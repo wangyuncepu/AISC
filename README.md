@@ -1,6 +1,6 @@
 # AutoCC — Claude Code + DeepSeek 一键安装与配置工具
 
-**AutoCC** 是一个跨平台自动化工具，让你在 3 分钟内完成 Claude Code 的安装、DeepSeek API 接入，以及 5 个常用 Skills/MCP Servers 的自动挂载。
+**AutoCC** 是一个跨平台自动化工具，让你的 Claude Code 在 2 分钟内完成安装、DeepSeek API 接入，以及 5 个常用 Skills/MCP Servers 的配置。
 
 > 🎯 只需回答 **2 个问题**，其余全自动完成。
 
@@ -9,8 +9,8 @@
 - 🖥️ **跨平台**: 支持 Windows、macOS、Linux（apt / pacman / dnf / apk / zypper）
 - 🇨🇳 **国内网络优化**: 全链路走 npmmirror / 阿里云 / 中科大镜像源
 - 🔐 **安全输入**: API Key 密码掩码输入，不回显
-- 🤖 **Claude 自配置**: Skills/MCP 由 Claude Code 自动安装，不手写 JSON
-- 🐟 **Fish Shell 兼容**: 同时生成 bash / zsh / fish / PowerShell 环境变量文件
+- 🐟 **Fish Shell 兼容**: 环境变量直接写入 Shell 原生 RC 文件（`$PROFILE` / `.bashrc` / `.zshrc` / `config.fish`）
+- 📄 **自文档化配置**: 生成 `AUTO_CONFIG.md`，用户复制一条命令即可完成 Skill 安装
 - 🔇 **完全非交互**: 安装过程无需按回车，可无人值守
 
 ## 快速开始
@@ -28,11 +28,9 @@ chmod +x install.sh
 #    Q1: 是否使用中国大陆镜像源？ [Y/n]
 #    Q2: 请输入 DeepSeek API Key [****]
 #
-#    ... 之后全自动完成 ...
+#    ... 之后全自动完成环境配置 ...
 
-# 4. 启动 Claude Code
-source ~/.claude/env.sh   # 或 ~/.claude/env.fish (Fish Shell)
-claude
+# 4. 复制脚本输出的命令，在新终端中运行，完成 Skills/MCP 安装
 ```
 
 **Windows 用户请使用 PowerShell：**
@@ -42,41 +40,37 @@ claude
 ```
 
 若显示
+
 ```powershell
-.\install.ps1 : 无法加载文件 C:\Users\VE111\Desktop\AutoCC\install.ps1，因为在此系统上禁止运行脚本。有关详细信息，请参
-阅 https:/go.microsoft.com/fwlink/?LinkID=135170 中的 about_Execution_Policies。
-所在位置 行:1 字符: 1
-+ .\install.ps1
-+ ~~~~~~~~~~~~~
-    + CategoryInfo          : SecurityError: (:) []，PSSecurityException
-    + FullyQualifiedErrorId : UnauthorizedAccess
+.\install.ps1 : 无法加载文件 C:\Users\...\AutoCC\install.ps1，因为在此系统上禁止运行脚本。
 ```
 
 则可运行如下命令开放权限：
+
 ```powershell
 # 临时放行
 Set-ExecutionPolicy Bypass -Scope Process
 
 # 永久放行
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser（后选择y）
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser（后选择 y）
 ```
 
-
-## 一键安装了什么
+## 安装了什么
 
 | 项目 | 说明 |
 |------|------|
 | **Node.js >= 18** | 若缺失则通过系统包管理器自动安装 |
 | **Claude Code** | `npm install -g @anthropic-ai/claude-code` |
-| **DeepSeek API 配置** | 环境变量写入 `~/.claude/env.sh`（bash/zsh/fish/ps1） |
+| **DeepSeek API 配置** | 环境变量直接写入 Shell 原生 RC 文件 |
+| **AUTO_CONFIG.md** | 生成 Skill 安装指令文件 |
 
-### 5 个自动挂载的 Skills / MCP
+### 5 个可安装的 Skills / MCP
 
 | Skill | 类型 | 说明 |
 |-------|------|------|
 | **superpowers** | Plugin | 20+ 实战 Skills（测试/调试/协作/计划） |
 | **document-skills** | Plugin | Anthropic 官方文档处理（Excel/Word/PPT/PDF） |
-| **caveman** | Plugin | SPEC.md 压缩工具（节省 ~75% Token） |
+| **caveman** | Plugin | 压缩输出模式（节省 ~75% Token） |
 | **gstack** | MCP | Google Cloud 命令行 MCP Server |
 | **claude-hub** | MCP | 社区 MCP Server 注册中心 |
 
@@ -94,9 +88,9 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser（后选择y）
   └── [主脚本 Node.js + TUI]
       ├── @clack/prompts TUI（仅 2 问）
       ├── npm install -g @anthropic-ai/claude-code
-      ├── 写入环境变量文件（bash/fish/ps1）
-      └── claude --print --dangerously-skip-permissions
-          └── Claude Code 自动安装 5 个 Skills/MCP
+      ├── 写入 Shell 原生 RC 文件（$PROFILE / .bashrc / .zshrc / config.fish）
+      ├── 生成 ~/.claude/AUTO_CONFIG.md
+      └── 打印一键安装命令（用户复制运行）
 ```
 
 ## 文件结构
@@ -105,7 +99,7 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser（后选择y）
 AutoCC/
 ├── install.sh          # Linux/macOS 引导入口（Bash）
 ├── install.ps1         # Windows 引导入口（PowerShell）
-├── install.js          # 主脚本（Node.js TUI + 安装 + Claude 自配置）
+├── install.js          # 主脚本（Node.js TUI + 安装 + 环境配置）
 ├── package.json        # 依赖声明（@clack/prompts, picocolors）
 ├── README.md           # 本文件
 └── DEEPSEEK_README.md  # DeepSeek API 接入参考
@@ -159,13 +153,23 @@ AutoCC/
 
 ## 环境变量
 
-安装完成后，`~/.claude/env.sh`（或 `.env.fish` / `.env.ps1`）包含以下配置：
+脚本直接将环境变量写入 Shell 原生配置文件，新终端启动时自动生效。
+
+**写入位置：**
+
+| Shell | 配置文件 |
+|-------|---------|
+| PowerShell | `$PROFILE` |
+| Bash | `~/.bashrc` |
+| Zsh | `~/.zshrc` |
+| Fish | `~/.config/fish/config.fish` |
+| 备份 | `~/.claude/.env` |
+
+**写入内容：**
 
 ```bash
-# 用户输入
+# >>> AutoCC — Claude Code + DeepSeek >>>
 export ANTHROPIC_AUTH_TOKEN='<你的 API Key>'
-
-# DeepSeek 官方默认值（自动设置，无需修改）
 export ANTHROPIC_BASE_URL='https://api.deepseek.com/anthropic'
 export ANTHROPIC_MODEL='deepseek-v4-pro[1m]'
 export ANTHROPIC_DEFAULT_OPUS_MODEL='deepseek-v4-pro[1m]'
@@ -173,61 +177,44 @@ export ANTHROPIC_DEFAULT_SONNET_MODEL='deepseek-v4-pro[1m]'
 export ANTHROPIC_DEFAULT_HAIKU_MODEL='deepseek-v4-flash'
 export CLAUDE_CODE_SUBAGENT_MODEL='deepseek-v4-flash'
 export CLAUDE_CODE_EFFORT_LEVEL='max'
+# <<< AutoCC <<<
 ```
 
-每次启动 Claude Code 前，执行：
+> 重复运行脚本不会重复写入（幂等，通过 marker 标记识别已有配置块）。
+
+## 安装 Skills / MCP
+
+脚本完成后会打印一条命令，复制到终端运行即可：
 
 ```bash
-# Bash / Zsh
-source ~/.claude/env.sh
-
-# Fish
-source ~/.claude/env.fish
-
-# PowerShell
-. $HOME\.claude\env.ps1
+claude --print 'Read the file at "~/.claude/AUTO_CONFIG.md". Execute every step listed in it, in order. Verify each step. Output PASS/FAIL at the end.' --dangerously-skip-permissions
 ```
 
-建议将 source 命令追加到 Shell 配置文件中：
+Claude Code 会自动读取指令文件，依次完成 5 个 Skill 的安装。
 
-```bash
-# Bash
-echo 'source ~/.claude/env.sh' >> ~/.bashrc
-
-# Zsh
-echo 'source ~/.claude/env.sh' >> ~/.zshrc
-
-# Fish
-echo 'source ~/.claude/env.fish' >> ~/.config/fish/config.fish
-```
+> `~/.claude/AUTO_CONFIG.md` 文件包含每个 Skill 的安装命令和验证方法，也可手动逐条执行。
 
 ## GStack 额外配置
 
 `gstack` (Google Cloud MCP) 需要 GCP Service Account 凭据。安装完成后，手动设置：
 
 ```bash
+# Bash / Zsh
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/your-gcp-key.json
+
+# PowerShell
+$env:GOOGLE_APPLICATION_CREDENTIALS='C:\path\to\gcp-key.json'
 ```
 
 ## 常见问题
 
 **Q: 安装过程中卡住了？**
 
-A: 正常流程约 2-3 分钟。如果 Claude Code 自动配置阶段超时（超过 5 分钟），脚本会跳过该阶段，你可手动执行：
+A: 正常流程约 1-2 分钟。如果网络慢，安装 Node.js 或 Claude Code 可能需要更长时间。
 
-```bash
-# 安装 Skills (Plugin)
-claude plugin marketplace add obra/superpowers-marketplace
-claude plugin install superpowers@superpowers-marketplace
-claude plugin marketplace add anthropics/skills
-claude plugin install document-skills@anthropic-agent-skills
-claude plugin marketplace add JuliusBrussee/caveman
-claude plugin install caveman@caveman
+**Q: Skills 安装命令执行时报错？**
 
-# 安装 MCP Servers
-claude mcp add --transport stdio gstack -- npx -y gcloud-mcp
-claude mcp add --transport stdio claude-hub -- npx -y @amritessh/mcp-hub
-```
+A: 确认 DeepSeek API Key 已正确设置在环境变量中。打开新终端后运行 `claude --version` 确认 Claude Code 可用。`~/.claude/AUTO_CONFIG.md` 中的命令也可手动逐条执行。
 
 **Q: API Key 从哪里获取？**
 
@@ -235,12 +222,7 @@ A: 登录 [DeepSeek Platform](https://platform.deepseek.com)，在 API Keys 页�
 
 **Q: 支持原版 Anthropic API 而非 DeepSeek 吗？**
 
-A: 可以，只需在 TUI 中输入 Anthropic 的 API Key。启动 Claude Code 前手动设置环境变量：
-
-```bash
-export ANTHROPIC_BASE_URL='https://api.anthropic.com'
-unset ANTHROPIC_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL  # 使用 Anthropic 默认模型
-```
+A: 可以，在 TUI 中输入你的 Anthropic API Key，然后编辑 Shell 配置文件中的 `ANTHROPIC_BASE_URL` 为 `https://api.anthropic.com`，并根据需要移除模型相关环境变量。
 
 **Q: 安装后 `claude` 命令找不到？**
 
@@ -250,15 +232,9 @@ A: 重新打开终端窗口，或执行 `hash -r`（Linux/macOS）刷新命令�
 npm bin -g  # 查看 npm 全局 bin 路径
 ```
 
-**Q: 如何在 CI/CD 中无人值守使用？**
+**Q: 如何卸载？**
 
-A: 设置环境变量跳过 TUI：
-
-```bash
-export CC_INSTALL_USE_CN=true   # 或 false
-# 然后将 API Key 写入临时文件作为标准输入
-echo "sk-your-api-key" | ./install.sh 2>&1  # 需脚本支持 stdin 输入
-```
+A: 编辑对应 Shell 的配置文件，删除 `# >>> AutoCC` 到 `# <<< AutoCC <<<` 之间的内容。
 
 ## 前置依赖
 
