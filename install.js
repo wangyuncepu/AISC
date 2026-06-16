@@ -9,13 +9,13 @@
 // 职责:
 //   1. TUI 交互: 网络环境选择 + DeepSeek API Key 输入（仅此 2 问）
 //   2. 安装 @anthropic-ai/claude-code
-//   3. 写入环境变量文件（bash / fish / PowerShell）
-//   4. 生成 Prompt 并触发 Claude Code 自动配置 5 个 Skills/MCP
+//   3. 写入 Shell RC 文件 ($PROFILE / .bashrc / .zshrc / config.fish)
+//   4. 生成 AUTO_CONFIG.md + 打印一键安装命令
 //   5. 打印安装汇总
 // =============================================================================
 
 import { password, confirm, note, spinner, isCancel, cancel } from "@clack/prompts";
-import { execSync, spawn } from "node:child_process";
+import { execSync } from "node:child_process";
 import { homedir, platform } from "node:os";
 import {
   existsSync,
@@ -424,29 +424,6 @@ function generateAutoConfigMd() {
 }
 
 // =============================================================================
-// DeepSeek API 连通性验证
-// =============================================================================
-
-/**
- * 验证 DeepSeek API 是否可达
- * 直接使用 claude --print 探测（与后续 auto-config 使用相同的鉴权路径）
- * 比 curl 更可靠：相同的 ANTHROPIC_AUTH_TOKEN 环境变量、相同的 API 端点
- * @returns {boolean}
- */
-function verifyDeepSeekApi() {
-  // 最小探测：让 Claude 只回复一个单词，不使用任何工具
-  // timeout: 30 秒（首次调用可能较慢，包含模型冷启动）
-  const result = sh(
-    `claude --print "respond with exactly the word CONNECTED and nothing else. do not use any tools." --dangerously-skip-permissions`,
-    { timeout: 30000 },
-  );
-  if (!result.ok) {
-    return false;
-  }
-  return result.stdout.includes("CONNECTED");
-}
-
-// =============================================================================
 // Claude Code 安装
 // =============================================================================
 
@@ -459,74 +436,6 @@ function installClaudeCode() {
   return result;
 }
 
-// =============================================================================
-// Claude 自动配置执行
-// =============================================================================
-
-async function runClaudeAutoConfig(configMdPath, envVars) {
-  // 告诉 Claude Code 读取 AUTO_CONFIG.md 并执行
-  // 注意：用双引号包裹路径，Windows 和 Unix 都能正确解析
-  const prompt = `Read the file at "${configMdPath}". Execute every step listed in it, in order. For each step: run the command, verify it succeeded, then proceed to the next. At the end, run the Final Verification commands and output the PASS/FAIL table. Use bash commands exclusively.`;
-
-  const spin = spinner();
-  spin.start("正在通过 Claude Code 自动配置 Skills/MCP (约需 1-2 分钟)...");
-
-  return new Promise((resolve) => {
-    const cmd = OS === "win32" ? "cmd" : "claude";
-    const args =
-      OS === "win32"
-        ? ["/c", "claude", "--print", prompt, "--dangerously-skip-permissions"]
-        : ["--print", prompt, "--dangerously-skip-permissions"];
-
-    const childEnv = { ...process.env, ...envVars };
-
-    const child = spawn(cmd, args, {
-      cwd: HOME,
-      env: childEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        spin.stop(pc.green("✓ Claude 自动配置完成"));
-        resolve({ success: true, stdout, stderr });
-      } else {
-        spin.stop(pc.yellow("⚠ Claude 自动配置返回非零状态"));
-        resolve({ success: false, stdout, stderr, exitCode: code });
-      }
-    });
-
-    child.on("error", (err) => {
-      spin.stop(pc.red("✗ 无法启动 Claude Code"));
-      resolve({ success: false, error: err.message });
-    });
-
-    // 超时保护：5 分钟
-    setTimeout(() => {
-      if (!child.killed) {
-        child.kill();
-        spin.stop(pc.yellow("⚠ 自动配置超时（5 分钟）"));
-        resolve({ success: false, error: "timeout" });
-      }
-    }, 5 * 60 * 1000);
-  });
-}
-
-// =============================================================================
-// 验证
-// =============================================================================
-
 /**
  * 验证 Claude Code 是否正确安装
  */
@@ -538,36 +447,15 @@ function verifyClaudeCode() {
   return { ok: false, version: null, stderr: result.stderr };
 }
 
-/**
- * 验证单个 MCP Server 是否已配置
- */
-function verifyMcpServer(name) {
-  const result = sh("claude mcp list");
-  if (!result.ok) return { configured: false, error: result.stderr };
-  // 检查输出中是否包含该 server 名称
-  return { configured: result.stdout.includes(name), error: null };
-}
-
-/**
- * 验证单个 Plugin 是否已安装
- */
-function verifyPlugin(name) {
-  const result = sh("claude plugin list");
-  if (!result.ok) return { configured: false, error: result.stderr };
-  return { configured: result.stdout.includes(name), error: null };
-}
-
 // =============================================================================
 // 安装汇总
 // =============================================================================
 
-function printSummary(apiKey, rcPath, backupPath, autoConfigResult, verifiedSkills) {
+function printSummary(apiKey, rcPath, backupPath) {
   const maskedKey =
     apiKey.length > 8
       ? apiKey.slice(0, 4) + "****" + apiKey.slice(-4)
       : "****";
-
-  const currentShell = detectShell();
 
   console.log("");
   console.log(
@@ -598,66 +486,45 @@ function printSummary(apiKey, rcPath, backupPath, autoConfigResult, verifiedSkil
   console.log(`  ${pc.bold("备份文件:")}       ${pc.dim(backupPath)}`);
   console.log(`  ${pc.bold("当前终端:")}       ${pc.green("✓ 环境变量已加载（仅本会话有效）")}`);
 
-  // ---- 下次启动提示 ----
-  console.log("");
-  console.log(`  ${pc.bold("下次启动 Claude Code:")}`);
-  if (OS === "win32") {
-    console.log(`    ${pc.dim("新开 PowerShell 窗口后环境变量自动生效")}`);
-  } else {
-    console.log(`    ${pc.dim(`新终端自动 source ${rcPath}，环境变量已持久化`)}`);
-  }
-  console.log(`    ${pc.green("claude")}`);
   console.log("");
 
-  // ---- Skills / MCP 状态 (基于实际验证) ----
-  console.log(`  ${pc.bold("Skills / MCP 配置:")}`);
-  if (verifiedSkills && Object.keys(verifiedSkills).length > 0) {
-    for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
-      const verified = verifiedSkills[name];
-      if (verified && verified.configured) {
-        console.log(
-          `    ${pc.green("✓")} ${name}  ${pc.dim(`— ${skill.description.split("—")[0].trim()}`)}`,
-        );
-      } else {
-        console.log(
-          `    ${pc.red("✗")} ${name}  ${pc.dim(`— 未成功配置`)}`,
-        );
-      }
-    }
-  } else if (autoConfigResult && autoConfigResult.success) {
-    for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
-      console.log(
-        `    ${pc.yellow("?")} ${name}  ${pc.dim(`— 待验证 (${skill.description.split("—")[0].trim()})`)}`,
-      );
-    }
-    console.log(`    ${pc.yellow("  ↑ 请运行 claude mcp list 和 claude plugin list 确认")}`);
+  // ---- 下一步：安装 Skills/MCP ----
+  console.log(`  ${pc.bold(pc.cyan("═══════ 下一步：安装 Skills/MCP ═══════"))}`);
+  console.log("");
+  console.log(`  ${pc.dim("在新终端中运行以下命令，Claude Code 将自动安装 5 个 Skills/MCP：")}`);
+  console.log("");
+
+  // 构造命令
+  const mdPath = join(CLAUDE_DIR, "AUTO_CONFIG.md");
+  let runCmd;
+  if (OS === "win32") {
+    runCmd = `cmd /c claude --print "Read the file at '${mdPath}'. Execute every step listed in it, in order. Verify each step. Output PASS/FAIL at the end." --dangerously-skip-permissions`;
   } else {
-    console.log(
-      `    ${pc.yellow("⚠")} Claude Code 自动配置未成功，请手动执行以下命令：`,
-    );
-    console.log("");
-    console.log(`    ${pc.dim("# 在终端中依次执行:")}`);
-    for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
-      if (skill.type === "plugin") {
-        console.log(
-          `    ${pc.yellow(`claude plugin marketplace add ${skill.marketplace}`)}`,
-        );
-        console.log(
-          `    ${pc.yellow(`claude plugin install ${skill.plugin}`)}`,
-        );
-      } else {
-        const argsStr = skill.args.map((a) => `"${a}"`).join(" ");
-        console.log(
-          `    ${pc.yellow(`claude mcp add --transport stdio ${skill.name} -- ${skill.command} ${argsStr}`)}`,
-        );
-      }
-    }
+    runCmd = `claude --print 'Read the file at "${mdPath}". Execute every step listed in it, in order. Verify each step. Output PASS/FAIL at the end.' --dangerously-skip-permissions`;
   }
+  console.log(`    ${pc.green(pc.bold(runCmd))}`);
+  console.log("");
+
+  // 列出将要安装的 Skill
+  console.log(`  ${pc.dim("将安装以下 Skills/MCP:")}`);
+  for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
+    console.log(
+      `    ${pc.green("●")} ${name} ${pc.dim(`— ${skill.description.split("—")[0].trim()}`)}`,
+    );
+  }
+  console.log("");
+
+  // ---- 下次启动提示 ----
+  if (OS === "win32") {
+    console.log(`  ${pc.dim("新开 PowerShell 窗口后环境变量自动生效")}`);
+  } else {
+    console.log(`  ${pc.dim("新终端自动从 Shell RC 加载环境变量")}`);
+  }
+  console.log("");
 
   // ---- GCP 凭据提醒 ----
   const gstack = SKILLS_CONFIG["gstack"];
   if (gstack && gstack.requiredEnv.length > 0) {
-    console.log("");
     console.log(`  ${pc.yellow(pc.bold("⚠ 提醒:"))} ${gstack.name} 需要额外配置:`);
     if (OS === "win32") {
       console.log(`    ${pc.yellow(`$env:${gstack.requiredEnv[0]}='C:\\path\\to\\gcp-key.json'`)}`);
@@ -794,80 +661,14 @@ async function main() {
   console.log(`    ${pc.dim("备份文件:")}       ${backupPath}`);
   console.log(`    ${pc.dim("当前终端:")}       ${pc.green("已立即生效（仅本会话）")}`);
 
-  // ---- Step 4.5: 验证 DeepSeek API 连通性 ----
+  // ---- Step 5: 生成 AUTO_CONFIG.md ----
+  // 生成配置指令文件，供用户手动运行 claude --print 一键完成 Skill 安装
+  generateAutoConfigMd();
   console.log("");
-  const spinConn = spinner();
-  spinConn.start("正在验证 DeepSeek API 连通性...");
-  const connOk = verifyDeepSeekApi();
-  if (connOk) {
-    spinConn.stop(pc.green("✓ DeepSeek API 连通正常"));
-  } else {
-    spinConn.stop(pc.yellow("⚠ DeepSeek API 连通性检查未通过"));
-    console.log(pc.yellow("  自动配置将跳过，请手动检查 API Key 和网络后重试"));
-    console.log(pc.dim(`  Base URL: ${envVars.ANTHROPIC_BASE_URL}`));
-    console.log("");
-    // 跳过 auto-config，直接打印汇总
-    printSummary(apiKey, rcPath, backupPath, null, {});
-    console.log(pc.yellow("⚠ Shell 配置已写入，但 Skills/MCP 未自动配置"));
-    console.log(pc.dim("  修复 API Key 后重新运行本脚本即可"));
-    console.log("");
-    return;
-  }
-
-  // ---- Step 5: 生成 AUTO_CONFIG.md + Claude Code 自动安装 ----
-  console.log("");
-  console.log(pc.cyan(pc.bold("═══════════ Claude Code 自动配置 Skills/MCP ═══════════")));
-  console.log("");
-  console.log(pc.dim("  以下 5 个 Skill/MCP 将由 Claude Code 自动安装和配置:"));
-  console.log("");
-  for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
-    console.log(
-      `    ${pc.green("●")} ${pc.bold(name)} — ${pc.dim(skill.description)}`,
-    );
-  }
-  console.log("");
-
-  // 生成 AUTO_CONFIG.md 指令文件
-  const configMdPath = generateAutoConfigMd();
-  console.log(pc.dim(`  配置指令文件: ${configMdPath}`));
-  console.log("");
-
-  // 直接全自动执行，无需用户确认（连通性已在 Step 4.5 验证通过）
-  let autoConfigResult = null;
-  let verifiedSkills = {};
-  autoConfigResult = await runClaudeAutoConfig(configMdPath, envVars);
-
-  // —— 验证自动配置是否真正生效 ——
-  // 即使 claude --print 退出码为 0，内部命令也可能静默失败
-  // 必须通过 claude mcp list / plugin list 确认
-  if (autoConfigResult && autoConfigResult.success) {
-    const spinVerify = spinner();
-    spinVerify.start("正在验证 Skills/MCP 安装状态...");
-
-    for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
-      if (skill.type === "mcp") {
-        const v = verifyMcpServer(skill.name);
-        verifiedSkills[name] = v;
-      } else if (skill.type === "plugin") {
-        const v = verifyPlugin(name);
-        verifiedSkills[name] = v;
-      }
-    }
-
-    const configuredCount = Object.values(verifiedSkills).filter((v) => v.configured).length;
-    const totalCount = Object.keys(SKILLS_CONFIG).length;
-
-    if (configuredCount === totalCount) {
-      spinVerify.stop(pc.green(`✓ 全部 ${totalCount} 个 Skills/MCP 已验证通过`));
-    } else {
-      spinVerify.stop(
-        pc.yellow(`⚠ 验证结果: ${configuredCount}/${totalCount} 成功，其余可能需要手动配置`),
-      );
-    }
-  }
+  console.log(pc.dim(`  配置指令文件: ${join(CLAUDE_DIR, "AUTO_CONFIG.md")}`));
 
   // ---- Step 6: 打印汇总 ----
-  printSummary(apiKey, rcPath, backupPath, autoConfigResult, verifiedSkills);
+  printSummary(apiKey, rcPath, backupPath);
 
   console.log(pc.green(pc.bold("✓ 全部配置完成！")));
   console.log("");
