@@ -429,34 +429,21 @@ function generateAutoConfigMd() {
 
 /**
  * 验证 DeepSeek API 是否可达
- * 发送一个最小请求（1 token）确认鉴权和网络
- * @param {{ [key: string]: string }} envVars
+ * 直接使用 claude --print 探测（与后续 auto-config 使用相同的鉴权路径）
+ * 比 curl 更可靠：相同的 ANTHROPIC_AUTH_TOKEN 环境变量、相同的 API 端点
  * @returns {boolean}
  */
-function verifyDeepSeekApi(envVars) {
-  const baseUrl = envVars.ANTHROPIC_BASE_URL || "https://api.deepseek.com/anthropic";
-  const apiKey = envVars[AUTH_TOKEN_KEY] || "";
-  const model = envVars.ANTHROPIC_MODEL || "deepseek-v4-pro[1m]";
-
-  // 用 curl 发送最小探测请求（1 token 输出，不计费或极低费用）
-  const curlCmd =
-    `curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 15 ` +
-    `-H "x-api-key: ${apiKey}" ` +
-    `-H "anthropic-version: 2023-06-01" ` +
-    `-H "content-type: application/json" ` +
-    `-d '{"model":"${model}","max_tokens":1,"messages":[{"role":"user","content":"ping"}]}' ` +
-    `"${baseUrl}/v1/messages"`;
-
-  // 注意：Windows 上 curl 语法相同，cmd /c 由 sh() 自动处理
-  const result = sh(curlCmd);
+function verifyDeepSeekApi() {
+  // 最小探测：让 Claude 只回复一个单词，不使用任何工具
+  // timeout: 30 秒（首次调用可能较慢，包含模型冷启动）
+  const result = sh(
+    `claude --print "respond with exactly the word CONNECTED and nothing else. do not use any tools." --dangerously-skip-permissions`,
+    { timeout: 30000 },
+  );
   if (!result.ok) {
-    // curl 本身失败（网络不通、DNS 解析失败等）
     return false;
   }
-  const httpCode = result.stdout.trim();
-  // 200 = 鉴权成功；401/403 = 鉴权失败但端点可达（网络没问题）
-  // 其他 4xx/5xx 视为不可达
-  return httpCode === "200" || httpCode === "401" || httpCode === "403";
+  return result.stdout.includes("CONNECTED");
 }
 
 // =============================================================================
@@ -811,7 +798,7 @@ async function main() {
   console.log("");
   const spinConn = spinner();
   spinConn.start("正在验证 DeepSeek API 连通性...");
-  const connOk = verifyDeepSeekApi(envVars);
+  const connOk = verifyDeepSeekApi();
   if (connOk) {
     spinConn.stop(pc.green("✓ DeepSeek API 连通正常"));
   } else {
