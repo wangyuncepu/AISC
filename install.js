@@ -176,33 +176,73 @@ function detectShell() {
 }
 
 // =============================================================================
-// 环境变量文件生成
+// 环境变量管理 — 单一数据源，文件写入与进程注入共享同一份数据
 // =============================================================================
 
 /**
- * 生成所有平台的环境变量配置并写入文件
- * @param {string} apiKey - 用户的 DeepSeek API Key
+ * 构建完整的环境变量表（单一数据源）
+ * @param {string} apiKey
+ * @returns {{ [key: string]: string }}
  */
-function writeEnvFiles(apiKey) {
+function buildEnvVars(apiKey) {
+  /** @type {{ [key: string]: string }} */
+  const vars = {};
+  vars[AUTH_TOKEN_KEY] = apiKey;
+  for (const [key, val] of HIDDEN_ENV_VARS) {
+    vars[key] = val;
+  }
+  return vars;
+}
+
+/**
+ * 将环境变量加载到当前进程（子进程自动继承）
+ * 效果等同于 source ~/.claude/env.sh 或 . $HOME\\.claude\\env.ps1
+ * @param {{ [key: string]: string }} envVars
+ */
+function loadEnvToProcess(envVars) {
+  for (const [key, val] of Object.entries(envVars)) {
+    process.env[key] = val;
+  }
+}
+
+/**
+ * 生成所有平台的配置文件（从 envVars 构建，保证与进程内一致）
+ * @param {{ [key: string]: string }} envVars
+ */
+function writeEnvFiles(envVars) {
   ensureDir(CLAUDE_DIR);
 
   const results = [];
+  const ts = new Date().toISOString();
+
+  // --- .env (KEY=VALUE 格式 — 通用，可被 Node.js/python/docker 读取) ---
+  const dotEnvLines = [
+    "# Claude Code + DeepSeek 环境变量",
+    `# 生成时间: ${ts}`,
+    "# 通用 KEY=VALUE 格式",
+    "",
+  ];
+  for (const [key, val] of Object.entries(envVars)) {
+    dotEnvLines.push(`${key}=${val}`);
+  }
+  dotEnvLines.push("");
+  const dotEnvPath = join(CLAUDE_DIR, ".env");
+  writeFileSync(dotEnvPath, dotEnvLines.join("\n") + "\n");
+  results.push({ shell: "通用 (.env)", path: dotEnvPath });
 
   // --- bash / zsh (export 语法) ---
   const bashLines = [
     "# ============================================================",
     "# Claude Code + DeepSeek 环境变量",
-    `# 生成时间: ${new Date().toISOString()}`,
+    `# 生成时间: ${ts}`,
     "# 用法: source ~/.claude/env.sh",
     "# ============================================================",
     "",
-    `export ${AUTH_TOKEN_KEY}='${apiKey}'`,
   ];
-  for (const [key, val] of HIDDEN_ENV_VARS) {
+  for (const [key, val] of Object.entries(envVars)) {
     bashLines.push(`export ${key}='${val}'`);
   }
   bashLines.push("");
-
   const bashPath = join(CLAUDE_DIR, "env.sh");
   writeFileSync(bashPath, bashLines.join("\n") + "\n");
   chmodSync(bashPath, 0o644);
@@ -212,55 +252,40 @@ function writeEnvFiles(apiKey) {
   const fishLines = [
     "# ============================================================",
     "# Claude Code + DeepSeek 环境变量 (Fish Shell)",
-    `# 生成时间: ${new Date().toISOString()}`,
+    `# 生成时间: ${ts}`,
     "# 用法: source ~/.claude/env.fish",
     "# ============================================================",
     "",
-    `set -gx ${AUTH_TOKEN_KEY} '${apiKey}'`,
   ];
-  for (const [key, val] of HIDDEN_ENV_VARS) {
+  for (const [key, val] of Object.entries(envVars)) {
     fishLines.push(`set -gx ${key} '${val}'`);
   }
   fishLines.push("");
-
   const fishPath = join(CLAUDE_DIR, "env.fish");
   writeFileSync(fishPath, fishLines.join("\n") + "\n");
   chmodSync(fishPath, 0o644);
   results.push({ shell: "fish", path: fishPath });
 
-  // --- PowerShell (所有平台都生成，用户可能在 Windows 上使用) ---
+  // --- PowerShell ---
   const psLines = [
     "# ============================================================",
     "# Claude Code + DeepSeek 环境变量 (PowerShell)",
-    `# 生成时间: ${new Date().toISOString()}`,
+    `# 生成时间: ${ts}`,
     "# 用法: . $HOME\\.claude\\env.ps1",
     "# 或添加到 PowerShell Profile 中自动加载",
     "# ============================================================",
     "",
-    `$env:${AUTH_TOKEN_KEY}='${apiKey}'`,
   ];
-  for (const [key, val] of HIDDEN_ENV_VARS) {
+  for (const [key, val] of Object.entries(envVars)) {
     psLines.push(`$env:${key}='${val}'`);
   }
   psLines.push("");
-
   const psPath = join(CLAUDE_DIR, "env.ps1");
   writeFileSync(psPath, psLines.join("\n") + "\n");
-  // Windows 上 chmod 是 noop，不会报错
   try { chmodSync(psPath, 0o644); } catch {}
   results.push({ shell: "powershell", path: psPath });
 
   return results;
-}
-
-/**
- * 将环境变量注入当前进程（子进程将继承）
- */
-function injectEnvToProcess(apiKey) {
-  process.env[AUTH_TOKEN_KEY] = apiKey;
-  for (const [key, val] of HIDDEN_ENV_VARS) {
-    process.env[key] = val;
-  }
 }
 
 // =============================================================================
@@ -312,6 +337,42 @@ Report a final summary with the status of each item.`;
 }
 
 // =============================================================================
+// DeepSeek API 连通性验证
+// =============================================================================
+
+/**
+ * 验证 DeepSeek API 是否可达
+ * 发送一个最小请求（1 token）确认鉴权和网络
+ * @param {{ [key: string]: string }} envVars
+ * @returns {boolean}
+ */
+function verifyDeepSeekApi(envVars) {
+  const baseUrl = envVars.ANTHROPIC_BASE_URL || "https://api.deepseek.com/anthropic";
+  const apiKey = envVars[AUTH_TOKEN_KEY] || "";
+  const model = envVars.ANTHROPIC_MODEL || "deepseek-v4-pro[1m]";
+
+  // 用 curl 发送最小探测请求（1 token 输出，不计费或极低费用）
+  const curlCmd =
+    `curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 --max-time 15 ` +
+    `-H "x-api-key: ${apiKey}" ` +
+    `-H "anthropic-version: 2023-06-01" ` +
+    `-H "content-type: application/json" ` +
+    `-d '{"model":"${model}","max_tokens":1,"messages":[{"role":"user","content":"ping"}]}' ` +
+    `"${baseUrl}/v1/messages"`;
+
+  // 注意：Windows 上 curl 语法相同，cmd /c 由 sh() 自动处理
+  const result = sh(curlCmd);
+  if (!result.ok) {
+    // curl 本身失败（网络不通、DNS 解析失败等）
+    return false;
+  }
+  const httpCode = result.stdout.trim();
+  // 200 = 鉴权成功；401/403 = 鉴权失败但端点可达（网络没问题）
+  // 其他 4xx/5xx 视为不可达
+  return httpCode === "200" || httpCode === "401" || httpCode === "403";
+}
+
+// =============================================================================
 // Claude Code 安装
 // =============================================================================
 
@@ -328,7 +389,7 @@ function installClaudeCode() {
 // Claude 自动配置执行
 // =============================================================================
 
-async function runClaudeAutoConfig(apiKey, useCN) {
+async function runClaudeAutoConfig(apiKey, useCN, envVars) {
   const prompt = buildAutoConfigPrompt(apiKey, useCN);
 
   // 将 Prompt 写入临时文件（避免 shell 转义问题）
@@ -340,16 +401,18 @@ async function runClaudeAutoConfig(apiKey, useCN) {
   spin.start("正在通过 Claude Code 自动配置 Skills/MCP (约需 1-2 分钟)...");
 
   return new Promise((resolve) => {
-    // Windows 用 cmd /c 包装
     const cmd = OS === "win32" ? "cmd" : "claude";
     const args =
       OS === "win32"
         ? ["/c", "claude", "--print", promptContent, "--dangerously-skip-permissions", "--output-format", "text"]
         : ["--print", promptContent, "--dangerously-skip-permissions", "--output-format", "text"];
 
+    // 使用 unified envVars（与写入文件的数据完全一致）
+    const childEnv = { ...process.env, ...envVars };
+
     const child = spawn(cmd, args, {
       cwd: HOME,
-      env: { ...process.env, ...Object.fromEntries(HIDDEN_ENV_VARS), [AUTH_TOKEN_KEY]: apiKey },
+      env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -650,7 +713,7 @@ async function main() {
     process.exit(1);
   }
 
-  // 验证安装
+  // 验证安装（不需要 API Key，仅确认二进制可用）
   const ccVerification = verifyClaudeCode();
   if (!ccVerification.ok) {
     console.error(pc.red("\nClaude Code 安装后无法执行 claude --version"));
@@ -659,15 +722,44 @@ async function main() {
   }
   console.log(`  ${pc.green("✓")} Claude Code 安装成功: ${ccVerification.version}`);
 
-  // ---- Step 4: 写入环境变量 ----
+  // ---- Step 4: 配置环境变量（先注入进程，再写入文件） ----
+  // 关键顺序：必须先 loadEnvToProcess，后续 claude 命令才能鉴权
   console.log("");
   const spinEnv = spinner();
-  spinEnv.start("正在写入环境变量配置文件...");
-  const envFiles = writeEnvFiles(apiKey);
-  injectEnvToProcess(apiKey);
+  spinEnv.start("正在配置 DeepSeek API 环境变量...");
+
+  // 单一数据源
+  const envVars = buildEnvVars(apiKey);
+
+  // 1. 注入当前进程（效果等同于 source ~/.claude/env.sh / . $HOME\.claude\env.ps1）
+  loadEnvToProcess(envVars);
+
+  // 2. 持久化到文件
+  const envFiles = writeEnvFiles(envVars);
+
   spinEnv.stop(
-    pc.green(`✓ 环境变量已写入 ${envFiles.length} 个配置文件`),
+    pc.green(`✓ 环境变量已加载到当前进程并写入 ${envFiles.length} 个配置文件`),
   );
+
+  // ---- Step 4.5: 验证 DeepSeek API 连通性 ----
+  console.log("");
+  const spinConn = spinner();
+  spinConn.start("正在验证 DeepSeek API 连通性...");
+  const connOk = verifyDeepSeekApi(envVars);
+  if (connOk) {
+    spinConn.stop(pc.green("✓ DeepSeek API 连通正常"));
+  } else {
+    spinConn.stop(pc.yellow("⚠ DeepSeek API 连通性检查未通过"));
+    console.log(pc.yellow("  自动配置将跳过，请手动检查 API Key 和网络后重试"));
+    console.log(pc.dim(`  Base URL: ${envVars.ANTHROPIC_BASE_URL}`));
+    console.log("");
+    // 跳过 auto-config，直接打印汇总
+    printSummary(apiKey, envFiles, null, {});
+    console.log(pc.yellow("⚠ 环境变量已写入，但 Skills/MCP 未自动配置"));
+    console.log(pc.dim("  修复 API Key 后重新运行本脚本即可"));
+    console.log("");
+    return;
+  }
 
   // ---- Step 5: Claude Code 自动配置 Skills/MCP ----
   console.log("");
@@ -695,7 +787,7 @@ async function main() {
   let autoConfigResult = null;
   let verifiedSkills = {};
   if (autoConfirm) {
-    autoConfigResult = await runClaudeAutoConfig(apiKey, useCNMirror);
+    autoConfigResult = await runClaudeAutoConfig(apiKey, useCNMirror, envVars);
 
     // —— 验证自动配置是否真正生效 ——
     // 即使 claude --print 退出码为 0，内部命令也可能静默失败
