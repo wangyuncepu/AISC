@@ -114,37 +114,41 @@ function ensureDir(dir) {
 }
 
 /**
- * 同步执行命令，返回 stdout（出错时抛异常）
+ * 统一命令执行 — 自动处理 Windows cmd /c 包装
+ * @returns {{ stdout: string, stderr: string, ok: boolean }}
  */
-function exec(cmd, opts = {}) {
+function sh(cmd, opts = {}) {
   const isWin = OS === "win32";
-  // Windows 需要用 cmd /c 包装
   const finalCmd = isWin && !cmd.startsWith("cmd /c") ? `cmd /c ${cmd}` : cmd;
-  return execSync(finalCmd, {
-    stdio: opts.silent ? "pipe" : "inherit",
-    encoding: "utf-8",
-    ...opts,
-  });
-}
-
-/**
- * 带 spinner 的 exec
- */
-function execWithSpinner(cmd, label, opts = {}) {
-  const spin = spinner();
-  spin.start(label);
   try {
-    const result = execSync(cmd, {
+    const stdout = execSync(finalCmd, {
       stdio: "pipe",
       encoding: "utf-8",
       ...opts,
     });
-    spin.stop(pc.green("✓ 完成"));
-    return result;
+    return { stdout: stdout.trim(), stderr: "", ok: true };
   } catch (err) {
-    spin.stop(pc.red("✗ 失败"));
-    throw err;
+    return {
+      stdout: (err.stdout || "").toString().trim(),
+      stderr: (err.stderr || err.message || "").toString().trim(),
+      ok: false,
+    };
   }
+}
+
+/**
+ * 带 spinner 的命令执行
+ */
+function shWithSpinner(cmd, label) {
+  const spin = spinner();
+  spin.start(label);
+  const result = sh(cmd);
+  if (result.ok) {
+    spin.stop(pc.green("✓ 完成"));
+  } else {
+    spin.stop(pc.red("✗ 失败"));
+  }
+  return result;
 }
 
 /**
@@ -224,26 +228,27 @@ function writeEnvFiles(apiKey) {
   chmodSync(fishPath, 0o644);
   results.push({ shell: "fish", path: fishPath });
 
-  // --- PowerShell ---
-  if (OS === "win32") {
-    const psLines = [
-      "# ============================================================",
-      "# Claude Code + DeepSeek 环境变量 (PowerShell)",
-      `# 生成时间: ${new Date().toISOString()}`,
-      "# 用法: . $HOME\\.claude\\env.ps1",
-      "# ============================================================",
-      "",
-      `$env:${AUTH_TOKEN_KEY}='${apiKey}'`,
-    ];
-    for (const [key, val] of HIDDEN_ENV_VARS) {
-      psLines.push(`$env:${key}='${val}'`);
-    }
-    psLines.push("");
-
-    const psPath = join(CLAUDE_DIR, "env.ps1");
-    writeFileSync(psPath, psLines.join("\n") + "\n");
-    results.push({ shell: "powershell", path: psPath });
+  // --- PowerShell (所有平台都生成，用户可能在 Windows 上使用) ---
+  const psLines = [
+    "# ============================================================",
+    "# Claude Code + DeepSeek 环境变量 (PowerShell)",
+    `# 生成时间: ${new Date().toISOString()}`,
+    "# 用法: . $HOME\\.claude\\env.ps1",
+    "# 或添加到 PowerShell Profile 中自动加载",
+    "# ============================================================",
+    "",
+    `$env:${AUTH_TOKEN_KEY}='${apiKey}'`,
+  ];
+  for (const [key, val] of HIDDEN_ENV_VARS) {
+    psLines.push(`$env:${key}='${val}'`);
   }
+  psLines.push("");
+
+  const psPath = join(CLAUDE_DIR, "env.ps1");
+  writeFileSync(psPath, psLines.join("\n") + "\n");
+  // Windows 上 chmod 是 noop，不会报错
+  try { chmodSync(psPath, 0o644); } catch {}
+  results.push({ shell: "powershell", path: psPath });
 
   return results;
 }
@@ -312,7 +317,11 @@ Report a final summary with the status of each item.`;
 
 function installClaudeCode() {
   const label = "正在安装 @anthropic-ai/claude-code (全局)...";
-  return execWithSpinner("npm install -g @anthropic-ai/claude-code", label);
+  const result = shWithSpinner("npm install -g @anthropic-ai/claude-code", label);
+  if (!result.ok) {
+    throw new Error(result.stderr || "npm install 失败");
+  }
+  return result;
 }
 
 // =============================================================================
@@ -389,34 +398,47 @@ async function runClaudeAutoConfig(apiKey, useCN) {
 // 验证
 // =============================================================================
 
+/**
+ * 验证 Claude Code 是否正确安装
+ */
 function verifyClaudeCode() {
-  try {
-    const version = execSync("claude --version", {
-      stdio: "pipe",
-      encoding: "utf-8",
-    }).trim();
-    return { ok: true, version };
-  } catch {
-    return { ok: false, version: null };
+  const result = sh("claude --version");
+  if (result.ok && result.stdout) {
+    return { ok: true, version: result.stdout };
   }
+  return { ok: false, version: null, stderr: result.stderr };
+}
+
+/**
+ * 验证单个 MCP Server 是否已配置
+ */
+function verifyMcpServer(name) {
+  const result = sh("claude mcp list");
+  if (!result.ok) return { configured: false, error: result.stderr };
+  // 检查输出中是否包含该 server 名称
+  return { configured: result.stdout.includes(name), error: null };
+}
+
+/**
+ * 验证单个 Plugin 是否已安装
+ */
+function verifyPlugin(name) {
+  const result = sh("claude plugin list");
+  if (!result.ok) return { configured: false, error: result.stderr };
+  return { configured: result.stdout.includes(name), error: null };
 }
 
 // =============================================================================
 // 安装汇总
 // =============================================================================
 
-function printSummary(apiKey, envFiles, autoConfigResult) {
+function printSummary(apiKey, envFiles, autoConfigResult, verifiedSkills) {
   const maskedKey =
     apiKey.length > 8
       ? apiKey.slice(0, 4) + "****" + apiKey.slice(-4)
       : "****";
 
-  // 检测并建议正确的 source 命令
   const currentShell = detectShell();
-  let sourceCmd = `source ${join(CLAUDE_DIR, "env.sh")}`;
-  if (currentShell === "fish") {
-    sourceCmd = `source ${join(CLAUDE_DIR, "env.fish")}`;
-  }
 
   console.log("");
   console.log(
@@ -452,17 +474,33 @@ function printSummary(apiKey, envFiles, autoConfigResult) {
     );
   }
 
-  // ---- Skills / MCP 状态 ----
+  // ---- Skills / MCP 状态 (基于实际验证) ----
   console.log(`  ${pc.bold("Skills / MCP 配置:")}`);
-  if (autoConfigResult && autoConfigResult.success) {
+  if (verifiedSkills && Object.keys(verifiedSkills).length > 0) {
+    for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
+      const verified = verifiedSkills[name];
+      if (verified && verified.configured) {
+        console.log(
+          `    ${pc.green("✓")} ${name}  ${pc.dim(`— ${skill.description.split("—")[0].trim()}`)}`,
+        );
+      } else {
+        console.log(
+          `    ${pc.red("✗")} ${name}  ${pc.dim(`— 未成功配置`)}`,
+        );
+      }
+    }
+  } else if (autoConfigResult && autoConfigResult.success) {
+    // 无验证数据但自动配置声称成功 → 标注为"未验证"
     for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
       console.log(
-        `    ${pc.green("✓")} ${name}  ${pc.dim(`— ${skill.description.split("—")[0].trim()}`)}`,
+        `    ${pc.yellow("?")} ${name}  ${pc.dim(`— 待验证 (${skill.description.split("—")[0].trim()})`)}`,
       );
     }
+    console.log(`    ${pc.yellow("  ↑ 请运行 claude mcp list 和 claude plugin list 确认")}`);
   } else {
+    // 自动配置失败 → 给出手动命令
     console.log(
-      `    ${pc.yellow("⚠")} Claude Code 自动配置未完全成功，请手动执行以下命令：`,
+      `    ${pc.yellow("⚠")} Claude Code 自动配置未成功，请手动执行以下命令：`,
     );
     console.log("");
     console.log(`    ${pc.dim("# 在终端中依次执行:")}`);
@@ -483,17 +521,29 @@ function printSummary(apiKey, envFiles, autoConfigResult) {
     }
   }
 
-  // ---- 启动命令 ----
+  // ---- 启动命令（根据平台和 Shell 显示正确的命令） ----
   console.log("");
   console.log(`  ${pc.bold("启动 Claude Code:")}`);
   console.log("");
-  currentShell === "fish"
-    ? console.log(
-        `    ${pc.green(`source ~/.claude/env.fish  # 添加到 ~/.config/fish/config.fish 中`)}`,
-      )
-    : console.log(
-        `    ${pc.green(`echo 'source ~/.claude/env.sh' >> ~/.${currentShell}rc`)}`,
-      );
+
+  if (OS === "win32") {
+    // Windows PowerShell
+    console.log(
+      `    ${pc.green('在 PowerShell 中执行（或添加到 $PROFILE）：')}`,
+    );
+    console.log(`    ${pc.green(`. $HOME\\.claude\\env.ps1`)}`);
+  } else if (currentShell === "fish") {
+    console.log(
+      `    ${pc.green("source ~/.claude/env.fish  # 添加到 ~/.config/fish/config.fish 中")}`,
+    );
+  } else {
+    // bash / zsh
+    const rcFile = currentShell === "zsh" ? "~/.zshrc" : "~/.bashrc";
+    console.log(
+      `    ${pc.green(`echo 'source ~/.claude/env.sh' >> ${rcFile}`)}`,
+    );
+    console.log(`    ${pc.green(`source ~/.claude/env.sh  # 当前终端立即生效`)}`);
+  }
   console.log(`    ${pc.green("claude")}`);
   console.log("");
 
@@ -501,7 +551,11 @@ function printSummary(apiKey, envFiles, autoConfigResult) {
   const gstack = SKILLS_CONFIG["gstack"];
   if (gstack && gstack.requiredEnv.length > 0) {
     console.log(`  ${pc.yellow(pc.bold("⚠ 提醒:"))} ${gstack.name} 需要额外配置:`);
-    console.log(`    ${pc.yellow(`export ${gstack.requiredEnv[0]}=/path/to/gcp-key.json`)}`);
+    if (OS === "win32") {
+      console.log(`    ${pc.yellow(`$env:${gstack.requiredEnv[0]}='C:\\path\\to\\gcp-key.json'`)}`);
+    } else {
+      console.log(`    ${pc.yellow(`export ${gstack.requiredEnv[0]}=/path/to/gcp-key.json`)}`);
+    }
     console.log(`    ${pc.dim(gstack.envNote)}`);
     console.log("");
   }
@@ -551,18 +605,9 @@ async function main() {
 
   // 配置 npm 镜像
   if (useCNMirror) {
-    try {
-      execSync("npm config set registry https://registry.npmmirror.com", {
-        stdio: "pipe",
-      });
-      execSync(
-        "npm config set disturl https://npmmirror.com/mirrors/node",
-        { stdio: "pipe" },
-      );
-      console.log(pc.dim("  npm 镜像源 → https://registry.npmmirror.com"));
-    } catch {
-      // 非关键，继续
-    }
+    sh("npm config set registry https://registry.npmmirror.com");
+    sh("npm config set disturl https://npmmirror.com/mirrors/node");
+    console.log(pc.dim("  npm 镜像源 → https://registry.npmmirror.com"));
   }
 
   console.log("");
@@ -648,12 +693,42 @@ async function main() {
   }
 
   let autoConfigResult = null;
+  let verifiedSkills = {};
   if (autoConfirm) {
     autoConfigResult = await runClaudeAutoConfig(apiKey, useCNMirror);
+
+    // —— 验证自动配置是否真正生效 ——
+    // 即使 claude --print 退出码为 0，内部命令也可能静默失败
+    // 必须通过 claude mcp list / plugin list 确认
+    if (autoConfigResult && autoConfigResult.success) {
+      const spinVerify = spinner();
+      spinVerify.start("正在验证 Skills/MCP 安装状态...");
+
+      for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
+        if (skill.type === "mcp") {
+          const v = verifyMcpServer(skill.name);
+          verifiedSkills[name] = v;
+        } else if (skill.type === "plugin") {
+          const v = verifyPlugin(name);
+          verifiedSkills[name] = v;
+        }
+      }
+
+      const configuredCount = Object.values(verifiedSkills).filter((v) => v.configured).length;
+      const totalCount = Object.keys(SKILLS_CONFIG).length;
+
+      if (configuredCount === totalCount) {
+        spinVerify.stop(pc.green(`✓ 全部 ${totalCount} 个 Skills/MCP 已验证通过`));
+      } else {
+        spinVerify.stop(
+          pc.yellow(`⚠ 验证结果: ${configuredCount}/${totalCount} 成功，其余可能需要手动配置`),
+        );
+      }
+    }
   }
 
   // ---- Step 6: 打印汇总 ----
-  printSummary(apiKey, envFiles, autoConfigResult);
+  printSummary(apiKey, envFiles, autoConfigResult, verifiedSkills);
 
   console.log(pc.green(pc.bold("✓ 全部配置完成！")));
   console.log("");
