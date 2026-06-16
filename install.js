@@ -14,9 +14,9 @@
 //   5. 打印安装汇总
 // =============================================================================
 
-import { intro, outro, text, password, confirm, note, spinner, isCancel, cancel } from "@clack/prompts";
+import { password, confirm, note, spinner, isCancel, cancel } from "@clack/prompts";
 import { execSync, spawn } from "node:child_process";
-import { homedir, platform, tmpdir } from "node:os";
+import { homedir, platform } from "node:os";
 import {
   existsSync,
   readFileSync,
@@ -308,51 +308,119 @@ function writeBackupEnvFile(envVars) {
 }
 
 // =============================================================================
-// Claude Code 自动配置 Prompt 模板
+// AUTO_CONFIG.md 生成 — Claude Code 自配置指令文件
 // =============================================================================
 
-function buildAutoConfigPrompt(apiKey, useCN) {
-  // 对 plugin 类型的 skill，生成 marketplace add + install 命令
-  // 对 mcp 类型的 skill，生成 mcp add 命令
+/**
+ * 生成 ~/.claude/AUTO_CONFIG.md
+ * 该文件给 Claude Code 读取，包含完整安装步骤和验证指令
+ * 同时也可供用户直接阅读和手动执行
+ */
+function generateAutoConfigMd() {
+  const ts = new Date().toISOString();
 
-  const pluginSteps = [];
-  const mcpSteps = [];
+  const lines = [
+    "# Claude Code Auto-Configuration",
+    "",
+    `> 生成时间: ${ts}`,
+    "> 此文件由 AutoCC 自动生成，供 Claude Code 自配置使用",
+    "> 也可手动执行以下命令完成配置",
+    "",
+    "---",
+    "",
+    "## Prerequisites",
+    "",
+    "- Claude Code: installed via `npm install -g @anthropic-ai/claude-code`",
+    "- DeepSeek API: configured via environment variables",
+    "- Network: connected",
+    "",
+    "## Instructions",
+    "",
+    "Execute each step in order. Verify success before proceeding to the next step.",
+    "If a step fails, note the error and continue. Use bash commands for all operations.",
+    "",
+    "---",
+    "",
+  ];
 
-  for (const [_, skill] of Object.entries(SKILLS_CONFIG)) {
+  let stepNum = 0;
+
+  for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
+    stepNum++;
+    lines.push(`### Step ${stepNum}: ${name}`);
+
+    if (skill.description) {
+      lines.push("");
+      lines.push(`> ${skill.description}`);
+    }
+    lines.push("");
+
     if (skill.type === "plugin") {
-      pluginSteps.push(
-        `  claude plugin marketplace add ${skill.marketplace}`,
-        `  claude plugin install ${skill.plugin}`,
-      );
+      lines.push("**Add marketplace and install plugin:**");
+      lines.push("");
+      lines.push("```bash");
+      lines.push(`claude plugin marketplace add ${skill.marketplace}`);
+      lines.push(`claude plugin install ${skill.plugin}`);
+      lines.push("```");
+      lines.push("");
+      lines.push("**Verify:**");
+      lines.push("```bash");
+      lines.push(`claude plugin list | grep -i ${name}`);
+      lines.push("```");
     } else if (skill.type === "mcp") {
       const argsStr = skill.args.map((a) => `"${a}"`).join(" ");
-      let mcpCmd = `  claude mcp add --transport stdio ${skill.name} -- ${skill.command} ${argsStr}`;
-      mcpSteps.push(mcpCmd);
+      lines.push("**Add MCP server:**");
+      lines.push("");
+      lines.push("```bash");
+      // Windows needs cmd /c wrapper
+      if (OS === "win32") {
+        lines.push(
+          `cmd /c claude mcp add --transport stdio ${skill.name} -- ${skill.command} ${argsStr}`,
+        );
+      } else {
+        lines.push(
+          `claude mcp add --transport stdio ${skill.name} -- ${skill.command} ${argsStr}`,
+        );
+      }
+      lines.push("```");
+      lines.push("");
+      lines.push("**Verify:**");
+      lines.push("```bash");
+      lines.push(`claude mcp list | grep -i ${name}`);
+      lines.push("```");
     }
+
+    if (skill.requiredEnv && skill.requiredEnv.length > 0) {
+      lines.push("");
+      lines.push(`**Note:** This skill requires additional credentials:`);
+      for (const env of skill.requiredEnv) {
+        lines.push(`- \`${env}\` — ${skill.envNote || "see documentation"}`);
+      }
+    }
+
+    lines.push("");
+    lines.push("---");
+    lines.push("");
   }
 
-  const prompt = `You are performing automated post-install configuration for Claude Code.
-Execute each step below in order. Use bash commands (NOT slash commands).
-If a step fails, briefly note the error and continue to the next step.
-At the end, verify all installations with "claude mcp list".
+  // Final verification
+  lines.push("## Final Verification");
+  lines.push("");
+  lines.push("After all steps complete, run these commands and output a summary table:");
+  lines.push("");
+  lines.push("```bash");
+  lines.push("echo '=== MCP Servers ===' && claude mcp list");
+  lines.push("echo '=== Plugins ===' && claude plugin list");
+  lines.push("```");
+  lines.push("");
+  lines.push(
+    "Output a table: Item | Type | Status (PASS/FAIL). Do NOT continue past a FAIL without trying an alternative.",
+  );
 
-## Plugin Marketplaces & Plugin Installation
-
-${pluginSteps.join("\n")}
-
-## MCP Server Installation
-
-${mcpSteps.join("\n")}
-
-## Verification
-
-After all steps complete, run:
-  claude mcp list
-  claude plugin list
-
-Report a final summary with the status of each item.`;
-
-  return prompt;
+  const configPath = join(CLAUDE_DIR, "AUTO_CONFIG.md");
+  ensureDir(CLAUDE_DIR);
+  writeFileSync(configPath, lines.join("\n") + "\n");
+  return configPath;
 }
 
 // =============================================================================
@@ -408,13 +476,10 @@ function installClaudeCode() {
 // Claude 自动配置执行
 // =============================================================================
 
-async function runClaudeAutoConfig(apiKey, useCN, envVars) {
-  const prompt = buildAutoConfigPrompt(apiKey, useCN);
-
-  // 将 Prompt 写入临时文件（避免 shell 转义问题）
-  const promptFile = join(tmpdir(), "cc-auto-config-prompt.txt");
-  writeFileSync(promptFile, prompt, "utf-8");
-  const promptContent = prompt;
+async function runClaudeAutoConfig(configMdPath, envVars) {
+  // 告诉 Claude Code 读取 AUTO_CONFIG.md 并执行
+  // 注意：用双引号包裹路径，Windows 和 Unix 都能正确解析
+  const prompt = `Read the file at "${configMdPath}". Execute every step listed in it, in order. For each step: run the command, verify it succeeded, then proceed to the next. At the end, run the Final Verification commands and output the PASS/FAIL table. Use bash commands exclusively.`;
 
   const spin = spinner();
   spin.start("正在通过 Claude Code 自动配置 Skills/MCP (约需 1-2 分钟)...");
@@ -423,10 +488,9 @@ async function runClaudeAutoConfig(apiKey, useCN, envVars) {
     const cmd = OS === "win32" ? "cmd" : "claude";
     const args =
       OS === "win32"
-        ? ["/c", "claude", "--print", promptContent, "--dangerously-skip-permissions", "--output-format", "text"]
-        : ["--print", promptContent, "--dangerously-skip-permissions", "--output-format", "text"];
+        ? ["/c", "claude", "--print", prompt, "--dangerously-skip-permissions"]
+        : ["--print", prompt, "--dangerously-skip-permissions"];
 
-    // 使用 unified envVars（与写入文件的数据完全一致）
     const childEnv = { ...process.env, ...envVars };
 
     const child = spawn(cmd, args, {
@@ -447,21 +511,17 @@ async function runClaudeAutoConfig(apiKey, useCN, envVars) {
     });
 
     child.on("close", (code) => {
-      // 清理临时文件
-      try { require("fs").unlinkSync(promptFile); } catch {}
-
       if (code === 0) {
-        spin.stop(pc.green("✓ 自动配置完成"));
+        spin.stop(pc.green("✓ Claude 自动配置完成"));
         resolve({ success: true, stdout, stderr });
       } else {
-        spin.stop(pc.yellow("⚠ 自动配置返回非零状态"));
+        spin.stop(pc.yellow("⚠ Claude 自动配置返回非零状态"));
         resolve({ success: false, stdout, stderr, exitCode: code });
       }
     });
 
     child.on("error", (err) => {
       spin.stop(pc.red("✗ 无法启动 Claude Code"));
-      try { require("fs").unlinkSync(promptFile); } catch {}
       resolve({ success: false, error: err.message });
     });
 
@@ -767,7 +827,7 @@ async function main() {
     return;
   }
 
-  // ---- Step 5: Claude Code 自动配置 Skills/MCP ----
+  // ---- Step 5: 生成 AUTO_CONFIG.md + Claude Code 自动安装 ----
   console.log("");
   console.log(pc.cyan(pc.bold("═══════════ Claude Code 自动配置 Skills/MCP ═══════════")));
   console.log("");
@@ -780,48 +840,42 @@ async function main() {
   }
   console.log("");
 
-  const autoConfirm = await confirm({
-    message: "是否立即执行自动配置？\n  (Claude Code 将自动安装上述 Skills/MCP)",
-    initialValue: true,
-  });
+  // 生成 AUTO_CONFIG.md 指令文件
+  const configMdPath = generateAutoConfigMd();
+  console.log(pc.dim(`  配置指令文件: ${configMdPath}`));
+  console.log("");
 
-  if (isCancel(autoConfirm)) {
-    cancel("安装已取消（环境变量已写入）");
-    process.exit(0);
-  }
-
+  // 直接全自动执行，无需用户确认（连通性已在 Step 4.5 验证通过）
   let autoConfigResult = null;
   let verifiedSkills = {};
-  if (autoConfirm) {
-    autoConfigResult = await runClaudeAutoConfig(apiKey, useCNMirror, envVars);
+  autoConfigResult = await runClaudeAutoConfig(configMdPath, envVars);
 
-    // —— 验证自动配置是否真正生效 ——
-    // 即使 claude --print 退出码为 0，内部命令也可能静默失败
-    // 必须通过 claude mcp list / plugin list 确认
-    if (autoConfigResult && autoConfigResult.success) {
-      const spinVerify = spinner();
-      spinVerify.start("正在验证 Skills/MCP 安装状态...");
+  // —— 验证自动配置是否真正生效 ——
+  // 即使 claude --print 退出码为 0，内部命令也可能静默失败
+  // 必须通过 claude mcp list / plugin list 确认
+  if (autoConfigResult && autoConfigResult.success) {
+    const spinVerify = spinner();
+    spinVerify.start("正在验证 Skills/MCP 安装状态...");
 
-      for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
-        if (skill.type === "mcp") {
-          const v = verifyMcpServer(skill.name);
-          verifiedSkills[name] = v;
-        } else if (skill.type === "plugin") {
-          const v = verifyPlugin(name);
-          verifiedSkills[name] = v;
-        }
+    for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
+      if (skill.type === "mcp") {
+        const v = verifyMcpServer(skill.name);
+        verifiedSkills[name] = v;
+      } else if (skill.type === "plugin") {
+        const v = verifyPlugin(name);
+        verifiedSkills[name] = v;
       }
+    }
 
-      const configuredCount = Object.values(verifiedSkills).filter((v) => v.configured).length;
-      const totalCount = Object.keys(SKILLS_CONFIG).length;
+    const configuredCount = Object.values(verifiedSkills).filter((v) => v.configured).length;
+    const totalCount = Object.keys(SKILLS_CONFIG).length;
 
-      if (configuredCount === totalCount) {
-        spinVerify.stop(pc.green(`✓ 全部 ${totalCount} 个 Skills/MCP 已验证通过`));
-      } else {
-        spinVerify.stop(
-          pc.yellow(`⚠ 验证结果: ${configuredCount}/${totalCount} 成功，其余可能需要手动配置`),
-        );
-      }
+    if (configuredCount === totalCount) {
+      spinVerify.stop(pc.green(`✓ 全部 ${totalCount} 个 Skills/MCP 已验证通过`));
+    } else {
+      spinVerify.stop(
+        pc.yellow(`⚠ 验证结果: ${configuredCount}/${totalCount} 成功，其余可能需要手动配置`),
+      );
     }
   }
 
