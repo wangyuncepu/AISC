@@ -372,16 +372,9 @@ function generateAutoConfigMd() {
       lines.push("**Add MCP server:**");
       lines.push("");
       lines.push("```bash");
-      // Windows needs cmd /c wrapper
-      if (OS === "win32") {
-        lines.push(
-          `cmd /c claude mcp add --transport stdio ${skill.name} -- ${skill.command} ${argsStr}`,
-        );
-      } else {
-        lines.push(
-          `claude mcp add --transport stdio ${skill.name} -- ${skill.command} ${argsStr}`,
-        );
-      }
+      lines.push(
+        `claude mcp add --transport stdio ${skill.name} -- ${skill.command} ${argsStr}`,
+      );
       lines.push("```");
       lines.push("");
       lines.push("**Verify:**");
@@ -495,13 +488,10 @@ function printSummary(apiKey, rcPath, backupPath) {
   console.log("");
 
   // 构造命令
+  // 语法说明: 单引号内是字面量 → 内层双引号包裹路径 → 外层单引号包裹整个 Prompt
+  // PowerShell (win32) 和 Unix Shell 都支持这种引号嵌套
   const mdPath = join(CLAUDE_DIR, "AUTO_CONFIG.md");
-  let runCmd;
-  if (OS === "win32") {
-    runCmd = `cmd /c claude --print "Read the file at '${mdPath}'. Execute every step listed in it, in order. Verify each step. Output PASS/FAIL at the end." --dangerously-skip-permissions`;
-  } else {
-    runCmd = `claude --print 'Read the file at "${mdPath}". Execute every step listed in it, in order. Verify each step. Output PASS/FAIL at the end.' --dangerously-skip-permissions`;
-  }
+  const runCmd = `claude --print 'Read the file at "${mdPath}". Execute every step listed in it, in order. Verify each step. Output PASS/FAIL at the end.' --dangerously-skip-permissions`;
   console.log(`    ${pc.green(pc.bold(runCmd))}`);
   console.log("");
 
