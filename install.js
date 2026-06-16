@@ -176,13 +176,11 @@ function detectShell() {
 }
 
 // =============================================================================
-// 环境变量管理 — 单一数据源，文件写入与进程注入共享同一份数据
+// 环境变量管理 — 单一数据源，直接写入 Shell 原生配置文件
 // =============================================================================
 
 /**
  * 构建完整的环境变量表（单一数据源）
- * @param {string} apiKey
- * @returns {{ [key: string]: string }}
  */
 function buildEnvVars(apiKey) {
   /** @type {{ [key: string]: string }} */
@@ -195,9 +193,92 @@ function buildEnvVars(apiKey) {
 }
 
 /**
- * 将环境变量加载到当前进程（子进程自动继承）
- * 效果等同于 source ~/.claude/env.sh 或 . $HOME\\.claude\\env.ps1
+ * 获取当前 Shell 的原生配置文件路径
+ */
+function getShellRcPath() {
+  if (OS === "win32") {
+    // $PROFILE 可能包含多个路径，优先 CurrentUserCurrentHost
+    const profile = process.env.PROFILE;
+    if (profile) return profile;
+    // 回退到默认路径
+    const pwshDir = existsSync(join(HOME, "Documents", "PowerShell"))
+      ? join(HOME, "Documents", "PowerShell")
+      : join(HOME, "Documents", "WindowsPowerShell");
+    return join(pwshDir, "Microsoft.PowerShell_profile.ps1");
+  }
+
+  const shell = detectShell();
+  switch (shell) {
+    case "zsh":
+      return join(HOME, ".zshrc");
+    case "fish":
+      return join(HOME, ".config", "fish", "config.fish");
+    case "bash":
+    default:
+      return join(HOME, ".bashrc");
+  }
+}
+
+/**
+ * 直接写入 Shell 原生 RC 文件（幂等：重复运行不会重复写入）
  * @param {{ [key: string]: string }} envVars
+ * @returns {{ rcPath: string, shell: string }}
+ */
+function writeEnvToShellRc(envVars) {
+  const rcPath = getShellRcPath();
+  const shell = detectShell();
+  ensureDir(dirname(rcPath));
+
+  const ts = new Date().toISOString();
+  const marker = "# >>> AutoCC — Claude Code + DeepSeek >>>";
+  const endMarker = "# <<< AutoCC <<<";
+
+  // 根据 Shell 类型生成对应语法的代码块
+  let block = `\n${marker}\n`;
+  block += `# 生成时间: ${ts}\n`;
+  block += `# 每次启动 Shell 自动加载以下环境变量\n`;
+
+  if (OS === "win32") {
+    for (const [key, val] of Object.entries(envVars)) {
+      block += `$env:${key}='${val}'\n`;
+    }
+  } else if (shell === "fish") {
+    for (const [key, val] of Object.entries(envVars)) {
+      block += `set -gx ${key} '${val}'\n`;
+    }
+  } else {
+    // bash / zsh
+    for (const [key, val] of Object.entries(envVars)) {
+      block += `export ${key}='${val}'\n`;
+    }
+  }
+  block += `${endMarker}\n`;
+
+  // 幂等：如果已有旧块，先移除
+  let content = "";
+  if (existsSync(rcPath)) {
+    content = readFileSync(rcPath, "utf-8");
+    // 如果末尾没有换行，补一个
+    if (content.length > 0 && !content.endsWith("\n")) {
+      content += "\n";
+    }
+    // 移除旧的 AutoCC 块
+    if (content.includes(marker)) {
+      const re = new RegExp(
+        `\\n?${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?${endMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n?`,
+        "g",
+      );
+      content = content.replace(re, "");
+    }
+  }
+
+  writeFileSync(rcPath, content + block);
+  return { rcPath, shell };
+}
+
+/**
+ * 将环境变量加载到当前进程（子进程自动继承）
+ * 等价于 source/dot-source 刚写入的 RC 文件
  */
 function loadEnvToProcess(envVars) {
   for (const [key, val] of Object.entries(envVars)) {
@@ -206,86 +287,24 @@ function loadEnvToProcess(envVars) {
 }
 
 /**
- * 生成所有平台的配置文件（从 envVars 构建，保证与进程内一致）
- * @param {{ [key: string]: string }} envVars
+ * 写入备份文件 ~/.claude/.env（通用 KEY=VAL 格式，供非标准场景使用）
  */
-function writeEnvFiles(envVars) {
+function writeBackupEnvFile(envVars) {
   ensureDir(CLAUDE_DIR);
-
-  const results = [];
   const ts = new Date().toISOString();
-
-  // --- .env (KEY=VALUE 格式 — 通用，可被 Node.js/python/docker 读取) ---
-  const dotEnvLines = [
-    "# Claude Code + DeepSeek 环境变量",
+  const lines = [
+    "# Claude Code + DeepSeek 环境变量 (备份)",
     `# 生成时间: ${ts}`,
-    "# 通用 KEY=VALUE 格式",
+    "# 主要配置已写入 Shell RC 文件，此文件仅作备份",
     "",
   ];
   for (const [key, val] of Object.entries(envVars)) {
-    dotEnvLines.push(`${key}=${val}`);
+    lines.push(`${key}=${val}`);
   }
-  dotEnvLines.push("");
-  const dotEnvPath = join(CLAUDE_DIR, ".env");
-  writeFileSync(dotEnvPath, dotEnvLines.join("\n") + "\n");
-  results.push({ shell: "通用 (.env)", path: dotEnvPath });
-
-  // --- bash / zsh (export 语法) ---
-  const bashLines = [
-    "# ============================================================",
-    "# Claude Code + DeepSeek 环境变量",
-    `# 生成时间: ${ts}`,
-    "# 用法: source ~/.claude/env.sh",
-    "# ============================================================",
-    "",
-  ];
-  for (const [key, val] of Object.entries(envVars)) {
-    bashLines.push(`export ${key}='${val}'`);
-  }
-  bashLines.push("");
-  const bashPath = join(CLAUDE_DIR, "env.sh");
-  writeFileSync(bashPath, bashLines.join("\n") + "\n");
-  chmodSync(bashPath, 0o644);
-  results.push({ shell: "bash/zsh", path: bashPath });
-
-  // --- fish (set -gx 语法) ---
-  const fishLines = [
-    "# ============================================================",
-    "# Claude Code + DeepSeek 环境变量 (Fish Shell)",
-    `# 生成时间: ${ts}`,
-    "# 用法: source ~/.claude/env.fish",
-    "# ============================================================",
-    "",
-  ];
-  for (const [key, val] of Object.entries(envVars)) {
-    fishLines.push(`set -gx ${key} '${val}'`);
-  }
-  fishLines.push("");
-  const fishPath = join(CLAUDE_DIR, "env.fish");
-  writeFileSync(fishPath, fishLines.join("\n") + "\n");
-  chmodSync(fishPath, 0o644);
-  results.push({ shell: "fish", path: fishPath });
-
-  // --- PowerShell ---
-  const psLines = [
-    "# ============================================================",
-    "# Claude Code + DeepSeek 环境变量 (PowerShell)",
-    `# 生成时间: ${ts}`,
-    "# 用法: . $HOME\\.claude\\env.ps1",
-    "# 或添加到 PowerShell Profile 中自动加载",
-    "# ============================================================",
-    "",
-  ];
-  for (const [key, val] of Object.entries(envVars)) {
-    psLines.push(`$env:${key}='${val}'`);
-  }
-  psLines.push("");
-  const psPath = join(CLAUDE_DIR, "env.ps1");
-  writeFileSync(psPath, psLines.join("\n") + "\n");
-  try { chmodSync(psPath, 0o644); } catch {}
-  results.push({ shell: "powershell", path: psPath });
-
-  return results;
+  lines.push("");
+  const backupPath = join(CLAUDE_DIR, ".env");
+  writeFileSync(backupPath, lines.join("\n") + "\n");
+  return backupPath;
 }
 
 // =============================================================================
@@ -495,7 +514,7 @@ function verifyPlugin(name) {
 // 安装汇总
 // =============================================================================
 
-function printSummary(apiKey, envFiles, autoConfigResult, verifiedSkills) {
+function printSummary(apiKey, rcPath, backupPath, autoConfigResult, verifiedSkills) {
   const maskedKey =
     apiKey.length > 8
       ? apiKey.slice(0, 4) + "****" + apiKey.slice(-4)
@@ -526,16 +545,22 @@ function printSummary(apiKey, envFiles, autoConfigResult, verifiedSkills) {
     console.log(`    ${pc.yellow("⚠")} 请验证安装`);
   }
 
-  // ---- API Key ----
-  console.log(`  ${pc.bold("API Key:")}     ${maskedKey} (已写入环境变量)`);
+  // ---- API Key + Shell 配置 ----
+  console.log(`  ${pc.bold("API Key:")}       ${maskedKey}`);
+  console.log(`  ${pc.bold("Shell 配置:")}     ${pc.green("✓ 已写入")} ${pc.dim(rcPath)}`);
+  console.log(`  ${pc.bold("备份文件:")}       ${pc.dim(backupPath)}`);
+  console.log(`  ${pc.bold("当前终端:")}       ${pc.green("✓ 环境变量已加载（仅本会话有效）")}`);
 
-  // ---- 环境变量文件 ----
-  console.log(`  ${pc.bold("环境变量文件:")}`);
-  for (const f of envFiles) {
-    console.log(
-      `    ${pc.green("✓")} ${f.path}  ${pc.dim(`(${f.shell})`)}`,
-    );
+  // ---- 下次启动提示 ----
+  console.log("");
+  console.log(`  ${pc.bold("下次启动 Claude Code:")}`);
+  if (OS === "win32") {
+    console.log(`    ${pc.dim("新开 PowerShell 窗口后环境变量自动生效")}`);
+  } else {
+    console.log(`    ${pc.dim(`新终端自动 source ${rcPath}，环境变量已持久化`)}`);
   }
+  console.log(`    ${pc.green("claude")}`);
+  console.log("");
 
   // ---- Skills / MCP 状态 (基于实际验证) ----
   console.log(`  ${pc.bold("Skills / MCP 配置:")}`);
@@ -553,7 +578,6 @@ function printSummary(apiKey, envFiles, autoConfigResult, verifiedSkills) {
       }
     }
   } else if (autoConfigResult && autoConfigResult.success) {
-    // 无验证数据但自动配置声称成功 → 标注为"未验证"
     for (const [name, skill] of Object.entries(SKILLS_CONFIG)) {
       console.log(
         `    ${pc.yellow("?")} ${name}  ${pc.dim(`— 待验证 (${skill.description.split("—")[0].trim()})`)}`,
@@ -561,7 +585,6 @@ function printSummary(apiKey, envFiles, autoConfigResult, verifiedSkills) {
     }
     console.log(`    ${pc.yellow("  ↑ 请运行 claude mcp list 和 claude plugin list 确认")}`);
   } else {
-    // 自动配置失败 → 给出手动命令
     console.log(
       `    ${pc.yellow("⚠")} Claude Code 自动配置未成功，请手动执行以下命令：`,
     );
@@ -584,35 +607,10 @@ function printSummary(apiKey, envFiles, autoConfigResult, verifiedSkills) {
     }
   }
 
-  // ---- 启动命令（根据平台和 Shell 显示正确的命令） ----
-  console.log("");
-  console.log(`  ${pc.bold("启动 Claude Code:")}`);
-  console.log("");
-
-  if (OS === "win32") {
-    // Windows PowerShell
-    console.log(
-      `    ${pc.green('在 PowerShell 中执行（或添加到 $PROFILE）：')}`,
-    );
-    console.log(`    ${pc.green(`. $HOME\\.claude\\env.ps1`)}`);
-  } else if (currentShell === "fish") {
-    console.log(
-      `    ${pc.green("source ~/.claude/env.fish  # 添加到 ~/.config/fish/config.fish 中")}`,
-    );
-  } else {
-    // bash / zsh
-    const rcFile = currentShell === "zsh" ? "~/.zshrc" : "~/.bashrc";
-    console.log(
-      `    ${pc.green(`echo 'source ~/.claude/env.sh' >> ${rcFile}`)}`,
-    );
-    console.log(`    ${pc.green(`source ~/.claude/env.sh  # 当前终端立即生效`)}`);
-  }
-  console.log(`    ${pc.green("claude")}`);
-  console.log("");
-
   // ---- GCP 凭据提醒 ----
   const gstack = SKILLS_CONFIG["gstack"];
   if (gstack && gstack.requiredEnv.length > 0) {
+    console.log("");
     console.log(`  ${pc.yellow(pc.bold("⚠ 提醒:"))} ${gstack.name} 需要额外配置:`);
     if (OS === "win32") {
       console.log(`    ${pc.yellow(`$env:${gstack.requiredEnv[0]}='C:\\path\\to\\gcp-key.json'`)}`);
@@ -620,8 +618,8 @@ function printSummary(apiKey, envFiles, autoConfigResult, verifiedSkills) {
       console.log(`    ${pc.yellow(`export ${gstack.requiredEnv[0]}=/path/to/gcp-key.json`)}`);
     }
     console.log(`    ${pc.dim(gstack.envNote)}`);
-    console.log("");
   }
+  console.log("");
 }
 
 // =============================================================================
@@ -722,24 +720,32 @@ async function main() {
   }
   console.log(`  ${pc.green("✓")} Claude Code 安装成功: ${ccVerification.version}`);
 
-  // ---- Step 4: 配置环境变量（先注入进程，再写入文件） ----
-  // 关键顺序：必须先 loadEnvToProcess，后续 claude 命令才能鉴权
+  // ---- Step 4: 配置环境变量 ----
+  // 1. 构建单一数据源
+  // 2. 写入 Shell 原生 RC 文件（$PROFILE / .bashrc / .zshrc / config.fish）
+  // 3. 同时加载到当前进程（等价于 source）
+  // 4. 写入备份文件 ~/.claude/.env
   console.log("");
   const spinEnv = spinner();
-  spinEnv.start("正在配置 DeepSeek API 环境变量...");
+  spinEnv.start("正在写入 Shell 配置文件...");
 
-  // 单一数据源
   const envVars = buildEnvVars(apiKey);
 
-  // 1. 注入当前进程（效果等同于 source ~/.claude/env.sh / . $HOME\.claude\env.ps1）
+  // 写入 Shell 原生 RC 文件
+  const { rcPath, shell: rcShell } = writeEnvToShellRc(envVars);
+
+  // 加载到当前进程（当前终端立即生效，后续 claude 子进程可鉴权）
   loadEnvToProcess(envVars);
 
-  // 2. 持久化到文件
-  const envFiles = writeEnvFiles(envVars);
+  // 写入备份（供容器/CI 等非标准场景使用）
+  const backupPath = writeBackupEnvFile(envVars);
 
-  spinEnv.stop(
-    pc.green(`✓ 环境变量已加载到当前进程并写入 ${envFiles.length} 个配置文件`),
-  );
+  spinEnv.stop(pc.green("✓ 环境变量已写入"));
+
+  // 显示写入位置
+  console.log(`    ${pc.dim("Shell 配置文件:")} ${pc.bold(rcPath)}`);
+  console.log(`    ${pc.dim("备份文件:")}       ${backupPath}`);
+  console.log(`    ${pc.dim("当前终端:")}       ${pc.green("已立即生效（仅本会话）")}`);
 
   // ---- Step 4.5: 验证 DeepSeek API 连通性 ----
   console.log("");
@@ -754,8 +760,8 @@ async function main() {
     console.log(pc.dim(`  Base URL: ${envVars.ANTHROPIC_BASE_URL}`));
     console.log("");
     // 跳过 auto-config，直接打印汇总
-    printSummary(apiKey, envFiles, null, {});
-    console.log(pc.yellow("⚠ 环境变量已写入，但 Skills/MCP 未自动配置"));
+    printSummary(apiKey, rcPath, backupPath, null, {});
+    console.log(pc.yellow("⚠ Shell 配置已写入，但 Skills/MCP 未自动配置"));
     console.log(pc.dim("  修复 API Key 后重新运行本脚本即可"));
     console.log("");
     return;
@@ -820,7 +826,7 @@ async function main() {
   }
 
   // ---- Step 6: 打印汇总 ----
-  printSummary(apiKey, envFiles, autoConfigResult, verifiedSkills);
+  printSummary(apiKey, rcPath, backupPath, autoConfigResult, verifiedSkills);
 
   console.log(pc.green(pc.bold("✓ 全部配置完成！")));
   console.log("");
