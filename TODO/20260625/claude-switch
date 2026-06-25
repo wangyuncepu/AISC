@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# claude-switch — switch Claude Code between cc / deepseek / ark / 1y / duo-cc
+# Modifies ~/.claude/settings.json env block only; everything else untouched.
+
+SETTINGS="${HOME}/.claude/settings.json"
+
+# ====== API Keys (fill these in) ======
+DEEPSEEK_BASE="${DEEPSEEK_BASE:-https://api.deepseek.com/anthropic}"
+DEEPSEEK_KEY="${DEEPSEEK_KEY:-sk-ae1708b1fb1a440d8f81f6b4c12e1bf4}"
+GLM_KEY="${GLM_KEY:-5e2c2b2f-24d9-48c6-acec-c024a6cf7a9d}"
+GLM_BASE="${GLM_BASE:-https://ark.cn-beijing.volces.com/api/coding}"
+ONEY_BASE="${ONEY_BASE:-https://1yuanapi.com}"
+ONEY_KEY="${ONEY_KEY:-sk-kDGznDTPHUQGjAZXw3NrL43jvdUSuytSV2lfM5xhcX08wjIx}"
+DUOCC_BASE="${DUOCC_BASE:-https://api.duou.cc}"
+DUOCC_KEY="${DUOCC_KEY:-sk-vCtavLUcYvnVK6q88qPXmToILs3GaSWV6WrbhoCq2ZzXOdWS}"
+# =======================================
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+switch() {
+  local mode="$1"
+  local node_script
+
+  case "$mode" in
+    cc)
+      node_script="const env = {ANTHROPIC_BASE_URL:'',ANTHROPIC_AUTH_TOKEN:'',ANTHROPIC_MODEL:'',ANTHROPIC_DEFAULT_OPUS_MODEL:'',ANTHROPIC_DEFAULT_SONNET_MODEL:'',ANTHROPIC_DEFAULT_HAIKU_MODEL:'',CLAUDE_CODE_SUBAGENT_MODEL:'',CLAUDE_CODE_EFFORT_LEVEL:'',CLAUDE_CODE_AUTO_COMPACT_WINDOW:''};"
+      echo "Switched to: Claude (default Anthropic)"
+      ;;
+    deepseek)
+      node_script="
+        const env = {
+          ANTHROPIC_BASE_URL: '${DEEPSEEK_BASE}',
+          ANTHROPIC_AUTH_TOKEN: '${DEEPSEEK_KEY}',
+          ANTHROPIC_MODEL: 'deepseek-v4-pro[1m]',
+          ANTHROPIC_DEFAULT_OPUS_MODEL: 'deepseek-v4-pro[1m]',
+          ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek-v4-pro[1m]',
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-v4-flash',
+          CLAUDE_CODE_SUBAGENT_MODEL: 'deepseek-v4-flash',
+          CLAUDE_CODE_EFFORT_LEVEL: 'max'
+        };
+      "
+      echo "Switched to: DeepSeek"
+      ;;
+    ark)
+      node_script="
+        const env = {
+          ANTHROPIC_BASE_URL: '${GLM_BASE}',
+          ANTHROPIC_AUTH_TOKEN: '${GLM_KEY}',
+          ANTHROPIC_MODEL: 'glm-5.2[1m]',
+          CLAUDE_CODE_SUBAGENT_MODEL: 'glm-4.7',
+          CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-4.7',
+          ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.2[1m]',
+          ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.2[1m]'
+        };
+      "
+      echo "Switched to: Ark"
+      ;;
+    1y)
+      node_script="
+        const env = {
+          ANTHROPIC_BASE_URL: '${ONEY_BASE}',
+          ANTHROPIC_AUTH_TOKEN: '${ONEY_KEY}',
+          ANTHROPIC_MODEL: 'claude-sonnet-4-8[1m]',
+          ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
+          ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-4-6[1m]',
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5-20251001[1m]',
+          CLAUDE_CODE_SUBAGENT_MODEL: 'claude-haiku-4-5-20251001[1m]'
+        };
+      "
+      echo "Switched to: 1y (1yuanapi.com)"
+      ;;
+    duo-cc)
+      node_script="
+        const env = {
+          ANTHROPIC_BASE_URL: '${DUOCC_BASE}',
+          ANTHROPIC_AUTH_TOKEN: '${DUOCC_KEY}',
+          ANTHROPIC_MODEL: 'claude-sonnet-4-8[1m]',
+          ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
+          ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-4-6[1m]',
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5-20251001[1m]',
+          CLAUDE_CODE_SUBAGENT_MODEL: 'claude-haiku-4-5-20251001[1m]'
+        };
+      "
+      echo "Switched to: duo-cc (api.duou.cc)"
+      ;;
+    *)
+      die "unknown mode: ${mode}"
+      ;;
+  esac
+
+  node -e "
+    const fs = require('fs');
+    let cfg = JSON.parse(fs.readFileSync('${SETTINGS}','utf8'));
+    ${node_script}
+    cfg.env = env;
+    fs.writeFileSync('${SETTINGS}', JSON.stringify(cfg, null, 2) + '\n');
+  " || die "failed to write settings"
+}
+
+show_current() {
+  node -e "
+    const cfg = require('${SETTINGS}');
+    const env = cfg.env || {};
+    const base = env.ANTHROPIC_BASE_URL || '';
+    if (!base)                          { console.log('current: cc (Anthropic default)'); }
+    else if (base.includes('deepseek')) { console.log('current: deepseek'); }
+    else if (base.includes('volces'))   { console.log('current: ark'); }
+    else if (base.includes('1yuanapi')) { console.log('current: 1y'); }
+    else if (base.includes('duou.cc'))  { console.log('current: duo-cc'); }
+    else                                { console.log('current: custom → ' + base); }
+  " 2>/dev/null || echo "current: unknown"
+}
+
+case "${1:-}" in
+  cc|default|anthropic)  switch cc ;;
+  deepseek|ds)           switch deepseek ;;
+  ark)                   switch ark ;;
+  1y|oney)               switch 1y ;;
+  duo-cc|duo|duou)      switch duo-cc ;;
+  show|current|"")       show_current ;;
+  -h|--help)
+    echo "Usage: claude-switch {cc|deepseek|ark|1y|duo-cc|show}"
+    echo ""
+    echo "  cc        Claude default (Anthropic)"
+    echo "  deepseek  DeepSeek V4"
+    echo "  ark       Ark"
+    echo "  1y        1yuanapi.com (Claude models proxied)"
+    echo "  duo-cc    api.duou.cc (Claude models proxied)"
+    echo "  show      Show current mode"
+    ;;
+  *)
+    die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, or show"
+    ;;
+esac
