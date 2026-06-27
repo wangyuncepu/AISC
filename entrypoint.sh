@@ -44,15 +44,21 @@ fi
 # 3. 环境变量与网络状态展示
 # ==========================================
 SETTINGS_FILE="${HOME}/.claude/settings.json"
+KEY_STORE="${HOME}/.claude/api-keys"
+
 if [ -f "$SETTINGS_FILE" ]; then
     MODEL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_MODEL||'')}catch(e){}" 2>/dev/null)
     BASE_URL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_BASE_URL||'')}catch(e){}" 2>/dev/null)
-    echo "🌐 当前大模型后端: ${MODEL:-未配置}"
-    if [ -n "$BASE_URL" ]; then
-        echo "🔗 自定义 API 节点: $BASE_URL"
-    fi
+    AUTH=$(node -e "try{const e=require('$SETTINGS_FILE').env;process.stdout.write(e.ANTHROPIC_API_KEY||e.ANTHROPIC_AUTH_TOKEN?'yes':'no')}catch(e){process.stdout.write('no')}" 2>/dev/null)
 else
-    echo "🌐 当前大模型后端: 未配置（运行 cs <后端> 进行切换）"
+    MODEL=""
+    BASE_URL=""
+    AUTH="no"
+fi
+
+echo "🌐 当前大模型后端: ${MODEL:-未配置}"
+if [ -n "$BASE_URL" ]; then
+    echo "🔗 自定义 API 节点: $BASE_URL"
 fi
 echo -e "----------------------------------------\n"
 
@@ -66,7 +72,27 @@ if [ "$1" = "cs" ]; then
 fi
 
 # ==========================================
-# 5. 执行控制权移交 (极其关键)
+# 5. 未配置拦截：无后端时阻止直接进 Claude，引导用户先配置
+# ==========================================
+if [ "$1" = "claude" ] && [ "$AUTH" = "no" ] && [ -z "$MODEL" ]; then
+    echo ""
+    if [ -f "$KEY_STORE" ] && grep -q '.=' "$KEY_STORE" 2>/dev/null; then
+        echo "💡 已检测到保存的 Key，请运行 cs <后端> 完成配置："
+        echo "   cs deepseek    cs ark    cs 1y    cs duo-cc    cs cc"
+    else
+        echo "💡 请先运行 cs <后端> 配置 Key，再启动 Claude："
+        echo "   cs deepseek    ← DeepSeek V4"
+        echo "   cs ark         ← Ark GLM-5.2"
+        echo "   cs 1y          ← 1yuanapi"
+        echo "   cs duo-cc      ← duo-cc"
+        echo "   cs cc          ← Anthropic 官方"
+    fi
+    echo ""
+    exec bash
+fi
+
+# ==========================================
+# 6. 执行控制权移交 (极其关键)
 # ==========================================
 # 使用 exec 是 Docker 入口脚本的最佳实践！
 # 它会让 claude 进程直接替换掉当前的 bash 进程成为 PID 1。

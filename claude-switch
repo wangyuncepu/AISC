@@ -1,99 +1,144 @@
 #!/usr/bin/env bash
-# claude-switch — switch Claude Code between cc / deepseek / ark / 1y / duo-cc
+# cs / claude-switch — switch Claude Code between cc / deepseek / ark / 1y / duo-cc
+# API Keys stored in ~/.claude/api-keys (chmod 600), never in this file.
 # Modifies ~/.claude/settings.json env block only; everything else untouched.
 
 SETTINGS_RAW="${HOME}/.claude/settings.json"
+KEY_STORE="${HOME}/.claude/api-keys"
 
-# Windows Git Bash needs cygpath for Node.js; Linux containers can use the POSIX path directly.
+# If running inside Docker and /app is mounted, prefer the project-local store
+# so keys survive container rebuilds without extra mounts.
+if [ -d /app ]; then
+  KEY_STORE="/app/.claude/api-keys"
+fi
+
+# Windows Git Bash needs cygpath for Node.js; Linux containers use the POSIX path directly.
 if command -v cygpath >/dev/null 2>&1; then
   SETTINGS=$(cygpath -w "$SETTINGS_RAW" | sed 's/\\/\//g')
 else
   SETTINGS="$SETTINGS_RAW"
 fi
 
+# Ensure ~/.claude/ exists
 mkdir -p "$(dirname "$SETTINGS_RAW")"
+
+# Init settings.json if missing
 if [ ! -f "$SETTINGS_RAW" ]; then
   printf '{\n  "env": {}\n}\n' > "$SETTINGS_RAW"
 fi
 
-# ====== API Keys (fill these in) ======
+# Init key store if missing
+if [ ! -f "$KEY_STORE" ]; then
+  touch "$KEY_STORE"
+  chmod 600 "$KEY_STORE"
+fi
+
+# ====== Endpoint URLs (non-secret) ======
 DEEPSEEK_BASE="${DEEPSEEK_BASE:-https://api.deepseek.com/anthropic}"
-DEEPSEEK_KEY="${DEEPSEEK_KEY:-sk-ae1708b1fb1a440d8f81f6b4c12e1bf4}"
-GLM_KEY="${GLM_KEY:-5e2c2b2f-24d9-48c6-acec-c024a6cf7a9d}"
 GLM_BASE="${GLM_BASE:-https://ark.cn-beijing.volces.com/api/coding}"
 ONEY_BASE="${ONEY_BASE:-https://1yuanapi.com}"
-ONEY_KEY="${ONEY_KEY:-sk-kDGznDTPHUQGjAZXw3NrL43jvdUSuytSV2lfM5xhcX08wjIx}"
 DUOCC_BASE="${DUOCC_BASE:-https://api.duou.cc}"
-DUOCC_KEY="${DUOCC_KEY:-sk-vCtavLUcYvnVK6q88qPXmToILs3GaSWV6WrbhoCq2ZzXOdWS}"
-# =======================================
+# =========================================
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+# ==========================================
+# get_key — read key from store, or prompt user
+# ==========================================
+get_key() {
+  local name="$1"
+  local label="$2"
+  local key
+
+  key=$(grep "^${name}=" "$KEY_STORE" 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d '\r')
+
+  if [ -z "$key" ]; then
+    echo "" >&2
+    echo "🔐 后端 [$label] 需要 API Key" >&2
+    read -s -p "📝 请粘贴 Key（输入不会显示）: " key
+    echo "" >&2
+    if [ -z "$key" ]; then
+      echo "❌ Key 不能为空，已取消。" >&2
+      return 1
+    fi
+    echo "${name}=${key}" >> "$KEY_STORE"
+    chmod 600 "$KEY_STORE"
+    echo "✅ Key 已保存至 $KEY_STORE" >&2
+  fi
+
+  printf '%s' "$key"
+}
+
+# ==========================================
+# write_settings — write env block via Node
+# All values passed through env vars to avoid shell->JS escaping issues.
+# ==========================================
+write_settings() {
+  node -e "
+    const fs = require('fs');
+    let cfg = JSON.parse(fs.readFileSync('${SETTINGS}','utf8'));
+    cfg.env = {
+      ANTHROPIC_BASE_URL: process.env.CS_BASE_URL || '',
+      ANTHROPIC_AUTH_TOKEN: process.env.CS_AUTH_TOKEN || '',
+      ANTHROPIC_API_KEY: process.env.CS_API_KEY || '',
+      ANTHROPIC_MODEL: process.env.CS_MODEL || '',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: process.env.CS_DEFAULT_OPUS || '',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: process.env.CS_DEFAULT_SONNET || '',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: process.env.CS_DEFAULT_HAIKU || '',
+      CLAUDE_CODE_SUBAGENT_MODEL: process.env.CS_SUBAGENT || '',
+      CLAUDE_CODE_EFFORT_LEVEL: process.env.CS_EFFORT || '',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: process.env.CS_COMPACT || ''
+    };
+    fs.writeFileSync('${SETTINGS}', JSON.stringify(cfg, null, 2) + '\n');
+  " || die "failed to write settings"
+}
+
 switch() {
   local mode="$1"
-  local node_script
+  local key
 
   case "$mode" in
     cc)
-      node_script="const env = {ANTHROPIC_BASE_URL:'',ANTHROPIC_AUTH_TOKEN:'',ANTHROPIC_MODEL:'',ANTHROPIC_DEFAULT_OPUS_MODEL:'',ANTHROPIC_DEFAULT_SONNET_MODEL:'',ANTHROPIC_DEFAULT_HAIKU_MODEL:'',CLAUDE_CODE_SUBAGENT_MODEL:'',CLAUDE_CODE_EFFORT_LEVEL:'',CLAUDE_CODE_AUTO_COMPACT_WINDOW:''};"
+      key=$(get_key "ANTHROPIC_OFFICIAL_KEY" "Anthropic 官方") || return 1
+      export CS_BASE_URL="" CS_AUTH_TOKEN="" CS_API_KEY="$key"
+      export CS_MODEL="" CS_DEFAULT_OPUS="" CS_DEFAULT_SONNET="" CS_DEFAULT_HAIKU=""
+      export CS_SUBAGENT="" CS_EFFORT="" CS_COMPACT=""
       echo "Switched to: Claude (default Anthropic)"
       ;;
     deepseek)
-      node_script="
-        const env = {
-          ANTHROPIC_BASE_URL: '${DEEPSEEK_BASE}',
-          ANTHROPIC_AUTH_TOKEN: '${DEEPSEEK_KEY}',
-          ANTHROPIC_MODEL: 'deepseek-v4-pro[1m]',
-          ANTHROPIC_DEFAULT_OPUS_MODEL: 'deepseek-v4-pro[1m]',
-          ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek-v4-pro[1m]',
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek-v4-flash',
-          CLAUDE_CODE_SUBAGENT_MODEL: 'deepseek-v4-flash',
-          CLAUDE_CODE_EFFORT_LEVEL: 'max'
-        };
-      "
+      key=$(get_key "DEEPSEEK_KEY" "DeepSeek") || return 1
+      export CS_BASE_URL="$DEEPSEEK_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
+      export CS_MODEL="deepseek-v4-pro[1m]"
+      export CS_DEFAULT_OPUS="deepseek-v4-pro[1m]" CS_DEFAULT_SONNET="deepseek-v4-pro[1m]"
+      export CS_DEFAULT_HAIKU="deepseek-v4-flash" CS_SUBAGENT="deepseek-v4-flash"
+      export CS_EFFORT="max" CS_COMPACT=""
       echo "Switched to: DeepSeek"
       ;;
     ark)
-      node_script="
-        const env = {
-          ANTHROPIC_BASE_URL: '${GLM_BASE}',
-          ANTHROPIC_AUTH_TOKEN: '${GLM_KEY}',
-          ANTHROPIC_MODEL: 'glm-5.2[1m]',
-          CLAUDE_CODE_SUBAGENT_MODEL: 'glm-4.7',
-          CLAUDE_CODE_AUTO_COMPACT_WINDOW: '1000000',
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-4.7',
-          ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.2[1m]',
-          ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.2[1m]'
-        };
-      "
+      key=$(get_key "GLM_KEY" "Ark") || return 1
+      export CS_BASE_URL="$GLM_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
+      export CS_MODEL="glm-5.2[1m]"
+      export CS_DEFAULT_OPUS="glm-5.2[1m]" CS_DEFAULT_SONNET="glm-5.2[1m]"
+      export CS_DEFAULT_HAIKU="glm-4.7" CS_SUBAGENT="glm-4.7"
+      export CS_EFFORT="" CS_COMPACT="1000000"
       echo "Switched to: Ark"
       ;;
     1y)
-      node_script="
-        const env = {
-          ANTHROPIC_BASE_URL: '${ONEY_BASE}',
-          ANTHROPIC_AUTH_TOKEN: '${ONEY_KEY}',
-          ANTHROPIC_MODEL: 'claude-sonnet-4-8[1m]',
-          ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
-          ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-4-6[1m]',
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5-20251001[1m]',
-          CLAUDE_CODE_SUBAGENT_MODEL: 'claude-haiku-4-5-20251001[1m]'
-        };
-      "
+      key=$(get_key "ONEY_KEY" "1yuanapi") || return 1
+      export CS_BASE_URL="$ONEY_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
+      export CS_MODEL="claude-sonnet-4-8[1m]"
+      export CS_DEFAULT_OPUS="claude-opus-4-8[1m]" CS_DEFAULT_SONNET="claude-sonnet-4-6[1m]"
+      export CS_DEFAULT_HAIKU="claude-haiku-4-5-20251001[1m]" CS_SUBAGENT="claude-haiku-4-5-20251001[1m]"
+      export CS_EFFORT="" CS_COMPACT=""
       echo "Switched to: 1y (1yuanapi.com)"
       ;;
     duo-cc)
-      node_script="
-        const env = {
-          ANTHROPIC_BASE_URL: '${DUOCC_BASE}',
-          ANTHROPIC_AUTH_TOKEN: '${DUOCC_KEY}',
-          ANTHROPIC_MODEL: 'claude-sonnet-4-8[1m]',
-          ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-8[1m]',
-          ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-4-6[1m]',
-          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-4-5-20251001[1m]',
-          CLAUDE_CODE_SUBAGENT_MODEL: 'claude-haiku-4-5-20251001[1m]'
-        };
-      "
+      key=$(get_key "DUOCC_KEY" "duo-cc") || return 1
+      export CS_BASE_URL="$DUOCC_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
+      export CS_MODEL="claude-sonnet-4-8[1m]"
+      export CS_DEFAULT_OPUS="claude-opus-4-8[1m]" CS_DEFAULT_SONNET="claude-sonnet-4-6[1m]"
+      export CS_DEFAULT_HAIKU="claude-haiku-4-5-20251001[1m]" CS_SUBAGENT="claude-haiku-4-5-20251001[1m]"
+      export CS_EFFORT="" CS_COMPACT=""
       echo "Switched to: duo-cc (api.duou.cc)"
       ;;
     *)
@@ -101,13 +146,7 @@ switch() {
       ;;
   esac
 
-  node -e "
-    const fs = require('fs');
-    let cfg = JSON.parse(fs.readFileSync('${SETTINGS}','utf8'));
-    ${node_script}
-    cfg.env = env;
-    fs.writeFileSync('${SETTINGS}', JSON.stringify(cfg, null, 2) + '\n');
-  " || die "failed to write settings"
+  write_settings
 
   if [ "${SC_RESTART:-}" = "1" ]; then
     echo "Restarting Claude with new settings..."
@@ -116,17 +155,32 @@ switch() {
 }
 
 show_current() {
+  echo ""
+  echo "Current backend:"
   node -e "
     const cfg = require('${SETTINGS}');
     const env = cfg.env || {};
     const base = env.ANTHROPIC_BASE_URL || '';
-    if (!base)                          { console.log('current: cc (Anthropic default)'); }
-    else if (base.includes('deepseek')) { console.log('current: deepseek'); }
-    else if (base.includes('volces'))   { console.log('current: ark'); }
-    else if (base.includes('1yuanapi')) { console.log('current: 1y'); }
-    else if (base.includes('duou.cc'))  { console.log('current: duo-cc'); }
-    else                                { console.log('current: custom → ' + base); }
-  " 2>/dev/null || echo "current: unknown"
+    if (!base)                          { console.log('  cc (Anthropic default)'); }
+    else if (base.includes('deepseek')) { console.log('  deepseek'); }
+    else if (base.includes('volces'))   { console.log('  ark'); }
+    else if (base.includes('1yuanapi')) { console.log('  1y'); }
+    else if (base.includes('duou.cc'))  { console.log('  duo-cc'); }
+    else                                { console.log('  custom → ' + base); }
+  " 2>/dev/null || echo "  unknown"
+
+  echo ""
+  echo "Saved keys:"
+  for entry in "ANTHROPIC_OFFICIAL_KEY:Anthropic" "DEEPSEEK_KEY:DeepSeek" "GLM_KEY:Ark" "ONEY_KEY:1yuanapi" "DUOCC_KEY:duo-cc"; do
+    name="${entry%%:*}"
+    label="${entry##*:}"
+    if grep -q "^${name}=." "$KEY_STORE" 2>/dev/null; then
+      echo "  $label ✓"
+    else
+      echo "  $label ✗"
+    fi
+  done
+  echo ""
 }
 
 case "${1:-}" in
@@ -134,17 +188,19 @@ case "${1:-}" in
   deepseek|ds)           switch deepseek ;;
   ark)                   switch ark ;;
   1y|oney)               switch 1y ;;
-  duo-cc|duo|duou)      switch duo-cc ;;
+  duo-cc|duo|duou)       switch duo-cc ;;
   show|current|"")       show_current ;;
   -h|--help)
-    echo "Usage: claude-switch {cc|deepseek|ark|1y|duo-cc|show}"
+    echo "Usage: cs {cc|deepseek|ark|1y|duo-cc|show}"
     echo ""
     echo "  cc        Claude default (Anthropic)"
     echo "  deepseek  DeepSeek V4"
     echo "  ark       Ark"
     echo "  1y        1yuanapi.com (Claude models proxied)"
     echo "  duo-cc    api.duou.cc (Claude models proxied)"
-    echo "  show      Show current mode"
+    echo "  show      Show current backend & saved keys"
+    echo ""
+    echo "Keys are stored in ~/.claude/api-keys and never committed to git."
     ;;
   *)
     die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, or show"

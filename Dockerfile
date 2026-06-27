@@ -55,8 +55,12 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # 注入模型切换 CLI 工具：使用根目录脚本作为 cs/claude-switch
 COPY claude-switch /usr/local/bin/cs
 RUN chmod +x /usr/local/bin/cs \
-    && ln -sf /usr/local/bin/cs /usr/local/bin/claude-switch \
-    && /usr/local/bin/cs deepseek
+    && ln -sf /usr/local/bin/cs /usr/local/bin/claude-switch
+
+# 初始化空的 Key 存储和默认 settings.json（用户首次运行 cs 时按需填入）
+RUN touch /root/.claude/api-keys \
+    && chmod 600 /root/.claude/api-keys \
+    && printf '{\n  "env": {}\n}\n' > /root/.claude/settings.json
 
 # Claude 包装器：直接移交给原版 claude
 # 将原版 claude 重命名为 claude-real，保留一个稳定入口，后端切换交给 cs 完成

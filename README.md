@@ -5,7 +5,7 @@
 ## 核心亮点
 
 - 🔄 **5 大模型后端** — `cs cc` / `cs deepseek` / `cs ark` / `cs 1y` / `cs duo-cc`，一键切换
-- 🚀 **即开即用** — 构建时预初始化 DeepSeek 后端，启动直接进 Claude Code，零手动配置
+- 🔐 **Key 安全存储** — API Key 存于 `~/.claude/api-keys`（chmod 600），脚本不包含机密
 - ⚡ **轻量离线** — 预装 Claude Code + 全套国内镜像源，导出 tar 后可在无外网环境部署
 - 🧠 **20+ 预装技能** — 代码审查、Bug 排查、TDD、Karpathy 编码规范等
 
@@ -34,12 +34,12 @@ docker build \
   -t super-claude:v1 .
 ```
 
-> 构建时自动执行 `cs deepseek` 初始化默认后端配置到 `~/.claude/settings.json`。
+> 首次启动时运行 `cs <后端>` 配置 Key，之后自动记住无需重复输入。
 
 ### 启动
 
 ```bash
-# 直接启动 Claude Code（默认 DeepSeek 后端）
+# 直接启动 Claude Code（首次需先运行 cs 配置后端）
 docker run -it --rm -v "$(pwd):/app" super-claude:v1
 
 # 先进入终端
@@ -70,7 +70,9 @@ docker run ... super-claude:v1
 
 ## `cs` 模型切换
 
-容器内 `cs` 与 `claude-switch` 指向同一脚本，写入 `~/.claude/settings.json` 的 `env` 配置块。
+容器内 `cs` 与 `claude-switch` 指向同一脚本。Key 保存在 `~/.claude/api-keys`，后端配置写入 `~/.claude/settings.json`。
+
+首次运行某后端时会提示输入 Key，之后自动记住。
 
 ```bash
 cs show       # 查看当前后端
@@ -91,7 +93,7 @@ cs duo-cc     # duo-cc         →  claude-sonnet-4-8[1m]
 | `cs 1y` | 1yuanapi | `claude-sonnet-4-8[1m]` | `1yuanapi.com` |
 | `cs duo-cc` | duo-cc | `claude-sonnet-4-8[1m]` | `api.duou.cc` |
 
-> 💡 各平台 API Key 已内置于 `cs` 脚本。通过 Docker 命令直接调用 `cs`（如 `docker run ... cs ark`），切换后会自动重启 Claude Code。
+> 💡 Key 保存后，通过 Docker 命令直接调用 `cs`（如 `docker run ... cs ark`），切换后会自动重启 Claude Code。
 
 ---
 
@@ -102,7 +104,7 @@ cs duo-cc     # duo-cc         →  claude-sonnet-4-8[1m]
 | **基础镜像** | 默认 `node:20-slim`，可通过 `--build-arg NODE_IMAGE=...` 替换拉取源 |
 | **网络优化** | 清华 apt 镜像 + 淘宝 NPM 镜像（免 VPN） |
 | **运行时** | Claude Code 全局安装 |
-| **默认后端** | 构建时 `cs deepseek` 写入 `~/.claude/settings.json`，开箱即用 |
+| **默认后端** | 空配置启动，首次运行 `cs <后端>` 时输入 Key 即可 |
 | **切换工具** | `cs` / `claude-switch` 模型后端切换器 |
 | **鉴权机制** | Anthropic 官方用 `ANTHROPIC_API_KEY`，第三方平台用 `ANTHROPIC_AUTH_TOKEN` |
 | **全局配置** | `claude.json`（claude-hud + document-skills 插件） |

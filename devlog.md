@@ -1,5 +1,43 @@
 # Super Claude — 开发日志
 
+## v1.1.2 (2026-06-27)
+
+### 🔐 安全重构：API Key 与脚本分离
+
+**重大变更**：`cs` 脚本不再硬编码 Key，改为从 `~/.claude/api-keys` 读取，无 Key 时交互式提示输入。
+
+### ✨ 变更
+
+| 项 | 说明 |
+|----|------|
+| Key Store | `~/.claude/api-keys`（chmod 600），`KEY_NAME=value` 格式，5 组 Key 独立存储 |
+| `get_key()` | 新函数：先查 Key Store → 没有则提示用户输入 → 输入后自动保存 |
+| `cs show` 增强 | 显示当前后端 + 各后端 Key 保存状态（✓/✗） |
+| URL 保留 | 端点 URL 仍留在脚本中（非机密），仅 Key 走外部存储 |
+| Dockerfile | 构建时不执行 `cs`，改为创建空 `api-keys` + 空 `settings.json` |
+| entrypoint 引导 | 未配置时自动显示 `cs deepseek` / `cs ark` 等可用命令 |
+
+### 🔧 修复
+
+| 项 | 说明 |
+|----|------|
+| 硬编码 Key | `claude-switch` 第 21-27 行移除全部默认 Key |
+| 构建时依赖 Key | Dockerfile 不再 `RUN cs deepseek`，避免 build 阶段要求交互输入 |
+| Key 注入 JS 字符串 | 改为 env var 传递（`export CS_AUTH_TOKEN`），消除 `'` `\` 等特殊字符引发的 SyntaxError |
+| `get_key()` stdout 污染 | `echo` 提示文案全部改 `>&2`，`$()` 只捕获纯 Key 值 |
+| CRLF 混入 Key | `grep` → `tr -d '\r'` 清洗 Windows 行尾 |
+| 密钥路径 | Docker 容器内自动使用 `/app/.claude/api-keys`（随 `-v` 挂载） |
+| entrypoint 重复提示 | Section 3 改为单行状态；Section 5 仅在拦截时显示一次性引导 |
+| entrypoint 未配置拦截 | `claude` 命令在无后端时 `exec bash` 而非直接进 Claude Code |
+| `.gitignore` | 新增 `api-keys` + `super-claude-v1.1.2.tar` 排除规则 |
+
+### 📝 已知问题
+
+- [ ] Termius SSH 配置文档未编写
+- [x] ~~`cs` 脚本内 API Key 硬编码~~ → v1.1.2 修复
+
+---
+
 ## v1.1.1 (2026-06-27)
 
 ### 🔄 切换脚本重构：`cs` 统一入口

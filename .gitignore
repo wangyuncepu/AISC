@@ -18,6 +18,7 @@ npm-debug.log*
 # Environment (contains secrets)
 .env
 .env.local
+api-keys
 
 # Claude Code local state
 .claude/
@@ -26,3 +27,4 @@ npm-debug.log*
 # Docker image export
 super-claude-v1.tar
 super-claude-v1.tar.gz
+super-claude-v1.1.2.tar
