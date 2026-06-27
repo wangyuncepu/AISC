@@ -14,4 +14,4 @@ echo.
 echo ── 准备进入 Claude Code ──
 echo.
 
-docker run -it --rm -v "%cd%:/app" super-claude:v1
+docker run -it --rm -v "%cd%:/app" super-claude:v1.1.2
