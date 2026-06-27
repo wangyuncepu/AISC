@@ -2,7 +2,19 @@
 # claude-switch — switch Claude Code between cc / deepseek / ark / 1y / duo-cc
 # Modifies ~/.claude/settings.json env block only; everything else untouched.
 
-SETTINGS="${HOME}/.claude/settings.json"
+SETTINGS_RAW="${HOME}/.claude/settings.json"
+
+# Windows Git Bash needs cygpath for Node.js; Linux containers can use the POSIX path directly.
+if command -v cygpath >/dev/null 2>&1; then
+  SETTINGS=$(cygpath -w "$SETTINGS_RAW" | sed 's/\\/\//g')
+else
+  SETTINGS="$SETTINGS_RAW"
+fi
+
+mkdir -p "$(dirname "$SETTINGS_RAW")"
+if [ ! -f "$SETTINGS_RAW" ]; then
+  printf '{\n  "env": {}\n}\n' > "$SETTINGS_RAW"
+fi
 
 # ====== API Keys (fill these in) ======
 DEEPSEEK_BASE="${DEEPSEEK_BASE:-https://api.deepseek.com/anthropic}"
@@ -96,6 +108,11 @@ switch() {
     cfg.env = env;
     fs.writeFileSync('${SETTINGS}', JSON.stringify(cfg, null, 2) + '\n');
   " || die "failed to write settings"
+
+  if [ "${SC_RESTART:-}" = "1" ]; then
+    echo "Restarting Claude with new settings..."
+    exec claude
+  fi
 }
 
 show_current() {

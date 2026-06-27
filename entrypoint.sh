@@ -43,20 +43,26 @@ fi
 # ==========================================
 # 3. 环境变量与网络状态展示
 # ==========================================
-echo "🌐 当前大模型后端: ${ANTHROPIC_MODEL:-Claude 官方模型}"
-if [ -n "$ANTHROPIC_BASE_URL" ]; then
-    echo "🔗 自定义 API 节点: $ANTHROPIC_BASE_URL"
+SETTINGS_FILE="${HOME}/.claude/settings.json"
+if [ -f "$SETTINGS_FILE" ]; then
+    MODEL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_MODEL||'')}catch(e){}" 2>/dev/null)
+    BASE_URL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_BASE_URL||'')}catch(e){}" 2>/dev/null)
+    echo "🌐 当前大模型后端: ${MODEL:-未配置}"
+    if [ -n "$BASE_URL" ]; then
+        echo "🔗 自定义 API 节点: $BASE_URL"
+    fi
+else
+    echo "🌐 当前大模型后端: 未配置（运行 cs <后端> 进行切换）"
 fi
 echo -e "----------------------------------------\n"
 
 # ==========================================
-# 4. 智能引导：未配置 Key 时自动进入 claude-switch
+# 4. 智能引导：支持 cs 直连切换
 # ==========================================
-# 如果用户直接运行 claude（默认 CMD）且还没有 API Key，自动引导配置
-if [ "$1" = "claude" ] && [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$ANTHROPIC_AUTH_TOKEN" ]; then
-    echo "⚠️  尚未配置 API Key，正在启动模型后端切换器..."
-    echo ""
-    exec claude-switch
+# 如果用户用 Docker 命令行传入 cs，表示切换后自动重启 Claude
+if [ "$1" = "cs" ]; then
+    shift
+    SC_RESTART=1 exec /usr/local/bin/cs "$@"
 fi
 
 # ==========================================

@@ -1,5 +1,6 @@
-# 使用官方轻量级 Node 镜像
-FROM node:20-slim
+# 使用官方轻量级 Node 镜像；国内网络可通过 --build-arg NODE_IMAGE=... 替换拉取源
+ARG NODE_IMAGE=node:20-slim
+FROM ${NODE_IMAGE}
 
 # ==========================================
 # 1. 网络环境优化：注入国内镜像源 (告别 VPN 依赖)
@@ -31,18 +32,6 @@ RUN mkdir -p /root/.claude \
     && echo '}'                                           >> /root/.claude/config.json
 
 
-# ==========================================
-# 🚀 注入 DeepSeek 专属环境变量 (公开安全配置)
-# ==========================================
-ENV ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
-ENV ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
-ENV ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
-ENV ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
-ENV ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
-ENV CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
-ENV CLAUDE_CODE_EFFORT_LEVEL="max"
-
-
 # 创建全局配置与技能目录
 RUN mkdir -p /root/.claude/skills
 
@@ -63,24 +52,17 @@ RUN mkdir -p /template/.claude /app \
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 注入模型切换 CLI 工具
-COPY claude-switch /usr/local/bin/claude-switch
-RUN chmod +x /usr/local/bin/claude-switch
+# 注入模型切换 CLI 工具：使用根目录脚本作为 cs/claude-switch
+COPY claude-switch /usr/local/bin/cs
+RUN chmod +x /usr/local/bin/cs \
+    && ln -sf /usr/local/bin/cs /usr/local/bin/claude-switch \
+    && /usr/local/bin/cs deepseek
 
-# ==========================================
-# Claude 包装器：无 Key 时自动引导到 claude-switch
-# ==========================================
-# 将原版 claude 重命名为 claude-real，用包装脚本替换
-# 检查两种鉴权方式：ANTHROPIC_API_KEY（Anthropic 官方）或 ANTHROPIC_AUTH_TOKEN（第三方）
+# Claude 包装器：直接移交给原版 claude
+# 将原版 claude 重命名为 claude-real，保留一个稳定入口，后端切换交给 cs 完成
 RUN mv /usr/local/bin/claude /usr/local/bin/claude-real
-RUN echo '#!/bin/bash'                    >  /usr/local/bin/claude \
- && echo 'if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$ANTHROPIC_AUTH_TOKEN" ]; then' >> /usr/local/bin/claude \
- && echo '    echo "⚠️  尚未配置 API Key，自动启动模型后端切换器..."' >> /usr/local/bin/claude \
- && echo '    exec claude-switch "$@"'    >> /usr/local/bin/claude \
- && echo 'else'                           >> /usr/local/bin/claude \
- && echo '    exec claude-real "$@"'      >> /usr/local/bin/claude \
- && echo 'fi'                             >> /usr/local/bin/claude \
- && chmod +x /usr/local/bin/claude
+RUN printf '#!/bin/bash\nexec claude-real "$@"\n' > /usr/local/bin/claude \
+    && chmod +x /usr/local/bin/claude
 
 # 设置工作目录，后续用户的代码将挂载到这里
 WORKDIR /app

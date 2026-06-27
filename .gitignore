@@ -22,3 +22,7 @@ npm-debug.log*
 # Claude Code local state
 .claude/
 .claude_keys
+
+# Docker image export
+super-claude-v1.tar
+super-claude-v1.tar.gz

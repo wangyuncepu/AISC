@@ -1,5 +1,78 @@
 # Super Claude — 开发日志
 
+## v1.1.1 (2026-06-27)
+
+### 🔄 切换脚本重构：`cs` 统一入口
+
+**重大变更**：废弃交互式菜单方案，改用 `cs` 一键切换 + `~/.claude/settings.json` 持久化。
+
+### ✨ 变更
+
+| 项 | 说明 |
+|----|------|
+| `cs` 统一入口 | `cs` / `claude-switch` 指向同一脚本，写入 `~/.claude/settings.json` |
+| 放弃菜单交互 | 旧版 `claude-switch` 菜单 + `.claude_keys` 方案全部移除 |
+| 5 后端内嵌 Key | cc / deepseek / ark / 1y / duo-cc 的 API Key 内置脚本，切换即用 |
+| `cs show` | 快速查看当前后端 |
+| `SC_RESTART=1` | 切换后自动重启 Claude Code（Docker 直连模式） |
+| 默认后端初始化 | Dockerfile 构建时 `RUN cs deepseek`，不再用 `ENV` 硬编码 |
+| `ARG NODE_IMAGE` | 基础镜像可通过 `--build-arg` 替换，解决国内拉取问题 |
+| `.gitignore` | 排除 `super-claude-v1.tar`、`.claude_keys` |
+| 构建导出流程 | `docker build` + `docker save` → `super-claude-v1.tar` |
+
+### 🔧 修复
+
+| 项 | 说明 |
+|----|------|
+| CRLF 行尾 | `claude-switch` 从 CRLF 转为 LF，修复容器内 `bash\r` 错误 |
+| DeepSeek 无 Key | 移除 Dockerfile 中 `ENV ANTHROPIC_BASE_URL`（有 URL 无 Token 导致 `ERR_BAD_REQUEST`） |
+| entrypoint 横幅 | 改为从 `~/.claude/settings.json` 读取后端信息，不再依赖 Docker ENV |
+| `claude` 包装器 | 简化为直接移交 `claude-real`，不再做 Key 检测（切换交给 `cs`） |
+| cygpath 兼容 | `cs` 脚本自动识别 Windows/Linux 环境，Linux 容器内直接使用 POSIX 路径 |
+
+### 📝 文档
+
+- README.md 重写：`cs` 用法、平台详情表、构建导出流程
+- 新增 `cs` 直连模式说明：`docker run ... cs ark`
+
+### 🗑️ 移除
+
+- 旧版交互式 `claude-switch` 菜单（Anthropic/DeepSeek/硅基流动/OpenRouter/智谱 5 选 1）
+- `.claude_keys` Key 持久化文件（改为 `~/.claude/settings.json` 管理）
+- `entrypoint.sh` 中无 Key 自动引导逻辑（不再需要）
+- Dockerfile 中 7 行 `ENV` 硬编码 DeepSeek 变量
+
+### 📂 当前项目结构
+
+```
+.
+├── Dockerfile
+├── entrypoint.sh
+├── claude-switch                       # 同时是 cs 和 claude-switch 的源
+├── 一键启动_AI工作站.bat
+├── devlog.md
+├── README.md
+├── skills/
+│   ├── claude.json
+│   ├── karpathy-flow/
+│   └── ... (20+ 技能)
+├── .claude/
+│   └── settings.local.json
+├── .claude_keys                        (已废弃，不再使用)
+└── todo/
+    ├── todo.md
+    └── 20260625/
+        ├── claude-switch               (开发过程中的中间版本)
+        └── setup-ssh-portproxy.ps1
+```
+
+### 已知问题
+
+- [ ] Termius SSH 配置文档未编写
+- [ ] `cs` 脚本内 API Key 硬编码，后续可改为环境变量覆盖 + 运行时输入
+
+---
+
 ## v1.1.0 (2026-06-27)
 
 ### 🔄 架构重构：纯终端闭环

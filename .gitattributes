@@ -1,0 +1,5 @@
+*.sh text eol=lf
+claude-switch text eol=lf
+*.bat text eol=crlf
+*.md text eol=lf
+*.json text eol=lf

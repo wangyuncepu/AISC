@@ -1,13 +1,13 @@
 # Super Claude
 
-开箱即用的 [Claude Code](https://claude.ai/code) Docker 容器——预装精选技能库、**5 大模型后端**、密钥持久化，**100% 纯终端 CLI**。挂载任意代码库即可获得全副武装的 Claude Code 会话。
+开箱即用的 [Claude Code](https://claude.ai/code) Docker 容器——预装 20+ 技能库、**5 大模型后端**、`cs` 一键切换，**100% 纯终端 CLI**。
 
 ## 核心亮点
 
-- 🔄 **5 大模型后端** — Anthropic 官方 / DeepSeek / 硅基流动 / OpenRouter / 智谱 Z.AI，15+ 模型可选
-- 🔑 **密钥持久化** — API Key 保存至 `.claude_keys`（chmod 600），容器重启不丢失
-- 🛡️ **自动引导** — 未配置 Key 时无论怎么启动都自动进 `claude-switch`，杜绝裸奔报错
-- 🧠 **20+ 预装技能** — 代码审查、Bug 排查、TDD、Karpathy 编码规范等开箱即用
+- 🔄 **5 大模型后端** — `cs cc` / `cs deepseek` / `cs ark` / `cs 1y` / `cs duo-cc`，一键切换
+- 🚀 **即开即用** — 构建时预初始化 DeepSeek 后端，启动直接进 Claude Code，零手动配置
+- ⚡ **轻量离线** — 预装 Claude Code + 全套国内镜像源，导出 tar 后可在无外网环境部署
+- 🧠 **20+ 预装技能** — 代码审查、Bug 排查、TDD、Karpathy 编码规范等
 
 ## 快速开始
 
@@ -16,88 +16,82 @@
 - 已安装 [Docker](https://www.docker.com/)
 - 拥有至少一个后端的 API Key
 
-### 三步启动
+### 方式一：导入预构建镜像
 
 ```bash
-# 1. 构建
-docker build -t super-claude:v1 .
-
-# 2. 启动（二选一）
-docker run -it --rm -v "$(pwd):/app" super-claude:v1          # 直接启动，自动进菜单
-docker run -it --rm -v "$(pwd):/app" super-claude:v1 bash     # 先进入终端，手动操作
-
-# 3. 选后端 + 配 Key → 自动进入 Claude
+docker load -i super-claude-v1.tar
 ```
 
-Windows 用户可直接双击 `一键启动_AI工作站.bat`。
+### 方式二：从源码构建
 
-> 💡 `claude` 命令已被包装：无论从 CMD 启动还是 bash 内手动敲，**只要没有 API Key 就会自动弹出菜单引导配置**。配置过的 Key 缓存到 `.claude_keys`，下次自动加载。
+```bash
+# 标准构建
+docker build -t super-claude:v1 .
 
-### 首次启动全流程
+# 国内网络指定基础镜像源
+docker build \
+  --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim \
+  -t super-claude:v1 .
+```
+
+> 构建时自动执行 `cs deepseek` 初始化默认后端配置到 `~/.claude/settings.json`。
+
+### 启动
+
+```bash
+# 直接启动 Claude Code（默认 DeepSeek 后端）
+docker run -it --rm -v "$(pwd):/app" super-claude:v1
+
+# 先进入终端
+docker run -it --rm -v "$(pwd):/app" super-claude:v1 bash
+
+# 切换后端后自动启动 Claude Code
+docker run -it --rm -v "$(pwd):/app" super-claude:v1 cs ark
+```
+
+Windows 用户也可双击 `一键启动_AI工作站.bat`。
+
+### 启动流程
 
 ```
 docker run ... super-claude:v1
         │
-        ├── entrypoint.sh ──→ .claude/ 注入 + 权限修复 + 环境展示
+        ├── entrypoint.sh ──→ .claude/ 注入 + 权限修复 + 显示当前后端
+        │                     （从 ~/.claude/settings.json 读取）
         │
-        ├── claude 包装器检测到无 API Key
-        │       └──→ claude-switch 菜单
-        │               ├── 选平台 (1-5)
-        │               ├── 选模型（硅基流动/OpenRouter/智谱 支持子菜单）
-        │               ├── 首次输入 Key → 持久化到 .claude_keys
-        │               └── exec claude ← 进入对话
-        │
-        └── 下次启动：Key 已缓存，选完后端直接进 Claude
+        └── 默认执行 claude ──→ Claude Code 启动
+                │
+                └── 需要切换后端时：cs <cc|deepseek|ark|1y|duo-cc|show>
+                        └── 修改 ~/.claude/settings.json 的 env 配置
+                            └── SC_RESTART=1 时自动重启 Claude Code
 ```
 
 ---
 
-## claude-switch 平台与模型
+## `cs` 模型切换
 
-### 主菜单
+容器内 `cs` 与 `claude-switch` 指向同一脚本，写入 `~/.claude/settings.json` 的 `env` 配置块。
 
-```
-╔══════════════════════════════════════════╗
-║      🔄 Claude 模型后端切换器           ║
-╠══════════════════════════════════════════╣
-║  1) Anthropic 官方                      ║
-║     模型: claude-opus-4-8              ║
-║                                          ║
-║  2) DeepSeek 官方                       ║
-║     模型: deepseek-v4-pro[1m]           ║
-║                                          ║
-║  3) 硅基流动 · 国产模型                 ║
-║  4) OpenRouter · 全球路由               ║
-║  5) 智谱 Z.AI · GLM 系列               ║
-╚══════════════════════════════════════════╝
+```bash
+cs show       # 查看当前后端
+cs cc         # Anthropic 官方  →  claude-opus-4-8
+cs deepseek   # DeepSeek 官方  →  deepseek-v4-pro[1m]
+cs ark        # 火山 Ark       →  glm-5.2[1m]
+cs 1y         # 1yuanapi       →  claude-sonnet-4-8[1m]
+cs duo-cc     # duo-cc         →  claude-sonnet-4-8[1m]
 ```
 
 ### 平台详情
 
-| # | 平台 | 默认模型 | 端点 | 鉴权方式 | 子菜单 |
-|---|------|----------|------|----------|--------|
-| 1 | Anthropic 官方 | `claude-opus-4-8` | 官方默认 | `API_KEY` | — |
-| 2 | DeepSeek 官方 | `deepseek-v4-pro[1m]` | `api.deepseek.com/anthropic` | `AUTH_TOKEN` | — |
-| 3 | 硅基流动 | `Pro/deepseek-ai/DeepSeek-V4-Pro` | `api.siliconflow.cn/v1/anthropic` | `AUTH_TOKEN` | 5 款模型 |
-| 4 | OpenRouter | `anthropic/claude-opus-4-8` | `openrouter.ai/api` | `AUTH_TOKEN` | 6 款模型 |
-| 5 | 智谱 Z.AI | `glm-4.6` | `api.z.ai/api/anthropic` | `AUTH_TOKEN` | 3 款模型 |
+| 命令 | 平台 | 默认模型 | 端点 |
+|------|------|----------|------|
+| `cs cc` | Anthropic 官方 | `claude-opus-4-8` | 官方默认 |
+| `cs deepseek` | DeepSeek | `deepseek-v4-pro[1m]` | `api.deepseek.com/anthropic` |
+| `cs ark` | 火山 Ark | `glm-5.2[1m]` | `ark.cn-beijing.volces.com/api/coding` |
+| `cs 1y` | 1yuanapi | `claude-sonnet-4-8[1m]` | `1yuanapi.com` |
+| `cs duo-cc` | duo-cc | `claude-sonnet-4-8[1m]` | `api.duou.cc` |
 
-### 子菜单模型
-
-| 平台 | 可选模型 |
-|------|----------|
-| **硅基流动** | DeepSeek-V4-Pro ⭐ / GLM-5.2 / Nex-N2-Pro / MiniMax M3 / Qwen3.6-35B |
-| **OpenRouter** | Claude Opus 4.8 ⭐ / Claude Sonnet 4.6 / DeepSeek V3.2 / GLM-5.2 / Qwen3 Coder Plus / Kimi K2.7 Code |
-| **智谱 Z.AI** | GLM-4.6 ⭐ / GLM-4.5 / GLM-4.5-Air |
-
-### 密钥管理
-
-每个平台的 API Key **独立存储**，互不干扰。切换后端无需重新输入 Key。
-
-```bash
-grep -o '^[^=]*' /app/.claude_keys   # 查看已保存的平台
-vim /app/.claude_keys                 # 手动编辑
-```
+> 💡 各平台 API Key 已内置于 `cs` 脚本。通过 Docker 命令直接调用 `cs`（如 `docker run ... cs ark`），切换后会自动重启 Claude Code。
 
 ---
 
@@ -105,11 +99,12 @@ vim /app/.claude_keys                 # 手动编辑
 
 | 层级 | 内容 |
 |------|------|
-| **基础镜像** | `node:20-slim` + git + curl + sudo + tmux |
+| **基础镜像** | 默认 `node:20-slim`，可通过 `--build-arg NODE_IMAGE=...` 替换拉取源 |
 | **网络优化** | 清华 apt 镜像 + 淘宝 NPM 镜像（免 VPN） |
-| **运行时** | Claude Code 全局安装 + `claude` 包装器（自动引导） |
-| **CLI 工具** | `claude-switch` 模型后端切换器 + `claude` 包装器自动引导 |
-| **鉴权机制** | Anthropic 官方用 `ANTHROPIC_API_KEY`，第三方平台用 `ANTHROPIC_AUTH_TOKEN`（避免 key 验证失败） |
+| **运行时** | Claude Code 全局安装 |
+| **默认后端** | 构建时 `cs deepseek` 写入 `~/.claude/settings.json`，开箱即用 |
+| **切换工具** | `cs` / `claude-switch` 模型后端切换器 |
+| **鉴权机制** | Anthropic 官方用 `ANTHROPIC_API_KEY`，第三方平台用 `ANTHROPIC_AUTH_TOKEN` |
 | **全局配置** | `claude.json`（claude-hud + document-skills 插件） |
 | **技能库** | 20+ 技能预装至 `/root/.claude/skills/` |
 | **项目模板** | `settings.local.json`，首次挂载自动注入 |
@@ -148,19 +143,19 @@ vim /app/.claude_keys                 # 手动编辑
 
 ## 环境变量
 
-由 `claude-switch` 自动设置，也可手动覆盖：
+由 `cs` 写入 `~/.claude/settings.json` 的 `env` 配置块；CI/CD 场景可直接传环境变量覆盖：
 
 | 变量 | 说明 |
 |------|------|
-| `ANTHROPIC_API_KEY` | Anthropic 官方 API 密钥（平台 1） |
-| `ANTHROPIC_AUTH_TOKEN` | 第三方平台 API 密钥（平台 2-5） |
+| `ANTHROPIC_API_KEY` | Anthropic 官方 API 密钥 |
+| `ANTHROPIC_AUTH_TOKEN` | 第三方平台 API 密钥 |
 | `ANTHROPIC_BASE_URL` | API 端点 |
 | `ANTHROPIC_MODEL` | 对话模型 |
-| `CLAUDE_CODE_EFFORT_LEVEL` | 推理努力程度，默认 `max` |
+| `CLAUDE_CODE_EFFORT_LEVEL` | 推理努力程度 |
 
-> 💡 第三方平台必须用 `ANTHROPIC_AUTH_TOKEN` 传 Key，同时保持 `ANTHROPIC_API_KEY=""`。否则 Claude Code 会拿第三方 Key 去 Anthropic 官方验证，直接报错。
+> 💡 第三方平台必须用 `ANTHROPIC_AUTH_TOKEN` 传 Key，同时保持 `ANTHROPIC_API_KEY=""`。
 
-CI/CD 场景直接传 Key 跳过菜单：
+### CI/CD 直接传 Key
 
 ```bash
 # Anthropic 官方
@@ -169,7 +164,7 @@ docker run -it --rm \
   -v "$(pwd):/app" \
   super-claude:v1
 
-# DeepSeek / 硅基流动 / OpenRouter / 智谱
+# 第三方平台
 docker run -it --rm \
   -e ANTHROPIC_AUTH_TOKEN="sk-xxx" \
   -e ANTHROPIC_API_KEY="" \
@@ -185,18 +180,17 @@ docker run -it --rm \
 ```
 .
 ├── Dockerfile
-├── entrypoint.sh                       # 入口：注入 .claude/ + 权限修复 + 自动引导
-├── claude-switch                       # 模型后端切换器（5 平台 15+ 模型）
+├── entrypoint.sh                       # 入口：技能注入 + 权限修复 + cs 直连
+├── claude-switch                       # 切换脚本 → /usr/local/bin/cs、claude-switch
 ├── 一键启动_AI工作站.bat              # Windows 一键启动
-├── devlog.md                           # 开发日志
 ├── README.md
+├── devlog.md                           # 开发日志
 ├── skills/                             # 全局技能 → /root/.claude/skills/
 │   ├── claude.json
 │   ├── karpathy-flow/
 │   └── ... (20+ 技能)
 ├── .claude/                            # 项目模板 → /app/.claude/
 │   └── settings.local.json
-├── .claude_keys                        # Key 持久化（chmod 600，运行时生成）
 └── todo/
     └── todo.md
 ```
@@ -206,8 +200,24 @@ docker run -it --rm \
 - **日常开发** — 挂载项目目录，获得全副武装的 AI 编程助手
 - **CI/CD 审查** — `docker run ... claude -p "/review"` 在流水线中审查 PR
 - **一次性任务** — `docker run --rm ... claude -p "排查 src/auth.ts 中的 Bug"`
-- **离线部署** — 预构建镜像包含全部依赖，运行时无需网络
-- **多仓库切换** — 挂载不同项目，`.claude_keys` 随宿主机持久化
+- **离线部署** — 导出 tar 后 `docker load` 即可在无外网环境使用
+
+## 构建与导出
+
+```bash
+# 构建
+docker build \
+  --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim \
+  -t super-claude:v1 .
+
+# 导出
+docker save -o super-claude-v1.tar super-claude:v1
+docker save super-claude:v1 | gzip > super-claude-v1.tar.gz   # 压缩版
+
+# 导入
+docker load -i super-claude-v1.tar
+gunzip -c super-claude-v1.tar.gz | docker load                # 解压导入
+```
 
 ## 许可证
 

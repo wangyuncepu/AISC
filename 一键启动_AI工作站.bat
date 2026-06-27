@@ -4,12 +4,12 @@ chcp 65001 >nul
 echo.
 echo ╔══════════════════════════════════════════╗
 echo ║     🚀 Super Claude AI 工作站          ║
-echo ║        v1.1.0 · 5 平台 15+ 模型       ║
+echo ║        v1.1.0 · cs 一键切换       ║
 echo ╚══════════════════════════════════════════╝
 echo.
 echo 📦 正在启动容器...
-echo 💡 首次使用会弹出 claude-switch 菜单引导配置
-echo 💡 配置过的 Key 会缓存到 .claude_keys，下次自动加载
+echo 💡 容器内可用 cs ark / cs deepseek / cs show 切换模型后端
+echo 💡 也可 docker run ... cs ark 切换后自动进入 Claude
 echo.
 echo ── 准备进入 Claude Code ──
 echo.
