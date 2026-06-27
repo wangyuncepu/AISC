@@ -141,39 +141,6 @@ cs duo-cc     # duo-cc         →  claude-sonnet-4-8[1m]
 ### 写作
 - **writing-skills** — 技能编写指南 + Anthropic 最佳实践
 
----
-
-## 环境变量
-
-由 `cs` 写入 `~/.claude/settings.json` 的 `env` 配置块；CI/CD 场景可直接传环境变量覆盖：
-
-| 变量 | 说明 |
-|------|------|
-| `ANTHROPIC_API_KEY` | Anthropic 官方 API 密钥 |
-| `ANTHROPIC_AUTH_TOKEN` | 第三方平台 API 密钥 |
-| `ANTHROPIC_BASE_URL` | API 端点 |
-| `ANTHROPIC_MODEL` | 对话模型 |
-| `CLAUDE_CODE_EFFORT_LEVEL` | 推理努力程度 |
-
-> 💡 第三方平台必须用 `ANTHROPIC_AUTH_TOKEN` 传 Key，同时保持 `ANTHROPIC_API_KEY=""`。
-
-### CI/CD 直接传 Key
-
-```bash
-# Anthropic 官方
-docker run -it --rm \
-  -e ANTHROPIC_API_KEY="sk-ant-xxx" \
-  -v "$(pwd):/app" \
-  super-claude:v1
-
-# 第三方平台
-docker run -it --rm \
-  -e ANTHROPIC_AUTH_TOKEN="sk-xxx" \
-  -e ANTHROPIC_API_KEY="" \
-  -e ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic" \
-  -v "$(pwd):/app" \
-  super-claude:v1
-```
 
 ---
 
