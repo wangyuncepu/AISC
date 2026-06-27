@@ -1,251 +1,214 @@
-# AutoCC — Claude Code + DeepSeek 一键安装与配置工具
+# Super Claude
 
-**AutoCC** 是一个跨平台自动化工具，让你的 Claude Code 在 2 分钟内完成安装、DeepSeek API 接入，以及 5 个常用 Skills/MCP Servers 的配置。
+开箱即用的 [Claude Code](https://claude.ai/code) Docker 容器——预装精选技能库、**5 大模型后端**、密钥持久化，**100% 纯终端 CLI**。挂载任意代码库即可获得全副武装的 Claude Code 会话。
 
-> 🎯 只需回答 **2 个问题**，其余全自动完成。
+## 核心亮点
 
-## 特性
-
-- 🖥️ **跨平台**: 支持 Windows、macOS、Linux（apt / pacman / dnf / apk / zypper）
-- 🇨🇳 **国内网络优化**: 全链路走 npmmirror / 阿里云 / 中科大镜像源
-- 🔐 **安全输入**: API Key 密码掩码输入，不回显
-- 🐟 **Fish Shell 兼容**: 环境变量直接写入 Shell 原生 RC 文件（`$PROFILE` / `.bashrc` / `.zshrc` / `config.fish`）
-- 📄 **自文档化配置**: 生成 `AUTO_CONFIG.md`，用户复制一条命令即可完成 Skill 安装
-- 🔇 **完全非交互**: 安装过程无需按回车，可无人值守
+- 🔄 **5 大模型后端** — Anthropic 官方 / DeepSeek / 硅基流动 / OpenRouter / 智谱 Z.AI，15+ 模型可选
+- 🔑 **密钥持久化** — API Key 保存至 `.claude_keys`（chmod 600），容器重启不丢失
+- 🛡️ **自动引导** — 未配置 Key 时无论怎么启动都自动进 `claude-switch`，杜绝裸奔报错
+- 🧠 **20+ 预装技能** — 代码审查、Bug 排查、TDD、Karpathy 编码规范等开箱即用
 
 ## 快速开始
 
+### 前置条件
+
+- 已安装 [Docker](https://www.docker.com/)
+- 拥有至少一个后端的 API Key
+
+### 三步启动
+
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/your-org/AutoCC.git
-cd AutoCC
+# 1. 构建
+docker build -t super-claude:v1 .
 
-# 2. 运行安装
-chmod +x install.sh
-./install.sh
+# 2. 启动（二选一）
+docker run -it --rm -v "$(pwd):/app" super-claude:v1          # 直接启动，自动进菜单
+docker run -it --rm -v "$(pwd):/app" super-claude:v1 bash     # 先进入终端，手动操作
 
-# 3. 回答 2 个问题：
-#    Q1: 是否使用中国大陆镜像源？ [Y/n]
-#    Q2: 请输入 DeepSeek API Key [****]
-#
-#    ... 之后全自动完成环境配置 ...
-
-# 4. 复制脚本输出的命令，在新终端中运行，完成 Skills/MCP 安装
+# 3. 选后端 + 配 Key → 自动进入 Claude
 ```
 
-**Windows 用户请使用 PowerShell：**
+Windows 用户可直接双击 `一键启动_AI工作站.bat`。
 
-```powershell
-.\install.ps1
+> 💡 `claude` 命令已被包装：无论从 CMD 启动还是 bash 内手动敲，**只要没有 API Key 就会自动弹出菜单引导配置**。配置过的 Key 缓存到 `.claude_keys`，下次自动加载。
+
+### 首次启动全流程
+
+```
+docker run ... super-claude:v1
+        │
+        ├── entrypoint.sh ──→ .claude/ 注入 + 权限修复 + 环境展示
+        │
+        ├── claude 包装器检测到无 API Key
+        │       └──→ claude-switch 菜单
+        │               ├── 选平台 (1-5)
+        │               ├── 选模型（硅基流动/OpenRouter/智谱 支持子菜单）
+        │               ├── 首次输入 Key → 持久化到 .claude_keys
+        │               └── exec claude ← 进入对话
+        │
+        └── 下次启动：Key 已缓存，选完后端直接进 Claude
 ```
 
-若显示
+---
 
-```powershell
-.\install.ps1 : 无法加载文件 C:\Users\...\AutoCC\install.ps1，因为在此系统上禁止运行脚本。
+## claude-switch 平台与模型
+
+### 主菜单
+
+```
+╔══════════════════════════════════════════╗
+║      🔄 Claude 模型后端切换器           ║
+╠══════════════════════════════════════════╣
+║  1) Anthropic 官方                      ║
+║     模型: claude-opus-4-8              ║
+║                                          ║
+║  2) DeepSeek 官方                       ║
+║     模型: deepseek-v4-pro[1m]           ║
+║                                          ║
+║  3) 硅基流动 · 国产模型                 ║
+║  4) OpenRouter · 全球路由               ║
+║  5) 智谱 Z.AI · GLM 系列               ║
+╚══════════════════════════════════════════╝
 ```
 
-则可运行如下命令开放权限：
+### 平台详情
 
-```powershell
-# 临时放行
-Set-ExecutionPolicy Bypass -Scope Process
+| # | 平台 | 默认模型 | 端点 | 鉴权方式 | 子菜单 |
+|---|------|----------|------|----------|--------|
+| 1 | Anthropic 官方 | `claude-opus-4-8` | 官方默认 | `API_KEY` | — |
+| 2 | DeepSeek 官方 | `deepseek-v4-pro[1m]` | `api.deepseek.com/anthropic` | `AUTH_TOKEN` | — |
+| 3 | 硅基流动 | `Pro/deepseek-ai/DeepSeek-V4-Pro` | `api.siliconflow.cn/v1/anthropic` | `AUTH_TOKEN` | 5 款模型 |
+| 4 | OpenRouter | `anthropic/claude-opus-4-8` | `openrouter.ai/api` | `AUTH_TOKEN` | 6 款模型 |
+| 5 | 智谱 Z.AI | `glm-4.6` | `api.z.ai/api/anthropic` | `AUTH_TOKEN` | 3 款模型 |
 
-# 永久放行
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser（后选择 y）
+### 子菜单模型
+
+| 平台 | 可选模型 |
+|------|----------|
+| **硅基流动** | DeepSeek-V4-Pro ⭐ / GLM-5.2 / Nex-N2-Pro / MiniMax M3 / Qwen3.6-35B |
+| **OpenRouter** | Claude Opus 4.8 ⭐ / Claude Sonnet 4.6 / DeepSeek V3.2 / GLM-5.2 / Qwen3 Coder Plus / Kimi K2.7 Code |
+| **智谱 Z.AI** | GLM-4.6 ⭐ / GLM-4.5 / GLM-4.5-Air |
+
+### 密钥管理
+
+每个平台的 API Key **独立存储**，互不干扰。切换后端无需重新输入 Key。
+
+```bash
+grep -o '^[^=]*' /app/.claude_keys   # 查看已保存的平台
+vim /app/.claude_keys                 # 手动编辑
 ```
 
-## 安装了什么
+---
 
-| 项目 | 说明 |
+## 容器包含
+
+| 层级 | 内容 |
 |------|------|
-| **Node.js >= 18** | 若缺失则通过系统包管理器自动安装 |
-| **Claude Code** | `npm install -g @anthropic-ai/claude-code` |
-| **DeepSeek API 配置** | 环境变量直接写入 Shell 原生 RC 文件 |
-| **AUTO_CONFIG.md** | 生成 Skill 安装指令文件 |
+| **基础镜像** | `node:20-slim` + git + curl + sudo + tmux |
+| **网络优化** | 清华 apt 镜像 + 淘宝 NPM 镜像（免 VPN） |
+| **运行时** | Claude Code 全局安装 + `claude` 包装器（自动引导） |
+| **CLI 工具** | `claude-switch` 模型后端切换器 + `claude` 包装器自动引导 |
+| **鉴权机制** | Anthropic 官方用 `ANTHROPIC_API_KEY`，第三方平台用 `ANTHROPIC_AUTH_TOKEN`（避免 key 验证失败） |
+| **全局配置** | `claude.json`（claude-hud + document-skills 插件） |
+| **技能库** | 20+ 技能预装至 `/root/.claude/skills/` |
+| **项目模板** | `settings.local.json`，首次挂载自动注入 |
 
-### 5 个可安装的 Skills / MCP
+## 内置技能
 
-| Skill | 类型 | 说明 |
-|-------|------|------|
-| **superpowers** | Plugin | 20+ 实战 Skills（测试/调试/协作/计划） |
-| **document-skills** | Plugin | Anthropic 官方文档处理（Excel/Word/PPT/PDF） |
-| **caveman** | Plugin | 压缩输出模式（节省 ~75% Token） |
-| **gstack** | MCP | Google Cloud 命令行 MCP Server |
-| **claude-hub** | MCP | 社区 MCP Server 注册中心 |
+### 核心工作流
+- **gstack** — 无头浏览器，QA 测试、网站验证、截图、部署检查
+- **autoplan** — 全流程审查管线（CEO/工程/设计审查）
+- **review** — 多维度代码审查（安全、性能、可维护性等）
+- **investigate** — 系统性 Bug 排查与根因追溯
 
-## 架构
+### 开发
+- **karpathy-flow** — Andrej Karpathy 编码规范：先想后写、极简实现、精准修改、目标驱动
+- **writing-plans** — 结构化实施方案 + 审查者提示词
+- **subagent-driven-development** — 并行子代理开发
+- **test-driven-development** — TDD 工作流 + 反模式检测
+- **dispatching-parallel-agents** — 并行代理调度
+- **verification-before-completion** — 提交前验证门禁
 
-```
-用户执行 install.sh / install.ps1
-  │
-  ├── [引导层 Shell/PowerShell]
-  │   ├── 检测操作系统 & 包管理器
-  │   ├── 检测 Node.js → 缺失则自动安装（国内镜像）
-  │   ├── 配置 npm 镜像源
-  │   └── npm install → node install.js
-  │
-  └── [主脚本 Node.js + TUI]
-      ├── @clack/prompts TUI（仅 2 问）
-      ├── npm install -g @anthropic-ai/claude-code
-      ├── 写入 Shell 原生 RC 文件（$PROFILE / .bashrc / .zshrc / config.fish）
-      ├── 生成 ~/.claude/AUTO_CONFIG.md
-      └── 打印一键安装命令（用户复制运行）
-```
+### 沟通
+- **caveman** — 超压缩沟通模式（节省约 75% token）
+- **brainstorming** — 结构化头脑风暴 + 可视化
 
-## 文件结构
+### 运维
+- **using-git-worktrees** — 隔离工作树
+- **using-superpowers** — AI 工具参考指南
+- **executing-plans** — 方案执行工作流
+- **finishing-a-development-branch** — 分支收尾检查清单
+- **receiving-code-review** — 处理代码审查
 
-```
-AutoCC/
-├── install.sh          # Linux/macOS 引导入口（Bash）
-├── install.ps1         # Windows 引导入口（PowerShell）
-├── install.js          # 主脚本（Node.js TUI + 安装 + 环境配置）
-├── package.json        # 依赖声明（@clack/prompts, picocolors）
-├── README.md           # 本文件
-└── DEEPSEEK_README.md  # DeepSeek API 接入参考
-```
+### 写作
+- **writing-skills** — 技能编写指南 + Anthropic 最佳实践
 
-## 支持的平台
-
-| 平台 | 包管理器 | Node.js 安装方式 |
-|------|---------|-----------------|
-| Ubuntu / Debian | apt | `apt-get install nodejs` + NodeSource |
-| Arch Linux | pacman | `pacman -S nodejs npm` |
-| Fedora / CentOS | dnf / yum | `dnf install nodejs npm` |
-| Alpine | apk | `apk add nodejs npm` |
-| openSUSE | zypper | `zypper install nodejs npm` |
-| macOS | Homebrew | `brew install node` |
-| Windows | winget / Chocolatey | `winget install` 或 msi 直链 |
-| 通用回退 | nvm | nvm + 国内镜像安装 |
-
-## 国内镜像源
-
-中国大陆网络环境下，脚本自动切换以下镜像：
-
-| 环节 | 默认源 | 国内镜像 |
-|------|--------|---------|
-| npm registry | registry.npmjs.org | registry.npmmirror.com |
-| Node.js 二进制 | nodejs.org/dist | npmmirror.com/mirrors/node |
-| apt (Ubuntu/Debian) | archive.ubuntu.com | mirrors.aliyun.com |
-| pacman (Arch) | 默认 mirrorlist | mirrors.ustc.edu.cn |
-| Homebrew (macOS) | github.com/Homebrew | mirrors.ustc.edu.cn |
-| nvm 安装脚本 | raw.githubusercontent.com | gitee.com/mirrors/nvm |
-
-## 命令行选项
-
-### install.sh
-
-```bash
-./install.sh               # 正常安装
-./install.sh --dry-run     # 仅检测环境，不执行任何安装
-./install.sh --cn          # 强制使用国内镜像
-./install.sh --no-cn       # 强制使用国际网络
-```
-
-### install.ps1
-
-```powershell
-.\install.ps1               # 正常安装
-.\install.ps1 -DryRun       # 仅检测环境
-.\install.ps1 -UseCN        # 强制国内镜像
-.\install.ps1 -NoCN         # 强制国际网络
-```
+---
 
 ## 环境变量
 
-脚本直接将环境变量写入 Shell 原生配置文件，新终端启动时自动生效。
+由 `claude-switch` 自动设置，也可手动覆盖：
 
-**写入位置：**
-
-| Shell | 配置文件 |
-|-------|---------|
-| PowerShell | `$PROFILE` |
-| Bash | `~/.bashrc` |
-| Zsh | `~/.zshrc` |
-| Fish | `~/.config/fish/config.fish` |
-| 备份 | `~/.claude/.env` |
-
-**写入内容：**
-
-```bash
-# >>> AutoCC — Claude Code + DeepSeek >>>
-export ANTHROPIC_AUTH_TOKEN='<你的 API Key>'
-export ANTHROPIC_BASE_URL='https://api.deepseek.com/anthropic'
-export ANTHROPIC_MODEL='deepseek-v4-pro[1m]'
-export ANTHROPIC_DEFAULT_OPUS_MODEL='deepseek-v4-pro[1m]'
-export ANTHROPIC_DEFAULT_SONNET_MODEL='deepseek-v4-pro[1m]'
-export ANTHROPIC_DEFAULT_HAIKU_MODEL='deepseek-v4-flash'
-export CLAUDE_CODE_SUBAGENT_MODEL='deepseek-v4-flash'
-export CLAUDE_CODE_EFFORT_LEVEL='max'
-# <<< AutoCC <<<
-```
-
-> 重复运行脚本不会重复写入（幂等，通过 marker 标记识别已有配置块）。
-
-## 安装 Skills / MCP
-
-脚本完成后会打印一条命令，复制到终端运行即可：
-
-```bash
-claude --print 'Read the file at "~/.claude/AUTO_CONFIG.md". Execute every step listed in it, in order. Verify each step. Output PASS/FAIL at the end.' --dangerously-skip-permissions
-```
-
-Claude Code 会自动读取指令文件，依次完成 5 个 Skill 的安装。
-
-> `~/.claude/AUTO_CONFIG.md` 文件包含每个 Skill 的安装命令和验证方法，也可手动逐条执行。
-
-## GStack 额外配置
-
-`gstack` (Google Cloud MCP) 需要 GCP Service Account 凭据。安装完成后，手动设置：
-
-```bash
-# Bash / Zsh
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/your-gcp-key.json
-
-# PowerShell
-$env:GOOGLE_APPLICATION_CREDENTIALS='C:\path\to\gcp-key.json'
-```
-
-## 常见问题
-
-**Q: 安装过程中卡住了？**
-
-A: 正常流程约 1-2 分钟。如果网络慢，安装 Node.js 或 Claude Code 可能需要更长时间。
-
-**Q: Skills 安装命令执行时报错？**
-
-A: 确认 DeepSeek API Key 已正确设置在环境变量中。打开新终端后运行 `claude --version` 确认 Claude Code 可用。`~/.claude/AUTO_CONFIG.md` 中的命令也可手动逐条执行。
-
-**Q: API Key 从哪里获取？**
-
-A: 登录 [DeepSeek Platform](https://platform.deepseek.com)，在 API Keys 页面创建。
-
-**Q: 支持原版 Anthropic API 而非 DeepSeek 吗？**
-
-A: 可以，在 TUI 中输入你的 Anthropic API Key，然后编辑 Shell 配置文件中的 `ANTHROPIC_BASE_URL` 为 `https://api.anthropic.com`，并根据需要移除模型相关环境变量。
-
-**Q: 安装后 `claude` 命令找不到？**
-
-A: 重新打开终端窗口，或执行 `hash -r`（Linux/macOS）刷新命令缓存。确保 npm 全局 bin 目录在 PATH 中：
-
-```bash
-npm bin -g  # 查看 npm 全局 bin 路径
-```
-
-**Q: 如何卸载？**
-
-A: 编辑对应 Shell 的配置文件，删除 `# >>> AutoCC` 到 `# <<< AutoCC <<<` 之间的内容。
-
-## 前置依赖
-
-| 依赖 | 说明 |
+| 变量 | 说明 |
 |------|------|
-| Bash / Zsh / PowerShell | 运行引导脚本 |
-| curl | 网络环境检测、nvm 下载 |
-| git | (可选) nvm 安装、插件 marketplace 克隆 |
+| `ANTHROPIC_API_KEY` | Anthropic 官方 API 密钥（平台 1） |
+| `ANTHROPIC_AUTH_TOKEN` | 第三方平台 API 密钥（平台 2-5） |
+| `ANTHROPIC_BASE_URL` | API 端点 |
+| `ANTHROPIC_MODEL` | 对话模型 |
+| `CLAUDE_CODE_EFFORT_LEVEL` | 推理努力程度，默认 `max` |
 
-引导脚本会自动检测并提示缺失的依赖。
+> 💡 第三方平台必须用 `ANTHROPIC_AUTH_TOKEN` 传 Key，同时保持 `ANTHROPIC_API_KEY=""`。否则 Claude Code 会拿第三方 Key 去 Anthropic 官方验证，直接报错。
 
-## License
+CI/CD 场景直接传 Key 跳过菜单：
+
+```bash
+# Anthropic 官方
+docker run -it --rm \
+  -e ANTHROPIC_API_KEY="sk-ant-xxx" \
+  -v "$(pwd):/app" \
+  super-claude:v1
+
+# DeepSeek / 硅基流动 / OpenRouter / 智谱
+docker run -it --rm \
+  -e ANTHROPIC_AUTH_TOKEN="sk-xxx" \
+  -e ANTHROPIC_API_KEY="" \
+  -e ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic" \
+  -v "$(pwd):/app" \
+  super-claude:v1
+```
+
+---
+
+## 项目结构
+
+```
+.
+├── Dockerfile
+├── entrypoint.sh                       # 入口：注入 .claude/ + 权限修复 + 自动引导
+├── claude-switch                       # 模型后端切换器（5 平台 15+ 模型）
+├── 一键启动_AI工作站.bat              # Windows 一键启动
+├── devlog.md                           # 开发日志
+├── README.md
+├── skills/                             # 全局技能 → /root/.claude/skills/
+│   ├── claude.json
+│   ├── karpathy-flow/
+│   └── ... (20+ 技能)
+├── .claude/                            # 项目模板 → /app/.claude/
+│   └── settings.local.json
+├── .claude_keys                        # Key 持久化（chmod 600，运行时生成）
+└── todo/
+    └── todo.md
+```
+
+## 使用场景
+
+- **日常开发** — 挂载项目目录，获得全副武装的 AI 编程助手
+- **CI/CD 审查** — `docker run ... claude -p "/review"` 在流水线中审查 PR
+- **一次性任务** — `docker run --rm ... claude -p "排查 src/auth.ts 中的 Bug"`
+- **离线部署** — 预构建镜像包含全部依赖，运行时无需网络
+- **多仓库切换** — 挂载不同项目，`.claude_keys` 随宿主机持久化
+
+## 许可证
 
 MIT
