@@ -6,10 +6,13 @@
 SETTINGS_RAW="${HOME}/.claude/settings.json"
 KEY_STORE="${HOME}/.claude/api-keys"
 
-# If running inside Docker and /app is mounted, prefer the project-local store
-# so keys survive container rebuilds without extra mounts.
+# Prefer project-local paths (Docker /app mount, or current directory on host)
 if [ -d /app ]; then
+  SETTINGS_RAW="/app/.claude/settings.json"
   KEY_STORE="/app/.claude/api-keys"
+elif [ -f "./.claude/api-keys" ]; then
+  SETTINGS_RAW="$(pwd)/.claude/settings.json"
+  KEY_STORE="$(pwd)/.claude/api-keys"
 fi
 
 # Windows Git Bash needs cygpath for Node.js; Linux containers use the POSIX path directly.
@@ -89,6 +92,7 @@ write_settings() {
       CLAUDE_CODE_EFFORT_LEVEL: process.env.CS_EFFORT || '',
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: process.env.CS_COMPACT || ''
     };
+    delete cfg.model;  // 清除 Claude Code 的 model 固定，让 env.ANTHROPIC_MODEL 接管
     fs.writeFileSync('${SETTINGS}', JSON.stringify(cfg, null, 2) + '\n');
   " || die "failed to write settings"
 }

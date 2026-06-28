@@ -165,6 +165,27 @@ cs duo-cc     # duo-cc         →  claude-sonnet-4-8[1m]
 ```
 
 
+## TODO
+
+详细任务追踪见 [`TODO/TODO.md`](TODO/TODO.md)。README 仅保留当前待解决问题摘要，避免与源 TODO 文件重复维护。
+
+### 启动与使用体验
+
+- [ ] **统一跨平台使用引导**：README 按 Windows / Linux / macOS 分区说明启动方式，并分别给出一键脚本或等价命令。
+- [ ] **保留单次运行模式**：补充交互式使用与单次命令使用，例如 `claude -p "..."`。
+- [ ] **容器残留处理**：说明用户直接关闭 Terminal 时容器可能不会自动退出，并提供 Docker 清理命令。
+- [ ] **终端中文显示方案**：说明传统 CMD 可能乱码，推荐 Windows Terminal / Warp / Termius 等 UTF-8 终端。
+
+### 技能与默认配置
+
+- [ ] **启用 karpathy-flow 默认规则**：将 Karpathy 编码规范接入全局 `CLAUDE.md`，使其默认影响 Claude Code 行为，而不是仅作为 skill 文件存在。
+- [ ] **确认 gstack 安装方案**：当前仓库仅有 gstack 文档/技能描述，需确认是完整预装、首次使用安装，还是从 README 中降级为计划支持。
+- [ ] **Caveman 默认激活**：Caveman 已安装但默认不启用，需决定默认启用级别，例如 `lite` 或 `full`。
+
+### 远程访问与运维
+
+- [ ] **SSH / Termius 配置文档**：补充 Windows OpenSSH、端口开放、Termius Host 配置，以及 `setup-ssh-portproxy.ps1` 的使用说明。
+
 ## 许可证
 
 MIT

@@ -62,11 +62,10 @@ RUN touch /root/.claude/api-keys \
     && chmod 600 /root/.claude/api-keys \
     && printf '{\n  "env": {}\n}\n' > /root/.claude/settings.json
 
-# Claude 包装器：直接移交给原版 claude
-# 将原版 claude 重命名为 claude-real，保留一个稳定入口，后端切换交给 cs 完成
+# Claude 包装器：每次启动前从 settings.json 注入 env
 RUN mv /usr/local/bin/claude /usr/local/bin/claude-real
-RUN printf '#!/bin/bash\nexec claude-real "$@"\n' > /usr/local/bin/claude \
-    && chmod +x /usr/local/bin/claude
+COPY claude-wrapper /usr/local/bin/claude
+RUN chmod +x /usr/local/bin/claude
 
 # 设置工作目录，后续用户的代码将挂载到这里
 WORKDIR /app

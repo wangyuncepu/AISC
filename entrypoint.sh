@@ -43,13 +43,38 @@ fi
 # ==========================================
 # 3. 环境变量与网络状态展示
 # ==========================================
-SETTINGS_FILE="${HOME}/.claude/settings.json"
-KEY_STORE="${HOME}/.claude/api-keys"
+# cs 将 settings 持久化到 /app/.claude/（宿主机卷），此处统一读取
+SETTINGS_FILE="/app/.claude/settings.json"
+KEY_STORE="/app/.claude/api-keys"
+
+# 首次运行：cs 尚未写入，使用容器内的空默认配置作为 fallback
+if [ ! -f "$SETTINGS_FILE" ]; then
+    SETTINGS_FILE="${HOME}/.claude/settings.json"
+fi
+if [ ! -f "$KEY_STORE" ]; then
+    KEY_STORE="${HOME}/.claude/api-keys"
+fi
 
 if [ -f "$SETTINGS_FILE" ]; then
     MODEL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_MODEL||'')}catch(e){}" 2>/dev/null)
     BASE_URL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_BASE_URL||'')}catch(e){}" 2>/dev/null)
     AUTH=$(node -e "try{const e=require('$SETTINGS_FILE').env;process.stdout.write(e.ANTHROPIC_API_KEY||e.ANTHROPIC_AUTH_TOKEN?'yes':'no')}catch(e){process.stdout.write('no')}" 2>/dev/null)
+
+    # 将 settings.json 的 env 块真正注入当前 shell，供 claude 进程继承。
+    # 空值必须 unset，避免 ANTHROPIC_API_KEY="" 覆盖 ANTHROPIC_AUTH_TOKEN。
+    eval "$(SETTINGS_FILE="$SETTINGS_FILE" node - <<'NODE'
+const fs = require('fs');
+const cfg = JSON.parse(fs.readFileSync(process.env.SETTINGS_FILE, 'utf8'));
+const env = cfg.env || {};
+function q(v) {
+  return "'" + String(v).replace(/'/g, "'\\''") + "'";
+}
+for (const [k, v] of Object.entries(env)) {
+  if (v) console.log(`export ${k}=${q(v)}`);
+  else console.log(`unset ${k}`);
+}
+NODE
+)"
 else
     MODEL=""
     BASE_URL=""
