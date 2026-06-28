@@ -37,6 +37,7 @@ RUN mkdir -p /root/.claude/skills
 
 # 1. 注入全局系统配置 (你提取的 claude.json)
 COPY skills/claude.json /root/.claude/claude.json
+COPY global-claude.md /root/.claude/CLAUDE.md
 
 # 2. 注入全局技能库 (gstack, superpowers, review 等)
 COPY skills/ /root/.claude/skills/

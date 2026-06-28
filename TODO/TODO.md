@@ -12,12 +12,12 @@
 
 # 20260625
 
-* [ ] karpathy-skills安装后并没有被claude调用，需要主要启用；全局CLAUDE.md使用这个技能的CLAUDE.md文件（不是项目文件夹那个）
-* [ ] README.md使用引导统一，分为Windows，Linux，MacOS使用，各自有一键运行脚本
-* [ ] EADME.md中 直接运行super-claude:v1.1.2h 空白 和 bash的区别，两者使用上似乎没有区别，前者配置好之后再次登录不会调用claude
+* [x] karpathy-skills安装后并没有被claude调用，需要主要启用；全局CLAUDE.md使用这个技能的CLAUDE.md文件（不是项目文件夹那个）
+* [x] README.md使用引导统一，分为Windows，Linux，MacOS使用，各自有一键运行脚本
+* [x] EADME.md中 直接运行super-claude:v1.1.2h 空白 和 bash的区别，两者使用上似乎没有区别，前者配置好之后再次登录不会调用claude
 * [X] Windows一键运行脚本.bat，没有版本更新更改名称，改为“docker run -it --rm -v "%cd%:/app" super-claude:v1.1.2”
-* [ ] 保留之前的单次运行的使用方法，交互式+运行单个命令
-* [ ] 产生的Container如果用户直接关闭Terminal，不会关闭Container，需要docker手动删除
-* [ ] gstack没有成功安装
-* [ ] Caveman安装了，但是需要默认激活（默认是不激活的）
-* [ ] CMD运行有中文乱码问题，跨平台使用的终端方案（目前我用的是Wrap和Termius）
+* [x] 保留之前的单次运行的使用方法，交互式+运行单个命令
+* [ ] 产生的Container如果用户直接关闭Terminal，不会关闭Container，需要docker手动删除???
+* [ ] gstack没有成功安装??
+* [x] Caveman安装了，但是需要默认激活（默认是不激活的）
+* [x] CMD运行有中文乱码问题，跨平台使用的终端方案（目前我用的是Wrap和Termius）

@@ -15,55 +15,138 @@
 
 - 已安装 [Docker](https://www.docker.com/)
 - 拥有至少一个后端的 API Key
+- Windows 推荐使用 **Windows Terminal / Warp / Termius**，不推荐传统 CMD（中文与 emoji 可能乱码）
 
 ### 方式一：导入预构建镜像
 
 ```bash
-docker load -i super-claude-v1.1.2.tar
+docker load -i super-claude-v1.1.3.tar
 ```
 
 ### 方式二：从源码构建
 
 ```bash
 # 标准构建
-docker build -t super-claude:v1.1.2 .
+docker build -t super-claude:latest .
 
 # 国内网络指定基础镜像源
 docker build \
   --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim \
-  -t super-claude:v1.1.2 .
+  -t super-claude:latest .
 ```
 
 > 首次启动时运行 `cs <后端>` 配置 Key，之后自动记住无需重复输入。
 
-### 启动
+### Windows 使用
 
-```bash
-# 直接启动 Claude Code（首次需先运行 cs 配置后端）
-docker run -it --rm -v "$(pwd):/app" super-claude:v1.1.2
+#### 一键启动
 
-# 先进入终端
-docker run -it --rm -v "$(pwd):/app" super-claude:v1.1.2 bash
+双击：
 
-# 切换后端后自动启动 Claude Code
-docker run -it --rm -v "$(pwd):/app" super-claude:v1.1.2 cs ark
+```text
+一键启动_AI工作站.bat
 ```
 
-Windows 用户也可双击 `一键启动_AI工作站.bat`。
+#### 手动启动（PowerShell / Windows Terminal）
+
+```powershell
+docker run -it --rm -v "${PWD}:/app" super-claude:latest
+```
+
+#### CMD
+
+```bat
+docker run -it --rm -v "%cd%:/app" super-claude:latest
+```
+
+> CMD 即使执行了 `chcp 65001`，也可能因为字体或 emoji 渲染出现乱码。推荐 Windows Terminal。
+
+### Linux 使用
+
+#### 一键启动
+
+```bash
+chmod +x ./启动_AI工作站.sh
+./启动_AI工作站.sh
+```
+
+#### 手动启动
+
+```bash
+docker run -it --rm -v "$(pwd):/app" super-claude:latest
+```
+
+### macOS 使用
+
+#### 一键启动
+
+```bash
+chmod +x ./启动_AI工作站.command ./启动_AI工作站.sh
+./启动_AI工作站.command
+```
+
+也可以在 Finder 中双击 `启动_AI工作站.command`。
+
+#### 手动启动
+
+```bash
+docker run -it --rm -v "$(pwd):/app" super-claude:latest
+```
+
+### 启动模式
+
+| 模式 | 命令 | 说明 |
+|------|------|------|
+| 交互式 Claude Code | `docker run -it --rm -v "$(pwd):/app" super-claude:latest` | 默认模式，进入 Claude Code |
+| 容器 Bash | `docker run -it --rm -v "$(pwd):/app" super-claude:latest bash` | 调试、手动运行 `cs`、查看配置 |
+| 切换后端并启动 | `docker run -it --rm -v "$(pwd):/app" super-claude:latest cs ark` | 写入 Ark 配置后自动进入 Claude Code |
+| 单次运行 | `docker run -it --rm -v "$(pwd):/app" super-claude:latest claude -p "解释这个项目的架构"` | 执行一次任务后退出 |
+
+### 单次运行示例
+
+```bash
+# 解释当前项目
+docker run -it --rm -v "$(pwd):/app" super-claude:latest claude -p "解释这个项目的架构"
+
+# 代码审查
+docker run -it --rm -v "$(pwd):/app" super-claude:latest claude -p "阅读 README.md 并指出可以改进的地方"
+
+# 先切换后端，再执行单次任务
+docker run -it --rm -v "$(pwd):/app" super-claude:latest bash -lc "cs deepseek && claude -p '总结这个仓库的用途'"
+```
+
+### 容器残留清理
+
+正常退出 Claude Code 或 Bash 时，`--rm` 会自动删除容器。若直接关闭 Terminal，容器可能残留。
+
+#### Linux / macOS / Git Bash
+
+```bash
+docker ps -a --filter "ancestor=super-claude:latest"
+docker rm -f $(docker ps -aq --filter "ancestor=super-claude:latest")
+```
+
+#### Windows PowerShell
+
+```powershell
+docker ps -a --filter "ancestor=super-claude:latest"
+docker ps -aq --filter "ancestor=super-claude:latest" | ForEach-Object { docker rm -f $_ }
+```
 
 ### 启动流程
 
 ```
-docker run ... super-claude:v1.1.2
+docker run -it --rm -v "$(pwd):/app" super-claude:latest
         │
-        ├── entrypoint.sh ──→ .claude/ 注入 + 权限修复 + 显示当前后端
-        │                     （从 ~/.claude/settings.json 读取）
+        ├── entrypoint.sh ──→ .claude/ 注入 + 权限修复 + 读取当前后端
+        │                     （优先读取 /app/.claude/settings.json）
         │
-        └── 默认执行 claude ──→ Claude Code 启动
+        ├── 已配置后端 ──→ 注入 env → claude-wrapper → claude-real
+        │
+        └── 未配置后端 ──→ 提示运行 cs <后端> → 进入 bash
                 │
-                └── 需要切换后端时：cs <cc|deepseek|ark|1y|duo-cc|show>
-                        └── 修改 ~/.claude/settings.json 的 env 配置
-                            └── SC_RESTART=1 时自动重启 Claude Code
+                └── bash 内运行 cs ark / cs deepseek
+                        └── 写入 /app/.claude/settings.json 和 /app/.claude/api-keys
 ```
 
 ---
@@ -107,7 +190,7 @@ cs duo-cc     # duo-cc         →  claude-sonnet-4-8[1m]
 | **默认后端** | 空配置启动，首次运行 `cs <后端>` 时输入 Key 即可 |
 | **切换工具** | `cs` / `claude-switch` 模型后端切换器 |
 | **鉴权机制** | Anthropic 官方用 `ANTHROPIC_API_KEY`，第三方平台用 `ANTHROPIC_AUTH_TOKEN` |
-| **全局配置** | `claude.json`（claude-hud + document-skills 插件） |
+| **全局配置** | `claude.json`（claude-hud + document-skills 插件）+ `CLAUDE.md`（默认 karpathy-flow + Caveman） |
 | **技能库** | 20+ 技能预装至 `/root/.claude/skills/` |
 | **项目模板** | `settings.local.json`，首次挂载自动注入 |
 
@@ -151,7 +234,10 @@ cs duo-cc     # duo-cc         →  claude-sonnet-4-8[1m]
 ├── Dockerfile
 ├── entrypoint.sh                       # 入口：技能注入 + 权限修复 + cs 直连
 ├── claude-switch                       # 切换脚本 → /usr/local/bin/cs、claude-switch
+├── global-claude.md                    # 镜像内全局 CLAUDE.md 模板
 ├── 一键启动_AI工作站.bat              # Windows 一键启动
+├── 启动_AI工作站.sh                  # Linux 一键启动
+├── 启动_AI工作站.command             # macOS 一键启动
 ├── README.md
 ├── devlog.md                           # 开发日志
 ├── skills/                             # 全局技能 → /root/.claude/skills/
@@ -164,27 +250,6 @@ cs duo-cc     # duo-cc         →  claude-sonnet-4-8[1m]
     └── todo.md
 ```
 
-
-## TODO
-
-详细任务追踪见 [`TODO/TODO.md`](TODO/TODO.md)。README 仅保留当前待解决问题摘要，避免与源 TODO 文件重复维护。
-
-### 启动与使用体验
-
-- [ ] **统一跨平台使用引导**：README 按 Windows / Linux / macOS 分区说明启动方式，并分别给出一键脚本或等价命令。
-- [ ] **保留单次运行模式**：补充交互式使用与单次命令使用，例如 `claude -p "..."`。
-- [ ] **容器残留处理**：说明用户直接关闭 Terminal 时容器可能不会自动退出，并提供 Docker 清理命令。
-- [ ] **终端中文显示方案**：说明传统 CMD 可能乱码，推荐 Windows Terminal / Warp / Termius 等 UTF-8 终端。
-
-### 技能与默认配置
-
-- [ ] **启用 karpathy-flow 默认规则**：将 Karpathy 编码规范接入全局 `CLAUDE.md`，使其默认影响 Claude Code 行为，而不是仅作为 skill 文件存在。
-- [ ] **确认 gstack 安装方案**：当前仓库仅有 gstack 文档/技能描述，需确认是完整预装、首次使用安装，还是从 README 中降级为计划支持。
-- [ ] **Caveman 默认激活**：Caveman 已安装但默认不启用，需决定默认启用级别，例如 `lite` 或 `full`。
-
-### 远程访问与运维
-
-- [ ] **SSH / Termius 配置文档**：补充 Windows OpenSSH、端口开放、Termius Host 配置，以及 `setup-ssh-portproxy.ps1` 的使用说明。
 
 ## 许可证
 
