@@ -31,7 +31,7 @@ RUN npm config set registry https://registry.npmmirror.com/ \
 #   - 让 Claude CLI 自己生成原生结构（projects/todos/statsig/plugins/shell-snapshots…）
 #   - 再叠加我们的全局 skills + CLAUDE.md + claude.json
 #   - 项目模式整目录拷贝到 /app/.claude（不改名）
-#   - cs 运行配置（settings.json + api-keys）独立存放在 /app/cc-config，不混进 .claude
+#   - cs 运行配置（settings.json + api-keys）独立存放在 /app/.cc-config，不混进 .claude
 # ==========================================
 # 跳过首次启动联网 onboarding：写 config.json 告诉 CLI"已完成引导"（绕过 api.anthropic.com 检查）
 RUN mkdir -p /root/.claude \
@@ -70,8 +70,8 @@ COPY claude-switch /usr/local/bin/cs
 RUN chmod +x /usr/local/bin/cs \
     && ln -sf /usr/local/bin/cs /usr/local/bin/claude-switch
 
-# cs 运行配置（settings.json + api-keys）存于 cc-config，独立于 CLI 的 .claude。
-# 不在此预建 —— cs 首次运行时按 CLAUDE_CONFIG_DIR 同级的 cc-config 目录自动创建。
+# cs 运行配置（settings.json + api-keys）存于 .cc-config，独立于 CLI 的 .claude。
+# 不在此预建 —— cs 首次运行时按 CLAUDE_CONFIG_DIR 同级的 .cc-config 目录自动创建。
 
 # Claude 包装器：每次启动前从 settings.json 注入 env
 RUN mv /usr/local/bin/claude /usr/local/bin/claude-real

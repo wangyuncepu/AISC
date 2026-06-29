@@ -9,12 +9,12 @@ export LANG=C.UTF-8 LC_ALL=C.UTF-8
 # 路径模型
 #   .claude   = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
 #               全局 /root/.claude；项目模式整目录拷到 /app/.claude（不改名）
-#   cc-config = cs 运行时生成的特殊配置（settings.json + api-keys），独立于 .claude
-#               固定放当前项目 /app/cc-config（全局与项目模式都用它）
+#   .cc-config = cs 运行时生成的特殊配置（settings.json + api-keys），独立于 .claude
+#               固定放当前项目 /app/.cc-config（全局与项目模式都用它）
 # ==========================================
 GLOBAL_CLAUDE_DIR="/root/.claude"
 PROJECT_CLAUDE_DIR="/app/.claude"
-CC_CONFIG_DIR="/app/cc-config"   # cs 配置目录，恒定项目内
+CC_CONFIG_DIR="/app/.cc-config"   # cs 配置目录，恒定项目内
 
 echo -e "\n🚀 [Super Claude] 工作站初始化中..."
 
@@ -66,7 +66,7 @@ fi
 export CLAUDE_CONFIG_DIR
 export CC_CONFIG_DIR
 
-# cc-config（cs 配置）目录确保存在
+# .cc-config（cs 配置）目录确保存在
 mkdir -p "$CC_CONFIG_DIR"
 
 # 权限修复：Docker 内 root 写入的文件交还宿主机用户（仅项目挂载卷需要）
@@ -90,7 +90,7 @@ if ! grep -q 'CC_CONFIG_DIR' /root/.bashrc 2>/dev/null; then
 fi
 
 # ==========================================
-# 3. 环境变量与网络状态展示（读 cc-config 的 settings.json）
+# 3. 环境变量与网络状态展示（读 .cc-config 的 settings.json）
 # ==========================================
 SETTINGS_FILE="$CC_CONFIG_DIR/settings.json"
 KEY_STORE="$CC_CONFIG_DIR/api-keys"
