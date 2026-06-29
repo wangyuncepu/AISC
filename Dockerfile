@@ -68,26 +68,9 @@ COPY _bundle/skills/ /root/.claude/skills/
 # 3b. gstack 6 个技能的斜杠命令（/plan-ceo-review 等，包装对应 skill）
 COPY commands/ /root/.claude/commands/
 
-# 5. CLI settings.json：启用 5 个插件 + 声明其 marketplace 来源
-RUN node -e ' \
-  const fs=require("fs"); \
-  const s={ \
-    enabledPlugins:{ \
-      "caveman@caveman":true, \
-      "claude-hud@claude-hud":true, \
-      "document-skills@anthropic-agent-skills":true, \
-      "superpowers@claude-plugins-official":true, \
-      "skill-creator@claude-plugins-official":true \
-    }, \
-    extraKnownMarketplaces:{ \
-      "caveman":{source:{source:"github",repo:"JuliusBrussee/caveman"}}, \
-      "claude-hud":{source:{source:"github",repo:"jarrodwatts/claude-hud"}}, \
-      "anthropic-agent-skills":{source:{source:"github",repo:"anthropics/skills"}}, \
-      "claude-plugins-official":{source:{source:"github",repo:"anthropics/claude-plugins-official"}} \
-    } \
-  }; \
-  fs.writeFileSync("/root/.claude/settings.json",JSON.stringify(s,null,2)); \
-  '
+# 5. CLI settings.json：启用 5 个插件 + marketplace 来源 + claude-hud 状态栏(statusLine)
+#    statusLine 用 node 跑 claude-hud 的 dist/index.js（容器无 bun）
+COPY claude-settings.json /root/.claude/settings.json
 
 # 6. skill-creator 在 host 未预装，从本地 marketplace 离线安装（写入 installed_plugins.json）
 RUN CLAUDE_CONFIG_DIR=/root/.claude claude plugin install skill-creator@claude-plugins-official 2>&1 | tail -1 || true

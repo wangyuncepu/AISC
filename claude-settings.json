@@ -1,0 +1,19 @@
+{
+  "enabledPlugins": {
+    "caveman@caveman": true,
+    "claude-hud@claude-hud": true,
+    "document-skills@anthropic-agent-skills": true,
+    "superpowers@claude-plugins-official": true,
+    "skill-creator@claude-plugins-official": true
+  },
+  "extraKnownMarketplaces": {
+    "caveman": { "source": { "source": "github", "repo": "JuliusBrussee/caveman" } },
+    "claude-hud": { "source": { "source": "github", "repo": "jarrodwatts/claude-hud" } },
+    "anthropic-agent-skills": { "source": { "source": "github", "repo": "anthropics/skills" } },
+    "claude-plugins-official": { "source": { "source": "github", "repo": "anthropics/claude-plugins-official" } }
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash -c 'pd=$(ls -d \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"/plugins/cache/claude-hud/claude-hud/*/ 2>/dev/null | tail -1); exec node \"${pd}dist/index.js\"'"
+  }
+}
