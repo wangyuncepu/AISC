@@ -12,12 +12,14 @@
 
 # 20260625
 
-* [x] karpathy-skills安装后并没有被claude调用，需要主要启用；全局CLAUDE.md使用这个技能的CLAUDE.md文件（不是项目文件夹那个）
-* [x] README.md使用引导统一，分为Windows，Linux，MacOS使用，各自有一键运行脚本
-* [x] EADME.md中 直接运行super-claude:v1.1.2h 空白 和 bash的区别，两者使用上似乎没有区别，前者配置好之后再次登录不会调用claude
+* [X] karpathy-skills安装后并没有被claude调用，需要主要启用；全局CLAUDE.md使用这个技能的CLAUDE.md文件（不是项目文件夹那个）
+* [X] README.md使用引导统一，分为Windows，Linux，MacOS使用，各自有一键运行脚本
+* [X] EADME.md中 直接运行super-claude:v1.1.2h 空白 和 bash的区别，两者使用上似乎没有区别，前者配置好之后再次登录不会调用claude
 * [X] Windows一键运行脚本.bat，没有版本更新更改名称，改为“docker run -it --rm -v "%cd%:/app" super-claude:v1.1.2”
-* [x] 保留之前的单次运行的使用方法，交互式+运行单个命令
-* [ ] 产生的Container如果用户直接关闭Terminal，不会关闭Container，需要docker手动删除???
-* [ ] gstack没有成功安装??
-* [x] Caveman安装了，但是需要默认激活（默认是不激活的）
-* [x] CMD运行有中文乱码问题，跨平台使用的终端方案（目前我用的是Wrap和Termius）
+* [X] 保留之前的单次运行的使用方法，交互式+运行单个命令
+* [ ] 产生的Container如果用户直接关闭Terminal，不会关闭Container，需要docker手动删除（进入虚拟机之后，exit推出回windows，如果这个时候不输入exit，关闭windows的命令行，docker不关闭）
+* [ ] gstack没有成功安装: gstack的安装略微不同于其它的（/slash运行模式下没有/gstack./office-hour）
+* [ ] windows一键启动脚本.bat，wt启动后显示“参数格式不正确 - >nul”
+* [ ] 手动运行之后，linux内没有配置UTF-8, 有如下输出："root@b3a8735c12f8:/app# ls \\n $$'\345\267\245\344\275\234\347\253\231''.bat'"; 需要export LANG=C. UTF-8
+* [X] Caveman安装了，但是需要默认激活（默认是不激活的）
+* [X] CMD运行有中文乱码问题，跨平台使用的终端方案（目前我用的是Wrap和Termius）
