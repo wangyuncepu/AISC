@@ -3,16 +3,55 @@ set -euo pipefail
 
 IMAGE="super-claude:latest"
 NAME="super-claude-station"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # 构建上下文（AISC 目录，含 Dockerfile + _bundle）
 
 echo
 echo "🚀 Super Claude AI 工作站"
-echo "   v1.1.3 · cs 一键切换"
-echo
-echo "📦 正在启动容器..."
-echo "💡 容器内可用 cs ark / cs deepseek / cs show 切换模型后端"
+echo "   cs 一键切换 · 插件/技能内置"
 echo
 
-# 清理上次残留的同名容器，避免堆积 (no.3)
+# ── 构建镜像（自包含：仓库已含 _bundle，无需联网/宿主机插件）──
+build_image() {
+  echo "📦 正在构建镜像: $IMAGE ..."
+  docker build -t "$IMAGE" "$SCRIPT_DIR"
+  echo "✅ 构建完成: $IMAGE"
+}
+
+image_exists() { docker image inspect "$IMAGE" >/dev/null 2>&1; }
+
+if image_exists; then
+  # ── 防止悬空镜像：同名镜像已存在，提示用户处理 ──
+  echo "⚠️  已存在同名镜像: $IMAGE"
+  echo "   [1] 直接运行现有镜像（默认）"
+  echo "   [2] 删除旧镜像并重新构建（避免悬空 <none> 镜像）"
+  echo "   [3] 用新镜像名构建运行（保留旧镜像）"
+  read -r -p "请选择 [1/2/3，默认 1]: " choice
+  case "${choice:-1}" in
+    2)
+      echo "🗑️  删除旧镜像 $IMAGE ..."
+      docker rmi -f "$IMAGE" 2>/dev/null || true
+      build_image
+      ;;
+    3)
+      read -r -p "输入新镜像名 (如 super-claude:v2): " NEWIMG
+      [ -n "$NEWIMG" ] && IMAGE="$NEWIMG"
+      build_image
+      ;;
+    *)
+      echo "▶️  使用现有镜像。"
+      ;;
+  esac
+else
+  echo "🔍 未找到镜像 $IMAGE，开始构建..."
+  build_image
+fi
+
+echo
+echo "📦 正在启动容器..."
+echo "💡 容器内：cs ark / cs deepseek / cs show 切换模型后端"
+echo
+
+# 清理上次残留的同名容器，避免堆积
 docker rm -f "$NAME" 2>/dev/null || true
 
 docker run -it --rm --name "$NAME" -v "$(pwd):/app" "$IMAGE"
