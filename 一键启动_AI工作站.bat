@@ -6,6 +6,17 @@ set TITLE=Super Claude AI Workstation
 REM Unique container name suffix so parallel runs (project + temporary) don't evict each other
 set NAME=super-claude-station-%RANDOM%
 
+REM Per-project named volume for /app/.claude. Windows bind mounts don't propagate
+REM inotify -> Claude Code can't hot-reload settings (cs ds not live) and HUD/statusLine
+REM breaks. A named volume is real Linux FS in the Docker VM -> inotify works.
+REM Code stays bind-mounted/editable on host; only .claude lives in the volume.
+set "VOL=%CD%"
+set "VOL=%VOL::=%"
+set "VOL=%VOL:\=_%"
+set "VOL=%VOL:/=_%"
+set "VOL=%VOL: =_%"
+set "VOL=sc-claude-%VOL%"
+
 echo.
 echo ==========================================
 echo    Super Claude AI Workstation
@@ -83,4 +94,4 @@ goto :eof
 :runcontainer
 echo.
 echo Starting container...
-docker run -it --rm -e TERM=xterm-256color --name %NAME% -v "%cd%:/app" %IMAGE%
+docker run -it --rm -e TERM=xterm-256color --name %NAME% -v "%cd%:/app" -v "%VOL%:/app/.claude" %IMAGE%

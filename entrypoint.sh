@@ -60,10 +60,12 @@ else
     CLAUDE_CONFIG_DIR="$PROJECT_CLAUDE_DIR"
     echo "📁 作用域: 项目 (project) → $CLAUDE_CONFIG_DIR"
 
-    # 项目 .claude 不存在 → 从镜像内置 .claude 完整复制（CLI 原生目录整体，含 skills/plugins/...）
-    if [ ! -d "$PROJECT_CLAUDE_DIR" ]; then
+    # 项目 .claude 不存在或为空 → 从镜像内置 .claude 完整复制
+    #（为空判断：命名卷首挂载会预建空目录，不能只看是否存在）
+    if [ ! -d "$PROJECT_CLAUDE_DIR" ] || [ -z "$(ls -A "$PROJECT_CLAUDE_DIR" 2>/dev/null)" ]; then
         echo "📦 当前项目首次运行，正在从镜像复制完整 .claude（含技能库与 CLI 状态）..."
-        cp -r "$GLOBAL_CLAUDE_DIR" "$PROJECT_CLAUDE_DIR"
+        mkdir -p "$PROJECT_CLAUDE_DIR"
+        cp -a "$GLOBAL_CLAUDE_DIR/." "$PROJECT_CLAUDE_DIR/"
         echo "✅ 项目 .claude 初始化成功！"
     else
         echo "🔍 检测到当前项目已有 .claude，跳过复制 (保护您的自定义修改)。"
