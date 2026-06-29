@@ -213,7 +213,7 @@ do_upgrade() {
   for d in skills plugins commands; do
     [ -d "$SRC/$d" ] || continue
     mkdir -p "$DST/$d"
-    cp -rf "$SRC/$d/." "$DST/$d/"
+    cp -rfL "$SRC/$d/." "$DST/$d/"   # -L 解引用符号链接，兼容 Windows 绑定挂载
   done
   [ -f "$SRC/CLAUDE.md" ]          && cp -f "$SRC/CLAUDE.md" "$DST/CLAUDE.md"
   [ -f "$SRC/settings.local.json" ] && cp -f "$SRC/settings.local.json" "$DST/settings.local.json"

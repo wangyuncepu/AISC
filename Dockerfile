@@ -73,6 +73,14 @@ COPY _bundle/plugins/ /root/.claude/plugins/
 # 3. 注入扁平技能（来源 _bundle/skills）：gstack（仅文档，6 子技能）
 COPY _bundle/skills/ /root/.claude/skills/
 
+# 3c. 解引用 .claude 内所有符号链接 → 真文件
+#     Windows 绑定挂载(grpcfuse)不支持创建 symlink，cp -r 会失败导致项目复制残缺。
+#     在镜像内把 symlink 替换为内容，使 cp -r 在任何宿主上都成功。
+RUN find /root/.claude -type l | while read -r l; do \
+        t="$(readlink -f "$l")"; \
+        if [ -e "$t" ]; then cp -f --remove-destination "$t" "$l"; fi; \
+    done
+
 # 3b. gstack 6 个技能的斜杠命令（/plan-ceo-review 等，包装对应 skill）
 COPY commands/ /root/.claude/commands/
 
