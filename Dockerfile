@@ -13,6 +13,13 @@ RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.li
 RUN apt-get update && apt-get install -y git curl sudo tmux \
     && rm -rf /var/lib/apt/lists/*
 
+# ==========================================
+# 容器内 UTF-8 locale：解决 ls / 中文文件名八进制转义乱码 (no.5)
+# debian-slim/glibc 内置 C.UTF-8，无需 locale-gen
+# ==========================================
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
 # 替换 NPM 源为淘宝镜像，并全局安装 Claude Code
 RUN npm config set registry https://registry.npmmirror.com/ \
     && npm install -g @anthropic-ai/claude-code

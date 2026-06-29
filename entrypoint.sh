@@ -2,6 +2,9 @@
 # 开启遇到错误即退出的严格模式
 set -e
 
+# 运行期 UTF-8 兜底：即便镜像未注入 locale 也保证中文不乱码 (no.5)
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+
 # 定义常量路径
 PROJECT_CLAUDE_DIR="/app/.claude"
 TEMPLATE_CLAUDE_DIR="/template/.claude"

@@ -1,5 +1,24 @@
 # Super Claude — 开发日志
 
+## 修复：容器运行时与 Windows 启动问题 (2026-06-29, no.3-5)
+
+### 🐛 三项缺陷修复
+
+- **no.5 中文乱码** — 容器内未配置 UTF-8 locale，`ls` 等输出八进制转义乱码。
+  Dockerfile 注入 `ENV LANG=C.UTF-8 LC_ALL=C.UTF-8`（debian-slim/glibc 内置，无需 locale-gen），
+  `entrypoint.sh` 追加 `export LANG/LC_ALL` 作运行期兜底。已在容器内验证 `locale`=`C.UTF-8`、中文文件名与渲染正常。
+- **no.4 .bat 报错** — `一键启动_AI工作站.bat` 经 Windows Terminal 启动报 `参数格式不正确 - >nul`，
+  根因为 `wt ... cmd /k "chcp 65001 ^>nul && ..."` 中 caret 转义的 `>nul` 被 wt 参数切分误判。
+  去除该重定向（保留一行 `Active code page` 输出，无害）。
+- **no.3 残留容器** — `docker run --rm` 无 `--name`，窗口被强制关闭时容器残留需手动删。
+  启动脚本（`.bat` + `启动_AI工作站.sh`）改用固定 `--name super-claude-station`，
+  并在每次启动前 `docker rm -f` 清理同名 stale 容器，保证不堆积。正常退出仍建议 `exit`。
+
+### ✅ 验证
+
+`docker build` 通过；容器内 `locale` 确认 `C.UTF-8`，`ls` 中文无乱码。
+Windows `.bat` 的 no.4 需在 Windows + Windows Terminal 环境实测确认。
+
 ## v1.1.3 (2026-06-28)
 
 ### 🚀 启动体验与全局行为优化
