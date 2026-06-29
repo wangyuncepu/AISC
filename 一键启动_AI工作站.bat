@@ -83,4 +83,4 @@ goto :eof
 :runcontainer
 echo.
 echo Starting container...
-docker run -it --rm --name %NAME% -v "%cd%:/app" %IMAGE%
+docker run -it --rm -e TERM=xterm-256color --name %NAME% -v "%cd%:/app" %IMAGE%

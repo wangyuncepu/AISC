@@ -67,4 +67,4 @@ echo
 # 仅清理已退出的旧工作站容器（不影响正在运行的，支持多开并行）
 docker ps -aq -f "name=super-claude-station" -f "status=exited" 2>/dev/null | xargs -r docker rm >/dev/null 2>&1 || true
 
-docker run -it --rm --name "$NAME" -v "$(pwd):/app" "$IMAGE"
+docker run -it --rm -e TERM=xterm-256color --name "$NAME" -v "$(pwd):/app" "$IMAGE"

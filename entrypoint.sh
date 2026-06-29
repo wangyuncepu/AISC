@@ -5,6 +5,11 @@ set -e
 # 运行期 UTF-8 兜底：即便镜像未注入 locale 也保证中文不乱码 (no.5)
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
 
+# 终端能力兜底：Windows(cmd/docker) 下容器 TERM 常缺失，导致 Claude Code
+# 判定终端不支持而隐藏 statusLine(claude-hud HUD)。强制设为支持 VT 的值。
+export TERM="${TERM:-xterm-256color}"
+[ "$TERM" = "dumb" ] && export TERM=xterm-256color
+
 # ==========================================
 # 路径模型
 #   .claude   = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
