@@ -230,25 +230,47 @@ do_upgrade() {
   fi
   echo "✅ 出厂部分已更新（skills/plugins/commands/CLAUDE.md/settings）。"
 
-  # 3) “项目独有”项逐项询问删除（默认保留）；仅 skills/commands（用户可加处）
+  # 3) “项目独有”项（出厂中没有，可能自加 or 出厂已删）→ 表格多选删除，默认全部保留
+  local -a OPATH=() OLABEL=()
+  local d item name
   for d in skills commands; do
     [ -d "$DST/$d" ] || continue
     for item in "$DST/$d"/*; do
       [ -e "$item" ] || continue
-      local name; name="$(basename "$item")"
+      name="$(basename "$item")"
       if [ ! -e "$SRC/$d/$name" ]; then
-        local ans=""
-        if [ -r /dev/tty ]; then
-          printf "  项目独有 %s/%s — 删除? [y/N]: " "$d" "$name"
-          read -r ans </dev/tty || ans=""
-        fi
-        case "$ans" in
-          y|Y) rm -rf "$item"; echo "    已删除 $d/$name" ;;
-          *)   echo "    保留 $d/$name（默认）" ;;
-        esac
+        OPATH+=("$item"); OLABEL+=("$d/$name")
       fi
     done
   done
+
+  if [ "${#OPATH[@]}" -gt 0 ]; then
+    echo ""
+    echo "📋 项目独有项（出厂中没有）："
+    local i
+    for i in "${!OLABEL[@]}"; do printf "   [%d] %s\n" "$((i+1))" "${OLABEL[$i]}"; done
+    echo ""
+    local sel=""
+    if [ -t 0 ]; then
+      printf "输入要删除的编号 (空格分隔; a=全部; 回车=全部保留): "
+      read -r sel || sel=""
+    fi
+    if [ -z "$sel" ]; then
+      echo "   ✅ 全部保留。"
+    elif [ "$sel" = "a" ] || [ "$sel" = "all" ]; then
+      for i in "${!OPATH[@]}"; do rm -rf "${OPATH[$i]}"; echo "   🗑️  删除 ${OLABEL[$i]}"; done
+    else
+      local n idx
+      for n in $sel; do
+        case "$n" in
+          ''|*[!0-9]*) echo "   ⚠ 跳过无效编号: $n" ;;
+          *) idx=$((n-1))
+             if [ -n "${OPATH[$idx]:-}" ]; then rm -rf "${OPATH[$idx]}"; echo "   🗑️  删除 ${OLABEL[$idx]}"
+             else echo "   ⚠ 编号越界: $n"; fi ;;
+        esac
+      done
+    fi
+  fi
 
   # 4) 同步版本戳
   [ -f "$SRC/.factory-version" ] && cp -f "$SRC/.factory-version" "$DST/.factory-version"
