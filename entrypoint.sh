@@ -90,9 +90,11 @@ if ! grep -q 'CC_CONFIG_DIR' /root/.bashrc 2>/dev/null; then
 fi
 
 # ==========================================
-# 3. 环境变量与网络状态展示（读 .cc-config 的 settings.json）
+# 3. 环境变量与网络状态展示
+#    env 块读 CLAUDE_CONFIG_DIR/settings.json（Claude CLI 原生文件，cs 写此处）
+#    api-keys 密钥仍在 .cc-config
 # ==========================================
-SETTINGS_FILE="$CC_CONFIG_DIR/settings.json"
+SETTINGS_FILE="$CLAUDE_CONFIG_DIR/settings.json"
 KEY_STORE="$CC_CONFIG_DIR/api-keys"
 
 if [ -f "$SETTINGS_FILE" ]; then
