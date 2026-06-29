@@ -58,12 +58,44 @@ RUN mkdir -p /root/.claude/skills /app
 COPY skills/claude.json /root/.claude/claude.json
 COPY global-claude.md /root/.claude/CLAUDE.md
 
-# 2. 注入全局技能库 (gstack, superpowers, review 等)
+# 2. 注入自定义扁平技能（autoplan / investigate / karpathy-flow / review 等）
+#    superpowers / caveman 改由插件机制提供，不再扁平复制（避免重复）
 COPY skills/ /root/.claude/skills/
-# 因为你的 claude.json 放在 skills 目录里一起拷进去了，我们在 skills 目录下将其删掉保持整洁
 RUN rm -f /root/.claude/skills/claude.json
 
-# 3. 默认 settings.local.json 放入 CLI 原生目录（随 .claude 一并复制到项目）
+# 3. 注入插件机制技能套件（离线可用）：
+#    caveman（默认激活）/ claude-hud / document-skills / superpowers / skill-creator
+#    由 stage-skills.sh 预暂存到 _bundle/plugins（含 cache + marketplaces + 注册表）
+COPY _bundle/plugins/ /root/.claude/plugins/
+
+# 4. gstack 扁平技能（仅文档，无二进制；browse 等命令需宿主机 gstack 工具）
+COPY _bundle/skills/gstack/ /root/.claude/skills/gstack/
+
+# 5. CLI settings.json：启用 5 个插件 + 声明其 marketplace 来源
+RUN node -e ' \
+  const fs=require("fs"); \
+  const s={ \
+    enabledPlugins:{ \
+      "caveman@caveman":true, \
+      "claude-hud@claude-hud":true, \
+      "document-skills@anthropic-agent-skills":true, \
+      "superpowers@claude-plugins-official":true, \
+      "skill-creator@claude-plugins-official":true \
+    }, \
+    extraKnownMarketplaces:{ \
+      "caveman":{source:{source:"github",repo:"JuliusBrussee/caveman"}}, \
+      "claude-hud":{source:{source:"github",repo:"jarrodwatts/claude-hud"}}, \
+      "anthropic-agent-skills":{source:{source:"github",repo:"anthropics/skills"}}, \
+      "claude-plugins-official":{source:{source:"github",repo:"anthropics/claude-plugins-official"}} \
+    } \
+  }; \
+  fs.writeFileSync("/root/.claude/settings.json",JSON.stringify(s,null,2)); \
+  '
+
+# 6. skill-creator 在 host 未预装，从本地 marketplace 离线安装（写入 installed_plugins.json）
+RUN CLAUDE_CONFIG_DIR=/root/.claude claude plugin install skill-creator@claude-plugins-official 2>&1 | tail -1 || true
+
+# 7. 默认 settings.local.json 放入 CLI 原生目录（随 .claude 一并复制到项目）
 RUN echo '{ "enableAllProjectMcpServers": true }' > /root/.claude/settings.local.json
 
 # 拷贝并赋予 entrypoint 脚本执行权限
