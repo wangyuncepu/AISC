@@ -109,11 +109,11 @@ switch() {
 
   case "$mode" in
     cc)
-      key=$(get_key "ANTHROPIC_OFFICIAL_KEY" "Anthropic 官方") || return 1
-      export CS_BASE_URL="" CS_AUTH_TOKEN="" CS_API_KEY="$key"
+      # 官方默认：允许留空，所有配置清为 ""（走 Anthropic 默认端点 / 自带登录）
+      export CS_BASE_URL="" CS_AUTH_TOKEN="" CS_API_KEY=""
       export CS_MODEL="" CS_DEFAULT_OPUS="" CS_DEFAULT_SONNET="" CS_DEFAULT_HAIKU=""
       export CS_SUBAGENT="" CS_EFFORT="" CS_COMPACT=""
-      echo "Switched to: Claude (default Anthropic)"
+      echo "Switched to: Claude (default Anthropic, 全部配置已清空)"
       ;;
     deepseek)
       key=$(get_key "DEEPSEEK_KEY" "DeepSeek") || return 1
