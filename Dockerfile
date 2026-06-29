@@ -78,6 +78,15 @@ RUN CLAUDE_CONFIG_DIR=/root/.claude claude plugin install skill-creator@claude-p
 # 7. 默认 settings.local.json 放入 CLI 原生目录（随 .claude 一并复制到项目）
 RUN echo '{ "enableAllProjectMcpServers": true }' > /root/.claude/settings.local.json
 
+# 8. 出厂版本戳（内容哈希）：项目模式据此检测镜像是否更新，提示 cs upgrade
+#    仅哈希出厂内容（skills/plugins/commands/CLAUDE.md/settings*），排除 .claude.json
+#    （含每次构建随机的 machineID，会无谓变动）
+RUN find /root/.claude/skills /root/.claude/plugins /root/.claude/commands \
+        /root/.claude/CLAUDE.md /root/.claude/settings.json /root/.claude/settings.local.json \
+        -type f 2>/dev/null | sort | xargs sha1sum 2>/dev/null | sha1sum | cut -d' ' -f1 \
+        > /root/.claude/.factory-version \
+    && echo "factory-version: $(cat /root/.claude/.factory-version)"
+
 # 拷贝并赋予 entrypoint 脚本执行权限
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

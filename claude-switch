@@ -196,26 +196,93 @@ show_current() {
   echo ""
 }
 
+# ==========================================
+# do_upgrade — 把镜像出厂 .claude 合并进当前项目 .claude
+#   叠加覆盖出厂部分（保留项目自加项），合并 settings（留用户 env），
+#   再对“项目独有”项逐项询问删除（默认保留），最后同步版本戳。
+# ==========================================
+do_upgrade() {
+  local SRC="/root/.claude"
+  local DST="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  [ -d "$SRC" ] || die "未找到镜像出厂 .claude: $SRC"
+  [ "$DST" = "$SRC" ] && die "临时模式（$SRC 即出厂本体），无需升级"
+
+  echo "⬆️  升级项目 .claude：$DST  ←  出厂 $SRC"
+
+  # 1) 叠加覆盖出厂部分（cp -rf 不 rm，保留项目自加项）
+  for d in skills plugins commands; do
+    [ -d "$SRC/$d" ] || continue
+    mkdir -p "$DST/$d"
+    cp -rf "$SRC/$d/." "$DST/$d/"
+  done
+  [ -f "$SRC/CLAUDE.md" ]          && cp -f "$SRC/CLAUDE.md" "$DST/CLAUDE.md"
+  [ -f "$SRC/settings.local.json" ] && cp -f "$SRC/settings.local.json" "$DST/settings.local.json"
+
+  # 2) 合并 settings.json：出厂字段更新 + 保留用户 env（cs 后端选择）
+  if [ -f "$SRC/settings.json" ]; then
+    SRC="$SRC" DST="$DST" node -e '
+      const fs=require("fs");
+      const fac=JSON.parse(fs.readFileSync(process.env.SRC+"/settings.json","utf8"));
+      let usr={}; try{usr=JSON.parse(fs.readFileSync(process.env.DST+"/settings.json","utf8"))}catch(e){}
+      if (usr.env) fac.env = usr.env;
+      fs.writeFileSync(process.env.DST+"/settings.json", JSON.stringify(fac,null,2)+"\n");
+    ' || die "settings.json 合并失败"
+  fi
+  echo "✅ 出厂部分已更新（skills/plugins/commands/CLAUDE.md/settings）。"
+
+  # 3) “项目独有”项逐项询问删除（默认保留）；仅 skills/commands（用户可加处）
+  for d in skills commands; do
+    [ -d "$DST/$d" ] || continue
+    for item in "$DST/$d"/*; do
+      [ -e "$item" ] || continue
+      local name; name="$(basename "$item")"
+      if [ ! -e "$SRC/$d/$name" ]; then
+        local ans=""
+        if [ -r /dev/tty ]; then
+          printf "  项目独有 %s/%s — 删除? [y/N]: " "$d" "$name"
+          read -r ans </dev/tty || ans=""
+        fi
+        case "$ans" in
+          y|Y) rm -rf "$item"; echo "    已删除 $d/$name" ;;
+          *)   echo "    保留 $d/$name（默认）" ;;
+        esac
+      fi
+    done
+  done
+
+  # 4) 同步版本戳
+  [ -f "$SRC/.factory-version" ] && cp -f "$SRC/.factory-version" "$DST/.factory-version"
+
+  # 5) 权限交还宿主机用户（项目挂载卷）
+  if [ -d /app ]; then
+    local U G; U=$(stat -c "%u" /app 2>/dev/null || echo 0); G=$(stat -c "%g" /app 2>/dev/null || echo 0)
+    [ "$U" != "0" ] && chown -R "$U:$G" "$DST" 2>/dev/null || true
+  fi
+  echo "🎉 升级完成。"
+}
+
 case "${1:-}" in
   cc|default|anthropic)  switch cc ;;
   deepseek|ds)           switch deepseek ;;
   ark)                   switch ark ;;
   1y|oney)               switch 1y ;;
   duo-cc|duo|duou)       switch duo-cc ;;
+  upgrade|up)            do_upgrade ;;
   show|current|"")       show_current ;;
   -h|--help)
-    echo "Usage: cs {cc|deepseek|ark|1y|duo-cc|show}"
+    echo "Usage: cs {cc|deepseek|ark|1y|duo-cc|upgrade|show}"
     echo ""
     echo "  cc        Claude default (Anthropic)"
     echo "  deepseek  DeepSeek V4"
     echo "  ark       Ark"
     echo "  1y        1yuanapi.com (Claude models proxied)"
     echo "  duo-cc    api.duou.cc (Claude models proxied)"
+    echo "  upgrade   合并镜像出厂 .claude 到当前项目（保留后端配置/历史）"
     echo "  show      Show current backend & saved keys"
     echo ""
-    echo "Keys are stored in ~/.claude/api-keys and never committed to git."
+    echo "Keys are stored in .cc-config/api-keys and never committed to git."
     ;;
   *)
-    die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, or show"
+    die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, upgrade, or show"
     ;;
 esac

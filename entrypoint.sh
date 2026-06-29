@@ -63,6 +63,14 @@ else
     else
         echo "🔍 检测到当前项目已有 .claude，跳过复制 (保护您的自定义修改)。"
     fi
+
+    # 检测镜像出厂配置是否比项目新 → 仅提示，由用户手动 cs upgrade
+    FV_IMG="$GLOBAL_CLAUDE_DIR/.factory-version"
+    FV_PRJ="$PROJECT_CLAUDE_DIR/.factory-version"
+    if [ -f "$FV_IMG" ] && [ "$(cat "$FV_IMG" 2>/dev/null)" != "$(cat "$FV_PRJ" 2>/dev/null)" ]; then
+        echo "⚠️  镜像出厂配置已更新（skills/插件/命令等）。"
+        echo "    运行  cs upgrade  升级当前项目 .claude（保留你的后端配置与历史）。"
+    fi
 fi
 
 export CLAUDE_CONFIG_DIR
