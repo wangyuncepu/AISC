@@ -2,7 +2,8 @@
 set -euo pipefail
 
 IMAGE="super-claude:latest"
-NAME="super-claude-station"
+# 容器名加唯一后缀（PID），避免多开（项目+全局并行）时同名容器互相挤掉
+NAME="super-claude-station-$$"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # 构建上下文（AISC 目录，含 Dockerfile + _bundle）
 
 echo
@@ -51,7 +52,7 @@ echo "📦 正在启动容器..."
 echo "💡 容器内：cs ark / cs deepseek / cs show 切换模型后端"
 echo
 
-# 清理上次残留的同名容器，避免堆积
-docker rm -f "$NAME" 2>/dev/null || true
+# 仅清理已退出的旧工作站容器（不影响正在运行的，支持多开并行）
+docker ps -aq -f "name=super-claude-station" -f "status=exited" 2>/dev/null | xargs -r docker rm >/dev/null 2>&1 || true
 
 docker run -it --rm --name "$NAME" -v "$(pwd):/app" "$IMAGE"

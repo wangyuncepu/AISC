@@ -3,7 +3,8 @@ chcp 65001 >nul
 
 set IMAGE=super-claude:latest
 set TITLE=Super Claude AI 工作站
-set NAME=super-claude-station
+REM 容器名加唯一后缀，避免多开（项目+全局并行）时同名容器互相挤掉
+set NAME=super-claude-station-%RANDOM%
 
 echo.
 echo ╔══════════════════════════════════════════╗
@@ -26,8 +27,8 @@ wt -d "%cd%" --title "%TITLE%" cmd /k ""%~f0""
 exit /b
 
 :run
-REM 清理上次窗口被强制关闭后残留的同名容器，避免堆积 (no.3)
-docker rm -f %NAME% >nul 2>nul
+REM 仅清理已退出的旧工作站容器（不影响正在运行的，支持多开并行）
+for /f %%i in ('docker ps -aq -f "name=super-claude-station" -f "status=exited" 2^>nul') do docker rm %%i >nul 2>nul
 
 REM ── 检查镜像是否存在 ──
 docker image inspect %IMAGE% >nul 2>nul
