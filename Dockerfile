@@ -62,9 +62,7 @@ COPY global-claude.md /root/.claude/CLAUDE.md
 #    由 stage-skills.sh 预暂存到 _bundle/plugins（含 cache + marketplaces + 注册表）
 COPY _bundle/plugins/ /root/.claude/plugins/
 
-# 3. 注入扁平技能（单一来源 _bundle/skills）：
-#    gstack（仅文档）+ 自定义 autoplan/investigate/karpathy-flow/review
-#    自定义源在 custom-skills/，由 stage-skills.sh 折叠进 _bundle/skills/
+# 3. 注入扁平技能（来源 _bundle/skills）：gstack（仅文档，6 子技能）
 COPY _bundle/skills/ /root/.claude/skills/
 
 # 5. CLI settings.json：启用 5 个插件 + 声明其 marketplace 来源

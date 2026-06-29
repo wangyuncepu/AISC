@@ -2,8 +2,6 @@
 
 ## Default coding behavior
 
-Follow `karpathy-flow` by default for software engineering tasks.
-
 ### 1. Think Before Coding
 
 Don't assume. Don't hide confusion. Surface tradeoffs.
