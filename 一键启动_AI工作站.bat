@@ -3,7 +3,7 @@ chcp 65001 >nul
 
 set IMAGE=super-claude:latest
 set TITLE=Super Claude AI 工作站
-REM 容器名加唯一后缀，避免多开（项目+全局并行）时同名容器互相挤掉
+REM 容器名加唯一后缀，避免多开（项目+临时并行）时同名容器互相挤掉
 set NAME=super-claude-station-%RANDOM%
 
 echo.

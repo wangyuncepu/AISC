@@ -8,9 +8,9 @@ export LANG=C.UTF-8 LC_ALL=C.UTF-8
 # ==========================================
 # 路径模型
 #   .claude   = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
-#               全局 /root/.claude；项目模式整目录拷到 /app/.claude（不改名）
+#               临时模式用镜像内置 /root/.claude；项目模式整目录拷到 /app/.claude（不改名）
 #   .cc-config = cs 运行时生成的特殊配置（settings.json + api-keys），独立于 .claude
-#               固定放当前项目 /app/.cc-config（全局与项目模式都用它）
+#               固定放当前项目 /app/.cc-config（临时与项目模式都用它）
 # ==========================================
 GLOBAL_CLAUDE_DIR="/root/.claude"
 PROJECT_CLAUDE_DIR="/app/.claude"
@@ -19,8 +19,10 @@ CC_CONFIG_DIR="/app/.cc-config"   # cs 配置目录，恒定项目内
 echo -e "\n🚀 [Super Claude] 工作站初始化中..."
 
 # ==========================================
-# 1. 选择 .claude 作用域：全局 / 项目
-#    - 优先环境变量 CLAUDE_SCOPE=global|project（无交互，适合脚本）
+# 1. 选择 .claude 作用域：临时 / 项目
+#    临时(temporary) = 用镜像内置 /root/.claude，容器退出即重置，改动不保留
+#    项目(project)   = /app/.claude，持久到宿主机卷，跨 run 保留
+#    - 优先环境变量 CLAUDE_SCOPE=global|project（global 即临时；无交互，适合脚本）
 #    - 否则交互终端弹菜单
 #    - 非交互且无变量 → 默认 project
 # ==========================================
@@ -30,8 +32,8 @@ if [ -z "$SCOPE" ]; then
     if [ -t 0 ]; then
         echo ""
         echo "请选择 Claude (.claude) 作用域："
-        echo "  1) 全局 global  — 使用镜像内置全局 .claude (${GLOBAL_CLAUDE_DIR})，不写入当前项目"
-        echo "  2) 项目 project — 当前项目独立 .claude (${PROJECT_CLAUDE_DIR})，从全局完整复制"
+        echo "  1) 临时 temporary — 使用镜像内置 .claude (${GLOBAL_CLAUDE_DIR})，容器退出即重置、改动不保留"
+        echo "  2) 项目 project   — 当前项目独立 .claude (${PROJECT_CLAUDE_DIR})，持久到宿主机，从镜像完整复制"
         echo ""
         read -r -p "输入 1 或 2 [默认 2]: " choice
         case "$choice" in
@@ -46,16 +48,16 @@ fi
 # ==========================================
 # 2. 按作用域确定 CLAUDE_CONFIG_DIR（CLI 原生目录）
 # ==========================================
-if [ "$SCOPE" = "global" ]; then
+if [ "$SCOPE" = "global" ] || [ "$SCOPE" = "temp" ] || [ "$SCOPE" = "temporary" ]; then
     CLAUDE_CONFIG_DIR="$GLOBAL_CLAUDE_DIR"
-    echo "🌍 作用域: 全局 (global) → $CLAUDE_CONFIG_DIR"
+    echo "🧪 作用域: 临时 (temporary) → $CLAUDE_CONFIG_DIR （容器退出即重置）"
 else
     CLAUDE_CONFIG_DIR="$PROJECT_CLAUDE_DIR"
     echo "📁 作用域: 项目 (project) → $CLAUDE_CONFIG_DIR"
 
-    # 项目 .claude 不存在 → 从全局完整复制（CLI 原生目录整体，含 skills/plugins/...）
+    # 项目 .claude 不存在 → 从镜像内置 .claude 完整复制（CLI 原生目录整体，含 skills/plugins/...）
     if [ ! -d "$PROJECT_CLAUDE_DIR" ]; then
-        echo "📦 当前项目首次运行，正在从全局复制完整 .claude（含技能库与 CLI 状态）..."
+        echo "📦 当前项目首次运行，正在从镜像复制完整 .claude（含技能库与 CLI 状态）..."
         cp -r "$GLOBAL_CLAUDE_DIR" "$PROJECT_CLAUDE_DIR"
         echo "✅ 项目 .claude 初始化成功！"
     else

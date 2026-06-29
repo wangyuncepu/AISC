@@ -2,7 +2,7 @@
 set -euo pipefail
 
 IMAGE="super-claude:latest"
-# 容器名加唯一后缀（PID），避免多开（项目+全局并行）时同名容器互相挤掉
+# 容器名加唯一后缀（PID），避免多开（项目+临时并行）时同名容器互相挤掉
 NAME="super-claude-station-$$"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # 构建上下文（AISC 目录，含 Dockerfile + _bundle）
 
