@@ -33,18 +33,23 @@ RUN npm config set registry https://registry.npmmirror.com/ \
 #   - 项目模式整目录拷贝到 /app/.claude（不改名）
 #   - cs 运行配置（settings.json + api-keys）独立存放在 /app/.cc-config，不混进 .claude
 # ==========================================
-# 跳过首次启动联网 onboarding：写 config.json 告诉 CLI"已完成引导"（绕过 api.anthropic.com 检查）
+# 跳过首次启动联网 onboarding（绕过 api.anthropic.com 检查）。
+# 新版 CLI 核心状态在 .claude.json（非 config.json）；缺失会报
+# "Claude configuration file not found"。先写入完整 onboarding 状态，
+# 再跑一次 CLI 让它补全 machineID / userID / migrationVersion 等运行字段。
 RUN mkdir -p /root/.claude \
-    && echo '{'                                           >  /root/.claude/config.json \
-    && echo '  "hasCompletedOnboarding": true,'           >> /root/.claude/config.json \
-    && echo '  "acceptedTos": true,'                      >> /root/.claude/config.json \
-    && echo '  "autoUpdates": false,'                     >> /root/.claude/config.json \
-    && echo '  "installMethod": "npm",'                   >> /root/.claude/config.json \
-    && echo '  "firstStartTime": "2025-01-01T00:00:00Z"'  >> /root/.claude/config.json \
-    && echo '}'                                           >> /root/.claude/config.json
+    && echo '{'                                           >  /root/.claude/.claude.json \
+    && echo '  "hasCompletedOnboarding": true,'           >> /root/.claude/.claude.json \
+    && echo '  "acceptedTos": true,'                      >> /root/.claude/.claude.json \
+    && echo '  "autoUpdates": false,'                     >> /root/.claude/.claude.json \
+    && echo '  "installMethod": "npm",'                   >> /root/.claude/.claude.json \
+    && echo '  "firstStartTime": "2025-01-01T00:00:00Z"'  >> /root/.claude/.claude.json \
+    && echo '}'                                           >> /root/.claude/.claude.json \
+    && echo '{ "hasCompletedOnboarding": true }'          >  /root/.claude/config.json
 
-# 让 Claude CLI 自己生成原生目录结构（onboarding 已绕过，此命令触发初始化但不进入交互）
-RUN CLAUDE_CONFIG_DIR=/root/.claude claude --version >/dev/null 2>&1 || true
+# 触发 CLI 初始化：补全 .claude.json 运行字段并生成原生目录（projects/sessions/backups…）
+RUN CLAUDE_CONFIG_DIR=/root/.claude claude -p "init" >/dev/null 2>&1 || true \
+    && CLAUDE_CONFIG_DIR=/root/.claude claude --version >/dev/null 2>&1 || true
 
 # 创建技能目录
 RUN mkdir -p /root/.claude/skills /app
