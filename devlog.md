@@ -1,5 +1,25 @@
 # Super Claude — 开发日志
 
+## 修复：.bat WT 启动逻辑重做 (2026-06-29, bug4 后续)
+
+### 🐛 no.4 修复后暴露的两个新问题
+
+- **4a 重复开窗** — 已在 Windows Terminal 内运行 `.bat` 仍无条件再开一个 wt。
+  根因：脚本只 `where wt` 判断系统是否装 wt，未判断**当前是否已在 wt 内**。
+  修复：读环境变量 `WT_SESSION`，已在 wt 则 `goto run` 直接当前标签运行。
+- **4b docker 丢参** — 新 wt 内报 `'docker run' requires at least 1 argument`（`%IMAGE%` 丢失）。
+  根因：`wt ... cmd /k "...""%cd%:/app""...%IMAGE%"` 的嵌套双引号经 **wt tokenizer**（非 cmd）解析时被拆断，
+  命令在 `-v` 后截断，`%IMAGE%` 落入 wt 的其它参数而丢失。
+  修复：改为**自重启模式** — wt 仅以本脚本 `cmd /k ""%~f0""` 开新标签，
+  `docker run` 在重启实例内**直接执行**，不再把命令串塞进 wt 解析器；`wt -d "%cd%"` 保留工作目录。
+  结构用 `if defined WT_SESSION goto run` + `where wt` / `if errorlevel 1 goto run` + `:run` 标签，
+  规避 `&&( ... )` 括号块的批处理解析坑。
+
+### ⚠️ 验证
+
+本机 Linux 无法执行 `.bat`，仅做静态校验（含 `WT_SESSION`/`wt -d`、docker run 参数完整、无嵌套 docker 串）。
+**需 Windows + Windows Terminal 实测三场景**：① 已在 wt 标签内双击/运行 ② CMD/PowerShell 双击 ③ 未装 wt。
+
 ## 修复：容器运行时与 Windows 启动问题 (2026-06-29, no.3-5)
 
 ### 🐛 三项缺陷修复
