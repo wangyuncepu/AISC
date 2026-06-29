@@ -1,0 +1,34 @@
+{
+  "claude-plugins-official": {
+    "source": {
+      "source": "github",
+      "repo": "anthropics/claude-plugins-official"
+    },
+    "installLocation": "/root/.claude/plugins/marketplaces/claude-plugins-official",
+    "lastUpdated": "2026-06-29T15:07:20.531Z"
+  },
+  "claude-hud": {
+    "source": {
+      "source": "github",
+      "repo": "jarrodwatts/claude-hud"
+    },
+    "installLocation": "/root/.claude/plugins/marketplaces/claude-hud",
+    "lastUpdated": "2026-03-26T00:20:14.773Z"
+  },
+  "caveman": {
+    "source": {
+      "source": "github",
+      "repo": "JuliusBrussee/caveman"
+    },
+    "installLocation": "/root/.claude/plugins/marketplaces/caveman",
+    "lastUpdated": "2026-05-16T04:24:45.137Z"
+  },
+  "anthropic-agent-skills": {
+    "source": {
+      "source": "github",
+      "repo": "anthropics/skills"
+    },
+    "installLocation": "/root/.claude/plugins/marketplaces/anthropic-agent-skills",
+    "lastUpdated": "2026-06-29T15:07:20.198Z"
+  }
+}
