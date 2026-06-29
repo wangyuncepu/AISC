@@ -65,6 +65,9 @@ COPY _bundle/plugins/ /root/.claude/plugins/
 # 3. 注入扁平技能（来源 _bundle/skills）：gstack（仅文档，6 子技能）
 COPY _bundle/skills/ /root/.claude/skills/
 
+# 3b. gstack 6 个技能的斜杠命令（/plan-ceo-review 等，包装对应 skill）
+COPY commands/ /root/.claude/commands/
+
 # 5. CLI settings.json：启用 5 个插件 + 声明其 marketplace 来源
 RUN node -e ' \
   const fs=require("fs"); \
