@@ -31,10 +31,7 @@ api-keys
 # 使 docker build 自包含、不依赖宿主机 ~/.claude。
 
 # Docker image export
-super-claude-v1.tar
-super-claude-v1.tar.gz
-super-claude-v1.1.2.tar
-super-claude-v1.1.3.tar
+super-claude-*.tar
 
 .project
-task/
+tasks/
