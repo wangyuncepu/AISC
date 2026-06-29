@@ -79,6 +79,14 @@ else
         echo "🔍 检测到当前项目已有完整 .claude，跳过复制 (保护您的自定义修改)。"
     fi
 
+    # 修正插件注册表绝对路径 /root/.claude → /app/.claude（幂等）。
+    # 否则 installPath 仍指向镜像 /root，CLI 误判项目内插件副本为 orphan，
+    # 可能在后续插件操作时删除其 dist → claude-hud(HUD) 等失效。
+    for j in installed_plugins.json known_marketplaces.json; do
+        f="$PROJECT_CLAUDE_DIR/plugins/$j"
+        [ -f "$f" ] && sed -i "s#${GLOBAL_CLAUDE_DIR}#${PROJECT_CLAUDE_DIR}#g" "$f" 2>/dev/null || true
+    done
+
     # 检测镜像出厂配置是否比项目新 → 仅提示，由用户手动 cs upgrade
     FV_IMG="$GLOBAL_CLAUDE_DIR/.factory-version"
     FV_PRJ="$PROJECT_CLAUDE_DIR/.factory-version"

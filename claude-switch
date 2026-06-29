@@ -218,6 +218,11 @@ do_upgrade() {
   [ -f "$SRC/CLAUDE.md" ]          && cp -f "$SRC/CLAUDE.md" "$DST/CLAUDE.md"
   [ -f "$SRC/settings.local.json" ] && cp -f "$SRC/settings.local.json" "$DST/settings.local.json"
 
+  # 修正插件注册表路径 /root/.claude → 项目目录（避免 orphan 误删）
+  for j in installed_plugins.json known_marketplaces.json; do
+    [ -f "$DST/plugins/$j" ] && sed -i "s#${SRC}#${DST}#g" "$DST/plugins/$j" 2>/dev/null || true
+  done
+
   # 2) 合并 settings.json：出厂字段更新 + 保留用户 env（cs 后端选择）
   if [ -f "$SRC/settings.json" ]; then
     SRC="$SRC" DST="$DST" node -e '
