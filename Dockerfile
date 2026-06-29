@@ -54,14 +54,13 @@ RUN CLAUDE_CONFIG_DIR=/root/.claude claude -p "init" >/dev/null 2>&1 || true \
 # 创建技能目录
 RUN mkdir -p /root/.claude/skills /app
 
-# 1. 注入全局系统配置 (你提取的 claude.json)
-COPY skills/claude.json /root/.claude/claude.json
+# 1. 注入全局 CLAUDE.md
 COPY global-claude.md /root/.claude/CLAUDE.md
 
 # 2. 注入自定义扁平技能（autoplan / investigate / karpathy-flow / review 等）
 #    superpowers / caveman 改由插件机制提供，不再扁平复制（避免重复）
+#    enabledPlugins 由下方 settings.json 统一管理，不再用 claude.json
 COPY skills/ /root/.claude/skills/
-RUN rm -f /root/.claude/skills/claude.json
 
 # 3. 注入插件机制技能套件（离线可用）：
 #    caveman（默认激活）/ claude-hud / document-skills / superpowers / skill-creator
