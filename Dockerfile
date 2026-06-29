@@ -57,18 +57,15 @@ RUN mkdir -p /root/.claude/skills /app
 # 1. 注入全局 CLAUDE.md
 COPY global-claude.md /root/.claude/CLAUDE.md
 
-# 2. 注入自定义扁平技能（autoplan / investigate / karpathy-flow / review 等）
-#    superpowers / caveman 改由插件机制提供，不再扁平复制（避免重复）
-#    enabledPlugins 由下方 settings.json 统一管理，不再用 claude.json
-COPY skills/ /root/.claude/skills/
-
-# 3. 注入插件机制技能套件（离线可用）：
+# 2. 注入插件机制技能套件（离线可用）：
 #    caveman（默认激活）/ claude-hud / document-skills / superpowers / skill-creator
 #    由 stage-skills.sh 预暂存到 _bundle/plugins（含 cache + marketplaces + 注册表）
 COPY _bundle/plugins/ /root/.claude/plugins/
 
-# 4. gstack 扁平技能（仅文档，无二进制；browse 等命令需宿主机 gstack 工具）
-COPY _bundle/skills/gstack/ /root/.claude/skills/gstack/
+# 3. 注入扁平技能（单一来源 _bundle/skills）：
+#    gstack（仅文档）+ 自定义 autoplan/investigate/karpathy-flow/review
+#    自定义源在 custom-skills/，由 stage-skills.sh 折叠进 _bundle/skills/
+COPY _bundle/skills/ /root/.claude/skills/
 
 # 5. CLI settings.json：启用 5 个插件 + 声明其 marketplace 来源
 RUN node -e ' \

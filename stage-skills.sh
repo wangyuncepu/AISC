@@ -111,6 +111,14 @@ for sk in "${GSTACK_SKILLS[@]}"; do
 done
 find "$DST/skills/gstack" -type d -empty -delete 2>/dev/null || true
 
+echo "🧩 折叠自定义扁平技能（custom-skills/）进 _bundle/skills/ ..."
+# _bundle 每次重建，故自定义技能源置于 tracked 的 custom-skills/，构建期复制进来
+CUSTOM_DIR="$(cd "$(dirname "$0")" && pwd)/custom-skills"
+if [ -d "$CUSTOM_DIR" ]; then
+    cp -r "$CUSTOM_DIR/." "$DST/skills/"
+    echo "  已并入: $(ls "$CUSTOM_DIR")"
+fi
+
 echo "🧽 剥离嵌入 .git 与运行锁（避免污染外层仓库 / 减小体积）..."
 find "$DST" -name '.git' -prune -exec rm -rf {} + 2>/dev/null || true
 find "$DST" -name '.in_use' -type d -prune -exec rm -rf {} + 2>/dev/null || true
