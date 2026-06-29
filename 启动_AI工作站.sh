@@ -14,15 +14,19 @@ echo
 # ── 构建镜像（自包含：仓库已含 _bundle，无需联网/宿主机插件）──
 build_image() {
   local cache_flag="" mirror_arg="USE_CN_MIRROR=1"
+  # 国内镜像默认连基础镜像 node 也走 daocloud（绕开 docker.io 超时）
+  local node_arg="NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim"
 
   read -r -p "构建是否使用缓存? [Y/n]（n=--no-cache 全新构建）: " uc
   case "$uc" in n|N) cache_flag="--no-cache" ;; esac
 
-  read -r -p "是否使用国内镜像源(apt清华/npm淘宝)? [Y/n]: " um
-  case "$um" in n|N) mirror_arg="USE_CN_MIRROR=0" ;; esac
+  read -r -p "是否使用国内镜像源(基础镜像daocloud/apt清华/npm淘宝)? [Y/n]: " um
+  case "$um" in
+    n|N) mirror_arg="USE_CN_MIRROR=0"; node_arg="NODE_IMAGE=node:20-slim" ;;
+  esac
 
   echo "📦 正在构建镜像: $IMAGE  ${cache_flag:+(无缓存) }(${mirror_arg}) ..."
-  docker build $cache_flag --build-arg "$mirror_arg" -t "$IMAGE" "$SCRIPT_DIR"
+  docker build $cache_flag --build-arg "$mirror_arg" --build-arg "$node_arg" -t "$IMAGE" "$SCRIPT_DIR"
   echo "✅ 构建完成: $IMAGE"
 }
 

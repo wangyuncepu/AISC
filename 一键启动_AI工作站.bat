@@ -66,14 +66,17 @@ goto runcontainer
 :build
 set "CACHE_FLAG="
 set "MIRROR_ARG=USE_CN_MIRROR=1"
+REM China mirror also pulls base node image from daocloud (bypass docker.io timeout)
+set "NODE_ARG=NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim"
 set "uc="
 set /p uc=Use build cache? [Y/n] (n = --no-cache):
 if /i "%uc%"=="n" set "CACHE_FLAG=--no-cache"
 set "um="
-set /p um=Use China mirrors (apt tuna / npm taobao)? [Y/n]:
+set /p um=Use China mirrors (base daocloud / apt tuna / npm taobao)? [Y/n]:
 if /i "%um%"=="n" set "MIRROR_ARG=USE_CN_MIRROR=0"
+if /i "%um%"=="n" set "NODE_ARG=NODE_IMAGE=node:20-slim"
 echo Building image: %IMAGE%  (%MIRROR_ARG%) %CACHE_FLAG% ...
-docker build %CACHE_FLAG% --build-arg %MIRROR_ARG% -t %IMAGE% "%~dp0."
+docker build %CACHE_FLAG% --build-arg %MIRROR_ARG% --build-arg %NODE_ARG% -t %IMAGE% "%~dp0."
 echo Build done: %IMAGE%
 goto :eof
 
