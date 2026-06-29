@@ -2,12 +2,18 @@
 ARG NODE_IMAGE=node:20-slim
 FROM ${NODE_IMAGE}
 
+# 是否使用国内镜像源（apt 清华 / npm 淘宝）。1=用（默认），0=用官方源。
+# 启动脚本会按交互选择传入 --build-arg USE_CN_MIRROR=0/1
+ARG USE_CN_MIRROR=1
+
 # ==========================================
-# 1. 网络环境优化：注入国内镜像源 (告别 VPN 依赖)
+# 1. 网络环境优化：按 USE_CN_MIRROR 决定 apt 源
 # ==========================================
-# 替换 Debian 软件源为清华镜像（防止 apt-get 卡死）
-RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources || \
-    sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list || true
+RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
+        sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+        sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list 2>/dev/null || true ; \
+        echo "apt: 清华镜像" ; \
+    else echo "apt: 官方源" ; fi
 
 # 安装必要的系统工具 (git 和 curl 是 Claude Code 常用的底层依赖)
 RUN apt-get update && apt-get install -y git curl sudo tmux \
@@ -20,9 +26,11 @@ RUN apt-get update && apt-get install -y git curl sudo tmux \
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-# 替换 NPM 源为淘宝镜像，并全局安装 Claude Code
+# 替换 NPM 源（按 USE_CN_MIRROR）并全局安装 Claude Code
 # --no-cache + 版本校验：防止镜像源返回损坏 tarball 导致装出的二进制 segfault
-RUN npm config set registry https://registry.npmmirror.com/ \
+RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
+        npm config set registry https://registry.npmmirror.com/ ; echo "npm: 淘宝镜像" ; \
+    else echo "npm: 官方源" ; fi \
     && npm install -g --no-cache @anthropic-ai/claude-code \
     && claude --version
 

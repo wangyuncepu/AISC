@@ -64,8 +64,16 @@ call :build
 goto runcontainer
 
 :build
-echo Building image: %IMAGE% ...
-docker build -t %IMAGE% "%~dp0."
+set "CACHE_FLAG="
+set "MIRROR_ARG=USE_CN_MIRROR=1"
+set "uc="
+set /p uc=Use build cache? [Y/n] (n = --no-cache):
+if /i "%uc%"=="n" set "CACHE_FLAG=--no-cache"
+set "um="
+set /p um=Use China mirrors (apt tuna / npm taobao)? [Y/n]:
+if /i "%um%"=="n" set "MIRROR_ARG=USE_CN_MIRROR=0"
+echo Building image: %IMAGE%  (%MIRROR_ARG%) %CACHE_FLAG% ...
+docker build %CACHE_FLAG% --build-arg %MIRROR_ARG% -t %IMAGE% "%~dp0."
 echo Build done: %IMAGE%
 goto :eof
 
