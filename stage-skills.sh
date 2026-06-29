@@ -111,9 +111,12 @@ for sk in "${GSTACK_SKILLS[@]}"; do
 done
 find "$DST/skills/gstack" -type d -empty -delete 2>/dev/null || true
 
-echo "🧽 剥离嵌入 .git 与运行锁（避免污染外层仓库 / 减小体积）..."
+echo "🧽 剥离嵌入 .git / 运行锁 / 嵌套 .gitignore（后者会让 dist 等被外层 git 忽略而漏提交）..."
 find "$DST" -name '.git' -prune -exec rm -rf {} + 2>/dev/null || true
 find "$DST" -name '.in_use' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+# 关键：插件自带的 .gitignore 含 dist/ 等，复制进 _bundle 后会导致 git 漏提交
+# 编译产物(claude-hud dist/index.js) → 用户 clone 后镜像缺文件、HUD 失效
+find "$DST" -name '.gitignore' -delete 2>/dev/null || true
 
 echo "✅ 暂存完成。体积："
 du -sh "$DST" "$DST/plugins/cache" "$DST/plugins/marketplaces" "$DST/skills/gstack" 2>/dev/null
