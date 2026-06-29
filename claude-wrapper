@@ -3,10 +3,9 @@
 # 解决用户首次进入 bash 后运行 cs，再手动运行 claude 时配置未生效的问题。
 set -e
 
-SETTINGS_FILE="/app/.claude/settings.json"
-if [ ! -f "$SETTINGS_FILE" ]; then
-    SETTINGS_FILE="${HOME}/.claude/settings.json"
-fi
+# cs 运行配置在 cc-config（独立于 CLI 的 .claude）。entrypoint 导出 CC_CONFIG_DIR。
+CC_DIR="${CC_CONFIG_DIR:-/app/cc-config}"
+SETTINGS_FILE="${CC_DIR}/settings.json"
 
 if [ -f "$SETTINGS_FILE" ]; then
     eval "$(SETTINGS_FILE="$SETTINGS_FILE" node - <<'NODE'

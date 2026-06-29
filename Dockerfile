@@ -27,10 +27,13 @@ RUN npm config set registry https://registry.npmmirror.com/ \
     && claude --version
 
 # ==========================================
-# 跳过 Claude Code 首次启动的联网验证（解决国内无 VPN 报错）
+# 全局 Claude CLI 目录：/root/.claude（CLI 原生完整目录）
+#   - 让 Claude CLI 自己生成原生结构（projects/todos/statsig/plugins/shell-snapshots…）
+#   - 再叠加我们的全局 skills + CLAUDE.md + claude.json
+#   - 项目模式整目录拷贝到 /app/.claude（不改名）
+#   - cs 运行配置（settings.json + api-keys）独立存放在 /app/cc-config，不混进 .claude
 # ==========================================
-# Claude Code 启动时会强制连接 api.anthropic.com 做 onboarding 检查
-# 这个检查无视 ANTHROPIC_BASE_URL。手动写 config.json 告诉它"已完成引导"
+# 跳过首次启动联网 onboarding：写 config.json 告诉 CLI"已完成引导"（绕过 api.anthropic.com 检查）
 RUN mkdir -p /root/.claude \
     && echo '{'                                           >  /root/.claude/config.json \
     && echo '  "hasCompletedOnboarding": true,'           >> /root/.claude/config.json \
@@ -40,9 +43,11 @@ RUN mkdir -p /root/.claude \
     && echo '  "firstStartTime": "2025-01-01T00:00:00Z"'  >> /root/.claude/config.json \
     && echo '}'                                           >> /root/.claude/config.json
 
+# 让 Claude CLI 自己生成原生目录结构（onboarding 已绕过，此命令触发初始化但不进入交互）
+RUN CLAUDE_CONFIG_DIR=/root/.claude claude --version >/dev/null 2>&1 || true
 
-# 创建全局配置与技能目录
-RUN mkdir -p /root/.claude/skills
+# 创建技能目录
+RUN mkdir -p /root/.claude/skills /app
 
 # 1. 注入全局系统配置 (你提取的 claude.json)
 COPY skills/claude.json /root/.claude/claude.json
@@ -53,10 +58,8 @@ COPY skills/ /root/.claude/skills/
 # 因为你的 claude.json 放在 skills 目录里一起拷进去了，我们在 skills 目录下将其删掉保持整洁
 RUN rm -f /root/.claude/skills/claude.json
 
-# 3. 准备局部项目模板 — 不再依赖宿主机的 .claude/ 目录
-#    直接在镜像内生成默认 settings.local.json，彻底告别 COPY 报错
-RUN mkdir -p /template/.claude /app \
-    && echo '{ "enableAllProjectMcpServers": true }' > /template/.claude/settings.local.json
+# 3. 默认 settings.local.json 放入 CLI 原生目录（随 .claude 一并复制到项目）
+RUN echo '{ "enableAllProjectMcpServers": true }' > /root/.claude/settings.local.json
 
 # 拷贝并赋予 entrypoint 脚本执行权限
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -67,10 +70,8 @@ COPY claude-switch /usr/local/bin/cs
 RUN chmod +x /usr/local/bin/cs \
     && ln -sf /usr/local/bin/cs /usr/local/bin/claude-switch
 
-# 初始化空的 Key 存储和默认 settings.json（用户首次运行 cs 时按需填入）
-RUN touch /root/.claude/api-keys \
-    && chmod 600 /root/.claude/api-keys \
-    && printf '{\n  "env": {}\n}\n' > /root/.claude/settings.json
+# cs 运行配置（settings.json + api-keys）存于 cc-config，独立于 CLI 的 .claude。
+# 不在此预建 —— cs 首次运行时按 CLAUDE_CONFIG_DIR 同级的 cc-config 目录自动创建。
 
 # Claude 包装器：每次启动前从 settings.json 注入 env
 RUN mv /usr/local/bin/claude /usr/local/bin/claude-real

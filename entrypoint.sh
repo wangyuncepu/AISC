@@ -5,58 +5,95 @@ set -e
 # 运行期 UTF-8 兜底：即便镜像未注入 locale 也保证中文不乱码 (no.5)
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
 
-# 定义常量路径
+# ==========================================
+# 路径模型
+#   .claude   = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
+#               全局 /root/.claude；项目模式整目录拷到 /app/.claude（不改名）
+#   cc-config = cs 运行时生成的特殊配置（settings.json + api-keys），独立于 .claude
+#               固定放当前项目 /app/cc-config（全局与项目模式都用它）
+# ==========================================
+GLOBAL_CLAUDE_DIR="/root/.claude"
 PROJECT_CLAUDE_DIR="/app/.claude"
-TEMPLATE_CLAUDE_DIR="/template/.claude"
+CC_CONFIG_DIR="/app/cc-config"   # cs 配置目录，恒定项目内
 
 echo -e "\n🚀 [Super Claude] 工作站初始化中..."
 
 # ==========================================
-# 1. 智能技能注入逻辑 (防覆盖机制)
+# 1. 选择 .claude 作用域：全局 / 项目
+#    - 优先环境变量 CLAUDE_SCOPE=global|project（无交互，适合脚本）
+#    - 否则交互终端弹菜单
+#    - 非交互且无变量 → 默认 project
 # ==========================================
-# 检查模板目录是否存在内容
-if [ -d "$TEMPLATE_CLAUDE_DIR" ] && [ "$(ls -A $TEMPLATE_CLAUDE_DIR)" ]; then
-    # 检查用户的项目目录下是否已经有 .claude 文件夹
-    if [ ! -d "$PROJECT_CLAUDE_DIR" ]; then
-        echo "📦 检测到项目首次运行，正在注入全局技能库 (Skills) 和预设配置..."
-        # 递归拷贝所有模板文件到宿主机挂载的项目目录
-        cp -r "$TEMPLATE_CLAUDE_DIR" "$PROJECT_CLAUDE_DIR"
-        echo "✅ 技能库注入成功！"
+SCOPE="${CLAUDE_SCOPE:-}"
+
+if [ -z "$SCOPE" ]; then
+    if [ -t 0 ]; then
+        echo ""
+        echo "请选择 Claude (.claude) 作用域："
+        echo "  1) 全局 global  — 使用镜像内置全局 .claude (${GLOBAL_CLAUDE_DIR})，不写入当前项目"
+        echo "  2) 项目 project — 当前项目独立 .claude (${PROJECT_CLAUDE_DIR})，从全局完整复制"
+        echo ""
+        read -r -p "输入 1 或 2 [默认 2]: " choice
+        case "$choice" in
+            1) SCOPE="global" ;;
+            *) SCOPE="project" ;;
+        esac
     else
-        echo "🔍 检测到当前项目已有 .claude 配置，跳过注入 (保护您的自定义修改)。"
+        SCOPE="project"
     fi
+fi
+
+# ==========================================
+# 2. 按作用域确定 CLAUDE_CONFIG_DIR（CLI 原生目录）
+# ==========================================
+if [ "$SCOPE" = "global" ]; then
+    CLAUDE_CONFIG_DIR="$GLOBAL_CLAUDE_DIR"
+    echo "🌍 作用域: 全局 (global) → $CLAUDE_CONFIG_DIR"
 else
-    echo "⚠️ 未找到预设技能模板，跳过注入步骤。"
-fi
+    CLAUDE_CONFIG_DIR="$PROJECT_CLAUDE_DIR"
+    echo "📁 作用域: 项目 (project) → $CLAUDE_CONFIG_DIR"
 
-# ==========================================
-# 2. 权限修复机制 (解决 Linux/WSL 下的文件 Root 锁死问题)
-# ==========================================
-# 由于 Docker 内部默认是 root 运行，cp 过去的文件归属也是 root。
-# 这里通过自动获取挂载目录当前的属主，把新文件的权限交还给你！
-if [ -d "$PROJECT_CLAUDE_DIR" ]; then
-    HOST_UID=$(stat -c "%u" /app)
-    HOST_GID=$(stat -c "%g" /app)
-    # 如果发现宿主机目录不是 root，就把 .claude 的归属权还给宿主机用户
-    if [ "$HOST_UID" != "0" ]; then
-        chown -R $HOST_UID:$HOST_GID "$PROJECT_CLAUDE_DIR"
+    # 项目 .claude 不存在 → 从全局完整复制（CLI 原生目录整体，含 skills/plugins/...）
+    if [ ! -d "$PROJECT_CLAUDE_DIR" ]; then
+        echo "📦 当前项目首次运行，正在从全局复制完整 .claude（含技能库与 CLI 状态）..."
+        cp -r "$GLOBAL_CLAUDE_DIR" "$PROJECT_CLAUDE_DIR"
+        echo "✅ 项目 .claude 初始化成功！"
+    else
+        echo "🔍 检测到当前项目已有 .claude，跳过复制 (保护您的自定义修改)。"
     fi
 fi
 
-# ==========================================
-# 3. 环境变量与网络状态展示
-# ==========================================
-# cs 将 settings 持久化到 /app/.claude/（宿主机卷），此处统一读取
-SETTINGS_FILE="/app/.claude/settings.json"
-KEY_STORE="/app/.claude/api-keys"
+export CLAUDE_CONFIG_DIR
+export CC_CONFIG_DIR
 
-# 首次运行：cs 尚未写入，使用容器内的空默认配置作为 fallback
-if [ ! -f "$SETTINGS_FILE" ]; then
-    SETTINGS_FILE="${HOME}/.claude/settings.json"
+# cc-config（cs 配置）目录确保存在
+mkdir -p "$CC_CONFIG_DIR"
+
+# 权限修复：Docker 内 root 写入的文件交还宿主机用户（仅项目挂载卷需要）
+HOST_UID=$(stat -c "%u" /app 2>/dev/null || echo 0)
+HOST_GID=$(stat -c "%g" /app 2>/dev/null || echo 0)
+if [ "$HOST_UID" != "0" ]; then
+    [ -d "$PROJECT_CLAUDE_DIR" ] && chown -R "$HOST_UID:$HOST_GID" "$PROJECT_CLAUDE_DIR" 2>/dev/null || true
+    chown -R "$HOST_UID:$HOST_GID" "$CC_CONFIG_DIR" 2>/dev/null || true
 fi
-if [ ! -f "$KEY_STORE" ]; then
-    KEY_STORE="${HOME}/.claude/api-keys"
+
+# 让用户进入 bash 后再次运行 cs / claude 时仍能拿到同一作用域
+{
+    echo "export CLAUDE_CONFIG_DIR='$CLAUDE_CONFIG_DIR'"
+    echo "export CC_CONFIG_DIR='$CC_CONFIG_DIR'"
+} > /etc/profile.d/cc-scope.sh 2>/dev/null || true
+if ! grep -q 'CC_CONFIG_DIR' /root/.bashrc 2>/dev/null; then
+    {
+        echo "export CLAUDE_CONFIG_DIR='$CLAUDE_CONFIG_DIR'"
+        echo "export CC_CONFIG_DIR='$CC_CONFIG_DIR'"
+    } >> /root/.bashrc
 fi
+
+# ==========================================
+# 3. 环境变量与网络状态展示（读 cc-config 的 settings.json）
+# ==========================================
+SETTINGS_FILE="$CC_CONFIG_DIR/settings.json"
+KEY_STORE="$CC_CONFIG_DIR/api-keys"
 
 if [ -f "$SETTINGS_FILE" ]; then
     MODEL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_MODEL||'')}catch(e){}" 2>/dev/null)

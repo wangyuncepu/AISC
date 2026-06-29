@@ -3,17 +3,23 @@
 # API Keys stored in ~/.claude/api-keys (chmod 600), never in this file.
 # Modifies ~/.claude/settings.json env block only; everything else untouched.
 
-SETTINGS_RAW="${HOME}/.claude/settings.json"
-KEY_STORE="${HOME}/.claude/api-keys"
-
-# Prefer project-local paths (Docker /app mount, or current directory on host)
-if [ -d /app ]; then
-  SETTINGS_RAW="/app/.claude/settings.json"
-  KEY_STORE="/app/.claude/api-keys"
-elif [ -f "./.claude/api-keys" ]; then
-  SETTINGS_RAW="$(pwd)/.claude/settings.json"
-  KEY_STORE="$(pwd)/.claude/api-keys"
+# cs 配置目录 cc-config（独立于 Claude CLI 的 .claude）解析顺序：
+#   1) CC_CONFIG_DIR（entrypoint 导出，恒为 /app/cc-config）
+#   2) Docker 项目卷 /app/cc-config
+#   3) 当前目录 ./cc-config（宿主机直接运行）
+#   4) 全局 ~/cc-config
+if [ -n "${CC_CONFIG_DIR:-}" ]; then
+  CONFIG_DIR="$CC_CONFIG_DIR"
+elif [ -d /app ]; then
+  CONFIG_DIR="/app/cc-config"
+elif [ -f "./cc-config/api-keys" ]; then
+  CONFIG_DIR="$(pwd)/cc-config"
+else
+  CONFIG_DIR="${HOME}/cc-config"
 fi
+
+SETTINGS_RAW="${CONFIG_DIR}/settings.json"
+KEY_STORE="${CONFIG_DIR}/api-keys"
 
 # Windows Git Bash needs cygpath for Node.js; Linux containers use the POSIX path directly.
 if command -v cygpath >/dev/null 2>&1; then
