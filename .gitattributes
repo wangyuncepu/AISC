@@ -1,5 +1,8 @@
 *.sh text eol=lf
+*.command text eol=lf
 claude-switch text eol=lf
+claude-wrapper text eol=lf
+entrypoint.sh text eol=lf
 *.bat text eol=crlf
 *.md text eol=lf
 *.json text eol=lf

@@ -21,8 +21,10 @@ ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
 # 替换 NPM 源为淘宝镜像，并全局安装 Claude Code
+# --no-cache + 版本校验：防止镜像源返回损坏 tarball 导致装出的二进制 segfault
 RUN npm config set registry https://registry.npmmirror.com/ \
-    && npm install -g @anthropic-ai/claude-code
+    && npm install -g --no-cache @anthropic-ai/claude-code \
+    && claude --version
 
 # ==========================================
 # 跳过 Claude Code 首次启动的联网验证（解决国内无 VPN 报错）
@@ -74,6 +76,15 @@ RUN touch /root/.claude/api-keys \
 RUN mv /usr/local/bin/claude /usr/local/bin/claude-real
 COPY claude-wrapper /usr/local/bin/claude
 RUN chmod +x /usr/local/bin/claude
+
+# 防御：若构建上下文来自 Windows（CRLF），脚本 shebang 会变成 "#!/bin/bash\r"，
+# 导致 "cannot execute: required file not found"。统一剥离 CR，确保镜像内脚本可执行。
+# 注意：只处理文本脚本，绝不能 sed claude-real —— 那是 244MB 原生 ELF 二进制，
+# sed -i 会破坏其结构导致运行时 segfault。
+RUN sed -i 's/\r$//' \
+        /usr/local/bin/entrypoint.sh \
+        /usr/local/bin/cs \
+        /usr/local/bin/claude 2>/dev/null || true
 
 # 设置工作目录，后续用户的代码将挂载到这里
 WORKDIR /app
