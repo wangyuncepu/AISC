@@ -137,23 +137,24 @@ if [ "$1" = "cs" ]; then
 fi
 
 # ==========================================
-# 5. 未配置拦截：无后端时阻止直接进 Claude，引导用户先配置
+# 5. 启动方式菜单：bash（可选）/ claude（默认）
+#    仅在交互终端、且以默认 claude 启动时弹出
+#    无任何 cs 配置时不再拦截 —— 空配置即走 cc 官方默认端点
 # ==========================================
-if [ "$1" = "claude" ] && [ "$AUTH" = "no" ] && [ -z "$MODEL" ]; then
-    echo ""
-    if [ -f "$KEY_STORE" ] && grep -q '.=' "$KEY_STORE" 2>/dev/null; then
-        echo "💡 已检测到保存的 Key，请运行 cs <后端> 完成配置："
-        echo "   cs deepseek    cs ark    cs 1y    cs duo-cc    cs cc"
-    else
-        echo "💡 请先运行 cs <后端> 配置 Key，再启动 Claude："
-        echo "   cs deepseek    ← DeepSeek V4"
-        echo "   cs ark         ← Ark GLM-5.2"
-        echo "   cs 1y          ← 1yuanapi"
-        echo "   cs duo-cc      ← duo-cc"
-        echo "   cs cc          ← Anthropic 官方"
+if [ "$1" = "claude" ] && [ -t 0 ]; then
+    if [ "$AUTH" = "no" ] && [ -z "$MODEL" ]; then
+        echo "ℹ️  当前无 cs 配置，将以 cc 官方默认启动（可在 bash 内用 cs 切换后端）。"
     fi
     echo ""
-    exec bash
+    echo "请选择启动方式："
+    echo "  1) bash   进入命令行（可手动 cs 配置后再 claude）"
+    echo "  2) claude 直接启动 Claude（默认）"
+    echo ""
+    read -r -p "输入 1 或 2 [默认 2]: " launch
+    case "$launch" in
+        1) echo "▶️  进入 bash。"; exec bash ;;
+        *) ;;  # 继续往下启动 claude
+    esac
 fi
 
 # ==========================================
