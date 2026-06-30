@@ -1,5 +1,12 @@
 # Super Claude — 开发日志
 
+## v1.2.1 (2026-06-30) — README 手动构建/运行 文档完善
+
+- **README 手动构建/运行部分重写**：拆分为构建/运行/常用变体三个小节，覆盖三平台命令。
+  - 构建：明确 `USE_CN_MIRROR` 默认=1，新增 `--no-cache` 示例。
+  - 运行：新增 Windows PowerShell/CMD 的 `-v` 语法，强调 `TERM=xterm-256color` 必要性。
+  - 常用变体：`CLAUDE_SCOPE` 跳过菜单、`bash` 直接进 shell、`cs <后端>` 一键切换、`--name` 容器命名。
+
 ## v1.2.0 (2026-06-30) — 插件化重构 + 双作用域 + 跨平台修复
 
 ### 架构重构

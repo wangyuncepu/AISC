@@ -1,4 +1,4 @@
-# Super Claude · v1.2.0
+# Super Claude · v1.2.1
 
 开箱即用的 [Claude Code](https://claude.ai/code) Docker 工作站 —— 插件化技能套件、**5 大模型后端一键切换**、**临时/项目双作用域**、**自包含离线构建**，100% 纯终端 CLI。
 
@@ -34,24 +34,66 @@
 
 ### 手动构建 / 运行
 
+#### 构建
+
 ```bash
-# 构建（自包含，仓库已含 _bundle）
+# 默认构建（自包含，仓库已含 _bundle；国内镜像源默认开）
 docker build -t super-claude:latest .
 
-# 国内网络（基础镜像走 daocloud + apt 清华 + npm 淘宝）
-docker build \
-  --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim \
-  --build-arg USE_CN_MIRROR=1 \
-  -t super-claude:latest .
-
-# 海外网络（官方源）
+# 海外网络 —— 显式关闭国内镜像（apt / npm 走官方源）
 docker build --build-arg USE_CN_MIRROR=0 -t super-claude:latest .
 
-# 运行
-docker run -it --rm -e TERM=xterm-256color -v "$(pwd):/app" super-claude:latest
+# 国内网络 + 基础镜像也走 daocloud（绕开 docker.io 拉取超时）
+docker build \
+  --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim \
+  -t super-claude:latest .
+
+# 完全从头构建（禁用缓存）
+docker build --no-cache -t super-claude:latest .
 ```
 
-> 仓库内置 `_bundle`（插件/技能，约 24M）。若需从你本机 `~/.claude` 重新生成插件包，运行 `bash stage-skills.sh` 后再 build（一次性，普通用户无需）。
+> **⚠️ `USE_CN_MIRROR` 默认 = `1`（国内源）**：apt → 清华、npm → 淘宝。海外用户需显式传 `--build-arg USE_CN_MIRROR=0` 走官方源。
+>
+> 仓库内置 `_bundle`（插件/技能，约 24M），构建不依赖宿主机 `~/.claude`。若需从你本机重新生成插件包，运行 `bash stage-skills.sh` 后再 build（一次性，普通用户无需）。
+
+#### 运行
+
+```bash
+# Linux / macOS
+docker run -it --rm -e TERM=xterm-256color -v "$(pwd):/app" super-claude:latest
+
+# Windows PowerShell
+docker run -it --rm -e TERM=xterm-256color -v "${PWD}:/app" super-claude:latest
+
+# Windows CMD
+docker run -it --rm -e TERM=xterm-256color -v "%cd%:/app" super-claude:latest
+```
+
+> **`TERM=xterm-256color` 必须设置**：Windows 下容器 TERM 常缺失，Claude Code 会判定终端不支持而隐藏 claude-hud（状态栏 HUD）。
+
+#### 常用变体
+
+```bash
+# 跳过交互菜单，直接进入 claude（项目模式，持久化配置）
+docker run -it --rm -e TERM=xterm-256color -e CLAUDE_SCOPE=project \
+  -v "$(pwd):/app" super-claude:latest
+
+# 临时模式（配置不持久，容器退出即重置）
+docker run -it --rm -e TERM=xterm-256color -e CLAUDE_SCOPE=temp \
+  -v "$(pwd):/app" super-claude:latest
+
+# 直接进 bash（不启动 claude，可手动 cs 配置后再启动）
+docker run -it --rm -e TERM=xterm-256color -v "$(pwd):/app" super-claude:latest bash
+
+# 启动后一键切换后端（跳过菜单，cs 切换后自动重启 claude）
+docker run -it --rm -e TERM=xterm-256color -v "$(pwd):/app" super-claude:latest cs deepseek
+
+# 指定容器名（多开时加后缀区分，避免残留；--rm 正常退出自动清理）
+docker run -it --rm --name sc-myproject -e TERM=xterm-256color \
+  -v "$(pwd):/app" super-claude:latest
+```
+
+> 环境变量 `CLAUDE_SCOPE=project|temp` 可跳过交互作用域菜单，适合脚本/管道等非交互场景。
 
 ## 作用域：临时 vs 项目
 
