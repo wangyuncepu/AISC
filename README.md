@@ -1,4 +1,4 @@
-# Super Claude · v1.2.1
+# Super Claude · v1.2.2
 
 开箱即用的 [Claude Code](https://claude.ai/code) Docker 工作站 —— 插件化技能套件、**5 大模型后端一键切换**、**临时/项目双作用域**、**自包含离线构建**，100% 纯终端 CLI。
 
@@ -60,13 +60,13 @@ docker build --no-cache -t super-claude:latest .
 
 ```bash
 # Linux / macOS
-docker run -it --rm -e TERM=xterm-256color -v "$(pwd):/app" super-claude:latest
+docker run -it --rm -e TERM=xterm-256color -v "$(pwd):/home/AISC/app" super-claude:latest
 
 # Windows PowerShell
-docker run -it --rm -e TERM=xterm-256color -v "${PWD}:/app" super-claude:latest
+docker run -it --rm -e TERM=xterm-256color -v "${PWD}:/home/AISC/app" super-claude:latest
 
 # Windows CMD
-docker run -it --rm -e TERM=xterm-256color -v "%cd%:/app" super-claude:latest
+docker run -it --rm -e TERM=xterm-256color -v "%cd%:/home/AISC/app" super-claude:latest
 ```
 
 > **`TERM=xterm-256color` 必须设置**：Windows 下容器 TERM 常缺失，Claude Code 会判定终端不支持而隐藏 claude-hud（状态栏 HUD）。
@@ -76,21 +76,21 @@ docker run -it --rm -e TERM=xterm-256color -v "%cd%:/app" super-claude:latest
 ```bash
 # 跳过交互菜单，直接进入 claude（项目模式，持久化配置）
 docker run -it --rm -e TERM=xterm-256color -e CLAUDE_SCOPE=project \
-  -v "$(pwd):/app" super-claude:latest
+  -v "$(pwd):/home/AISC/app" super-claude:latest
 
 # 临时模式（配置不持久，容器退出即重置）
 docker run -it --rm -e TERM=xterm-256color -e CLAUDE_SCOPE=temp \
-  -v "$(pwd):/app" super-claude:latest
+  -v "$(pwd):/home/AISC/app" super-claude:latest
 
 # 直接进 bash（不启动 claude，可手动 cs 配置后再启动）
-docker run -it --rm -e TERM=xterm-256color -v "$(pwd):/app" super-claude:latest bash
+docker run -it --rm -e TERM=xterm-256color -v "$(pwd):/home/AISC/app" super-claude:latest bash
 
 # 启动后一键切换后端（跳过菜单，cs 切换后自动重启 claude）
-docker run -it --rm -e TERM=xterm-256color -v "$(pwd):/app" super-claude:latest cs deepseek
+docker run -it --rm -e TERM=xterm-256color -v "$(pwd):/home/AISC/app" super-claude:latest cs deepseek
 
 # 指定容器名（多开时加后缀区分，避免残留；--rm 正常退出自动清理）
 docker run -it --rm --name sc-myproject -e TERM=xterm-256color \
-  -v "$(pwd):/app" super-claude:latest
+  -v "$(pwd):/home/AISC/app" super-claude:latest
 ```
 
 > 环境变量 `CLAUDE_SCOPE=project|temp` 可跳过交互作用域菜单，适合脚本/管道等非交互场景。
@@ -107,10 +107,10 @@ docker run -it --rm --name sc-myproject -e TERM=xterm-256color \
 
 | | 临时 temporary | 项目 project（默认）|
 |---|---|---|
-| `CLAUDE_CONFIG_DIR` | `/root/.claude`（镜像内置）| `/app/.claude`（挂载卷）|
+| `CLAUDE_CONFIG_DIR` | `/home/AISC/.claude`（镜像内置）| `/home/AISC/app/.claude`（挂载卷）|
 | 持久化 | 容器退出即重置 | 持久到宿主机，跨 run 保留 |
 | 适用 | 快速试用、一次性任务 | 长期项目、独立配置/历史 |
-| 首次行为 | 直接用镜像 | 从镜像完整复制到 `/app/.claude` |
+| 首次行为 | 直接用镜像 | 从镜像完整复制到 `/home/AISC/app/.claude` |
 
 - 非交互（脚本/管道）默认 **项目**；可用环境变量 `CLAUDE_SCOPE=temp|project` 跳过菜单。
 - 两模式的 `cs` 后端配置都写 `.cc-config`（恒在项目内），与 `.claude` 分离。
@@ -176,7 +176,7 @@ cs upgrade → 叠加更新出厂部分(skills/plugins/commands)，合并 settin
 
 ```
 .claude/        Claude CLI 原生目录（skills/plugins/commands/projects/...，软件本体）
-                临时=/root/.claude（镜像）  项目=/app/.claude（挂载卷）
+                临时=/home/AISC/.claude（镜像）  项目=/home/AISC/app/.claude（挂载卷）
 .cc-config/     cs 运行配置：settings.json(env) + api-keys（密钥，gitignore）
 ```
 
@@ -186,7 +186,7 @@ cs upgrade → 叠加更新出厂部分(skills/plugins/commands)，合并 settin
 |------|------|
 | 基础镜像 | `node:20-slim`（`--build-arg NODE_IMAGE=` 可换源）|
 | 网络优化 | `USE_CN_MIRROR=1` → apt 清华 + npm 淘宝（可关）|
-| 运行时 | Claude Code 全局安装（`/root/.claude` 内置完整配置）|
+| 运行时 | Claude Code 全局安装（`/home/AISC/.claude` 内置完整配置）|
 | 插件套件 | 6 套技能（cache + marketplace + enabledPlugins + statusLine）|
 | 切换工具 | `cs` / `claude-switch` |
 | 鉴权 | 官方用 `ANTHROPIC_API_KEY`，第三方用 `ANTHROPIC_AUTH_TOKEN` |

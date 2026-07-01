@@ -10,7 +10,7 @@ set -euo pipefail
 
 SRC="${HOME}/.claude"
 DST="$(cd "$(dirname "$0")" && pwd)/_bundle"
-IMG_HOME="/root/.claude"   # 镜像内目标路径，用于重写绝对路径
+IMG_HOME="/home/AISC/.claude"   # 镜像内目标路径，用于重写绝对路径
 
 # 需要的 4 个 marketplace（skill-creator 由 claude-plugins-official 本地源解析）
 MARKETS=(caveman claude-hud claude-plugins-official anthropic-agent-skills)

@@ -5,7 +5,7 @@ set -e
 
 # env 块在 Claude CLI 原生 settings.json（CLAUDE_CONFIG_DIR/settings.json）。
 # 启动时兜底注入一次；Claude Code 自身也会原生读取该文件并实时生效。
-CFG_DIR="${CLAUDE_CONFIG_DIR:-/root/.claude}"
+CFG_DIR="${CLAUDE_CONFIG_DIR:-/home/AISC/.claude}"
 SETTINGS_FILE="${CFG_DIR}/settings.json"
 
 if [ -f "$SETTINGS_FILE" ]; then
@@ -24,4 +24,17 @@ NODE
 )"
 fi
 
-exec claude-real "$@"
+# 默认以 --dangerously-skip-permissions 模式运行（跳过权限确认，适合容器内自动流）。
+# 用户若已手动传入则不重复追加，避免重复 flag 报错。
+skip_perm="--dangerously-skip-permissions"
+has_flag=0
+for a in "$@"; do
+    case "$a" in
+        --dangerously-skip-permissions|--permission-mode=*) has_flag=1; break ;;
+    esac
+done
+if [ "$has_flag" = "0" ]; then
+    exec claude-real "$skip_perm" "$@"
+else
+    exec claude-real "$@"
+fi

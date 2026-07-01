@@ -1,5 +1,30 @@
 # Super Claude — 开发日志
 
+## v1.2.2 (2026-07-01) — 非 root 运行（AISC 用户）
+
+### 动机
+
+Claude Code 在 root 下拒绝 `--dangerously-skip-permissions` 模式。容器全程改用非 root 用户 `AISC`（uid 1000），
+让该模式可用；挂载点从 `/app` 移到 AISC 家目录 `/home/AISC/app`，所有运行态目录均在 AISC 可写范围内。
+
+### 变更
+
+- **Dockerfile**：`useradd -m -u 1000 AISC`；出厂 `.claude` 由 `/root/.claude` 改建 `/home/AISC/.claude`；
+  `WORKDIR /home/AISC/app`；构建末尾 `chown -R AISC:AISC /home/AISC` 后 `USER AISC`。
+- **entrypoint.sh**：`GLOBAL=/home/AISC/.claude`、`PROJECT=/home/AISC/app/.claude`、`CC_CONFIG=/home/AISC/app/.cc-config`；
+  删除 root 专属的 `chown` 权限交还逻辑（AISC 直接读写挂载卷）；作用域导出改写 `~/.bashrc`，不再写 `/etc/profile.d`。
+- **claude-wrapper / claude-switch**：fallback 与 `do_upgrade` 出厂源路径改 `/home/AISC/.claude`；
+  `cs` KEY_DIR 解析路径改 `/home/AISC/app/.cc-config`；`do_upgrade` 删除 `chown` 交还块。
+- **stage-skills.sh**：`IMG_HOME=/home/AISC/.claude`。
+- **启动器（.sh / .bat）**：挂载目标 `:/app` → `:/home/AISC/app`（.bat 的 named volume 同步改 `/home/AISC/app/.claude`）。
+- **README / devlog**：路径表与示例命令同步更新。
+
+### 取舍
+
+- 不做 UID 匹配（无 build-arg UID/GID）。Docker Desktop 下容器 uid 对宿主透明，AISC(1000) 写入即归宿主用户。
+  原生 Linux Docker 若宿主 uid ≠ 1000，挂载卷可能写不动 —— 留待实际遇到再加 build-arg。
+- 不保留旧 root 所有权文件的迁移修复：全新非 root 环境，旧 `/app/.claude` 若 root 所有权残留需手动删除重建。
+
 ## v1.2.1 (2026-06-30) — README 手动构建/运行 文档完善
 
 - **README 手动构建/运行部分重写**：拆分为构建/运行/常用变体三个小节，覆盖三平台命令。

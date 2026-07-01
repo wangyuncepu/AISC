@@ -11,22 +11,22 @@ export TERM="${TERM:-xterm-256color}"
 [ "$TERM" = "dumb" ] && export TERM=xterm-256color
 
 # ==========================================
-# 路径模型
+# 路径模型（全程非 root，用户 AISC，家目录 /home/AISC）
 #   .claude   = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
-#               临时模式用镜像内置 /root/.claude；项目模式整目录拷到 /app/.claude（不改名）
+#               临时模式用镜像内置 /home/AISC/.claude；项目模式整目录拷到 /home/AISC/app/.claude（不改名）
 #   .cc-config = cs 运行时生成的特殊配置（settings.json + api-keys），独立于 .claude
-#               固定放当前项目 /app/.cc-config（临时与项目模式都用它）
+#               固定放当前项目 /home/AISC/app/.cc-config（临时与项目模式都用它）
 # ==========================================
-GLOBAL_CLAUDE_DIR="/root/.claude"
-PROJECT_CLAUDE_DIR="/app/.claude"
-CC_CONFIG_DIR="/app/.cc-config"   # cs 配置目录，恒定项目内
+GLOBAL_CLAUDE_DIR="/home/AISC/.claude"
+PROJECT_CLAUDE_DIR="/home/AISC/app/.claude"
+CC_CONFIG_DIR="/home/AISC/app/.cc-config"   # cs 配置目录，恒定项目内
 
 echo -e "\n🚀 [Super Claude] 工作站初始化中..."
 
 # ==========================================
 # 1. 选择 .claude 作用域：临时 / 项目
-#    临时(temporary) = 用镜像内置 /root/.claude，容器退出即重置，改动不保留
-#    项目(project)   = /app/.claude，持久到宿主机卷，跨 run 保留
+#    临时(temporary) = 用镜像内置 /home/AISC/.claude，容器退出即重置，改动不保留
+#    项目(project)   = /home/AISC/app/.claude，持久到宿主机卷，跨 run 保留
 #    - 优先环境变量 CLAUDE_SCOPE=global|project（global 即临时；无交互，适合脚本）
 #    - 否则交互终端弹菜单
 #    - 非交互且无变量 → 默认 project
@@ -79,8 +79,8 @@ else
         echo "🔍 检测到当前项目已有完整 .claude，跳过复制 (保护您的自定义修改)。"
     fi
 
-    # 修正插件注册表绝对路径 /root/.claude → /app/.claude（幂等）。
-    # 否则 installPath 仍指向镜像 /root，CLI 误判项目内插件副本为 orphan，
+    # 修正插件注册表绝对路径 /home/AISC/.claude → /home/AISC/app/.claude（幂等）。
+    # 否则 installPath 仍指向镜像 /home/AISC，CLI 误判项目内插件副本为 orphan，
     # 可能在后续插件操作时删除其 dist → claude-hud(HUD) 等失效。
     for j in installed_plugins.json known_marketplaces.json; do
         f="$PROJECT_CLAUDE_DIR/plugins/$j"
@@ -102,24 +102,20 @@ export CC_CONFIG_DIR
 # .cc-config（cs 配置）目录确保存在
 mkdir -p "$CC_CONFIG_DIR"
 
-# 权限修复：Docker 内 root 写入的文件交还宿主机用户（仅项目挂载卷需要）
-HOST_UID=$(stat -c "%u" /app 2>/dev/null || echo 0)
-HOST_GID=$(stat -c "%g" /app 2>/dev/null || echo 0)
-if [ "$HOST_UID" != "0" ]; then
-    [ -d "$PROJECT_CLAUDE_DIR" ] && chown -R "$HOST_UID:$HOST_GID" "$PROJECT_CLAUDE_DIR" 2>/dev/null || true
-    chown -R "$HOST_UID:$HOST_GID" "$CC_CONFIG_DIR" 2>/dev/null || true
-fi
+# 旧镜像曾以 root 运行，绑定挂载把 root 所有权持久化到宿主；
+# 新镜像 USER AISC 后 mkdir -p 见目录已存在则 no-op，不修所有权，
+# 导致 AISC 读不了 root:600 的 api-keys → cs 切换静默失败。
+# AISC 已在 sudoers (NOPASSWD)，此处直接 sudo chown 自愈，
+# 不依赖外部 bat 的宿主侧 root pass。
+sudo chown -R AISC:AISC "$CC_CONFIG_DIR" 2>/dev/null || true
 
 # 让用户进入 bash 后再次运行 cs / claude 时仍能拿到同一作用域
-{
-    echo "export CLAUDE_CONFIG_DIR='$CLAUDE_CONFIG_DIR'"
-    echo "export CC_CONFIG_DIR='$CC_CONFIG_DIR'"
-} > /etc/profile.d/cc-scope.sh 2>/dev/null || true
-if ! grep -q 'CC_CONFIG_DIR' /root/.bashrc 2>/dev/null; then
+# （非 root，只能写家目录 ~/.bashrc；不再写 /etc/profile.d）
+if ! grep -q 'CC_CONFIG_DIR' "$HOME/.bashrc" 2>/dev/null; then
     {
         echo "export CLAUDE_CONFIG_DIR='$CLAUDE_CONFIG_DIR'"
         echo "export CC_CONFIG_DIR='$CC_CONFIG_DIR'"
-    } >> /root/.bashrc
+    } >> "$HOME/.bashrc"
 fi
 
 # ==========================================

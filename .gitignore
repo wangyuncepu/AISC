@@ -19,6 +19,7 @@ npm-debug.log*
 .env
 .env.local
 api-keys
+.git-credentials
 
 # Claude Code local state
 .claude/
