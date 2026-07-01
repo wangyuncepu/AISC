@@ -79,12 +79,15 @@ else
         echo "🔍 检测到当前项目已有完整 .claude，跳过复制 (保护您的自定义修改)。"
     fi
 
-    # 修正插件注册表绝对路径 /home/AISC/.claude → /home/AISC/app/.claude（幂等）。
-    # 否则 installPath 仍指向镜像 /home/AISC，CLI 误判项目内插件副本为 orphan，
+    # 修正插件注册表绝对路径 → /home/AISC/app/.claude（幂等）。
+    # 否则 installPath 仍指向镜像内路径，CLI 误判项目内插件副本为 orphan，
     # 可能在后续插件操作时删除其 dist → claude-hud(HUD) 等失效。
+    # 兼容两类历史路径：当前镜像 /home/AISC/.claude，更早 root 镜像 /root/.claude
+    # （后者 AISC 读不了 /root → 插件加载失败、skills 不出现）。
     for j in installed_plugins.json known_marketplaces.json; do
         f="$PROJECT_CLAUDE_DIR/plugins/$j"
-        [ -f "$f" ] && sed -i "s#${GLOBAL_CLAUDE_DIR}#${PROJECT_CLAUDE_DIR}#g" "$f" 2>/dev/null || true
+        [ -f "$f" ] && sed -i -e "s#${GLOBAL_CLAUDE_DIR}#${PROJECT_CLAUDE_DIR}#g" \
+                                -e "s#/root/.claude#${PROJECT_CLAUDE_DIR}#g" "$f" 2>/dev/null || true
     done
 
     # 检测镜像出厂配置是否比项目新 → 仅提示，由用户手动 cs upgrade
