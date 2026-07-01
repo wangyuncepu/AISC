@@ -11,6 +11,9 @@
 - 📦 **自包含构建** — 仓库内置 `_bundle`，`docker build` 不依赖宿主机 `~/.claude`、可离线
 - ⬆️ **一键升级** — 镜像更新后 `cs upgrade` 合并出厂配置，保留你的后端选择与历史
 - 🚀 **智能启动器** — 自动检测/构建镜像、防悬空镜像、可选缓存与国内镜像源、多开互不干扰
+- ⚡ **默认跳过权限确认** — Claude 以 `--dangerously-skip-permissions` 启动，容器内自动流无需逐条确认
+- 🛡️ **容器配置加固** — AISC 用户带密码 + 免密 sudo；entrypoint 自愈 `.cc-config` 所有权；git 全局 `autocrlf=input` 杜绝 CRLF 噪音
+- 🔧 **构建稳健性** — 启动器 build 失败即退出、Dockerfile 缺失检查，不再假报成功
 
 ## 快速开始
 

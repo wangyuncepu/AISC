@@ -150,6 +150,11 @@ RUN chown -R AISC:AISC /home/AISC
 # 以非 root 用户运行：root 下 Claude Code 拒绝 --dangerously-skip-permissions
 USER AISC
 
+# git 全局配置：core.autocrlf=input
+#   commit 时 CRLF→LF（仓库永远干净 LF），checkout 不转（保持仓库原样）。
+#   跨平台(Win 宿主 + Linux 容器)场景避免 CRLF 噪音进历史；.gitattributes 优先于此。
+RUN git config --global core.autocrlf input
+
 # 设置入口点
 ENTRYPOINT ["entrypoint.sh"]
 

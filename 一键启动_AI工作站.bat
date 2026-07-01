@@ -40,6 +40,7 @@ if %errorlevel%==0 goto imgexists
 
 echo Image %IMAGE% not found, building...
 call :build
+if errorlevel 1 exit /b 1
 goto afterbuild
 
 :imgexists
@@ -59,6 +60,7 @@ goto runcontainer
 echo Deleting old image %IMAGE% ...
 docker rmi -f %IMAGE% >nul 2>nul
 call :build
+if errorlevel 1 exit /b 1
 goto afterbuild
 
 :newname
@@ -66,6 +68,7 @@ set "NEWIMG="
 set /p NEWIMG=Enter new image name (e.g. super-claude:v2):
 if not "%NEWIMG%"=="" set IMAGE=%NEWIMG%
 call :build
+if errorlevel 1 exit /b 1
 goto afterbuild
 
 :build
@@ -90,7 +93,7 @@ echo Building image: %IMAGE%  (%MIRROR_ARG%) %CACHE_FLAG% ...
 docker build %CACHE_FLAG% --build-arg %MIRROR_ARG% --build-arg %NODE_ARG% -t %IMAGE% "%~dp0."
 if %errorlevel% neq 0 (
     echo.
-    echo [ERROR] Build failed (exit code %errorlevel%). Aborting.
+    echo [ERROR] Build failed, exit code %errorlevel%. Aborting.
     exit /b 1
 )
 echo Build succeeded: %IMAGE%

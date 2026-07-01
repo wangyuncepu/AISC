@@ -25,6 +25,26 @@ Claude Code 在 root 下拒绝 `--dangerously-skip-permissions` 模式。容器�
   原生 Linux Docker 若宿主 uid ≠ 1000，挂载卷可能写不动 —— 留待实际遇到再加 build-arg。
 - 不保留旧 root 所有权文件的迁移修复：全新非 root 环境，旧 `/app/.claude` 若 root 所有权残留需手动删除重建。
 
+### v1.2.2 增量（容器配置加固）
+
+在非 root 运行基础上，补齐权限/安全/构建稳健性与 git 工作流。
+
+- **AISC 用户密码 + sudoers**：`echo 'AISC:AISC' | chpasswd`；`/etc/sudoers.d/aisc` 写 `AISC ALL=(ALL) NOPASSWD:ALL`（440）。容器内 AISC 免密 sudo，便于权限修复与系统操作。
+- **entrypoint.sh 自愈 `.cc-config` 所有权**：旧镜像曾以 root 运行，绑定挂载把 root 所有权持久化到宿主，导致 AISC 读不了 `root:600` 的 `api-keys` → `cs` 切换静默失败。改为 `sudo chown -R AISC:AISC "$CC_CONFIG_DIR"` 自愈（依赖前述 sudoers）。
+- **claude-wrapper 默认 `--dangerously-skip-permissions`**：注入默认 flag 跳过权限确认（容器内自动流），用户手动传入则不重复追加，避免重复 flag 报错。前提是 `USER AISC`（root 下 Claude 拒绝此 flag）。
+- **git 全局 `core.autocrlf=input`**：Dockerfile 内 `USER AISC` 后 `git config --global core.autocrlf input`。commit 时 CRLF→LF（仓库永远干净 LF），checkout 不转；跨平台(Win 宿主 + Linux 容器)避免 CRLF 噪音进历史，`.gitattributes` 优先于此。
+- **`.gitattributes` 行尾规范化**：`git add --renormalize .` 一次性把 665 个 `_bundle` CRLF 噪音归零（纯行尾，无内容差异），分两个 commit（行尾规范化 + 源文件改动）入库。
+- **启动器 `.bat` 加固**：
+  - `:build` 开头检查 `%~dp0Dockerfile` 是否存在，缺失则报错退出（提示「请在有 Dockerfile 及其它资源的文件夹下进行 build 操作」）。
+  - build 失败检测修正：`if` 块内 echo 去括号（修 "was unexpected at this time" 解析错误）；每个 `call :build` 后加 `if errorlevel 1 exit /b 1`（修 `exit /b` 从 call 返回不退出脚本、假报成功的问题）。
+- **本项目 git 配置**：`user.name=Thomas Wang`、`user.email`、`credential.helper=store`（token 存 `.git-credentials`，600 权限，`.gitignore` 忽略），remote 走 HTTPS + PAT。
+
+### 取舍（增量）
+
+- `--dangerously-skip-permissions` 默认开：容器 `--rm` 隔离 + 绑定挂载仅 `app/`，风险可控；纯本地自动流场景值得。
+- token 存仓库内 `.git-credentials`：随项目走但明文（600），比放 `~/.git-credentials` 风险略高，用户取舍。
+- sudoers `NOPASSWD`：容器内便利 > 安全约束；容器即用即弃，影响域有限。
+
 ## v1.2.1 (2026-06-30) — README 手动构建/运行 文档完善
 
 - **README 手动构建/运行部分重写**：拆分为构建/运行/常用变体三个小节，覆盖三平台命令。
