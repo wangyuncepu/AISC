@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cs / claude-switch — switch Claude Code between cc / deepseek / ark / 1y / duo-cc / xf
+# cs / claude-switch — switch Claude Code between cc / deepseek / ark / 1y / duo-cc / xf / orange
 # API Keys stored in ~/.claude/api-keys (chmod 600), never in this file.
 # Modifies ~/.claude/settings.json env block only; everything else untouched.
 
@@ -51,6 +51,7 @@ GLM_BASE="${GLM_BASE:-https://ark.cn-beijing.volces.com/api/coding}"
 ONEY_BASE="${ONEY_BASE:-https://1yuanapi.com}"
 DUOCC_BASE="${DUOCC_BASE:-https://api.duou.cc}"
 XF_BASE="${XF_BASE:-https://maas-coding-api.cn-huabei-1.xf-yun.com/anthropic}"
+ORANGE_BASE="${ORANGE_BASE:-https://api4.orangeai.cc}"
 # =========================================
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -164,6 +165,15 @@ switch() {
       export CS_EFFORT="max" CS_COMPACT="512000"
       echo "Switched to: XF (讯飞 maas-coding)"
       ;;
+    orange)
+      key=$(get_key "ORANGE_KEY" "OrangeAI") || return 1
+      export CS_BASE_URL="$ORANGE_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
+      export CS_MODEL="glm-5.2[1m]"
+      export CS_DEFAULT_OPUS="glm-5.2[1m]" CS_DEFAULT_SONNET="glm-5.2[1m]"
+      export CS_DEFAULT_HAIKU="glm-5.2[1m]" CS_SUBAGENT="glm-5.2[1m]"
+      export CS_EFFORT="" CS_COMPACT="1000000"
+      echo "Switched to: OrangeAI (api4.orangeai.cc)"
+      ;;
     *)
       die "unknown mode: ${mode}"
       ;;
@@ -209,12 +219,13 @@ show_current() {
     else if (base.includes('1yuanapi')) console.log('\\n  后端: 1y');
     else if (base.includes('duou.cc'))  console.log('\\n  后端: duo-cc');
     else if (base.includes('xf-yun'))   console.log('\\n  后端: xf');
+    else if (base.includes('orangeai')) console.log('\\n  后端: orange');
     else                            console.log('\\n  后端: custom → ' + base);
   " 2>/dev/null || echo "  unable to read settings"
 
   echo ""
   echo "Saved keys:"
-  for entry in "ANTHROPIC_OFFICIAL_KEY:Anthropic" "DEEPSEEK_KEY:DeepSeek" "GLM_KEY:Ark" "ONEY_KEY:1yuanapi" "DUOCC_KEY:duo-cc" "XF_KEY:XF(讯飞)"; do
+  for entry in "ANTHROPIC_OFFICIAL_KEY:Anthropic" "DEEPSEEK_KEY:DeepSeek" "GLM_KEY:Ark" "ONEY_KEY:1yuanapi" "DUOCC_KEY:duo-cc" "XF_KEY:XF(讯飞)" "ORANGE_KEY:OrangeAI"; do
     name="${entry%%:*}"
     label="${entry##*:}"
     if grep -q "^${name}=." "$KEY_STORE" 2>/dev/null; then
@@ -321,10 +332,11 @@ case "${1:-}" in
   1y|oney)               switch 1y ;;
   duo-cc|duo|duou)       switch duo-cc ;;
   xf|xunfei)             switch xf ;;
+  orange)                switch orange ;;
   upgrade|up)            do_upgrade ;;
   show|current|"")       show_current ;;
   -h|--help)
-    echo "Usage: cs {cc|deepseek|ark|1y|duo-cc|xf|upgrade|show}"
+    echo "Usage: cs {cc|deepseek|ark|1y|duo-cc|xf|orange|upgrade|show}"
     echo ""
     echo "  cc        Claude default (Anthropic)"
     echo "  deepseek  DeepSeek V4"
@@ -332,12 +344,13 @@ case "${1:-}" in
     echo "  1y        1yuanapi.com (Claude models proxied)"
     echo "  duo-cc    api.duou.cc (Claude models proxied)"
     echo "  xf        讯飞 maas-coding (glm5.2/deepseek-v4-pro/flash)"
+    echo "  orange    api4.orangeai.cc (glm-5.2)"
     echo "  upgrade   合并镜像出厂 .claude 到当前项目（保留后端配置/历史）"
     echo "  show      Show current backend & saved keys"
     echo ""
     echo "Keys are stored in .cc-config/api-keys and never committed to git."
     ;;
   *)
-    die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, xf, upgrade, or show"
+    die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, xf, orange, upgrade, or show"
     ;;
 esac
