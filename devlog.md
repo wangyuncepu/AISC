@@ -45,6 +45,22 @@ Claude Code 在 root 下拒绝 `--dangerously-skip-permissions` 模式。容器�
 - token 存仓库内 `.git-credentials`：随项目走但明文（600），比放 `~/.git-credentials` 风险略高，用户取舍。
 - sudoers `NOPASSWD`：容器内便利 > 安全约束；容器即用即弃，影响域有限。
 
+### v1.2.2 增量二（后端模型配置对齐 + xf 后端 + cs show 增强）
+
+实测各代理可用模型后，对齐 `claude-switch` 配置。
+
+- **新增 xf 后端**（讯飞 maas-coding）：`XF_BASE=https://maas-coding-api.cn-huabei-1.xf-yun.com/anthropic`，独立 `XF_KEY`。三档：OPUS=`xopglm52`（glm5.2，512k 无 1M）、SONNET=`xopdeepseekv4pro[1m]`、HAIKU/SUBAGENT=`xopdeepseekv4flash[1m]`；EFFORT=max、COMPACT=512000。
+- **ark 低端两档换 deepseek**：SONNET 由 `glm-5.2[1m]` → `deepseek-v4-pro[1m]`，HAIKU/SUBAGENT 由 `glm-4.7` → `deepseek-v4-flash[1m]`；OPUS 保持 `glm-5.2[1m]`；EFFORT 开 max。
+- **1y 配置实测对齐**：1y 仅 `glm-5.2` 可用（Claude 模型名全 503），全档改 `glm-5.2[1m]`。
+- **duo-cc 配置实测对齐**：duo-cc Claude 模型名 `claude-sonnet-5`/`claude-opus-4.8`/`claude-haiku-4.5` 实测可用，MODEL 全设 `claude-sonnet-5[1m]`。
+- **COMPACT 统一**：除 cc（清空设计）与 xf（512000）外，deepseek/ark/1y/duo-cc 全设 `1000000`，充分利用 1M 窗口、减少压缩损失。
+- **`cs show` 增强**：不再只显示后端名，打印全部 11 个 settings.json env 变量（BASE/TOKEN/API_KEY/MODEL/OPUS/SONNET/HAIKU/SUBAGENT/EFFORT/COMPACT），敏感 token 截断显示（前 12 + 后 4）。
+
+### 取舍（增量二）
+
+- duo-cc/1y 设 COMPACT=1M 但模型未必真支持 1M：若实际窗口 <1M，到模型上限才报错而非提前压缩。duo-cc 充值后实测确认。
+- xf OPUS `xopglm52` 不加 `[1m]`：glm5.2 在讯飞只有 512k，加后缀会错。
+
 ## v1.2.1 (2026-06-30) — README 手动构建/运行 文档完善
 
 - **README 手动构建/运行部分重写**：拆分为构建/运行/常用变体三个小节，覆盖三平台命令。

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cs / claude-switch — switch Claude Code between cc / deepseek / ark / 1y / duo-cc
+# cs / claude-switch — switch Claude Code between cc / deepseek / ark / 1y / duo-cc / xf
 # API Keys stored in ~/.claude/api-keys (chmod 600), never in this file.
 # Modifies ~/.claude/settings.json env block only; everything else untouched.
 
@@ -50,6 +50,7 @@ DEEPSEEK_BASE="${DEEPSEEK_BASE:-https://api.deepseek.com/anthropic}"
 GLM_BASE="${GLM_BASE:-https://ark.cn-beijing.volces.com/api/coding}"
 ONEY_BASE="${ONEY_BASE:-https://1yuanapi.com}"
 DUOCC_BASE="${DUOCC_BASE:-https://api.duou.cc}"
+XF_BASE="${XF_BASE:-https://maas-coding-api.cn-huabei-1.xf-yun.com/anthropic}"
 # =========================================
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -124,35 +125,44 @@ switch() {
       export CS_MODEL="deepseek-v4-pro[1m]"
       export CS_DEFAULT_OPUS="deepseek-v4-pro[1m]" CS_DEFAULT_SONNET="deepseek-v4-pro[1m]"
       export CS_DEFAULT_HAIKU="deepseek-v4-flash" CS_SUBAGENT="deepseek-v4-flash"
-      export CS_EFFORT="max" CS_COMPACT=""
+      export CS_EFFORT="max" CS_COMPACT="1000000"
       echo "Switched to: DeepSeek"
       ;;
     ark)
       key=$(get_key "GLM_KEY" "Ark") || return 1
       export CS_BASE_URL="$GLM_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
       export CS_MODEL="glm-5.2[1m]"
-      export CS_DEFAULT_OPUS="glm-5.2[1m]" CS_DEFAULT_SONNET="glm-5.2[1m]"
-      export CS_DEFAULT_HAIKU="glm-4.7" CS_SUBAGENT="glm-4.7"
-      export CS_EFFORT="" CS_COMPACT="1000000"
+      export CS_DEFAULT_OPUS="glm-5.2[1m]" CS_DEFAULT_SONNET="deepseek-v4-pro[1m]"
+      export CS_DEFAULT_HAIKU="deepseek-v4-flash[1m]" CS_SUBAGENT="deepseek-v4-flash[1m]"
+      export CS_EFFORT="max" CS_COMPACT="1000000"
       echo "Switched to: Ark"
       ;;
     1y)
       key=$(get_key "ONEY_KEY" "1yuanapi") || return 1
       export CS_BASE_URL="$ONEY_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
-      export CS_MODEL="claude-sonnet-4-8[1m]"
-      export CS_DEFAULT_OPUS="claude-opus-4-8[1m]" CS_DEFAULT_SONNET="claude-sonnet-4-6[1m]"
-      export CS_DEFAULT_HAIKU="claude-haiku-4-5-20251001[1m]" CS_SUBAGENT="claude-haiku-4-5-20251001[1m]"
-      export CS_EFFORT="" CS_COMPACT=""
+      export CS_MODEL="glm-5.2[1m]"
+      export CS_DEFAULT_OPUS="glm-5.2[1m]" CS_DEFAULT_SONNET="glm-5.2[1m]"
+      export CS_DEFAULT_HAIKU="glm-5.2[1m]" CS_SUBAGENT="glm-5.2[1m]"
+      export CS_EFFORT="" CS_COMPACT="1000000"
       echo "Switched to: 1y (1yuanapi.com)"
       ;;
     duo-cc)
       key=$(get_key "DUOCC_KEY" "duo-cc") || return 1
       export CS_BASE_URL="$DUOCC_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
-      export CS_MODEL="claude-sonnet-4-8[1m]"
-      export CS_DEFAULT_OPUS="claude-opus-4-8[1m]" CS_DEFAULT_SONNET="claude-sonnet-4-6[1m]"
-      export CS_DEFAULT_HAIKU="claude-haiku-4-5-20251001[1m]" CS_SUBAGENT="claude-haiku-4-5-20251001[1m]"
-      export CS_EFFORT="" CS_COMPACT=""
+      export CS_MODEL="claude-sonnet-5"
+      export CS_DEFAULT_OPUS="claude-opus-4.8" CS_DEFAULT_SONNET="claude-sonnet-5"
+      export CS_DEFAULT_HAIKU="claude-haiku-4.5" CS_SUBAGENT="claude-haiku-4.5"
+      export CS_EFFORT="" CS_COMPACT="1000000"
       echo "Switched to: duo-cc (api.duou.cc)"
+      ;;
+    xf)
+      key=$(get_key "XF_KEY" "XF (讯飞)") || return 1
+      export CS_BASE_URL="$XF_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
+      export CS_MODEL="xopdeepseekv4pro[1m]"
+      export CS_DEFAULT_OPUS="xopglm52" CS_DEFAULT_SONNET="xopdeepseekv4pro[1m]"
+      export CS_DEFAULT_HAIKU="xopdeepseekv4flash[1m]" CS_SUBAGENT="xopdeepseekv4flash[1m]"
+      export CS_EFFORT="max" CS_COMPACT="512000"
+      echo "Switched to: XF (讯飞 maas-coding)"
       ;;
     *)
       die "unknown mode: ${mode}"
@@ -169,22 +179,42 @@ switch() {
 
 show_current() {
   echo ""
-  echo "Current backend:"
   node -e "
-    const cfg = require('${SETTINGS}');
+    const fs = require('fs');
+    const cfg = JSON.parse(fs.readFileSync('${SETTINGS}','utf8'));
     const env = cfg.env || {};
+    const labels = {
+      ANTHROPIC_BASE_URL:       'BASE URL',
+      ANTHROPIC_AUTH_TOKEN:     'AUTH TOKEN',
+      ANTHROPIC_API_KEY:        'API KEY',
+      ANTHROPIC_MODEL:          'MODEL',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'OPUS',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'SONNET',
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'HAIKU',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'SUBAGENT',
+      CLAUDE_CODE_EFFORT_LEVEL: 'EFFORT',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: 'COMPACT'
+    };
+    console.log('=== 当前配置 ===');
+    for (const [k, v] of Object.entries(env)) {
+      const label = labels[k] || k;
+      const val = v || '(empty)';
+      const sensitive = (k.includes('TOKEN') || k.includes('KEY')) && v;
+      console.log('  ' + label.padEnd(12) + ' = ' + (sensitive ? v.slice(0,12) + '...' + v.slice(-4) : val));
+    }
     const base = env.ANTHROPIC_BASE_URL || '';
-    if (!base)                          { console.log('  cc (Anthropic default)'); }
-    else if (base.includes('deepseek')) { console.log('  deepseek'); }
-    else if (base.includes('volces'))   { console.log('  ark'); }
-    else if (base.includes('1yuanapi')) { console.log('  1y'); }
-    else if (base.includes('duou.cc'))  { console.log('  duo-cc'); }
-    else                                { console.log('  custom → ' + base); }
-  " 2>/dev/null || echo "  unknown"
+    if (!base)                      console.log('\\n  后端: cc (Anthropic)');
+    else if (base.includes('deepseek')) console.log('\\n  后端: deepseek');
+    else if (base.includes('volces'))   console.log('\\n  后端: ark');
+    else if (base.includes('1yuanapi')) console.log('\\n  后端: 1y');
+    else if (base.includes('duou.cc'))  console.log('\\n  后端: duo-cc');
+    else if (base.includes('xf-yun'))   console.log('\\n  后端: xf');
+    else                            console.log('\\n  后端: custom → ' + base);
+  " 2>/dev/null || echo "  unable to read settings"
 
   echo ""
   echo "Saved keys:"
-  for entry in "ANTHROPIC_OFFICIAL_KEY:Anthropic" "DEEPSEEK_KEY:DeepSeek" "GLM_KEY:Ark" "ONEY_KEY:1yuanapi" "DUOCC_KEY:duo-cc"; do
+  for entry in "ANTHROPIC_OFFICIAL_KEY:Anthropic" "DEEPSEEK_KEY:DeepSeek" "GLM_KEY:Ark" "ONEY_KEY:1yuanapi" "DUOCC_KEY:duo-cc" "XF_KEY:XF(讯飞)"; do
     name="${entry%%:*}"
     label="${entry##*:}"
     if grep -q "^${name}=." "$KEY_STORE" 2>/dev/null; then
@@ -290,22 +320,24 @@ case "${1:-}" in
   ark)                   switch ark ;;
   1y|oney)               switch 1y ;;
   duo-cc|duo|duou)       switch duo-cc ;;
+  xf|xunfei)             switch xf ;;
   upgrade|up)            do_upgrade ;;
   show|current|"")       show_current ;;
   -h|--help)
-    echo "Usage: cs {cc|deepseek|ark|1y|duo-cc|upgrade|show}"
+    echo "Usage: cs {cc|deepseek|ark|1y|duo-cc|xf|upgrade|show}"
     echo ""
     echo "  cc        Claude default (Anthropic)"
     echo "  deepseek  DeepSeek V4"
     echo "  ark       Ark"
     echo "  1y        1yuanapi.com (Claude models proxied)"
     echo "  duo-cc    api.duou.cc (Claude models proxied)"
+    echo "  xf        讯飞 maas-coding (glm5.2/deepseek-v4-pro/flash)"
     echo "  upgrade   合并镜像出厂 .claude 到当前项目（保留后端配置/历史）"
     echo "  show      Show current backend & saved keys"
     echo ""
     echo "Keys are stored in .cc-config/api-keys and never committed to git."
     ;;
   *)
-    die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, upgrade, or show"
+    die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, xf, upgrade, or show"
     ;;
 esac
