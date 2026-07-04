@@ -25,7 +25,7 @@
 # 20260701
 
 * [ ] 每日skill/claude学习模块
-* [ ] clash翻墙配置（docker内部翻墙）
+* [X] clash翻墙配置（docker内部翻墙）— v1.2.3 完成：容器内建 Mihomo TUN 透明代理 + 多格式订阅转换（yaml/base64订阅/URI/JSON，ss/vmess/trojan/vless/hysteria2），详见 devlog
 * [ ] 一键启动脚本规范化配置
 * [ ] claude code CLI外配置 cc-switch-cli：[github.com/saladday/cc-switch-cli](https://github.com/saladday/cc-switch-cli) （暂时保留cs-switch）
 * [ ] 配置docker容器系统的python
