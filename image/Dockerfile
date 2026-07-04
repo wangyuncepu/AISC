@@ -213,6 +213,15 @@ RUN sed -i 's/\r$//' \
         /usr/local/bin/claude \
         /usr/local/bin/mihomo-build-config.js 2>/dev/null || true
 
+# ==========================================
+# Python 运行时：python3 + pip + venv + python-is-python3
+#   Claude Code 可直接用 python/pip。放靠后，避免使前面 npm/claude 重型层缓存失效。
+#   Debian 12 PEP 668 限制系统 pip install → 建默认 venv（USER AISC 后，挂 PATH 头）。
+# ==========================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv python-is-python3 \
+    && rm -rf /var/lib/apt/lists/*
+
 # 设置工作目录，后续用户的代码将挂载到这里
 WORKDIR /home/AISC/app
 
@@ -226,6 +235,13 @@ USER AISC
 #   commit 时 CRLF→LF（仓库永远干净 LF），checkout 不转（保持仓库原样）。
 #   跨平台(Win 宿主 + Linux 容器)场景避免 CRLF 噪音进历史；.gitattributes 优先于此。
 RUN git config --global core.autocrlf input
+
+# 默认 Python venv（AISC 可写，pip install 不受 PEP 668 限制）
+#   python/pip → venv（PATH 优先）；pip install 直达，无需 --break-system-packages。
+#   venv 在镜像内（--rm 容器每次重启重置为出厂；如需持久化包，加 requirements.txt + 启动安装）。
+RUN python3 -m venv /home/AISC/.venv \
+    && /home/AISC/.venv/bin/python -m pip install --upgrade pip --quiet
+ENV PATH="/home/AISC/.venv/bin:${PATH}"
 
 # 设置入口点
 ENTRYPOINT ["entrypoint.sh"]

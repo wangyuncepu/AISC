@@ -267,6 +267,7 @@ cs upgrade → 叠加更新出厂部分(skills/plugins/commands)，合并 settin
 | 基础镜像 | `node:20-slim`（`--build-arg NODE_IMAGE=` 可换源）|
 | 网络优化 | `USE_CN_MIRROR=1` → apt 清华 + npm 淘宝（可关）|
 | 运行时 | Claude Code 全局安装（`/home/AISC/.claude` 内置完整配置）|
+| Python | python3 3.11 + pip + 默认 venv `/home/AISC/.venv`（PATH 头，`pip install` 直达，绕过 PEP 668）|
 | 插件套件 | 6 套技能（cache + marketplace + enabledPlugins + statusLine）|
 | 切换工具 | `cs` / `claude-switch` |
 | 鉴权 | 官方用 `ANTHROPIC_API_KEY`，第三方用 `ANTHROPIC_AUTH_TOKEN` |
@@ -318,7 +319,8 @@ docker ps -aq --filter "name=super-claude-station" | ForEach-Object { docker rm 
 │   └── stage-mihomo.sh         #   预下载 mihomo+geodata 到 image/downloads（弱网/离线兜底）
 └── docs/                       # 文档
     ├── devlog.md               #   开发日志
-    └── TODO/                   #   待办 + 设计方案
+    ├── plans/                  #   设计方案（PLAN-*.md）
+    └── TODO/                   #   待办 + 日期归档
 ```
 
 ## 启动器架构（v1.3.0 模块化）

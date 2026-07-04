@@ -1,5 +1,30 @@
 # Super Claude — 开发日志
 
+## v1.3.2 (2026-07-04) — 容器内 Python 运行时
+
+### 动机
+TODO「配置 docker 容器系统的 python」——容器内无 Python，Claude Code 无法跑 Python 脚本 / pip 装包。
+
+### 变更
+- **Dockerfile**：新增 Python apt 层（放 sed CRLF 之后，避免使 npm/claude 重型层缓存失效）——`python3 python3-pip python3-venv python-is-python3`（Debian 12 → Python 3.11）。
+- **默认 venv**：`python3 -m venv /home/AISC/.venv`（USER AISC 后创建，AISC 可写）+ `ENV PATH="/home/AISC/.venv/bin:$PATH"`（venv 挂 PATH 头）。
+- 绕过 Debian 12 PEP 668：系统 `pip install` 受限（externally-managed-environment），venv 内 `pip install` 直达，无需 `--break-system-packages`。
+
+### 取舍
+- **venv 在镜像内（`--rm` 每次重置）**：pip 装的包每次容器重启回到出厂（仅 pip 升级）。如需持久化包，加 requirements.txt + 启动安装脚本（未做，按需）。
+- **Python 版本**：用系统 3.11（Debian 12 自带），不引入 pyenv/deadsnakes（够用）。
+- **层位置**：python apt 放 sed CRLF 之后，npm/claude 重型层缓存命中，重建仅 ~30s。
+
+### 测试
+- 构建：python apt + venv 层新建，重型层 CACHED。
+- 容器内：`which python` → `/home/AISC/.venv/bin/python`；`python --version` → 3.11.2；`pip install requests` → 成功（PEP 668 绕过）。
+
+### 其他
+- PLAN 文件从 `docs/TODO/` 移到 `docs/plans/`（与 TODO 分开）。
+- TODO #3（启动器规范化）、#5（python）标完成。
+
+---
+
 ## v1.3.1 (2026-07-04) — 项目目录重构（按职责分组）
 
 ### 动机
