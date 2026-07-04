@@ -1,5 +1,52 @@
 # Super Claude — 开发日志
 
+## v1.2.3 (2026-07-04) — 容器内建 Mihomo TUN 透明代理
+
+### 动机
+
+宿主机零代理场景下，让容器内 Claude Code 直连 Anthropic API。在容器内以 Mihomo (Clash Meta) TUN 模式接管全部出站，宿主无需开任何代理；TUI 引导用户完成配置，开箱即用。对应 TODO「clash翻墙配置（docker内部翻墙）」。
+
+### 设计决策（与用户确认）
+
+- **D1 · TUN 补丁容器内权威注入**：宿主启动器只下载/拷贝用户**原始**配置到 `.claude/mihomo/config.yaml`（不打补丁）；`entrypoint.sh` 用 Node 在可写副本上 strip+append。落盘文件保留原始配置，运行时强制含 TUN。理由：容器内 Node+工具必有、每次启动重打、手动丢配置也兜底；宿主环境不可控（Windows BAT 无 Node/awk）。
+- **D2 · docker run 特权按需追加**：仅 TUI 选“需要代理”时追加 `--cap-add=NET_ADMIN --device /dev/net/tun` 与配置只读挂载；不配代理则零特权、零 tun 设备依赖，避免宿主缺 `/dev/net/tun` 时启动失败。
+
+### 变更
+
+- **Dockerfile**：apt 增加 `iptables iproute2 ca-certificates`（TUN auto-route 操纵 iptables/路由表、https 下载）；新增 mihomo 下载层（pin `MIHOMO_VERSION=v1.19.27`，arch 自适应）+ geodata 预置层（geoip.metadb/geosite.dat/country.mmdb → `/home/AISC/.mihomo`，单文件失败仅 warn 不阻断）。**下载加固**：优先用 `downloads/` 本地预置（离线/弱网）；否则多镜像轮询（ghfast.top 实测稳，依次 gh-proxy/github.moeyy/ghproxy.net/mirror.ghproxy）+ 强制 `--http1.1`（绕开 curl/GitHub CDN HTTP/2 流异常）+ 短 connect-timeout 快失败 + 直连兜底。
+- **stage-mihomo.sh**（新增）：预下载 mihomo.gz + geodata 到 `downloads/`。镜像 `stage-skills.sh`+`_bundle` 自包含哲学；`downloads/` **已纳入 git** → `docker build` 完全不访问 GitHub（详见增量）。
+- **entrypoint.sh**：新增 §3.5 — 若 `/etc/mihomo/config.yaml` 存在：Node 读 ro 源 → 通用顶层块剥离（`tun:`/`dns:`）→ 追加规范 `tun:` 块（+ 缺失时补最小 `dns:` 防 53 端口解析死循环）→ 写可写副本 → `sudo -b mihomo -d ~/.mihomo -f 副本` → sleep 2 → pgrep 健康检查 + `curl api.anthropic.com` 探测 → 极客日志。失败仅告警不阻断（便于进 bash 排障）。
+- **启动_AI工作站.sh**：新增 `configure_proxy()`（本地文件/URL 二选一，curl 下载，base64 异常检测）+ `docker run` 数组化条件追加 `--cap-add=NET_ADMIN --device /dev/net/tun -v .../config.yaml:/etc/mihomo/config.yaml:ro`。
+- **一键启动_AI工作站.bat**：降级为纯 ASCII 三行包装（`chcp 65001` + `powershell -File launcher.ps1`）；中文 UI 与全部逻辑移至 `launcher.ps1`（PowerShell 原生 Unicode）。cmd .bat 对中文有 DBCS 解析缺陷，无法在 .bat 内承载中文（详见增量「Windows 启动器中文化」）。
+- **.gitignore**：显式忽略 `.claude/mihomo/`（订阅凭据敏感；`.claude/` 已覆盖，此处防御性显式）。
+- **README / devlog**：新增“代理网络（容器内建 Mihomo TUN）”章节（原理图/使用/手动构建/已知限制）+ 数据模型补 `.claude/mihomo/`。
+
+### 取舍
+
+- **DNS 块**：用户 spec 仅列 `tun:`；实测 TUN `dns-hijack: any:53` 无解析器易形成解析死循环 → 仅在用户配置**无** `dns:` 顶层块时补一个最小 `dns:`（fake-ip + 国内外 nameserver/fallback），不覆盖用户已有 `dns:`。
+- **mihomo 版本 pin**：v1.19.27（build-arg 可覆盖），换可复现构建；asset `mihomo-linux-<arch>-<ver>.gz` 已核验。
+- **mihomo 以 root 启动**：`USER AISC` 无 `CAP_NET_ADMIN`，建 TUN + iptables 必须 root → `sudo`（NOPASSWD sudoers 已就绪）。后台 `sudo -b`，容器退出随 PID1 终止，`--rm` 自动清理。
+- **geodata 失败降级**：不阻断构建（GEO 规则不可用，多数订阅仍可用 IP-CIDR/域名规则）。
+- **ghproxy flaky**：`GH_PROXY` build-arg 可覆盖；下载逻辑代理→直连回退。
+
+### v1.2.3 增量（多格式订阅自动转换 + 启动器中文化 + 构建下载加固）
+
+- **下载加固（Dockerfile）**：mihomo/geodata 下载层重写——优先用 `downloads/` 本地预置（离线/弱网）；否则多镜像轮询（`ghfast.top` 实测稳，依次 gh-proxy / github.moeyy / ghproxy.net / mirror.ghproxy）+ 强制 `--http1.1`（绕开 curl/GitHub CDN HTTP/2 流异常）+ 短 connect-timeout 快失败 + 直连兜底。修复用户构建时 `mirror.ghproxy.com` SSL 失败 + GitHub HTTP/2 流异常导致下载失败。
+- **stage-mihomo.sh（新增）**：预下载 mihomo.gz + geodata 到 `downloads/`。**已纳入 git**（同 `_bundle` 哲学）→ `docker build` 完全不访问 GitHub，国内网络无忧（消除用户提出的「构建期 GitHub 下载慢/失败」风险）。升级 mihomo：改 Dockerfile `MIHOMO_VERSION` 后重跑本脚本更新 `downloads/` 再提交。`downloads/` 为空时构建自动回退多镜像下载。
+- **mihomo-build-config.js（新增）**：把原 entrypoint 内联 heredoc 抽成独立脚本（可测、清晰）。职责 = 原始订阅 → mihomo 配置：①格式识别（clash-yaml / base64订阅 / URI直链 / JSON(SIP008)），非 yaml 自动转最小 Clash 配置（proxies + url-test自动选最快 + select + MATCH,PROXY），节点协议支持 ss/vmess/trojan/vless/hysteria2(hy2)；②剥离已有 tun:/dns: 顶层块 → 追加规范 tun:（+ 缺失时补 dns:）。退出码：0 产出配置 / 1 硬失败（空 / 识别为订阅但 0 节点 / 读取失败）。
+- **entrypoint.sh**：§3.5 改调 `node /usr/local/bin/mihomo-build-config.js`，去掉大段内联 heredoc。健康检查改用 **curl 探测作主信号**——初版用 `pgrep -x mihomo` 在 3s 时点曾误报「启动失败」（进程名/时序问题），但 mihomo 实际存活并处理了请求；改为 `curl -sS https://api.anthropic.com`（去 `-f`：无 auth 返 401/404，`-f` 会误判失败，任何 HTTP 响应都算可达）。sleep→4 给 url-test 初选时间。curl 失败时用 `pgrep -f 'mihomo -d'` 区分「进程退出 vs 仍在初选」。实测：用户 base64 订阅 → 31 节点 → TUN 接口 `Meta` UP → api.anthropic.com 经 hysteria2 节点可达（HTTP 404）。
+- **启动器校验放宽**：`.sh`/`.bat` 去掉「必须含冒号」的 yaml 限制，改为非空即可——格式由容器内识别/转换。
+- **Windows 启动器中文化（.bat → .ps1 拆分）**：cmd.exe 的 .bat 对中文有 DBCS 解析缺陷，三方案全败——① UTF-8 文件按 OEM(936/GBK)解析致 3 字节错切，中文片段被当命令执行（`'时多开...' is not recognized`）；② GBK 编码又撞 cmd 第二个 bug（GBK 尾字节落 ASCII 特殊字符区如 `|`/`{`，`if/goto` 上下文不当双字节处理 → `syntax incorrect`）；③ UTF-8 BOM 不被 cmd 识别（破坏 `@echo off`）。`chcp`/BOM 均改不了 .bat 解析码页（固定 OEM）。故 `.bat` 降级为纯 ASCII 三行包装（`chcp 65001` + `powershell -File launcher.ps1`），所有中文 UI 移到 `launcher.ps1`（PowerShell 原生 Unicode，UTF-8 BOM 解析无缺陷）。`launcher.ps1` 设 `[Console]::OutputEncoding=UTF8` + `.bat` 已 `chcp 65001` → 中文在任何 Windows 正常显示。docker 调用用数组 splatting（`& docker @args`）规避 PS 原生参数引号问题；`--device=/dev/net/tun` 用 `=` 形式避免 PS 对 `/` 前缀的处理。实测中文 UI 完美显示、无解析错误、两条路径（配/不配代理）均正确拼出 docker run。
+- **多格式验证**：用户订阅 `https://103.14.76.98/sub/fsc/...`（base64，31 节点：trojan/vless/hysteria2）→ 转换后 `mihomo -t` 校验通过。
+
+### 已知限制
+
+- 自动转换生成最小配置（自动选最快节点 + 全流量走代理），不含原订阅分流规则/分组；需精细分流仍可提供 Clash YAML 直链（原样使用，仅注入 TUN）。节点协议暂支持 ss/vmess/trojan/vless/hysteria2，其余协议解析到 0 节点会明确报错。
+- `/dev/net/tun` 依赖：Docker Desktop LinuxKit VM 内置；原生 Linux 需 tun 模块。仅启用代理时挂载。
+- mihomo 日志在容器内 `/home/AISC/.mihomo/mihomo.log`。
+
+---
+
 ## v1.2.2 (2026-07-01) — 非 root 运行（AISC 用户）
 
 ### 动机

@@ -162,6 +162,45 @@ fi
 echo -e "----------------------------------------\n"
 
 # ==========================================
+# 3.5 容器内 Mihomo TUN 透明代理（若挂载了配置 /etc/mihomo/config.yaml）
+#    - 宿主侧启动器仅下载/拷贝用户原始配置/订阅（ro 挂载），由 mihomo-build-config.js 处理：
+#      读 ro 源 → 识别格式(yaml/base64订阅/URI直链/JSON) 非yaml自动转最小Clash配置
+#      → 剥离已有 tun:/dns: 顶层块 → 追加规范 tun:（+ 缺失时补 dns:）→ 写可写副本
+#      → sudo mihomo -f 副本
+#    - mihomo 建 TUN 设备 + auto-route iptables 需 CAP_NET_ADMIN → 以 root(sudo) 后台启动
+#      （AISC 已在 sudoers NOPASSWD；容器需 --cap-add=NET_ADMIN --device /dev/net/tun）
+#    - 启动后再 exec claude：TUN 已接管容器全部出站，API 请求经代理
+# ==========================================
+if [ -f /etc/mihomo/config.yaml ]; then
+    echo "🚀 正在内建 TUN 透明代理网络..."
+    MIHOMO_DATA_DIR="/home/AISC/.mihomo"
+    MIHOMO_CFG="$MIHOMO_DATA_DIR/config.yaml"
+
+    # 原始订阅 → mihomo 配置（格式自动转换 + TUN/DNS 强制注入）到可写副本。
+    # 支持 yaml / base64 订阅 / URI 直链 / JSON(SIP008)；失败仅告警不阻断，便于进 bash 排障。
+    if node /usr/local/bin/mihomo-build-config.js /etc/mihomo/config.yaml "$MIHOMO_CFG"; then
+        # 后台启动 mihomo（root），日志写 AISC 可写目录
+        sudo -b bash -c "mihomo -d '$MIHOMO_DATA_DIR' -f '$MIHOMO_CFG' > '$MIHOMO_DATA_DIR/mihomo.log' 2>&1"
+        # 等待 TUN 接管路由 + url-test 初选节点（节点多时需几秒）
+        sleep 4
+        # 健康探测：经代理能否到达 api.anthropic.com（不带 -f：401/404 等任何 HTTP 响应都算可达，只看连接是否成功）
+        if curl -sS --max-time 10 -o /dev/null https://api.anthropic.com 2>/dev/null; then
+            echo "✅ Mihomo TUN 已就绪，代理连通: api.anthropic.com 可达"
+        else
+            # curl 失败：区分 mihomo 进程是否存活，给出更准确的排障提示
+            if sudo pgrep -f 'mihomo -d' >/dev/null 2>&1; then
+                echo "⚠️  mihomo 运行中但代理暂未通（可能仍在 url-test 初选节点，或节点异常）。可继续；若 claude 连不上请查 $MIHOMO_DATA_DIR/mihomo.log"
+            else
+                echo "❌ mihomo 进程已退出，请查日志: $MIHOMO_DATA_DIR/mihomo.log"
+            fi
+        fi
+    else
+        echo "❌ 代理配置构建失败，跳过 TUN。请检查订阅链接或配置格式（支持 yaml/base64订阅/URI直链/JSON）。"
+    fi
+    echo "----------------------------------------"
+fi
+
+# ==========================================
 # 4. 智能引导：支持 cs 直连切换
 # ==========================================
 # 如果用户用 Docker 命令行传入 cs，表示切换后自动重启 Claude

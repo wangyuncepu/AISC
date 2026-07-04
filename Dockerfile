@@ -7,6 +7,14 @@ FROM ${NODE_IMAGE}
 ARG USE_CN_MIRROR=1
 
 # ==========================================
+# 容器内建 Mihomo (Clash Meta) TUN 透明代理核心
+#   - MIHOMO_VERSION: pin 版本（可 --build-arg 覆盖）；asset = mihomo-linux-<arch>-<ver>.gz
+#   - GH_PROXY: GitHub release 加速前缀。留空=直连；USE_CN_MIRROR=1 时自动用 ghproxy（可显式覆盖）
+# ==========================================
+ARG MIHOMO_VERSION=v1.19.27
+ARG GH_PROXY=
+
+# ==========================================
 # 1. 网络环境优化：按 USE_CN_MIRROR 决定 apt 源
 # ==========================================
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
@@ -15,9 +23,68 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
         echo "apt: 清华镜像" ; \
     else echo "apt: 官方源" ; fi
 
-# 安装必要的系统工具 (git 和 curl 是 Claude Code 常用的底层依赖)
-RUN apt-get update && apt-get install -y git curl sudo tmux \
+# 安装必要的系统工具：
+#   git/curl/sudo/tmux — Claude Code 常用底层依赖
+#   iptables/iproute2  — Mihomo TUN auto-route 操纵 iptables 与路由表所必需
+#   ca-certificates    — mihomo/geodata 经 https 下载所需
+RUN apt-get update && apt-get install -y git curl sudo tmux iptables iproute2 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# ==========================================
+# 1b/1c. Mihomo + geodata —— 容器内建 TUN 透明代理核心
+#   优先用构建上下文 downloads/ 里预放的本地文件（离线/网络差时，由 stage-mihomo.sh 下载）；
+#   否则多镜像轮询下载（ghfast.top 实测稳）+ 强制 --http1.1（绕开 curl/GitHub CDN 的 HTTP/2 流异常）
+#   + 短 connect-timeout 快失败 + 直连兜底。
+#   放 root 阶段：mihomo → /usr/local/bin/mihomo（root:root 755），geodata → /home/AISC/.mihomo。
+#   注意：mihomo 是 ELF 二进制，绝不能 sed 处理（同 claude-real 教训）。
+# ==========================================
+COPY downloads/ /tmp/dl/
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in amd64) mih_arch=amd64;; arm64|aarch64) mih_arch=arm64;; *) mih_arch=amd64;; esac; \
+    # 1) 优先本地预置
+    if ls /tmp/dl/mihomo-linux-${mih_arch}-*.gz >/dev/null 2>&1; then \
+        echo "📦 使用本地预置 mihomo: $(ls /tmp/dl/mihomo-linux-${mih_arch}-*.gz)"; \
+        cp /tmp/dl/mihomo-linux-${mih_arch}-*.gz /tmp/mihomo.gz; \
+        rm -f /tmp/dl/mihomo-linux-${mih_arch}-*.gz; \
+    else \
+        base="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-${mih_arch}-${MIHOMO_VERSION}.gz"; \
+        if [ -n "${GH_PROXY:-}" ]; then mirrors="${GH_PROXY}"; \
+        elif [ "$USE_CN_MIRROR" = "1" ]; then mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ https://ghproxy.net/ https://mirror.ghproxy.com/"; \
+        else mirrors=""; fi; \
+        ok=0; \
+        for m in $mirrors ""; do \
+            u="${m}${base}"; echo "⬇️  mihomo try: $u"; \
+            if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
+                    --connect-timeout 8 --max-time 120 "$u" -o /tmp/mihomo.gz; then ok=1; break; fi; \
+        done; \
+        [ "$ok" = "1" ] || { echo "❌ mihomo 下载失败（可运行 bash stage-mihomo.sh 预下载到 downloads/ 后重建，或 --build-arg GH_PROXY=<镜像前缀>）"; exit 1; }; \
+    fi; \
+    gunzip -f /tmp/mihomo.gz; \
+    mv /tmp/mihomo /usr/local/bin/mihomo; \
+    chmod +x /usr/local/bin/mihomo; \
+    /usr/local/bin/mihomo -v
+
+RUN set -eux; \
+    mkdir -p /home/AISC/.mihomo; \
+    if [ -n "${GH_PROXY:-}" ]; then mirrors="${GH_PROXY}"; \
+    elif [ "$USE_CN_MIRROR" = "1" ]; then mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ https://ghproxy.net/ https://mirror.ghproxy.com/"; \
+    else mirrors=""; fi; \
+    for f in geoip.metadb geosite.dat country.mmdb; do \
+        if [ -f /tmp/dl/$f ]; then \
+            echo "📦 使用本地预置 geodata: $f"; cp /tmp/dl/$f /home/AISC/.mihomo/$f; rm -f /tmp/dl/$f; \
+        else \
+            url="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/$f"; \
+            ok=0; \
+            for m in $mirrors ""; do \
+                u="${m}${url}"; \
+                if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
+                        --connect-timeout 8 --max-time 120 "$u" -o "/home/AISC/.mihomo/$f"; then ok=1; break; fi; \
+            done; \
+            [ "$ok" = "1" ] || echo "⚠️  geodata $f 下载失败（mihomo 仍可启动，GEO 规则可能受限）"; \
+        fi; \
+    done; \
+    rm -rf /tmp/dl
 
 # ==========================================
 # 创建非 root 运行用户 AISC（uid 1000）
@@ -117,6 +184,10 @@ RUN find /home/AISC/.claude/skills /home/AISC/.claude/plugins /home/AISC/.claude
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Mihomo 配置构建器：原始订阅 → mihomo 配置（格式自动转换 yaml/base64订阅/URI直链/JSON
+#   + 强制注入 TUN/DNS）。entrypoint 调用，Node 运行，无外部依赖。
+COPY mihomo-build-config.js /usr/local/bin/mihomo-build-config.js
+
 # 注入模型切换 CLI 工具：使用根目录脚本作为 cs/claude-switch
 COPY claude-switch /usr/local/bin/cs
 RUN chmod +x /usr/local/bin/cs \
@@ -139,7 +210,8 @@ RUN chmod +x /usr/local/bin/claude
 RUN sed -i 's/\r$//' \
         /usr/local/bin/entrypoint.sh \
         /usr/local/bin/cs \
-        /usr/local/bin/claude 2>/dev/null || true
+        /usr/local/bin/claude \
+        /usr/local/bin/mihomo-build-config.js 2>/dev/null || true
 
 # 设置工作目录，后续用户的代码将挂载到这里
 WORKDIR /home/AISC/app

@@ -11,6 +11,7 @@
 - 📦 **自包含构建** — 仓库内置 `_bundle`，`docker build` 不依赖宿主机 `~/.claude`、可离线
 - ⬆️ **一键升级** — 镜像更新后 `cs upgrade` 合并出厂配置，保留你的后端选择与历史
 - 🚀 **智能启动器** — 自动检测/构建镜像、防悬空镜像、可选缓存与国内镜像源、多开互不干扰
+- 🌐 **容器内建 TUN 透明代理** — 宿主机零代理，容器内 Mihomo (Clash Meta) TUN 接管全部出站，Claude Code 直连 Anthropic API；TUI 引导本地文件/订阅链接二选一，自动强制注入 TUN 配置
 - ⚡ **默认跳过权限确认** — Claude 以 `--dangerously-skip-permissions` 启动，容器内自动流无需逐条确认
 - 🛡️ **容器配置加固** — AISC 用户带密码 + 免密 sudo；entrypoint 自愈 `.cc-config` 所有权；git 全局 `autocrlf=input` 杜绝 CRLF 噪音
 - 🔧 **构建稳健性** — 启动器 build 失败即退出、Dockerfile 缺失检查，不再假报成功
@@ -142,6 +143,80 @@ cs upgrade    # 合并镜像出厂 .claude 到当前项目（保留后端配置/
 
 > Key 首次输入后保存，之后自动记住。可 `docker run ... cs ark` 直接切换并重启 Claude。
 
+## 代理网络（容器内建 Mihomo TUN 透明代理）
+
+宿主机**无需开启任何代理**。容器内 Mihomo (Clash Meta) 以 TUN 模式接管全部出站流量，Claude Code 直连 Anthropic API。启动器 TUI 引导完成配置，用户无需懂技术。
+
+### 工作原理
+
+```
+启动器 TUI（宿主）                    容器内（entrypoint）
+─────────────────                    ──────────────────────
+1. 询问“是否需要代理?” ── y
+2. 选 1)本地文件 / 2)URL
+3. 下载/拷贝原始 config.yaml
+   → .claude/mihomo/config.yaml       4. 读 ro 挂载的原始配置/订阅
+                                      5. 自动识别格式(yaml/base64订阅/URI直链/JSON)
+                                         非yaml → 转最小Clash配置(ss/vmess/trojan/vless/hysteria2)
+                                         + 强制注入 TUN 块(+ 缺失时补 DNS)
+                                      6. sudo mihomo -d ~/.mihomo -f 副本（后台）
+                                      7. TUN 接管路由 → exec claude
+docker run 追加:
+  --cap-add=NET_ADMIN --device /dev/net/tun
+  -v .claude/mihomo/config.yaml:/etc/mihomo/config.yaml:ro
+```
+
+- **TUN 配置权威注入在容器内**（Node）：剥离用户配置中已有的 `tun:` 块 → 追加规范 `tun:`（`enable/stack:system/dns-hijack:any:53/auto-route/auto-detect-interface`）；若用户配置无 `dns:` 块则补一个最小可用 `dns:`（避免 TUN 劫持 53 端口形成解析死循环）。每次启动重打，幂等，手动丢配置也能兜底。
+- **特权按需**：仅当 TUI 选“需要代理”时才追加 `--cap-add=NET_ADMIN --device /dev/net/tun` 与配置只读挂载；不配代理则零特权、零 tun 设备依赖。
+- **mihomo 以 root 启动**（`sudo`，AISC 已 NOPASSWD sudoers）：建 TUN 设备 + `auto-route` iptables 需 `CAP_NET_ADMIN`，非 root 用户无此 cap。
+- **geodata 预置**：镜像构建期下载 `geoip.metadb/geosite.dat/country.mmdb`，避免受限网络下 mihomo 运行时下载 geodata 失败导致起不来。
+
+### 使用
+
+启动器交互（以 `.sh` 为例，`.bat` 同理）：
+
+```
+是否需要配置代理网络? [y/N]: y
+  1) 本地文件 — 输入本地 config.yaml 绝对路径
+  2) 网络链接 — 输入订阅链接 / 配置直链 URL
+选择 [1/2，默认 2]: 2
+配置 URL: https://example.com/sub.yaml
+⬇️  下载配置...
+✅ 代理配置已就绪
+🛡️  已启用容器内 TUN 透明代理（NET_ADMIN + /dev/net/tun）
+```
+
+容器启动日志：
+
+```
+🚀 正在内建 TUN 透明代理网络...
+✅ Mihomo TUN 已就绪（PID 42）
+🌐 代理连通: api.anthropic.com 可达
+```
+
+### 手动构建/运行（含代理）
+
+```bash
+# 构建（默认 pin mihomo v1.19.27；国内源自动用 ghproxy 加速 GitHub release）
+docker build -t super-claude:latest .
+
+# 运行（启用 TUN 代理）—— 需先放好 .claude/mihomo/config.yaml
+docker run -it --rm -e TERM=xterm-256color \
+  --cap-add=NET_ADMIN --device /dev/net/tun \
+  -v "$(pwd):/home/AISC/app" \
+  -v "$(pwd)/.claude/mihomo/config.yaml:/etc/mihomo/config.yaml:ro" \
+  super-claude:latest
+```
+
+### 已知限制
+
+- **多格式订阅自动转换**：订阅链接支持 **Clash YAML / base64 订阅 / URI 直链 / JSON(SIP008)**，容器内 `mihomo-build-config.js` 自动识别并转换为最小 Clash 配置（`url-test` 自动选最快节点 + `MATCH,PROXY`）。节点协议支持 **ss / vmess / trojan / vless / hysteria2(hy2)**。无需订阅转换工具，Clash Verge 能导入的订阅链接本站也能用。
+- `/dev/net/tun` 依赖：Docker Desktop（Win/macOS）LinuxKit VM 内置；原生 Linux 需 tun 内核模块（通常内置）。仅启用代理时才挂载，不影响纯直连。
+- mihomo 日志：容器内 `/home/AISC/.mihomo/mihomo.log`，代理异常时优先查此。TUN 接口名为 `Meta`（非 `tun0`），`ip -br link | grep -i meta` 可查其状态。
+- 自定义 mihomo 版本：`docker build --build-arg MIHOMO_VERSION=v1.x.x .`；指定单一镜像前缀：`--build-arg GH_PROXY=https://ghfast.top/`；海外直连：`--build-arg GH_PROXY= --build-arg USE_CN_MIRROR=0`。
+- **构建零 GitHub 依赖**：mihomo 二进制 + geodata 已预下载到 `downloads/` 并**纳入 git**（同 `_bundle` 哲学），`docker build` 完全不访问 GitHub，国内网络无忧。升级 mihomo：改 Dockerfile `MIHOMO_VERSION` 后跑 `bash stage-mihomo.sh` 更新 `downloads/` 再提交。若 `downloads/` 被清空，构建自动回退多镜像下载（`ghfast.top` 优先 + `--http1.1` + 直连兜底）。
+- **转换局限**：自动转换生成的是最小配置（自动选最快节点 + 全流量走代理），不含原订阅的分流规则/分组。若需精细分流，仍可直接提供 Clash YAML 直链（原样使用，仅注入 TUN）。
+
 ## 内置技能（插件机制）
 
 | 插件 | 作用 | 调用 |
@@ -180,6 +255,8 @@ cs upgrade → 叠加更新出厂部分(skills/plugins/commands)，合并 settin
 ```
 .claude/        Claude CLI 原生目录（skills/plugins/commands/projects/...，软件本体）
                 临时=/home/AISC/.claude（镜像）  项目=/home/AISC/app/.claude（挂载卷）
+.claude/mihomo/ Mihomo 代理配置（用户原始 config.yaml，订阅凭据敏感，gitignore）
+                容器内 ro 挂载至 /etc/mihomo/config.yaml，TUN 块由 entrypoint 注入
 .cc-config/     cs 运行配置：settings.json(env) + api-keys（密钥，gitignore）
 ```
 
@@ -214,15 +291,19 @@ docker ps -aq --filter "name=super-claude-station" | ForEach-Object { docker rm 
 ```
 .
 ├── Dockerfile                  # 多阶段：插件注入 + 解符号链接 + 版本戳
-├── entrypoint.sh               # 作用域选择 + .claude 复制/校验 + env 注入 + 启动菜单
+├── entrypoint.sh               # 作用域选择 + .claude 复制/校验 + Mihomo TUN 启动 + env 注入 + 启动菜单
+├── mihomo-build-config.js      # 订阅格式转换(yaml/base64/URI/JSON) + TUN/DNS 强制注入（容器内运行）
 ├── claude-switch               # cs：后端切换 / upgrade / show
 ├── claude-wrapper              # claude 包装器：启动注入 env
 ├── claude-settings.json        # CLI settings（enabledPlugins + marketplaces + statusLine）
 ├── stage-skills.sh             # _bundle 生成器（从 ~/.claude 暂存插件/技能，一次性）
+├── stage-mihomo.sh             # mihomo+geodata 预下载器（弱网/离线构建兜底，一次性）
+├── downloads/                  # mihomo 二进制+geodata 预置（stage-mihomo.sh 填充，gitignore）
 ├── global-claude.md            # 全局 CLAUDE.md
 ├── commands/                   # gstack 6 个斜杠命令
 ├── _bundle/                    # 内置插件 + gstack 文档（纳入 git → 自包含构建）
-├── 一键启动_AI工作站.bat       # Windows 启动器（英文，防乱码）
+├── 一键启动_AI工作站.bat       # Windows 启动器（ASCII 包装 → launcher.ps1，防 cmd 中文 DBCS 解析 bug）
+├── launcher.ps1                # Windows 启动器中文 UI 主体（PowerShell，原生 Unicode）
 ├── 启动_AI工作站.sh            # Linux 启动器
 ├── 启动_AI工作站.command       # macOS 启动器
 ├── README.md

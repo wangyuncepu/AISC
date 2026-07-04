@@ -1,0 +1,3 @@
+# 此目录预置 mihomo 二进制与 geodata，供 Dockerfile 构建时优先使用。
+# 由 stage-mihomo.sh 下载填充，并纳入 git → docker build 自包含、国内网络下不访问 GitHub。
+# 升级 mihomo：改 Dockerfile MIHOMO_VERSION 后重跑 bash stage-mihomo.sh 更新本目录再提交。
