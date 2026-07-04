@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# stage-mihomo.sh —— 构建前预下载 Mihomo 二进制 + geodata 到 downloads/
-# 网络差/离线构建时用：Dockerfile 优先使用 downloads/ 本地副本，跳过联网下载。
+# stage-mihomo.sh —— 构建前预下载 Mihomo 二进制 + geodata 到 image/downloads/
+# 网络差/离线构建时用：Dockerfile 优先使用 image/downloads/ 本地副本，跳过联网下载。
 # 一次性脚本，普通用户无需运行（默认 docker build 联网下载即可）。
 #
-# 产物（不入 git，仅 .gitkeep 占位）：
-#   downloads/mihomo-linux-<arch>-<ver>.gz   mihomo 二进制（gz）
-#   downloads/geoip.metadb  geosite.dat  country.mmdb   geodata
+# 产物（纳入 git，使构建自包含、国内网络不访问 GitHub）：
+#   image/downloads/mihomo-linux-<arch>-<ver>.gz   mihomo 二进制（gz）
+#   image/downloads/geoip.metadb  geosite.dat  country.mmdb   geodata
 set -euo pipefail
 
-DST="$(cd "$(dirname "$0")" && pwd)/downloads"
+DST="$(cd "$(dirname "$0")/.." && pwd)/image/downloads"
 mkdir -p "$DST"
 
 VER="${MIHOMO_VERSION:-v1.19.27}"
@@ -52,7 +52,7 @@ for f in geoip.metadb geosite.dat country.mmdb; do
     echo "  ⚠️  $f 下载失败（mihomo 仍可启动，GEO 规则可能受限）"
 done
 
-echo "✅ 完成。downloads/ 内容："
+echo "✅ 完成。image/downloads/ 内容："
 ls -la "$DST"
 echo ""
-echo "现在可离线/弱网构建：docker build -t super-claude:latest ."
+echo "现在可离线/弱网构建：docker build -f image/Dockerfile -t super-claude:latest image/（或直接跑启动器）"

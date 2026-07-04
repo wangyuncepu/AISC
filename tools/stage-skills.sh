@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# stage-skills.sh —— 构建前从宿主机 ~/.claude 暂存所需插件与技能到 _bundle/
-# Docker 构建上下文只能访问 AISC/ 目录，故插件缓存需先暂存进 _bundle（已 gitignore）。
+# stage-skills.sh —— 构建前从宿主机 ~/.claude 暂存所需插件与技能到 image/_bundle/
+# Docker 构建上下文为 image/，故插件缓存需先暂存进 image/_bundle（纳入 git）。
 #
 # 暂存内容：
 #   插件（plugin 机制，离线可用）：caveman / claude-hud / document-skills /
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 SRC="${HOME}/.claude"
-DST="$(cd "$(dirname "$0")" && pwd)/_bundle"
+DST="$(cd "$(dirname "$0")/.." && pwd)/image/_bundle"
 IMG_HOME="/home/AISC/.claude"   # 镜像内目标路径，用于重写绝对路径
 
 # 需要的 4 个 marketplace（skill-creator 由 claude-plugins-official 本地源解析）
@@ -121,4 +121,4 @@ find "$DST" -name '.gitignore' -delete 2>/dev/null || true
 echo "✅ 暂存完成。体积："
 du -sh "$DST" "$DST/plugins/cache" "$DST/plugins/marketplaces" "$DST/skills/gstack" 2>/dev/null
 echo ""
-echo "下一步：docker build -t super-claude:latest ."
+echo "下一步：docker build -f image/Dockerfile -t super-claude:latest image/（或直接跑启动器）"

@@ -21,7 +21,7 @@ build_image() {
   read -r -p "是否使用国内镜像源(基础镜像daocloud/apt清华/npm淘宝)? [Y/n]: " um
   case "$um" in n|N) mirror_arg="USE_CN_MIRROR=0"; node_arg="NODE_IMAGE=node:20-slim" ;; esac
   echo "📦 正在构建镜像: $IMAGE  ${cache_flag:+(无缓存) }(${mirror_arg}) ..."
-  if ! docker build $cache_flag --build-arg "$mirror_arg" --build-arg "$node_arg" -t "$IMAGE" "$PROJECT_ROOT"; then
+  if ! docker build $cache_flag --build-arg "$mirror_arg" --build-arg "$node_arg" -f "$PROJECT_ROOT/image/Dockerfile" -t "$IMAGE" "$PROJECT_ROOT/image"; then
     echo "❌ 构建失败。"
     exit 1
   fi

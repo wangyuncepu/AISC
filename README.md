@@ -41,24 +41,24 @@
 #### 构建
 
 ```bash
-# 默认构建（自包含，仓库已含 _bundle；国内镜像源默认开）
-docker build -t super-claude:latest .
+# 默认构建（自包含，仓库已含 image/_bundle；国内镜像源默认开）
+docker build -f image/Dockerfile -t super-claude:latest image/
 
 # 海外网络 —— 显式关闭国内镜像（apt / npm 走官方源）
-docker build --build-arg USE_CN_MIRROR=0 -t super-claude:latest .
+docker build -f image/Dockerfile --build-arg USE_CN_MIRROR=0 -t super-claude:latest image/
 
 # 国内网络 + 基础镜像也走 daocloud（绕开 docker.io 拉取超时）
-docker build \
+docker build -f image/Dockerfile \
   --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim \
-  -t super-claude:latest .
+  -t super-claude:latest image/
 
 # 完全从头构建（禁用缓存）
-docker build --no-cache -t super-claude:latest .
+docker build -f image/Dockerfile --no-cache -t super-claude:latest image/
 ```
 
 > **⚠️ `USE_CN_MIRROR` 默认 = `1`（国内源）**：apt → 清华、npm → 淘宝。海外用户需显式传 `--build-arg USE_CN_MIRROR=0` 走官方源。
 >
-> 仓库内置 `_bundle`（插件/技能，约 24M），构建不依赖宿主机 `~/.claude`。若需从你本机重新生成插件包，运行 `bash stage-skills.sh` 后再 build（一次性，普通用户无需）。
+> 仓库内置 `image/_bundle`（插件/技能，约 24M），构建不依赖宿主机 `~/.claude`。若需从你本机重新生成插件包，运行 `bash tools/stage-skills.sh` 后再 build（一次性，普通用户无需）。
 
 #### 运行
 
@@ -197,8 +197,8 @@ docker run 追加:
 ### 手动构建/运行（含代理）
 
 ```bash
-# 构建（默认 pin mihomo v1.19.27；国内源自动用 ghproxy 加速 GitHub release）
-docker build -t super-claude:latest .
+# 构建（默认 pin mihomo v1.19.27；image/downloads/ 已预置，不访问 GitHub）
+docker build -f image/Dockerfile -t super-claude:latest image/
 
 # 运行（启用 TUN 代理）—— 需先放好 .claude/mihomo/config.yaml
 docker run -it --rm -e TERM=xterm-256color \
@@ -213,8 +213,8 @@ docker run -it --rm -e TERM=xterm-256color \
 - **多格式订阅自动转换**：订阅链接支持 **Clash YAML / base64 订阅 / URI 直链 / JSON(SIP008)**，容器内 `mihomo-build-config.js` 自动识别并转换为最小 Clash 配置（`url-test` 自动选最快节点 + `MATCH,PROXY`）。节点协议支持 **ss / vmess / trojan / vless / hysteria2(hy2)**。无需订阅转换工具，Clash Verge 能导入的订阅链接本站也能用。
 - `/dev/net/tun` 依赖：Docker Desktop（Win/macOS）LinuxKit VM 内置；原生 Linux 需 tun 内核模块（通常内置）。仅启用代理时才挂载，不影响纯直连。
 - mihomo 日志：容器内 `/home/AISC/.mihomo/mihomo.log`，代理异常时优先查此。TUN 接口名为 `Meta`（非 `tun0`），`ip -br link | grep -i meta` 可查其状态。
-- 自定义 mihomo 版本：`docker build --build-arg MIHOMO_VERSION=v1.x.x .`；指定单一镜像前缀：`--build-arg GH_PROXY=https://ghfast.top/`；海外直连：`--build-arg GH_PROXY= --build-arg USE_CN_MIRROR=0`。
-- **构建零 GitHub 依赖**：mihomo 二进制 + geodata 已预下载到 `downloads/` 并**纳入 git**（同 `_bundle` 哲学），`docker build` 完全不访问 GitHub，国内网络无忧。升级 mihomo：改 Dockerfile `MIHOMO_VERSION` 后跑 `bash stage-mihomo.sh` 更新 `downloads/` 再提交。若 `downloads/` 被清空，构建自动回退多镜像下载（`ghfast.top` 优先 + `--http1.1` + 直连兜底）。
+- 自定义 mihomo 版本：`docker build -f image/Dockerfile --build-arg MIHOMO_VERSION=v1.x.x image/`；指定单一镜像前缀：`--build-arg GH_PROXY=https://ghfast.top/`；海外直连：`--build-arg GH_PROXY= --build-arg USE_CN_MIRROR=0`。
+- **构建零 GitHub 依赖**：mihomo 二进制 + geodata 已预下载到 `image/downloads/` 并**纳入 git**（同 `image/_bundle` 哲学），`docker build` 完全不访问 GitHub，国内网络无忧。升级 mihomo：改 `image/Dockerfile` 的 `MIHOMO_VERSION` 后跑 `bash tools/stage-mihomo.sh` 更新 `image/downloads/` 再提交。若 `image/downloads/` 被清空，构建自动回退多镜像下载（`ghfast.top` 优先 + `--http1.1` + 直连兜底）。
 - **转换局限**：自动转换生成的是最小配置（自动选最快节点 + 全流量走代理），不含原订阅的分流规则/分组。若需精细分流，仍可直接提供 Clash YAML 直链（原样使用，仅注入 TUN）。
 
 ## 内置技能（插件机制）
@@ -242,7 +242,7 @@ docker run -it --rm -e TERM=xterm-256color \
 ## 升级流程
 
 ```
-改 Dockerfile / 技能 → docker build（.factory-version 自动变）
+改 image/Dockerfile / 技能 → docker build -f image/Dockerfile image/（.factory-version 自动变）
         ↓
 docker run（项目模式）→ 启动检测版本旧 → 提示「运行 cs upgrade」
         ↓
@@ -290,21 +290,22 @@ docker ps -aq --filter "name=super-claude-station" | ForEach-Object { docker rm 
 
 ```
 .
-├── Dockerfile                  # 多阶段：插件注入 + 解符号链接 + 版本戳
-├── entrypoint.sh               # 作用域选择 + .claude 复制/校验 + Mihomo TUN 启动 + env 注入 + 启动菜单
-├── mihomo-build-config.js      # 订阅格式转换(yaml/base64/URI/JSON) + TUN/DNS 强制注入（容器内运行）
-├── claude-switch               # cs：后端切换 / upgrade / show
-├── claude-wrapper              # claude 包装器：启动注入 env
-├── claude-settings.json        # CLI settings（enabledPlugins + marketplaces + statusLine）
-├── stage-skills.sh             # _bundle 生成器（从 ~/.claude 暂存插件/技能，一次性）
-├── stage-mihomo.sh             # mihomo+geodata 预下载器（弱网/离线构建兜底，一次性）
-├── downloads/                  # mihomo 二进制+geodata 预置（stage-mihomo.sh 填充，gitignore）
-├── global-claude.md            # 全局 CLAUDE.md
-├── commands/                   # gstack 6 个斜杠命令
-├── _bundle/                    # 内置插件 + gstack 文档（纳入 git → 自包含构建）
+├── README.md                   # 项目说明（GitHub 显示）
 ├── 一键启动_AI工作站.bat       # Windows 入口（ASCII 薄壳 → scripts/run.ps1）
 ├── 启动_AI工作站.sh            # Linux/macOS 入口（薄壳 → scripts/run.sh）
 ├── 启动_AI工作站.command       # macOS 双击入口（透传 .sh）
+├── skills-lock.json            # skills 锁文件
+├── image/                      # ★ 镜像构建上下文（Dockerfile + 全部 COPY 源）
+│   ├── Dockerfile              #   多阶段：插件注入 + 解符号链接 + 版本戳
+│   ├── entrypoint.sh           #   作用域 + .claude 复制/校验 + Mihomo TUN + env 注入 + 启动菜单
+│   ├── mihomo-build-config.js  #   订阅格式转换 + TUN/DNS 强制注入（容器内运行）
+│   ├── claude-switch           #   cs：后端切换 / upgrade / show
+│   ├── claude-wrapper          #   claude 包装器：启动注入 env
+│   ├── claude-settings.json    #   CLI settings（enabledPlugins + marketplaces + statusLine）
+│   ├── global-claude.md        #   全局 CLAUDE.md
+│   ├── commands/               #   gstack 6 个斜杠命令
+│   ├── _bundle/                #   内置插件 + gstack 文档（纳入 git → 自包含构建）
+│   └── downloads/              #   mihomo 二进制 + geodata 预置（纳入 git → 国内网络零 GitHub 依赖）
 ├── scripts/                    # 启动器流水线模块（低耦合；状态经 .deploy/state.env 解耦）
 │   ├── run.sh / run.ps1        #   编排器：初始化 state + 按序调 01→04，失败即中止
 │   ├── 01_check_env.*          #   环境检测（docker 已装且 daemon 运行）
@@ -312,8 +313,12 @@ docker ps -aq --filter "name=super-claude-station" | ForEach-Object { docker rm 
 │   ├── 03_build_image.*        #   镜像菜单 + 构建 → state(IMAGE, DO_RUN)
 │   ├── 04_launcher.*           #   读 state → docker run（按需加 NET_ADMIN/tun/挂载）
 │   └── _state.*                #   状态文件读写助手（KEY=value，两平台共读共写）
-├── README.md
-└── devlog.md                   # 开发日志
+├── tools/                      # 一次性生成器
+│   ├── stage-skills.sh         #   从 ~/.claude 暂存插件/技能到 image/_bundle
+│   └── stage-mihomo.sh         #   预下载 mihomo+geodata 到 image/downloads（弱网/离线兜底）
+└── docs/                       # 文档
+    ├── devlog.md               #   开发日志
+    └── TODO/                   #   待办 + 设计方案
 ```
 
 ## 启动器架构（v1.3.0 模块化）

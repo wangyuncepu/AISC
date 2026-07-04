@@ -1,5 +1,36 @@
 # Super Claude — 开发日志
 
+## v1.3.1 (2026-07-04) — 项目目录重构（按职责分组）
+
+### 动机
+
+根目录 ~18 项混杂（Dockerfile/entrypoint/claude-switch/wrapper/_bundle/downloads/commands/启动器/文档/生成器…），违反高聚合。按职责分组到 `image/` / `scripts/` / `tools/` / `docs/`，根目录收敛到 7 项（入口 + README + 配置 + 锁文件）。
+
+### 变更
+
+- **`image/`**（新建，= 镜像构建上下文）：Dockerfile + entrypoint.sh + claude-switch + claude-wrapper + claude-settings.json + global-claude.md + mihomo-build-config.js + commands/ + _bundle/ + downloads/ 全部搬入。构建上下文从根改为 `image/`，**Dockerfile COPY 路径零改动**（全相对上下文）。
+- **`tools/`**（新建）：stage-skills.sh + stage-mihomo.sh 搬入；`DST` 改为 `image/_bundle`、`image/downloads`（`$(dirname "$0")/..` 推导项目根）。
+- **`docs/`**（新建）：devlog.md + TODO/ 搬入。
+- **`scripts/03_build_image.{sh,ps1}`**：构建命令加 `-f $PROJECT_ROOT/image/Dockerfile` + 上下文改 `$PROJECT_ROOT/image`。
+- **根目录**：仅留 README.md + .gitignore + .gitattributes + 3 个入口(.bat/.sh/.command) + skills-lock.json。
+- **README**：项目结构章节重写；构建命令全部更新（`docker build -f image/Dockerfile ... image/`）；引用更新（stage-*.sh → tools/，downloads/ → image/downloads/，devlog.md → docs/devlog.md）。
+
+### 取舍
+
+- **构建上下文 = `image/`**：Dockerfile COPY 全相对上下文，搬入后零改动；额外收益——上下文从根（含 `.git/`/62MB 二进制/scripts/docs）缩到 `image/`，**传输更小、构建更快**。
+- **`.gitattributes`/`.gitignore` 不动**：模式全局（`*.sh`/`*.ps1`/`claude-switch` 按文件名匹配子目录；`.claude/`/`.deploy/` 全局忽略），移动后仍生效。
+- **宿主 `.claude/mihomo/` 留根**：02 写、04 挂载的代理配置是宿主运行时产物，非镜像输入。
+- **`skills-lock.json` 留根**：未被构建/启动器引用，锁文件约定根。
+- **版本号**：v1.3.0（模块化）已推送，本次续 v1.3.1（目录重构），不 force-push 重写历史。
+
+### 测试
+
+- `bash -n` 全 .sh；PS 语法全 .ps1。
+- `docker build -f image/Dockerfile image/` 构建成功（验证上下文 + COPY）。
+- e2e：启动器流水线（镜像存在→run）两平台通过。
+
+---
+
 ## v1.3.0 (2026-07-04) — 启动器模块化重构（流水线 + 状态解耦）
 
 ### 动机

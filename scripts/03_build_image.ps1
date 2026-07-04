@@ -25,7 +25,7 @@ function Build-Image {
     Write-Host "📦 正在构建镜像: $Image  ($mirrorArg) $cacheFlag ..."
     $buildArgs = @('build')
     if ($cacheFlag) { $buildArgs += $cacheFlag }
-    $buildArgs += @('--build-arg', $mirrorArg, '--build-arg', $nodeArg, '-t', $Image, $ProjectRoot)
+    $buildArgs += @('-f', "$ProjectRoot\image\Dockerfile", '--build-arg', $mirrorArg, '--build-arg', $nodeArg, '-t', $Image, "$ProjectRoot\image")
     & docker @buildArgs
     if ($LASTEXITCODE -ne 0) { Write-Host '[错误] 构建失败。' -ForegroundColor Red; exit 1 }
     Write-Host "✅ 构建完成: $Image"
