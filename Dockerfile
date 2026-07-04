@@ -15,8 +15,12 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
         echo "apt: 清华镜像" ; \
     else echo "apt: 官方源" ; fi
 
-# 安装必要的系统工具 (git 和 curl 是 Claude Code 常用的底层依赖)
-RUN apt-get update && apt-get install -y git curl sudo tmux \
+# 安装必要的系统工具
+#   git/curl/sudo — Claude Code 底层依赖与权限
+#   python3 — Python 运行环境
+RUN apt-get update && apt-get install -y \
+        git curl sudo \
+        python3 python3-pip python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # ==========================================
