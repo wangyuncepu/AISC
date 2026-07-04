@@ -1,5 +1,45 @@
 # Super Claude — 开发日志
 
+## v1.3.0 (2026-07-04) — 启动器模块化重构（流水线 + 状态解耦）
+
+### 动机
+
+`launcher.ps1`（131 行）/ `启动_AI工作站.sh`（134 行）随 Mihomo TUN、API 配置等功能膨胀，构建/代理/运行逻辑耦合在单体脚本里，违反低耦合高聚合。拆为 4 个生命周期模块 + 薄流水线入口，模块间用状态文件解耦。
+
+### 设计决策
+
+- **D1 · 按平台 .sh + .ps1 平行**（已与用户确认）：bash/PowerShell 各平台自带，零宿主依赖（不选 Node.js 调度——宿主 Node 不可控，违反"开箱即用"）。代价：两套平行逻辑同步维护。
+- **D2 · 状态文件解耦**：`.deploy/state.env`（KEY=value，gitignored）。只存简单值 `IMAGE`/`PROXY_ENABLED`/`CONTAINER_NAME`/`DO_RUN`；**路径不入状态**——各模块从 `$0`/`$PSScriptRoot` 推导 `PROJECT_ROOT`，避免空格/特殊字符破坏 `source`/解析。bash `source`/grep 读、PS 正则读；写用追加+去重。
+- **D3 · 入口极薄**：根 `.sh`/`.bat` 只按序调 4 模块（pipeline）。
+- **D4 · 行为保持**：根文件名 + 双击入口不变；代理 TUI/构建菜单/docker run 参数等价迁移。**API Key 仍在容器内 `cs`**、**作用域仍在 entrypoint**（不挪到宿主 02）。
+- **D5 · 容器侧不动**：Dockerfile/entrypoint/mihomo-build-config.js/stage-mihomo.sh 全不变。
+
+### 变更
+
+- **scripts/ 流水线**（新增 12 文件，6 .sh + 6 .ps1）：
+  - `run.*` 编排器：`state_init` + 写 `CONTAINER_NAME`/`IMAGE`/`DO_RUN`/`PROXY_ENABLED` 默认值 → 按序调 01-04，任一非零退出即中止。
+  - `01_check_env.*`：`docker` 命令存在 + `docker info` daemon 运行；失败友好退出。
+  - `02_config_wizard.*`：代理 TUI（y/N → 本地/URL → 下载/拷贝 → 非空校验）→ 写 `.claude/mihomo/config.yaml` + `state(PROXY_ENABLED)`。代理非阻断：失败/跳过 → `PROXY_ENABLED=0` 回退直连（匹配旧行为）。
+  - `03_build_image.*`：镜像存在菜单（[1]运行/[2]重建/[3]新名）+ 构建（cache/镜像源提示）+ "立即运行?" → `state(IMAGE, DO_RUN)`。`DO_RUN=0`（选不运行）→ 04 跳过 docker run。
+  - `04_launcher.*`：读 state → 清退出的旧容器 → 拼 `docker run`（`PROXY_ENABLED=1` 追加 `--cap-add=NET_ADMIN --device=/dev/net/tun` + 配置只读挂载）。
+  - `_state.*`：`state_init`/`state_set`/`state_get`（bash）/ `Init-State`/`Set-State`/`Get-State`（PS）。PS 用 .NET `WriteAllText`（UTF-8 无 BOM + LF）避免 bash `source` 被 BOM/CR 破坏；bash `state_get` 末尾 `tr -d '\r'` 防御。
+- **根入口改薄**：`启动_AI工作站.sh` → `exec bash scripts/run.sh`；`一键启动_AI工作站.bat`（ASCII）→ `powershell -File scripts/run.ps1`；`.command` 不变。
+- **PS1 BOM**：所有 `scripts/*.ps1` UTF-8 BOM（PS5.1 按 BOM 识别中文）；`.gitattributes` `*.ps1 text eol=lf` 保证提交后 LF+BOM。
+- **`.gitignore`**：加 `.deploy/`（运行时状态）。
+
+### 取舍
+
+- **PS 编排用子进程**：`run.ps1` 用 `& powershell -NoProfile -File` 调各模块（独立进程 + `$LASTEXITCODE`），而非 dot-source——dot-source 下模块 `exit 0` 会退出整个 run.ps1，破坏流水线。子进程有 ~1-2s 启动开销，可接受。bash 同理用 `bash scripts/0X.sh` 子进程。
+- **DO_RUN 状态位**：03"构建后不运行"需干净中止 04。用 `DO_RUN` 状态位（0/1）而非特殊退出码，符合状态解耦原则。
+- **两套平行逻辑**：改提示文案需同步 .sh + .ps1 两份（用户已接受）。
+
+### 测试
+
+- `bash -n` 全 .sh 通过；PS `[Parser]::ParseFile` 全 .ps1 通过。
+- e2e 两平台 × 两路径（配/不配代理）全通过：4 模块按序、state.env 正确流转（`PROXY_ENABLED`/`DO_RUN`/`IMAGE`/`CONTAINER_NAME`）、docker run 拿到正确参数（代理路径含 `--cap-add=NET_ADMIN --device=/dev/net/tun` + 配置挂载）。
+
+---
+
 ## v1.2.3 (2026-07-04) — 容器内建 Mihomo TUN 透明代理
 
 ### 动机

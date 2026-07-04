@@ -302,13 +302,32 @@ docker ps -aq --filter "name=super-claude-station" | ForEach-Object { docker rm 
 ├── global-claude.md            # 全局 CLAUDE.md
 ├── commands/                   # gstack 6 个斜杠命令
 ├── _bundle/                    # 内置插件 + gstack 文档（纳入 git → 自包含构建）
-├── 一键启动_AI工作站.bat       # Windows 启动器（ASCII 包装 → launcher.ps1，防 cmd 中文 DBCS 解析 bug）
-├── launcher.ps1                # Windows 启动器中文 UI 主体（PowerShell，原生 Unicode）
-├── 启动_AI工作站.sh            # Linux 启动器
-├── 启动_AI工作站.command       # macOS 启动器
+├── 一键启动_AI工作站.bat       # Windows 入口（ASCII 薄壳 → scripts/run.ps1）
+├── 启动_AI工作站.sh            # Linux/macOS 入口（薄壳 → scripts/run.sh）
+├── 启动_AI工作站.command       # macOS 双击入口（透传 .sh）
+├── scripts/                    # 启动器流水线模块（低耦合；状态经 .deploy/state.env 解耦）
+│   ├── run.sh / run.ps1        #   编排器：初始化 state + 按序调 01→04，失败即中止
+│   ├── 01_check_env.*          #   环境检测（docker 已装且 daemon 运行）
+│   ├── 02_config_wizard.*      #   代理 TUI → .claude/mihomo/config.yaml + state(PROXY_ENABLED)
+│   ├── 03_build_image.*        #   镜像菜单 + 构建 → state(IMAGE, DO_RUN)
+│   ├── 04_launcher.*           #   读 state → docker run（按需加 NET_ADMIN/tun/挂载）
+│   └── _state.*                #   状态文件读写助手（KEY=value，两平台共读共写）
 ├── README.md
 └── devlog.md                   # 开发日志
 ```
+
+## 启动器架构（v1.3.0 模块化）
+
+启动器已从单体脚本拆为 4 个低耦合生命周期模块，按流水线执行，模块间用 `.deploy/state.env`（KEY=value，gitignored）解耦传参：
+
+```
+入口(.sh/.bat) → run.* 编排器 → 01_check_env → 02_config_wizard → 03_build_image → 04_launcher
+                                  (docker?)      (代理TUI)          (镜像构建)        (docker run)
+```
+
+- **状态契约**：`state.env` 只存简单值 `IMAGE` / `PROXY_ENABLED` / `CONTAINER_NAME` / `DO_RUN`；路径不入状态，各模块从自身位置推导 `PROJECT_ROOT`。
+- **跨平台**：bash 模块（Linux/macOS）+ PowerShell 模块（Windows，UTF-8 BOM）平行；`.bat` 为纯 ASCII 薄壳（规避 cmd 中文 DBCS 解析缺陷）。
+- **行为不变**：根文件名 + 双击入口不变；代理 TUI / 构建菜单 / docker run 参数等价迁移。API Key 仍在容器内 `cs`，作用域仍在 entrypoint。
 
 ## 许可证
 
