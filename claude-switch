@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cs / claude-switch — switch Claude Code between cc / deepseek / ark / 1y / duo-cc / xf / orange
+# cs / claude-switch — switch Claude Code between cc / codesome-cc / deepseek / ark / xf
 # API Keys stored in ~/.claude/api-keys (chmod 600), never in this file.
 # Modifies ~/.claude/settings.json env block only; everything else untouched.
 
@@ -48,10 +48,8 @@ fi
 # ====== Endpoint URLs (non-secret) ======
 DEEPSEEK_BASE="${DEEPSEEK_BASE:-https://api.deepseek.com/anthropic}"
 GLM_BASE="${GLM_BASE:-https://ark.cn-beijing.volces.com/api/coding}"
-ONEY_BASE="${ONEY_BASE:-https://1yuanapi.com}"
-DUOCC_BASE="${DUOCC_BASE:-https://api.duou.cc}"
 XF_BASE="${XF_BASE:-https://maas-coding-api.cn-huabei-1.xf-yun.com/anthropic}"
-ORANGE_BASE="${ORANGE_BASE:-https://api4.orangeai.cc}"
+CODESOME_BASE="${CODESOME_BASE:-https://aio.codesome.ai/api}"
 # =========================================
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -120,6 +118,14 @@ switch() {
       export CS_SUBAGENT="" CS_EFFORT="" CS_COMPACT=""
       echo "Switched to: Claude (default Anthropic, 全部配置已清空)"
       ;;
+    codesome-cc)
+      # 基于 cc，仅替换 base URL + key（模型/effort 等留空，走 codesome 代理）
+      key=$(get_key "CODESOME_KEY" "Codesome") || return 1
+      export CS_BASE_URL="$CODESOME_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
+      export CS_MODEL="" CS_DEFAULT_OPUS="" CS_DEFAULT_SONNET="" CS_DEFAULT_HAIKU=""
+      export CS_SUBAGENT="" CS_EFFORT="" CS_COMPACT=""
+      echo "Switched to: Codesome (aio.codesome.ai/api)"
+      ;;
     deepseek)
       key=$(get_key "DEEPSEEK_KEY" "DeepSeek") || return 1
       export CS_BASE_URL="$DEEPSEEK_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
@@ -138,24 +144,6 @@ switch() {
       export CS_EFFORT="max" CS_COMPACT="1000000"
       echo "Switched to: Ark"
       ;;
-    1y)
-      key=$(get_key "ONEY_KEY" "1yuanapi") || return 1
-      export CS_BASE_URL="$ONEY_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
-      export CS_MODEL="glm-5.2[1m]"
-      export CS_DEFAULT_OPUS="glm-5.2[1m]" CS_DEFAULT_SONNET="glm-5.2[1m]"
-      export CS_DEFAULT_HAIKU="glm-5.2[1m]" CS_SUBAGENT="glm-5.2[1m]"
-      export CS_EFFORT="" CS_COMPACT="1000000"
-      echo "Switched to: 1y (1yuanapi.com)"
-      ;;
-    duo-cc)
-      key=$(get_key "DUOCC_KEY" "duo-cc") || return 1
-      export CS_BASE_URL="$DUOCC_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
-      export CS_MODEL="claude-sonnet-5"
-      export CS_DEFAULT_OPUS="claude-opus-4.8" CS_DEFAULT_SONNET="claude-sonnet-5"
-      export CS_DEFAULT_HAIKU="claude-haiku-4.5" CS_SUBAGENT="claude-haiku-4.5"
-      export CS_EFFORT="" CS_COMPACT="1000000"
-      echo "Switched to: duo-cc (api.duou.cc)"
-      ;;
     xf)
       key=$(get_key "XF_KEY" "XF (讯飞)") || return 1
       export CS_BASE_URL="$XF_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
@@ -164,15 +152,6 @@ switch() {
       export CS_DEFAULT_HAIKU="xopdeepseekv4flash[1m]" CS_SUBAGENT="xopdeepseekv4flash[1m]"
       export CS_EFFORT="max" CS_COMPACT="512000"
       echo "Switched to: XF (讯飞 maas-coding)"
-      ;;
-    orange)
-      key=$(get_key "ORANGE_KEY" "OrangeAI") || return 1
-      export CS_BASE_URL="$ORANGE_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
-      export CS_MODEL="glm-5.2[1m]"
-      export CS_DEFAULT_OPUS="glm-5.2[1m]" CS_DEFAULT_SONNET="glm-5.2[1m]"
-      export CS_DEFAULT_HAIKU="glm-5.2[1m]" CS_SUBAGENT="glm-5.2[1m]"
-      export CS_EFFORT="" CS_COMPACT="1000000"
-      echo "Switched to: OrangeAI (api4.orangeai.cc)"
       ;;
     *)
       die "unknown mode: ${mode}"
@@ -216,16 +195,14 @@ show_current() {
     if (!base)                      console.log('\\n  后端: cc (Anthropic)');
     else if (base.includes('deepseek')) console.log('\\n  后端: deepseek');
     else if (base.includes('volces'))   console.log('\\n  后端: ark');
-    else if (base.includes('1yuanapi')) console.log('\\n  后端: 1y');
-    else if (base.includes('duou.cc'))  console.log('\\n  后端: duo-cc');
     else if (base.includes('xf-yun'))   console.log('\\n  后端: xf');
-    else if (base.includes('orangeai')) console.log('\\n  后端: orange');
+    else if (base.includes('codesome')) console.log('\\n  后端: codesome-cc');
     else                            console.log('\\n  后端: custom → ' + base);
   " 2>/dev/null || echo "  unable to read settings"
 
   echo ""
   echo "Saved keys:"
-  for entry in "ANTHROPIC_OFFICIAL_KEY:Anthropic" "DEEPSEEK_KEY:DeepSeek" "GLM_KEY:Ark" "ONEY_KEY:1yuanapi" "DUOCC_KEY:duo-cc" "XF_KEY:XF(讯飞)" "ORANGE_KEY:OrangeAI"; do
+  for entry in "ANTHROPIC_OFFICIAL_KEY:Anthropic" "CODESOME_KEY:Codesome" "DEEPSEEK_KEY:DeepSeek" "GLM_KEY:Ark" "XF_KEY:XF(讯飞)"; do
     name="${entry%%:*}"
     label="${entry##*:}"
     if grep -q "^${name}=." "$KEY_STORE" 2>/dev/null; then
@@ -327,30 +304,26 @@ do_upgrade() {
 
 case "${1:-}" in
   cc|default|anthropic)  switch cc ;;
+  codesome-cc|codesome) switch codesome-cc ;;
   deepseek|ds)           switch deepseek ;;
   ark)                   switch ark ;;
-  1y|oney)               switch 1y ;;
-  duo-cc|duo|duou)       switch duo-cc ;;
   xf|xunfei)             switch xf ;;
-  orange)                switch orange ;;
   upgrade|up)            do_upgrade ;;
   show|current|"")       show_current ;;
   -h|--help)
-    echo "Usage: cs {cc|deepseek|ark|1y|duo-cc|xf|orange|upgrade|show}"
+    echo "Usage: cs {cc|codesome-cc|deepseek|ark|xf|upgrade|show}"
     echo ""
-    echo "  cc        Claude default (Anthropic)"
-    echo "  deepseek  DeepSeek V4"
-    echo "  ark       Ark"
-    echo "  1y        1yuanapi.com (Claude models proxied)"
-    echo "  duo-cc    api.duou.cc (Claude models proxied)"
-    echo "  xf        讯飞 maas-coding (glm5.2/deepseek-v4-pro/flash)"
-    echo "  orange    api4.orangeai.cc (glm-5.2)"
-    echo "  upgrade   合并镜像出厂 .claude 到当前项目（保留后端配置/历史）"
-    echo "  show      Show current backend & saved keys"
+    echo "  cc          Claude default (Anthropic)"
+    echo "  codesome-cc aio.codesome.ai/api (Claude proxied)"
+    echo "  deepseek    DeepSeek V4"
+    echo "  ark         Ark"
+    echo "  xf          讯飞 maas-coding (glm5.2/deepseek-v4-pro/flash)"
+    echo "  upgrade     合并镜像出厂 .claude 到当前项目（保留后端配置/历史）"
+    echo "  show        Show current backend & saved keys"
     echo ""
     echo "Keys are stored in .cc-config/api-keys and never committed to git."
     ;;
   *)
-    die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, xf, orange, upgrade, or show"
+    die "unknown: $1  —  use cc, codesome-cc, deepseek, ark, xf, upgrade, or show"
     ;;
 esac
