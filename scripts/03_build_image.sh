@@ -10,8 +10,8 @@ IMAGE="$(state_get IMAGE)"
 echo "📦 [3/4] 镜像构建..."
 
 build_image() {
-  if [ ! -f "$PROJECT_ROOT/Dockerfile" ]; then
-    echo "❌ 未找到 Dockerfile: $PROJECT_ROOT/Dockerfile"
+  if [ ! -f "$PROJECT_ROOT/image/Dockerfile" ]; then
+    echo "❌ 未找到 Dockerfile: $PROJECT_ROOT/image/Dockerfile"
     exit 1
   fi
   local cache_flag="" mirror_arg="USE_CN_MIRROR=1"

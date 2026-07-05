@@ -11,8 +11,8 @@ if (-not $Image) { $Image = 'super-claude:latest' }
 Write-Host '📦 [3/4] 镜像构建...'
 
 function Build-Image {
-    if (-not (Test-Path "$ProjectRoot\Dockerfile")) {
-        Write-Host "[错误] 未找到 Dockerfile: $ProjectRoot\Dockerfile" -ForegroundColor Red
+    if (-not (Test-Path "$ProjectRoot\image\Dockerfile")) {
+        Write-Host "[错误] 未找到 Dockerfile: $ProjectRoot\image\Dockerfile" -ForegroundColor Red
         exit 1
     }
     $cacheFlag = ''
