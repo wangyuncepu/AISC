@@ -22,10 +22,17 @@ build_image() {
   case "$um" in
     n|N) mirror_arg="USE_CN_MIRROR=0" ;;
     *)
-      # 多源 fallback：测 manifest 端点（比 /v2/ 根更准），只要不超时就算通
+      # 多源 fallback：优先用本地已有镜像（省拉取）；否则测网络(仅200/401算通，403=禁止不可用)
       for reg in docker.m.daocloud.io docker.nju.edu.cn hub-mirror.c.163.com; do
-        if curl -s -o /dev/null --max-time 10 --connect-timeout 5 "https://$reg/v2/library/node/manifests/20-slim" 2>/dev/null; then
-          node_arg="NODE_IMAGE=${reg}/library/node:20-slim"
+        img="${reg}/library/node:20-slim"
+        if docker image inspect "$img" >/dev/null 2>&1; then
+          node_arg="NODE_IMAGE=${img}"
+          echo "✅ 国内镜像源(本地缓存): $reg"
+          break
+        fi
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --connect-timeout 5 "https://$reg/v2/library/node/manifests/20-slim" 2>/dev/null)
+        if [ "$code" = "200" ] || [ "$code" = "401" ]; then
+          node_arg="NODE_IMAGE=${img}"
           echo "✅ 国内镜像源: $reg"
           break
         fi

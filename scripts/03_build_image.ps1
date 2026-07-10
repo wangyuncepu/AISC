@@ -22,13 +22,22 @@ function Build-Image {
     if ($uc -match '^[nN]') { $cacheFlag = '--no-cache' }
     $um = Read-Host '是否使用国内镜像源(基础镜像多源/apt清华/npm淘宝)? [Y/n]'
     if ($um -match '^[nN]') { $mirrorArg = 'USE_CN_MIRROR=0' } else {
-        # 多源 fallback：测 manifest 端点（比 /v2/ 根更准），只要不超时就算通
+        # 多源 fallback：优先用本地已有镜像（省拉取）；否则测网络(仅200/401算通，403=禁止不可用)
         foreach ($reg in @('docker.m.daocloud.io','docker.nju.edu.cn','hub-mirror.c.163.com')) {
-            try {
-                Invoke-WebRequest -Uri "https://$reg/v2/library/node/manifests/20-slim" -TimeoutSec 10 -SkipHttpErrorCheck -UseBasicParsing | Out-Null
-                $nodeArg = "NODE_IMAGE=${reg}/library/node:20-slim"
-                Write-Host "✅ 国内镜像源: $reg"
+            $img = "${reg}/library/node:20-slim"
+            docker image inspect $img 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $nodeArg = "NODE_IMAGE=${img}"
+                Write-Host "✅ 国内镜像源(本地缓存): $reg"
                 break
+            }
+            try {
+                $code = (Invoke-WebRequest -Uri "https://$reg/v2/library/node/manifests/20-slim" -TimeoutSec 10 -SkipHttpErrorCheck -UseBasicParsing).StatusCode
+                if ($code -eq 200 -or $code -eq 401) {
+                    $nodeArg = "NODE_IMAGE=${img}"
+                    Write-Host "✅ 国内镜像源: $reg"
+                    break
+                }
             } catch {}
         }
         if ($nodeArg -eq 'NODE_IMAGE=node:20-slim') {

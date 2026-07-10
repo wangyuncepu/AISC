@@ -12,6 +12,7 @@
 - ⬆️ **一键升级** — 镜像更新后 `cs upgrade` 合并出厂配置，保留你的后端选择与历史
 - 🚀 **智能启动器** — 自动检测/构建镜像、防悬空镜像、可选缓存与国内镜像源、多开互不干扰
 - 🌐 **容器内建 TUN 透明代理** — 宿主机零代理，容器内 Mihomo (Clash Meta) TUN 接管全部出站，Claude Code 直连 Anthropic API；TUI 引导本地文件/订阅链接二选一，自动强制注入 TUN 配置
+- 🔌 **OpenAI 协议转换** — 内置 LiteLLM 反向代理，Claude Code 接入 OpenAI / DeepSeek 等 OpenAI 格式渠道，Anthropic ↔ OpenAI 协议自动转换
 - ⚡ **默认跳过权限确认** — Claude 以 `--dangerously-skip-permissions` 启动，容器内自动流无需逐条确认
 - 🛡️ **容器配置加固** — AISC 用户带密码 + 免密 sudo；entrypoint 自愈 `.cc-config` 所有权；git 全局 `autocrlf=input` 杜绝 CRLF 噪音
 - 🔧 **构建稳健性** — 启动器 build 失败即退出、Dockerfile 缺失检查，不再假报成功
@@ -142,6 +143,62 @@ cs upgrade    # 合并镜像出厂 .claude 到当前项目（保留后端配置/
 | `cs duo-cc` | duo-cc | `claude-sonnet-4-8[1m]` | `api.duou.cc` |
 
 > Key 首次输入后保存，之后自动记住。可 `docker run ... cs ark` 直接切换并重启 Claude。
+
+## OpenAI 协议转换（LiteLLM 反向代理）
+
+容器内置 [LiteLLM](https://github.com/BerriAI/litellm) 反向代理，将 Claude Code 的 Anthropic 格式请求自动转换为 OpenAI 兼容格式，实现 Claude Code 接入 OpenAI / DeepSeek 等非 Anthropic 渠道。
+
+> **与 `cs` 的区别**：`cs` 切换的是 **Anthropic 兼容**后端（Anthropic 格式直通，不改协议）；LiteLLM 做的是 **协议转换**（Anthropic → OpenAI 格式），适用于 OpenAI 原生接口或 DeepSeek 等 OpenAI 兼容服务。
+
+### 架构
+
+```
+Claude Code                        LiteLLM Proxy             上游 API
+(Anthropic 格式) ──→ localhost:4000/v1/messages ──→ OpenAI 格式 ──→ openai / deepseek / ...
+```
+
+### 使用方法
+
+1. 编辑 `api_route_demo/config.yaml`，填入真实 API Key：
+   ```yaml
+   model_list:
+     - model_name: claude-3-7-sonnet-20250219   # Claude Code 发来的模型名（固定）
+       litellm_params:
+         model: openai/gpt-4o                    # 真实后端模型
+         api_key: "sk-你的key"                   # 替换为真实 key
+         # api_base: https://你的端点/v1         # 可选：自建/第三方中转
+   ```
+
+2. 容器内启动代理（**需要先启用 TUN 代理**，确保上游可达）：
+   ```bash
+   bash /home/AISC/api_route_demo/start_proxy.sh &
+   ```
+
+3. 注入环境变量后启动 Claude Code：
+   ```bash
+   bash /home/AISC/api_route_demo/run_claude_demo.sh
+   ```
+   Claude Code 的流量走 `localhost:4000` → LiteLLM 协议转换 → 上游 API。
+
+### 支持的后端
+
+| 后端 | `model` | `api_base` |
+|------|---------|------------|
+| OpenAI 官方 | `openai/gpt-4o` | 不填（默认 `api.openai.com`） |
+| DeepSeek | `deepseek/deepseek-chat` | 不填（默认 `api.deepseek.com`） |
+| 自定义 OpenAI 兼容中转 | `openai/<模型名>` | `https://你的地址/v1` |
+| 阿里百炼 | `openai/qwen-plus` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| 其他 OpenAI 兼容服务 | `openai/<模型名>` | `<服务商 /v1 端点>` |
+
+> 换后端只需改 `config.yaml` 的 `model` 和 `api_key`，重起 proxy 即可（`pkill -f litellm && bash start_proxy.sh &`）。
+
+### 验证
+
+```bash
+# 容器内 proxy 就绪后
+curl -s http://localhost:4000/v1/models
+# 应返回 model_name: claude-3-7-sonnet-20250219（owned_by: openai）
+```
 
 ## 代理网络（容器内建 Mihomo TUN 透明代理）
 

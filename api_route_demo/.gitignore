@@ -1,0 +1,4 @@
+# 运行时生成，含 API Key，勿提交
+.config.runtime.yaml
+# 宿主机隔离环境
+.venv/
