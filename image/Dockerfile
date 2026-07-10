@@ -243,6 +243,21 @@ RUN python3 -m venv /home/AISC/.venv \
     && /home/AISC/.venv/bin/python -m pip install --upgrade pip --quiet
 ENV PATH="/home/AISC/.venv/bin:${PATH}"
 
+# ==========================================
+# LiteLLM 反向代理 Demo：Claude Code 接入 OpenAI 格式渠道
+#   容器 Python 3.11 -> litellm 装入 /home/AISC/.venv（PATH 优先，litellm 直达）。
+#   demo 置于 /home/AISC/api_route_demo（避开 /home/AISC/app 运行时挂载点）。
+#   start_proxy.sh 自动判环境：无 run_proxy.py 时走 litellm 直调（容器路径）。
+#   构建脚本会把 config.yaml + 2 脚本临时复制进 build context（见 03_build_image.*）。
+# ==========================================
+COPY --chown=AISC:AISC api_route_demo/ /home/AISC/api_route_demo/
+RUN chmod +x /home/AISC/api_route_demo/*.sh \
+    && PIP_INDEX="https://pypi.org/simple" \
+    && if [ "$USE_CN_MIRROR" = "1" ]; then PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"; echo "pip: 清华镜像"; fi \
+    && /home/AISC/.venv/bin/pip install -i "$PIP_INDEX" 'litellm[proxy]' \
+    && /home/AISC/.venv/bin/litellm --help >/dev/null 2>&1 || true
+EXPOSE 4000
+
 # 设置入口点
 ENTRYPOINT ["entrypoint.sh"]
 

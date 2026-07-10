@@ -15,16 +15,40 @@ build_image() {
     exit 1
   fi
   local cache_flag="" mirror_arg="USE_CN_MIRROR=1"
-  local node_arg="NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim"
+  local node_arg="NODE_IMAGE=node:20-slim"
   read -r -p "构建是否使用缓存? [Y/n]（n=--no-cache 全新构建）: " uc
   case "$uc" in n|N) cache_flag="--no-cache" ;; esac
-  read -r -p "是否使用国内镜像源(基础镜像daocloud/apt清华/npm淘宝)? [Y/n]: " um
-  case "$um" in n|N) mirror_arg="USE_CN_MIRROR=0"; node_arg="NODE_IMAGE=node:20-slim" ;; esac
+  read -r -p "是否使用国内镜像源(基础镜像多源/apt清华/npm淘宝)? [Y/n]: " um
+  case "$um" in
+    n|N) mirror_arg="USE_CN_MIRROR=0" ;;
+    *)
+      # 多源 fallback：测 manifest 端点（比 /v2/ 根更准），只要不超时就算通
+      for reg in docker.m.daocloud.io docker.nju.edu.cn hub-mirror.c.163.com; do
+        if curl -s -o /dev/null --max-time 10 --connect-timeout 5 "https://$reg/v2/library/node/manifests/20-slim" 2>/dev/null; then
+          node_arg="NODE_IMAGE=${reg}/library/node:20-slim"
+          echo "✅ 国内镜像源: $reg"
+          break
+        fi
+      done
+      if [ "$node_arg" = "NODE_IMAGE=node:20-slim" ]; then
+        echo "⚠️ 所有国内镜像源均不可达，回退 Docker Hub 官方源"
+      fi
+      ;;
+  esac
+  # 把 api_route_demo 容器构建文件带入 build context (image/)：
+  # context=image/ 取不到项目根 api_route_demo/，故临时复制 3 文件，构建后清理。
+  local demo_ctx="$PROJECT_ROOT/image/api_route_demo"
+  mkdir -p "$demo_ctx"
+  cp "$PROJECT_ROOT/api_route_demo/config.yaml" \
+     "$PROJECT_ROOT/api_route_demo/start_proxy.sh" \
+     "$PROJECT_ROOT/api_route_demo/run_claude_demo.sh" "$demo_ctx/"
   echo "📦 正在构建镜像: $IMAGE  ${cache_flag:+(无缓存) }(${mirror_arg}) ..."
   if ! docker build $cache_flag --build-arg "$mirror_arg" --build-arg "$node_arg" -f "$PROJECT_ROOT/image/Dockerfile" -t "$IMAGE" "$PROJECT_ROOT/image"; then
+    rm -rf "$demo_ctx"
     echo "❌ 构建失败。"
     exit 1
   fi
+  rm -rf "$demo_ctx"
   echo "✅ 构建完成: $IMAGE"
   echo
   read -r -p "构建成功，是否立即运行容器? [Y/n]（n=退出）: " rb

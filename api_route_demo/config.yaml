@@ -1,0 +1,20 @@
+# LiteLLM 反向代理配置 —— Claude Code 接入 OpenAI 格式渠道 Demo
+#
+# 关键点：外部接收的模型名必须为 claude-3-7-sonnet-20250219
+# （Claude Code 内部强校验该官方模型名），底层真实目标映射到 openai/gpt-4o。
+# LiteLLM Proxy 会自动暴露 /v1/messages（Anthropic 格式）端点并做协议转换。
+
+model_list:
+  - model_name: claude-3-7-sonnet-20250219   # Claude Code 发来的模型名
+    litellm_params:
+      model: openai/gpt-4o                    # 真实后端模型（OpenAI 兼容）
+      api_key: "sk-your-openai-key"           # 占位符；替换为真实 key
+      # 如需读取环境变量，改为： api_key: os.environ/OPENAI_API_KEY
+      # 如需指向 DeepSeek 等其他 OpenAI 兼容渠道，取消注释下面两行：
+      # model: deepseek/deepseek-chat
+      # api_base: https://api.deepseek.com/v1
+
+# 通用设置：关闭遥测；不设 master_key（本地演示不鉴权）。
+# 这样 Claude Code 带的 placeholder_key 可直接放行，真实上游 key 在上方 api_key 字段。
+litellm_settings:
+  telemetry: False
