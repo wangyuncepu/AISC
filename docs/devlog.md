@@ -1,5 +1,125 @@
 # Super Claude — 开发日志
 
+## v1.5.1 (2026-07-14) - 权限修复 + 简讯 URL 增强
+
+### 变更
+- **`entrypoint.sh`**：项目模式下对 `.claude` 目录追加 `sudo chown -R AISC:AISC`，解决挂载卷文件属主非 uid 1000 导致 `cs` 写 `settings.json` 时报 `EACCES: permission denied`。
+- **`scripts/03_build_image.sh`**：临时构建上下文目录（`image/api_route_demo/`、`image/ai_brief/`）`mkdir -p` 前先 `rm -rf`，避免上次 `sudo` 构建残留 root 文件导致普通用户 `cp` 权限拒绝，`start.sh` 不再强制要求 sudo。
+- **`ai_brief/brief.py`**：`--ai` 模式的素材和 prompt 增加原始链接 URL（`🔗`），LLM 输出每条简讯下方附带来源 URL，方便查看详情。
+
+### 取舍
+- **`.claude` chown 放在 entrypoint 而非构建期**：构建期 `USER AISC` 后 `chown` 对挂载卷无效（卷在运行时挂载）。entrypoint 启动时 `sudo chown` 自愈，利用 AISC 已在 sudoers NOPASSWD。
+
+---
+
+## v1.5.0 (2026-07-12) - AI 每日简讯注入启动头（TLDR + The Rundown）
+
+### 动机
+启动头那段「🚀 [Super Claude] 工作站初始化中... + 后端状态 + 分隔线」纯装饰、无信息量。把每日 AI 资讯（TLDR AI + The Rundown AI）抓取 + LLM 中文精选后注入启动头，每次进容器先看今日要闻；同时支持单独 CLI 输出。
+
+### 变更
+- **`ai_brief/` 新建**（项目根，与 `api_route_demo/` 平级）：
+  - `brief.py`：**stdlib-only**（urllib + xml.etree + re），Py3.11（容器）/3.14（宿主）双端零安装。flags：`--date`/`--days`/`--top`/`--source`/`--ai`/`--save`/`--no-cache`/`--strict`。
+  - `run.sh`：薄包装（`exec python3 brief.py`），绕 DrvFs 无 exec 位。
+  - `README.md` + `.gitignore`（忽略 `cache/`）。
+- **数据源**（curl 侦察确认）：
+  - TLDR：RSS `tldr.tech/api/rss/ai` 拿期次 -> issue 页 `article.mt-3` 块解析（`a.font-bold` 链接 + `h3` 标题 + `div.newsletter-html` 摘要）。
+  - Rundown：**无 RSS** -> `sitemap.xml` 过滤 `/p/` 按 `<lastmod>` 取最新 -> post 页（服务端渲染，964KB）解析 H1 头条 + 正文外链次要要闻。
+- **规则筛选**：去赞助（blocklist：doubleclick/strandsagents/awscloud/videoask/typeform 等）+ 跨源去重（URL + 标题词集）+ 每源 Top N。Rundown 额外过滤裸域名/导航页/碎片锚文本。
+- **`--ai` LLM 中文摘要**：读 cs 后端 env，urllib POST `/v1/messages` 精选 5 条 + 一句话中文。模型优先 `ANTHROPIC_DEFAULT_HAIKU_MODEL`（haiku/flash 档，快+省），回退 `ANTHROPIC_MODEL`。**兼容 GLM thinking 块**（遍历 content 取首个 `type:text`）；`max_tokens=4096`；失败回退规则英文输出。
+- **终端渲染**：输出纯文本（编号 + 缩进 + emoji 段头 + 日期），无 `##`/`**` markdown 标记，终端直读；`--ai` 头带日期 `🤖 AI 精选简讯 · YYYY-MM-DD（N 条）`。
+- **Dockerfile**：LiteLLM 层后新增 `COPY ai_brief/ -> /home/AISC/ai_brief/`（stdlib-only，无需 pip）。
+- **entrypoint.sh**：mihomo 段（§3.5）后、启动菜单（§4）前新增 §3.6 - **有后端配置**（§3 算好的 `BASE_URL`+`AUTH`）才跑 `timeout 45 python3 /home/AISC/ai_brief/brief.py --ai --top 5`（中文精选）；**无后端**（临时作用域/cc/全新）-> 一行「简讯跳过」提示，不显示英文 fallback。BRIEF 空（timeout 杀/全失败）打印诊断行；绝不阻断启动。
+- **构建脚本（`03_build_image.{sh,ps1}`）**：api_route_demo staging 旁加 `ai_brief`（brief.py + run.sh）临时进 `image/ai_brief/`，构建后清理。
+
+### 取舍
+- **stdlib-only 而非 bs4/requests**：换 Py3.11/3.14 双端零安装（契合 DrvFs/PEP 668/uvloop 约束）。正则解析规整 HTML，站点改版失效则优雅降级（空输出 + exit 0）。
+- **启动头走 `--ai` 中文（haiku/flash 档）**：用户要中文；flash 模型控延迟/成本（~10s LLM + 6s 抓取 ≈ 15s）。后端未配/超时 -> 回退规则英文 + 提示；`timeout 45` 兜底（LLM 内部 30s 超时则回退）。实测 GLM-5.2[1m] 大模型 thinking 读超时，改 flash 后稳定。
+- **无后端跳过简讯**：临时作用域读镜像出厂 settings.json（无 cs env），--ai 无 LLM 可用；§3.6 检测 `BASE_URL`+`AUTH`，无则一行跳过提示，不回退英文废话。
+- **终端纯文本非 markdown**：启动头是终端输出，markdown 源码（`##`/`**`）不渲染显累赘；改纯文本编号+缩进直读。
+- **每源独立 try + http_get 单次重试**：单源间歇失败不影响另一源，部分成功仍渲染；`--strict` 供调试非零退出。
+- **`--rm` 容器缓存随容器销毁**：每次 `docker run` 重抓+LLM ≈ 15s；宿主单跑或同会话内重跑命中缓存。
+- **日期取源站「最新已发刊」一期**：美 newsletter，北京早晨时当日刊未发（美早间=北京晚），故周二早显示周一 7.13 是正确的最新期，非 bug。
+
+### 测试
+- 宿主 `brief.py` 全 flag：双源/`--source`/`--top`/`--no-cache`/`--save`/缓存命中/`--ai`（haiku/flash 出中文 5 条 + 日期头）/断网静默 exit 0/`--strict` exit 1。
+- 容器内（Python 3.11 + 容器网络）：双源抓取渲染 exit 0。
+- **端到端重建**（`super-claude:latest`，项目挂载读 cs 后端）：启动头显示 `📰 今日 AI 简讯：🤖 AI 精选简讯 · 2026-07-13（5 条）` + 5 条中文一句话，纯文本无 markdown 标记；容器正常继续 exec（exit 0）。
+- 全脚本 `bash -n` + `ast.parse` 通过。
+
+### 其他
+- entrypoint §3.6 注入点在 mihomo 之后（网络就绪）。
+- 缓存默认开（`--no-cache` 关），非 `--cache` flag -- entrypoint 用 `--ai --top 5`。
+- README 头版本号 v1.4.0 -> v1.5.0。
+
+### v1.5.0 增量 — 多源扩展（5 源）+ 分类面板 TUI
+
+在初版 TLDR+Rundown 双源基础上，curl 侦察见现存源偏向行业新闻（融资/诉讼/模型发布），用户要的是**工具+工作流+方法**。补 3 个 RSS/Atom 源并重做输出格式。
+
+**新增数据源**（curl 验证存活+内容风味）：
+- **Simon Willison**（`simonwillison.net/atom/everything/`，Atom）：LLM 实战工具 + 工作流，最贴合。
+- **Changelog**（`changelog.com/news/feed`，RSS）：开发工具/开源/agent 工作流讨论。
+- **HN Show HN**（`hnrss.org/show`，RSS）：新项目/工具火龙，加 AI/dev 关键词过滤（`ai/llm/agent/tool/cli/dev/claude/cursor/...`）。
+
+**源码重组**（`ai_brief/brief.py` 大幅重写）：
+- **源注册表**：`SOURCE_FETCHERS` dict + `SOURCE_GROUPS`（`all`/`tools`/`industry`/`workflow`），`--source` 支持组合（如 `tldr,simon`）。
+- **通用 RSS 抓取**：`rss_fetch()` 兼容 RSS `<item>` + Atom `<entry>` + 命名空间（`{http://www.w3.org/2005/Atom}`，Simon feed 实测）。Atom `<link href="...">`（self-closing 有属性无文本）vs RSS `<link>url</link>`（文本值）两格式通吃。**Python 3.14 ElementTree 适配**：`el.find("link")` 对命名空间元素的行为变化，改为 namespace-aware 查找 + 独立 `if None` 检查（避 `or` 触 DeprecationWarning）。
+- **HN 过滤**：`hn_filter()` 检查标题+URL 含白名单关键词，拉 3 倍条目再过滤，保证过滤后够 top 数。
+
+**分类面板 TUI**：
+- 3 分类：🛠️ 新工具 / 🔧 工作流/方法 / 📰 行业动态。
+- 规则模式：按源分到预定义分类（`SOURCE_CATEGORIES`），每分类下子源分块，编号+缩进。
+- `--ai` 模式：改 prompt 让 LLM **跨源按内容动态分类**（不按源），每类最多 4 条中文一句话，输出即用。实测深度求索 flash 中文分类质量好。
+- 新 `--source` 快捷值：`all`（5 源）/ `tools` / `industry` / `workflow` / 逗号组合。
+
+**取舍（增量）**：
+- **Atom 命名空间兼容**：Simon 用 Atom（非 RSS），字段在 `{ns}title/link/summary` 下，通用 `rss_fetch` 同时兼容两格式（按 `els[0].tag` 检测 ns）。
+- **分类不由源绑定**：规则模式按预定义表分，`--ai` 由 LLM 按内容分（更准）。
+- **仅加 RSS 源不换掉 TLDR/Rundown**：用户选择保留（原说要中文 TLDR，后放宽；Rundown 虽无标准 feed 但因用户要求保留）。
+
+### 测试（增量）
+- 宿主：5 源各自单独拉（含 Atom 命名空间修复）、`--source all` 分类规则输出、`--ai` 分类中文（🛠️4 条/🔧4 条/📰4 条）、`--source tools/industry/tldr,simon` 组合。
+- 容器端到端：因 Docker bridge 网络故障未重跑（宿主全量验证 + 先前端到端已证 entrypoint §3.6 调用链有效）。待 Docker 恢复后重建 + 验证启动头分类面板。
+
+---
+
+## v1.4.0 (2026-07-10) - LiteLLM 协议转换 + cc-switch-cli 集成
+
+### 动机
+TODO「claude code CLI外配置 cc-switch-cli」+ 汇报演示「Claude Code 接入 OpenAI 格式渠道的技术可行性」。内置 `cs` 只切 Anthropic 兼容后端（不改协议）；需 LiteLLM 做 Anthropic↔OpenAI 协议转换，并集成 cc-switch-cli（4.1k stars，多 AI CLI 管理）与 cs 共存。
+
+### 变更
+- **LiteLLM Demo（`api_route_demo/` 新建）**：
+  - `config.yaml`：模型映射 `claude-3-7-sonnet-20250219`（Claude Code 强校验）-> `openai/gpt-4o`，占位 key。
+  - `start_proxy.sh`：交互式输入 base_url + api_key，生成 `.config.runtime.yaml`（含 key 不入 git）；宿主/容器双环境（有 `run_proxy.py` 走 venv python，否则直接 `litellm`）。
+  - `run_claude_demo.sh`：注入 `ANTHROPIC_BASE_URL=http://localhost:4000` + 起 claude。
+  - `run_proxy.py`：宿主机 Python 3.14 绕 uvloop 不兼容（monkeypatch `ProxyInitializationHelpers._get_loop_type`）。
+- **Dockerfile**：
+  - LiteLLM 层（venv 后）：COPY demo + `pip install litellm[proxy]`（清华源，`USE_CN_MIRROR` 控制）+ `EXPOSE 4000`；demo 放 `/home/AISC/api_route_demo`（避开 app 挂载点）。
+  - cc-switch-cli 层（litellm 后）：`ARG CC_SWITCH_VERSION=v5.9.0` + 下载 musl 二进制（复用 GH_PROXY 多镜像）-> `/usr/local/bin/cc-switch`；`USER root` 临时切 root 写再切回 AISC，**不破坏 litellm 缓存**。
+- **构建脚本（`scripts/03_build_image.{sh,ps1}`）**：
+  - 国内镜像源从单一 daocloud 改**多源 fallback**（daocloud -> nju -> 163）：优先本地缓存（`docker image inspect`），否则测 manifest 端点（仅 200/401 算通，403 排除），全不通回退官方源。
+  - build 前把 demo 3 文件 cp 进 `image/api_route_demo/`（context=image/ 取不到项目根），build 后清理。
+- **README**：版本 v1.2.2 -> v1.4.0；加「OpenAI 协议转换」+「cc-switch-cli」亮点与使用章节。
+
+### 取舍
+- **cc-switch 与 cs 共存**（非替代）：命令名 `cc-switch` vs `cs` 不冲突；cc-switch 功能全（多 AI CLI 管理），cs 轻量内置，按需选。
+- **cc-switch 放 litellm 层后**：litellm pip 重型层缓存保留，重建仅 cc-switch 下载（~10s）；代价是 `USER root`/`USER AISC` 切换（比 sudo 干净）。
+- **start_proxy.sh 生成运行时配置**（不覆盖原 config.yaml）：`.config.runtime.yaml` 含 key 加 `.gitignore`；非交互可预设 `OPENAI_API_BASE`/`OPENAI_API_KEY`。
+- **构建脚本多源 fallback**：daocloud `/v2/` 通但 manifest TLS 超时、nju 403、Docker Hub 直连超时——多源 + 本地缓存优先是当前网络最稳方案；极端全不通才需配 daemon mirror。
+- **宿主机 Python 3.14 兼容**：orjson 强制 3.11.9（litellm 钉 3.10.15 无 cp314 wheel）、uvloop monkeypatch（3.14 移除 `BaseDefaultEventLoopPolicy`）；容器 Python 3.11 无此问题。
+
+### 测试
+- 构建成功（`super-claude:latest`，2.55GB）：cc-switch `--version` -> `cc-switch 5.9.0`，ghfast.top 下载通。
+- 容器内：`cs` + `cc-switch` 共存（`/usr/local/bin/`）；`/v1/models` 返回 `claude-3-7-sonnet-20250219`（owned_by: openai）；`/v1/messages` 带 placeholder_key 上游 401（config 无语法错误）。
+- 宿主机回归：start_proxy.sh 改后仍走 run_proxy.py 分支，proxy 6s 就绪；交互式输入生成正确 YAML，`/health/readiness` 200。
+
+### 其他
+- TODO「cc-switch-cli」标完成。
+- 发现 `docker rmi -f`（选 [2]）会清构建缓存，增量改动应选 [3] 新镜像名或保留镜像。
+
+---
+
 ## v1.3.2 (2026-07-04) — 容器内 Python 运行时
 
 ### 动机

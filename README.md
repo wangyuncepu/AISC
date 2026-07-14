@@ -1,4 +1,4 @@
-# Super Claude · v1.2.2
+# Super Claude · v1.5.1
 
 开箱即用的 [Claude Code](https://claude.ai/code) Docker 工作站 —— 插件化技能套件、**5 大模型后端一键切换**、**临时/项目双作用域**、**自包含离线构建**，100% 纯终端 CLI。
 
@@ -13,6 +13,7 @@
 - 🚀 **智能启动器** — 自动检测/构建镜像、防悬空镜像、可选缓存与国内镜像源、多开互不干扰
 - 🌐 **容器内建 TUN 透明代理** — 宿主机零代理，容器内 Mihomo (Clash Meta) TUN 接管全部出站，Claude Code 直连 Anthropic API；TUI 引导本地文件/订阅链接二选一，自动强制注入 TUN 配置
 - 🔌 **OpenAI 协议转换** — 内置 LiteLLM 反向代理，Claude Code 接入 OpenAI / DeepSeek 等 OpenAI 格式渠道，Anthropic ↔ OpenAI 协议自动转换
+- 🧰 **cc-switch-cli** — 增量集成 cc-switch-cli（Rust 二进制，v5.9.0），与内置 `cs` 共存，多 AI CLI（Claude/Codex/Gemini）provider 配置管理
 - ⚡ **默认跳过权限确认** — Claude 以 `--dangerously-skip-permissions` 启动，容器内自动流无需逐条确认
 - 🛡️ **容器配置加固** — AISC 用户带密码 + 免密 sudo；entrypoint 自愈 `.cc-config` 所有权；git 全局 `autocrlf=input` 杜绝 CRLF 噪音
 - 🔧 **构建稳健性** — 启动器 build 失败即退出、Dockerfile 缺失检查，不再假报成功
@@ -199,6 +200,32 @@ Claude Code                        LiteLLM Proxy             上游 API
 curl -s http://localhost:4000/v1/models
 # 应返回 model_name: claude-3-7-sonnet-20250219（owned_by: openai）
 ```
+
+## cc-switch-cli（增量集成，与 cs 共存）
+
+容器内置 [cc-switch-cli](https://github.com/saladday/cc-switch-cli)（Rust 二进制，v5.9.0），跨平台 AI CLI 管理工具，统一管理 Claude Code / Codex / Gemini / OpenCode 等 provider 配置、MCP servers、skills、prompts。
+
+> **与 `cs` 的区别**：`cs` 是项目内置轻量切换器（5 后端一键切）；`cc-switch` 功能更全（多 AI CLI、TUI、WebDAV 同步、用量统计）。命令名不冲突（`cs` vs `cc-switch`），共存按需用。
+
+### 使用
+
+```bash
+cc-switch              # 进 TUI 交互界面（provider/账号/会话管理）
+cc-switch --version    # 查看版本
+cc-switch --help       # 查看 CLI 子命令
+```
+
+### 构建参数
+
+```bash
+# 指定版本（默认 v5.9.0）
+docker build -f image/Dockerfile --build-arg CC_SWITCH_VERSION=v5.9.0 -t super-claude:latest image/
+
+# 海外直连（不用 ghproxy 加速）
+docker build -f image/Dockerfile --build-arg GH_PROXY= --build-arg USE_CN_MIRROR=0 -t super-claude:latest image/
+```
+
+> cc-switch 下载复用 mihomo 的 `GH_PROXY` 多镜像 fallback（ghfast.top 等），国内网络无忧；musl 静态版兼容 glibc/musl。
 
 ## 代理网络（容器内建 Mihomo TUN 透明代理）
 

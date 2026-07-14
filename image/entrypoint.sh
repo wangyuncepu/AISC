@@ -111,6 +111,11 @@ mkdir -p "$CC_CONFIG_DIR"
 # AISC 已在 sudoers (NOPASSWD)，此处直接 sudo chown 自愈，
 # 不依赖外部 bat 的宿主侧 root pass。
 sudo chown -R AISC:AISC "$CC_CONFIG_DIR" 2>/dev/null || true
+# .claude 目录同理：挂载卷上文件可能属于宿主机用户（非 uid 1000），
+# AISC 无写权限会导致 cs 写 settings.json 时报 EACCES。
+if [ "$SCOPE" = "project" ]; then
+    sudo chown -R AISC:AISC "$CLAUDE_CONFIG_DIR" 2>/dev/null || true
+fi
 
 # 让用户进入 bash 后再次运行 cs / claude 时仍能拿到同一作用域
 # （非 root，只能写家目录 ~/.bashrc；不再写 /etc/profile.d）
@@ -198,6 +203,30 @@ if [ -f /etc/mihomo/config.yaml ]; then
         echo "❌ 代理配置构建失败，跳过 TUN。请检查订阅链接或配置格式（支持 yaml/base64订阅/URI直链/JSON）。"
     fi
     echo "----------------------------------------"
+fi
+
+# ==========================================
+# 3.6 AI 每日简讯（TLDR + The Rundown，--ai 中文精选，daily cache）
+#   需 cs 后端配置（§3 算好的 BASE_URL + AUTH）：有后端 -> --ai 中文简讯注入启动头；
+#   无后端（临时作用域/cc/全新项目）-> --ai 不可用，一行提示跳过，不显示英文 fallback。
+#   timeout + 诊断行兜底，绝不阻断启动。
+# ==========================================
+if command -v python3 >/dev/null 2>&1 && [ -d /home/AISC/ai_brief ]; then
+    if [ -n "$BASE_URL" ] && [ "$AUTH" = "yes" ]; then
+        BRIEF="$(timeout 45 python3 /home/AISC/ai_brief/brief.py --ai --top 5 2>/dev/null)" || BRIEF=""
+        if [ -n "$BRIEF" ]; then
+            echo "📰 今日 AI 简讯："
+            echo "$BRIEF"
+            echo "----------------------------------------"
+        else
+            # brief.py 被 timeout 杀在打印前 / 抓取全失败 -> 不静默，给一行诊断
+            echo "📰 简讯加载超时/失败，已跳过（容器内可手跑：python3 /home/AISC/ai_brief/brief.py）"
+            echo "----------------------------------------"
+        fi
+    else
+        # 无后端配置 -> --ai 无 LLM 可用，跳过不显示英文 fallback
+        echo "📰 简讯跳过（当前无 cs 后端配置，--ai 不可用）"
+    fi
 fi
 
 # ==========================================

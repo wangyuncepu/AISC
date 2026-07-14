@@ -45,17 +45,21 @@ build_image() {
   # 把 api_route_demo 容器构建文件带入 build context (image/)：
   # context=image/ 取不到项目根 api_route_demo/，故临时复制 3 文件，构建后清理。
   local demo_ctx="$PROJECT_ROOT/image/api_route_demo"
-  mkdir -p "$demo_ctx"
+  rm -rf "$demo_ctx" && mkdir -p "$demo_ctx"
   cp "$PROJECT_ROOT/api_route_demo/config.yaml" \
      "$PROJECT_ROOT/api_route_demo/start_proxy.sh" \
      "$PROJECT_ROOT/api_route_demo/run_claude_demo.sh" "$demo_ctx/"
+  # 同理把 ai_brief（简讯工具，entrypoint 启动头注入）带入 build context
+  local brief_ctx="$PROJECT_ROOT/image/ai_brief"
+  rm -rf "$brief_ctx" && mkdir -p "$brief_ctx"
+  cp "$PROJECT_ROOT/ai_brief/brief.py" "$PROJECT_ROOT/ai_brief/run.sh" "$brief_ctx/"
   echo "📦 正在构建镜像: $IMAGE  ${cache_flag:+(无缓存) }(${mirror_arg}) ..."
   if ! docker build $cache_flag --build-arg "$mirror_arg" --build-arg "$node_arg" -f "$PROJECT_ROOT/image/Dockerfile" -t "$IMAGE" "$PROJECT_ROOT/image"; then
-    rm -rf "$demo_ctx"
+    rm -rf "$demo_ctx" "$brief_ctx"
     echo "❌ 构建失败。"
     exit 1
   fi
-  rm -rf "$demo_ctx"
+  rm -rf "$demo_ctx" "$brief_ctx"
   echo "✅ 构建完成: $IMAGE"
   echo
   read -r -p "构建成功，是否立即运行容器? [Y/n]（n=退出）: " rb
