@@ -39,12 +39,12 @@ python3 ai_brief/brief.py --ai --save --no-cache
 |---|---|
 | `--source {all,tools,industry,workflow,tldr,simon,...}` | 源选择，默认 `all`；逗号分隔可组合 |
 | `--top N` | 每源 Top N（默认 5）；`--ai` 模式限每类最多 4 条 |
-| `--ai` | LLM **跨源分类中文精选**（🛠️新工具 / 🔧工作流 / 📰行业），读 cs 后端 env（haiku/flash 档），失败回退规则英文分类 |
+| `--ai` | LLM **跨源分类中文精选**（🛠️新工具 / 🔧工作流 / 📰行业），读 cs 后端 env（haiku/flash 档；reasoning 模型遇 max_tokens 自动降素材+加 tokens 重试），失败回退规则英文分类 + 提示 |
 | `--date YYYY-MM-DD` | 指定日期 |
 | `--days N` | 取最近 N 期（默认 1） |
-| `--save` | 另存 `cache/` |
-| `--no-cache` | 跳过 latest 缓存 |
-| `--strict` | 失败时非零退出（调试用） |
+| `--save` | 另存缓存到 `~/.cache/ai-brief/rendered/` |
+| `--no-cache` | 跳过同日缓存，全量重新抓取 |
+| `--debug` | stderr 逐源计时 + LLM 耗时诊断 |
 
 ## 分类
 
@@ -58,15 +58,17 @@ python3 ai_brief/brief.py --ai --save --no-cache
 
 ## 缓存
 
-`latest` 路径同日缓存命中即复用。宿主单跑时缓存落 `ai_brief/cache/` 持久生效；容器为 `--rm`，缓存随容器销毁，故每次 `docker run` 启动头会重新抓取+LLM 摘要（约 15s）。`cache/` 已 gitignore。
+缓存落 `~/.cache/ai-brief/`（raw 层 1h TTL + rendered 同日复用），stale-while-revalidate。宿主单跑时持久生效；容器 `--rm` 下 `~/.cache/ai-brief/` 随容器销毁，除非显式挂载 `-v some-vol:/home/AISC/.cache/ai-brief` 实现跨容器复用。`cache/`（项目目录）未使用，已 gitignore。
 
 ## 集成进启动头
 
 `image/entrypoint.sh` §3.6：**有 cs 后端配置**（`BASE_URL`+`AUTH`）才调用 `brief.py --ai --top 5`（跨源分类中文精选），非空则嵌入 `📰 今日 AI 简讯` 块；**无后端**（临时作用域/cc/全新）-> 一行「简讯跳过」提示。BRIEF 空（timeout 杀/全失败）打印诊断行，不阻断启动。
 
+并发抓取约 9-14s + LLM 分类约 25-30s（reasoning 模型遇 max_tokens 耗尽自动降素材重试），总预算 50s（`timeout 50`），实测总耗时约 37s。`--debug` 可输出逐阶段耗时诊断（stderr → `/tmp/ai-brief.log`）。
+
 ## 取舍
 
 - **stdlib-only**（urllib + xml.etree + re）：Py3.11/3.14 双端零安装（绕 PEP 668 / uvloop / DrvFs 无 exec 位）。
 - **Atom/RSS 优先**：Simon/Changelog/HN 走标准 feed 解析（含 Atom 命名空间兼容 + Python 3.14 ElementTree 适配）；TLDR/Rundown 仍走 HTML 网页抓取（无标准 feed）。
-- **启动头 `--ai` 分类中文**：按类别分组显更有信息量；haiku/flash 档控延迟/成本（~15s）。后端未配/超时 -> 回退规则英文分类 + 提示。
+- **启动头 `--ai` 分类中文**：按类别分组显更有信息量；haiku/flash 档控延迟，总耗时约 37s（含并发抓取）。后端未配/超时 -> 回退规则英文分类 + 提示。
 - **HN Show HN 关键词过滤**：HN 火龙，不过滤会大量非相关条目；关键词覆盖 `ai/llm/agent/tool/cli/dev/claude/gpt/cursor/coder/vibe/mcp/rag` 等。

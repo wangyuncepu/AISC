@@ -41,7 +41,7 @@ RUN apt-get update && apt-get install -y git curl sudo tmux iptables iproute2 ca
 #   放 root 阶段：mihomo → /usr/local/bin/mihomo（root:root 755），geodata → /home/AISC/.mihomo。
 #   注意：mihomo 是 ELF 二进制，绝不能 sed 处理（同 claude-real 教训）。
 # ==========================================
-COPY downloads/ /tmp/dl/
+COPY image/downloads/ /tmp/dl/
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in amd64) mih_arch=amd64;; arm64|aarch64) mih_arch=arm64;; *) mih_arch=amd64;; esac; \
@@ -143,15 +143,15 @@ RUN CLAUDE_CONFIG_DIR=/home/AISC/.claude claude -p "init" >/dev/null 2>&1 || tru
 RUN mkdir -p /home/AISC/.claude/skills /home/AISC/app
 
 # 1. 注入全局 CLAUDE.md
-COPY global-claude.md /home/AISC/.claude/CLAUDE.md
+COPY image/global-claude.md /home/AISC/.claude/CLAUDE.md
 
 # 2. 注入插件机制技能套件（离线可用）：
 #    caveman（默认激活）/ claude-hud / document-skills / superpowers / skill-creator
 #    由 stage-skills.sh 预暂存到 _bundle/plugins（含 cache + marketplaces + 注册表）
-COPY _bundle/plugins/ /home/AISC/.claude/plugins/
+COPY image/_bundle/plugins/ /home/AISC/.claude/plugins/
 
 # 3. 注入扁平技能（来源 _bundle/skills）：gstack（仅文档，6 子技能）
-COPY _bundle/skills/ /home/AISC/.claude/skills/
+COPY image/_bundle/skills/ /home/AISC/.claude/skills/
 
 # 3c. 解引用 .claude 内所有符号链接 → 真文件
 #     Windows 绑定挂载(grpcfuse)不支持创建 symlink，cp -r 会失败导致项目复制残缺。
@@ -162,11 +162,11 @@ RUN find /home/AISC/.claude -type l | while read -r l; do \
     done
 
 # 3b. gstack 6 个技能的斜杠命令（/plan-ceo-review 等，包装对应 skill）
-COPY commands/ /home/AISC/.claude/commands/
+COPY image/commands/ /home/AISC/.claude/commands/
 
 # 5. CLI settings.json：启用 5 个插件 + marketplace 来源 + claude-hud 状态栏(statusLine)
 #    statusLine 用 node 跑 claude-hud 的 dist/index.js（容器无 bun）
-COPY claude-settings.json /home/AISC/.claude/settings.json
+COPY image/claude-settings.json /home/AISC/.claude/settings.json
 
 # 6. skill-creator 在 host 未预装，从本地 marketplace 离线安装（写入 installed_plugins.json）
 RUN CLAUDE_CONFIG_DIR=/home/AISC/.claude claude plugin install skill-creator@claude-plugins-official 2>&1 | tail -1 || true
@@ -184,15 +184,15 @@ RUN find /home/AISC/.claude/skills /home/AISC/.claude/plugins /home/AISC/.claude
     && echo "factory-version: $(cat /home/AISC/.claude/.factory-version)"
 
 # 拷贝并赋予 entrypoint 脚本执行权限
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Mihomo 配置构建器：原始订阅 → mihomo 配置（格式自动转换 yaml/base64订阅/URI直链/JSON
 #   + 强制注入 TUN/DNS）。entrypoint 调用，Node 运行，无外部依赖。
-COPY mihomo-build-config.js /usr/local/bin/mihomo-build-config.js
+COPY image/mihomo-build-config.js /usr/local/bin/mihomo-build-config.js
 
 # 注入模型切换 CLI 工具：使用根目录脚本作为 cs/claude-switch
-COPY claude-switch /usr/local/bin/cs
+COPY image/claude-switch /usr/local/bin/cs
 RUN chmod +x /usr/local/bin/cs \
     && ln -sf /usr/local/bin/cs /usr/local/bin/claude-switch
 
@@ -203,7 +203,7 @@ RUN chmod +x /usr/local/bin/cs \
 # --dangerously-skip-permissions（跳过权限确认，容器内自动流；root 下 Claude
 # 拒绝此 flag，故 USER AISC 是前提）。用户手动传入则不重复追加。
 RUN mv /usr/local/bin/claude /usr/local/bin/claude-real
-COPY claude-wrapper /usr/local/bin/claude
+COPY image/claude-wrapper /usr/local/bin/claude
 RUN chmod +x /usr/local/bin/claude
 
 # 防御：若构建上下文来自 Windows（CRLF），脚本 shebang 会变成 "#!/bin/bash\r"，

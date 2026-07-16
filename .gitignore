@@ -21,6 +21,10 @@ npm-debug.log*
 api-keys
 .git-credentials
 
+# Python
+__pycache__/
+*.pyc
+
 # Claude Code local state
 .claude/
 .claude_keys

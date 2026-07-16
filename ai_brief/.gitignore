@@ -1,2 +1,6 @@
 # cache/ - 运行时生成的日级缓存，不入 git
 cache/
+
+# Python
+__pycache__/
+*.pyc

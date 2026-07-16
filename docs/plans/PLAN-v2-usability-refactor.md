@@ -48,7 +48,7 @@
 ### 2.2 产品宣传与实际实现不一致
 
 - README 将 LiteLLM 协议转换描述为内置能力，但当前 Dockerfile 并未安装或复制 LiteLLM demo。
-- `api_route_demo/` 更接近开发示例，没有独立 README、依赖锁和稳定运行契约。
+- `api_route_demo/`（LiteLLM demo）已移除（P0 清理），不再作为项目组件存在。
 - README 中供应商数量、模型和 endpoint 与 `claude-switch` 中的实际配置不一致。
 - `ai_brief/README.md` 的缓存位置、预计耗时和行为说明已经落后于代码。
 
@@ -226,12 +226,6 @@ AISC/
 │   │   ├── brief.py
 │   │   ├── run.sh
 │   │   └── tests/
-│   └── litellm-proxy/
-│       ├── README.md
-│       ├── requirements.lock
-│       ├── config.example.yaml
-│       ├── run.py
-│       └── tests/
 │
 ├── vendor/
 │   ├── manifest.json
@@ -439,7 +433,6 @@ docker build -f container/Dockerfile .
 .claude
 .cc-config
 .deploy
-api_route_demo/.venv
 **/__pycache__
 docs
 tests
@@ -649,7 +642,7 @@ proxy profile 能生成预期 Docker 参数
 - 将 Docker 构建上下文移到仓库根目录。
 - 删除构建脚本临时修改 `image/` 的机制。
 - 将 `ai_brief` 移入 `apps/ai-brief/`。
-- 将 `api_route_demo` 重命名为 `apps/litellm-proxy/`，补充 README 和依赖锁。
+- ~~将 `api_route_demo` 重命名为 `apps/litellm-proxy/`~~（P0 已移除 demo，此条不再适用）。
 - 将 `claude-switch` 拆为供应商切换和工作区升级。
 - 把供应商信息迁移到 `providers.json`。
 - 将启动器状态归并到 `.aisc/`。

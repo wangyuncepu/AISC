@@ -12,8 +12,7 @@
 - ⬆️ **一键升级** — 镜像更新后 `cs upgrade` 合并出厂配置，保留你的后端选择与历史
 - 🚀 **智能启动器** — 自动检测/构建镜像、防悬空镜像、可选缓存与国内镜像源、多开互不干扰
 - 🌐 **容器内建 TUN 透明代理** — 宿主机零代理，容器内 Mihomo (Clash Meta) TUN 接管全部出站，Claude Code 直连 Anthropic API；TUI 引导本地文件/订阅链接二选一，自动强制注入 TUN 配置
-- 🔌 **OpenAI 协议转换** — 内置 LiteLLM 反向代理，Claude Code 接入 OpenAI / DeepSeek 等 OpenAI 格式渠道，Anthropic ↔ OpenAI 协议自动转换
-- 🧰 **cc-switch-cli** — 增量集成 cc-switch-cli（Rust 二进制，v5.9.0），与内置 `cs` 共存，多 AI CLI（Claude/Codex/Gemini）provider 配置管理
+- 🧰 **cc-switch-cli** — 内置 cc-switch-cli（Rust 二进制，v5.9.0），与 `cs` 共存，统一管理多 AI CLI（Claude/Codex/Gemini）provider 配置、MCP servers、skills 和 prompts
 - ⚡ **默认跳过权限确认** — Claude 以 `--dangerously-skip-permissions` 启动，容器内自动流无需逐条确认
 - 🛡️ **容器配置加固** — AISC 用户带密码 + 免密 sudo；entrypoint 自愈 `.cc-config` 所有权；git 全局 `autocrlf=input` 杜绝 CRLF 噪音
 - 🔧 **构建稳健性** — 启动器 build 失败即退出、Dockerfile 缺失检查，不再假报成功
@@ -29,9 +28,9 @@
 
 | 平台 | 文件 |
 |------|------|
-| Windows | 双击 `一键启动_AI工作站.bat` |
-| Linux | `./启动_AI工作站.sh` |
-| macOS | 双击 `启动_AI工作站.command` |
+| Windows | 双击 `start.bat` |
+| Linux | `./start.sh` |
+| macOS | 双击 `start.command` |
 
 启动器会：
 1. 检测镜像是否存在 —— 不存在则**自动构建**（构建前询问：是否用缓存 / 是否用国内镜像源）
@@ -44,18 +43,18 @@
 
 ```bash
 # 默认构建（自包含，仓库已含 image/_bundle；国内镜像源默认开）
-docker build -f image/Dockerfile -t super-claude:latest image/
+docker build -f image/Dockerfile -t super-claude:latest .
 
 # 海外网络 —— 显式关闭国内镜像（apt / npm 走官方源）
-docker build -f image/Dockerfile --build-arg USE_CN_MIRROR=0 -t super-claude:latest image/
+docker build -f image/Dockerfile --build-arg USE_CN_MIRROR=0 -t super-claude:latest .
 
 # 国内网络 + 基础镜像也走 daocloud（绕开 docker.io 拉取超时）
 docker build -f image/Dockerfile \
   --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim \
-  -t super-claude:latest image/
+  -t super-claude:latest .
 
 # 完全从头构建（禁用缓存）
-docker build -f image/Dockerfile --no-cache -t super-claude:latest image/
+docker build -f image/Dockerfile --no-cache -t super-claude:latest .
 ```
 
 > **⚠️ `USE_CN_MIRROR` 默认 = `1`（国内源）**：apt → 清华、npm → 淘宝。海外用户需显式传 `--build-arg USE_CN_MIRROR=0` 走官方源。
@@ -163,10 +162,10 @@ cc-switch --help       # 查看 CLI 子命令
 
 ```bash
 # 指定版本（默认 v5.9.0）
-docker build -f image/Dockerfile --build-arg CC_SWITCH_VERSION=v5.9.0 -t super-claude:latest image/
+docker build -f image/Dockerfile --build-arg CC_SWITCH_VERSION=v5.9.0 -t super-claude:latest .
 
 # 海外直连（不用 ghproxy 加速）
-docker build -f image/Dockerfile --build-arg GH_PROXY= --build-arg USE_CN_MIRROR=0 -t super-claude:latest image/
+docker build -f image/Dockerfile --build-arg GH_PROXY= --build-arg USE_CN_MIRROR=0 -t super-claude:latest .
 ```
 
 > cc-switch 下载复用 mihomo 的 `GH_PROXY` 多镜像 fallback（ghfast.top 等），国内网络无忧；musl 静态版兼容 glibc/musl。
@@ -226,7 +225,7 @@ docker run 追加:
 
 ```bash
 # 构建（默认 pin mihomo v1.19.27；image/downloads/ 已预置，不访问 GitHub）
-docker build -f image/Dockerfile -t super-claude:latest image/
+docker build -f image/Dockerfile -t super-claude:latest .
 
 # 运行（启用 TUN 代理）—— 需先放好 .claude/mihomo/config.yaml
 docker run -it --rm -e TERM=xterm-256color \
@@ -241,7 +240,7 @@ docker run -it --rm -e TERM=xterm-256color \
 - **多格式订阅自动转换**：订阅链接支持 **Clash YAML / base64 订阅 / URI 直链 / JSON(SIP008)**，容器内 `mihomo-build-config.js` 自动识别并转换为最小 Clash 配置（`url-test` 自动选最快节点 + `MATCH,PROXY`）。节点协议支持 **ss / vmess / trojan / vless / hysteria2(hy2)**。无需订阅转换工具，Clash Verge 能导入的订阅链接本站也能用。
 - `/dev/net/tun` 依赖：Docker Desktop（Win/macOS）LinuxKit VM 内置；原生 Linux 需 tun 内核模块（通常内置）。仅启用代理时才挂载，不影响纯直连。
 - mihomo 日志：容器内 `/home/AISC/.mihomo/mihomo.log`，代理异常时优先查此。TUN 接口名为 `Meta`（非 `tun0`），`ip -br link | grep -i meta` 可查其状态。
-- 自定义 mihomo 版本：`docker build -f image/Dockerfile --build-arg MIHOMO_VERSION=v1.x.x image/`；指定单一镜像前缀：`--build-arg GH_PROXY=https://ghfast.top/`；海外直连：`--build-arg GH_PROXY= --build-arg USE_CN_MIRROR=0`。
+- 自定义 mihomo 版本：`docker build -f image/Dockerfile --build-arg MIHOMO_VERSION=v1.x.x .`；指定单一镜像前缀：`--build-arg GH_PROXY=https://ghfast.top/`；海外直连：`--build-arg GH_PROXY= --build-arg USE_CN_MIRROR=0`。
 - **构建零 GitHub 依赖**：mihomo 二进制 + geodata 已预下载到 `image/downloads/` 并**纳入 git**（同 `image/_bundle` 哲学），`docker build` 完全不访问 GitHub，国内网络无忧。升级 mihomo：改 `image/Dockerfile` 的 `MIHOMO_VERSION` 后跑 `bash tools/stage-mihomo.sh` 更新 `image/downloads/` 再提交。若 `image/downloads/` 被清空，构建自动回退多镜像下载（`ghfast.top` 优先 + `--http1.1` + 直连兜底）。
 - **转换局限**：自动转换生成的是最小配置（自动选最快节点 + 全流量走代理），不含原订阅的分流规则/分组。若需精细分流，仍可直接提供 Clash YAML 直链（原样使用，仅注入 TUN）。
 
@@ -270,7 +269,7 @@ docker run -it --rm -e TERM=xterm-256color \
 ## 升级流程
 
 ```
-改 image/Dockerfile / 技能 → docker build -f image/Dockerfile image/（.factory-version 自动变）
+改 image/Dockerfile / 技能 → docker build -f image/Dockerfile .（.factory-version 自动变）
         ↓
 docker run（项目模式）→ 启动检测版本旧 → 提示「运行 cs upgrade」
         ↓
@@ -320,9 +319,9 @@ docker ps -aq --filter "name=super-claude-station" | ForEach-Object { docker rm 
 ```
 .
 ├── README.md                   # 项目说明（GitHub 显示）
-├── 一键启动_AI工作站.bat       # Windows 入口（ASCII 薄壳 → scripts/run.ps1）
-├── 启动_AI工作站.sh            # Linux/macOS 入口（薄壳 → scripts/run.sh）
-├── 启动_AI工作站.command       # macOS 双击入口（透传 .sh）
+├── start.bat                   # Windows 入口（ASCII 薄壳 → scripts/run.ps1）
+├── start.sh                    # Linux/macOS 入口（薄壳 → scripts/run.sh）
+├── start.command               # macOS 双击入口（透传 start.sh）
 ├── skills-lock.json            # skills 锁文件
 ├── image/                      # ★ 镜像构建上下文（Dockerfile + 全部 COPY 源）
 │   ├── Dockerfile              #   多阶段：插件注入 + 解符号链接 + 版本戳

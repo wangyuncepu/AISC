@@ -206,34 +206,56 @@ if [ -f /etc/mihomo/config.yaml ]; then
 fi
 
 # ==========================================
-# 3.6 AI 每日简讯（TLDR + The Rundown，--ai 中文精选，daily cache）
-#   需 cs 后端配置（§3 算好的 BASE_URL + AUTH）：有后端 -> --ai 中文简讯注入启动头；
-#   无后端（临时作用域/cc/全新项目）-> --ai 不可用，一行提示跳过，不显示英文 fallback。
-#   timeout + 诊断行兜底，绝不阻断启动。
+# 3.6 AI 每日简讯（opt-in，默认不运行）
+#   AI_BRIEF_ON_START=background  → 后台抓取+LLM（日志 /tmp/ai-brief.log），不阻塞
+#   AI_BRIEF_ON_START=foreground  → 阻塞同步运行（含 50s 超时，仅调试用）
+#   AI_BRIEF_ON_START=off / 空    → 不运行（默认，零阻塞）
 #   并发抓取 ~9-12s + LLM（reasoning 模型）~30s → 总预算 50s。
-#   诊断 stderr → /tmp/ai-brief.log（静默，仅排查用）。
 #   ~/.cache/ai-brief/ 持久化，跨容器复用。
 # ==========================================
-if command -v python3 >/dev/null 2>&1 && [ -d /home/AISC/ai_brief ]; then
-    if [ -n "$BASE_URL" ] && [ "$AUTH" = "yes" ]; then
-        BRIEF_EXIT=0
-        BRIEF="$(timeout 50 python3 /home/AISC/ai_brief/brief.py --ai --top 5 2>/tmp/ai-brief.log)" || BRIEF_EXIT=$?
-        if [ -n "$BRIEF" ]; then
-            echo "📰 今日 AI 简讯："
-            echo "$BRIEF"
-            echo "----------------------------------------"
-        elif [ "$BRIEF_EXIT" = "124" ]; then
-            echo "📰 简讯加载超时（50s），已跳过（容器内可手跑：python3 /home/AISC/ai_brief/brief.py）"
-            echo "----------------------------------------"
-        else
-            echo "📰 简讯加载失败，已跳过（容器内可手跑：python3 /home/AISC/ai_brief/brief.py）"
-            echo "----------------------------------------"
+AI_BRIEF_ON_START="${AI_BRIEF_ON_START:-}"
+
+case "${AI_BRIEF_ON_START,,}" in
+    background)
+        if command -v python3 >/dev/null 2>&1 && [ -d /home/AISC/ai_brief ]; then
+            if [ -n "$BASE_URL" ] && [ "$AUTH" = "yes" ]; then
+                echo "📰 AI 简讯后台抓取中（日志: /tmp/ai-brief.log，容器启动后 cat /tmp/ai-brief.log 查看）"
+                (
+                    python3 /home/AISC/ai_brief/brief.py --ai --top 5 \
+                        > /tmp/ai-brief.log 2>&1
+                    printf '--- DONE (%s) ---\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> /tmp/ai-brief.log
+                ) &
+            else
+                echo "📰 简讯跳过（当前无 cs 后端配置，--ai 不可用）"
+            fi
         fi
-    else
-        # 无后端配置 -> --ai 无 LLM 可用，跳过不显示英文 fallback
-        echo "📰 简讯跳过（当前无 cs 后端配置，--ai 不可用）"
-    fi
-fi
+        ;;
+    foreground)
+        # 阻塞同步模式（会延长启动时间，仅调试/手动触发用）
+        if command -v python3 >/dev/null 2>&1 && [ -d /home/AISC/ai_brief ]; then
+            if [ -n "$BASE_URL" ] && [ "$AUTH" = "yes" ]; then
+                BRIEF_EXIT=0
+                BRIEF="$(timeout 50 python3 /home/AISC/ai_brief/brief.py --ai --top 5 2>/tmp/ai-brief.log)" || BRIEF_EXIT=$?
+                if [ -n "$BRIEF" ]; then
+                    echo "📰 今日 AI 简讯："
+                    echo "$BRIEF"
+                    echo "----------------------------------------"
+                elif [ "$BRIEF_EXIT" = "124" ]; then
+                    echo "📰 简讯加载超时（50s），已跳过（容器内可手跑：python3 /home/AISC/ai_brief/brief.py）"
+                    echo "----------------------------------------"
+                else
+                    echo "📰 简讯加载失败，已跳过（容器内可手跑：python3 /home/AISC/ai_brief/brief.py）"
+                    echo "----------------------------------------"
+                fi
+            else
+                echo "📰 简讯跳过（当前无 cs 后端配置，--ai 不可用）"
+            fi
+        fi
+        ;;
+    *)
+        # off / 空 / 任何其他值 — 默认不运行，静默零阻塞
+        ;;
+esac
 
 # ==========================================
 # 4. 智能引导：支持 cs 直连切换

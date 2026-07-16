@@ -42,17 +42,11 @@ build_image() {
       fi
       ;;
   esac
-  # 把 ai_brief（简讯工具，entrypoint 启动头注入）带入 build context
-  local brief_ctx="$PROJECT_ROOT/image/ai_brief"
-  rm -rf "$brief_ctx" && mkdir -p "$brief_ctx"
-  cp "$PROJECT_ROOT/ai_brief/brief.py" "$PROJECT_ROOT/ai_brief/run.sh" "$brief_ctx/"
   echo "📦 正在构建镜像: $IMAGE  ${cache_flag:+(无缓存) }(${mirror_arg}) ..."
-  if ! docker build $cache_flag --build-arg "$mirror_arg" --build-arg "$node_arg" -f "$PROJECT_ROOT/image/Dockerfile" -t "$IMAGE" "$PROJECT_ROOT/image"; then
-    rm -rf "$brief_ctx"
+  if ! docker build $cache_flag --build-arg "$mirror_arg" --build-arg "$node_arg" -f "$PROJECT_ROOT/image/Dockerfile" -t "$IMAGE" "$PROJECT_ROOT"; then
     echo "❌ 构建失败。"
     exit 1
   fi
-  rm -rf "$brief_ctx"
   echo "✅ 构建完成: $IMAGE"
   echo
   read -r -p "构建成功，是否立即运行容器? [Y/n]（n=退出）: " rb
