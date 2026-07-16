@@ -1,11 +1,11 @@
 # Super Claude · v1.5.1
 
-开箱即用的 [Claude Code](https://claude.ai/code) Docker 工作站 —— 插件化技能套件、**5 大模型后端一键切换**、**临时/项目双作用域**、**自包含离线构建**，100% 纯终端 CLI。
+开箱即用的 [Claude Code](https://claude.ai/code) Docker 工作站 —— 插件化技能套件、**7 大模型后端一键切换**、**临时/项目双作用域**、**自包含离线构建**，100% 纯终端 CLI。
 
 ## 核心亮点
 
 - 🔌 **插件化技能** — caveman（默认激活）/ claude-hud（状态栏 HUD）/ document-skills / superpowers / skill-creator + gstack，全部离线内置
-- 🔄 **5 大模型后端** — `cs cc / deepseek / ark / 1y / duo-cc` 一键切换，**实时生效**
+- 🔄 **7 大模型后端** — `cs cc / deepseek / ark / 1y / duo-cc / xf / orange` 一键切换，**实时生效**
 - 🧪 **临时 / 项目 双作用域** — 临时模式即用即弃，项目模式配置持久且隔离
 - 🔐 **密钥隔离** — API Key 存于 `.cc-config/api-keys`（chmod 600），与 CLI 配置 `.claude` 分离，永不入 git
 - 📦 **自包含构建** — 仓库内置 `_bundle`，`docker build` 不依赖宿主机 `~/.claude`、可离线
@@ -24,7 +24,7 @@
 - 已安装 [Docker](https://www.docker.com/)（Windows 建议 Docker Desktop）
 - Windows 推荐 **Windows Terminal**（cmd 旧窗口可能乱码且 HUD 不渲染）
 
-### 一键启动（推荐）
+### 启动方式 (start.sh / start.bat / start.command)
 
 | 平台 | 文件 |
 |------|------|
@@ -131,6 +131,8 @@ cs deepseek   # DeepSeek         → deepseek-v4-pro[1m]
 cs ark        # 火山 Ark         → glm-5.2[1m]
 cs 1y         # 1yuanapi         → claude-sonnet-4-8[1m]
 cs duo-cc     # duo-cc           → claude-sonnet-4-8[1m]
+cs xf          # 讯飞              → xopdeepseekv4pro[1m]
+cs orange      # OrangeAI          → glm-5.2[1m]
 cs upgrade    # 合并镜像出厂 .claude 到当前项目（保留后端配置/历史）
 ```
 
@@ -141,6 +143,8 @@ cs upgrade    # 合并镜像出厂 .claude 到当前项目（保留后端配置/
 | `cs ark` | 火山 Ark | `glm-5.2[1m]` | `ark.cn-beijing.volces.com/api/coding` |
 | `cs 1y` | 1yuanapi | `claude-sonnet-4-8[1m]` | `1yuanapi.com` |
 | `cs duo-cc` | duo-cc | `claude-sonnet-4-8[1m]` | `api.duou.cc` |
+| `cs xf` | 讯飞 | `xopdeepseekv4pro[1m]` | `maas-coding-api.cn-huabei-1.xf-yun.com/anthropic` |
+| `cs orange` | OrangeAI | `glm-5.2[1m]` | `api4.orangeai.cc` |
 
 > Key 首次输入后保存，之后自动记住。可 `docker run ... cs ark` 直接切换并重启 Claude。
 
@@ -148,7 +152,7 @@ cs upgrade    # 合并镜像出厂 .claude 到当前项目（保留后端配置/
 
 容器内置 [cc-switch-cli](https://github.com/saladday/cc-switch-cli)（Rust 二进制，v5.9.0），跨平台 AI CLI 管理工具，统一管理 Claude Code / Codex / Gemini / OpenCode 等 provider 配置、MCP servers、skills、prompts。
 
-> **与 `cs` 的区别**：`cs` 是项目内置轻量切换器（5 后端一键切）；`cc-switch` 功能更全（多 AI CLI、TUI、WebDAV 同步、用量统计）。命令名不冲突（`cs` vs `cc-switch`），共存按需用。
+> **与 `cs` 的区别**：`cs` 是项目内置轻量切换器（7 后端一键切）；`cc-switch` 功能更全（多 AI CLI、TUI、WebDAV 同步、用量统计）。命令名不冲突（`cs` vs `cc-switch`），共存按需用。
 
 ### 使用
 
