@@ -215,6 +215,61 @@ Commit `a8ce21d`（2026-07-16 22:49）；漂移修复 `4820ec2`（2026-07-16 22:
 
 ---
 
+### P3.1 S1 — 统一 CLI 协议契约、Python stdlib 运行时决策与特征测试 harness
+
+P3 计划 commit `c706a68`（2026-07-17 01:03）已提交到仓库。本节记录 **P3.1 第一阶段（S1）**，聚焦协议设计、技术决策与测试基础设施搭建。**本阶段不修改业务逻辑、不实现 Python CLI、不切换默认入口。后续 S2–S8 将在此基础上逐步实现 CLI 命令。**
+
+#### RFC：AISC CLI v1 机器消费协议（`docs/rfc/aisc-cli-v1.md`，状态：draft）
+
+新增 `docs/rfc/aisc-cli-v1.md`（366 行），定义 `aisc.cli/v1` 协议 schema 与语义。**当前为 S1 草案（draft），是冻结候选合同而非已实现接口**——协议细节在 S9 稳定化前可能发生兼容性变更。主要约定：
+
+- **输出格式三选一**：`--format text`（默认，人类可读，stdout）、`--format json`（JSON envelope，stdout 单条完整 JSON）、`--events`（JSONL 事件流，stdout 每行一个 JSON）。`--format json` 与 `--events` 互斥。
+- **stdout/stderr 严格隔离**：结构化数据只走 stdout；日志、诊断、错误描述只走 stderr。消费者可独立捕获。
+- **退出码体系**：固定语义退出码 `AISC_EXIT_OK(0)` / `AISC_EXIT_USAGE(1)` / `AISC_EXIT_ERR(2)` / `AISC_EXIT_CANCEL(130)`，禁止 shell 惯用 `1` 的模糊语义。
+- **错误输出规范**：`--format json/jsonl` 下错误对象含 `code`（字符串枚举）和 `message`（单行一句话），面向机器消费。
+- **non-interactive 保证**：`--format json` 或 `--events` 时 CLI 不得启动任何交互式提示、分页器或 TUI。
+- **交互确认/极简 redaction**：定义确认方式（`--yes` flag/`AISC_YES=1` 环境变量）与密钥参数 redaction 约束。
+
+#### ADR：Python stdlib CLI 运行时决策（`docs/adr/001-python-stdlib-cli.md`，状态：已接受）
+
+新增 `docs/adr/001-python-stdlib-cli.md`（192 行），记录 P3 统一 CLI 的技术选型决策：
+
+- **选择 Python 3.11+ stdlib core**（不引入 click/typer/rich 等第三方依赖）：零 `pip install`，跨平台（Linux/macOS/Windows）一致行为。
+- **分发策略**：未来通过 PyInstaller 打包为独立单文件可执行制品（standalone），无需用户安装 Python；同时保持 `python3 -m aisc` 兼容 bundle 模式用于开发/CI/高级用户。
+- **GUI / daemon 明确不在当前范围**：ADR 明确定义 CLI 边界——no GUI endpoint、no background daemon/server process。远程 daemon 在远期规划但非实施目标。
+
+#### stdlib unittest harness（`tests/harness/`）
+
+新增纯 stdlib 测试 harness（零第三方依赖，设计供 S2+ 测试复用）：
+
+- **`tests/harness/test_runner.py`**（460 行）：`RunResult` dataclass（stdout/stderr/exit_code/timed_out）+ `CliRunner`（subprocess 包装，支持 cwd/timeout/env 注入）。内置协议断言函数：
+  - `assert_json_envelope()`：严格校验 `--format json` 的纯 JSON stdout——要求 `meta.protocol=="aisc.cli/v1"`，并检查 `meta.command/exit_code/timestamp/version/run_id`、`data` 与 `errors`；协议退出码必须与进程退出码一致。
+  - `assert_jsonl_protocol()`：严格校验 `--events` JSONL 流——每条 JSON 对象含 7 个必填字段（`protocol`/`command`/`run_id`/`seq`/`type`/`ts`/`data`），`seq` 从 1 起严格单调递增+1，恰好一条终端事件（`.complete`/`.failed`/`.cancelled`）作为最后一行，`data.exit_code` 为 int。
+- **`tests/harness/test_harness_self.py`**（harness 自检）：`assert_json_envelope` 接收非法/缺失字段/output-not-JSON 时正确 `AssertionError`；超时子进程被 `CliRunner` 正确捕获为 `timed_out=True`。
+
+#### legacy characterization tests（`tests/features/`）
+
+为现有 shell 脚本建立静态契约特征测试——**只验证现有行为不修改逻辑，fake Docker 无真实 Docker/网络，不污染真实 `.aisc/`/`.deploy/` 状态**：
+
+- **`tests/features/helpers.py`**：`TempProject` 隔离辅助对象——在临时目录创建 `scripts/` 副本，由测试 teardown 清理；fake Docker 使用可逆的结构化 trace 保留每个 argv 的边界。
+- **`tests/features/test__state.py`**：测试 `scripts/_state.sh` 的 init/set/get、primary-priority（`.aisc/`）与 legacy-fallback（`.deploy/`）路径、双写（`.aisc/state.env` + `.deploy/state.env`）行为。
+- **`tests/features/test_start.py`**：冻结 `start.sh` 的未知参数、缺失 `--workspace` 值和不存在 workspace 等错误路径。
+- **`tests/features/test_03_build_image.py`**：通过 fake Docker 冻结根 build context、`container/Dockerfile`、镜像 tag、关键 build args 与 `DO_RUN=0` 行为，并校验 argv 边界。
+- **`tests/features/test_04_launcher.py`**：通过 fake Docker 冻结 `DO_RUN=0`、workspace 校验、基本/代理模式 run argv、Docker 退出码透传；额外验证含空格 workspace 的 bind mount 仍是单个 argv。
+- **`tests/features/test_contracts.py`**：静态 repo 契约——`container/providers.json` 结构校验（`schema_version`/`providers` 非空/每个 provider 含必填键 `id`/`name`/`auth_type`/`auth_key_name`/`base_url`/`model`）+ `config/versions.env` 键存在性检查。
+
+#### CI 集成
+
+- **`.github/workflows/checks.yml`** 新增 step：`python3 -m unittest discover -s tests -p 'test_*.py' -v`（push + PR），位于 bash `-n` / Python `py_compile` / Node `--check` / JSON 校验之后。
+
+#### 验证状态
+
+- `python3 -m unittest discover -s tests -p 'test_*.py' -v`：**100/100 通过**。
+- `tests/smoke/check-syntax.sh`：**69/69 通过**；`tools/check-docs.sh`：**54/54 通过**；`git diff --check`：通过。
+- 特征测试使用临时目录与 fake Docker，不调用真实 Docker/网络，也不修改真实 `.aisc/` 或 `.deploy/` 状态。
+
+---
+
 ### 已知未完成 / 技术债（如实记录，不做为已完成）
 
 - **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。

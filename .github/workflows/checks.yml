@@ -33,6 +33,9 @@ jobs:
       - name: Run project smoke test
         run: bash tests/smoke/check-syntax.sh
       
+      - name: Run Python unit tests (stdlib unittest)
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
         env:
