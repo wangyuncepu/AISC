@@ -1,3 +1,8 @@
+# Version pins: see config/versions.env for all dependency versions
+# Override via: docker build --build-arg MIHOMO_VERSION=v1.20.0 ...
+# NODE_IMAGE_DIGEST is documented in config/versions.env but not consumed by FROM:
+# pin the digest in NODE_IMAGE itself, e.g. node:20-slim@sha256:...
+
 # 使用官方轻量级 Node 镜像；国内网络可通过 --build-arg NODE_IMAGE=... 替换拉取源
 ARG NODE_IMAGE=node:20-slim
 FROM ${NODE_IMAGE}
@@ -16,6 +21,12 @@ ARG GH_PROXY=
 
 # cc-switch-cli 版本（跨平台 AI CLI 管理工具，Rust 二进制，与内置 cs 共存）
 ARG CC_SWITCH_VERSION=v5.9.0
+
+# Claude Code npm 版本（@anthropic-ai/claude-code）
+ARG CLAUDE_CODE_VERSION=latest  # TODO: pin to specific version
+
+# Geodata 发布版本（MetaCubeX/meta-rules-dat release tag）
+ARG GEODATA_VERSION=latest  # TODO: pin to dated release tag
 
 # ==========================================
 # 1. 网络环境优化：按 USE_CN_MIRROR 决定 apt 源
@@ -77,7 +88,7 @@ RUN set -eux; \
         if [ -f /tmp/dl/$f ]; then \
             echo "📦 使用本地预置 geodata: $f"; cp /tmp/dl/$f /home/AISC/.mihomo/$f; rm -f /tmp/dl/$f; \
         else \
-            url="https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/$f"; \
+            url="https://github.com/MetaCubeX/meta-rules-dat/releases/download/${GEODATA_VERSION}/$f"; \
             ok=0; \
             for m in $mirrors ""; do \
                 u="${m}${url}"; \
@@ -111,7 +122,7 @@ ENV LANG=C.UTF-8 \
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
         npm config set registry https://registry.npmmirror.com/ ; echo "npm: 淘宝镜像" ; \
     else echo "npm: 官方源" ; fi \
-    && npm install -g --no-cache @anthropic-ai/claude-code \
+    && npm install -g --no-cache @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && claude --version
 
 # ==========================================

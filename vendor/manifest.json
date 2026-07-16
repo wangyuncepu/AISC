@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "generated": "2026-07-16",
+  "components": [
+    {
+      "name": "mihomo",
+      "version": "v1.19.27",
+      "source": "https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.27",
+      "license": "GPL-3.0",
+      "files": [
+        "container/downloads/mihomo-linux-amd64-v1.19.27.gz"
+      ]
+    },
+    {
+      "name": "geodata",
+      "version": "latest",
+      "source": "https://github.com/MetaCubeX/meta-rules-dat",
+      "license": "unknown",
+      "files": [
+        "container/downloads/geoip.metadb",
+        "container/downloads/geosite.dat",
+        "container/downloads/country.mmdb"
+      ]
+    },
+    {
+      "name": "caveman",
+      "version": "0.1.0",
+      "source": "https://github.com/JuliusBrussee/caveman",
+      "license": "MIT",
+      "files": [
+        "container/_bundle/plugins/marketplaces/caveman/"
+      ]
+    },
+    {
+      "name": "claude-hud",
+      "version": "0.0.11",
+      "source": "https://github.com/jarrodwatts/claude-hud",
+      "license": "MIT",
+      "files": [
+        "container/_bundle/plugins/marketplaces/claude-hud/"
+      ]
+    },
+    {
+      "name": "claude-plugins-official",
+      "version": "embedded",
+      "source": "https://github.com/anthropics/claude-plugins-public",
+      "license": "Apache-2.0",
+      "files": [
+        "container/_bundle/plugins/marketplaces/claude-plugins-official/"
+      ]
+    },
+    {
+      "name": "anthropic-agent-skills",
+      "version": "1.0.0",
+      "source": "https://github.com/anthropics/skills",
+      "license": "Apache-2.0",
+      "files": [
+        "container/_bundle/plugins/marketplaces/anthropic-agent-skills/"
+      ]
+    },
+    {
+      "name": "gstack-skills",
+      "version": "1.1.0",
+      "source": "https://github.com/gstack/skills",
+      "license": "unknown",
+      "files": [
+        "container/_bundle/skills/gstack/"
+      ]
+    }
+  ]
+}

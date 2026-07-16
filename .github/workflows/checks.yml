@@ -1,0 +1,61 @@
+name: Checks
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Shell syntax check (bash -n)
+        run: |
+          find . -name '*.sh' -not -path './.git/*' -not -path './container/_bundle/*' -print0 | xargs -0 -I{} bash -n {}
+      
+      - name: Python syntax check
+        run: |
+          find . -name '*.py' -not -path './.git/*' -not -path './container/_bundle/*' -print0 | xargs -0 python3 -m py_compile
+      
+      - name: Node.js syntax check
+        run: |
+          for f in $(find . -name '*.js' -not -path './.git/*' -not -path './container/_bundle/*' -not -path '*/node_modules/*'); do
+            node --check "$f" || exit 1
+          done
+      
+      - name: JSON validation
+        run: |
+          find . -name '*.json' -not -path './.git/*' -not -path './container/_bundle/*' -not -path '*/node_modules/*' -print0 | xargs -0 -I{} python3 -m json.tool {} > /dev/null
+      
+      - name: Run project smoke test
+        run: bash tests/smoke/check-syntax.sh
+      
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+        continue-on-error: true  # Don't block CI on gitleaks license issues
+
+  doc-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check README references actual files
+        run: |
+          # Verify key files referenced in README exist
+          for f in container/Dockerfile start.sh start.bat start.command; do
+            if [ ! -f "$f" ]; then echo "MISSING: $f (referenced in README)"; exit 1; fi
+          done
+          echo "All README-referenced files exist."
+      
+      - name: Check no stale build-context references
+        run: |
+          # After P0 refactoring, image/Dockerfile should NOT appear in active code/docs
+          if grep -r "image/Dockerfile" --include='*.md' --include='*.sh' --include='*.ps1' . | grep -v '.git/' | grep -v 'docs/devlog' | grep -v 'docs/plans'; then
+            echo "WARNING: stale image/Dockerfile references found in non-historical files"
+          fi
