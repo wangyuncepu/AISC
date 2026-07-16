@@ -196,6 +196,10 @@ COPY container/claude-switch /usr/local/bin/cs
 RUN chmod +x /usr/local/bin/cs \
     && ln -sf /usr/local/bin/cs /usr/local/bin/claude-switch
 
+# 模型提供商元数据（data-driven config），cs/claude-switch 在运行时读取。
+# 所有 provider 的 base URL / model / alias 等均在此定义，脚本中无硬编码。
+COPY container/providers.json /home/AISC/providers.json
+
 # cs 运行配置（settings.json + api-keys）存于 .cc-config，独立于 CLI 的 .claude。
 # 不在此预建 —— cs 首次运行时按 CLAUDE_CONFIG_DIR 同级的 .cc-config 目录自动创建。
 

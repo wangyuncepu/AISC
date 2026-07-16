@@ -2,6 +2,7 @@
 # cs / claude-switch — switch Claude Code between cc / deepseek / ark / 1y / duo-cc / xf / orange
 # API Keys stored in ~/.claude/api-keys (chmod 600), never in this file.
 # Modifies ~/.claude/settings.json env block only; everything else untouched.
+# Provider data is in providers.json (data-driven, no hardcoded backend config).
 
 # env 块写进 Claude CLI 原生 settings.json（CLAUDE_CONFIG_DIR/settings.json）。
 # 这样 Claude Code 原生读取并实时生效（与非 docker 行为一致，!cs ds 立即更新）。
@@ -45,16 +46,87 @@ if [ ! -f "$KEY_STORE" ]; then
   chmod 600 "$KEY_STORE"
 fi
 
-# ====== Endpoint URLs (non-secret) ======
-DEEPSEEK_BASE="${DEEPSEEK_BASE:-https://api.deepseek.com/anthropic}"
-GLM_BASE="${GLM_BASE:-https://ark.cn-beijing.volces.com/api/coding}"
-ONEY_BASE="${ONEY_BASE:-https://1yuanapi.com}"
-DUOCC_BASE="${DUOCC_BASE:-https://api.duou.cc}"
-XF_BASE="${XF_BASE:-https://maas-coding-api.cn-huabei-1.xf-yun.com/anthropic}"
-ORANGE_BASE="${ORANGE_BASE:-https://api4.orangeai.cc}"
-# =========================================
+# Path to providers.json — same location in Docker image
+export PROVIDERS_JSON="${PROVIDERS_JSON:-/home/AISC/providers.json}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+
+# ==========================================
+# _node_read_providers — output shell variable assignments for a provider
+#   Usage: eval "$(_node_resolve_provider <mode>)"
+#   Sets: _PR_ID, _PR_NAME, _PR_AUTH_KEY_NAME, _PR_AUTH_PROMPT, _PR_KEY_DISPLAY,
+#         _PR_AUTH_TYPE, _PR_CLEAR_ALL, _PR_BASE_URL, _PR_MODEL, _PR_OPUS, _PR_SONNET,
+#         _PR_HAIKU, _PR_SUBAGENT, _PR_EFFORT, _PR_COMPACT, _PR_SWITCH_MSG,
+#         _PR_URL_FRAGMENT, _PR_HELP_DESC
+#   If not found, sets _PR_VALID=0
+# ==========================================
+_node_resolve_provider() {
+  node -e '
+    var fs = require("fs");
+    var cfg = JSON.parse(fs.readFileSync(process.env.PROVIDERS_JSON || "/home/AISC/providers.json", "utf8"));
+    var input = process.argv[1] || "";
+    var providers = cfg.providers || {};
+    var id = "";
+    for (var k in providers) {
+      if (k === input) { id = k; break; }
+      var aliases = providers[k].aliases || [];
+      if (aliases.indexOf(input) !== -1) { id = k; break; }
+    }
+    if (!id || !providers[id]) {
+      console.log("_PR_VALID=0");
+      process.exit(0);
+    }
+    var p = providers[id];
+    var q = JSON.stringify;
+    console.log("_PR_VALID=1");
+    console.log("_PR_ID=" + q(p.id || id));
+    console.log("_PR_NAME=" + q(p.name || ""));
+    console.log("_PR_AUTH_KEY_NAME=" + q(p.auth_key_name || ""));
+    console.log("_PR_AUTH_PROMPT=" + q(p.auth_prompt || ""));
+    console.log("_PR_KEY_DISPLAY=" + q(p.key_display || p.auth_prompt || ""));
+    console.log("_PR_AUTH_TYPE=" + q(p.auth_type || ""));
+    console.log("_PR_CLEAR_ALL=" + (p.clear_all ? "1" : "0"));
+    console.log("_PR_BASE_URL=" + q(p.base_url || ""));
+    console.log("_PR_MODEL=" + q(p.model || ""));
+    console.log("_PR_OPUS=" + q(p.default_opus || ""));
+    console.log("_PR_SONNET=" + q(p.default_sonnet || ""));
+    console.log("_PR_HAIKU=" + q(p.default_haiku || ""));
+    console.log("_PR_SUBAGENT=" + q(p.subagent || ""));
+    console.log("_PR_EFFORT=" + q(p.effort || ""));
+    console.log("_PR_COMPACT=" + q(p.compact || ""));
+    console.log("_PR_SWITCH_MSG=" + q(p.switch_msg || p.name || ""));
+    console.log("_PR_URL_FRAGMENT=" + q(p.url_fragment || ""));
+    console.log("_PR_HELP_DESC=" + q(p.help_desc || p.name || ""));
+  ' "$1"
+}
+
+# ==========================================
+# _node_list_providers — output shell assignments for all provider keys/display names
+#   Sets: _PL_COUNT=N, _PL_ID_0=.., _PL_KEYNAME_0=.., _PL_KEYDISP_0=.., ...
+# ==========================================
+_node_list_providers() {
+  node -e '
+    var fs = require("fs");
+    var cfg = JSON.parse(fs.readFileSync(process.env.PROVIDERS_JSON || "/home/AISC/providers.json", "utf8"));
+    var providers = cfg.providers || {};
+    var keys = Object.keys(providers);
+    var q = JSON.stringify;
+    console.log("_PL_COUNT=" + keys.length);
+    for (var i = 0; i < keys.length; i++) {
+      var p = providers[keys[i]];
+      console.log("_PL_ID_" + i + "=" + q(keys[i]));
+      console.log("_PL_KEYNAME_" + i + "=" + q(p.auth_key_name || ""));
+      console.log("_PL_KEYDISP_" + i + "=" + q(p.key_display || p.auth_prompt || ""));
+      console.log("_PL_URLFRAG_" + i + "=" + q(p.url_fragment || ""));
+      console.log("_PL_SWITCHMSG_" + i + "=" + q(p.switch_msg || p.name || ""));
+      console.log("_PL_HELPDESC_" + i + "=" + q(p.help_desc || p.name || ""));
+      var aliases = (p.aliases || []).join("|");
+      console.log("_PL_ALIASES_" + i + "=" + q(aliases));
+      var allNames = [keys[i]].concat(p.aliases || []);
+      console.log("_PL_ALLNAMES_" + i + "=" + q(allNames.join("|")));
+    }
+  '
+}
 
 # ==========================================
 # get_key — read key from store, or prompt user
@@ -108,78 +180,41 @@ write_settings() {
   " || die "failed to write settings"
 }
 
+# ==========================================
+# switch — data-driven provider switching
+# ==========================================
 switch() {
   local mode="$1"
-  local key
+  local key=""
 
-  case "$mode" in
-    cc)
-      # 官方默认：允许留空，所有配置清为 ""（走 Anthropic 默认端点 / 自带登录）
-      export CS_BASE_URL="" CS_AUTH_TOKEN="" CS_API_KEY=""
-      export CS_MODEL="" CS_DEFAULT_OPUS="" CS_DEFAULT_SONNET="" CS_DEFAULT_HAIKU=""
-      export CS_SUBAGENT="" CS_EFFORT="" CS_COMPACT=""
-      echo "Switched to: Claude (default Anthropic, 全部配置已清空)"
-      ;;
-    deepseek)
-      key=$(get_key "DEEPSEEK_KEY" "DeepSeek") || return 1
-      export CS_BASE_URL="$DEEPSEEK_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
-      export CS_MODEL="deepseek-v4-pro[1m]"
-      export CS_DEFAULT_OPUS="deepseek-v4-pro[1m]" CS_DEFAULT_SONNET="deepseek-v4-pro[1m]"
-      export CS_DEFAULT_HAIKU="deepseek-v4-flash" CS_SUBAGENT="deepseek-v4-flash"
-      export CS_EFFORT="max" CS_COMPACT="1000000"
-      echo "Switched to: DeepSeek"
-      ;;
-    ark)
-      key=$(get_key "GLM_KEY" "Ark") || return 1
-      export CS_BASE_URL="$GLM_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
-      export CS_MODEL="glm-5.2[1m]"
-      export CS_DEFAULT_OPUS="glm-5.2[1m]" CS_DEFAULT_SONNET="deepseek-v4-pro[1m]"
-      export CS_DEFAULT_HAIKU="deepseek-v4-flash[1m]" CS_SUBAGENT="deepseek-v4-flash[1m]"
-      export CS_EFFORT="max" CS_COMPACT="1000000"
-      echo "Switched to: Ark"
-      ;;
-    1y)
-      key=$(get_key "ONEY_KEY" "1yuanapi") || return 1
-      export CS_BASE_URL="$ONEY_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
-      export CS_MODEL="glm-5.2[1m]"
-      export CS_DEFAULT_OPUS="glm-5.2[1m]" CS_DEFAULT_SONNET="glm-5.2[1m]"
-      export CS_DEFAULT_HAIKU="glm-5.2[1m]" CS_SUBAGENT="glm-5.2[1m]"
-      export CS_EFFORT="" CS_COMPACT="1000000"
-      echo "Switched to: 1y (1yuanapi.com)"
-      ;;
-    duo-cc)
-      key=$(get_key "DUOCC_KEY" "duo-cc") || return 1
-      export CS_BASE_URL="$DUOCC_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
-      export CS_MODEL="claude-sonnet-5"
-      export CS_DEFAULT_OPUS="claude-opus-4.8" CS_DEFAULT_SONNET="claude-sonnet-5"
-      export CS_DEFAULT_HAIKU="claude-haiku-4.5" CS_SUBAGENT="claude-haiku-4.5"
-      export CS_EFFORT="" CS_COMPACT="1000000"
-      echo "Switched to: duo-cc (api.duou.cc)"
-      ;;
-    xf)
-      key=$(get_key "XF_KEY" "XF (讯飞)") || return 1
-      export CS_BASE_URL="$XF_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
-      export CS_MODEL="xopdeepseekv4pro[1m]"
-      export CS_DEFAULT_OPUS="xopglm52" CS_DEFAULT_SONNET="xopdeepseekv4pro[1m]"
-      export CS_DEFAULT_HAIKU="xopdeepseekv4flash[1m]" CS_SUBAGENT="xopdeepseekv4flash[1m]"
-      export CS_EFFORT="max" CS_COMPACT="512000"
-      echo "Switched to: XF (讯飞 maas-coding)"
-      ;;
-    orange)
-      key=$(get_key "ORANGE_KEY" "OrangeAI") || return 1
-      export CS_BASE_URL="$ORANGE_BASE" CS_AUTH_TOKEN="$key" CS_API_KEY=""
-      export CS_MODEL="glm-5.2[1m]"
-      export CS_DEFAULT_OPUS="glm-5.2[1m]" CS_DEFAULT_SONNET="glm-5.2[1m]"
-      export CS_DEFAULT_HAIKU="glm-5.2[1m]" CS_SUBAGENT="glm-5.2[1m]"
-      export CS_EFFORT="" CS_COMPACT="1000000"
-      echo "Switched to: OrangeAI (api4.orangeai.cc)"
-      ;;
-    *)
-      die "unknown mode: ${mode}"
-      ;;
-  esac
+  # Resolve provider via providers.json
+  eval "$(_node_resolve_provider "$mode")"
+  [ "${_PR_VALID:-0}" = "0" ] && die "unknown mode: ${mode}"
+
+  # Get key if provider requires one
+  if [ "${_PR_CLEAR_ALL:-0}" != "1" ] && [ -n "${_PR_AUTH_KEY_NAME:-}" ]; then
+    key=$(get_key "$_PR_AUTH_KEY_NAME" "$_PR_AUTH_PROMPT") || return 1
+  fi
+
+  # Set env vars (identical to original write_settings expectations)
+  export CS_BASE_URL="${_PR_BASE_URL:-}"
+  if [ "${_PR_AUTH_TYPE:-}" = "token" ]; then
+    export CS_AUTH_TOKEN="$key"
+    export CS_API_KEY=""
+  else
+    export CS_AUTH_TOKEN=""
+    export CS_API_KEY="$key"
+  fi
+  export CS_MODEL="${_PR_MODEL:-}"
+  export CS_DEFAULT_OPUS="${_PR_OPUS:-}"
+  export CS_DEFAULT_SONNET="${_PR_SONNET:-}"
+  export CS_DEFAULT_HAIKU="${_PR_HAIKU:-}"
+  export CS_SUBAGENT="${_PR_SUBAGENT:-}"
+  export CS_EFFORT="${_PR_EFFORT:-}"
+  export CS_COMPACT="${_PR_COMPACT:-}"
 
   write_settings
+  echo "Switched to: ${_PR_SWITCH_MSG}"
 
   if [ "${SC_RESTART:-}" = "1" ]; then
     echo "Restarting Claude with new settings..."
@@ -187,6 +222,9 @@ switch() {
   fi
 }
 
+# ==========================================
+# show_current — display current settings + saved keys
+# ==========================================
 show_current() {
   echo ""
   node -e "
@@ -213,25 +251,40 @@ show_current() {
       console.log('  ' + label.padEnd(12) + ' = ' + (sensitive ? v.slice(0,12) + '...' + v.slice(-4) : val));
     }
     const base = env.ANTHROPIC_BASE_URL || '';
-    if (!base)                      console.log('\\n  后端: cc (Anthropic)');
-    else if (base.includes('deepseek')) console.log('\\n  后端: deepseek');
-    else if (base.includes('volces'))   console.log('\\n  后端: ark');
-    else if (base.includes('1yuanapi')) console.log('\\n  后端: 1y');
-    else if (base.includes('duou.cc'))  console.log('\\n  后端: duo-cc');
-    else if (base.includes('xf-yun'))   console.log('\\n  后端: xf');
-    else if (base.includes('orangeai')) console.log('\\n  后端: orange');
-    else                            console.log('\\n  后端: custom → ' + base);
+    // Build backend fragments from providers.json
+    const provCfg = JSON.parse(fs.readFileSync(process.env.PROVIDERS_JSON || '/home/AISC/providers.json','utf8'));
+    const providers = provCfg.providers || {};
+    let backend = '';
+    for (const [id, p] of Object.entries(providers)) {
+      const frag = p.url_fragment || '';
+      if (frag && base.includes(frag)) { backend = id; break; }
+    }
+    if (!backend && !base) {
+      backend = 'cc';
+    }
+    if (backend) {
+      const p = providers[backend];
+      const showLabel = p ? (p.switch_msg || p.name || backend) : backend;
+      console.log('\\n  后端: ' + backend + (p && p.name ? ' (' + p.name + ')' : ''));
+    } else if (base) {
+      console.log('\\n  后端: custom → ' + base);
+    } else {
+      console.log('\\n  后端: cc (Anthropic)');
+    }
   " 2>/dev/null || echo "  unable to read settings"
 
   echo ""
   echo "Saved keys:"
-  for entry in "ANTHROPIC_OFFICIAL_KEY:Anthropic" "DEEPSEEK_KEY:DeepSeek" "GLM_KEY:Ark" "ONEY_KEY:1yuanapi" "DUOCC_KEY:duo-cc" "XF_KEY:XF(讯飞)" "ORANGE_KEY:OrangeAI"; do
-    name="${entry%%:*}"
-    label="${entry##*:}"
-    if grep -q "^${name}=." "$KEY_STORE" 2>/dev/null; then
-      echo "  $label ✓"
+  # Read key listing from providers.json (dynamic, no hardcoded entries)
+  eval "$(_node_list_providers)"
+  local i
+  for i in $(seq 0 $((_PL_COUNT - 1))); do
+    eval 'local keyname="${_PL_KEYNAME_'${i}'}"'
+    eval 'local keydisp="${_PL_KEYDISP_'${i}'}"'
+    if [ -n "$keyname" ] && grep -q "^${keyname}=." "$KEY_STORE" 2>/dev/null; then
+      echo "  $keydisp ✓"
     else
-      echo "  $label ✗"
+      echo "  $keydisp ✗"
     fi
   done
   echo ""
@@ -325,32 +378,78 @@ do_upgrade() {
   echo "🎉 升级完成。"
 }
 
+# ==========================================
+# show_help — generate help text from providers.json
+# ==========================================
+show_help() {
+  echo "Usage: cs {cc|deepseek|ark|1y|duo-cc|xf|orange|upgrade|show}"
+  echo ""
+  # Generate provider listing from providers.json
+  eval "$(_node_list_providers)"
+  local i id name aliases help_desc
+  for i in $(seq 0 $((_PL_COUNT - 1))); do
+    eval 'id="${_PL_ID_'${i}'}"'
+    eval 'help_desc="${_PL_HELPDESC_'${i}'}"'
+    echo "  $(printf '%-10s' "$id") $help_desc"
+  done
+  echo "  upgrade   合并镜像出厂 .claude 到当前项目（保留后端配置/历史）"
+  echo "  show      Show current backend & saved keys"
+  echo ""
+  echo "Keys are stored in .cc-config/api-keys and never committed to git."
+}
+
+# ==========================================
+# _match_provider — find the canonical provider id for a given input
+#   Echoes the id or exits 1 if not found.
+# ==========================================
+_match_provider() {
+  local input="$1"
+  node -e '
+    var fs = require("fs");
+    var cfg = JSON.parse(fs.readFileSync(process.env.PROVIDERS_JSON || "/home/AISC/providers.json", "utf8"));
+    var input = process.argv[1] || "";
+    var providers = cfg.providers || {};
+    for (var k in providers) {
+      if (k === input) { console.log(k); process.exit(0); }
+      var aliases = providers[k].aliases || [];
+      if (aliases.indexOf(input) !== -1) { console.log(k); process.exit(0); }
+    }
+    process.exit(1);
+  ' "$input"
+}
+
+# ==========================================
+# _list_all_provider_names — space-separated list of all ids + aliases
+# ==========================================
+_list_all_provider_names() {
+  node -e '
+    var fs = require("fs");
+    var cfg = JSON.parse(fs.readFileSync(process.env.PROVIDERS_JSON || "/home/AISC/providers.json", "utf8"));
+    var providers = cfg.providers || {};
+    var names = [];
+    for (var k in providers) {
+      names.push(k);
+      var aliases = providers[k].aliases || [];
+      for (var a = 0; a < aliases.length; a++) names.push(aliases[a]);
+    }
+    console.log(names.join(" "));
+  '
+}
+
+# ==========================================
+# CLI dispatch — match against providers.json dynamically
+# ==========================================
 case "${1:-}" in
-  cc|default|anthropic)  switch cc ;;
-  deepseek|ds)           switch deepseek ;;
-  ark)                   switch ark ;;
-  1y|oney)               switch 1y ;;
-  duo-cc|duo|duou)       switch duo-cc ;;
-  xf|xunfei)             switch xf ;;
-  orange)                switch orange ;;
-  upgrade|up)            do_upgrade ;;
-  show|current|"")       show_current ;;
-  -h|--help)
-    echo "Usage: cs {cc|deepseek|ark|1y|duo-cc|xf|orange|upgrade|show}"
-    echo ""
-    echo "  cc        Claude default (Anthropic)"
-    echo "  deepseek  DeepSeek V4"
-    echo "  ark       Ark"
-    echo "  1y        1yuanapi.com (Claude models proxied)"
-    echo "  duo-cc    api.duou.cc (Claude models proxied)"
-    echo "  xf        讯飞 maas-coding (glm5.2/deepseek-v4-pro/flash)"
-    echo "  orange    api4.orangeai.cc (glm-5.2)"
-    echo "  upgrade   合并镜像出厂 .claude 到当前项目（保留后端配置/历史）"
-    echo "  show      Show current backend & saved keys"
-    echo ""
-    echo "Keys are stored in .cc-config/api-keys and never committed to git."
-    ;;
+  show|current|"")  show_current ;;
+  -h|--help)        show_help ;;
+  upgrade|up)       do_upgrade ;;
   *)
-    die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, xf, orange, upgrade, or show"
+    if [ -z "${1:-}" ]; then
+      show_current
+    else
+      # Try to resolve as a provider id or alias
+      resolved=$(_match_provider "$1") || die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, xf, orange, upgrade, or show"
+      switch "$resolved"
+    fi
     ;;
 esac
