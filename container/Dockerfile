@@ -183,6 +183,10 @@ RUN find /home/AISC/.claude/skills /home/AISC/.claude/plugins /home/AISC/.claude
         > /home/AISC/.claude/.factory-version \
     && echo "factory-version: $(cat /home/AISC/.claude/.factory-version)"
 
+# 共享库脚本（entrypoint / claude-wrapper 复用 env 注入与路径/权限逻辑）
+COPY container/lib/ /usr/local/bin/lib/
+RUN chmod +x /usr/local/bin/lib/*.sh
+
 # 拷贝并赋予 entrypoint 脚本执行权限
 COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
@@ -218,7 +222,9 @@ RUN sed -i 's/\r$//' \
         /usr/local/bin/entrypoint.sh \
         /usr/local/bin/cs \
         /usr/local/bin/claude \
-        /usr/local/bin/mihomo-build-config.js 2>/dev/null || true
+        /usr/local/bin/mihomo-build-config.js \
+        /usr/local/bin/lib/env-inject.sh \
+        /usr/local/bin/lib/path-resolve.sh 2>/dev/null || true
 
 # ==========================================
 # Python 运行时：python3 + pip + venv + python-is-python3

@@ -3,26 +3,14 @@
 # 解决用户首次进入 bash 后运行 cs，再手动运行 claude 时配置未生效的问题。
 set -e
 
+source /usr/local/bin/lib/env-inject.sh
+
 # env 块在 Claude CLI 原生 settings.json（CLAUDE_CONFIG_DIR/settings.json）。
 # 启动时兜底注入一次；Claude Code 自身也会原生读取该文件并实时生效。
 CFG_DIR="${CLAUDE_CONFIG_DIR:-/home/AISC/.claude}"
 SETTINGS_FILE="${CFG_DIR}/settings.json"
 
-if [ -f "$SETTINGS_FILE" ]; then
-    eval "$(SETTINGS_FILE="$SETTINGS_FILE" node - <<'NODE'
-const fs = require('fs');
-const cfg = JSON.parse(fs.readFileSync(process.env.SETTINGS_FILE, 'utf8'));
-const env = cfg.env || {};
-function q(v) {
-  return "'" + String(v).replace(/'/g, "'\\''") + "'";
-}
-for (const [k, v] of Object.entries(env)) {
-  if (v) console.log(`export ${k}=${q(v)}`);
-  else console.log(`unset ${k}`);
-}
-NODE
-)"
-fi
+env_inject "$SETTINGS_FILE"
 
 # 默认以 --dangerously-skip-permissions 模式运行（跳过权限确认，适合容器内自动流）。
 # 用户若已手动传入则不重复追加，避免重复 flag 报错。

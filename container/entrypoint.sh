@@ -11,6 +11,12 @@ export TERM="${TERM:-xterm-256color}"
 [ "$TERM" = "dumb" ] && export TERM=xterm-256color
 
 # ==========================================
+# 共享库：env 注入 + 路径/权限辅助（消除 entrypoint/claude-wrapper 重复代码）
+# ==========================================
+source /usr/local/bin/lib/env-inject.sh
+source /usr/local/bin/lib/path-resolve.sh
+
+# ==========================================
 # 路径模型（全程非 root，用户 AISC，家目录 /home/AISC）
 #   .claude   = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
 #               临时模式用镜像内置 /home/AISC/.claude；项目模式整目录拷到 /home/AISC/app/.claude（不改名）
@@ -103,23 +109,19 @@ export CLAUDE_CONFIG_DIR
 export CC_CONFIG_DIR
 
 # .cc-config（cs 配置）目录确保存在
-mkdir -p "$CC_CONFIG_DIR"
+ensure_writable "$CC_CONFIG_DIR"
 
 # .aisc/secrets/（密钥新位置，P1.4）目录确保存在
 mkdir -p "$(dirname "$CC_CONFIG_DIR")/.aisc/secrets"
 chmod 700 "$(dirname "$CC_CONFIG_DIR")/.aisc/secrets"
-
 # 旧镜像曾以 root 运行，绑定挂载把 root 所有权持久化到宿主；
-# 新镜像 USER AISC 后 mkdir -p 见目录已存在则 no-op，不修所有权，
-# 导致 AISC 读不了 root:600 的 api-keys → cs 切换静默失败。
-# AISC 已在 sudoers (NOPASSWD)，此处直接 sudo chown 自愈，
-# 不依赖外部 bat 的宿主侧 root pass。
-sudo chown -R AISC:AISC "$CC_CONFIG_DIR" 2>/dev/null || true
-sudo chown -R AISC:AISC "$(dirname "$CC_CONFIG_DIR")/.aisc" 2>/dev/null || true
+# ensure_writable 以 sudo chown AISC:AISC 自愈，不依赖外部 bat 的宿主侧 root pass。
+ensure_writable "$(dirname "$CC_CONFIG_DIR")/.aisc"
+
 # .claude 目录同理：挂载卷上文件可能属于宿主机用户（非 uid 1000），
 # AISC 无写权限会导致 cs 写 settings.json 时报 EACCES。
 if [ "$SCOPE" = "project" ]; then
-    sudo chown -R AISC:AISC "$CLAUDE_CONFIG_DIR" 2>/dev/null || true
+    ensure_writable "$CLAUDE_CONFIG_DIR"
 fi
 
 # 让用户进入 bash 后再次运行 cs / claude 时仍能拿到同一作用域
@@ -147,19 +149,7 @@ if [ -f "$SETTINGS_FILE" ]; then
 
     # 将 settings.json 的 env 块真正注入当前 shell，供 claude 进程继承。
     # 空值必须 unset，避免 ANTHROPIC_API_KEY="" 覆盖 ANTHROPIC_AUTH_TOKEN。
-    eval "$(SETTINGS_FILE="$SETTINGS_FILE" node - <<'NODE'
-const fs = require('fs');
-const cfg = JSON.parse(fs.readFileSync(process.env.SETTINGS_FILE, 'utf8'));
-const env = cfg.env || {};
-function q(v) {
-  return "'" + String(v).replace(/'/g, "'\\''") + "'";
-}
-for (const [k, v] of Object.entries(env)) {
-  if (v) console.log(`export ${k}=${q(v)}`);
-  else console.log(`unset ${k}`);
-}
-NODE
-)"
+    env_inject "$SETTINGS_FILE"
 else
     MODEL=""
     BASE_URL=""
