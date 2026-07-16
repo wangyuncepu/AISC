@@ -55,6 +55,21 @@ export PROVIDERS_JSON="${PROVIDERS_JSON:-/home/AISC/providers.json}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+# _ensure_dir DIR — create directory with sudo fallback for bind-mount permission resilience
+_ensure_dir() {
+  local d="$1"
+  [ -n "$d" ] || return 1
+  [ -d "$d" ] && return 0
+  if mkdir -p -- "$d" 2>/dev/null; then
+    return 0
+  fi
+  if sudo mkdir -p -- "$d" 2>/dev/null; then
+    return 0
+  fi
+  echo "ERROR: cannot create directory '$d'" >&2
+  return 1
+}
+
 # ==========================================
 # migrate_keys — idempotent copy from .cc-config/api-keys → .aisc/secrets/api-keys
 #   Only runs if .aisc/ exists (project scope) and the old store has keys
@@ -67,7 +82,7 @@ migrate_keys() {
 
   if [ -f "$KEY_STORE" ] && [ -s "$KEY_STORE" ]; then
     if [ ! -d "$AISC_SECRETS_DIR" ] || [ -z "$(ls -A "$AISC_SECRETS_DIR" 2>/dev/null)" ]; then
-      mkdir -p "$AISC_SECRETS_DIR"
+      _ensure_dir "$AISC_SECRETS_DIR" || return 1
       chmod 700 "$AISC_SECRETS_DIR"
       cp "$KEY_STORE" "$AISC_KEY_STORE"
       chmod 600 "$AISC_KEY_STORE"
@@ -184,7 +199,7 @@ get_key() {
       return 1
     fi
     # Double-write: save to both new and old locations (backward compat)
-    mkdir -p "$AISC_SECRETS_DIR" 2>/dev/null || true
+    _ensure_dir "$AISC_SECRETS_DIR" || return 1
     echo "${name}=${key}" >> "$AISC_KEY_STORE" 2>/dev/null || true
     chmod 600 "$AISC_KEY_STORE" 2>/dev/null || true
     echo "${name}=${key}" >> "$KEY_STORE"

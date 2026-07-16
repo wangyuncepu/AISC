@@ -112,11 +112,13 @@ export CC_CONFIG_DIR
 ensure_writable "$CC_CONFIG_DIR"
 
 # .aisc/secrets/（密钥新位置，P1.4）目录确保存在
-mkdir -p "$(dirname "$CC_CONFIG_DIR")/.aisc/secrets"
-chmod 700 "$(dirname "$CC_CONFIG_DIR")/.aisc/secrets"
+# 通过 ensure_writable 初始化目录及权限（含 sudo 兜底），避免绑定挂载权限导致 plain mkdir 失败
+AISC_DIR="$(dirname "$CC_CONFIG_DIR")/.aisc"
+ensure_writable "$AISC_DIR"
+ensure_writable "$AISC_DIR/secrets"
+chmod 700 "$AISC_DIR/secrets"
 # 旧镜像曾以 root 运行，绑定挂载把 root 所有权持久化到宿主；
 # ensure_writable 以 sudo chown AISC:AISC 自愈，不依赖外部 bat 的宿主侧 root pass。
-ensure_writable "$(dirname "$CC_CONFIG_DIR")/.aisc"
 
 # .claude 目录同理：挂载卷上文件可能属于宿主机用户（非 uid 1000），
 # AISC 无写权限会导致 cs 写 settings.json 时报 EACCES。
