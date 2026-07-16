@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
 """ai_brief/brief.py - 多源 AI 资讯聚合：工具 + 工作流 + 行业。
 
-stdlib-only（urllib + xml.etree + re），Py3.11/3.14 通用，零安装。
+stdlib-only（urllib + xml.etree + re + concurrent.futures），Py3.11/3.14 通用，零安装。
 - 5 源：TLDR AI + The Rundown AI（行业）+ Simon Willison（工具/工作流）+ Changelog（工具）+ HN Show HN（工具）
-- --ai：读 cs 后端 env，调 /v1/messages 按类别（新工具/工作流/行业）跨源中文精选；失败回退规则输出。
-- 规则模式：按类别分组，终端纯文本格式。
+- 5 源并发抓取（ThreadPoolExecutor, max_workers=5），单个源故障不阻塞其他源。
+- --ai：读 cs 后端 env，调 /v1/messages 按类别跨源中文精选；失败回退规则输出。
+- 缓存到 ~/.cache/ai-brief/（持久化，跨容器复用）；stale-while-revalidate。
 - 失败静默 exit 0（除非 --strict），避免阻断 entrypoint 启动。
 """
 import argparse
+import concurrent.futures
+import gzip
 import html as ihtml
+import json
 import os
 import re
+import socket
 import sys
 import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+import zlib
 from urllib.parse import urlsplit
 
 # ==========================================
@@ -28,7 +34,11 @@ SIMON_ATOM = "https://simonwillison.net/atom/everything/"
 CHANGELOG_RSS = "https://changelog.com/news/feed"
 HN_SHOW_RSS = "https://hnrss.org/show"
 UA = "Mozilla/5.0 (ai_brief fetcher)"
-TIMEOUT = 12  # 单请求超时（秒）
+
+HTTP_TIMEOUT = 6       # 单次请求超时（秒）
+FETCH_DEADLINE = 14    # 并发抓取总截止（秒）
+LLM_TIMEOUT = 30       # LLM 请求超时（秒），reasoning 模型需更久
+RETRY_DELAY = 0.5      # 重试等待（秒）
 
 # 赞助/广告域名 blocklist（TLDR 赞助 + Rundown 赞助/CTA）
 SPONSOR_DOMAINS = (
@@ -62,26 +72,73 @@ CATEGORY_META = {
     "industry": ("📰", "行业"),
 }
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-CACHE_DIR = os.path.join(HERE, "cache")
+# 缓存目录（持久化位置，可 volume 挂载跨容器复用）
+CACHE_ROOT = os.path.join(os.path.expanduser("~"), ".cache", "ai-brief")
+RAW_CACHE_DIR = os.path.join(CACHE_ROOT, "raw")
+RENDERED_CACHE_DIR = os.path.join(CACHE_ROOT, "rendered")
+RAW_CACHE_TTL = 3600      # raw 缓存有效期（1 小时）
 
 
 # ==========================================
 # 通用工具
 # ==========================================
-def http_get(url, timeout=TIMEOUT):
-    """GET + 单次重试，缓解间歇网络/限流抖动。"""
+def is_transient_error(e):
+    """判断是否值得重试：瞬时网络抖动 -> True；4xx/解析错误 -> False。"""
+    if isinstance(e, (socket.timeout, TimeoutError, ConnectionError,
+                       urllib.error.URLError, OSError)):
+        s = str(e).lower()
+        if "errno 101" in s or "network is unreachable" in s:
+            return False
+        if "certificate" in s or "tls" in s or "ssl" in s:
+            return False
+        return True
+    if isinstance(e, urllib.error.HTTPError):
+        code = e.code if hasattr(e, "code") else 0
+        return code in (429,) or 500 <= code < 600
+    return False
+
+
+def http_get(url, timeout=HTTP_TIMEOUT, deadline=None):
+    """GET + 选择性单次重试（仅瞬时错误）。返回 decoded str。"""
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
-    last = None
     for attempt in range(2):
+        if deadline is not None and time.monotonic() > deadline:
+            raise TimeoutError("fetch deadline exceeded before request")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                return r.read().decode("utf-8", "replace")
+                body = r.read()
+                content_encoding = r.headers.get("Content-Encoding", "").lower()
+                if "gzip" in content_encoding:
+                    body = gzip.decompress(body)
+                elif "deflate" in content_encoding:
+                    body = zlib.decompress(body)
+                return body.decode("utf-8", "replace")
         except Exception as e:
-            last = e
-            if attempt == 0:
-                time.sleep(1)
-    raise last
+            if attempt == 0 and is_transient_error(e):
+                time.sleep(RETRY_DELAY)
+                continue
+            raise
+
+
+def http_get_cached(url, cache_key, timeout=HTTP_TIMEOUT, deadline=None):
+    """GET，raw 缓存兜底（1h TTL）。先拉网络，失败读缓存。"""
+    cache_path = os.path.join(RAW_CACHE_DIR, f"{cache_key}.cache")
+    try:
+        body = http_get(url, timeout=timeout, deadline=deadline)
+        os.makedirs(RAW_CACHE_DIR, exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            f.write(body)
+        return body
+    except Exception as e:
+        # 失败时尝试读 raw 缓存
+        if os.path.isfile(cache_path):
+            try:
+                age = time.time() - os.path.getmtime(cache_path)
+                if age < RAW_CACHE_TTL:
+                    return open(cache_path, encoding="utf-8").read()
+            except (OSError, ValueError):
+                pass
+        raise e
 
 
 def strip_tags(s):
@@ -108,18 +165,17 @@ def cache_valid(path):
 # ==========================================
 # RSS/Atom 通用抓取
 # ==========================================
-def rss_fetch(url, top=5, item_filter=None):
+def rss_fetch(url, top=5, item_filter=None, deadline=None):
     """拉 RSS/Atom feed，返回 [{title, url, summary}]，可选过滤。兼容 Atom <entry> + 命名空间。"""
-    xml = http_get(url)
+    cache_key = re.sub(r"[^a-zA-Z0-9_.-]", "_", url)[:80]
+    xml = http_get_cached(url, f"rss_{cache_key}", timeout=HTTP_TIMEOUT, deadline=deadline)
     root = ET.fromstring(xml)
     items = []
-    # 尝试 RSS <item>，否则 Atom <entry>（可能带命名空间前缀或无前缀）
     els = root.findall(".//item")
     if not els:
         els = root.findall(".//{http://www.w3.org/2005/Atom}entry")
     if not els:
         els = root.findall(".//entry")
-    # 检测子元素是否需要命名空间前缀
     ns = ""
     if els and "}" in els[0].tag:
         ns = els[0].tag.split("}")[0] + "}"
@@ -152,34 +208,36 @@ def hn_filter(url, title):
 # ==========================================
 # Simon Willison（Atom）
 # ==========================================
-def fetch_simon(top, date=None, days=1):
-    items = rss_fetch(SIMON_ATOM, top=max(top, 8))
+def fetch_simon(top, date=None, days=1, deadline=None):
+    items = rss_fetch(SIMON_ATOM, top=max(top, 8), deadline=deadline)
     return "Simon Willison", items[:top]
 
 
 # ==========================================
 # Changelog News（RSS）
 # ==========================================
-def fetch_changelog(top, date=None, days=1):
-    items = rss_fetch(CHANGELOG_RSS, top=max(top, 5))
+def fetch_changelog(top, date=None, days=1, deadline=None):
+    items = rss_fetch(CHANGELOG_RSS, top=max(top, 5), deadline=deadline)
     return "Changelog", items[:top]
 
 
 # ==========================================
 # HN Show HN（RSS，AI/dev 过滤）
 # ==========================================
-def fetch_hn(top, date=None, days=1):
-    # 拉更多条再过滤，保证过滤后够 top 条
-    items = rss_fetch(HN_SHOW_RSS, top=max(top * 3, 10), item_filter=hn_filter)
+def fetch_hn(top, date=None, days=1, deadline=None):
+    items = rss_fetch(HN_SHOW_RSS, top=max(top * 3, 10), item_filter=hn_filter,
+                      deadline=deadline)
     return "HN Show HN", items[:top]
 
 
 # ==========================================
-# TLDR AI（现有逻辑，不动）
+# TLDR AI
 # ==========================================
-def tldr_list_issues():
+def tldr_list_issues(deadline=None):
     """RSS -> [{date,title,url}], 最新在前。"""
-    root = ET.fromstring(http_get(TLDR_RSS))
+    cache_key = "rss_tldr.tech_api_rss_ai"
+    xml = http_get_cached(TLDR_RSS, cache_key, timeout=HTTP_TIMEOUT, deadline=deadline)
+    root = ET.fromstring(xml)
     out = []
     for item in root.iter("item"):
         link = (item.findtext("link") or "").strip()
@@ -192,9 +250,10 @@ def tldr_list_issues():
     return out
 
 
-def tldr_parse_issue(url):
+def tldr_parse_issue(url, deadline=None):
     """issue 页 -> [{title,url,summary}]，已去赞助。"""
-    html = http_get(url)
+    cache_key = f"tldr_issue_{re.sub(r'[^a-zA-Z0-9_-]', '_', url)[:60]}"
+    html = http_get_cached(url, cache_key, timeout=HTTP_TIMEOUT, deadline=deadline)
     items = []
     for art in re.findall(r'<article class="mt-3">(.*?)</article>', html, re.S):
         am = re.search(r'<a class="font-bold"[^>]+href="([^"]+)"', art)
@@ -214,9 +273,9 @@ def tldr_parse_issue(url):
     return items
 
 
-def fetch_tldr(top, date=None, days=1):
+def fetch_tldr(top, date=None, days=1, deadline=None):
     """返回 (label, [items])。"""
-    issues = tldr_list_issues()
+    issues = tldr_list_issues(deadline=deadline)
     if not issues:
         return None
     if date:
@@ -227,7 +286,7 @@ def fetch_tldr(top, date=None, days=1):
     label_dates = []
     for iss in picked:
         label_dates.append(iss["date"])
-        items.extend(tldr_parse_issue(iss["url"]))
+        items.extend(tldr_parse_issue(iss["url"], deadline=deadline))
     if not items:
         return None
     label = "TLDR AI · " + (date or "~".join(label_dates[:3]))
@@ -235,11 +294,12 @@ def fetch_tldr(top, date=None, days=1):
 
 
 # ==========================================
-# The Rundown AI（现有逻辑，不动）
+# The Rundown AI
 # ==========================================
-def rundown_list_posts():
+def rundown_list_posts(deadline=None):
     """sitemap -> [(lastmod, url)], 最新在前。"""
-    xml = http_get(RUNDOWN_SITEMAP)
+    cache_key = "sitemap_therundown.ai"
+    xml = http_get_cached(RUNDOWN_SITEMAP, cache_key, timeout=HTTP_TIMEOUT, deadline=deadline)
     posts = []
     for m in re.finditer(r"<loc>([^<]*?/p/[^<]*)</loc>\s*<lastmod>([^<]*)</lastmod>", xml):
         posts.append((m.group(2), m.group(1)))
@@ -247,9 +307,10 @@ def rundown_list_posts():
     return posts
 
 
-def rundown_parse_post(url):
+def rundown_parse_post(url, deadline=None):
     """post 页 -> {title, lead, url, items:[{title,url}]}。"""
-    html = http_get(url)
+    cache_key = f"rundown_{re.sub(r'[^a-zA-Z0-9_-]', '_', url)[:60]}"
+    html = http_get_cached(url, cache_key, timeout=HTTP_TIMEOUT, deadline=deadline)
     h1m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.S)
     title = strip_tags(h1m.group(1)) if h1m else "The Rundown AI"
     lead = ""
@@ -286,8 +347,8 @@ def word_overlap(a, b):
     return len(aw & bw)
 
 
-def fetch_rundown(top, date=None, days=1):
-    posts = rundown_list_posts()
+def fetch_rundown(top, date=None, days=1, deadline=None):
+    posts = rundown_list_posts(deadline=deadline)
     if not posts:
         return None
     if date:
@@ -299,7 +360,7 @@ def fetch_rundown(top, date=None, days=1):
     lead_title, lead, lead_url, lead_date = "", "", "", ""
     items = []
     for (lm, u) in picked:
-        post = rundown_parse_post(u)
+        post = rundown_parse_post(u, deadline=deadline)
         if not lead_title:
             lead_title, lead, lead_url, lead_date = post["title"], post["lead"], post["url"], lm
         items.extend(post["items"])
@@ -341,7 +402,6 @@ SOURCE_FETCHERS = {
     "hn": fetch_hn,
 }
 
-# --source 快捷值
 SOURCE_GROUPS = {
     "all": ("simon", "changelog", "hn", "tldr", "rundown"),
     "tools": ("simon", "changelog", "hn"),
@@ -355,7 +415,6 @@ def resolve_sources(arg):
     arg = arg.lower().strip()
     if arg in SOURCE_GROUPS:
         return list(SOURCE_GROUPS[arg])
-    # 兼容旧值 'both' -> 'tldr,rundown'
     if arg == "both":
         return ["tldr", "rundown"]
     return [k.strip() for k in arg.split(",") if k.strip() in SOURCE_FETCHERS]
@@ -366,7 +425,6 @@ def resolve_sources(arg):
 # ==========================================
 def render_categorized(results, source_keys):
     """results: {key: (label, items)}; 按类别分组渲染。Rundown 特殊处理。"""
-    # group by category
     cats = {}
     for key in source_keys:
         if key not in results or not results[key]:
@@ -384,7 +442,6 @@ def render_categorized(results, source_keys):
         lines.append(f"{emoji} {name}")
         for key, val in cats[cat_key]:
             if key == "rundown":
-                # Rundown 特殊：lead + items
                 label, info = val[0], val[1]
                 lines.append(f"  {label}")
                 if info.get("lead"):
@@ -409,38 +466,72 @@ def render_categorized(results, source_keys):
 # ==========================================
 # --ai：LLM 分类中文摘要
 # ==========================================
-def ai_summarize(results, top=3):
-    """读 ANTHROPIC_* env，POST /v1/messages 让模型分类+中文一句话总结。"""
-    base = os.environ.get("ANTHROPIC_BASE_URL", "").rstrip("/")
-    token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY", "")
-    # 用 haiku/flash 档（快+省），简讯摘要无需大模型
-    model = (os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
-             or os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5"))
-    if not base or not token:
-        raise RuntimeError("未配置 ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN（先用 cs 切后端）")
+def _llm_call(prompt, model, base, token, max_tokens, timeout):
+    """发送 LLM 请求，返回 (text, stop_reason, content_types)。"""
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base}/v1/messages",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": token,
+            "authorization": f"Bearer {token}",
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        resp = json.loads(r.read().decode("utf-8", "replace"))
 
-    # 拼素材
+    stop_reason = resp.get("stop_reason", "")
+    content = resp.get("content", [])
+    content_types = [b.get("type", "?") for b in content]
+
+    # Anthropic 格式
+    for block in content:
+        if block.get("type") == "text" and block.get("text"):
+            return block["text"].strip(), stop_reason, content_types
+
+    # OpenAI 兼容格式
+    try:
+        text = resp["choices"][0]["message"]["content"]
+        if text and text.strip():
+            return text.strip(), stop_reason, content_types
+    except (KeyError, IndexError, TypeError):
+        pass
+
+    return None, stop_reason, content_types
+
+
+def _build_material(results, top, source_display):
+    """构建 LLM 素材列表。"""
     material = []
-    source_display = {"simon": "Simon Willison", "changelog": "Changelog",
-                      "hn": "HN Show HN", "tldr": "TLDR AI", "rundown": "The Rundown AI"}
     for key in ("simon", "changelog", "hn", "tldr", "rundown"):
         if key not in results or not results[key]:
             continue
         val = results[key]
         if key == "rundown":
             info = val[1]
-            material.append(f"[{source_display[key]}] 头条：{info['title']}。{info.get('lead','')}")
-            for it in info.get("items", []):
-                material.append(f"- {it['title']}  🔗 {it['url']}")
+            material.append(
+                f"[{source_display[key]}] 头条：{info['title']}。"
+                f"{info.get('lead','')[:120]}")
+            for it in info.get("items", [])[:top]:
+                material.append(f"- {it['title'][:100]}  🔗 {it['url']}")
         else:
             label, items = val[0], val[1]
             material.append(f"[{source_display[key]} · {label}]")
-            for it in items:
-                material.append(f"- {it['title']}  🔗 {it['url']}")
-    if not material:
-        raise RuntimeError("无素材")
+            for it in items[:top]:
+                material.append(f"- {it['title'][:100]}  🔗 {it['url']}")
+    return material
 
-    prompt = (
+
+def _make_prompt(material, top):
+    return (
         "下面是来自多个信息源的内容。按类别精选最重要的条目，每类最多"
         f" {top} 条，分组输出：\n"
         "  🛠️ 新工具 — AI/开发新工具、开源项目、产品、CLI\n"
@@ -454,37 +545,56 @@ def ai_summarize(results, top=3):
         + "\n".join(material)
     )
 
-    payload = {
-        "model": model,
-        "max_tokens": 4096,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    body = __import__("json").dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        f"{base}/v1/messages",
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": token,
-            "authorization": f"Bearer {token}",
-            "anthropic-version": "2023-06-01",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        resp = __import__("json").loads(r.read().decode("utf-8", "replace"))
-    # 跳过 thinking 块，取首个 text 块（兼容 GLM）
-    try:
-        for block in resp["content"]:
-            if block.get("type") == "text" and block.get("text"):
-                return block["text"].strip()
-    except (KeyError, TypeError):
-        pass
-    # 兼容部分中转返回 OpenAI 格式
-    try:
-        return resp["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError):
-        raise RuntimeError(f"无法解析 LLM 响应: {str(resp)[:200]}")
+
+def ai_summarize(results, top=3, timeout=LLM_TIMEOUT):
+    """读 ANTHROPIC_* env，POST /v1/messages 让模型分类+中文一句话总结。
+    reasoning 模型备：首次 max_tokens=4096，若仅 thinking 无 text 则降素材 + 提至 8192 重试。"""
+    base = os.environ.get("ANTHROPIC_BASE_URL", "").rstrip("/")
+    token = os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY", "")
+    model = (os.environ.get("AI_BRIEF_MODEL")
+             or os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+             or os.environ.get("ANTHROPIC_MODEL")
+             or "claude-haiku-4-5")
+    if not base or not token:
+        raise RuntimeError("未配置 ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN（先用 cs 切后端）")
+
+    source_display = {"simon": "Simon Willison", "changelog": "Changelog",
+                      "hn": "HN Show HN", "tldr": "TLDR AI",
+                      "rundown": "The Rundown AI"}
+
+    material = _build_material(results, top, source_display)
+    if not material:
+        raise RuntimeError("无素材")
+    prompt = _make_prompt(material, top)
+
+    text, stop_reason, content_types = _llm_call(
+        prompt, model, base, token, max_tokens=4096, timeout=timeout)
+    if text:
+        return text
+
+    # 仅 thinking、无 text，且 stop_reason 是 max_tokens → 推理耗尽输出预算
+    if "thinking" in content_types and "text" not in content_types:
+        if stop_reason == "max_tokens":
+            # 降素材（每源 2 条）+ 提高 max_tokens 到 8192 重试
+            material2 = _build_material(results, max(top, 2) if top > 2 else top,
+                                        source_display)
+            prompt2 = _make_prompt(material2, top)
+            text2, sr2, ct2 = _llm_call(
+                prompt2, model, base, token, max_tokens=8192, timeout=timeout)
+            if text2:
+                return text2
+            if "thinking" in ct2 and "text" not in ct2 and sr2 == "max_tokens":
+                raise RuntimeError(
+                    f"推理耗尽输出预算（max_tokens），未生成摘要。"
+                    f"模型 {model} 为 reasoning 模型，建议用 AI_BRIEF_MODEL 指定非推理快速模型。")
+        raise RuntimeError(
+            f"模型仅返回 thinking 块、无文本摘要（stop_reason={stop_reason}）。"
+            f"建议用 AI_BRIEF_MODEL 指定非推理快速模型。")
+
+    # 其他无法解析的情况（无 text、无 thinking）
+    raise RuntimeError(
+        f"无法解析 LLM 响应（content_types={content_types}，stop_reason={stop_reason}）。"
+        f"模型={model}")
 
 
 # ==========================================
@@ -499,9 +609,10 @@ def main():
     ap.add_argument("--source", default="all",
                     help="源选择：all / tools / industry / workflow / tldr,simon,...（逗号分隔，默认 all）")
     ap.add_argument("--ai", action="store_true", help="LLM 按类别跨源中文精选")
-    ap.add_argument("--save", action="store_true", help="另存 cache/ 下文件")
-    ap.add_argument("--no-cache", action="store_true", help="跳过 latest 缓存")
+    ap.add_argument("--save", action="store_true", help="另存缓存文件")
+    ap.add_argument("--no-cache", action="store_true", help="跳过缓存（全量拉取）")
     ap.add_argument("--strict", action="store_true", help="失败时非零退出（调试用）")
+    ap.add_argument("--debug", action="store_true", help="输出逐源计时诊断日志（stderr）")
     args = ap.parse_args()
 
     source_keys = resolve_sources(args.source)
@@ -510,9 +621,10 @@ def main():
         return 1 if args.strict else 0
 
     use_cache = (not args.no_cache) and (not args.date) and args.days == 1
-    cache_key = f"categorized_{args.source}_{args.top}_ai{int(args.ai)}"
-    cache_path = os.path.join(CACHE_DIR, f"{cache_key}.md")
+    cache_key = f"brief_{args.source}_{args.top}_ai{int(args.ai)}"
+    cache_path = os.path.join(RENDERED_CACHE_DIR, f"{cache_key}.md")
 
+    # stale-while-revalidate：有缓存立即返回（同日缓存命中，毫秒级）
     if use_cache and cache_valid(cache_path):
         try:
             sys.stdout.write(open(cache_path, encoding="utf-8").read())
@@ -520,35 +632,90 @@ def main():
         except OSError:
             pass
 
-    # 拉取各源（每源独立 try，部分成功仍渲染）
+    # stale-while-revalidate：有旧缓存（非同日）先记下，抓取失败时兜底
+    stale_output = None
+    if use_cache and os.path.isfile(cache_path):
+        try:
+            stale_output = open(cache_path, encoding="utf-8").read().strip()
+        except OSError:
+            pass
+
+    # ---- 并发抓取各源 ----
+    fetch_start = time.perf_counter()
+    fetch_deadline = fetch_start + FETCH_DEADLINE
     results = {}
     errs = []
-    for key in source_keys:
-        try:
-            results[key] = SOURCE_FETCHERS[key](args.top, args.date, args.days)
-        except Exception as e:
-            if args.strict:
-                print(f"❌ {key} 抓取失败: {e}", file=sys.stderr)
-                return 1
-            errs.append(f"{key}: {e}")
-    if not results:
+    timings = {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as ex:
+        def _fetch_one(key):
+            t0 = time.perf_counter()
+            try:
+                r = SOURCE_FETCHERS[key](args.top, args.date, args.days,
+                                         deadline=fetch_deadline)
+                timings[key] = (True, round(time.perf_counter() - t0, 2), r)
+                return key, r, None
+            except Exception as e:
+                timings[key] = (False, round(time.perf_counter() - t0, 2), None)
+                return key, None, f"{key}: {e}"
+
+        futures = {ex.submit(_fetch_one, k): k for k in source_keys}
+        done, not_done = concurrent.futures.wait(
+            futures, timeout=FETCH_DEADLINE)
+        for f in done:
+            key, val, err = f.result()
+            if val is not None:
+                results[key] = val
+            elif err:
+                errs.append(err)
+        for f in not_done:
+            key = futures[f]
+            errs.append(f"{key}: deadline")
+            timings.setdefault(key, (False, FETCH_DEADLINE, None))
+            f.cancel()
+
+    fetch_elapsed = round(time.perf_counter() - fetch_start, 2)
+
+    if args.debug:
+        for key in source_keys:
+            ok, dur, _ = timings.get(key, (False, FETCH_DEADLINE, None))
+            status = "ok" if ok else "ERR"
+            print(f"  source={key} status={status} elapsed={dur}s",
+                  file=sys.stderr)
+        print(f"  phase=fetch elapsed={fetch_elapsed}s",
+              file=sys.stderr)
+
+    # 空结果：若有 stale 缓存则兜底输出
+    if not any(v for v in results.values() if v):
+        if stale_output:
+            if args.debug:
+                print(f"  stale-cache used (fetch failed)", file=sys.stderr)
+            sys.stdout.write(stale_output + "\n")
+            return 0
         if args.strict:
             print(f"❌ 全部源失败: {errs}", file=sys.stderr)
             return 1
         print("（简讯获取失败，已跳过）")
         return 0
 
+    ai_failed = False
     try:
         if args.ai:
-            out = ai_summarize(results, top=min(args.top, 4))
-            # 提取日期
+            ai_start = time.perf_counter()
+            out = ai_summarize(results, top=min(args.top, 4), timeout=LLM_TIMEOUT)
+            ai_elapsed = round(time.perf_counter() - ai_start, 2)
+            if args.debug:
+                print(f"  phase=ai elapsed={ai_elapsed}s", file=sys.stderr)
             date_str = ""
-            for rk, rv in zip(source_keys, results.values()):
+            for rk in source_keys:
+                rv = results.get(rk)
+                if not rv:
+                    continue
                 if rk in ("tldr", "rundown"):
                     if rk == "rundown":
-                        label = rv[0]  # "The Rundown AI · 2026-07-13"
+                        label = rv[0]
                     else:
-                        label = rv[0]  # "TLDR AI · 2026-07-13"
+                        label = rv[0]
                     m = re.search(r"\d{4}-\d{2}-\d{2}", label)
                     if m:
                         date_str = m.group(0)
@@ -560,13 +727,15 @@ def main():
         else:
             out = render_categorized(results, source_keys)
     except Exception as e:
+        ai_failed = True
+        if args.debug:
+            print(f"  phase=ai error={e}", file=sys.stderr)
         if args.strict:
             print(f"❌ 渲染/LLM 失败: {e}", file=sys.stderr)
             return 1
-        # --ai 失败 -> 回退规则输出
         out = render_categorized(results, source_keys)
         if out:
-            out += f"\n\n（AI 摘要失败，已回退规则输出: {e}）"
+            out += "\n\n（AI 摘要失败，已回退规则输出）"
         else:
             out = "（简讯获取失败，已跳过）"
             print(out)
@@ -578,9 +747,14 @@ def main():
 
     sys.stdout.write(out.rstrip() + "\n")
 
-    if args.save or use_cache:
+    total_elapsed = round(time.perf_counter() - fetch_start, 2)
+    if args.debug:
+        print(f"  total elapsed={total_elapsed}s", file=sys.stderr)
+
+    # AI 失败回退规则输出时不写入缓存，避免错误被缓存整天
+    if (args.save or use_cache) and not ai_failed:
         try:
-            os.makedirs(CACHE_DIR, exist_ok=True)
+            os.makedirs(RENDERED_CACHE_DIR, exist_ok=True)
             with open(cache_path, "w", encoding="utf-8") as f:
                 f.write(out.rstrip() + "\n")
         except OSError:

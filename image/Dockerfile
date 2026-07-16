@@ -14,6 +14,9 @@ ARG USE_CN_MIRROR=1
 ARG MIHOMO_VERSION=v1.19.27
 ARG GH_PROXY=
 
+# cc-switch-cli 版本（跨平台 AI CLI 管理工具，Rust 二进制，与内置 cs 共存）
+ARG CC_SWITCH_VERSION=v5.9.0
+
 # ==========================================
 # 1. 网络环境优化：按 USE_CN_MIRROR 决定 apt 源
 # ==========================================
@@ -244,19 +247,38 @@ RUN python3 -m venv /home/AISC/.venv \
 ENV PATH="/home/AISC/.venv/bin:${PATH}"
 
 # ==========================================
-# LiteLLM 反向代理 Demo：Claude Code 接入 OpenAI 格式渠道
-#   容器 Python 3.11 -> litellm 装入 /home/AISC/.venv（PATH 优先，litellm 直达）。
-#   demo 置于 /home/AISC/api_route_demo（避开 /home/AISC/app 运行时挂载点）。
-#   start_proxy.sh 自动判环境：无 run_proxy.py 时走 litellm 直调（容器路径）。
-#   构建脚本会把 config.yaml + 2 脚本临时复制进 build context（见 03_build_image.*）。
+# ai_brief - AI 每日简讯工具（TLDR + The Rundown），entrypoint 启动头注入
+#   stdlib-only，无需 pip；python3 已装（:224）。构建脚本临时带入 build context。
 # ==========================================
-COPY --chown=AISC:AISC api_route_demo/ /home/AISC/api_route_demo/
-RUN chmod +x /home/AISC/api_route_demo/*.sh \
-    && PIP_INDEX="https://pypi.org/simple" \
-    && if [ "$USE_CN_MIRROR" = "1" ]; then PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"; echo "pip: 清华镜像"; fi \
-    && /home/AISC/.venv/bin/pip install -i "$PIP_INDEX" 'litellm[proxy]' \
-    && /home/AISC/.venv/bin/litellm --help >/dev/null 2>&1 || true
-EXPOSE 4000
+COPY --chown=AISC:AISC ai_brief/ /home/AISC/ai_brief/
+RUN chmod +x /home/AISC/ai_brief/*.sh 2>/dev/null || true
+
+# ==========================================
+# cc-switch-cli（Rust 二进制）：跨平台 AI CLI 管理工具，与内置 cs 共存（命令名 cc-switch）
+#   临时切 root 写 /usr/local/bin，再切回 AISC。
+#   复用 mihomo 的 GH_PROXY 多镜像 fallback；musl 静态版兼容 glibc/musl。
+# ==========================================
+USER root
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in amd64) cs_arch=x64;; arm64|aarch64) cs_arch=arm64;; *) cs_arch=x64;; esac; \
+    base="https://github.com/saladday/cc-switch-cli/releases/download/${CC_SWITCH_VERSION}/cc-switch-cli-linux-${cs_arch}-musl.tar.gz"; \
+    if [ -n "${GH_PROXY:-}" ]; then mirrors="${GH_PROXY}"; \
+    elif [ "$USE_CN_MIRROR" = "1" ]; then mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ https://ghproxy.net/"; \
+    else mirrors=""; fi; \
+    ok=0; \
+    for m in $mirrors ""; do \
+        u="${m}${base}"; echo "⬇️  cc-switch try: $u"; \
+        if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
+                --connect-timeout 8 --max-time 120 "$u" -o /tmp/ccs.tar.gz; then ok=1; break; fi; \
+    done; \
+    [ "$ok" = "1" ] || { echo "❌ cc-switch 下载失败（可 --build-arg GH_PROXY=<镜像前缀> 重试）"; exit 1; }; \
+    tar -xzf /tmp/ccs.tar.gz -C /tmp; \
+    mv /tmp/cc-switch /usr/local/bin/cc-switch; \
+    chmod +x /usr/local/bin/cc-switch; \
+    rm -f /tmp/ccs.tar.gz; \
+    /usr/local/bin/cc-switch --version
+USER AISC
 
 # 设置入口点
 ENTRYPOINT ["entrypoint.sh"]

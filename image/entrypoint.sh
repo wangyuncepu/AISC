@@ -210,17 +210,23 @@ fi
 #   需 cs 后端配置（§3 算好的 BASE_URL + AUTH）：有后端 -> --ai 中文简讯注入启动头；
 #   无后端（临时作用域/cc/全新项目）-> --ai 不可用，一行提示跳过，不显示英文 fallback。
 #   timeout + 诊断行兜底，绝不阻断启动。
+#   并发抓取 ~9-12s + LLM（reasoning 模型）~30s → 总预算 50s。
+#   诊断 stderr → /tmp/ai-brief.log（静默，仅排查用）。
+#   ~/.cache/ai-brief/ 持久化，跨容器复用。
 # ==========================================
 if command -v python3 >/dev/null 2>&1 && [ -d /home/AISC/ai_brief ]; then
     if [ -n "$BASE_URL" ] && [ "$AUTH" = "yes" ]; then
-        BRIEF="$(timeout 45 python3 /home/AISC/ai_brief/brief.py --ai --top 5 2>/dev/null)" || BRIEF=""
+        BRIEF_EXIT=0
+        BRIEF="$(timeout 50 python3 /home/AISC/ai_brief/brief.py --ai --top 5 2>/tmp/ai-brief.log)" || BRIEF_EXIT=$?
         if [ -n "$BRIEF" ]; then
             echo "📰 今日 AI 简讯："
             echo "$BRIEF"
             echo "----------------------------------------"
+        elif [ "$BRIEF_EXIT" = "124" ]; then
+            echo "📰 简讯加载超时（50s），已跳过（容器内可手跑：python3 /home/AISC/ai_brief/brief.py）"
+            echo "----------------------------------------"
         else
-            # brief.py 被 timeout 杀在打印前 / 抓取全失败 -> 不静默，给一行诊断
-            echo "📰 简讯加载超时/失败，已跳过（容器内可手跑：python3 /home/AISC/ai_brief/brief.py）"
+            echo "📰 简讯加载失败，已跳过（容器内可手跑：python3 /home/AISC/ai_brief/brief.py）"
             echo "----------------------------------------"
         fi
     else

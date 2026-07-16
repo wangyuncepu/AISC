@@ -44,11 +44,10 @@ function Build-Image {
             Write-Host "⚠️ 所有国内镜像源均不可达，回退 Docker Hub 官方源"
         }
     }
-    # 把 api_route_demo 容器构建文件带入 build context (image\)：
-    # context=image\ 取不到项目根 api_route_demo\，故临时复制 3 文件，构建后清理。
-    $demoCtx = "$ProjectRoot\image\api_route_demo"
-    New-Item -ItemType Directory -Force -Path $demoCtx | Out-Null
-    Copy-Item "$ProjectRoot\api_route_demo\config.yaml", "$ProjectRoot\api_route_demo\start_proxy.sh", "$ProjectRoot\api_route_demo\run_claude_demo.sh" -Destination $demoCtx
+    # 把 ai_brief（简讯工具，entrypoint 启动头注入）带入 build context
+    $briefCtx = "$ProjectRoot\image\ai_brief"
+    New-Item -ItemType Directory -Force -Path $briefCtx | Out-Null
+    Copy-Item "$ProjectRoot\ai_brief\brief.py", "$ProjectRoot\ai_brief\run.sh" -Destination $briefCtx
     try {
         Write-Host "📦 正在构建镜像: $Image  ($mirrorArg) $cacheFlag ..."
         $buildArgs = @('build')
@@ -58,7 +57,7 @@ function Build-Image {
         if ($LASTEXITCODE -ne 0) { Write-Host '[错误] 构建失败。' -ForegroundColor Red; exit 1 }
         Write-Host "✅ 构建完成: $Image"
     } finally {
-        Remove-Item -Recurse -Force $demoCtx -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force $briefCtx -ErrorAction SilentlyContinue
     }
     $ab = Read-Host '构建成功，是否立即运行容器? [Y/n]（n=退出）'
     if ($ab -match '^[nN]') { Set-State -Key 'DO_RUN' -Val '0'; Write-Host '👋 已退出，未启动容器。' }

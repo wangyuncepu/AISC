@@ -145,62 +145,6 @@ cs upgrade    # 合并镜像出厂 .claude 到当前项目（保留后端配置/
 
 > Key 首次输入后保存，之后自动记住。可 `docker run ... cs ark` 直接切换并重启 Claude。
 
-## OpenAI 协议转换（LiteLLM 反向代理）
-
-容器内置 [LiteLLM](https://github.com/BerriAI/litellm) 反向代理，将 Claude Code 的 Anthropic 格式请求自动转换为 OpenAI 兼容格式，实现 Claude Code 接入 OpenAI / DeepSeek 等非 Anthropic 渠道。
-
-> **与 `cs` 的区别**：`cs` 切换的是 **Anthropic 兼容**后端（Anthropic 格式直通，不改协议）；LiteLLM 做的是 **协议转换**（Anthropic → OpenAI 格式），适用于 OpenAI 原生接口或 DeepSeek 等 OpenAI 兼容服务。
-
-### 架构
-
-```
-Claude Code                        LiteLLM Proxy             上游 API
-(Anthropic 格式) ──→ localhost:4000/v1/messages ──→ OpenAI 格式 ──→ openai / deepseek / ...
-```
-
-### 使用方法
-
-1. 编辑 `api_route_demo/config.yaml`，填入真实 API Key：
-   ```yaml
-   model_list:
-     - model_name: claude-3-7-sonnet-20250219   # Claude Code 发来的模型名（固定）
-       litellm_params:
-         model: openai/gpt-4o                    # 真实后端模型
-         api_key: "sk-你的key"                   # 替换为真实 key
-         # api_base: https://你的端点/v1         # 可选：自建/第三方中转
-   ```
-
-2. 容器内启动代理（**需要先启用 TUN 代理**，确保上游可达）：
-   ```bash
-   bash /home/AISC/api_route_demo/start_proxy.sh &
-   ```
-
-3. 注入环境变量后启动 Claude Code：
-   ```bash
-   bash /home/AISC/api_route_demo/run_claude_demo.sh
-   ```
-   Claude Code 的流量走 `localhost:4000` → LiteLLM 协议转换 → 上游 API。
-
-### 支持的后端
-
-| 后端 | `model` | `api_base` |
-|------|---------|------------|
-| OpenAI 官方 | `openai/gpt-4o` | 不填（默认 `api.openai.com`） |
-| DeepSeek | `deepseek/deepseek-chat` | 不填（默认 `api.deepseek.com`） |
-| 自定义 OpenAI 兼容中转 | `openai/<模型名>` | `https://你的地址/v1` |
-| 阿里百炼 | `openai/qwen-plus` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| 其他 OpenAI 兼容服务 | `openai/<模型名>` | `<服务商 /v1 端点>` |
-
-> 换后端只需改 `config.yaml` 的 `model` 和 `api_key`，重起 proxy 即可（`pkill -f litellm && bash start_proxy.sh &`）。
-
-### 验证
-
-```bash
-# 容器内 proxy 就绪后
-curl -s http://localhost:4000/v1/models
-# 应返回 model_name: claude-3-7-sonnet-20250219（owned_by: openai）
-```
-
 ## cc-switch-cli（增量集成，与 cs 共存）
 
 容器内置 [cc-switch-cli](https://github.com/saladday/cc-switch-cli)（Rust 二进制，v5.9.0），跨平台 AI CLI 管理工具，统一管理 Claude Code / Codex / Gemini / OpenCode 等 provider 配置、MCP servers、skills、prompts。
