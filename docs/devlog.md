@@ -1,4 +1,227 @@
-# Super Claude — 开发日志
+# AISC — 开发日志
+
+## v2.0.0-dev (2026-07-16 ~ 2026-07-17) — 多阶段可用性 / 可靠性 / 可维护性重构
+
+开发计划见 `docs/plans/PLAN-v2-usability-refactor.md`。以下按里程碑记录已完成工作，**不包含计划中尚未实现的条目**。除两轮权限修复跨午夜（最终 commit `4dff7ae` 2026-07-17 00:22），其余全部在 2026-07-16 完成。
+
+---
+
+### v1.5.2 — AI 简讯性能/可靠性重构
+
+Commit `e9945e4`（2026-07-16 21:50）。注意：当时目录名仍为 `image/` 和 `ai_brief/`，以下路径用当时实际名称（当前对应 `container/` 和 `apps/ai-brief/`）。
+
+**变更**：
+- **5 源并发抓取**（`concurrent.futures.ThreadPoolExecutor, max_workers=5`）：单个源网络故障不阻塞其他四源。新增 `FETCH_DEADLINE=14s` 全局截止，超时未完成的源直接丢弃。此前串行抓取全源约 26.6s，并发后全源抓取约 8.7–12s。
+- **HTTP 稳健性**：`HTTP_TIMEOUT` 从 12s 降至 6s（快失败）；`is_transient_error()` 按错误类型判断是否重试（瞬时抖动→重试，4xx/证书错误/网络不可达→放弃）；支持 gzip/deflate Content-Encoding 解压。
+- **双层缓存**：raw 缓存 `~/.cache/ai-brief/raw/`（1h TTL）+ rendered 缓存 `~/.cache/ai-brief/rendered/`（同日复用）。`http_get_cached()` 先拉网络，失败时读 raw 缓存（stale-while-revalidate）；rendered 缓存同日命中即复用。
+- **LLM thinking-only / timeout / max_tokens 处理**：`--ai` 模式检测 reasoning 模型（thinking-only 输出结构），`max_tokens=4096` 耗尽时自动降素材+加 tokens 重试；`LLM_TIMEOUT=30s` 独立超时。
+- **`--debug` 诊断**：`stderr` 逐源计时 + LLM 阶段耗时（容器内重定向至 `/tmp/ai-brief.log`）。
+- **入口重命名**：`一键启动_AI工作站.bat` → `start.bat`、`启动_AI工作站.sh` → `start.sh`、`启动_AI工作站.command` → `start.command`。
+- **Dockerfile**（仍为 `image/Dockerfile`，上下文 `image/`）：替换 LiteLLM demo 层为 ai_brief COPY（`COPY --chown=AISC:AISC ai_brief/ /home/AISC/ai_brief/`，stdlib-only）+ cc-switch-cli 下载安装层（`ARG CC_SWITCH_VERSION=v5.9.0`）。构建脚本需临时复制 `ai_brief/` 到 `image/ai_brief/`（因上下文仍为 `image/`），构建后清理。
+- **README** 同步更新入口文件名与构建命令。
+
+**取舍**：
+- **并发 5 源而非顺序**：串行全源约 26.6s，并发降至约 8.7–12s（单源瓶颈决定总耗时），网络抖动影响面从全失败降到 1/5。
+- **raw/rendered 双层缓存**：raw 缓存 1h TTL 解决短期断网自动兜底；rendered 缓存跨 `docker run` 复用需 volume 挂载 `~/.cache/ai-brief/`（否则 `--rm` 容器销毁后缓存清空）。
+- **reasoning 模型自动降素材**：thinking 输出占据大量 tokens，第一次 LLM 请求可能因 `max_tokens` 不足而返回空 content；降为 3 条+加 tokens 重试后成功率明显提升。
+
+**验证**：
+- 宿主 `brief.py` 全 flag 通过；Python 语法 `ast.parse` 通过；`bash -n` 全 .sh 通过。
+- 端到端实测（Docker 容器内）：fetch 8.86s + AI 精选 27.84s = 总计 36.7s 成功输出中文简讯。
+
+---
+
+### P0 — 可用性重构：启动入口、构建上下文、AI 简讯解耦
+
+Commit `370fb65`（2026-07-16 21:56）。注意：当时目录名仍为 `image/` 和 `ai_brief/`，目录迁移到 `container/` 和 `apps/ai-brief/` 在 P1.1（commit `5c3a52c`）。以下用当时实际路径记录。
+
+**变更**：
+- **根 Docker build context**：构建上下文从 `image/` 改为 `.`（项目根）。Dockerfile 仍为 `image/Dockerfile`。Dockerfile 内 COPY 路径加 `image/` 前缀（如 `COPY image/entrypoint.sh`）；构建脚本不再对 `ai_brief` 做临时 staging；入口构建命令从 `docker build -f image/Dockerfile image/` 变为 `docker build -f image/Dockerfile .`（当时路径；当前为 `container/Dockerfile`）。
+- **`.dockerignore` 新建**（32 条规则）：排除 `.git/`、`scripts/`、`tools/`、`docs/`、`api_route_demo/`、`start.*`、`README.md` 等。`image/` 内的 `_bundle/` 与 `downloads/` 未排除（构建所需）。
+- **移除 LiteLLM demo（`api_route_demo/` 整目录）**：v1.5.2 已在 Dockerfile 层面将 LiteLLM 层替换为 ai_brief + cc-switch-cli；P0 从仓库删除 `api_route_demo/` 的 5 个文件。README 删除「OpenAI 协议转换」亮点。
+- **AI 简讯退出默认同步启动路径**：entrypoint 改由 `AI_BRIEF_ON_START` 控制——默认关闭（零阻塞），`background` 后台异步并写日志，`foreground` 保留同步调试模式（外层 timeout 50s）。
+- **`.gitignore` 同步**：增补 `__pycache__/`、`*.pyc`。
+- **README / PLAN** 路径引用同步更新。
+
+**取舍**：
+- **根 build context 而非 `image/`**：根 context 下 COPY 的 `image/` 前缀更清晰、无需构建脚本临时复制。后续 P1.1 重命名 `image/` → `container/` 后前缀自然变为 `container/`。
+- **移除 LiteLLM demo**：协议转换概念可行但稳定运行依赖上游兼容（uvloop/3.14、orjson wheel），作为 demo 增加维护负担。
+
+**Commit**：`370fb65`（2026-07-16 21:56）
+
+---
+
+### P0.1 — 闭合 P0 可用性缺口
+
+Commit `c651ea3`（2026-07-16 22:08）。
+
+**变更**：
+- **PowerShell 5.1 兼容**：`scripts/03_build_image.ps1` 移除 `-SkipHttpErrorCheck`（PS 5.1 无此参数），改为 `try/catch` + `$_.Exception.Response.StatusCode` 判断 401。
+- **`tools/stage-*.sh` 构建上下文提示修复**：保留当时正确的 `image/_bundle`/`image/downloads` staging 目标，仅把输出的构建命令从 `docker build ... image/` 改为根上下文 `docker build ... .`；目录重命名在后续 P1.1 完成。
+- **新增 `cli/commands/doctor.sh`**：11 项环境诊断（Docker CLI/daemon/权限/Compose/Git/项目目录/Dockerfile 存在/Python 语法/macOS start.command/start.sh），彩色 PASS/FAIL/WARN 输出。用法仅 `bash cli/commands/doctor.sh`（`start.sh` 不含 doctor 子命令）。
+- **新增 `tests/smoke/check-syntax.sh`**：遍历 `cli/`、`image/`、`scripts/`、`tools/` 及根入口的 `.sh`/`.py`/`.js`/`.json` 文件做语法校验。初始 66 文件全通过（后续扩展至 69）。
+- **`.gitignore` + `.dockerignore` 增补 `.aisc/` 排除**。
+
+**验证**：
+- PS 代码仅做静态/manual review（本机 Linux 无 PowerShell 环境，未跑 `[Parser]::ParseFile`）。
+- `tests/smoke/check-syntax.sh`：66/66 通过。
+- doctor 在本机 WSL/Linux 宿主自检：8 passed, 2 warnings, 0 failures（Docker Compose 不可用 + macOS check 不适用）。
+
+**Commit**：`c651ea3`（2026-07-16 22:08）
+
+---
+
+### P1 — 架构收敛
+
+#### P1.1：目录机械迁移 `image→container`、`ai_brief→apps/ai-brief`
+
+Commit `5c3a52c`（2026-07-16 22:14）。
+
+- `image/` → `container/`（Dockerfile、entrypoint.sh、claude-switch、claude-wrapper、claude-settings.json、global-claude.md、mihomo-build-config.js、commands/、_bundle/、downloads/）。
+- `ai_brief/` → `apps/ai-brief/`（brief.py、run.sh、README.md、.gitignore）。
+- 所有引用同步更新：`scripts/03_build_image.{sh,ps1}`、README、PLAN、`.dockerignore`、`tools/stage-*.sh`、`tests/smoke/check-syntax.sh`。
+- `container/Dockerfile`：COPY 路径从 `image/...` → `container/...`；`COPY ai_brief/` → `COPY apps/ai-brief/`；构建命令从 `image/Dockerfile` → `container/Dockerfile`。Dockerfile 中 `COPY apps/ai-brief/ /home/AISC/ai_brief/` 持续有效（v1.5.2 引入的 COPY 在 P0/P1.1 始终保留，从未移除）。
+
+**Commit**：`5c3a52c`（2026-07-16 22:14）
+
+#### P1.2：Provider 元数据数据化
+
+Commit `66b8a50`（2026-07-16 22:21）。
+
+- 新建 `container/providers.json`（schema v1，7 个 provider：cc/deepseek/ark/duo-cc/1y/xf/orange），每个含 `id/name/aliases/models/auth_type/auth_key_name/auth_prompt/key_display/base_url/model/default_opus/default_sonnet/default_haiku/subagent/effort/compact/clear_all/url_fragment/help_desc/switch_msg` 等字段。
+- `container/claude-switch` 重构：原 7 个硬编码 provider 改为 `_node_resolve_provider()` / `_match_provider()` 数据驱动函数，每次调用启动 Node.js 子进程（`node -e`）读 providers.json，输出 shell 变量。provider 增删改只需改 JSON。
+- Dockerfile 新增 `COPY container/providers.json /home/AISC/providers.json`。
+- 密钥存储（`.cc-config/api-keys`）与 `write_settings` 行为完全不变。
+
+**验证**：providers.json JSON 语法验证通过（`python3 -m json.tool`）；`bash -n` 通过；冒烟测试通过。注：本阶段仅为语法/file 层面验证。
+
+**Commit**：`66b8a50`（2026-07-16 22:21）
+
+#### P1.3：`--workspace` 支持 + 状态迁移到 `.aisc/`
+
+Commit `e1bddb0`（2026-07-16 22:26）。
+
+- 新增 `--workspace PATH` 参数（`start.sh`、`start.bat`）：默认当前目录，`04_launcher` 用 `AISC_WORKSPACE` 决定 bind mount 源。
+- macOS `start.command` 修复 PWD 丢失：保存 `ORIGINAL_PWD` 并在 `start.sh` 中使用（设计用于兼容双击场景，未在真实 macOS 上验证）。
+- 状态双写：`_state.sh` / `_state.ps1` 同时写入 `.aisc/state.env` + `.deploy/state.env`，读取优先 `.aisc/`、fallback `.deploy/`。
+
+**验证**：脚本语法通过（`bash -n`）；`--workspace` 参数正确传递到 `04_launcher`。
+
+**Commit**：`e1bddb0`（2026-07-16 22:26）
+
+#### P1.4：密钥迁移到 `.aisc/secrets/`（保守复制）
+
+Commit `33901a2`（2026-07-16 22:30）。
+
+- `claude-switch` 新增 `migrate_keys()` 幂等函数：若 `.aisc/` 存在且旧 `.cc-config/api-keys` 有内容而 `.aisc/secrets/` 空，则 `cp`（复制，非 `mv`）。
+- `get_key()` 优先读 `.aisc/secrets/api-keys`，fallback `.cc-config/api-keys`；交互输入新 key 后双写两处。
+- entrypoint.sh：确保 `.aisc/secrets/` 目录存在 + `sudo chown -R AISC:AISC` + 权限 700。
+- `.cc-config/api-keys` **永不删除**。
+
+**已知边界**：当前 `claude-switch` 仍将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 注入 `.claude/settings.json`（env 块），意味着密钥并非仅存于 secrets 文件——settings.json 中也有一份明文副本。这是 P3 待处理的安全边界，如实记录。
+
+**Commit**：`33901a2`（2026-07-16 22:30）
+
+#### P1.5：entrypoint 纯内部重构——消除重复代码
+
+Commit `ffb970c`（2026-07-16 22:34）。
+
+- 抽取共享库 `container/lib/env-inject.sh`（Node.js env 注入）+ `container/lib/path-resolve.sh`（路径/权限辅助）。
+- entrypoint.sh 减少 ~10 行，claude-wrapper 减少 ~12 行。
+- Dockerfile 新增 `COPY container/lib/ /usr/local/bin/lib/`。行为完全不变。
+
+**Commit**：`ffb970c`（2026-07-16 22:34）
+
+---
+
+### P2 — 版本锁定、vendor 清单与 CI
+
+Commit `ff240ae`（2026-07-16 22:40）。
+
+#### P2.1：VERSION + config/versions.env
+- `VERSION`：`2.0.0-dev`。
+- `config/versions.env`：`AISC_VERSION`、`NODE_IMAGE=node:20-slim`、`NODE_IMAGE_DIGEST`（空 TODO）、`CLAUDE_CODE_VERSION=latest`、`MIHOMO_VERSION=v1.19.27`、`GEODATA_VERSION=latest`、`CC_SWITCH_VERSION=v5.9.0`、`USE_CN_MIRROR=1`、`GH_PROXY`（空）。Dockerfile ARG 与 versions.env 存在重复默认值（如 `USE_CN_MIRROR=1` 在两处各写一次），是已知技术债。
+
+#### P2.2：vendor/manifest.json + checksums.txt + licenses
+- `vendor/manifest.json`：7 组件——mihomo、geodata、caveman、claude-hud、claude-plugins-official、anthropic-agent-skills、gstack-skills，含版本/来源 URL/许可/文件列表。
+- `vendor/checksums.txt`：34 个 SHA256，全部验证通过。
+- `vendor/licenses/README.md`：第三方许可归档。
+
+#### P2.3：GitHub Actions CI
+- `checks.yml`（push + PR）：bash `-n`、Python `py_compile`、Node `--check`、JSON 校验、冒烟测试、gitleaks（**`continue-on-error: true`**，因此当时尚不是阻断门禁；`docs/` 整体 allowlist）。
+- `docker-smoke.yml`（PR + workflow_dispatch）：dry-run 构建，`timeout-minutes: 20`。
+- `.gitleaks.toml`：白名单 `container/_bundle/`、`docs/`、`vendor/`。
+
+#### 已知未固定项
+- `NODE_IMAGE_DIGEST` 空、`CLAUDE_CODE_VERSION=latest`、`GEODATA_VERSION=latest`——可复现构建尚不完全。
+
+**Commit**：`ff240ae`（2026-07-16 22:40）
+
+---
+
+### P2.4 — vendor 刷新/校验工具 + 文档一致性检查
+
+Commit `a8ce21d`（2026-07-16 22:49）；漂移修复 `4820ec2`（2026-07-16 22:50）。
+
+- `tools/vendor-refresh.sh`：4 步——①检查 manifest 源目录是否存在 ②报告 `container/_bundle/`（手动维护）③验证 `container/downloads/` 与 manifest 一致 ④通过 `find + sha256sum` 重生成 `vendor/checksums.txt`。支持 `--dry-run`。
+- `tools/vendor-verify.sh`：SHA256 完整性校验，34/34 通过。
+- `tools/check-docs.sh`：324 行文档一致性检查。**首次运行 42 passed, 1 warning, 2 failures**（README provider 数 5→7、xf/orange 缺失），立即修复（`4820ec2`）。修复后 45/45；README 全重写后最终 **54/54**。
+
+---
+
+### README 全面重写（commit `a87e5d9`，2026-07-16 23:00）
+
+修正 15 处事实错误：版本号 v1.5.1→2.0.0-dev、密钥路径 `.cc-config/`→`.aisc/secrets/`、provider 5→7、doctor 调用 `bash cli/commands/doctor.sh`（非 `start.sh doctor`）、构建命令（根 context + `container/Dockerfile`）、删除夸大陈述。
+
+新增：AI 简讯（`AI_BRIEF_ON_START`）、诊断工具、完整 Provider 表、Dockerfile ARG 表、版本固定状态、安全说明。
+
+372→342 行（-30 行）。验证：`check-docs.sh` 54/54/0；`check-syntax.sh` 69/69。
+
+---
+
+### 两轮 Linux bind mount 权限修复
+
+#### 第一轮：mkdir/sudo fallback（commit `2b37133`，2026-07-16 23:12）
+
+**问题**：Linux bind mount 上 `mkdir -p` 可能因父目录属主为 root 而失败。
+
+**修复**：
+- `claude-switch` 新增 `_ensure_dir()`：plain `mkdir` 失败→`sudo mkdir` fallback。
+- `path-resolve.sh` 的 `ensure_writable()`：`mkdir -p` 失败→`sudo mkdir -p` fallback；`sudo chown` 失败从静默忽略改为返回非零；新增 `[ -w ]` 验证。当时仍使用 `sudo chown -R AISC:AISC`（递归）。
+- entrypoint.sh：用 `ensure_writable` 初始化 `.aisc/` + `.aisc/secrets/`。
+- 新增 `tests/shell/test-ensure-writable.sh`：6 个测试场景，8/8 断言全通过。
+
+**Commit**：`2b37133`（2026-07-16 23:12）
+
+#### 第二轮：真实 I/O probe + 禁止递归 chown/chmod + node 基础用户 UID/GID 1000 根因修复（commit `4dff7ae`，2026-07-17 00:22）
+
+**问题（第一轮未解决）**：
+1. `[ -w ]` 在 CIFS/NFS/只读 bind mount 上可能假阳性。
+2. `sudo chown -R` 递归修改挂载卷所有文件，不安全且可能破坏宿主机权限。
+3. **根因**：node:20-slim 基础镜像自带 uid/gid=1000 的 `node` 用户。旧 Dockerfile 的 `useradd -m AISC`（未指定 `-u`）自动分配到 uid=1001，与 bind mount 上 uid=1000 文件不匹配。
+
+**修复**：
+- **容器 UID 对齐**：`groupmod -n AISC node && usermod -l AISC -d /home/AISC -m -g AISC node`——将 base image 自带 node 用户（uid=1000, gid=1000）改名为 AISC，彻底消除 uid 漂移。
+- **真实 I/O probe**：`_probe_writable()` 用 create→write→rename→delete 验证可写性，不依赖 `[ -w ]`。模拟了 CIFS chmod 静默忽略（fake chmod no-op）场景，但未在真实 CIFS 设备上复现。
+- **禁止递归 chown/chmod**：改为非递归 `sudo chown $(id -u):$(id -g)` + `sudo chmod u+rwx`（仅目录自身，不加 `-R`）。
+- **entrypoint chmod 700 收紧** + `stat -c '%a'` 验证（CIFS 静默忽略检测）。
+- 测试更新：`tests/shell/test-ensure-writable.sh` 扩展到 9 个场景共 18 个断言，**18/18 全通过**。
+
+**验证**：
+- `tests/shell/test-ensure-writable.sh`：**18/18**；`tests/smoke/check-syntax.sh`：**69/69**；`tools/check-docs.sh`：**54/54**。
+- Docker build 成功；`id AISC` 确认 uid=1000/gid=1000。
+- 真实 bind mount（`-v /tmp/aisc-test:/home/AISC/app`）：entrypoint 正常（fresh + 重复挂载均通过），`cs show` 正常，项目/临时/全局作用域均正常。
+- 用户随后完成手动启动验证并确认通过。
+
+---
+
+### 已知未完成 / 技术债（如实记录，不做为已完成）
+
+- **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。
+- **gitleaks 未闭合门禁**：`continue-on-error: true` + `docs/` 整体 allowlist。密扫运行但不阻断合并。
+- **无 GUI / P3 计划**：v2.0.0-dev 不包含 GUI、TUI 重做或 P3 任何条目。
+
+---
 
 ## v1.5.1 (2026-07-14) - 权限修复 + 简讯 URL 增强
 
