@@ -105,12 +105,17 @@ export CC_CONFIG_DIR
 # .cc-config（cs 配置）目录确保存在
 mkdir -p "$CC_CONFIG_DIR"
 
+# .aisc/secrets/（密钥新位置，P1.4）目录确保存在
+mkdir -p "$(dirname "$CC_CONFIG_DIR")/.aisc/secrets"
+chmod 700 "$(dirname "$CC_CONFIG_DIR")/.aisc/secrets"
+
 # 旧镜像曾以 root 运行，绑定挂载把 root 所有权持久化到宿主；
 # 新镜像 USER AISC 后 mkdir -p 见目录已存在则 no-op，不修所有权，
 # 导致 AISC 读不了 root:600 的 api-keys → cs 切换静默失败。
 # AISC 已在 sudoers (NOPASSWD)，此处直接 sudo chown 自愈，
 # 不依赖外部 bat 的宿主侧 root pass。
 sudo chown -R AISC:AISC "$CC_CONFIG_DIR" 2>/dev/null || true
+sudo chown -R AISC:AISC "$(dirname "$CC_CONFIG_DIR")/.aisc" 2>/dev/null || true
 # .claude 目录同理：挂载卷上文件可能属于宿主机用户（非 uid 1000），
 # AISC 无写权限会导致 cs 写 settings.json 时报 EACCES。
 if [ "$SCOPE" = "project" ]; then
@@ -129,10 +134,11 @@ fi
 # ==========================================
 # 3. 环境变量与网络状态展示
 #    env 块读 CLAUDE_CONFIG_DIR/settings.json（Claude CLI 原生文件，cs 写此处）
-#    api-keys 密钥仍在 .cc-config
+#    api-keys 密钥位于 .aisc/secrets/（主）与 .cc-config/（兼容）
 # ==========================================
 SETTINGS_FILE="$CLAUDE_CONFIG_DIR/settings.json"
 KEY_STORE="$CC_CONFIG_DIR/api-keys"
+AISC_KEY_STORE="$(dirname "$CC_CONFIG_DIR")/.aisc/secrets/api-keys"
 
 if [ -f "$SETTINGS_FILE" ]; then
     MODEL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_MODEL||'')}catch(e){}" 2>/dev/null)

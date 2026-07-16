@@ -25,6 +25,10 @@ else
 fi
 KEY_STORE="${KEY_DIR}/api-keys"
 
+# .aisc/secrets/ — new key storage location (P1.4 migration from .cc-config/api-keys)
+AISC_SECRETS_DIR="$(dirname "$KEY_DIR")/.aisc/secrets"
+AISC_KEY_STORE="${AISC_SECRETS_DIR}/api-keys"
+
 # Windows Git Bash needs cygpath for Node.js; Linux containers use the POSIX path directly.
 if command -v cygpath >/dev/null 2>&1; then
   SETTINGS=$(cygpath -w "$SETTINGS_RAW" | sed 's/\\/\//g')
@@ -50,6 +54,30 @@ fi
 export PROVIDERS_JSON="${PROVIDERS_JSON:-/home/AISC/providers.json}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+
+# ==========================================
+# migrate_keys — idempotent copy from .cc-config/api-keys → .aisc/secrets/api-keys
+#   Only runs if .aisc/ exists (project scope) and the old store has keys
+#   while the new secrets directory is empty. Safe to call multiple times.
+# ==========================================
+migrate_keys() {
+  local aisc_dir
+  aisc_dir="$(dirname "$KEY_DIR")/.aisc"
+  [ -d "$aisc_dir" ] || return 0
+
+  if [ -f "$KEY_STORE" ] && [ -s "$KEY_STORE" ]; then
+    if [ ! -d "$AISC_SECRETS_DIR" ] || [ -z "$(ls -A "$AISC_SECRETS_DIR" 2>/dev/null)" ]; then
+      mkdir -p "$AISC_SECRETS_DIR"
+      chmod 700 "$AISC_SECRETS_DIR"
+      cp "$KEY_STORE" "$AISC_KEY_STORE"
+      chmod 600 "$AISC_KEY_STORE"
+      echo "密钥已迁移到 .aisc/secrets/（旧位置 .cc-config/api-keys 保留可用）" >&2
+    fi
+  fi
+}
+
+# Run migration early, before any key read/write operations
+migrate_keys
 
 # ==========================================
 # _node_read_providers — output shell variable assignments for a provider
@@ -129,14 +157,22 @@ _node_list_providers() {
 }
 
 # ==========================================
-# get_key — read key from store, or prompt user
+# get_key — read key from .aisc/secrets/ (primary) or .cc-config/ (fallback),
+#   prompt user if missing, then double-write to both locations.
 # ==========================================
 get_key() {
   local name="$1"
   local label="$2"
   local key
 
-  key=$(grep "^${name}=" "$KEY_STORE" 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d '\r')
+  # Primary: read from .aisc/secrets/api-keys
+  if [ -f "$AISC_KEY_STORE" ]; then
+    key=$(grep "^${name}=" "$AISC_KEY_STORE" 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d '\r')
+  fi
+  # Fallback: read from .cc-config/api-keys
+  if [ -z "$key" ]; then
+    key=$(grep "^${name}=" "$KEY_STORE" 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d '\r')
+  fi
 
   if [ -z "$key" ]; then
     echo "" >&2
@@ -147,9 +183,13 @@ get_key() {
       echo "❌ Key 不能为空，已取消。" >&2
       return 1
     fi
+    # Double-write: save to both new and old locations (backward compat)
+    mkdir -p "$AISC_SECRETS_DIR" 2>/dev/null || true
+    echo "${name}=${key}" >> "$AISC_KEY_STORE" 2>/dev/null || true
+    chmod 600 "$AISC_KEY_STORE" 2>/dev/null || true
     echo "${name}=${key}" >> "$KEY_STORE"
     chmod 600 "$KEY_STORE"
-    echo "✅ Key 已保存至 $KEY_STORE" >&2
+    echo "✅ Key 已保存" >&2
   fi
 
   printf '%s' "$key"
@@ -281,7 +321,7 @@ show_current() {
   for i in $(seq 0 $((_PL_COUNT - 1))); do
     eval 'local keyname="${_PL_KEYNAME_'${i}'}"'
     eval 'local keydisp="${_PL_KEYDISP_'${i}'}"'
-    if [ -n "$keyname" ] && grep -q "^${keyname}=." "$KEY_STORE" 2>/dev/null; then
+    if [ -n "$keyname" ] && { grep -q "^${keyname}=." "$AISC_KEY_STORE" 2>/dev/null || grep -q "^${keyname}=." "$KEY_STORE" 2>/dev/null; }; then
       echo "  $keydisp ✓"
     else
       echo "  $keydisp ✗"
@@ -395,7 +435,7 @@ show_help() {
   echo "  upgrade   合并镜像出厂 .claude 到当前项目（保留后端配置/历史）"
   echo "  show      Show current backend & saved keys"
   echo ""
-  echo "Keys are stored in .cc-config/api-keys and never committed to git."
+  echo "Keys are stored in .aisc/secrets/api-keys and never committed to git."
 }
 
 # ==========================================
