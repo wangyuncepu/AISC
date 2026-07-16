@@ -1,6 +1,6 @@
 ﻿# scripts/run.ps1 — Super Claude AI 工作站流水线编排
 # 按序调用 01_check_env → 02_config_wizard → 03_build_image → 04_launcher
-# 模块间用 .deploy/state.env (KEY=value) 解耦传参。任一模块非零退出即中止。
+# 模块间用 .aisc/state.env (KEY=value) 解耦传参（.deploy/state.env 向后兼容）。任一模块非零退出即中止。
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $OutputEncoding = [System.Text.UTF8Encoding]::new()

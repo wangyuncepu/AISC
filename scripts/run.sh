@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/run.sh — Super Claude AI 工作站流水线编排
 # 按序调用 01_check_env → 02_config_wizard → 03_build_image → 04_launcher
-# 模块间用 .deploy/state.env (KEY=value) 解耦传参。任一模块非零退出即中止。
+# 模块间用 .aisc/state.env (KEY=value) 解耦传参（.deploy/state.env 向后兼容）。任一模块非零退出即中止。
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/_state.sh"
