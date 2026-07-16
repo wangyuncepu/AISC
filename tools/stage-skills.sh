@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # stage-skills.sh —— 构建前从宿主机 ~/.claude 暂存所需插件与技能到 image/_bundle/
-# Docker 构建上下文为 image/，故插件缓存需先暂存进 image/_bundle（纳入 git）。
+# Docker 构建上下文为 repo 根目录，故插件缓存需先暂存进 image/_bundle（纳入 git）。
 #
 # 暂存内容：
 #   插件（plugin 机制，离线可用）：caveman / claude-hud / document-skills /
@@ -121,4 +121,4 @@ find "$DST" -name '.gitignore' -delete 2>/dev/null || true
 echo "✅ 暂存完成。体积："
 du -sh "$DST" "$DST/plugins/cache" "$DST/plugins/marketplaces" "$DST/skills/gstack" 2>/dev/null
 echo ""
-echo "下一步：docker build -f image/Dockerfile -t super-claude:latest image/（或直接跑启动器）"
+echo "下一步：docker build -f image/Dockerfile -t super-claude:latest .（或直接跑启动器）"

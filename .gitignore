@@ -32,6 +32,9 @@ __pycache__/
 # cs 运行配置（含 api-keys 密钥）
 .cc-config/
 
+# AISC runtime state directory (config, secrets, cache, logs)
+.aisc/
+
 # Mihomo 代理配置（含订阅节点凭据，敏感）— 容器内建 TUN 透明代理
 .claude/mihomo/
 

@@ -55,4 +55,4 @@ done
 echo "✅ 完成。image/downloads/ 内容："
 ls -la "$DST"
 echo ""
-echo "现在可离线/弱网构建：docker build -f image/Dockerfile -t super-claude:latest image/（或直接跑启动器）"
+echo "现在可离线/弱网构建：docker build -f image/Dockerfile -t super-claude:latest .（或直接跑启动器）"

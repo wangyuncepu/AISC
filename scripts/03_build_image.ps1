@@ -32,13 +32,23 @@ function Build-Image {
                 break
             }
             try {
-                $code = (Invoke-WebRequest -Uri "https://$reg/v2/library/node/manifests/20-slim" -TimeoutSec 10 -SkipHttpErrorCheck -UseBasicParsing).StatusCode
-                if ($code -eq 200 -or $code -eq 401) {
+                $resp = Invoke-WebRequest -Uri "https://$reg/v2/library/node/manifests/20-slim" -TimeoutSec 10 -UseBasicParsing
+                if ($resp.StatusCode -eq 200 -or $resp.StatusCode -eq 401) {
                     $nodeArg = "NODE_IMAGE=${img}"
                     Write-Host "✅ 国内镜像源: $reg"
                     break
                 }
-            } catch {}
+            } catch {
+                # PS 5.1 compat: -SkipHttpErrorCheck unavailable; non-2xx (e.g. 401) throws
+                if ($_.Exception.Response) {
+                    $code = [int]$_.Exception.Response.StatusCode
+                    if ($code -eq 401) {
+                        $nodeArg = "NODE_IMAGE=${img}"
+                        Write-Host "✅ 国内镜像源: $reg"
+                        break
+                    }
+                }
+            }
         }
         if ($nodeArg -eq 'NODE_IMAGE=node:20-slim') {
             Write-Host "⚠️ 所有国内镜像源均不可达，回退 Docker Hub 官方源"

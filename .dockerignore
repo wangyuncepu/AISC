@@ -14,6 +14,7 @@ api-keys
 .claude/
 .claude_keys
 .cc-config/
+.aisc/
 .deploy/
 ai_brief/__pycache__/
 ai_brief/cache/
