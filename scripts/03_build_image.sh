@@ -10,8 +10,8 @@ IMAGE="$(state_get IMAGE)"
 echo "📦 [3/4] 镜像构建..."
 
 build_image() {
-  if [ ! -f "$PROJECT_ROOT/image/Dockerfile" ]; then
-    echo "❌ 未找到 Dockerfile: $PROJECT_ROOT/image/Dockerfile"
+  if [ ! -f "$PROJECT_ROOT/container/Dockerfile" ]; then
+    echo "❌ 未找到 Dockerfile: $PROJECT_ROOT/container/Dockerfile"
     exit 1
   fi
   local cache_flag="" mirror_arg="USE_CN_MIRROR=1"
@@ -43,7 +43,7 @@ build_image() {
       ;;
   esac
   echo "📦 正在构建镜像: $IMAGE  ${cache_flag:+(无缓存) }(${mirror_arg}) ..."
-  if ! docker build $cache_flag --build-arg "$mirror_arg" --build-arg "$node_arg" -f "$PROJECT_ROOT/image/Dockerfile" -t "$IMAGE" "$PROJECT_ROOT"; then
+  if ! docker build $cache_flag --build-arg "$mirror_arg" --build-arg "$node_arg" -f "$PROJECT_ROOT/container/Dockerfile" -t "$IMAGE" "$PROJECT_ROOT"; then
     echo "❌ 构建失败。"
     exit 1
   fi

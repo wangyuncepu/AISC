@@ -109,40 +109,40 @@ else
 fi
 
 # ── 7. AISC 项目根已找到 ───────────────────────────────────
-if [[ -f "$AISC_ROOT/image/Dockerfile" ]]; then
-  _passed "AISC 项目根已找到 (image/Dockerfile)"
+if [[ -f "$AISC_ROOT/container/Dockerfile" ]]; then
+  _passed "AISC 项目根已找到 (container/Dockerfile)"
 else
-  _failed "未找到 image/Dockerfile — 可能不是 AISC 项目根目录"
+  _failed "未找到 container/Dockerfile — 可能不是 AISC 项目根目录"
 fi
 
-# ── 8. image/Dockerfile 存在且可读 ─────────────────────────
-DOCKERFILE="$AISC_ROOT/image/Dockerfile"
+# ── 8. container/Dockerfile 存在且可读 ─────────────────────────
+DOCKERFILE="$AISC_ROOT/container/Dockerfile"
 if [[ -f "$DOCKERFILE" ]]; then
   if [[ -r "$DOCKERFILE" ]]; then
-    _passed "image/Dockerfile 存在且可读"
+    _passed "container/Dockerfile 存在且可读"
   else
-    _failed "image/Dockerfile 存在但不可读"
+    _failed "container/Dockerfile 存在但不可读"
   fi
 else
-  _failed "image/Dockerfile 不存在"
+  _failed "container/Dockerfile 不存在"
 fi
 
 # ── 9. ai_brief/brief.py Python 语法有效 ────────────────────
-BRIEF_PY="$AISC_ROOT/ai_brief/brief.py"
+BRIEF_PY="$AISC_ROOT/apps/ai-brief/brief.py"
 if [[ -f "$BRIEF_PY" ]]; then
   if command -v python3 &>/dev/null; then
     if python3 -m py_compile "$BRIEF_PY" 2>/dev/null; then
-      _passed "ai_brief/brief.py Python 语法有效"
+      _passed "apps/ai-brief/brief.py Python 语法有效"
     else
-      _warn "ai_brief/brief.py Python 语法检查失败"
+      _warn "apps/ai-brief/brief.py Python 语法检查失败"
     fi
     # 清理 __pycache__
     rm -rf "${BRIEF_PY%/*}/__pycache__" 2>/dev/null || true
   else
-    _warn "python3 不可用，跳过 ai_brief/brief.py 语法检查"
+    _warn "python3 不可用，跳过 apps/ai-brief/brief.py 语法检查"
   fi
 else
-  _warn "ai_brief/brief.py 不存在，跳过语法检查"
+  _warn "apps/ai-brief/brief.py 不存在，跳过语法检查"
 fi
 
 # ── 10. macOS: start.command 可执行 ─────────────────────────

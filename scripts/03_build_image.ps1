@@ -11,8 +11,8 @@ if (-not $Image) { $Image = 'super-claude:latest' }
 Write-Host '📦 [3/4] 镜像构建...'
 
 function Build-Image {
-    if (-not (Test-Path "$ProjectRoot\image\Dockerfile")) {
-        Write-Host "[错误] 未找到 Dockerfile: $ProjectRoot\image\Dockerfile" -ForegroundColor Red
+    if (-not (Test-Path "$ProjectRoot\container\Dockerfile")) {
+        Write-Host "[错误] 未找到 Dockerfile: $ProjectRoot\container\Dockerfile" -ForegroundColor Red
         exit 1
     }
     $cacheFlag = ''
@@ -57,7 +57,7 @@ function Build-Image {
     Write-Host "📦 正在构建镜像: $Image  ($mirrorArg) $cacheFlag ..."
     $buildArgs = @('build')
     if ($cacheFlag) { $buildArgs += $cacheFlag }
-    $buildArgs += @('-f', "$ProjectRoot\image\Dockerfile", '--build-arg', $mirrorArg, '--build-arg', $nodeArg, '-t', $Image, "$ProjectRoot")
+    $buildArgs += @('-f', "$ProjectRoot\container\Dockerfile", '--build-arg', $mirrorArg, '--build-arg', $nodeArg, '-t', $Image, "$ProjectRoot")
     & docker @buildArgs
     if ($LASTEXITCODE -ne 0) { Write-Host '[错误] 构建失败。' -ForegroundColor Red; exit 1 }
     Write-Host "✅ 构建完成: $Image"

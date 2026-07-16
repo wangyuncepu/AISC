@@ -62,7 +62,7 @@ python3 ai_brief/brief.py --ai --save --no-cache
 
 ## 集成进启动头
 
-`image/entrypoint.sh` §3.6：**有 cs 后端配置**（`BASE_URL`+`AUTH`）才调用 `brief.py --ai --top 5`（跨源分类中文精选），非空则嵌入 `📰 今日 AI 简讯` 块；**无后端**（临时作用域/cc/全新）-> 一行「简讯跳过」提示。BRIEF 空（timeout 杀/全失败）打印诊断行，不阻断启动。
+`container/entrypoint.sh` §3.6：**有 cs 后端配置**（`BASE_URL`+`AUTH`）才调用 `brief.py --ai --top 5`（跨源分类中文精选），非空则嵌入 `📰 今日 AI 简讯` 块；**无后端**（临时作用域/cc/全新）-> 一行「简讯跳过」提示。BRIEF 空（timeout 杀/全失败）打印诊断行，不阻断启动。
 
 并发抓取约 9-14s + LLM 分类约 25-30s（reasoning 模型遇 max_tokens 耗尽自动降素材重试），总预算 50s（`timeout 50`），实测总耗时约 37s。`--debug` 可输出逐阶段耗时诊断（stderr → `/tmp/ai-brief.log`）。
 
