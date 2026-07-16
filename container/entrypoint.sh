@@ -116,15 +116,34 @@ ensure_writable "$CC_CONFIG_DIR"
 AISC_DIR="$(dirname "$CC_CONFIG_DIR")/.aisc"
 ensure_writable "$AISC_DIR"
 ensure_writable "$AISC_DIR/secrets"
-chmod 700 "$AISC_DIR/secrets"
-# 旧镜像曾以 root 运行，绑定挂载把 root 所有权持久化到宿主；
-# ensure_writable 以 sudo chown AISC:AISC 自愈，不依赖外部 bat 的宿主侧 root pass。
 
 # .claude 目录同理：挂载卷上文件可能属于宿主机用户（非 uid 1000），
 # AISC 无写权限会导致 cs 写 settings.json 时报 EACCES。
 if [ "$SCOPE" = "project" ]; then
     ensure_writable "$CLAUDE_CONFIG_DIR"
 fi
+
+# Tighten sensitive dirs to 700 (owner-only), non-recursive, best-effort.
+# If the underlying fs rejects chmod (bind/CIFS/NFS) but the dir remains writable,
+# emit a security warning and continue — do NOT fail startup over a chmod.
+# Also detects CIFS "fake success": chmod returns 0 but mode unchanged.
+# 旧镜像曾以 root 运行，绑定挂载把 root 所有权持久化到宿主；
+# ensure_writable 以 sudo chown AISC:AISC 自愈，不依赖外部 bat 的宿主侧 root pass。
+for _d in "$CC_CONFIG_DIR" "$AISC_DIR" "$AISC_DIR/secrets"; do
+  if sudo chmod 700 -- "$_d" 2>/dev/null; then
+    # chmod reported success — verify it actually took effect (CIFS may silently ignore)
+    if command -v stat >/dev/null 2>&1; then
+      _mode=$(stat -c '%a' -- "$_d" 2>/dev/null || echo '')
+      if [ -n "$_mode" ] && [ "$_mode" != "700" ]; then
+        echo "⚠️  安全警告: chmod 700 '$_d' 报告成功但实际 mode=${_mode}（CIFS/绑定挂载可能静默忽略），目录仍可写，继续启动。" >&2
+      fi
+    fi
+  else
+    if _probe_writable "$_d"; then
+      echo "⚠️  安全警告: 无法收紧 '$_d' 权限为 700（可能绑定挂载限制），目录仍可写，继续启动。" >&2
+    fi
+  fi
+done
 
 # 让用户进入 bash 后再次运行 cs / claude 时仍能拿到同一作用域
 # （非 root，只能写家目录 ~/.bashrc；不再写 /etc/profile.d）

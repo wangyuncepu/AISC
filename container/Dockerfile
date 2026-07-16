@@ -45,6 +45,18 @@ RUN apt-get update && apt-get install -y git curl sudo tmux iptables iproute2 ca
     && rm -rf /var/lib/apt/lists/*
 
 # ==========================================
+# 以镜像内置 node 用户（uid=1000, gid=1000）重命名为 AISC
+#   原因：node:20-slim 已自带 uid/gid 1000 的 node 用户。直接新建 useradd 會導致
+#   uid 漂移到 1001+，与典型 Linux/Windows/WSL bind mount 上 uid=1000 文件不匹配。
+#   将 node 用户和组更名为 AISC，保持 uid/gid=1000，HOME=/home/AISC。
+#   Claude Code 在 root 下拒绝 --dangerously-skip-permissions，故必须非 root 运行。
+# ==========================================
+RUN groupmod -n AISC node \
+    && usermod -l AISC -d /home/AISC -m -g AISC node \
+    && echo 'AISC ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/aisc \
+    && chmod 440 /etc/sudoers.d/aisc
+
+# ==========================================
 # 1b/1c. Mihomo + geodata —— 容器内建 TUN 透明代理核心
 #   优先用构建上下文 downloads/ 里预放的本地文件（离线/网络差时，由 stage-mihomo.sh 下载）；
 #   否则多镜像轮询下载（ghfast.top 实测稳）+ 强制 --http1.1（绕开 curl/GitHub CDN 的 HTTP/2 流异常）
@@ -99,16 +111,6 @@ RUN set -eux; \
         fi; \
     done; \
     rm -rf /tmp/dl
-
-# ==========================================
-# 创建非 root 运行用户 AISC（uid 1000）
-#   原因：Claude Code 在 root 下拒绝 --dangerously-skip-permissions 模式。
-#   全程以 AISC 身份构建与运行，家目录 /home/AISC 承载 .claude 与项目挂载 app/。
-# ==========================================
-RUN useradd -m -s /bin/bash AISC \
-    && echo 'AISC:AISC' | chpasswd \
-    && echo 'AISC ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/aisc \
-    && chmod 440 /etc/sudoers.d/aisc
 
 # ==========================================
 # 容器内 UTF-8 locale：解决 ls / 中文文件名八进制转义乱码 (no.5)
