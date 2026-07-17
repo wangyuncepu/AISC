@@ -24,6 +24,9 @@ api-keys
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
+build/
+dist/
 
 # Claude Code local state
 .claude/

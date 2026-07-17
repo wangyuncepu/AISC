@@ -270,6 +270,104 @@ P3 计划 commit `c706a68`（2026-07-17 01:03）已提交到仓库。本节记�
 
 ---
 
+### P3.1 S2 — 最小 Python CLI 纵向切片（`version` + `doctor`）
+
+本节随 S2 实现于 2026-07-17 一并提交。
+
+S2 在 S1 的协议契约与测试 harness 基础上，实现了最小可运行的 Python CLI，包含 `version` 和 `doctor` 两个只读命令。**当前不切换默认入口——用户仍然通过 `start.sh` / `start.bat` / `start.command` 使用项目。**
+
+#### 新增文件结构
+
+```
+src/aisc/__init__.py          # package, __version__ = "2.0.0-dev"
+src/aisc/__main__.py          # python -m aisc 支持
+src/aisc/domain/models.py     # VersionInfo, CheckResult, DoctorReport, CliError, ProcessResult
+src/aisc/domain/__init__.py
+src/aisc/application/resources.py  # locate_aisc_root (4 级优先级)
+src/aisc/application/version.py    # gather_version_info, VERSION/versions.env 解析
+src/aisc/application/doctor.py     # 8 项 host doctor 检查 + 退出码优先级
+src/aisc/application/__init__.py
+src/aisc/adapters/system.py        # ProcessRunner Protocol + RealProcessRunner
+src/aisc/adapters/__init__.py
+src/aisc/cli/main.py               # argparse, 命令分发, JSON envelope 输出
+src/aisc/cli/output.py             # build_envelope, print_doctor_text
+src/aisc/cli/__init__.py
+pyproject.toml                     # setuptools src-layout, Python >=3.11
+tests/unit/test_resources.py       # locate_aisc_root 优先级/错误处理
+tests/unit/test_version.py         # VERSION 解析, versions.env inline comment
+tests/unit/test_doctor.py          # fake process/discovery 组合测试
+tests/integration/test_cli.py      # subprocess 集成: version/doctor text+json
+```
+
+#### 关键设计决策
+
+- **零运行时依赖**：stdlib-only。dev optional dependencies 声明 pytest/PyInstaller 但不用于运行时。
+- **资源定位 4 级优先级**：explicit `--aisc-root` → env `AISC_ROOT` → frozen `aisc-bundle/` → cwd 向上 repo 发现。每级严格验证（需 VERSION + container/Dockerfile + config/versions.env）。显式/env 无效 → 受控 OSError 不回退。Frozen bundle 缺失可继续，存在但损坏 → 受控报错。开发源码模式不从 `sys.executable` 寻找 bundle。
+- **版本解析**：`VERSION` 读取根文件第一行；`CLAUDE_CODE_VERSION` 从 `config/versions.env` 解析，去除 inline comment 保留 `latest`。无 root 时字段为 `None`。CLI 版本来自 package `__version__` 不依赖文件。`VERSION` 文件内容与 `__version__` 一致（均为 `2.0.0-dev`）。
+- **Doctor 8 项检查**：docker-cli / docker-daemon / docker-permission / docker-buildx / tun-device / aisc-root / root-files / git。Docker CLI 缺失时 daemon/permission/buildx 自动 skip（不产生重复 fail）。Warning 不导致失败。退出码优先级：Docker 不可用 → exit 3 (AISC_ERR_DOCKER_UNAVAILABLE)；仅权限 → exit 9 (AISC_ERR_PERMISSION_DENIED)；显式 root 无效或其他失败 → exit 1 (AISC_ERR_GENERAL)。
+- **JSON envelope**：完全符合 RFC `aisc.cli/v1` §2——meta (protocol/command/exit_code/timestamp/version/run_id) + data + errors。UTC Z 时间，UUID v4，meta.exit_code 与进程退出码一致。`version` data 固定包含 6 个键：cli/bundle/contract/image/claude/python version，未知值为 `null`。`doctor` data：host:{checks:[],summary:{}} + container:null。
+- **`--format json` 下 usage error**：stdout 输出严格 JSON envelope（exit 2, AISC_ERR_USAGE），stderr 保持为空。text 模式保持普通 usage 到 stderr。
+- **`--format` 全局参数**：可放在子命令前或后（如 `aisc --format json version` 和 `aisc version --format json` 均有效）。`--events` 不实现（usage error）。
+
+#### CI 集成
+
+- `.github/workflows/checks.yml` 将 unittest step 更新为 `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v`。
+- CI 在 unittest 后运行 `bash tests/smoke/packaging_smoke.sh`，验证 wheel 构建、临时 venv 安装、console script 与 `python -m aisc` 两种入口。
+
+#### 验证状态
+
+- `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v`：**233/233 通过**（S1 现有 100 + S2 新增 133）。
+- `PYTHONPATH=src python3 -m aisc version` / `version --format json` / `--format json version` / `--format=json version`：通过。
+- `PYTHONPATH=src python3 -m aisc doctor --format json`：合法 envelope（exit 0/3/9 依据环境）。
+- `bash tests/smoke/packaging_smoke.sh`：**通过**（wheel build + temp venv install + 两入口验证 + PEP440 版本规范化）。
+- `bash tests/smoke/check-syntax.sh`：**69/69 通过**。
+- `tools/check-docs.sh`：**54/54 通过**。
+- `git diff --check`：通过。
+
+#### 剩余限制
+
+- `build/run/config/profile/provider` 命令尚未实现（S3–S8）。
+- `--events` JSONL 流尚未实现。
+- 无 PyInstaller 打包（S4）。
+- 不修改 legacy `start.*`、`scripts/**`、`cli/commands/doctor.sh`、container 业务逻辑。
+
+#### Oracle 审查修复（S2 第二轮）
+
+**Build system**：
+- Backend 修正为 `setuptools.build_meta`（修复误用的 `_legacy:_Backend`）。
+- 新增 `tests/smoke/packaging_smoke.sh`：wheel 构建 + 临时 venv 安装 + 不设 PYTHONPATH 验证 `aisc version --format json` 和 `python -m aisc version --format json` + PEP440 规范化检查。
+
+**CLI/argparse**：
+- `allow_abbrev=False` 全局启用，`--form` 被拒绝（exit 2）。
+- `--format=json` 格式（`=` 形式）完全支持，与 `--format json` 等价。
+- 重复 `--format` 采用 last-wins 规则（通过原始 argv 扫描决定）。
+- 畸形子命令参数时 `meta.command` 保留已识别的命令名（如 `version --bogus` → meta.command="version"）。
+- 冲突重复 format 严格 JSON stdout 纯净 + 测试断言。
+
+**资源定位**：
+- `is_frozen` 和 `executable_path` 支持函数参数注入；生产默认值按调用时惰性读取 `sys.frozen` / `sys.executable`，核心 bundle 解析 helper 保持纯参数化。
+- 按 ADR：frozen adjacent bundle 不存在时继续 cwd repo discovery，存在但损坏立即 `_RootSourceError` 失败。
+- 错误来源区分（`_RootSourceError.source`）：`--aisc-root` / `AISC_ROOT` / `frozen-bundle`，消息不再混淆。
+
+**Doctor 命令发现**：
+- `which` 参数注入，解析 docker/git 路径一次然后所有调用复用。
+- 所有 docker 子命令使用相同的解析路径（`docker_path` 参数传递）。
+- Docker/Git 超时常量：`DOCKER_TIMEOUT=8s`，`GIT_TIMEOUT=5s`；timeout → FAIL/WARN。
+- `RealProcessRunner`：`encoding='utf-8'`、`errors='replace'`、通用 `OSError` 捕获。
+- Docker hints 改为跨平台中性措辞。
+- TUN 检查使用 `Path.stat()` + `stat.S_ISCHR` 验证字符设备；`OSError` → WARN。
+
+**Version JSON**：
+- 始终输出 6 个固定键（`cli_version`, `bundle_version`, `contract_version`, `image_version`, `claude_version`, `python_version`），未知为 `null`。
+- `root` 字段从稳定 data 中移除（不输出在 JSON payload 中）。
+- 文本输出不再重复 gather（复用 `VersionInfo` 对象）。
+
+**测试**：
+- 第二轮新增 26 个测试（S2 合计新增 133 个）：覆盖 Docker CLI 缺失时后续 docker 子命令零调用（`which` 返回 `None`）、`--format=json`、重复 format 的 last-wins、缩写拒绝、畸形子命令 command 保留、固定 6 键 JSON，以及 frozen 生产默认值与注入路径。
+- 所有 unit 测试使用注入参数，不依赖全局状态。
+
+---
+
 ### 已知未完成 / 技术债（如实记录，不做为已完成）
 
 - **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。
