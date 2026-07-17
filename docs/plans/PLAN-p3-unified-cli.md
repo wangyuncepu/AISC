@@ -78,7 +78,7 @@
 | G3 | CLI 可脚本化：所有交互式路径有对应的 `--non-interactive` 等效路径 | CI 中 `aisc build --non-interactive --profile safe` 可无人工干预完成 |
 | G4 | 结构化输出：`--format json` 对所有查询命令输出稳定 JSON envelope | `aisc doctor --format json` 返回机器可解析的诊断结果 |
 | G5 | 容器契约验证：`aisc doctor` 进行能力探测（capability detection），提前发现不兼容 | `aisc build` 前自动 preflight，失败给出可执行修复建议 |
-| G6 | 配置/状态/密钥彻底分离，无密钥写入 `.claude/settings.json` | runtime fixture integration test 验证 fixture key 只在新 secret store |
+| G6 | 配置/状态/密钥彻底分离，无新增密钥写入 `.claude/settings.json` | S7/S8 runtime fixture integration test 验证新写路径仅使用 host secret store；S5 copy-only 阶段允许 legacy fixture 继续保留原凭据 |
 | G7 | 独立可执行文件分发：普通用户无需预装 Python | 下载 release bundle archive 即可运行 |
 | G8 | 旧业务引擎可控删除 | 满足具体截止条件（见 §14.4）后安全移除 |
 
@@ -118,7 +118,11 @@ GUI 是长期远景计划。当前仅确保 CLI 协议（JSON envelope、JSONL e
 
 | 切片 | 名称 | 内容摘要 | 产出 |
 |------|------|----------|------|
-| S5 | **配置/密钥迁移（两阶段）** | Phase 1：`aisc config migrate`——copy-only：从 `.aisc/secrets/api-keys`、`.cc-config/api-keys` 和 `.claude/settings.json` 的密钥字段提取密钥→写入新 secret store（验证 hash 匹配后标记）→`.aisc/state.env`/`.deploy/state.env` 按独立 state 策略迁移→记录 source hash→创建 `.bak-YYYYMMDD` 备份；**不删除源文件或 settings 字段**。Phase 2：`aisc config cleanup` 才原子移除 `settings.json` 的 `env.ANTHROPIC_AUTH_TOKEN`/`env.ANTHROPIC_API_KEY`（完整保留其他字段），并按逐源策略清理已验证旧文件；内核在 S5 实现但 v3.0 默认拒绝（需 `--force-cleanup` 高级 flag，且提示不可逆警告），正式开放不早于 v3.1.0/2026-09-01，**且仍需单独用户批准进行不可逆清理**。从 S7 起 `cs` 停止双写。 | `src/aisc/application/config_service.py`、`aisc config validate/effective/migrate/cleanup` |
+| S5.1 | **配置/密钥发现与 schema** | 定义 config.json 最小 schema（用户级 + workspace 级）；定义 provider secret 每 provider 单文件 opaque UTF-8 credential 模型；定义 provider ID grammar 与 `secret_ref` 解析语义；定义 source inventory 固定为精确路径（`W/.aisc/secrets/api-keys`、`W/.cc-config/api-keys`、`W/.claude/api-keys`、`W/.claude/settings.json`、`R/.aisc/state.env`、`R/.deploy/state.env`）；定义 provider 映射规则（api-keys 仅按 `providers.json` 的 `auth_key_name` 唯一精确映射；settings token 仅在 canonical `base_url` 规范化后唯一精确匹配且 `auth_type` 对应时映射，禁止模型/url_fragment/token 外形猜测）；定义冲突规则（不同 secret source 无自动 precedence，相同值去重，不同值 conflict；目标不同绝不覆盖；目标已存在且相同→already_current）；定义 legacy state `.aisc` > `.deploy` 逐 key 策略，仅记录 shadowed。 | `src/aisc/domain/config.py`、`src/aisc/schemas/config_schema.py`、plan 级 source inventory |
+| S5.2 | **config validate/effective** | 实现 `aisc config validate`（schema 校验，text+json 输出）与 `aisc config effective`（脱敏合并有效配置，text+json 输出）。`--events` 与 validate/effective 组合→usage error（exit 2）。 | `src/aisc/application/config_service.py`、`aisc config validate/effective` |
+| S5.3 | **secure store adapter** | 实现 secret store adapter：平台原生路径解析（Linux XDG config/state/data、macOS Application Support/aisc、Windows APPDATA config + LOCALAPPDATA state/secrets）；POSIX 0700/0600 + owner；Windows DACL current user SID + SYSTEM full control、禁继承/Everyone/Users/Authenticated Users、写后验证、失败 exit 9（DACL 是实现 blocker）；journal/HMAC/原子写基础设施：不含明文/last4/普通 hash，使用 `migration-integrity.key`；per-target atomic、可重入、全局 lock；dry-run 零目录/lock/key/journal/chmod。**不含实密钥 contact**。 | `src/aisc/adapters/secret_store.py` |
+| S5.4 | **config migrate + journal** | 实现 `aisc config migrate`（text+json+events）：Phase 1 copy-only——从 source inventory 精确路径读取，**不修改/删除/重命名/chmod/chown legacy 源或 settings，源文件和 settings bytes 不变**；按 S5.1 映射规则进行 provider 映射与 secret 复制→新 store；冲突按 S5.1 规则处理；未映射 secret → exit 14 `AISC_EXIT_MIGRATION_CONFLICT`；legacy state 仅报告现状（`.aisc` > `.deploy` 逐 key），不过度承诺 state migration；若后续 S6-S8 无消费者 S5 仅报告 legacy state。回滚依靠源未变 + 目标逐文件原子 + journal；**不创建 `.bak-YYYYMMDD` 或明文备份**。退出码：0 成功/全部 already_current；14 冲突/未映射；6 schema 错误；7 必要文件缺失；9 权限不足；1 通用；130 中断（**不含部分成功退出码**）。`--dry-run` 零目录/lock/key/journal/chmod。 | `src/aisc/application/config_service.py`、`aisc config migrate` |
+| S5.5 | **cleanup 拒绝 stub** | 实现 `aisc config cleanup` **固定拒绝 stub**：exit 11、`AISC_ERR_CLEANUP_NOT_AUTHORIZED`、零读 secret、零写。cleanup mutation engine、真实 cleanup、legacy 删除**均不在 S5 实现**，需后续切片单独批准。**不存在 `--force-cleanup` flag**。 | `src/aisc/cli/commands/config.py`（cleanup stub） |
 | S6 | **最小 safe/unsafe resolver + network 正交** | 仅内置 `safe`/`unsafe` profile（首版不支持 user-defined profile 或 `custom_docker_args`）。safe 不含 `network` 字段、不含 `sudo_policy` 字段。network 由 `--network direct\|proxy` 单独控制。sudo 由容器内固定最小 sudoers allowlist（具体规则在 S8 落地）。`--non-interactive` 正交。 | `src/aisc/domain/profiles.py`、`aisc profile list/show` |
 | S7 | **Provider 唯一权威路径 + 端到端 non-interactive** | host `aisc provider use` 是**唯一持久写路径**。`aisc run --provider ID` 仅单次 override（不持久）。容器 `cs` 在兼容期只能 show 当前配置/委托到统一 contract，不再独立写 `.cc-config`/`.aisc/secrets`/`.claude/settings.json`。端到端 non-interactive 链路完成。providers 唯一事实源：`container/providers.json`。 | `src/aisc/application/provider_service.py`、`aisc provider list/show/use`、端到端测试 |
 | S8 | **容器契约/安全默认/移除 wrapper 默认 unsafe** | ① contract 按请求 capability label 校验（`safe`→`supports.safe`、`proxy`→`supports.proxy`、`non-interactive`→`supports.non-interactive`，任一缺失→`AISC_EXIT_CONTRACT_MISMATCH`）。无 label 仅 `--allow-legacy-image`+`--accept-unsafe-risk` 放行；safe 绝不降级。② `claude-wrapper` 改为仅在 `AISC_PROFILE=unsafe` 时注入 `--dangerously-skip-permissions`。③ `proxy` 显式请求但 TUN/preflight 失败必须非零 exit。④ 未请求 proxy 时 TUN 不可用只 warning。⑤ non-interactive 端到端无 stdin read。⑥ 密钥仅通过环境变量注入。⑦ 容器内固定最小 sudoers allowlist。⑧ API key 不再写入 `.claude/settings.json`。 | `container/Dockerfile` LABEL、`container/claude-wrapper` 重构、contract 验证 |
@@ -127,7 +131,7 @@ GUI 是长期远景计划。当前仅确保 CLI 协议（JSON envelope、JSONL e
 | S10 | **默认入口切换** | 进入条件同时满足 S8 contract 完成 + S9 协议稳定化完成 + **分发授权门通过**（release archive 可访问）。`start.*` 改为纯 locator：检测同目录/系统 PATH 下 `aisc` 二进制 → 有则转发 → 无则 **不静默 fallback**，报错并提示获取 CLI。旧 path 仅通过显式 `AISC_CLI_ENGINE=legacy` 环境变量可达。新 CLI 失败绝不静默回退旧引擎。 | 更新 `start.*` |
 | S11 | **观察期后删除 legacy** | S10 发布后监控 ≥2 周。满足 legacy 删除门槛（见 §14.4）后且获用户另行批准：删除 `scripts/01-04_*`、`_state.*`、`run.*`；`start.*` 移除 `AISC_CLI_ENGINE=legacy` 分支；CI 移除 Bash/PS 双轨检查。**legacy 删除和真实 secret cleanup 均需用户另行批准**。 | 删除的旧文件、精简后的 CI |
 
-**P3.2 验收门**：config migrate 两阶段幂等且 backup 完整；safe 下容器无危险权限；provider 由 host 唯一权威管理；container contract 按 capability label 校验生效；S9 协议验证覆盖本期已实现命令；分发授权门通过后 S10 默认入口切换；legacy 按条件删除且经用户批准。
+**P3.2 验收门**：config migrate 幂等且 journal 完整，Phase 1 copy-only 源文件与 settings bytes 不变；cleanup stub 正确拒绝（exit 11 / `AISC_ERR_CLEANUP_NOT_AUTHORIZED` / 零读写）；safe 下容器无危险权限；provider 由 host 唯一权威管理；container contract 按 capability label 校验生效；S9 协议验证覆盖本期已实现命令；分发授权门通过后 S10 默认入口切换；legacy 按条件删除且经用户批准。
 
 ---
 
@@ -153,7 +157,7 @@ P3 CLI **不是单文件即可完整 build/run**——`aisc version` 与 `aisc d
 
 ```text
 AISC/
-├── pyproject.toml                     # 元数据、包发现、dev/build 依赖（pytest/PyInstaller）
+├── pyproject.toml                     # 元数据、包发现、dev/build 依赖（unittest/PyInstaller）
 ├── src/
 │   └── aisc/                          # Python CLI 源码（runtime stdlib-only）
 │       ├── __init__.py
@@ -235,7 +239,7 @@ AISC/
 └── ... (其余目录不变)
 ```
 
-**pyproject.toml 策略**：最小 `pyproject.toml` 用于元数据、包发现、pytest/PyInstaller 等 dev/build 依赖声明。runtime **stdlib-only**，普通用户无需 Python/pip。开发/CI 阶段可通过 `pip install -e .` 或 `PYTHONPATH=src python -m aisc` 运行，**后者不是用户路径**。
+**pyproject.toml 策略**：最小 `pyproject.toml` 用于元数据、包发现、PyInstaller 等 dev/build 依赖声明。runtime **stdlib-only**，普通用户无需 Python/pip。测试使用 stdlib `unittest`，不引入 pytest。开发/CI 阶段可通过 `pip install -e .` 或 `PYTHONPATH=src python -m aisc` 运行，**后者不是用户路径**。
 
 **配置路径使用平台原生目录**：
 - Linux：`$XDG_CONFIG_HOME/aisc/`（默认 `~/.config/aisc/`）
@@ -256,8 +260,8 @@ Windows secrets 使用平台 ACL 策略保护，不以 POSIX `chmod`/`stat` 作�
 | `aisc doctor` | ✅ 初版 | host Docker/网络/权限诊断 | 容器 contract 兼容性检查（`aisc doctor --container`） | host/container 分拆为子命令 |
 | `aisc config validate` | ✅ 初版 | 校验用户/workspace config schema | — | — |
 | `aisc config effective` | ✅ 初版 | 显示脱敏合并有效配置 | — | — |
-| `aisc config migrate` | ✅ 初版 | 旧状态→新路径迁移（两阶段） | — | — |
-| `aisc config cleanup` | ✅ 内核 (S5) | 按逐源规则清理已验证旧密钥/状态；settings 仅移除两个密钥字段 | — | v3.0 默认拒绝；正式开放须满足版本、日期和单独授权门 |
+| `aisc config migrate` | ✅ 初版 | copy-only：从 source inventory 精确路径读取→按映射规则写入新 store→journal | — | text+json+events；unmapped→exit 14；`.bak-YYYYMMDD` 不存在 |
+| `aisc config cleanup` | ✅ 拒绝 stub (S5.5) | 固定拒绝：exit 11、`AISC_ERR_CLEANUP_NOT_AUTHORIZED`、零读写 | — | 真实 cleanup、legacy 删除仍单独批准，不在 S5 实现 |
 | `aisc profile list` | ✅ 初版 | 列出内置 profile | — | 首版仅内置 safe/unsafe |
 | `aisc profile show` | ✅ 初版 | 显示 profile 详情 | — | — |
 | `aisc provider list` | ✅ 初版 | 从 `container/providers.json` 读取 | — | — |
@@ -286,10 +290,10 @@ aisc
 ├── version                              # S2
 ├── doctor [--container]                 # S2 (host) + S8 (container)
 ├── config
-│   ├── validate                         # S5
-│   ├── effective                        # S5
-│   ├── migrate                          # S5
-│   └── cleanup                          # S5
+│   ├── validate                         # S5.2
+│   ├── effective                        # S5.2
+│   ├── migrate                          # S5.4
+│   └── cleanup                          # S5.5 (拒绝 stub)
 ├── profile
 │   ├── list                             # S6
 │   └── show [NAME]                      # S6
@@ -401,70 +405,145 @@ Docker 原始输出（build log/run log）进入 stderr 或编码为 `data.raw` 
 | `11` | `AISC_EXIT_NEEDS_CONFIRMATION` | `AISC_ERR_NEEDS_CONFIRMATION` | 需用户确认（unsafe profile 未确认 / 其他需要确认的操作） |
 | `12` | `AISC_EXIT_CONTRACT_MISMATCH` | `AISC_ERR_CONTRACT_MISMATCH` | 容器 contract version 不兼容 |
 | `13` | `AISC_EXIT_PROXY_FAILED` | `AISC_ERR_PROXY_FAILED` | `--network proxy` 显式请求但 TUN/preflight 失败 |
+| `14` | `AISC_EXIT_MIGRATION_CONFLICT` | `AISC_ERR_MIGRATION_CONFLICT` | 迁移冲突（secret 映射冲突/未映射/目标冲突） |
 
 **合并说明**：原 `EX_PROFILE_REQUIRES_CONFIRM(11)` 和 `EX_NEEDS_CONFIRMATION(12)` 合并为一个 `AISC_EXIT_NEEDS_CONFIRMATION(11)`；JSON 层可选 `AISC_ERR_PROFILE_REQUIRES_CONFIRM` 区分原因。
+
+**退出码 130**：`AISC_EXIT_INTERRUPTED`（`AISC_ERR_INTERRUPTED`）表示用户中断（SIGINT/Ctrl+C）。shell 约定退出码 128+信号编号（SIGINT=2→130），CLI 在收到 SIGINT 后以 130 退出。
 
 ---
 
 ## 8. Config / State / Secrets 分离
 
-### 8.1 三层存储模型
+### 8.1 存储模型与 platform paths
 
-```text
-用户级（跨 project 持久，平台原生路径）     项目级（workspace-local）
-──────────────────────────────────────     ─────────────────────────────
-<platform-config-dir>/aisc/               .aisc/
-├── config.json                  (用户偏好) ├── config.json    (非秘密配置)
-├── state.json                   (运行时)   ├── state.json     (运行时)
-└── secrets/                               └── cache/
-    └── providers/
-        ├── deepseek           (chmod 600  ┐
-        ├── ark                或平台 ACL) │
-        └── ...                            ┘
-```
+**用户级**（跨 project 持久，平台原生路径）：
 
-Windows：`%APPDATA%/aisc/`，secrets 用 ACL 限制当前用户（不以 POSIX `stat` 验证）。
+| 平台 | config | state | secrets |
+|------|--------|-------|---------|
+| Linux | `$XDG_CONFIG_HOME/aisc/`（默认 `~/.config/aisc/`） | `$XDG_STATE_HOME/aisc/`（默认 `~/.local/state/aisc/`） | `$XDG_DATA_HOME/aisc/secrets/`（默认 `~/.local/share/aisc/secrets/`） |
+| macOS | `~/Library/Application Support/aisc/` | `~/Library/Application Support/aisc/` | `~/Library/Application Support/aisc/secrets/` |
+| Windows | `%APPDATA%/aisc/` | `%LOCALAPPDATA%/aisc/` | `%LOCALAPPDATA%/aisc/secrets/` |
 
-### 8.2 `secret_ref` 机制
+**项目级**（workspace-local）：`.aisc/config.json`（非秘密配置）、`.aisc/state.json`（运行时状态）。**workspace `.aisc/` 不存储 secret**。
 
-workspace `.aisc/config.json` 不直接存 API key。需引用密钥时使用：
+普通用户没有 `--secrets-dir` 覆盖参数。平台路径解析由上表决定，不依赖环境变量注入（除标准 XDG/APPDATA/LOCALAPPDATA）。
 
+POSIX：目录 0700、密钥文件 0600、owner 校验。Windows：current user SID + SYSTEM full control、禁继承/Everyone/Users/Authenticated Users、写后验证 DACL、失败 exit 9（DACL 是实现 blocker）。macOS：POSIX 0700/0600 + extended ACL 校验，无法证明 fail closed。
+
+### 8.2 两个根：`--workspace` 与 `--aisc-root`
+
+| 参数 | 用途 | 定位内容 |
+|------|------|----------|
+| `--workspace W` | workspace legacy key/settings 精确路径 | `W/.aisc/secrets/api-keys`、`W/.cc-config/api-keys`、`W/.claude/api-keys`（历史候选，非 active）、`W/.claude/settings.json` |
+| `--aisc-root R` | launcher state 精确路径 | `R/.aisc/state.env`、`R/.deploy/state.env` |
+
+**不得递归搜索**层级子目录。仅使用上述精确路径。若 `R` 不可定位（例如 CLI 以独立可执行文件运行且无 bundle/repo），key/settings 迁移**可继续**（仅依赖 W），state 迁移标记为 `skipped:not_located`。
+
+### 8.3 source inventory（固定）
+
+| 类型 | 精确路径 | 说明 |
+|------|----------|------|
+| secret | `W/.aisc/secrets/api-keys` | legacy `KEY=VALUE`；按 `providers.json` 的 `auth_key_name` 唯一精确映射 |
+| secret | `W/.cc-config/api-keys` | 同上 |
+| secret | `W/.claude/api-keys` | 同上（历史候选，非 active 源） |
+| credentials | `W/.claude/settings.json` | `env.ANTHROPIC_AUTH_TOKEN` / `env.ANTHROPIC_API_KEY` |
+| state | `R/.aisc/state.env` | key=value；`.aisc` > `.deploy` 逐 key，仅记录 shadowed |
+| state | `R/.deploy/state.env` | key=value |
+
+仅以上精确路径。不扫描其他位置。
+
+### 8.4 config.json 最小 schema
+
+用户级 `config.json`（platform path）：
 ```json
-{"provider": {"id": "deepseek", "auth": {"secret_ref": "deepseek"}}}
+{
+  "schema_version": 1,
+  "provider": {
+    "id": "deepseek",
+    "auth": {
+      "secret_ref": "provider:deepseek"
+    }
+  },
+  "defaults": {
+    "profile": "safe",
+    "network": "direct"
+  }
+}
 ```
 
-解析规则：在用户 secrets 目录下查找对应文件。缺失时交互提示，非交互模式报 `AISC_EXIT_CONFIG_MISSING`。
+workspace `.aisc/config.json`：
+```json
+{
+  "schema_version": 1,
+  "provider": {
+    "id": "deepseek"
+  },
+  "defaults": {
+    "profile": "safe",
+    "network": "direct"
+  }
+}
+```
 
-### 8.3 密钥迁移（两阶段）
+**provider ID grammar**：`^[a-z0-9][a-z0-9._-]{0,63}$`，并拒绝 `/`、`\\`、`..`、控制字符及尾随点/空格。`secret_ref` 必须严格为 `provider:<provider_id>`——在用户 secrets 目录下查找 `<platform-secrets-dir>/providers/<id>` 文件。文件内容为 opaque UTF-8 credential：无 BOM、单行、允许一个最终换行，移除该最终换行后不得含 NUL/CR/LF；不得调用 `strip()` 改变凭据字节。
 
-| 阶段 | 命令 | 行为 |
-|------|------|------|
-| Phase 1 | `aisc config migrate` | **copy-only**：从 `.aisc/secrets/api-keys`、`.cc-config/api-keys`、`.claude/settings.json env` 提取密钥→写入新 secret store→记录 source hash→创建 `.bak-YYYYMMDD` 备份→**不删除源文件** |
-| Phase 2 | `aisc config cleanup` | 经版本/日期/单独授权门后，按逐源策略清理 hash 匹配的旧密钥文件和旧状态；`settings.json` 仅原子移除两个密钥字段，绝不删除整个文件 |
+### 8.5 provider 映射规则
 
-**迁移覆盖范围**：
-- `.aisc/secrets/api-keys` → 按 provider 拆分到 `<platform-config>/aisc/secrets/providers/<id>`
-- `.cc-config/api-keys` → 同上
-- `.claude/settings.json` → 提取 `env` 块中 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 明文值
+**api-keys 源**（`api-keys` 文件）：
+- 仅按 `container/providers.json` 中各 provider 的 `auth_key_name` 字段进行**唯一精确映射**。
+- 若一个 `auth_key_name` 出现在多个 provider 定义中→无法唯一映射→标记为 unmapped。
+- 禁止按模型名、URL fragment、token 外形/长度猜测映射。
 
-**幂等性**：通过 `state.json` 中的 `migrate.source_hashes` 跳过已迁移文件。
+**settings.json 源**（`.claude/settings.json` 的 `env.ANTHROPIC_AUTH_TOKEN`/`env.ANTHROPIC_API_KEY`）：
+- 仅在 canonical `base_url` 规范化后**唯一精确匹配**某个 provider 且该 provider 的 `auth_type` 为对应类型时映射。
+- 若 base_url 匹配多个 provider 或无匹配→unmapped。
+- 禁止按 model 名、URL fragment、token 外形猜测。
 
-**冲突处理**：若目标 secrets 文件已存在且内容不同，报告警告并跳过（不覆盖用户新数据）。
+**未映射 secret**→标记 unmapped，migrate 命令 exit 14 `AISC_EXIT_MIGRATION_CONFLICT`。
 
-**中断安全**：迁移过程每个文件独立操作。中断后重新执行不会丢失数据（copy-only 保证源文件完好）。
+### 8.6 冲突规则
 
-### 8.4 Legacy 双写/读取停止版本
+| 场景 | 行为 |
+|------|------|
+| 同一 secret 值出现在多个 source | 去重（仅保留一份） |
+| 不同 secret source 产生**不同值**映射到**同一目标 provider** | conflict——不迁移、不覆盖，标记 conflict |
+| 不同 secret source 映射到**不同目标 provider** | 永不覆盖，各自写入各自目标 |
+| 目标文件已存在且内容**相同** | `already_current`（幂等跳过） |
+| 目标文件已存在且内容**不同** | 保留现有，标记 conflict（不覆盖用户新数据） |
+
+不同 secret source **无自动 precedence**。不对不同 source 的 secret 进行自动合并/优选。
+
+### 8.7 legacy state 处理
+
+legacy state（`R/.aisc/state.env` + `R/.deploy/state.env`）：
+- 按 `.aisc` > `.deploy` 逐 key 读取（同名 key 以 `.aisc` 为准）。
+- S5 **仅报告** legacy state 现状（列出 key、标记 shadowed），不过度承诺 state migration。
+- 若后续 S6-S8 无 legacy state 消费者，S5 仅 report，不做任何 state 写入。
+
+### 8.8 journal / HMAC / 原子写
+
+- journal 不含明文 secret、不含 last4、不含普通 hash。
+- 完整性保护使用 `migration-integrity.key`（HMAC，存储在受保护的 `<platform-secrets-dir>/migration-integrity.key`，权限与 secret 相同）。
+- per-target atomic write（先写临时文件→重命名）。可重入，全局 `flock`/`LockFileEx`。
+- `--dry-run`：零目录创建、零 lock 获取、零 integrity key 生成、零 journal 写入、零 chmod/chown。仅报告将要执行的操作。
+
+### 8.9 `secret_ref` 解析语义
+
+workspace `.aisc/config.json` 不直接存 API key。需引用密钥时使用 `"secret_ref": "provider:<provider_id>"`。解析规则：在用户 secrets 目录 `<platform-secrets-dir>/providers/<provider_id>` 查找对应文件，读取 opaque UTF-8 credential。缺失时交互提示，非交互模式报 `AISC_EXIT_CONFIG_MISSING`。
+
+### 8.10 Legacy 双写/读取停止版本
 
 | 操作 | 停止版本 | 说明 |
 |------|----------|------|
 | `cs` 写 `.cc-config`/`.aisc/secrets`/`.claude/settings.json` | **S7 完成** | `cs` 改为只读 show |
 | 新 CLI 读 `.cc-config`/`.aisc/state.env` | **S10 完成** | 仅 `config migrate` 保留读能力 |
-| 旧路径文件/字段从磁盘保留 | cleanup 正式开放且用户单独授权后 | `config cleanup` 按逐源策略清理；与 S11 legacy 代码删除相互独立 |
+| source inventory 旧路径文件从磁盘删除 | 未来 cleanup 正式开放且用户单独授权后 | 不在 S5 实现；S11 legacy 代码删除与此相互独立 |
 
-### 8.5 Secret 唯一注入模型
+### 8.11 Secret 唯一注入模型
 
-- **Host CLI 是 secret owner**：host 从 `<platform-config>/aisc/secrets/` 读取密钥。
-- **容器只接收运行时注入**：通过 `docker run -e` 传入环境变量。容器**不直接读取** host secret 路径、**不挂载**整个 secret 目录。
+- **Host CLI 是 secret owner**：host 从 `<platform-secrets-dir>/providers/` 读取密钥。
+- **容器只接收运行时注入**：Docker argv 仅使用 `-e ANTHROPIC_AUTH_TOKEN` / `-e ANTHROPIC_API_KEY` 这样的变量名继承形式，实际 secret 值只进入启动 Docker 子进程的 environment，不进入 argv、dry-run、JSON、JSONL 或日志。容器**不直接读取** host secret 路径、**不挂载**整个 secret 目录。
 - **诚实注明**：Docker env 可被有 Docker 权限者通过 `docker inspect` 查看。短期只读 secret file（`--secret` / tmpfs mount）作为未来增强考量，首版不实现。
 
 ---
@@ -667,28 +746,84 @@ LABEL aisc.image.version="${AISC_VERSION}"
 | **文档更新** | Devlog（仅记录 CI artifact 产出） |
 | **Commit** | 约 4–6 个 |
 
-### S5：配置/密钥迁移 — 两阶段（P3.2）
+### S5.1：配置/密钥发现与 schema（P3.2）
 
 | 维度 | 内容 |
 |------|------|
 | **进入条件** | S2（domain 模型） |
-| **修改范围** | 新建 `src/aisc/adapters/config.py`、`src/aisc/application/config_service.py`、`src/aisc/cli/commands/config.py`；`src/aisc/domain/config.py` |
-| **核心工作** | ① 用户/workspace config JSON schema。② `aisc config validate/effective`。③ **Phase 1** `aisc config migrate`（copy-only）：从 `.aisc/secrets/api-keys`、`.cc-config/api-keys` 和 `.claude/settings.json` 的两个密钥字段提取密钥→写入新 store→验证 hash 匹配；`.aisc/state.env`/`.deploy/state.env` 按独立 state 键迁移。所有操作记录 source hash + 创建 `.bak-YYYYMMDD`，**不删除旧文件或 settings 字段**。④ **Phase 2** `aisc config cleanup`：两个 api-keys 文件仅在新 store 验证及 hash 匹配后删除/归档；`settings.json` 仅原子移除 `env.ANTHROPIC_AUTH_TOKEN`/`env.ANTHROPIC_API_KEY`，完整保留 `enabledPlugins`/`statusLine`/`model` 等字段；两个 state 文件按独立 state 策略清理。cleanup 内核在本切片实现但 **v3.0 默认拒绝**（需 `--force-cleanup` 高级 flag 且显示不可逆警告）；正式开放不早于 **v3.1.0/2026-09-01**；仍需**用户单独批准**方执行不可逆清理。⑤ 平台原生路径解析 |
+| **修改范围** | `src/aisc/domain/config.py`、`src/aisc/schemas/config_schema.py` |
+| **核心工作** | ① 定义 config.json 最小 schema（用户级 + workspace 级）。② 定义 provider secret 每 provider 单文件 opaque UTF-8 credential 模型。③ 定义 provider ID grammar `^[a-z0-9][a-z0-9._-]{0,63}$`、路径危险字符拒绝规则与 `provider:<id>` secret_ref 语义。④ 定义 source inventory 固定为精确路径（`W/.aisc/secrets/api-keys`、`W/.cc-config/api-keys`、`W/.claude/api-keys`、`W/.claude/settings.json`、`R/.aisc/state.env`、`R/.deploy/state.env`）。⑤ 定义 provider 映射规则（api-keys 仅按 `providers.json` 的 `auth_key_name` 唯一精确映射；settings token 仅在 canonical `base_url` 规范化后唯一精确匹配且 `auth_type` 对应时映射，禁止模型/url_fragment/token 外形猜测）。⑥ 定义冲突规则（不同 secret source 无自动 precedence，相同值去重，不同值 conflict；目标不同绝不覆盖；目标已存在且相同→already_current）。⑦ 定义 legacy state `.aisc` > `.deploy` 逐 key 策略，仅记录 shadowed。⑧ 明确两个根：`--workspace W`（workspace legacy key/settings 精确路径）、`--aisc-root R`（launcher state 精确路径），不得递归搜索。 |
 | **依赖** | S2 |
-| **测试证据** | ① fixture 覆盖 `.aisc/secrets/api-keys`、`.cc-config/api-keys`、含两个密钥字段及 plugins/statusLine/model 的 `.claude/settings.json`、`.aisc/state.env`、`.deploy/state.env`。② migrate 后新 store 去重正确；全部旧文件与 settings 密钥字段仍存在；`.bak` 与 source hash 完整；重复 migrate 幂等。③ cleanup 在 v3.0 默认拒绝；授权场景下仅清理 hash 匹配旧源：两个 api-keys 删除/归档、两个 state 文件按策略处理、settings 仅移除两个密钥字段。④ cleanup 后逐字段断言所有非密钥 settings 内容不变，并验证 `.bak` 可恢复全部文件/字段 |
-| **验收门** | Phase 1：可从全部旧源迁移，密钥去重正确，settings.json 保留所有非密钥字段（逐字段 diff 断言），backup 完整，source hash 幂等。Phase 2 内核正确但默认不可调用。fixture key 只在新 secret store（runtime 验证），`settings.json` env 块无 `AUTH_TOKEN`/`API_KEY` key |
-| **回滚** | ① 代码：删除 config 模块。② 用户数据：旧源在 Phase 1 后完好（copy-only）；Phase 2 cleanup 前各 `.bak` 可逐文件/字段恢复。③ 已迁移：回退 CLI 到旧版本继续读旧路径。④ settings.json：若已编辑可手工从 `.bak` 恢复或 git checkout |
+| **测试证据** | source inventory 枚举、provider ID grammar regex、映射规则单元测试（fixture 使用 temp PathPolicy，不读取真实 HOME/APPDATA/XDG/工作区真实密钥；sentinel 不出现在 stdout/stderr/json/jsonl/journal/errors） |
+| **验收门** | schema 定义完整；映射/冲突规则文档化；source inventory 固定 |
+| **回滚** | 删除 domain/schema 新增代码 |
+| **文档更新** | Devlog |
+| **Commit** | 约 2–3 个 |
+
+### S5.2：config validate/effective（P3.2）
+
+| 维度 | 内容 |
+|------|------|
+| **进入条件** | S5.1（schema 已定义） |
+| **修改范围** | `src/aisc/application/config_service.py`、`src/aisc/cli/commands/config.py`（validate/effective） |
+| **核心工作** | ① `aisc config validate`（schema 校验，text+json 输出）。② `aisc config effective`（脱敏合并有效配置，text+json 输出）。③ `--events` 与 validate/effective 组合→usage error（exit 2）。 |
+| **依赖** | S5.1 |
+| **测试证据** | schema 校验正确；有效配置脱敏；validate/effective `--events` → exit 2；fixture 使用 temp PathPolicy |
+| **验收门** | `aisc config validate/effective` text+json 输出正确 |
+| **回滚** | 删除 validate/effective 命令逻辑 |
+| **文档更新** | Devlog |
+| **Commit** | 约 2–3 个 |
+
+### S5.3：secure store adapter（P3.2）
+
+| 维度 | 内容 |
+|------|------|
+| **进入条件** | S5.1（路径模型已定义） |
+| **修改范围** | `src/aisc/adapters/secret_store.py` |
+| **核心工作** | ① 平台原生路径解析（Linux XDG config/state/data、macOS Application Support/aisc、Windows APPDATA config + LOCALAPPDATA state/secrets）。② POSIX 0700/0600 + owner 校验。③ Windows DACL current user SID + SYSTEM full control、禁继承/Everyone/Users/Authenticated Users、写后验证、失败 exit 9；DACL 的真实设置与回读验证是本切片完成条件，不允许以未接线 stub 延后。④ macOS：POSIX 0700/0600 + extended ACL 校验，无法证明 fail closed。⑤ journal/HMAC/原子写基础设施：不含明文/last4/普通 hash；完整性保护使用 `<platform-secrets-dir>/migration-integrity.key`；per-target atomic write（临时文件→重命名）；可重入，全局 `flock`/`LockFileEx`；`--dry-run` 零目录/lock/key/journal/chmod。生产实现不读取现有用户 secret；测试仅使用临时 PathPolicy fixture。 |
+| **依赖** | S5.1 |
+| **测试证据** | 平台路径解析正确；DACL/ACL 断言（mock 平台）；atomic write + journal HMAC；dry-run 零副作用。fixture 使用 temp PathPolicy |
+| **验收门** | adapter 可执行原子读/写；journal 可校验；Linux mode/owner、macOS extended ACL、Windows NTFS DACL 均有平台原生集成证据；无法证明安全权限时 fail closed（exit 9） |
+| **回滚** | 删除 secret_store adapter |
+| **文档更新** | Devlog |
+| **Commit** | 约 3–4 个 |
+
+### S5.4：config migrate + journal（P3.2）
+
+| 维度 | 内容 |
+|------|------|
+| **进入条件** | S5.3（secure store adapter 就绪） |
+| **修改范围** | `src/aisc/application/config_service.py`（migrate 逻辑）、`src/aisc/cli/commands/config.py`（migrate 命令） |
+| **核心工作** | ① `aisc config migrate`（text+json+events）：Phase 1 copy-only——从 S5.1 source inventory 精确路径读取；**不修改/删除/重命名/chmod/chown legacy 源或 settings，源文件和 settings bytes 不变**。② 按 S5.1 映射规则进行 provider 映射与 secret 复制→新 store。③ 冲突按 S5.1 规则处理（相同去重、不同 conflict、目标不同不覆盖、目标已存在相同→already_current）。④ 未映射 secret → exit 14 `AISC_EXIT_MIGRATION_CONFLICT`。⑤ legacy state 仅报告现状（`.aisc` > `.deploy` 逐 key，标记 shadowed），不过度承诺 state migration；若后续 S6-S8 无 legacy state 消费者，S5 仅报告。⑥ 回滚依靠源未变 + 目标逐文件原子 + journal；**不创建 `.bak-YYYYMMDD` 或明文备份**。⑦ 退出码：0 成功/全部 already_current；14 冲突/未映射；6 schema 错误；7 必要文件缺失；9 权限不足；1 通用；130 中断（**不含部分成功退出码**）。⑧ `--dry-run` 零目录/lock/key/journal/chmod。 |
+| **依赖** | S5.2、S5.3 |
+| **测试证据** | ① fixture 覆盖 source inventory 全量精确路径（`.aisc/secrets/api-keys`、`.cc-config/api-keys`、含两个密钥字段及 plugins/statusLine/model 的 `.claude/settings.json`、`.aisc/state.env`、`.deploy/state.env`）。② migrate 后新 store 去重/冲突/already_current 正确；全部旧文件与 settings 密钥字段仍存在、bytes 不变；journal 完整且可验证（HMAC）。③ 重复 migrate 幂等。④ unmapped→exit 14；`--dry-run` 零副作用。⑤ fixture 使用 temp PathPolicy，sentinel 不出现在 stdout/stderr/json/jsonl/journal/errors。 |
+| **验收门** | Phase 1 copy-only：可从全部旧源导入，密钥去重正确，所有 legacy 源与整个 `settings.json` 均 byte-for-byte 不变，journal 完整、幂等。fixture credential 预期同时保留在 legacy fixture 与新 secret store；“settings 不再含密钥/磁盘仅剩一份”不属于 S5，须等待 S7/S8 停止 runtime 写路径及未来获授权 cleanup。 |
+| **回滚** | ① 代码：删除 migrate 逻辑。② 用户数据：旧源在 Phase 1 后完好（copy-only——源文件 bytes 不变）。③ 已迁移：回退 CLI 到旧版本继续读旧路径。④ 目标 store：必要时从 platform state path 回退/删除新 store 文件（journal 提供审计轨迹） |
 | **文档更新** | README 配置章节；Devlog |
-| **Commit** | 约 8–12 个 |
+| **Commit** | 约 4–6 个 |
+
+### S5.5：cleanup 拒绝 stub（P3.2）
+
+| 维度 | 内容 |
+|------|------|
+| **进入条件** | S5.4（migrate 就绪） |
+| **修改范围** | `src/aisc/cli/commands/config.py`（cleanup stub） |
+| **核心工作** | 实现 `aisc config cleanup` **固定拒绝 stub**：exit 11、`AISC_ERR_CLEANUP_NOT_AUTHORIZED`、零读 secret、零写。cleanup mutation engine、真实 cleanup、legacy 删除**均不在 S5 实现**，需后续切片单独批准。**不存在 `--force-cleanup` flag**。 |
+| **依赖** | S5.4 |
+| **测试证据** | `aisc config cleanup` 在任何参数组合下均 exit 11；无文件访问/写入 |
+| **验收门** | cleanup stub 正确拒绝（exit 11 + `AISC_ERR_CLEANUP_NOT_AUTHORIZED`） |
+| **回滚** | 删除 cleanup stub |
+| **文档更新** | Devlog |
+| **Commit** | 1 个 |
 
 ### S6：最小 safe/unsafe resolver + network 正交（P3.2）
 
 | 维度 | 内容 |
 |------|------|
-| **进入条件** | S5（config 模型已就绪） |
+| **进入条件** | S5.4（config migrate/journal 已就绪） |
 | **修改范围** | 新建 `src/aisc/domain/profiles.py`、`src/aisc/application/profile_service.py`、`src/aisc/cli/commands/profile.py` |
 | **核心工作** | ① 仅内置 `safe`/`unsafe`（无 user-defined、无 `custom_docker_args`、无 `network` 字段、无 `sudo_policy` 字段）。② `aisc profile list/show`。③ `--profile unsafe` 确认逻辑 |
-| **依赖** | S5 |
+| **依赖** | S5.4 |
 | **测试证据** | `safe`/`unsafe` 正确解析；`--yes` 不批准 unsafe；`--non-interactive` + unsafe 无 confirm 时 exit 11 |
 | **验收门** | `aisc profile list` 列出 safe/unsafe；unsafe gate 生效 |
 | **回滚** | ① 代码：删除 profile 模块。② 行为：回退到旧镜像时，显式 safe 请求必须拒绝；只有用户同时提供 `--allow-legacy-image --accept-unsafe-risk` 才可按旧 unsafe 行为启动，绝不把 safe 静默 no-op。③ image：不依赖 profile 参数的旧镜像仅通过上述显式风险门继续可用 |
@@ -699,10 +834,10 @@ LABEL aisc.image.version="${AISC_VERSION}"
 
 | 维度 | 内容 |
 |------|------|
-| **进入条件** | S5（secrets 存储）、S6（profile） |
+| **进入条件** | S5.4（secrets 存储）、S6（profile） |
 | **修改范围** | 新建 `src/aisc/application/provider_service.py`、`src/aisc/cli/commands/provider.py`、`src/aisc/adapters/secret_store.py`；修改 `container/claude-switch`（改为只读 show） |
 | **核心工作** | ① `aisc provider list/show/use`。② host `aisc provider use` 是唯一持久写路径；`aisc run --provider` 仅单次 override。③ 容器 `cs` 改为只读 show，停止写 `.cc-config`/`.aisc/secrets`/`.claude/settings.json`。④ providers 唯一事实源：`container/providers.json`。⑤ 端到端 non-interactive CI 测试 |
-| **依赖** | S5、S6、容器内 `cs` 修改 |
+| **依赖** | S5.4、S6、容器内 `cs` 修改 |
 | **测试证据** | provider list 与 `container/providers.json` 一致；`cs` 不再写文件；e2e non-interactive 通过 |
 | **验收门** | `aisc provider use` 是唯一持久写路径；`cs` 仅 show；`--non-interactive` 端到端通过 |
 | **回滚** | ① 代码：删除 provider CLI。② 容器：`cs` 回滚到只读 show 模式，**不默认恢复双写**（需单独 revert `cs` 修改）。③ 用户数据：host secret store 不受影响（与旧 `.cc-config` 共存）。④ 若需恢复旧写路径：显式 revert 容器内 `cs` 双写 commit |
@@ -717,7 +852,7 @@ LABEL aisc.image.version="${AISC_VERSION}"
 | **修改范围** | `container/Dockerfile`（LABEL）、`container/claude-wrapper`（条件化权限）、`container/entrypoint.sh`（non-interactive 路径、sudo 收紧）；`src/aisc/application/diagnostic.py`（contract 检查） |
 | **核心工作** | ① contract compatibility table（§10.1）。② wrapper 仅 unsafe 注入 `--dangerously-skip-permissions`。③ proxy 失败非零 exit。④ non-interactive 端到端无 stdin。⑤ 密钥仅 env 注入。⑥ 容器固定最小 sudoers。⑦ `.claude/settings.json` 零密钥残留 |
 | **依赖** | S7、`claude-wrapper`/`entrypoint.sh` 修改 |
-| **测试证据** | runtime fixture test：fixture key 只在新 secret store（非 gitleaks 替代）; proxy 失败 exit 13；safe 下无 `--dangerously-skip-permissions` |
+| **测试证据** | S7/S8 runtime fixture test：新写路径不再向 `settings.json` 或 legacy api-keys 写入 fixture credential（非 gitleaks 替代）；proxy 失败 exit 13；safe 下无 `--dangerously-skip-permissions`。S5 copy-only fixture 仍保留 legacy credential，不与此验收混淆 |
 | **验收门** | safe 下真安全；proxy 失败是非零；contract 不兼容被拒；settings.json 零密钥 |
 | **回滚** | ① 代码：回退 `container/*` 修改。② image：用旧 immutable image tag 启动（保留旧安全行为）；旧镜像必须同时使用 `--allow-legacy-image --accept-unsafe-risk`，safe 请求拒绝无 capability label 的旧镜像。③ 回退版本 CLI **也检测 contract**（S8 rollback 不跳过 contract 验证）。④ 参数：`--profile unsafe` 回退到旧 wrapper 行为 |
 | **文档更新** | README 安全说明更新；Devlog |
@@ -772,7 +907,7 @@ LABEL aisc.image.version="${AISC_VERSION}"
 
 | Runner | 触发 | Job 内容 |
 |--------|------|-----------|
-| `ubuntu-latest` | push + PR | Python unit tests、feature tests、contract tests、config-path tests、JSON/JSONL/exit-code 协议验证、Linux Docker E2E integration tests（`pytest tests/integration/docker/`）、gitleaks（**阻断**）、文档一致性检查 |
+| `ubuntu-latest` | push + PR | Python unit tests、feature tests、contract tests、config-path tests、JSON/JSONL/exit-code 协议验证、Linux Docker E2E integration tests（`python -m unittest tests/integration/docker/`）、gitleaks（**阻断**）、文档一致性检查 |
 | `windows-latest` | push + PR | Python unit tests、feature tests、contract tests、config-path tests、JSON/JSONL/exit-code 协议验证、locator smoke（`start.bat` 转发验证）、PowerShell parser check（对 `*.ps1` 文件）。**无 Docker daemon——Docker Desktop E2E 属于 release checklist** |
 | `macos-14` (arm64) | push + PR | Python unit tests、feature tests、contract tests、config-path tests、JSON/JSONL/exit-code 协议验证、locator smoke（`start.command` 转发验证）。**无 Docker daemon——Docker Desktop E2E 属于 release checklist** |
 
@@ -786,7 +921,7 @@ LABEL aisc.image.version="${AISC_VERSION}"
 - `container/_bundle/` 保留 allowlist。
 - `vendor/` 保留 allowlist。
 
-**gitleaks 仅作为 repo 门禁。runtime 密钥安全以 behavior fixture integration test 验收**（验证 fixture key 只在新 secret store，不在 `settings.json` 中出现）。
+**gitleaks 仅作为 repo 门禁。runtime 密钥安全以 S7/S8 behavior fixture integration test 验收**（验证新写路径只写 host secret store，不再向 `settings.json` 或 legacy api-keys 新增 credential）。S5 copy-only 迁移明确保留旧源，不要求磁盘仅剩一份。
 
 ### 12.3 Artifact smoke（workflow-only）
 
@@ -859,12 +994,12 @@ LABEL aisc.image.version="${AISC_VERSION}"
 | 回滚维度 | 内容 |
 |----------|------|
 | 代码 | `git revert` 该切片 commit |
-| 用户数据 (config/secrets/state) | Phase 1 后旧源完好（copy-only）；Phase 2 cleanup 前各 `.bak` 可逐文件/字段恢复（`settings.json` 可手工 merge 或 git checkout）；旧路径在 S11 前持续可读 |
+| 用户数据 (config/secrets/state) | Phase 1 后旧源完好（copy-only——源文件 bytes 不变）；回滚依靠源未变 + 目标逐文件原子 + journal（不依赖 `.bak` 备份）；旧路径在 S11 前持续可读 |
 | CLI artifact | 回退到上一版 immutable release archive；`start.*` locator 可指向上版二进制或回退到直接调 `scripts/run.*` |
 | image | 用上一版 immutable image tag 启动，不依赖当前正在运行的容器 |
 | 参数行为 | 回退版本的 `--profile`/`--network`/`--provider` 语义等价于旧行为（profile 回退不得 no-op 到 safe） |
 
-**不合法回滚**：profile 回滚不能只是 no-op（移除 `--profile` 时应等效于旧 unsafe 行为，非 silent safe）。迁移回滚不能只删新文件（必须确保旧路径持续可读且 `.bak` 可恢复）。S8 回滚的 CLI 版本也必须检测 contract（不跳过）。
+**不合法回滚**：profile 回滚不能只是 no-op（移除 `--profile` 时应等效于旧 unsafe 行为，非 silent safe）。迁移回滚不能只删新文件（必须确保旧路径持续可读且源文件 bytes 不变——依靠 copy-only 保证源完好）。S8 回滚的 CLI 版本也必须检测 contract（不跳过）。
 
 ### 14.4 Legacy 删除门槛（具体条件）
 
@@ -880,9 +1015,9 @@ LABEL aisc.image.version="${AISC_VERSION}"
 8. **用户另行批准** legacy 删除。
 
 **与 `aisc config cleanup` 的关系**：
-- cleanup 内核在 S5 实现，但 v3.0 默认拒绝（需 `--force-cleanup` 高级 flag）。
-- cleanup 正式开放不早于 **v3.1.0 / 2026-09-01**，且**仍需用户另行批准进行不可逆清理**。
-- S11（legacy 删除）和 cleanup 正式开放是两个独立决策点，均需用户单独授权。cleanup 不可逆删除后用户可从 `.bak` 恢复；legacy 删除后用户需 `git checkout` 旧版本恢复。
+- cleanup 在 S5.5 仅实现为**固定拒绝 stub**（exit 11、`AISC_ERR_CLEANUP_NOT_AUTHORIZED`、零读写）。cleanup mutation engine 不在 S5 实现。
+- 真实 cleanup 正式开放不早于 **v3.1.0 / 2026-09-01**，且**仍需用户另行批准进行不可逆清理**。
+- S11（legacy 删除）和 cleanup 正式开放是两个独立决策点，均需用户单独授权。cleanup 不可逆删除后用户依赖 journal + 源文件不变恢复；legacy 删除后用户需 `git checkout` 旧版本恢复。
 
 **不使用旧代码覆盖率（<1%）作为门槛**——旧脚本功能性验证须通过上述场景矩阵。
 
@@ -901,8 +1036,8 @@ LABEL aisc.image.version="${AISC_VERSION}"
 
 ### 15.2 P3.2 完成标准
 
-- [ ] `aisc config migrate` 两阶段幂等、backup 完整、source hash 记录；settings.json 只移除密钥字段且保留所有其他字段（逐字段 diff 验证）
-- [ ] `aisc config effective` 输出脱敏；cleanup 内核正确但 v3.0 默认拒绝
+- [ ] `aisc config migrate` 幂等、journal 完整，Phase 1 copy-only 源文件与 settings bytes 不变；unmapped→exit 14
+- [ ] `aisc config effective` 输出脱敏；`aisc config cleanup` stub 正确拒绝（exit 11 / `AISC_ERR_CLEANUP_NOT_AUTHORIZED` / 零读写）
 - [ ] `aisc profile list/show` 列出 `safe`/`unsafe`
 - [ ] `aisc provider use` 是**唯一持久写路径**；`aisc provider list/show` 完整
 - [ ] `aisc run --non-interactive --profile safe` 端到端通过
@@ -920,7 +1055,7 @@ LABEL aisc.image.version="${AISC_VERSION}"
 |------|--------|----------|------|
 | R1 | 打包工具选择 | PyInstaller（实施阶段可评估 Nuitka） | CI 成熟度优先 |
 | R2 | `proxy` 建模方式 | `--network direct\|proxy` + config 持久偏好 | 正交于 profile |
-| R3 | Legacy config 迁移删除策略 | 两阶段：先 copy，再显式 cleanup | 最安全策略 |
+| R3 | Legacy config 迁移策略 | Phase 1 copy-only（源文件不变）；cleanup 仅拒绝 stub（exit 11）；真实 cleanup 与 legacy 删除仍需单独授权 | copy-only 最安全 + 拒绝 stub 明确边界 |
 | R4 | Legacy 删除门槛 | §14.4 全部条件满足 | v3.1.0 + 2026-09-01 双门槛 |
 | R5 | 分发渠道 | 用户批准后择一（GitHub Release / Gitee / OSS），**未批准前 S10 不得执行** | S10 强制前置分发授权门 |
 | R6 | Python 构建环境 | 3.11+ | 同容器内版本 |
@@ -962,7 +1097,19 @@ S1 (契约/特征测试)
       │         │
       │         └──────────────────────────┐
       │                                    │
-      └─→ S5 (配置/密钥迁移 — 两阶段)       │
+      └─→ S5.1 (配置/密钥发现与 schema)     │
+           │                               │
+           ├─→ S5.2 (config validate/effective)
+           │    │                           │
+           │    └─→ S5.4 (config migrate + journal)
+           │         │                      │
+           └─→ S5.3 (secure store adapter)  │
+                │    │                      │
+                ├────┘                      │
+                │                           │
+           S5.4 ─┘                          │
+           │                               │
+           ├─→ S5.5 (cleanup 拒绝 stub)     │
            │                               │
            └─→ S6 (最小 safe/unsafe + network 正交)
                 │                          │
@@ -980,8 +1127,9 @@ S1 (契约/特征测试)
 ```
 
 **依赖说明**：
-- P3.1 = S1→S4。P3.2 = S5→S11。
-- **S8→S9→S10→S11 严格单向顺序**。
+- P3.1 = S1→S4。P3.2 = S5.1→S11。
+- S5.1→S5.2→S5.3→S5.4→S5.5→S6→S7→S8→S9→S10→S11 严格单向顺序。
+- S5.2 依赖 S5.1；S5.3 依赖 S5.1；S5.4 依赖 S5.2+S5.3；S5.5 依赖 S5.4。
 - S4 同时是 S10 的**分发前置**（S4 产出完整 archive → 分发授权门 → S10 默认入口切换）。
 - S10 额外条件：S8 contract 完成 + S9 协议稳定化 + 分发授权门通过（用户批准发布渠道且 archive 可被普通用户访问）。
 - Legacy 删除（S11）最后，依赖所有迁移/安全/contract/协议/默认切换稳定 + 用户另行批准。
@@ -1007,5 +1155,8 @@ v2 中 P0/P1/P2 已完成的工作（目录重组、provider 数据化、version
 | **contract** | 容器镜像 LABEL 声明的兼容性版本号 |
 | **capability detection** | 运行时探测 Docker/内核能力（不设硬编码最低版本门槛） |
 | **non-interactive** | 不在 stdin 读取任何输入 |
-| **two-phase migration** | Phase 1 copy-only → Phase 2 显式 cleanup |
+| **copy-only migration** | Phase 1 仅复制 secret（源文件与 settings bytes 不变）；回滚依靠源未变 + journal；不创建 `.bak` 备份 |
+| **cleanup refusal stub** | `aisc config cleanup` 在 S5.5 固定拒绝（exit 11、零读写）；真实 cleanup 需后续切片单独批准 |
+| **journal** | 迁移操作的密码学审计轨迹（HMAC 保护，不含明文/last4/普通 hash） |
+| **source inventory** | 固定的精确路径集合（`W/.aisc/secrets/api-keys` 等），不得递归搜索 |
 | **feature test** | 记录兼容行为的回归测试（非完整 stdout golden） |
