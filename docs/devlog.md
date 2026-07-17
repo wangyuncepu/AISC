@@ -497,6 +497,44 @@ tests/integration/test_cli.py      # subprocess 集成: version/doctor text+json
 
 ---
 
+### P3.2 S5.1 — 配置/密钥发现与 schema（只读模型，ora-6 终审）
+
+**范围**：纯模型、解析器、只读 discovery。无 CLI、secure store、migration、write。
+
+**关闭的阻塞项**：
+
+- **A1 value 原样**：`parse_api_keys` 仅对空行/comment 使用独立 view；value 从首个 `=` 后取原 bytes。
+
+- **A2 auth_type 字段匹配**：`parse_settings` 单字段按 provider auth_type 匹配；错字段→UNMAPPED 零 OK。
+
+- **A3 跨 source 冲突传递**：`classify_credentials` 任一 CONFLICT→全组 CONFLICT；intra-source dup-diff 共享 provider_id。
+
+- **A4 canonical_url**：仅操作 `parsed.path` trailing slash，再 `urlunparse`。
+
+- **A5 state 分模型**：`StateEntry` repr/to_summary 不泄漏 value；`StateIssue` 仅 source/line/reason_code。
+
+- **A6 CredentialCandidate repr 受控**：内部字段 `__post_init__` 设置，asdict 不可见。
+
+- **A7 CredentialValue 收紧**：`_reveal_for_io()`；`same_value()` hmac.compare_digest；`__reduce_ex__`+`__deepcopy__` 拒绝 pickle/允许 deepcopy。
+
+- **B8 PathPolicy 根校验**：构造时拒绝空/相对；root symlink lstat 拒绝。
+
+- **B9 移除 reader callback**：`discover_sources` 固定 `_safe_read`。
+
+- **B10 延期**：parent race / Windows reparse→S5.3。
+
+- **B11 生产 loader**：`load_provider_catalog` 逐字段存在性+类型校验，错误不回显输入值。
+
+- **ora-6 终审 blocker 1**：`merge_state` 同源 duplicate→last-one-wins（`effective[e.key]=e` 替代 `setdefault`）；新增 deploy-only/aisc-only/双源 duplicate+shadowed+input 无副作用测试。
+
+- **ora-6 终审 blocker 2**：`load_provider_catalog` strict required fields（`id`/`name`/`auth_type`/`auth_key_name`/`base_url` 全部显式存在+类型校验）；name 非空；base_url 允许空但字段必须存在；id 必须等于 catalog key。新增缺失字段、类型错误、id/key mismatch、sentinel 扫描测试。
+
+**延期到 S5.3**：逐 component openat、Windows DACL/reparse、平台路径 resolver。
+
+**验证**：579 tests pass (117 config-specific)。
+
+---
+
 ### 已知未完成 / 技术债（如实记录，不做为已完成）
 
 - **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。
