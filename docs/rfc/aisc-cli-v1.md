@@ -32,7 +32,7 @@ CLI 支持三种输出格式，由全局参数控制：
 
 ### 2.1 结构
 
-适用于所有查询/只读命令（`version`、`doctor`、`config validate`、`config effective`、`profile list`、`profile show`、`provider list`、`provider show`）。
+适用于所有支持 `--format json` 的命令（`version`、`doctor`、`build`、`run`、`config validate`、`config effective`、`profile list`、`profile show`、`provider list`、`provider show`）。对于长命令（`build`、`run`），JSON envelope 返回单次结果摘要；Docker 原始日志走 stderr。失败时 `data` 保留完整字段（`build` 含 `image_tag,docker_exit_code`；`run` 含 `image,container_exit_code`）而非 null。
 
 ```jsonc
 {
@@ -340,8 +340,10 @@ S1 的 `tests/harness/test_runner.py` 可验证以下最小契约：
 | `profile show` | 单个 profile 详情 |
 | `provider list` | `providers` 数组 |
 | `provider show` | 单个 provider 详情（脱敏） |
-| `build` | `image_tag`, `dry_run` |
-| `run` | `container_id`, `dry_run` |
+| `build` | `image_tag`, `dry_run`, `executed`, `docker_argv`, `docker_exit_code`(nullable) | 构建结果；`docker_exit_code` 保留 Docker 原始退出码（成功 0，失败保留原码如 37）；AISC 进程退出码映射为 4（`AISC_EXIT_BUILD_FAILED`） |
+| `run` | `image`, `container_id`(nullable), `dry_run`, `executed`, `docker_argv`, `container_exit_code`(nullable) | 运行结果；`container_exit_code` 保留容器原始退出码；AISC 进程退出码映射为 10（`AISC_EXIT_CONTAINER_FAILED`） |
+
+> **退出码映射规则**：对于 `build`/`run`，进程退出码不与 Docker/容器退出码直接透传。`docker build` 非零 → AISC exit 4（`AISC_EXIT_BUILD_FAILED`），data.docker_exit_code 保留原码；`docker run` 非零 → AISC exit 10（`AISC_EXIT_CONTAINER_FAILED`），data.container_exit_code 保留原码。14-125 为业务预留，128+ 表示信号终止（如 SIGINT 130）。`--dry-run` 不调用 Docker，data.executed=false。
 
 **JSONL event `type` 命名空间约定**（S3+ 实现）：
 

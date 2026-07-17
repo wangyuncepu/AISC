@@ -218,7 +218,7 @@ cs upgrade → 合并出厂部分(skills/plugins/commands)，保留 projects/历
 
 ### P3 CLI（开发预览 / 尚未替代 start.*）
 
-> **状态说明**：P3.1 S2 实现了 `version` 与 `doctor` 两个只读命令的最小纵向切片。当前 **默认用户入口仍是 `start.sh` / `start.bat` / `start.command`**。Python CLI 处于开发预览阶段，独立二进制（PyInstaller）要到 S4 才会完成。
+> **状态说明**：P3.1 S3 实现了 `version`、`doctor`、`build`、`run` 四个命令的最小纵向切片。当前 **默认用户入口仍是 `start.sh` / `start.bat` / `start.command`**。Python CLI 处于开发预览阶段，独立二进制（PyInstaller）要到 S4 才会完成。
 
 ```bash
 # 开发用法（需要仓库源码 + Python 3.11+）
@@ -227,8 +227,20 @@ PYTHONPATH=src python3 -m aisc version --format json
 PYTHONPATH=src python3 -m aisc doctor
 PYTHONPATH=src python3 -m aisc doctor --format json
 
+# 构建镜像（dry-run 规划）
+PYTHONPATH=src python3 -m aisc build --dry-run
+PYTHONPATH=src python3 -m aisc build --dry-run --no-cache --pull
+PYTHONPATH=src python3 -m aisc build --dry-run --tag my-image:v1
+PYTHONPATH=src python3 -m aisc build --dry-run --events        # JSONL 事件流
+
+# 运行容器（dry-run 规划）
+PYTHONPATH=src python3 -m aisc run --dry-run
+PYTHONPATH=src python3 -m aisc run --dry-run --network proxy
+PYTHONPATH=src python3 -m aisc run --dry-run --events          # JSONL 事件流
+
 # 全局选项可放在子命令前或后
 PYTHONPATH=src python3 -m aisc --format json version
+PYTHONPATH=src python3 -m aisc --events build --dry-run
 ```
 
 > 协议细节见 `docs/rfc/aisc-cli-v1.md`。

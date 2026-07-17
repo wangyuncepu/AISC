@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -129,12 +129,14 @@ class DoctorReport:
 
 @dataclass
 class CliError(Exception):
-    """Controlled CLI error with exit code and stable error code."""
+    """Controlled CLI error with exit code, stable error code, and optional
+    structured outcome data for JSON envelope / events terminal."""
 
     message: str
     exit_code: int = 1
     error_code: str = "AISC_ERR_GENERAL"
     hint: Optional[str] = None
+    data: Optional[Dict[str, Any]] = None  # structured outcome preserved on failure
 
 
 # ---------------------------------------------------------------------------
@@ -150,3 +152,138 @@ class ProcessResult:
     exit_code: int = -1
     timed_out: bool = False
     command_not_found: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Docker preflight result
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DockerPreflightResult:
+    """Result of Docker availability preflight check."""
+
+    docker_path: str = ""
+    available: bool = False
+    reason: str = ""  # "ok", "cli_not_found", "daemon_unreachable", "permission_denied"
+
+    @property
+    def exit_code(self) -> int:
+        """Map preflight result to AISC exit code."""
+        if self.available:
+            return 0
+        if self.reason == "permission_denied":
+            return 9  # AISC_EXIT_PERMISSION_DENIED
+        return 3  # AISC_EXIT_DOCKER_UNAVAILABLE
+
+    @property
+    def error_code(self) -> str:
+        """Map preflight result to AISC error code."""
+        if self.available:
+            return ""
+        if self.reason == "permission_denied":
+            return "AISC_ERR_PERMISSION_DENIED"
+        return "AISC_ERR_DOCKER_UNAVAILABLE"
+
+
+# ---------------------------------------------------------------------------
+# Docker image inspect — structured result
+# ---------------------------------------------------------------------------
+
+class ImageInspectStatus:
+    """Classification of a docker image inspect call."""
+    EXISTS = "exists"
+    MISSING = "missing"
+    DOCKER_UNAVAILABLE = "docker_unavailable"
+    PERMISSION_DENIED = "permission_denied"
+    TIMEOUT = "timeout"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class ImageInspectResult:
+    """Structured result of ``docker image inspect``.
+
+    Only ``status == MISSING`` maps to AISC_EXIT_IMAGE_NOT_FOUND(5);
+    other non-ok statuses map to DOCKER_UNAVAILABLE(3), PERMISSION_DENIED(9),
+    or GENERAL(1) depending on the underlying cause.
+    """
+
+    status: str = ImageInspectStatus.ERROR  # one of ImageInspectStatus
+    image: str = ""
+    message: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Docker build / run plans (immutable, no side effects)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class BuildPlan:
+    """Immutable build specification — argv, tag, flags, root."""
+
+    tag: str = "super-claude:latest"
+    root: str = ""
+    dockerfile: str = ""
+    no_cache: bool = False
+    pull: bool = False
+    build_arg_use_cn_mirror: str = "1"
+    build_arg_node_image: str = "node:20-slim"
+    dry_run: bool = False
+
+    @property
+    def docker_argv(self) -> list:
+        """Return the ``docker build`` argv list (without ``docker``)."""
+        argv = ["build"]
+        if self.no_cache:
+            argv.append("--no-cache")
+        if self.pull:
+            argv.append("--pull")
+        argv.extend([
+            "--build-arg", f"USE_CN_MIRROR={self.build_arg_use_cn_mirror}",
+            "--build-arg", f"NODE_IMAGE={self.build_arg_node_image}",
+            "-f", self.dockerfile,
+            "-t", self.tag,
+            self.root,
+        ])
+        return argv
+
+
+@dataclass(frozen=True)
+class RunPlan:
+    """Immutable run specification — argv, image, workspace, network, flags."""
+
+    image: str = "super-claude:latest"
+    workspace: str = ""
+    name: str = ""
+    network: str = "direct"
+    dry_run: bool = False
+    interactive: bool = True  # True for text mode, False for json/events
+    proxy_config: str = ""    # host path to .claude/mihomo/config.yaml (when network=proxy)
+
+    @property
+    def docker_argv(self) -> list:
+        """Return the ``docker run`` argv list (without ``docker``).
+
+        - interactive=True  → includes ``-it``
+        - interactive=False → omits ``-it``
+        - network=proxy     → adds NET_ADMIN, TUN device, mihomo config mount
+        """
+        argv = ["run", "--rm"]
+        if self.interactive:
+            argv.append("-it")
+        argv.extend([
+            "-e", "TERM=xterm-256color",
+            "--name", self.name,
+            "-v", f"{self.workspace}:/home/AISC/app",
+        ])
+        if self.network == "proxy":
+            argv.extend([
+                "--cap-add=NET_ADMIN",
+                "--device", "/dev/net/tun",
+            ])
+            if self.proxy_config:
+                argv.extend([
+                    "-v", f"{self.proxy_config}:/etc/mihomo/config.yaml:ro",
+                ])
+        argv.append(self.image)
+        return argv

@@ -1,4 +1,4 @@
-"""CLI output formatting — JSON envelope and human-readable text."""
+"""CLI output formatting — JSON envelope, human-readable text, and JSONL emitter."""
 
 from __future__ import annotations
 
@@ -149,3 +149,76 @@ def print_doctor_text(report: Any, use_color: bool = True) -> None:
 
     for line in lines:
         print(line)
+
+
+# ---------------------------------------------------------------------------
+# JSONL Event Emitter (RFC §3)
+# ---------------------------------------------------------------------------
+
+class JsonlEmitter:
+    """Emit JSONL event lines to stdout during long commands (build/run).
+
+    Usage::
+
+        emitter = JsonlEmitter(command="build")
+        emitter.emit("build.start", data={"image_tag": "..."})
+        # ... docker build ...
+        emitter.emit("build.complete", data={"exit_code": 0}, terminal=True)
+
+    Each emit() writes one JSON line to stdout, increments seq by 1,
+    and enforces that ``terminal=True`` can only be called once as the
+    final event.
+    """
+
+    def __init__(self, command: str, *, run_id: Optional[str] = None):
+        self._command = command
+        self._run_id = run_id or str(uuid.uuid4())
+        self._seq = 0
+        self._terminated = False
+
+    @property
+    def run_id(self) -> str:
+        return self._run_id
+
+    @property
+    def seq(self) -> int:
+        return self._seq
+
+    @property
+    def terminated(self) -> bool:
+        """``True`` if a terminal event has already been emitted."""
+        return self._terminated
+
+    def emit(self, event_type: str, data: Dict[str, Any],
+             *, terminal: bool = False) -> None:
+        """Emit a single JSONL event line.
+
+        Args:
+            event_type: RFC event type, e.g. ``"build.start"``.
+            data: Event-specific payload dict.
+            terminal: ``True`` for the final terminating event only.
+        """
+        if self._terminated:
+            raise RuntimeError(
+                f"JSONL stream already terminated (last event was seq={self._seq})"
+            )
+        self._seq += 1
+        event = {
+            "protocol": PROTOCOL,
+            "command": self._command,
+            "run_id": self._run_id,
+            "seq": self._seq,
+            "type": event_type,
+            "ts": _utc_now(),
+            "data": data,
+        }
+        if terminal:
+            self._terminated = True
+        print(json.dumps(event, ensure_ascii=False))
+
+    def emit_terminal(self, terminal_type: str, exit_code: int,
+                      extra_data: Optional[Dict[str, Any]] = None) -> None:
+        """Emit the terminal event with ``data.exit_code``."""
+        data: Dict[str, Any] = dict(extra_data or {})
+        data["exit_code"] = exit_code
+        self.emit(terminal_type, data, terminal=True)

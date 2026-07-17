@@ -645,7 +645,7 @@ LABEL aisc.image.version="${AISC_VERSION}"
 |------|------|
 | **进入条件** | S2 完成 |
 | **修改范围** | 新建 `src/aisc/adapters/docker_.py`、`src/aisc/cli/commands/build.py`、`src/aisc/cli/commands/run.py` |
-| **核心工作** | ① Docker adapter。② `aisc build`（`--no-cache`/`--pull`/`--tag`）。③ `aisc run`（legacy-compatible——不加 contract 检查，`--dry-run` 输出对照旧行为） |
+| **核心工作** | ① Docker adapter（统一 `DockerExecutor` 协议：preflight/inspect_image/run_captured/run_streaming，生产 `RealDockerExecutor`，测试 `FakeDockerExecutor`）。② `aisc build`（`--tag/-t` 默认 super-claude:latest、`--no-cache`、`--pull`、`--dry-run`；从 `config/versions.env` 读取 `NODE_IMAGE`/`USE_CN_MIRROR`；`NODE_IMAGE` 缺失→exit 1；`Dockerfile` 缺失→exit 1；text 模式 streaming 实时日志；json/events 模式 captured 转发 stderr）。③ `aisc run`（`--image/-i`、`--workspace`、`--name`、`--network direct|proxy`、`--dry-run`；text 模式 `-it` streaming；json/events 模式无 `-it` captured；image inspect 结构化分类；proxy 固定 `<root>/.claude/mihomo/config.yaml` 验证+挂载；legacy-compatible——不加 contract 检查）。④ 退出码映射：docker build 非零→4（保留 raw docker_exit_code），docker run 非零→10（保留 raw container_exit_code）；preflight 失败→3/9；image not found→5；workspace 不可读→9；dry-run 零 Docker 调用。⑤ `--events` JSONL（完整实现）：`build.start/plan/step.complete/complete/failed`；`run.start/plan/container.start/container.complete/complete/failed/cancelled`；terminal 由 main.py 统一发，恰好一个，最后一行；`--format json --events` 互斥→exit 2。⑥ 全局参数支持命令前后。 |
 | **依赖** | S2 |
 | **测试证据** | Docker adapter mock 测试；集成测试（需 Docker daemon）；`--events` JSONL 有效 |
 | **验收门** | `aisc build` 等价于旧行为；`aisc run` 可正常启动容器；JSONL 有效 |

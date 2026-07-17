@@ -368,6 +368,77 @@ tests/integration/test_cli.py      # subprocess 集成: version/doctor text+json
 
 ---
 
+### P3.1 S3 — Docker planner/executor：`aisc build` + `aisc run`（legacy-compatible）
+
+**变更**：
+
+- **`aisc build`**：Docker 镜像构建命令（legacy-compatible）
+  - `--tag/-t`（默认 `super-claude:latest`）、`--no-cache`、`--pull`、`--dry-run`
+  - 从 `config/versions.env` 读取 `NODE_IMAGE` 和 `USE_CN_MIRROR` 作为 `--build-arg`
+  - `NODE_IMAGE` 缺失 → exit 1（`AISC_ERR_GENERAL`）；Dockerfile 缺失 → exit 4
+  - dry-run：本地验证/规划，不调用 docker；输出完整 `docker build` argv
+  - JSON envelope data：`image_tag`, `dry_run`, `executed`, `docker_argv`, `docker_exit_code`(nullable)
+
+- **`aisc run`**：Docker 容器运行命令（legacy-compatible，不加 contract 检查）
+  - `--image/-i`（默认 `super-claude:latest`）、`--workspace`（默认 cwd）、`--name`（默认 `super-claude-station-<短唯一值>`）、`--network direct|proxy`（默认 `direct`）、`--dry-run`
+  - proxy 模式追加 `--cap-add=NET_ADMIN --device /dev/net/tun`
+  - workspace 不存在/不可读 → exit 9（`AISC_EXIT_PERMISSION_DENIED`）
+  - 执行前检查镜像是否存在（`docker image inspect`）；不存在 → exit 5（`AISC_EXIT_IMAGE_NOT_FOUND`）
+  - JSON envelope data：`image`, `container_id`(nullable), `dry_run`, `executed`, `docker_argv`, `container_exit_code`(nullable)
+
+- **Docker preflight**：通过 `shutil.which` 找 docker；CLI/daemon 不可用 → exit 3（`AISC_ERR_DOCKER_UNAVAILABLE`），区分 `cli_not_found`/`daemon_unreachable`；`docker info` permission denied → exit 9（`AISC_ERR_PERMISSION_DENIED`）；dry-run 不做任何 preflight
+
+- **退出码映射**：docker build 非零 → exit 4（`AISC_EXIT_BUILD_FAILED`），data 保留 `docker_exit_code` 原码；docker run 非零 → exit 10（`AISC_EXIT_CONTAINER_FAILED`），data 保留 `container_exit_code` 原码；不透明透传容器原码
+
+- **`--events` JSONL**：完整实现（不再是 S2 stub）
+  - 小中型 `JsonlEmitter`（`output.py`），`seq` 从 1 起严格 +1，唯一 terminal 为最后一行
+  - Build 事件：`build.start`, `build.plan`, `build.complete`/`build.failed`
+  - Run 事件：`run.start`, `run.plan`, `run.container.start`, `run.container.complete`, `run.complete`/`run.failed`
+  - dry-run 不发 container start/complete
+  - terminal `data.exit_code` 与进程退出码一致
+  - Docker 原始日志仅走 stderr（JSON/events 模式 stdout 纯 envelope/JSONL）
+
+- **`--format json` 与 `--events` 互斥** → exit 2（usage error）
+
+- **全局参数支持命令前后**：`--format`、`--no-color`、`--aisc-root`、`--events` 均可放在子命令之前或之后
+
+- **`docker run` argv 以 list 形式构造**（不经 shell），路径含空格/中文保持为单 argv token
+
+- **domain 模型**：新增 `BuildPlan`、`RunPlan`（immutable dataclasses）、`DockerPreflightResult`
+
+- **adapter**：新增 `src/aisc/adapters/docker_.py`（docker CLI wrapper：preflight、image inspect、build/run 执行器、FakeDockerExecutor 供测试注入）
+
+**取舍**：
+- run 命令 `capture_output` 不适合交互使用：text 模式保持 `-it` 自然继承 stdin/stdout/stderr；JSON/events 模式使用 capture_output 转发 Docker stdout/stderr 到 stderr
+- proxy config 缺失验证：在 dry-run 和实际执行前都验证 `.claude/mihomo/config.yaml` 存在性，缺失时报错（非静默挂载目录）
+- 暂不实现 profile/provider/config/non-interactive/contract labels/secret——这些属于 P3.2 范围
+- 不修改 `start.*` 或 `scripts/`；P3.1 默认入口仍是旧 `start.sh`
+
+**验证**：
+- 336 单元+集成测试通过（新增 103 个 S3 测试：unit 覆盖 executor 注入、FakeDockerExecutor 零调用、dry-run 零 Docker、structured failure data、ImageInspectResult 分类、exit 映射、terminal 非命令层；integration 覆盖 CLI subprocess text/json/events）
+- 真实 Docker 验证：preflight（daemon v29.6.1 available）、image inspect（alpine:latest EXISTS / nonexistent MISSING）、structured run alpine:latest（non-interactive, exit 0）、dry-run 零 docker 调用
+- `packaging_smoke.sh` 通过
+- `check-syntax.sh`：69/69 通过
+- `check-docs.sh`：54/54 通过
+- `git diff --check` clean
+
+**Oracle 审查修复（第二轮）**：
+- 所有 Docker 操作统一经 `DockerExecutor` 协议注入（preflight / inspect_image / run_captured / run_streaming）；application/commands 内零 `subprocess.run`
+- terminal 所有权归 main.py（命令层不再发 terminal）；JsonlEmitter.terminated property
+- CliError 扩展 `data` 字段承载完整结构化结果（JSON failure 非 null）
+- ImageInspectResult 结构化分类（exists/missing/docker_unavailable/permission_denied/timeout/error）
+- RunPlan 新增 `interactive`（text → -it/streaming, json/events → 无 -it/captured）和 `proxy_config`（固定 `<root>/.claude/mihomo/config.yaml`）
+- 文本 dry-run 使用 `shlex.join` 跨平台格式化
+- 资源错误（Dockerfile/versions.env/NODE_IMAGE）→ exit 1；仅实际 docker build 非零 → exit 4
+- 测试真实性：FakeDockerExecutor 直接注入全覆盖，dry-run 断言零 Docker 调用
+- `check-syntax.sh`：69/69 通过
+- `check-docs.sh`：54/54 通过
+- `git diff --check` clean
+
+**未覆盖**：真实 large production image build+run（耗时过大，非 P3.1 验收范围）；SIGINT/SIGTERM 130/143 自然处理但无系统的信号框架测试；交互式 tty 测试在 CI 非 tty 环境不可执行
+
+---
+
 ### 已知未完成 / 技术债（如实记录，不做为已完成）
 
 - **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。
