@@ -439,6 +439,64 @@ tests/integration/test_cli.py      # subprocess 集成: version/doctor text+json
 
 ---
 
+### P3.1 S4 — Artifact 组装与 smoke（workflow artifact）
+
+**变更**：
+
+- **LICENSE**：新建根 `LICENSE`（标准 MIT 文本），Copyright (c) 2026 AISC contributors。`pyproject.toml` 已声明 MIT。
+- **`packaging/pyinstaller/entrypoint.py`**：PyInstaller 入口，调用 `aisc.cli.main:main`。onefile 的唯一入口。
+- **`packaging/artifact.py`**：跨平台 stdlib-only 打包脚本，支持 `stage`/`archive`/`verify`/`build-onefile`/`aggregate` 子命令。
+  - `stage`：组装干净 `aisc-bundle/`，含 manifest.json、VERSION、README.md、LICENSE、.dockerignore、config/versions.env、完整 `container/**`、受控 `apps/ai-brief/**`（排除 __pycache__/pyc/cache）、`vendor/manifest.json`、`vendor/checksums.txt`、`vendor/licenses/**`。不含 src/tests/docs/packaging/tools/scripts/cli/start.*/.git/.github 或任何 state/secrets/cache。
+  - `verify`：静态完整性校验——检查必需路径、manifest 合规（schema_version=1, compatible_cli_versions allowlist）、解析 container/Dockerfile COPY 源并验证、vendor checksums 验证、拒绝秘密/状态/cache/pyc。manifest missing/malformed/unknown field/type/schema/incompatible → 非零退出。
+  - `archive`：创建确定性 tar.gz（Linux/macOS）或 zip（Windows），单版本化顶层目录 `AISC-<version>-<platform>-<arch>/`，内部 `aisc`(Windows `aisc.exe`) + 同级 `aisc-bundle/`。tar 规范化 uid/gid 0/0、mtime 0；zip 固定合法时间、清除 extra fields。
+  - `build-onefile`：使用 PyInstaller 构建 onefile 可执行文件。onedir 仅 CI smoke，不入 archive。
+  - 稳定文件排序、相对路径、SHA256 sidecar。
+- **archive 命名**：`AISC-<version>-linux-x86_64.tar.gz`, `AISC-<version>-macos-arm64.tar.gz`, `AISC-<version>-windows-x86_64.zip`。
+- **manifest 契约**：`{"schema_version":1,"compatible_cli_versions":["<current __version__>"]}`；UTF-8 LF、2 spaces、末尾换行、allowlist 排序去重。无 timestamps/platform/arch/checksums/重复版本。
+- **版本 guard**：repo VERSION、`aisc.__version__`、staged VERSION、manifest allowlist、final executable `version --format json` 的 `cli_version` 一致性检查。
+- **`.github/workflows/artifact.yml`**：三平台 matrix CI（ubuntu-22.04/linux-x86_64, windows-2022/windows-x86_64, macos-14/macos-arm64），Python 3.12 + PyInstaller 6.21.0。先 onedir 冒烟，再 onefile + stage/archive/verify → 上传 matrix artifact → aggregate job 下载三者生成/验证 SHA256SUMS → 上传完整 workflow artifact。触发 main/develop push、面向 main 的 PR 及手动运行。**不公开发布**。
+- **`tests/packaging/test_*.py`**：stdlib unittest 覆盖 staging 创建、manifest 合规正整数/负例、archive 创建/验证、版本 guard 一致性、vendor checksums 验证、排除 __pycache__ 和 forbidden 内容。
+- **README 更新**：说明内部开发预览 CI workflow artifact，明确无公开下载、未切换入口。
+- **docs/devlog.md 更新**：记录 S4 范围与产出，明确未发布/未切入口。PLAN S4 的 manifest/资源布局矛盾已校正（bundle manifest schema_version=1 而非 2，仅 compatible_cli_versions 字段）。
+
+**取舍**：
+- **onefile 为唯一二进制**：onedir 仅 CI smoke，不入 archive、不上传。
+- **不做 Release/上传外部渠道**：产物仅为 workflow artifact（CI 内部），保留 7 天。
+- **不修改 start.sh/start.bat/start.command**、scripts/、container runtime、secrets/provider/security、runtime resource locator、exit codes、GUI。
+- **gitleaks continue-on-error 不变**：S4 不扩大安全切片范围。
+- **PyInstaller 中间产物在 temp 目录**：不污染 repo。
+- **不需要 PyInstaller hooks/spec**：CLI 参数足够，entrypoint.py 薄封装。
+
+**验证**：
+- `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v`：**462 通过**（S3 350 + S4 包装 112）。
+- `bash tests/smoke/packaging_smoke.sh`：通过。
+- `bash tests/smoke/check-syntax.sh`：69/69 通过。
+- packaging unit tests（112 tests）：覆盖 tar determinism、gzip mtime=0、execute mode、zip POSIX paths/compression/mode、production version guard、cache/secret exclusion、container/_bundle/plugins/cache allowlist、vendor checksums strict、Dockerfile COPY strict、archive verification checkout-independent、安全提取攻击面、aggregate（3-archive verify + SHA256SUMS）、ci_smoke importlib loading、archive-dir validation、expected version mismatch。全部通过。
+- 本地 Linux staging 验证：`python packaging/artifact.py stage --output /tmp/s` → 200+ 文件，manifest conformant，vendor checksums pass，zero forbidden (no src/tests/docs/.git/pyc/pycache/start.*)。
+- 本地 Linux archive 验证：tar.gz with correct layout (`AISC-2.0.0-dev-linux-x86_64/aisc` + `aisc-bundle/`), gzip mtime=0, exe mode 0755, SHA256 sidecar, two consecutive builds produce identical SHA256。
+- `git diff --check` clean。
+- 审计 `start.*`、`scripts/`、container runtime 未修改。
+
+**Oracle 审查修复 (S4 第二轮)**：
+- tar.gz: gzip.GzipFile(mtime=0) 包装 uncompressed tar；exe 0755, .sh/claude-switch/claude-wrapper 0755, regular 0644；连续两次相同输入 SHA256 相同。
+- zip: PosixPath(.as_posix()), create_system=3, 压缩 ZIP_DEFLATED+compresslevel=6, 固定日期、mode, 无反斜杠。
+- 版本 guard: stage 前 assert VERSION == get_package_version(root)，不硬编码版本号。
+- 消除 onefile 双重构建: archive 接受 `--executable PATH` + `--staging DIR`，不再内部 build_onefile。
+- verify: `--bundle PATH` 直接验证 staged bundle；archive verifier checkout-independent，从 archive 顶层名+bundle VERSION/manifest 验证，安全解压拒绝 absolute/`..`。
+- cache/secret 排除：apps/ai-brief/cache, .pytest_cache, .mypy_cache, .ruff_cache, coverage 排除；container/_bundle/plugins/cache allowlist 保留；nested .env/.git-credentials/api-keys 排除。
+- vendor checksums: 每行必须 64hex+SP+相对路径，拒绝 absolute/`..`/escape，malformed 报错不 skip。
+- Docker COPY: 仅 shell form，JSON/`--from` 直接 fail；对真实 Dockerfile 所有 COPY 源建立测试。
+- ARCH_TAG: platform.machine().lower() 映射，未知架构明确失败。
+- build_onefile: try/finally cleanup，不 pip install -e . 修改环境，加 `--paths src`。
+
+**跨平台限制**：
+- **仅 Linux x86_64 通过真实 PyInstaller/archive/smoke 验证**。Windows x86_64 / macOS arm64 CI workflow 已配置，待首次 matrix runner 验证。
+- 代码逻辑跨平台（tarfile/zipfile stdlib, PosixPath），安全提取已统一在 artifact.py 公开 helper（validate_tar_members/validate_zip_members/safe_extract_archive），ci_smoke通过 importlib 调用。
+- 版本 guard 的 PEP440 规范化（`2.0.0-dev` → `2.0.0.dev0`）在 wheel metadata 发生；frozen executable 的 `cli_version` 保持产品字符串 `2.0.0-dev`。CI smoke 验证此一致性。
+- `container/Dockerfile` COPY 源解析为 shell-form 简易扫描（JSON/--from 直接 fail），覆盖当前仓库全部 COPY 语句。
+
+---
+
 ### 已知未完成 / 技术债（如实记录，不做为已完成）
 
 - **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。

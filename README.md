@@ -218,7 +218,7 @@ cs upgrade → 合并出厂部分(skills/plugins/commands)，保留 projects/历
 
 ### P3 CLI（开发预览 / 尚未替代 start.*）
 
-> **状态说明**：P3.1 S3 实现了 `version`、`doctor`、`build`、`run` 四个命令的最小纵向切片。当前 **默认用户入口仍是 `start.sh` / `start.bat` / `start.command`**。Python CLI 处于开发预览阶段，独立二进制（PyInstaller）要到 S4 才会完成。
+> **状态说明**：P3.1 S4 完成了 `version`、`doctor`、`build`、`run` 四个命令的完整纵向切片，并实现了 PyInstaller 独立可执行打包、确定性 archive 组装、安全提取/静态完整性校验和 CI workflow artifact 生成。**当前仅 Linux x86_64 通过真实 PyInstaller/archive/smoke 验证**；Windows/macOS CI 已配置但待首次 matrix runner 验证。产物仅为 workflow artifact（非 Release），不对外公开发布、不替换默认入口。当前用户入口仍为 `start.sh` / `start.bat` / `start.command`。
 
 ```bash
 # 开发用法（需要仓库源码 + Python 3.11+）
@@ -365,6 +365,10 @@ docker ps -aq --filter "name=super-claude-station" | ForEach-Object { docker rm 
 - [Claude Code 文档](https://docs.anthropic.com/en/docs/claude-code)
 - [Issues](https://github.com/saladday/AISC/issues)
 - [cc-switch-cli](https://github.com/saladday/cc-switch-cli)
+
+## CI 制品（内部开发预览）
+
+> **未公开发布**：workflow `.github/workflows/artifact.yml` 已配置为在 matrix 运行时自动生成三平台独立可执行 archive（Linux x86_64 / macOS arm64 / Windows x86_64），作为 **GitHub Actions workflow artifact** 存放（仅 CI 内部可访问，保留 7 天）。**当前仅 Linux 已真实验证，Windows/macOS 待首次 runner 验证**。不提供公开下载链接，不替代默认入口。待后续分发切片完成正式发布流程后，将在适当渠道提供公开下载。
 
 ## 许可证
 
