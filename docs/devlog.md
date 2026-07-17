@@ -535,6 +535,17 @@ tests/integration/test_cli.py      # subprocess 集成: version/doctor text+json
 
 ---
 
+### P3.2 S5.2 — `aisc config validate` 与 `aisc config effective`（ora-7 最终修复）
+
+- `src/aisc/adapters/windows_config_reader.py`：`import ctypes.wintypes as _wt`（not `_ct.wintypes`）。自定义 `_FILETIME` + `_BY_HANDLE_FILE_INFO`（52 bytes, exact field offsets: dwFileAttributes0, ftCreationTime4, ftLastAccessTime12, ftLastWriteTime20, dwVolumeSerialNumber28, nFileSizeHigh32, nFileSizeLow36, nNumberOfLinks40, nFileIndexHigh44, nFileIndexLow48）。`_raise_win_error` 统一映射（ACCESS_DENIED/SHARING_VIOLATION→PermissionError, missing→FileNotFoundError, other→OSError），覆盖 CreateFileW/ReadFile/GetFileInformationByHandle/GetFileType/CloseHandle；修正 WinAPI `FILE_TYPE_DISK=0x0001`。
+- ABI tests：sizeof 52、field order、exact offsets、FILETIME 8 bytes、AST proof no wintypes.BY_HANDLE_FILE_INFORMATION import，以及独立的 WinAPI file-type literal 与非磁盘拒绝断言。
+- Service mapping tests（2 tests）：`config_service.safe_read_config_bytes` patch → PermissionError→exit9/permission_denied, OSError→exit1/error。
+- 其他：explicit config 在任何 workspace early return 前 lexical `abspath`，确保两条 source 身份固定；`.aisc` missing semantics、EIO/ENAMETOOLONG，以及 7 个 skipUnless(nt) real Windows tests。
+
+**验证**（256 config-specific，718 total，7 skipped，`-W error::ResourceWarning` clean，连续两次通过）。真实 Windows runner 未执行。Parent race / full handle-relative traversal / DACL→S5.3。
+
+---
+
 ### 已知未完成 / 技术债（如实记录，不做为已完成）
 
 - **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。

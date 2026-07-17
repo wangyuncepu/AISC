@@ -128,6 +128,26 @@ def _build_parser() -> _AiscArgumentParser:
     rp.add_argument("--dry-run", action="store_true", default=False,
                     help="Plan the run without executing")
 
+    # --- config ---
+    cp = sub.add_parser("config", help="Config management", allow_abbrev=False)
+    _add_global_args(cp, is_subparser=True)
+    csub = cp.add_subparsers(dest="config_command", title="config commands",
+                              parser_class=_AiscArgumentParser)
+
+    cv = csub.add_parser("validate", help="Validate config files", allow_abbrev=False)
+    _add_global_args(cv, is_subparser=True)
+    cv.add_argument("--config", type=str, default=None,
+                    help="Explicit user config file path")
+    cv.add_argument("--workspace", type=str, default=None,
+                    help="Workspace root path")
+
+    ce = csub.add_parser("effective", help="Show effective config", allow_abbrev=False)
+    _add_global_args(ce, is_subparser=True)
+    ce.add_argument("--config", type=str, default=None,
+                    help="Explicit user config file path")
+    ce.add_argument("--workspace", type=str, default=None,
+                    help="Workspace root path")
+
     return parser
 
 
@@ -149,7 +169,7 @@ def _detect_events(argv: List[str]) -> bool:
 
 
 def _detect_command(argv: List[str]) -> Optional[str]:
-    known = {"version", "doctor", "build", "run"}
+    known = {"version", "doctor", "build", "run", "config"}
     for arg in argv:
         if arg in known:
             return arg
@@ -282,6 +302,47 @@ def _cmd_run(
     return result.to_dict(), 0, []
 
 
+def _cmd_config(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Dispatch config validate/effective.  ServiceResult owns exit codes."""
+    from aisc.cli.commands.config import (
+        cmd_config_validate, cmd_config_effective,
+    )
+
+    sub = getattr(args, "config_command", None)
+    if sub not in ("validate", "effective"):
+        if effective_format == "json":
+            emit_json_usage_error(
+                command="config", version=__version__,
+                message="Unknown config subcommand",
+            )
+        else:
+            print("Error: Unknown config subcommand", file=sys.stderr)
+        sys.exit(2)
+
+    explicit_config = getattr(args, "config", None)
+    workspace = getattr(args, "workspace", None)
+
+    if sub == "validate":
+        result = cmd_config_validate(
+            explicit_config=explicit_config, workspace=workspace,
+        )
+    else:
+        result = cmd_config_effective(
+            explicit_config=explicit_config, workspace=workspace,
+        )
+
+    # Build errors list — exactly one top-level error on failure
+    errors: List[Dict[str, Any]] = []
+    if result.exit_code != 0:
+        errors.append(build_error(result.error_code or "AISC_ERR_GENERAL",
+                                   result.error_message))
+
+    return result.data, result.exit_code, errors
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -297,6 +358,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     cmd_hint = _detect_command(args_list) or "aisc"
     parser._aisc_format = "json" if json_requested else None
     parser._aisc_command = cmd_hint
+
+    # Propagate json format to config subparser for unknown-subcommand errors
+    if "config" in args_list:
+        try:
+            cfg_parser = [a for a in parser._subparsers._group_actions
+                          if a.dest == "command"][0].choices["config"]
+            cfg_parser._aisc_format = "json" if json_requested else None
+            cfg_parser._aisc_command = "config"
+        except (AttributeError, IndexError, KeyError):
+            pass
 
     try:
         args = parser.parse_args(args_list)
@@ -342,7 +413,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     emitter: Optional[JsonlEmitter] = None
     if args_events and args.command in ("build", "run"):
         emitter = JsonlEmitter(command=args.command)
-    elif args_events and args.command in ("version", "doctor"):
+    elif args_events and args.command in ("version", "doctor", "config"):
         if effective_format == "json":
             emit_json_usage_error(
                 command=args.command, version=__version__,
@@ -374,6 +445,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_build(args, emitter, effective_format)
         elif args.command == "run":
             data, exit_code, errors = _cmd_run(args, emitter, effective_format, aisc_root)
+        elif args.command == "config":
+            data, exit_code, errors = _cmd_config(args, effective_format)
         else:
             if effective_format == "json":
                 emit_json_usage_error(
@@ -454,6 +527,22 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                     print(f"Build succeeded: {data.get('image_tag', '')}")
                 else:
                     print("Container finished.")
+        elif args.command == "config":
+            from aisc.cli.commands.config import print_validate_text, print_effective_text
+            from aisc.application.config_service import ServiceResult
+            sub = getattr(args, "config_command", "validate")
+            if sub == "validate":
+                sr = ServiceResult(valid=data.get("valid", True), exit_code=exit_code,
+                                   error_code=errors[0]["code"] if errors else "",
+                                   error_message=errors[0]["message"] if errors else "",
+                                   data=data)
+                print_validate_text(sr)
+            else:
+                sr = ServiceResult(valid=data.get("valid", True), exit_code=exit_code,
+                                   error_code=errors[0]["code"] if errors else "",
+                                   error_message=errors[0]["message"] if errors else "",
+                                   data=data)
+                print_effective_text(sr)
 
     sys.exit(exit_code)
 
