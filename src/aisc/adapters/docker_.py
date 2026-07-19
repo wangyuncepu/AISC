@@ -64,6 +64,11 @@ class DockerExecutor(Protocol):
         """Execute ``docker <argv>`` with inherited stdin / stdout / stderr.
         Returns a ``ProcessResult`` with exit code captured, stderr empty."""
 
+    def run_non_interactive(self, docker_argv: List[str],
+                            *, timeout: Optional[float] = None) -> ProcessResult:
+        """Execute ``docker <argv>`` with DEVNULL stdin, inherited stdout / stderr.
+        For ``--non-interactive`` mode."""
+
 
 # Factory functions are below; Protocol methods don't have bodies.
 
@@ -287,6 +292,39 @@ class RealDockerExecutor:
                 exit_code=-1, command_not_found=True,
             )
 
+    # ------------------------------------------------------------------
+    # run_non_interactive
+    # ------------------------------------------------------------------
+
+    def run_non_interactive(self, docker_argv: List[str],
+                            *, timeout: Optional[float] = None) -> ProcessResult:
+        """Execute ``docker <argv>`` with DEVNULL stdin, inherited stdout/stderr."""
+        dp = self._resolve_path() or "docker"
+        try:
+            proc = subprocess.run(
+                [dp] + list(docker_argv),
+                stdin=subprocess.DEVNULL,
+                timeout=timeout,
+            )
+            return ProcessResult(
+                stdout="", stderr="", exit_code=proc.returncode,
+            )
+        except FileNotFoundError:
+            return ProcessResult(
+                stdout="", stderr="command not found: docker",
+                exit_code=-1, command_not_found=True,
+            )
+        except subprocess.TimeoutExpired:
+            return ProcessResult(
+                stdout="", stderr="command timed out",
+                exit_code=-1, timed_out=True,
+            )
+        except OSError as exc:
+            return ProcessResult(
+                stdout="", stderr=f"command error: {exc}",
+                exit_code=-1, command_not_found=True,
+            )
+
     @property
     def docker_path(self) -> str:
         return self._resolve_path() or "docker"
@@ -385,6 +423,20 @@ class FakeDockerExecutor:
 
     def run_streaming(self, docker_argv: List[str],
                       *, timeout: Optional[float] = None) -> ProcessResult:
+        self.streaming_calls.append(list(docker_argv))
+        return ProcessResult(
+            stdout="", stderr="",
+            exit_code=self._streaming_exit_code if self._streaming_exit_code >= 0 else -1,
+            command_not_found=(self._streaming_exit_code < 0),
+        )
+
+    # ------------------------------------------------------------------
+    # run_non_interactive
+    # ------------------------------------------------------------------
+
+    def run_non_interactive(self, docker_argv: List[str],
+                            *, timeout: Optional[float] = None) -> ProcessResult:
+        """Fake non-interactive — tracks call, returns streaming exit code."""
         self.streaming_calls.append(list(docker_argv))
         return ProcessResult(
             stdout="", stderr="",

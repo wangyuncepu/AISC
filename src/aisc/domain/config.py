@@ -346,6 +346,7 @@ class ProviderSpec:
     auth_type: str
     auth_key_name: str
     base_url: str = ""
+    aliases: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

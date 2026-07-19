@@ -546,6 +546,50 @@ tests/integration/test_cli.py      # subprocess 集成: version/doctor text+json
 
 ---
 
+### 用户感知增强：`aisc doctor` 只读检查扩展（2026-07-17）
+
+本节记录在现有 S2 doctor 8 项检查基础上的只读增强，**不包含网络探测、bind mount UID 检测或自动修复**。
+
+**新增检查项**：
+- **Docker Compose**：执行 `docker compose version`，缺失仅 WARN（提示安装），不影响成功退出码。
+- **项目根目录可写性**：`os.access(root, os.W_OK)` 预检——不创建探针文件，不是写入保证，仅通用可写性预判。
+- **Linux/macOS 启动器可执行位**：`os.access(start.sh, os.X_OK)`，macOS 额外检查 `start.command`。不可执行→WARN（提示 `chmod +x`）。
+- **`apps/ai-brief/brief.py` 语法检查**：使用内置 `compile(source, path, "exec")` 仅编译不执行、不生成 `.pyc`。失败→WARN。
+
+**验证**：
+- `PYTHONPATH=src python3 -W error::ResourceWarning -m unittest tests.unit.test_doctor tests.unit.test_secret_store`：**139 OK, skipped=8**。
+- `PYTHONPATH=src python3 -m unittest discover -s tests/unit -p 'test_*.py'`：**515 OK, skipped=15**。
+- `PYTHONPATH=src python3 -m aisc doctor --format json`：exit 0；**11 pass, 3 warn, 0 fail, 0 skip**。warn 为 buildx 缺失、Compose 缺失、start.sh 不可执行，均有提示。
+- `py_compile` 通过；`git diff --check` 通过；`tools/check-docs.sh`：**54/54** 通过。
+
+---
+
+### S5.3 状态更新 — 实验性、未提交、核心 Windows 实机硬 gate 已通过
+
+- S5.3 adapter（`src/aisc/adapters/secret_store.py`）、配套测试、`tests/manual/verify_s5_3_windows.py` 及 `docs/testing/S5.3-windows-secure-store.md` 手测指南**仅存在于未提交工作区**。
+- Linux/POSIX mode/owner 真实 `os.stat` 落盘证据通过；Windows ABI 静态测试（struct sizes/field offsets/SID/DACL 常量）通过；fake backend 测试通过；Linux 侧 symlink/reparse/非 regular 拒绝通过。
+- **Windows 核心实机硬 gate 已通过**（2026-07-17，Windows 11 Pro 10.0.26200，Python 3.12.10，commit a43a034）：verifier JSON overall PASS；DACL protected=true；目录与文件 exactly 2 ACE（current user + SYSTEM Full Control 0x001f01ff）；junction 拒绝通过；篡改增加第 3 ACE 后 fail closed；恢复后 PASS。4 个 TestWindowsReal 全部 passed。证据包 `/mnt/windows/Temp/aisc-s5.3-evidence-20260717-215512.zip`。
+- **注意**：证据快照的 focused unittest（Ran 69, FAILED failures=10 errors=14 skipped=1）和 full unittest（Ran 808, FAILED failures=54 errors=36 skipped=17）包含大量非 S5.3 相关失败，主要源于 POSIX-only 测试误在 Windows 执行及仓库跨平台兼容性问题。**不声称“Windows focused/full unittest 全绿”或笼统“PASSED”**。S5.3 核心验证独立于全套 unittest 通过。
+- **仍不接入默认 CLI/迁移流程**；**不宣称生产安全**。所有 7 个 findings 已在当前 Linux 工作区修复（`O_NOFOLLOW` guard、POSIX class skip、SYSTEM SID no padding、posixpath/ntpath、memmove bytes、msvcrt.open_osfhandle、verifier S-1-5-18 匹配），`tests.unit.test_secret_store` Ran 72 OK skipped=8，三个文件 py_compile clean。建议提交前/发布前 Windows 回归。
+- **用户决定**：当前验证阶段暂缓该安全深度工作。
+
+---
+
+### PLAN-v2 §5.2 第一切片 — 只读/兼容 UX 前移（2026-07-17）
+
+本节记录从 P3.2 S5–S8 计划中前移的四项只读或兼容别名 UX，**不改变 S5.4/S6/S7/S8 验收边界**。所有实现已独立验证（聚焦 236 tests OK，全量 unit 521 OK/15 skipped，`git diff --check` clean），未 commit。
+
+| 项 | 类型 | 内容 |
+|----|------|------|
+| `aisc config show` | 兼容别名 | `config effective` 严格兼容别名，共用 handler；相同脱敏、text/JSON、错误与退出码；`--events`→exit 2 |
+| `aisc provider list` | 只读前移 | 只读 canonical `<aisc-root>/container/providers.json`，使用现有 root locator + strict catalog loader；text 显示 id/name/auth type；JSON 含真实 schema_version/provider 数组；不读用户配置/secret、不写文件、无硬编码 fallback |
+| `aisc run --non-interactive` | 传输层第一阶段 | host/transport 第一阶段：无 `-it`，传 `AISC_NON_INTERACTIVE=1`、`CLAUDE_SCOPE=project`，真实 Docker stdin=DEVNULL，与 format/events 正交。**明确未完成**：S7/S8 前无 provider/key 缺失快速失败、无 image capability contract、无容器端 E2E 零 stdin 证明——不得宣称完整 non-interactive 达成 |
+| `aisc run --profile proxy` | v2 兼容别名 | 映射 `--network proxy`，不进入 profile domain、不持久化；与显式 `--network direct` 冲突→exit 2；safe/unsafe 未提前实现 |
+
+**边界**：未实现/仍延期——裸 `config` 交互写、`provider use/show`、`run --provider`、`proxy enable/disable`、`profile safe/unsafe`、`brief/logs/clean`。
+
+---
+
 ### 已知未完成 / 技术债（如实记录，不做为已完成）
 
 - **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。

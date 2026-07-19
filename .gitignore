@@ -56,3 +56,6 @@ super-claude-*.tar
 
 .project
 tasks/
+
+# Local deepwork orchestration state
+.slim/deepwork/

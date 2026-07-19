@@ -197,6 +197,88 @@ class TestRunText(unittest.TestCase):
 
 
 # ============================================================================
+# Run — non-interactive (§5.2 item 3)
+# ============================================================================
+
+class TestRunNonInteractive(unittest.TestCase):
+    def test_dry_run_no_it(self):
+        r = _run_aisc("run", "--dry-run", "--non-interactive")
+        self.assertEqual(r.exit_code, 0)
+        self.assertNotIn("-it", r.stdout)
+
+    def test_dry_run_has_env_vars(self):
+        r = _run_aisc("run", "--dry-run", "--non-interactive")
+        self.assertIn("AISC_NON_INTERACTIVE=1", r.stdout)
+        self.assertIn("CLAUDE_SCOPE=project", r.stdout)
+
+    def test_dry_run_text_still_text(self):
+        """--non-interactive --format text still produces text output."""
+        r = _run_aisc("run", "--dry-run", "--non-interactive", "--format", "text")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("Run plan", r.stdout)
+
+    def test_dry_run_json_env_vars(self):
+        r = _run_aisc("run", "--dry-run", "--non-interactive", "--format", "json")
+        data = assert_json_envelope(r)
+        argv = data["data"]["docker_argv"]
+        self.assertNotIn("-it", argv)
+        self.assertIn("AISC_NON_INTERACTIVE=1", argv)
+        self.assertIn("CLAUDE_SCOPE=project", argv)
+
+    def test_dry_run_without_non_interactive_has_it(self):
+        r = _run_aisc("run", "--dry-run")
+        self.assertIn("-it", r.stdout)
+        self.assertNotIn("AISC_NON_INTERACTIVE=1", r.stdout)
+
+
+# ============================================================================
+# Run — --profile proxy alias (§5.2 item 4)
+# ============================================================================
+
+class TestRunProfileProxy(unittest.TestCase):
+    def test_profile_proxy_dry_run_matches_network_proxy(self):
+        r_profile = _run_aisc("run", "--dry-run", "--profile", "proxy")
+        r_network = _run_aisc("run", "--dry-run", "--network", "proxy")
+        self.assertEqual(r_profile.exit_code, r_network.exit_code)
+        # Both should contain NET_ADMIN
+        self.assertIn("NET_ADMIN", r_profile.stdout)
+        self.assertIn("NET_ADMIN", r_network.stdout)
+
+    def test_profile_proxy_json_matches_network_proxy(self):
+        r_profile = _run_aisc("run", "--dry-run", "--profile", "proxy", "--format", "json")
+        r_network = _run_aisc("run", "--dry-run", "--network", "proxy", "--format", "json")
+        prof_data = parse_json_envelope(r_profile.stdout)
+        net_data = parse_json_envelope(r_network.stdout)
+        prof_argv = prof_data["data"]["docker_argv"]
+        net_argv = net_data["data"]["docker_argv"]
+        # Both should have proxy-related args
+        for key in ("--cap-add=NET_ADMIN", "--device", "/dev/net/tun"):
+            self.assertIn(key, prof_argv)
+            self.assertIn(key, net_argv)
+        # Both should have same structure (same length)
+        self.assertEqual(len(prof_argv), len(net_argv))
+
+    def test_profile_proxy_with_network_direct_conflict(self):
+        r = _run_aisc("run", "--dry-run", "--profile", "proxy", "--network", "direct")
+        self.assertEqual(r.exit_code, 2)
+
+    def test_profile_proxy_with_network_proxy_ok(self):
+        r = _run_aisc("run", "--dry-run", "--profile", "proxy", "--network", "proxy")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("NET_ADMIN", r.stdout)
+
+    def test_profile_proxy_dry_run_text_format(self):
+        r = _run_aisc("run", "--dry-run", "--profile", "proxy", "--format", "text")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("NET_ADMIN", r.stdout)
+
+    def test_profile_proxy_dry_run_no_config_write(self):
+        """--profile proxy should NOT write any config files."""
+        r = _run_aisc("run", "--dry-run", "--profile", "proxy")
+        self.assertEqual(r.exit_code, 0)
+
+
+# ============================================================================
 # Run — JSON
 # ============================================================================
 

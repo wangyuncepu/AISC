@@ -96,6 +96,25 @@ class TestRunPlan(unittest.TestCase):
         p = RunPlan(image="img:1", workspace="/w", name="n", interactive=False)
         self.assertNotIn("-it", p.docker_argv)
 
+    def test_non_interactive_flag_no_it(self):
+        p = RunPlan(image="img:1", workspace="/w", name="n",
+                     interactive=True, non_interactive=True)
+        self.assertNotIn("-it", p.docker_argv)
+
+    def test_non_interactive_env_vars(self):
+        p = RunPlan(image="img:1", workspace="/w", name="n",
+                     non_interactive=True)
+        a = p.docker_argv
+        self.assertIn("AISC_NON_INTERACTIVE=1", a)
+        self.assertIn("CLAUDE_SCOPE=project", a)
+
+    def test_non_interactive_no_env_vars_when_false(self):
+        p = RunPlan(image="img:1", workspace="/w", name="n",
+                     non_interactive=False)
+        a = p.docker_argv
+        self.assertNotIn("AISC_NON_INTERACTIVE=1", a)
+        self.assertNotIn("CLAUDE_SCOPE=project", a)
+
     def test_proxy_mount(self):
         p = RunPlan(image="i", workspace="/w", name="n", network="proxy",
                      proxy_config="/root/.claude/mihomo/config.yaml")
@@ -514,6 +533,47 @@ class TestRunWithFakeExecutor(unittest.TestCase):
         with self.assertRaises(CliError):
             run_container(plan, executor=exec_, emitter=emitter)
         self.assertFalse(emitter.terminated)
+
+    # ------------------------------------------------------------------
+    # Non-interactive capture mode (Task B fix)
+    # ------------------------------------------------------------------
+
+    def test_non_interactive_captured_mode(self):
+        """non-interactive + capture=True → uses run_captured, not streaming."""
+        plan = self._plan(dry_run=False, interactive=False, non_interactive=True)
+        exec_ = FakeDockerExecutor()
+        exec_.set_inspect(plan.image, ImageInspectResult(
+            status=ImageInspectStatus.EXISTS, image=plan.image))
+        exec_.set_captured("run", ProcessResult(
+            stdout="container stdout", stderr="container stderr", exit_code=0))
+        result = run_container(plan, executor=exec_, capture=True)
+        self.assertTrue(result.executed)
+        self.assertEqual(len(exec_.calls), 1)
+        self.assertEqual(len(exec_.streaming_calls), 0)
+
+    def test_non_interactive_streaming_mode(self):
+        """non-interactive + capture=False → uses run_non_interactive (streaming)."""
+        plan = self._plan(dry_run=False, interactive=False, non_interactive=True)
+        exec_ = FakeDockerExecutor()
+        exec_.set_inspect(plan.image, ImageInspectResult(
+            status=ImageInspectStatus.EXISTS, image=plan.image))
+        exec_.set_streaming_exit(0)
+        result = run_container(plan, executor=exec_, capture=False)
+        self.assertTrue(result.executed)
+        self.assertEqual(len(exec_.calls), 0)
+        self.assertEqual(len(exec_.streaming_calls), 1)
+
+    def test_capture_forces_captured_even_with_non_interactive(self):
+        """capture=True + non_interactive=True: captured must take priority."""
+        plan = self._plan(dry_run=False, interactive=False, non_interactive=True)
+        exec_ = FakeDockerExecutor()
+        exec_.set_inspect(plan.image, ImageInspectResult(
+            status=ImageInspectStatus.EXISTS, image=plan.image))
+        exec_.set_captured("run", ProcessResult(
+            stdout="container out", stderr="", exit_code=0))
+        run_container(plan, executor=exec_, capture=True)
+        self.assertEqual(len(exec_.calls), 1)
+        self.assertEqual(len(exec_.streaming_calls), 0)
 
 
 # ============================================================================

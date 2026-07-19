@@ -304,31 +304,39 @@ Claude Code 必需的项目级 `.claude/` 可以继续保留，但启动器自�
 
 ### 5.2 推荐命令
 
+> **第一切片状态（2026-07-17）**：以下四项已实现（只读/兼容 UX 前移）：
+> - `aisc config show` — `config effective` 兼容别名，共用 handler
+> - `aisc provider list` — 只读 canonical providers.json
+> - `aisc run --profile proxy` — 映射 `--network proxy` v2 兼容别名
+> - `aisc run --non-interactive` — host/transport 第一阶段（无 -it, stdin=DEVNULL）
+>
+> 完整体验仍依赖 P3.2 S5–S8 各阶段（provider use/show、proxy enable/disable、profile safe/unsafe、E2E non-interactive、brief/logs/clean）。以下列表中未标注“已实现”的命令仍为计划目标。
+
 ```text
 aisc run                 启动工作站
 aisc doctor              检查 Docker、网络、权限和配置
-aisc config              交互式修改持久配置
-aisc config show         显示脱敏后的有效配置
+aisc config              交互式修改持久配置（未实现）
+aisc config show         显示脱敏后的有效配置  ✅ 第一切片已实现
 aisc build               构建镜像
 aisc build --no-cache    无缓存构建
-aisc provider list       查看可用供应商
-aisc provider use NAME   切换供应商
-aisc proxy enable        启用代理 profile
-aisc proxy disable       关闭代理 profile
-aisc brief               手动运行 AI 简讯
-aisc logs                查看最近启动日志
+aisc provider list       查看可用供应商  ✅ 第一切片已实现
+aisc provider use NAME   切换供应商（未实现）
+aisc proxy enable        启用代理 profile（未实现）
+aisc proxy disable       关闭代理 profile（未实现）
+aisc brief               手动运行 AI 简讯（未实现）
+aisc logs                查看最近启动日志（未实现）
 aisc version             显示 CLI、镜像和 Claude 版本
-aisc clean               清理缓存，不删除用户密钥
+aisc clean               清理缓存，不删除用户密钥（未实现）
 ```
 
 高级用法：
 
 ```bash
 aisc run --workspace ~/project
-aisc run --profile proxy
-aisc run --profile unsafe
-aisc run --provider deepseek
-aisc run --non-interactive
+aisc run --profile proxy        # ✅ 第一切片已实现（映射 --network proxy）
+aisc run --profile unsafe       # 未实现
+aisc run --provider deepseek    # 未实现
+aisc run --non-interactive      # ✅ 第一切片已实现（host/transport 阶段1）
 ```
 
 关键行为：

@@ -50,6 +50,7 @@ def plan_run(
     network: str = "direct",
     dry_run: bool = False,
     interactive: bool = True,
+    non_interactive: bool = False,
     proxy_config: str = "",
     aisc_root: Optional[Path] = None,
 ) -> RunPlan:
@@ -62,6 +63,8 @@ def plan_run(
         network: ``"direct"`` or ``"proxy"``.
         dry_run: Plan only, don't execute.
         interactive: ``True`` → include ``-it``; ``False`` → omit.
+        non_interactive: ``True`` → omit ``-it``, add ``AISC_NON_INTERACTIVE=1``
+            and ``CLAUDE_SCOPE=project`` env vars, use DEVNULL for stdin.
         proxy_config: Host path to ``.claude/mihomo/config.yaml``.
             If omitted but ``network=proxy``, use
             ``<aisc_root>/.claude/mihomo/config.yaml``.
@@ -90,6 +93,7 @@ def plan_run(
         network=network,
         dry_run=dry_run,
         interactive=interactive,
+        non_interactive=non_interactive,
         proxy_config=resolved_proxy,
     )
 
@@ -128,6 +132,7 @@ def run_container(
     *,
     emitter: Optional[JsonlEmitter] = None,
     executor: Optional[DockerExecutor] = None,
+    capture: bool = False,
 ) -> RunResult:
     """Execute or simulate a ``docker run``, emitting events as needed.
 
@@ -137,6 +142,8 @@ def run_container(
         plan: The immutable run plan.
         emitter: JsonlEmitter for --events mode, or None.
         executor: DockerExecutor for injection (testing).
+        capture: Force captured output (stdout/stderr forwarded to stderr).
+            When True, container output never reaches stdout.
 
     Returns:
         RunResult with outcome data.
@@ -248,7 +255,26 @@ def run_container(
             "docker_argv": argv,
         })
 
-    if plan.interactive:
+    if capture:
+        # --- machine mode (json / events): captured output, forwarded to stderr ---
+        import sys as _sys
+        proc = exec_.run_captured(argv)
+        result.container_exit_code = proc.exit_code
+        result.executed = True
+
+        # Forward docker stdout/stderr to stderr
+        if proc.stdout:
+            _sys.stderr.write(proc.stdout)
+        if proc.stderr:
+            _sys.stderr.write(proc.stderr)
+
+        if proc.exit_code != 0:
+            raise CliError(
+                message=f"Container exited with code {proc.exit_code}",
+                exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
+                data=result.to_dict(),
+            )
+    elif plan.interactive and not plan.non_interactive:
         # Text mode: streaming with inherited streams
         proc = exec_.run_streaming(argv)
         result.container_exit_code = proc.exit_code if proc.exit_code >= 0 else proc.exit_code
@@ -272,8 +298,32 @@ def run_container(
                 exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
                 data=result.to_dict(),
             )
+    elif plan.non_interactive and not capture:
+        # Non-interactive mode: streaming with DEVNULL stdin
+        proc = exec_.run_non_interactive(argv)
+        result.container_exit_code = proc.exit_code if proc.exit_code >= 0 else proc.exit_code
+        result.executed = True
+
+        if proc.command_not_found:
+            raise CliError(
+                message="Docker CLI not found",
+                exit_code=3, error_code="AISC_ERR_DOCKER_UNAVAILABLE",
+                data=result.to_dict(),
+            )
+        if proc.timed_out:
+            raise CliError(
+                message="Container run timed out",
+                exit_code=1, error_code="AISC_ERR_GENERAL",
+                data=result.to_dict(),
+            )
+        if proc.exit_code != 0:
+            raise CliError(
+                message=f"Container exited with code {proc.exit_code}",
+                exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
+                data=result.to_dict(),
+            )
     else:
-        # JSON / events mode: capture output
+        # JSON / events mode (no capture flag, not interactive, not non_interactive): captured
         import sys as _sys
         proc = exec_.run_captured(argv)
         result.container_exit_code = proc.exit_code

@@ -1,5 +1,7 @@
 """Unit tests for aisc.application.doctor — doctor checks with fake processes."""
 
+import os
+import stat as st_module
 import sys
 import tempfile
 import unittest
@@ -19,6 +21,10 @@ from aisc.application.doctor import (
     _check_aisc_root,
     _check_root_files,
     _check_git,
+    _check_docker_compose,
+    _check_root_writable,
+    _check_launcher,
+    _check_brief_py_syntax,
     _compute_exit_code,
     EXIT_OK,
     EXIT_DOCKER_UNAVAILABLE,
@@ -28,6 +34,7 @@ from aisc.application.doctor import (
     ERR_GENERAL,
     DOCKER_TIMEOUT,
     GIT_TIMEOUT,
+    COMPOSE_TIMEOUT,
 )
 from aisc.domain.models import (
     CheckResult,
@@ -307,6 +314,268 @@ class TestCheckGit(unittest.TestCase):
         self.assertEqual(result.status, CheckStatus.WARN)
 
 
+class TestCheckDockerCompose(unittest.TestCase):
+    def test_available(self):
+        r = FakeProcessRunner()
+        r.set_result("docker compose version", ProcessResult(
+            stdout="Docker Compose version v2.24.0\n", stderr="", exit_code=0,
+        ))
+        result = _check_docker_compose("/usr/bin/docker", r, True)
+        self.assertEqual(result.status, CheckStatus.PASS)
+        self.assertIn("Docker Compose", result.message)
+
+    def test_not_available_subcommand_missing(self):
+        r = FakeProcessRunner()
+        r.set_result("docker compose version", ProcessResult(
+            stdout="", stderr="docker: 'compose' is not a docker command.",
+            exit_code=1, command_not_found=True,
+        ))
+        result = _check_docker_compose("/usr/bin/docker", r, True)
+        self.assertEqual(result.status, CheckStatus.WARN)
+        self.assertIn("subcommand not available", result.message)
+        # hint should be user-actionable
+        self.assertIsNotNone(result.hint)
+        self.assertIn("install", (result.hint or "").lower())
+
+    def test_timeout(self):
+        r = FakeProcessRunner()
+        r.set_result("docker compose version", ProcessResult(
+            stdout="", stderr="", exit_code=-1, timed_out=True,
+        ))
+        result = _check_docker_compose("/usr/bin/docker", r, True)
+        self.assertEqual(result.status, CheckStatus.WARN)
+        self.assertIn("timed out", result.message.lower())
+
+    def test_cli_unavailable_skips(self):
+        r = FakeProcessRunner()
+        result = _check_docker_compose(None, r, False)
+        self.assertEqual(result.status, CheckStatus.SKIP)
+
+    def test_exit_code_nonzero(self):
+        r = FakeProcessRunner()
+        r.set_result("docker compose version", ProcessResult(
+            stdout="", stderr="unknown error", exit_code=1,
+        ))
+        result = _check_docker_compose("/usr/bin/docker", r, True)
+        self.assertEqual(result.status, CheckStatus.WARN)
+        self.assertIn("docker compose version", result.hint or "")
+
+    def test_unknown_command_without_runner_flag_is_unavailable(self):
+        r = FakeProcessRunner()
+        r.set_result("docker compose version", ProcessResult(
+            stdout="", stderr="docker: unknown command: docker compose", exit_code=1,
+        ))
+        result = _check_docker_compose("/usr/bin/docker", r, True)
+        self.assertEqual(result.status, CheckStatus.WARN)
+        self.assertIn("Install", result.hint or "")
+
+
+class TestCheckRootWritable(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_writable(self):
+        result = _check_root_writable(self.root)
+        self.assertEqual(result.status, CheckStatus.PASS)
+
+    def test_not_writable(self):
+        with patch("os.access", return_value=False):
+            result = _check_root_writable(self.root)
+        self.assertEqual(result.status, CheckStatus.WARN)
+        self.assertIn("not be writable", result.message.lower())
+
+    def test_root_not_a_directory(self):
+        f = self.root / "notadir"
+        f.write_text("x")
+        result = _check_root_writable(f)
+        self.assertEqual(result.status, CheckStatus.WARN)
+        self.assertIn("not a directory", result.message.lower())
+
+    def test_root_does_not_exist(self):
+        result = _check_root_writable(self.root / "nonexistent")
+        self.assertEqual(result.status, CheckStatus.WARN)
+        self.assertIn("does not exist", result.message.lower())
+
+    def test_no_root_skips(self):
+        result = _check_root_writable(None)
+        self.assertEqual(result.status, CheckStatus.SKIP)
+
+    def test_oserror_caught(self):
+        with patch("pathlib.Path.exists", side_effect=OSError("permission denied")):
+            result = _check_root_writable(self.root)
+        self.assertEqual(result.status, CheckStatus.WARN)
+        self.assertIn("Cannot check", result.message)
+
+    def test_hint_is_user_actionable(self):
+        """Assert hint is a concrete suggestion, not empty."""
+        with patch("os.access", return_value=False):
+            result = _check_root_writable(self.root)
+        self.assertIsNotNone(result.hint)
+        self.assertGreater(len(result.hint), 0)
+
+
+class TestCheckLauncher(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_windows_skips(self):
+        with patch("sys.platform", "win32"):
+            results = _check_launcher(self.root)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, CheckStatus.SKIP)
+        self.assertEqual(results[0].name, "launcher")
+
+    def test_linux_start_sh_executable(self):
+        script = self.root / "start.sh"
+        script.write_text("#!/bin/bash\necho hi")
+        script.chmod(0o755)
+        with patch("sys.platform", "linux"):
+            results = _check_launcher(self.root)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, CheckStatus.PASS)
+        self.assertEqual(results[0].name, "launcher:start.sh")
+
+    def test_linux_start_sh_not_executable(self):
+        script = self.root / "start.sh"
+        script.write_text("#!/bin/bash\necho hi")
+        script.chmod(0o644)
+        with patch("sys.platform", "linux"):
+            results = _check_launcher(self.root)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, CheckStatus.WARN)
+        self.assertIn("not executable", results[0].message.lower())
+        # hint should include chmod command
+        self.assertIsNotNone(results[0].hint)
+        self.assertIn("chmod", results[0].hint)
+
+    def test_linux_start_sh_missing(self):
+        with patch("sys.platform", "linux"):
+            results = _check_launcher(self.root)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, CheckStatus.WARN)
+        self.assertIn("not found", results[0].message.lower())
+
+    def test_linux_start_sh_not_regular_file(self):
+        # create a directory with same name
+        (self.root / "start.sh").mkdir()
+        with patch("sys.platform", "linux"):
+            results = _check_launcher(self.root)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, CheckStatus.WARN)
+        self.assertIn("not a regular file", results[0].message.lower())
+
+    def test_macos_checks_both_scripts(self):
+        script_sh = self.root / "start.sh"
+        script_sh.write_text("#!/bin/bash\necho hi")
+        script_sh.chmod(0o755)
+        script_cmd = self.root / "start.command"
+        script_cmd.write_text("#!/bin/bash\necho hi")
+        script_cmd.chmod(0o755)
+        with patch("sys.platform", "darwin"):
+            results = _check_launcher(self.root)
+        self.assertEqual(len(results), 2)
+        names = [r.name for r in results]
+        self.assertIn("launcher:start.sh", names)
+        self.assertIn("launcher:start.command", names)
+        self.assertTrue(all(r.status == CheckStatus.PASS for r in results))
+
+    def test_macos_start_command_not_executable(self):
+        self.root.joinpath("start.sh").write_text("#!/bin/bash\necho hi")
+        self.root.joinpath("start.sh").chmod(0o755)
+        cmd = self.root / "start.command"
+        cmd.write_text("#!/bin/bash\necho hi")
+        cmd.chmod(0o644)
+        with patch("sys.platform", "darwin"):
+            results = _check_launcher(self.root)
+        sh_result = next(r for r in results if r.name == "launcher:start.sh")
+        cmd_result = next(r for r in results if r.name == "launcher:start.command")
+        self.assertEqual(sh_result.status, CheckStatus.PASS)
+        self.assertEqual(cmd_result.status, CheckStatus.WARN)
+        self.assertIn("chmod +x start.command", cmd_result.hint)
+
+    def test_no_root_skips(self):
+        with patch("sys.platform", "linux"):
+            results = _check_launcher(None)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, CheckStatus.SKIP)
+
+    def test_oserror_caught(self):
+        with patch("sys.platform", "linux"):
+            with patch("pathlib.Path.exists", side_effect=OSError("I/O error")):
+                results = _check_launcher(self.root)
+        self.assertEqual(results[0].status, CheckStatus.WARN)
+        self.assertIn("Cannot check", results[0].message)
+
+
+class TestCheckBriefPySyntax(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _create_brief_py(self, content: str) -> Path:
+        fpath = self.root / "apps" / "ai-brief" / "brief.py"
+        fpath.parent.mkdir(parents=True, exist_ok=True)
+        fpath.write_text(content, encoding="utf-8")
+        return fpath
+
+    def test_valid_syntax(self):
+        self._create_brief_py("print('hello')\n")
+        result = _check_brief_py_syntax(self.root)
+        self.assertEqual(result.status, CheckStatus.PASS)
+        self.assertIn("valid", result.message.lower())
+
+    def test_syntax_error(self):
+        self._create_brief_py("def broken(\n")
+        result = _check_brief_py_syntax(self.root)
+        self.assertEqual(result.status, CheckStatus.FAIL)
+        self.assertIn("Syntax error", result.message)
+        self.assertIn("line", result.message.lower())
+        # detail includes file path and line number
+        self.assertIsNotNone(result.detail)
+        self.assertIn("brief.py", result.detail)
+        # message should not leak file content
+        self.assertNotIn("broken", result.message)
+        # hint exists and is actionable
+        self.assertIsNotNone(result.hint)
+        self.assertIn("Fix", result.hint)
+
+    def test_syntax_error_line_number_in_detail(self):
+        self._create_brief_py("# line 1\n# line 2\ndef bad(\n# line 4\n")
+        result = _check_brief_py_syntax(self.root)
+        # detail should have file:lineno
+        self.assertIn(":", result.detail)
+        # the line number should be in the detail
+        self.assertIn("3", result.detail)
+
+    def test_file_missing(self):
+        result = _check_brief_py_syntax(self.root)
+        self.assertEqual(result.status, CheckStatus.WARN)
+        self.assertIn("not found", result.message.lower())
+
+    def test_read_error(self):
+        # create a directory instead of file to trigger IsADirectoryError (OSError)
+        dirpath = self.root / "apps" / "ai-brief" / "brief.py"
+        dirpath.mkdir(parents=True, exist_ok=True)
+        result = _check_brief_py_syntax(self.root)
+        self.assertEqual(result.status, CheckStatus.FAIL)
+        self.assertIn("Cannot read", result.message)
+
+    def test_no_root_skips(self):
+        result = _check_brief_py_syntax(None)
+        self.assertEqual(result.status, CheckStatus.SKIP)
+
+
 class TestComputeExitCode(unittest.TestCase):
     def test_all_pass(self):
         checks = [
@@ -514,6 +783,7 @@ class TestRunDoctor(unittest.TestCase):
         """Verify timeout constants are defined."""
         self.assertGreater(DOCKER_TIMEOUT, 0)
         self.assertGreater(GIT_TIMEOUT, 0)
+        self.assertGreater(COMPOSE_TIMEOUT, 0)
 
 
 if __name__ == "__main__":

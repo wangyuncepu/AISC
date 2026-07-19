@@ -120,7 +120,7 @@ GUI 是长期远景计划。当前仅确保 CLI 协议（JSON envelope、JSONL e
 |------|------|----------|------|
 | S5.1 | **配置/密钥发现与 schema** | 定义 config.json 最小 schema（用户级 + workspace 级）；定义 provider secret 每 provider 单文件 opaque UTF-8 credential 模型；定义 provider ID grammar 与 `secret_ref` 解析语义；定义 source inventory 固定为精确路径（`W/.aisc/secrets/api-keys`、`W/.cc-config/api-keys`、`W/.claude/api-keys`、`W/.claude/settings.json`、`R/.aisc/state.env`、`R/.deploy/state.env`）；定义 provider 映射规则（api-keys 仅按 `providers.json` 的 `auth_key_name` 唯一精确映射；settings token 仅在 canonical `base_url` 规范化后唯一精确匹配且 `auth_type` 对应时映射，禁止模型/url_fragment/token 外形猜测）；定义冲突规则（不同 secret source 无自动 precedence，相同值去重，不同值 conflict；目标不同绝不覆盖；目标已存在且相同→already_current）；定义 legacy state `.aisc` > `.deploy` 逐 key 策略，仅记录 shadowed。 | `src/aisc/domain/config.py`、`src/aisc/schemas/config_schema.py`、plan 级 source inventory |
 | S5.2 | **config validate/effective** | 实现 `aisc config validate`（schema 校验，text+json 输出）与 `aisc config effective`（脱敏合并有效配置，text+json 输出）。`--events` 与 validate/effective 组合→usage error（exit 2）。 | `src/aisc/application/config_service.py`、`aisc config validate/effective` |
-| S5.3 | **secure store adapter** | 实现 secret store adapter：平台原生路径解析（Linux XDG config/state/data、macOS Application Support/aisc、Windows APPDATA config + LOCALAPPDATA state/secrets）；POSIX 0700/0600 + owner；Windows DACL current user SID + SYSTEM full control、禁继承/Everyone/Users/Authenticated Users、写后验证、失败 exit 9（DACL 是实现 blocker）；journal/HMAC/原子写基础设施：不含明文/last4/普通 hash，使用 `migration-integrity.key`；per-target atomic、可重入、全局 lock；dry-run 零目录/lock/key/journal/chmod。**不含实密钥 contact**。 | `src/aisc/adapters/secret_store.py` |
+| S5.3 | **secure store adapter** | 实现 secret store adapter：平台原生路径解析（Linux XDG config/state/data、macOS Application Support/aisc、Windows `%APPDATA%/aisc` config + `%LOCALAPPDATA%/aisc` state + `%LOCALAPPDATA%/aisc/secrets` secrets，不新增 config/state 字面子目录）；安全目录与排他空文件句柄创建原语；POSIX 0700/0600 + owner（生产验证使用 `dir_fd`/`O_NOFOLLOW`/`fstat`，真实 `os.stat` 落盘证据，既有不安全对象 fail closed，不自动 chmod/chown 修复）；Windows DACL 创建时应用 + handle 回读验证（current user + SYSTEM Full Control，DACL protected、无 inherited ACE；不允许 Everyone/`BUILTIN\Users`/Authenticated Users 的 ALLOW ACE，不添加 broad DENY ACE），验证失败抛安全权限异常（exit 9 在后续 application/CLI 接线时映射）；symlink/reparse point/非 regular file type 一律 fail closed。**排他创建不等于 crash-safe atomic write**。不含实密钥接触；不含 HMAC/journal/global lock/atomic-write/migration integrity key/dry-run 语义（以上全部属于 S5.4）。S5.3 不新增空壳 CLI。 | `src/aisc/adapters/secret_store.py` |
 | S5.4 | **config migrate + journal** | 实现 `aisc config migrate`（text+json+events）：Phase 1 copy-only——从 source inventory 精确路径读取，**不修改/删除/重命名/chmod/chown legacy 源或 settings，源文件和 settings bytes 不变**；按 S5.1 映射规则进行 provider 映射与 secret 复制→新 store；冲突按 S5.1 规则处理；未映射 secret → exit 14 `AISC_EXIT_MIGRATION_CONFLICT`；legacy state 仅报告现状（`.aisc` > `.deploy` 逐 key），不过度承诺 state migration；若后续 S6-S8 无消费者 S5 仅报告 legacy state。回滚依靠源未变 + 目标逐文件原子 + journal；**不创建 `.bak-YYYYMMDD` 或明文备份**。退出码：0 成功/全部 already_current；14 冲突/未映射；6 schema 错误；7 必要文件缺失；9 权限不足；1 通用；130 中断（**不含部分成功退出码**）。`--dry-run` 零目录/lock/key/journal/chmod。 | `src/aisc/application/config_service.py`、`aisc config migrate` |
 | S5.5 | **cleanup 拒绝 stub** | 实现 `aisc config cleanup` **固定拒绝 stub**：exit 11、`AISC_ERR_CLEANUP_NOT_AUTHORIZED`、零读 secret、零写。cleanup mutation engine、真实 cleanup、legacy 删除**均不在 S5 实现**，需后续切片单独批准。**不存在 `--force-cleanup` flag**。 | `src/aisc/cli/commands/config.py`（cleanup stub） |
 | S6 | **最小 safe/unsafe resolver + network 正交** | 仅内置 `safe`/`unsafe` profile（首版不支持 user-defined profile 或 `custom_docker_args`）。safe 不含 `network` 字段、不含 `sudo_policy` 字段。network 由 `--network direct\|proxy` 单独控制。sudo 由容器内固定最小 sudoers allowlist（具体规则在 S8 落地）。`--non-interactive` 正交。 | `src/aisc/domain/profiles.py`、`aisc profile list/show` |
@@ -246,7 +246,7 @@ AISC/
 - macOS：`~/Library/Application Support/aisc/`
 - Windows：`%APPDATA%/aisc/`
 
-Windows secrets 使用平台 ACL 策略保护，不以 POSIX `chmod`/`stat` 作为跨平台证明。
+Windows secrets 使用平台 ACL 策略保护（current user + SYSTEM Full Control，DACL protected、无 inherited ACE，不允许 broad principal ALLOW ACE），不以 POSIX `chmod`/`stat` 作为跨平台证明。
 
 ---
 
@@ -259,16 +259,17 @@ Windows secrets 使用平台 ACL 策略保护，不以 POSIX `chmod`/`stat` 作�
 | `aisc version` | ✅ 初版 | 显示 CLI 版本、bundle 版本 | 镜像显示 image version、contract version | 可接受 `--format json` 区分 CLI/bundle/image/contract/Claude 版本 |
 | `aisc doctor` | ✅ 初版 | host Docker/网络/权限诊断 | 容器 contract 兼容性检查（`aisc doctor --container`） | host/container 分拆为子命令 |
 | `aisc config validate` | ✅ 初版 | 校验用户/workspace config schema | — | — |
-| `aisc config effective` | ✅ 初版 | 显示脱敏合并有效配置 | — | — |
+| `aisc config effective` | ✅ 初版 | 显示脱敏合并有效配置 | — | 别名 `aisc config show`，共存 handler |
+| `aisc config show` | ✅ 兼容别名 | 同 `config effective` | — | text+json；`--events`→exit 2 |
 | `aisc config migrate` | ✅ 初版 | copy-only：从 source inventory 精确路径读取→按映射规则写入新 store→journal | — | text+json+events；unmapped→exit 14；`.bak-YYYYMMDD` 不存在 |
 | `aisc config cleanup` | ✅ 拒绝 stub (S5.5) | 固定拒绝：exit 11、`AISC_ERR_CLEANUP_NOT_AUTHORIZED`、零读写 | — | 真实 cleanup、legacy 删除仍单独批准，不在 S5 实现 |
 | `aisc profile list` | ✅ 初版 | 列出内置 profile | — | 首版仅内置 safe/unsafe |
 | `aisc profile show` | ✅ 初版 | 显示 profile 详情 | — | — |
-| `aisc provider list` | ✅ 初版 | 从 `container/providers.json` 读取 | — | — |
+| `aisc provider list` | ✅ 初版（前移只读） | 从 `container/providers.json` 读取 | — | 只读前移实现；不读配置/secret、不写文件。S7 provider show/use 未前移 |
 | `aisc provider show` | ✅ 初版 | 显示 provider 详情（脱敏） | — | — |
 | `aisc provider use` | ✅ 初版 | **唯一持久写路径**，保存 key → host secret store | **兼容期 `cs` 仅可 show**，不再写任何文件 | `aisc run --provider ID` 单次 override |
 | `aisc build` | ✅ 初版 | Docker build 执行 | — | — |
-| `aisc run` | ✅ 初版 | Docker run 参数组装+执行 | 入口点调度 | — |
+| `aisc run` | ✅ 初版 | Docker run 参数组装+执行 | 入口点调度 | `--non-interactive` 传输层第一阶段已实现（无 `-it`、stdin=DEVNULL、env 注入）；S7/S8 前**不宣称完整**。`--profile proxy` 作 `--network proxy` v2 兼容别名，不进入 profile domain |
 | `aisc logs` | ❌ 候选 | 查看最近启动日志 | — | 初版候选，非 P3 DoD |
 | `aisc clean` | ❌ 候选 | 清理缓存 | — | 初版候选，非 P3 DoD |
 | `completion` | 候选 | shell completion 脚本生成 | — | — |
@@ -290,6 +291,7 @@ aisc
 ├── version                              # S2
 ├── doctor [--container]                 # S2 (host) + S8 (container)
 ├── config
+│   ├── show                             # 兼容别名（→ effective）
 │   ├── validate                         # S5.2
 │   ├── effective                        # S5.2
 │   ├── migrate                          # S5.4
@@ -298,11 +300,11 @@ aisc
 │   ├── list                             # S6
 │   └── show [NAME]                      # S6
 ├── provider
-│   ├── list                             # S7
+│   ├── list                             # 前移只读（原 S7）
 │   ├── show [NAME]                      # S7
 │   └── use NAME                         # S7 (唯一持久写路径)
 ├── build                                # S3
-└── run                                  # S3
+└── run                                  # S3 (+ --non-interactive 传输层阶段1; --profile proxy 兼容别名)
 ```
 
 ---
@@ -429,7 +431,7 @@ Docker 原始输出（build log/run log）进入 stderr 或编码为 `data.raw` 
 
 普通用户没有 `--secrets-dir` 覆盖参数。平台路径解析由上表决定，不依赖环境变量注入（除标准 XDG/APPDATA/LOCALAPPDATA）。
 
-POSIX：目录 0700、密钥文件 0600、owner 校验。Windows：current user SID + SYSTEM full control、禁继承/Everyone/Users/Authenticated Users、写后验证 DACL、失败 exit 9（DACL 是实现 blocker）。macOS：POSIX 0700/0600 + extended ACL 校验，无法证明 fail closed。
+POSIX：目录 0700、密钥文件 0600、owner 校验（生产验证使用 `dir_fd`/`O_NOFOLLOW`/`fstat`，真实 `os.stat` 落盘证据；既有不安全对象 fail closed，不自动 chmod/chown 修复）。Windows：current user SID + SYSTEM Full Control，DACL protected、无 inherited ACE；不允许 Everyone/`BUILTIN\Users`/Authenticated Users 的 ALLOW ACE，不添加 broad DENY ACE；创建时应用 + handle 回读验证；失败抛安全权限异常（exit 9 在后续 application/CLI 接线时映射，S5.3 不新增空壳 CLI）。macOS：按 POSIX 0700/0600 + owner 实现，保持 stdlib-only；extended ACL 延后为独立安全增强，不作为 S5.3 blocker。
 
 ### 8.2 两个根：`--workspace` 与 `--aisc-root`
 
@@ -521,7 +523,9 @@ legacy state（`R/.aisc/state.env` + `R/.deploy/state.env`）：
 - S5 **仅报告** legacy state 现状（列出 key、标记 shadowed），不过度承诺 state migration。
 - 若后续 S6-S8 无 legacy state 消费者，S5 仅 report，不做任何 state 写入。
 
-### 8.8 journal / HMAC / 原子写
+### 8.8 journal / HMAC / 原子写（属于 S5.4，非 S5.3）
+
+S5.3 仅提供安全目录与排他空文件句柄创建原语，**不包含**以下 migration 基础设施（全部属于 S5.4）：
 
 - journal 不含明文 secret、不含 last4、不含普通 hash。
 - 完整性保护使用 `migration-integrity.key`（HMAC，存储在受保护的 `<platform-secrets-dir>/migration-integrity.key`，权限与 secret 相同）。
@@ -774,25 +778,27 @@ LABEL aisc.image.version="${AISC_VERSION}"
 | **文档更新** | Devlog |
 | **Commit** | 约 2–3 个 |
 
-### S5.3：secure store adapter（P3.2）
+### S5.3：secure store adapter（P3.2 · 实验性、未提交，核心 Windows 实机硬 gate 已通过）
 
 | 维度 | 内容 |
 |------|------|
+| **状态** | **实验性，未提交**（2026-07-17）。adapter 代码/测试/Windows 手测指南已存在于未提交工作区。Linux/POSIX 及静态/ABI/fake 测试已通过。**Windows 核心实机硬 gate 已通过**（2026-07-17，Windows 11 Pro 10.0.26200，Python 3.12.10，commit a43a034）：verifier JSON overall PASS；DACL protected=true；2 ACE（user+SYSTEM Full Control）；junction 拒绝；篡改 fail-closed。4 个 TestWindowsReal 全部 passed。证据包见 `docs/testing/S5.3-findings.md` 底部。注意：证据快照的全套 focused/full unittest 因 POSIX-only 测试误执行及仓库跨平台兼容性问题存在非 S5.3 失败，**不声称“Windows unittest 全绿”或笼统“PASSED”**，核心硬 gate 独立于全套通过。仍未接入默认 CLI/迁移流程；不宣称生产安全。所有 7 个 findings 已在当前 Linux 工作区修复，`tests.unit.test_secret_store` Ran 72 OK skipped=8。建议提交前/发布前 Windows 回归。 |
 | **进入条件** | S5.1（路径模型已定义） |
 | **修改范围** | `src/aisc/adapters/secret_store.py` |
-| **核心工作** | ① 平台原生路径解析（Linux XDG config/state/data、macOS Application Support/aisc、Windows APPDATA config + LOCALAPPDATA state/secrets）。② POSIX 0700/0600 + owner 校验。③ Windows DACL current user SID + SYSTEM full control、禁继承/Everyone/Users/Authenticated Users、写后验证、失败 exit 9；DACL 的真实设置与回读验证是本切片完成条件，不允许以未接线 stub 延后。④ macOS：POSIX 0700/0600 + extended ACL 校验，无法证明 fail closed。⑤ journal/HMAC/原子写基础设施：不含明文/last4/普通 hash；完整性保护使用 `<platform-secrets-dir>/migration-integrity.key`；per-target atomic write（临时文件→重命名）；可重入，全局 `flock`/`LockFileEx`；`--dry-run` 零目录/lock/key/journal/chmod。生产实现不读取现有用户 secret；测试仅使用临时 PathPolicy fixture。 |
+| **核心工作** | ① 平台原生路径解析（Linux XDG config/state/data、macOS Application Support/aisc、Windows `%APPDATA%/aisc` config + `%LOCALAPPDATA%/aisc` state + `%LOCALAPPDATA%/aisc/secrets` secrets，不新增 config/state 字面子目录）。② 安全目录与排他空文件句柄创建原语。③ POSIX 0700/0600 + owner：生产验证使用 `dir_fd`/`O_NOFOLLOW`/`fstat`，真实 `os.stat` 落盘证据；既有不安全对象 fail closed，不自动 chmod/chown 修复。④ macOS：按 POSIX 0700/0600 + owner 实现，保持 stdlib-only；extended ACL 延后为独立安全增强，不作为 S5.3 blocker。⑤ symlink / reparse point / 非 regular file type 一律 fail closed。⑥ **不含** HMAC、journal、global lock（`flock`/`LockFileEx`）、atomic-write（临时文件→重命名）、migration integrity key、dry-run 语义——以上全部属于 S5.4。S5.3 仅提供安全目录与排他文件句柄创建原语，不做迁移基础设施。⑦ 排他创建不等于 crash-safe atomic write。生产实现不读取现有用户 secret；测试仅使用临时 PathPolicy fixture。 |
 | **依赖** | S5.1 |
-| **测试证据** | 平台路径解析正确；DACL/ACL 断言（mock 平台）；atomic write + journal HMAC；dry-run 零副作用。fixture 使用 temp PathPolicy |
-| **验收门** | adapter 可执行原子读/写；journal 可校验；Linux mode/owner、macOS extended ACL、Windows NTFS DACL 均有平台原生集成证据；无法证明安全权限时 fail closed（exit 9） |
+| **测试证据（已完成部分）** | Linux/POSIX mode/owner 真实 `os.stat` 落盘证据通过；Windows ABI 静态测试（struct sizes、field offsets、SID/DACL 常量）通过；fake backend 测试通过；symlink/reparse/非 regular 拒绝（Linux 侧）通过；**Windows 核心实机硬 gate 已通过**——verifier JSON overall PASS、DACL protected=true、exactly 2 ACE（user+SYSTEM Full Control）、junction 拒绝、篡改 fail-closed、4 个 TestWindowsReal 全部 passed；fixture 使用 temp PathPolicy |
+| **测试证据（未完成部分）** | 证据快照的全套 focused（Ran 69, FAILED failures=10 errors=14 skipped=1）和 full（Ran 808, FAILED failures=54 errors=36 skipped=17）unittest 因 POSIX-only 测试误执行及仓库跨平台问题存在大量非 S5.3 失败——不能据此宣称“Windows unittest 全绿”。S5.3 核心硬 gate 独立于全套通过。建议提交前/发布前在最终工作树复测 Windows 回归。 |
+| **验收门（实验性阶段不强制执行）** | 正式完成时：adapter 可创建安全目录与排他空文件句柄；Linux mode/owner（0700/0600）经真实 `os.stat` 验证；**真实 Windows DACL 经创建+回读验证**；macOS POSIX 权限生效；symlink/reparse/type fail closed；无法证明安全权限时 fail closed（抛安全权限异常）。当前实验性阶段：Windows 核心实机硬 gate 已通过，**不宣称已正式完成**。仍未接入默认 CLI/迁移流程，不宣称生产安全。所有 7 个 findings 已在当前 Linux 工作区修复，建议提交前/发布前 Windows 回归。 |
 | **回滚** | 删除 secret_store adapter |
 | **文档更新** | Devlog |
-| **Commit** | 约 3–4 个 |
+| **Commit** | 暂未提交（代码存在于未提交工作区） |
 
 ### S5.4：config migrate + journal（P3.2）
 
 | 维度 | 内容 |
 |------|------|
-| **进入条件** | S5.3（secure store adapter 就绪） |
+| **进入条件** | S5.3 Linux/POSIX 路径就绪（S5.3 适配器代码已存在于未提交工作区，Linux/POSIX 测试通过；S5.4 可通过注入 fake/skip-windows backend 在 Linux 上开发测试。**S5.3 正式完成需真实 Windows 证据**，参见 S5.3 硬性 gate） |
 | **修改范围** | `src/aisc/application/config_service.py`（migrate 逻辑）、`src/aisc/cli/commands/config.py`（migrate 命令） |
 | **核心工作** | ① `aisc config migrate`（text+json+events）：Phase 1 copy-only——从 S5.1 source inventory 精确路径读取；**不修改/删除/重命名/chmod/chown legacy 源或 settings，源文件和 settings bytes 不变**。② 按 S5.1 映射规则进行 provider 映射与 secret 复制→新 store。③ 冲突按 S5.1 规则处理（相同去重、不同 conflict、目标不同不覆盖、目标已存在相同→already_current）。④ 未映射 secret → exit 14 `AISC_EXIT_MIGRATION_CONFLICT`。⑤ legacy state 仅报告现状（`.aisc` > `.deploy` 逐 key，标记 shadowed），不过度承诺 state migration；若后续 S6-S8 无 legacy state 消费者，S5 仅报告。⑥ 回滚依靠源未变 + 目标逐文件原子 + journal；**不创建 `.bak-YYYYMMDD` 或明文备份**。⑦ 退出码：0 成功/全部 already_current；14 冲突/未映射；6 schema 错误；7 必要文件缺失；9 权限不足；1 通用；130 中断（**不含部分成功退出码**）。⑧ `--dry-run` 零目录/lock/key/journal/chmod。 |
 | **依赖** | S5.2、S5.3 |

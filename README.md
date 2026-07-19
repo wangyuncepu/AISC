@@ -214,36 +214,149 @@ cs upgrade → 合并出厂部分(skills/plugins/commands)，保留 projects/历
 
 > 升级非自动：用户需手动在容器内执行 `cs upgrade`。
 
-## 诊断工具
+## 可用 CLI Demo
 
-### P3 CLI（开发预览 / 尚未替代 start.*）
+> **预览，不替代 `start.*`。** 当前没有面向普通用户的公开 CLI/release bundle；CI archive 仅为 workflow artifact。真实打包和 smoke 主要在 Linux x86_64 验证，Windows/macOS runner 验证仍待补齐。
 
-> **状态说明**：P3.1 S4 完成了 `version`、`doctor`、`build`、`run` 四个命令的完整纵向切片，并实现了 PyInstaller 独立可执行打包、确定性 archive 组装、安全提取/静态完整性校验和 CI workflow artifact 生成。**当前仅 Linux x86_64 通过真实 PyInstaller/archive/smoke 验证**；Windows/macOS CI 已配置但待首次 matrix runner 验证。产物仅为 workflow artifact（非 Release），不对外公开发布、不替换默认入口。当前用户入口仍为 `start.sh` / `start.bat` / `start.command`。
+### 开发安装与运行
+
+CLI 运行时为 Python 标准库实现。请在仓库源码中运行；下文用 `aisc` 表示命令。
 
 ```bash
-# 开发用法（需要仓库源码 + Python 3.11+）
+# 不安装：适合快速试用
 PYTHONPATH=src python3 -m aisc version
-PYTHONPATH=src python3 -m aisc version --format json
-PYTHONPATH=src python3 -m aisc doctor
-PYTHONPATH=src python3 -m aisc doctor --format json
 
-# 构建镜像（dry-run 规划）
-PYTHONPATH=src python3 -m aisc build --dry-run
-PYTHONPATH=src python3 -m aisc build --dry-run --no-cache --pull
-PYTHONPATH=src python3 -m aisc build --dry-run --tag my-image:v1
-PYTHONPATH=src python3 -m aisc build --dry-run --events        # JSONL 事件流
-
-# 运行容器（dry-run 规划）
-PYTHONPATH=src python3 -m aisc run --dry-run
-PYTHONPATH=src python3 -m aisc run --dry-run --network proxy
-PYTHONPATH=src python3 -m aisc run --dry-run --events          # JSONL 事件流
-
-# 全局选项可放在子命令前或后
-PYTHONPATH=src python3 -m aisc --format json version
-PYTHONPATH=src python3 -m aisc --events build --dry-run
+# 或安装到当前 Python 虚拟环境，获得 aisc 命令
+python3 -m venv .venv
+. .venv/bin/activate                 # Windows PowerShell: .venv\Scripts\Activate.ps1
+python3 -m pip install -e .
+aisc version
 ```
 
-> 协议细节见 `docs/rfc/aisc-cli-v1.md`。
+未安装时，将所有 `aisc …` 替换为 `PYTHONPATH=src python3 -m aisc …`。`build`、`run`、`provider list/show` 和 `brief` 需要仓库中的 `container/`、`config/` 或 `apps/` 资源；通常在仓库根目录运行，从其他目录运行时使用 `--aisc-root /path/to/AISC`。
+
+### 当前实际命令树
+
+以下是当前可执行的命令，不是 P3 计划的完整终态：
+
+| 命令 | 可用子命令 / 选项 |
+|------|-------------------|
+| `aisc version` | — |
+| `aisc doctor` | — |
+| `aisc build` | `--tag TAG`、`--no-cache`、`--pull`、`--dry-run` |
+| `aisc run` | `--image IMAGE`、`--workspace PATH`、`--network direct\|proxy`、`--profile proxy`、`--non-interactive`、`--dry-run` |
+| `aisc config` | `validate`、`effective`、`show`（`effective` 的兼容别名）；三个命令均可接受 `--config PATH`、`--workspace PATH` |
+| `aisc profile` | `list`、`show [NAME]`；省略名称时显示 `safe` |
+| `aisc provider` | `list`、`show NAME`；`NAME` 可为 provider ID 或别名 |
+| `aisc brief` | `--date`、`--days`、`--top`、`--source`、`--ai`、`--save`、`--no-cache`、`--strict`、`--debug`；仅 text 输出 |
+
+除 `brief` 外，已实现顶层命令支持 `--format text|json`、`--no-color`、`--aisc-root PATH`。`build`、`run` 还支持 `--events` 输出 JSONL；`--format json` 与 `--events` 不能同时使用。machine mode（`--format json` 或 `--events`）执行非交互容器时，容器原始输出会转到 stderr，stdout 只保留 JSON envelope 或 JSONL。协议仍是草案，见 [`docs/rfc/aisc-cli-v1.md`](docs/rfc/aisc-cli-v1.md)。
+
+### 按功能复制示例
+
+#### 版本与环境诊断
+
+```bash
+aisc version
+aisc version --format json
+aisc doctor
+aisc doctor --format json
+
+# 旧 Shell 诊断器；不是 start.sh 子命令
+bash cli/commands/doctor.sh
+```
+
+`doctor` 当前只检查宿主机；`aisc doctor --container` 尚未实现。
+
+#### 镜像构建
+
+```bash
+# 先核对即将执行的 Docker 参数，不实际构建
+aisc build --dry-run
+aisc build --dry-run --no-cache --pull --tag my-super-claude:dev
+
+# 实际构建
+aisc build --tag my-super-claude:dev
+
+# 长命令事件流；Docker 原始日志走 stderr
+aisc build --dry-run --events
+```
+
+#### 容器运行
+
+```bash
+# 默认挂载当前目录，只预览 docker run
+aisc run --dry-run
+
+# 指定镜像与 workspace
+aisc run --image my-super-claude:dev --workspace /path/to/project --dry-run
+aisc run --image my-super-claude:dev --workspace /path/to/project
+
+# 非交互传输层预览：不分配 -it，stdin 使用 DEVNULL
+aisc run --non-interactive --dry-run
+
+# 可选容器内 TUN 代理；--profile proxy 只是兼容别名
+aisc run --network proxy --dry-run
+aisc run --profile proxy --dry-run
+```
+
+实际代理运行仍依赖 Docker/TUN 能力与代理配置。当前 Demo 没有完成计划中的完整 preflight、镜像 capability contract 或安全 profile；先 dry-run 核对参数。
+
+#### 配置、profile 与后端清单（只读）
+
+```bash
+aisc config validate
+aisc config validate --config /path/to/config.json --workspace /path/to/project
+aisc config effective --workspace /path/to/project
+aisc config show --format json       # effective 的兼容别名
+
+# 内置 profile 的只读说明；尚未接入 aisc run 的安全控制
+aisc profile list
+aisc profile show                     # 默认 safe
+aisc profile show unsafe --format json
+
+# 仅读取 container/providers.json，不读写密钥、不切换后端
+aisc provider list
+aisc provider list --format json
+aisc provider show deepseek
+aisc provider show default --format json
+```
+
+#### AI 每日简讯
+
+`brief` 调用仓库内的 AI 简讯工具，抓取结果、缓存可用性和 `--ai` 的 LLM 生成结果均取决于网络与当前配置。它当前只输出 text：`--format json` 或 `--events` 会返回 usage error（exit 2）。
+
+```bash
+# 默认：抓取默认来源并输出 text
+aisc brief
+
+# 使用 LLM 做跨来源中文精选；需要可用的模型凭据和网络
+aisc brief --ai
+
+# 只查看 tools 来源，每个来源最多 3 条
+aisc brief --source tools --top 3
+
+# 每个来源的耗时诊断写入 stderr
+aisc brief --debug
+```
+
+#### 一键 Demo
+
+```bash
+bash scripts/demo/demo_cli.sh
+```
+
+该脚本使用 `PYTHONPATH=src` 直接运行源码 CLI，不执行真实 `build` 或 `run`，只覆盖它们的 `--dry-run` 规划。它也会调用一次简讯入口来确认命令可执行，但联网、抓取或 LLM 生成是否成功**不是**整套 Demo 判定 PASS 的前提；离线环境下该检查会记录为通过。脚本仍会对版本、诊断、配置、provider/profile 的结构化输出及预期 usage error 进行实际断言，任一此类检查失败会使脚本非零退出。
+
+### Demo 限制与下一步边界
+
+- `provider use`、`config migrate`、`config cleanup`、`logs`、`clean` 尚未实现。
+- `profile list/show` 仅展示内置 `safe`、`unsafe` 定义；安全 profile、`--accept-unsafe-risk`、host secret store、镜像 contract 校验和完整 non-interactive 链路尚未完成。当前 `run --profile proxy` **不是**安全 profile。
+- `provider list/show` 仅读取 provider 定义，不能配置凭据或切换模型；实际切换仍在容器中使用 `cs`。
+- `start.*` 尚未转发到 `aisc`，也没有 fallback 关系；它们仍运行旧 Bash/PowerShell 流水线。
+- `brief` 是 text-only；`--format json` / `--events` 均会以 usage error 拒绝。其余命令的 JSON / JSONL 可用于 Demo、测试和脚本试验，但 RFC 处于 draft，不承诺长期兼容。
+
+统一 CLI 的目标命令树、切换条件和旧入口退役规则见 [`docs/plans/PLAN-p3-unified-cli.md`](docs/plans/PLAN-p3-unified-cli.md)。该计划描述拟议终态；本节以当前代码实际可执行的命令为准。
 
 ### Doctor（Shell 脚本版）
 

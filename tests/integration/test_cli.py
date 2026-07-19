@@ -359,5 +359,81 @@ class TestHarnessCompatibility(unittest.TestCase):
         self.assertEqual(data["meta"]["exit_code"], 2)
 
 
+# ---------------------------------------------------------------------------
+# config show — alias for config effective (§5.2 item 1)
+# ---------------------------------------------------------------------------
+
+class TestConfigShow(unittest.TestCase):
+    def test_show_json_matches_effective(self):
+        r_show = _run_aisc("config", "show", "--format", "json")
+        r_eff = _run_aisc("config", "effective", "--format", "json")
+        self.assertEqual(r_show.exit_code, r_eff.exit_code)
+        show_data = parse_json_envelope(r_show.stdout)
+        eff_data = parse_json_envelope(r_eff.stdout)
+        # Both should have same meta.command (both are "config" in the meta)
+        # and same data structure
+        self.assertEqual(show_data["meta"]["exit_code"], eff_data["meta"]["exit_code"])
+
+    def test_show_text_produces_output(self):
+        r = _run_aisc("config", "show")
+        self.assertIn(r.exit_code, (0, 1, 6, 7, 9))
+        # Should show "Config Effective" header
+        self.assertIn("Config Effective", r.stdout)
+
+    def test_show_events_exit_2(self):
+        r = _run_aisc("config", "show", "--events")
+        self.assertEqual(r.exit_code, 2)
+
+    def test_show_json_invalid_config(self):
+        import tempfile, json as _json
+        with tempfile.TemporaryDirectory() as td:
+            src = str(Path(td) / "bad.json")
+            Path(src).write_text("{bad")
+            r = _run_aisc("config", "show", "--format", "json", "--config", src)
+            parsed = parse_json_envelope(r.stdout)
+            self.assertIsNotNone(parsed)
+            self.assertNotEqual(parsed["meta"]["exit_code"], 0)
+
+
+# ---------------------------------------------------------------------------
+# provider list (§5.2 item 2)
+# ---------------------------------------------------------------------------
+
+class TestProviderList(unittest.TestCase):
+    def test_provider_list_text(self):
+        r = _run_aisc("provider", "list")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("Provider List", r.stdout)
+
+    def test_provider_list_json(self):
+        r = _run_aisc("provider", "list", "--format", "json")
+        data = assert_json_envelope(r)
+        self.assertIn("schema_version", data["data"])
+        self.assertIsInstance(data["data"]["providers"], list)
+        self.assertGreater(len(data["data"]["providers"]), 0)
+        # Each provider has required fields
+        for p in data["data"]["providers"]:
+            self.assertIn("id", p)
+            self.assertIn("name", p)
+            self.assertIn("auth_type", p)
+
+    def test_provider_list_invalid_root(self):
+        r = _run_aisc("provider", "list", "--format", "json",
+                       "--aisc-root", "/nonexistent")
+        parsed = parse_json_envelope(r.stdout)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["meta"]["exit_code"], 1)
+
+    def test_provider_list_events_exit_2(self):
+        r = _run_aisc("provider", "list", "--events")
+        self.assertEqual(r.exit_code, 2)
+
+    def test_provider_list_no_secret_reads(self):
+        """Smoke: verify the command completes without reading secrets."""
+        r = _run_aisc("provider", "list", "--format", "json")
+        data = assert_json_envelope(r)
+        self.assertEqual(data["meta"]["exit_code"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

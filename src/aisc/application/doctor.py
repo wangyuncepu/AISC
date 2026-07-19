@@ -6,6 +6,7 @@ Checks are ordered and the report determines the final exit code.
 
 from __future__ import annotations
 
+import os
 import stat
 import sys
 from pathlib import Path
@@ -21,6 +22,7 @@ from aisc.adapters.system import ProcessRunner, RealProcessRunner
 
 DOCKER_TIMEOUT = 8.0
 GIT_TIMEOUT = 5.0
+COMPOSE_TIMEOUT = 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +319,244 @@ def _check_git(
     )
 
 
+def _check_docker_compose(
+    docker_path: Optional[str],
+    runner: ProcessRunner,
+    docker_cli_available: bool,
+) -> CheckResult:
+    """Check 9: Docker Compose (``docker compose version``)."""
+    if not docker_cli_available or docker_path is None:
+        return CheckResult(
+            name="docker-compose",
+            status=CheckStatus.SKIP,
+            message="Docker CLI not available",
+        )
+    result = runner.run(
+        [docker_path, "compose", "version"], timeout=COMPOSE_TIMEOUT,
+    )
+    if result.command_not_found:
+        return CheckResult(
+            name="docker-compose",
+            status=CheckStatus.WARN,
+            message="Docker Compose subcommand not available",
+            detail="docker command exists but 'compose' subcommand not found",
+            hint="Ensure Docker Compose plugin is installed: https://docs.docker.com/compose/install/",
+        )
+    if result.timed_out:
+        return CheckResult(
+            name="docker-compose",
+            status=CheckStatus.WARN,
+            message="Docker Compose check timed out",
+        )
+    if result.exit_code != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        lowered = detail.lower()
+        if "unknown command" in lowered or "not a docker command" in lowered:
+            return CheckResult(
+                name="docker-compose",
+                status=CheckStatus.WARN,
+                message="Docker Compose subcommand not available",
+                detail=detail,
+                hint="Install the Docker Compose plugin: https://docs.docker.com/compose/install/",
+            )
+        return CheckResult(
+            name="docker-compose",
+            status=CheckStatus.WARN,
+            message="Docker Compose returned an error",
+            detail=detail,
+            hint="Run 'docker compose version' manually and check the Docker Compose plugin installation.",
+        )
+    version_line = (
+        result.stdout.strip().splitlines()[0]
+        if result.stdout.strip()
+        else "(unknown)"
+    )
+    return CheckResult(
+        name="docker-compose",
+        status=CheckStatus.PASS,
+        message=version_line,
+    )
+
+
+def _check_root_writable(root: Optional[Path]) -> CheckResult:
+    """Check 10: Project root directory writability (read-only diagnostic)."""
+    if root is None:
+        return CheckResult(
+            name="root-writable",
+            status=CheckStatus.SKIP,
+            message="No AISC root found — writability check skipped",
+        )
+    try:
+        if not root.exists():
+            return CheckResult(
+                name="root-writable",
+                status=CheckStatus.WARN,
+                message=f"Root directory does not exist: {root}",
+                hint="Verify the project root path is correct",
+            )
+        if not root.is_dir():
+            return CheckResult(
+                name="root-writable",
+                status=CheckStatus.WARN,
+                message=f"Root path is not a directory: {root}",
+                hint="The project root must be a directory",
+            )
+        if os.access(str(root), os.W_OK):
+            return CheckResult(
+                name="root-writable",
+                status=CheckStatus.PASS,
+                message=f"Root directory is writable: {root}",
+            )
+        else:
+            return CheckResult(
+                name="root-writable",
+                status=CheckStatus.WARN,
+                message=f"Root directory may not be writable: {root}",
+                detail="Permission pre-check only — not a write guarantee",
+                hint="Check directory permissions (e.g. ls -ld on the directory)",
+            )
+    except OSError as exc:
+        return CheckResult(
+            name="root-writable",
+            status=CheckStatus.WARN,
+            message=f"Cannot check root writability: {root}",
+            detail=str(exc),
+        )
+
+
+def _check_launcher(root: Optional[Path]) -> List[CheckResult]:
+    """Check 11: Launcher script executability (start.sh, start.command on macOS)."""
+    if sys.platform == "win32":
+        return [
+            CheckResult(
+                name="launcher",
+                status=CheckStatus.SKIP,
+                message="Windows — POSIX executable-bit checks skipped",
+            )
+        ]
+
+    results: List[CheckResult] = []
+    scripts: List[tuple] = [("start.sh", "chmod +x start.sh")]
+    if sys.platform == "darwin":
+        scripts.append(("start.command", "chmod +x start.command"))
+
+    if root is None:
+        for fname, _ in scripts:
+            results.append(
+                CheckResult(
+                    name=f"launcher:{fname}",
+                    status=CheckStatus.SKIP,
+                    message="No AISC root found — launcher check skipped",
+                )
+            )
+        return results
+
+    for fname, fix_cmd in scripts:
+        fpath = root / fname
+        try:
+            if not fpath.exists():
+                results.append(
+                    CheckResult(
+                        name=f"launcher:{fname}",
+                        status=CheckStatus.WARN,
+                        message=f"{fname} not found",
+                        detail=f"Expected at {fpath}",
+                        hint="Verify the launcher script exists in the project root",
+                    )
+                )
+                continue
+            if not fpath.is_file():
+                results.append(
+                    CheckResult(
+                        name=f"launcher:{fname}",
+                        status=CheckStatus.WARN,
+                        message=f"{fname} exists but is not a regular file",
+                    )
+                )
+                continue
+            st = fpath.stat()
+            if st.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
+                results.append(
+                    CheckResult(
+                        name=f"launcher:{fname}",
+                        status=CheckStatus.PASS,
+                        message=f"{fname} is executable",
+                    )
+                )
+            else:
+                results.append(
+                    CheckResult(
+                        name=f"launcher:{fname}",
+                        status=CheckStatus.WARN,
+                        message=f"{fname} is not executable",
+                        detail=f"Found at {fpath} but missing execute permission",
+                        hint=f"Run '{fix_cmd}' to make it executable",
+                    )
+                )
+        except OSError as exc:
+            results.append(
+                CheckResult(
+                    name=f"launcher:{fname}",
+                    status=CheckStatus.WARN,
+                    message=f"Cannot check {fname}",
+                    detail=str(exc),
+                )
+            )
+
+    return results
+
+
+def _check_brief_py_syntax(root: Optional[Path]) -> CheckResult:
+    """Check 12: ``apps/ai-brief/brief.py`` Python syntax (read-only compile)."""
+    if root is None:
+        return CheckResult(
+            name="brief-py-syntax",
+            status=CheckStatus.SKIP,
+            message="No AISC root found — syntax check skipped",
+        )
+    fpath = root / "apps" / "ai-brief" / "brief.py"
+    try:
+        source = fpath.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return CheckResult(
+            name="brief-py-syntax",
+            status=CheckStatus.WARN,
+            message=f"apps/ai-brief/brief.py not found",
+            detail=f"Expected at {fpath}",
+        )
+    except (OSError, UnicodeError) as exc:
+        return CheckResult(
+            name="brief-py-syntax",
+            status=CheckStatus.FAIL,
+            message=f"Cannot read brief.py: {exc}",
+            detail=str(fpath),
+        )
+
+    try:
+        compile(source, str(fpath), "exec")
+    except SyntaxError as exc:
+        return CheckResult(
+            name="brief-py-syntax",
+            status=CheckStatus.FAIL,
+            message=f"Syntax error in apps/ai-brief/brief.py at line {exc.lineno}",
+            detail=f"Error at {fpath}:{exc.lineno}",
+            hint="Fix the syntax error before running the application",
+        )
+    except Exception as exc:
+        return CheckResult(
+            name="brief-py-syntax",
+            status=CheckStatus.FAIL,
+            message=f"Unexpected error checking brief.py syntax: {exc}",
+            detail=str(fpath),
+        )
+
+    return CheckResult(
+        name="brief-py-syntax",
+        status=CheckStatus.PASS,
+        message="apps/ai-brief/brief.py syntax is valid",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Exit code priority logic
 # ---------------------------------------------------------------------------
@@ -483,6 +723,18 @@ def run_doctor(
                 message="Git not available",
             )
         )
+
+    # 9. docker-compose
+    checks.append(_check_docker_compose(docker_path, r, docker_cli_available))
+
+    # 10. root writability
+    checks.append(_check_root_writable(root))
+
+    # 11. launcher scripts
+    checks.extend(_check_launcher(root))
+
+    # 12. brief.py syntax
+    checks.append(_check_brief_py_syntax(root))
 
     exit_code, error_code, error_message = _compute_exit_code(checks)
 

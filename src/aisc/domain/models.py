@@ -258,6 +258,7 @@ class RunPlan:
     network: str = "direct"
     dry_run: bool = False
     interactive: bool = True  # True for text mode, False for json/events
+    non_interactive: bool = False  # --non-interactive: omit -it, add env vars, DEVNULL stdin
     proxy_config: str = ""    # host path to .claude/mihomo/config.yaml (when network=proxy)
 
     @property
@@ -266,16 +267,22 @@ class RunPlan:
 
         - interactive=True  → includes ``-it``
         - interactive=False → omits ``-it``
+        - non_interactive=True → also omits ``-it``, adds AISC_NON_INTERACTIVE + CLAUDE_SCOPE
         - network=proxy     → adds NET_ADMIN, TUN device, mihomo config mount
         """
         argv = ["run", "--rm"]
-        if self.interactive:
+        if self.interactive and not self.non_interactive:
             argv.append("-it")
         argv.extend([
             "-e", "TERM=xterm-256color",
             "--name", self.name,
             "-v", f"{self.workspace}:/home/AISC/app",
         ])
+        if self.non_interactive:
+            argv.extend([
+                "-e", "AISC_NON_INTERACTIVE=1",
+                "-e", "CLAUDE_SCOPE=project",
+            ])
         if self.network == "proxy":
             argv.extend([
                 "--cap-add=NET_ADMIN",

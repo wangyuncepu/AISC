@@ -170,8 +170,15 @@ def load_provider_catalog(raw: bytes) -> ProviderCatalog:
         if not isinstance(base_url, str):
             raise ValueError("providers.json: base_url must be string")
 
+        # aliases — optional, list of strings
+        raw_aliases = entry.get("aliases")
+        aliases: Tuple[str, ...] = ()
+        if isinstance(raw_aliases, list) and all(isinstance(a, str) for a in raw_aliases):
+            aliases = tuple(raw_aliases)
+
         specs[key] = ProviderSpec(id=pid, name=name, auth_type=auth_type,
-                                  auth_key_name=auth_key_name, base_url=base_url)
+                                  auth_key_name=auth_key_name, base_url=base_url,
+                                  aliases=aliases)
     return ProviderCatalog.build(specs, schema_version=sv)
 
 
