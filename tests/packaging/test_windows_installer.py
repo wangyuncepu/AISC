@@ -236,5 +236,28 @@ class TestWorkflowSetupInvariants(unittest.TestCase):
                       "Missing reference to smoke_installer.ps1")
 
 
+class TestInstallerSmokeInvariants(unittest.TestCase):
+    """Validate process handling in the Windows installer smoke test."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = (_PROJ / "packaging" / "windows" / "smoke_installer.ps1").read_text(
+            encoding="utf-8"
+        )
+
+    def test_gui_processes_are_waited_for(self):
+        """GUI setup executables require explicit waiting and process exit codes."""
+        self.assertIn("Start-Process", self.text)
+        self.assertIn("-Wait", self.text)
+        self.assertIn("-PassThru", self.text)
+        self.assertIn("return $process.ExitCode", self.text)
+
+    def test_setup_and_uninstall_use_process_helper(self):
+        """Install, upgrade, and uninstall must all use the waiting helper."""
+        self.assertEqual(self.text.count("Invoke-InstallerProcess `"), 3)
+        self.assertNotIn("& $setupFile.FullName /VERYSILENT", self.text)
+        self.assertNotIn("& $uninstFile.FullName /VERYSILENT", self.text)
+
+
 if __name__ == "__main__":
     unittest.main()

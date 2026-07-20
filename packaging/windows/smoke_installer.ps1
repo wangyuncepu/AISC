@@ -19,6 +19,21 @@ function Fail {
 }
 function Pass { param([string]$Msg) Write-Host "  PASS: $Msg" }
 
+function Invoke-InstallerProcess {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$FilePath,
+        [Parameter(Mandatory=$true)]
+        [string[]]$Arguments
+    )
+
+    $process = Start-Process -FilePath $FilePath `
+                             -ArgumentList $Arguments `
+                             -Wait `
+                             -PassThru
+    return $process.ExitCode
+}
+
 $appDir = "$env:LOCALAPPDATA\Programs\AISC"
 $regPath = "HKCU:\Environment"
 $sentinelConfig = "$env:USERPROFILE\.aisc\smoke-marker.txt"
@@ -66,9 +81,11 @@ try {
     # ---------------------------------------------------------------
     Write-Host "=== 1. Silent install ==="
     $log1 = "$env:TEMP\aisc-install-1.log"
-    & $setupFile.FullName /VERYSILENT /SUPPRESSMSGBOXES /LOG="$log1"
-    if ($LASTEXITCODE -ne 0) {
-        Fail "Install failed (exit $LASTEXITCODE)"
+    $installExitCode = Invoke-InstallerProcess `
+        -FilePath $setupFile.FullName `
+        -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', "/LOG=$log1")
+    if ($installExitCode -ne 0) {
+        Fail "Install failed (exit $installExitCode)"
         if (Test-Path $log1) { Write-Host (Get-Content $log1 -Raw) }
         exit 1
     }
@@ -126,8 +143,13 @@ try {
     # ---------------------------------------------------------------
     Write-Host "=== 2. Upgrade (second install) ==="
     $log2 = "$env:TEMP\aisc-install-2.log"
-    & $setupFile.FullName /VERYSILENT /SUPPRESSMSGBOXES /LOG="$log2"
-    if ($LASTEXITCODE -ne 0) { Fail "Upgrade install failed" }
+    $upgradeExitCode = Invoke-InstallerProcess `
+        -FilePath $setupFile.FullName `
+        -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', "/LOG=$log2")
+    if ($upgradeExitCode -ne 0) {
+        Fail "Upgrade install failed (exit $upgradeExitCode)"
+        if (Test-Path $log2) { Write-Host (Get-Content $log2 -Raw) }
+    }
 
     $currentPath = (Get-ItemProperty -Path $regPath -Name "PATH" -EA SilentlyContinue).PATH
     $inPath = if ($currentPath) {
@@ -156,8 +178,10 @@ try {
     $uninstFile = Get-ChildItem "$appDir\unins*.exe" -ErrorAction Stop | Select-Object -First 1
     if (-not $uninstFile) { Fail "unins*.exe not found — cannot uninstall"; exit 1 }
 
-    & $uninstFile.FullName /VERYSILENT /SUPPRESSMSGBOXES
-    if ($LASTEXITCODE -ne 0) { Fail "Uninstall failed (exit $LASTEXITCODE)" }
+    $uninstallExitCode = Invoke-InstallerProcess `
+        -FilePath $uninstFile.FullName `
+        -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES')
+    if ($uninstallExitCode -ne 0) { Fail "Uninstall failed (exit $uninstallExitCode)" }
     Start-Sleep -Seconds 2
 
     # Verify app dir gone
