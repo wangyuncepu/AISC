@@ -1,0 +1,9512 @@
+"""Unit tests for secret_store adapter (S5.3) — post security review rework.
+
+Covers path resolution (pure), POSIX dir_fd-based handle-relative ops,
+Windows ABI/fake/semantic tests, and Windows real skip tests.
+"""
+
+import ctypes as _ct
+import ctypes.wintypes as _wt
+import os as _os
+import stat as _stat
+import sys as _sys
+import tempfile as _tempfile
+import unittest as _ut
+from pathlib import Path as _Path
+
+_SYS_PATH = str(_Path(__file__).resolve().parent.parent.parent / "src")
+if _SYS_PATH not in _sys.path:
+    _sys.path.insert(0, _SYS_PATH)
+
+from aisc.adapters.secret_store import (  # noqa: E402
+    StorePaths,
+    SecureStorePermissionError,
+    SecureStoreResidualError,
+    resolve_store_paths,
+    ensure_secure_directory,
+    create_private_file,
+    _set_win_backend,
+    _get_win_backend,
+    _RealWinSecretBackend,
+    _WinSecretBackend,
+    _validate_leaf_name,
+    _attach_cleanup_errors,
+    _raise_no_primary_cleanup,
+    _classify_ntstatus,
+    _classify_ntstatus_exc,
+    _raise_from_ntstatus,
+    _convert_and_raise_ntstatus,
+    _parse_dacl_snapshot_from_sd,
+    DaclSnapshot,
+    DaclAceSnapshot,
+    _WinLowLevelAPI,
+    _RealLowLevelAPI,
+    _get_low_level_api,
+    _set_low_level_api,
+    _ACL,
+    _ACE_HEADER,
+    _ACCESS_ALLOWED_ACE,
+    _ACCESS_DENIED_ACE,
+    _ACL_SIZE_INFORMATION,
+    _SECURITY_DESCRIPTOR,
+    _SECURITY_ATTRIBUTES,
+    _SID_IDENTIFIER_AUTHORITY,
+    _TOKEN_USER,
+    _SID_AND_ATTRIBUTES,
+    _BY_HANDLE_FILE_INFO,
+    _FILETIME,
+    _UNICODE_STRING,
+    _OBJECT_ATTRIBUTES,
+    _IO_STATUS_BLOCK,
+    _IO_STATUS_BLOCK_u,
+    _FILE_DISPOSITION_INFO,
+    _LARGE_INTEGER,
+    _build_unicode_string,
+    _build_object_attributes,
+    _configure_ntdll_prototypes,
+    _configure_advapi32_prototypes,
+    _parse_fixed_drive_components,
+    _traverse_retained_handle,
+    _traverse_or_create_directory,
+    _validate_traversal_directory,
+    _ACCESS_ALLOWED_ACE_TYPE,
+    _ACCESS_DENIED_ACE_TYPE,
+    _CONTAINER_INHERIT_ACE,
+    _OBJECT_INHERIT_ACE,
+    _INHERITED_ACE,
+    _INHERIT_ONLY_ACE,
+    _NO_PROPAGATE_INHERIT_ACE,
+    _ACL_REVISION_DS,
+    _SE_DACL_PROTECTED,
+    _SECURITY_DESCRIPTOR_REVISION,
+    _FILE_ALL_ACCESS,
+    _FILE_TYPE_DISK,
+    _FILE_TYPE_UNKNOWN,
+    _FILE_FLAG_OPEN_REPARSE_POINT,
+    _FILE_FLAG_BACKUP_SEMANTICS,
+    _FILE_ATTRIBUTE_REPARSE_POINT,
+    _FILE_ATTRIBUTE_DIRECTORY,
+    _FILE_ATTRIBUTE_NORMAL,
+    _ERROR_FILE_NOT_FOUND,
+    _ERROR_PATH_NOT_FOUND,
+    _ERROR_FILE_EXISTS,
+    _ERROR_ACCESS_DENIED,
+    _FILE_SHARE_READ,
+    _FILE_SHARE_WRITE,
+    _FILE_SHARE_DELETE,
+    _NT_SUCCESS,
+    _STATUS_SUCCESS,
+    _STATUS_OBJECT_NAME_NOT_FOUND,
+    _STATUS_OBJECT_PATH_NOT_FOUND,
+    _STATUS_ACCESS_DENIED,
+    _STATUS_OBJECT_NAME_COLLISION,
+    _STATUS_SHARING_VIOLATION,
+    _STATUS_NOT_A_DIRECTORY,
+    _STATUS_FILE_IS_A_DIRECTORY,
+    _STATUS_REPARSE_POINT_NOT_RESOLVED,
+    _STATUS_REPARSE,
+    _FILE_OPEN,
+    _FILE_OPEN_IF,
+    _FILE_CREATE,
+    _FILE_DIRECTORY_FILE,
+    _FILE_NON_DIRECTORY_FILE,
+    _FILE_SYNCHRONOUS_IO_NONALERT,
+    _FILE_OPEN_FOR_BACKUP_INTENT,
+    _FILE_OPEN_REPARSE_POINT,
+    _FILE_READ_ATTRIBUTES,
+    _FILE_TRAVERSE,
+    _SYNCHRONIZE,
+    _READ_CONTROL,
+    _DELETE,
+    _OBJ_CASE_INSENSITIVE,
+    _DRIVE_FIXED,
+    _DRIVE_REMOTE,
+    _DRIVE_UNKNOWN,
+    _FILE_CREATED_INFO,
+    _FILE_OPENED_INFO,
+    _GENERIC_READ,
+    _GENERIC_WRITE,
+    # P2-D internals
+    _validate_dir_dacl_snapshot,
+    _validate_file_dacl_snapshot,
+    _validate_private_file_handle,
+    _create_private_file_relative,
+    _USER_SID_BYTES,
+    _SYSTEM_SID_BYTES,
+    # POSIX internals
+    _posix_walk_to_parent,
+    _posix_walk_to_directory,
+    _posix_open_root,
+    _posix_validate_dir_fd,
+    _posix_validate_file_fd,
+    # P3-A POSIX fail-integrity internals
+    _validate_dir_fd_simple,
+    _posix_close_fd,
+    _posix_rollback_dir,
+    _posix_rollback_file,
+    _posix_capture_dir_fd_and_identity,
+    _posix_rollback_dir_from_fd,
+    _FD_UNOWNED,
+    _build_residual_and_close,
+)
+
+
+# ============================================================================
+# Fake Windows backend (public API seam)
+# ============================================================================
+
+class FakeWinSecretBackend(_WinSecretBackend):
+    """Fake Windows backend for semantic tests."""
+
+    def __init__(self):
+        super().__init__()
+        self._dirs: set = set()
+        self._files: set = set()
+        self._next_fd = 100
+        self._closed: set = set()
+        self.ensure_calls: list = []
+        self.create_calls: list = []
+        self._fail_ensure: Exception | None = None
+        self._fail_create: Exception | None = None
+
+    def ensure_secure_directory(self, path: str) -> None:
+        self.ensure_calls.append(path)
+        if self._fail_ensure is not None:
+            raise self._fail_ensure
+        self._dirs.add(path)
+
+    def create_private_file(self, directory: str, leaf_name: str) -> int:
+        self.create_calls.append((directory, leaf_name))
+        if self._fail_create is not None:
+            raise self._fail_create
+        full = _os.path.join(directory, leaf_name)
+        if full in self._files:
+            raise FileExistsError(f"File exists: {full!r}")
+        fd = self._next_fd
+        self._next_fd += 1
+        self._files.add(full)
+        return fd
+
+
+class TestWindowsFakeBackend(_ut.TestCase):
+    def setUp(self):
+        self.fake = FakeWinSecretBackend()
+        self._orig = _get_win_backend()
+        _set_win_backend(self.fake)
+
+    def tearDown(self):
+        _set_win_backend(self._orig)
+
+    @_ut.skipUnless(_os.name == "nt", "Requires Windows backend path")
+    def test_ensure_creates_dir(self):
+        ensure_secure_directory("C:\\test\\aisc")
+        self.assertIn("C:\\test\\aisc", self.fake._dirs)
+
+    @_ut.skipUnless(_os.name == "nt", "Requires Windows backend path")
+    def test_create_file(self):
+        self.fake._dirs.add("C:\\test")
+        fd = create_private_file("C:\\test", "sec.dat")
+        self.assertIsInstance(fd, int)
+        self.assertGreater(fd, 0)
+
+    @_ut.skipUnless(_os.name == "nt", "Requires Windows backend path")
+    def test_create_file_exists(self):
+        self.fake._dirs.add("C:\\test")
+        self.fake._files.add("C:\\test\\sec.dat")
+        with self.assertRaises(FileExistsError):
+            create_private_file("C:\\test", "sec.dat")
+
+    @_ut.skipUnless(_os.name == "nt", "Requires Windows backend path")
+    def test_fake_backend_injection(self):
+        self.assertIs(_get_win_backend(), self.fake)
+        _set_win_backend(None)
+        self.assertIsNot(_get_win_backend(), self.fake)
+
+
+class TestFakeBackendLinux(_ut.TestCase):
+    def test_fake_instantiation(self):
+        fb = FakeWinSecretBackend()
+        self.assertIsInstance(fb, _WinSecretBackend)
+
+    def test_fake_ensure(self):
+        fb = FakeWinSecretBackend()
+        fb.ensure_secure_directory("C:\\test")
+        self.assertIn("C:\\test", fb._dirs)
+
+    def test_fake_create(self):
+        fb = FakeWinSecretBackend()
+        fd = fb.create_private_file("C:\\test", "f.dat")
+        self.assertIsInstance(fd, int)
+
+    def test_fake_create_exists(self):
+        fb = FakeWinSecretBackend()
+        fb.create_private_file("C:\\test", "f.dat")
+        with self.assertRaises(FileExistsError):
+            fb.create_private_file("C:\\test", "f.dat")
+
+    def test_fake_fail_injection(self):
+        fb = FakeWinSecretBackend()
+        fb._fail_ensure = SecureStorePermissionError("injected")
+        with self.assertRaises(SecureStorePermissionError):
+            fb.ensure_secure_directory("C:\\test")
+
+    def test_no_close_handle_on_interface(self):
+        fb = FakeWinSecretBackend()
+        self.assertTrue(hasattr(fb, "ensure_secure_directory"))
+        self.assertTrue(hasattr(fb, "create_private_file"))
+        self.assertFalse(hasattr(fb, "close_handle"))
+
+
+# ============================================================================
+# StorePaths + SecureStorePermissionError
+# ============================================================================
+
+
+class StorePathsContract(_ut.TestCase):
+    def test_fields(self):
+        sp = StorePaths(config="/a", state="/b", data="/c", secrets="/d")
+        self.assertEqual(sp.config, "/a")
+        self.assertEqual(sp.state, "/b")
+        self.assertEqual(sp.data, "/c")
+        self.assertEqual(sp.secrets, "/d")
+
+    def test_frozen(self):
+        sp = StorePaths(config="/a", state="/b", data="/c", secrets="/d")
+        with self.assertRaises(Exception):
+            sp.config = "/x"  # type: ignore[misc]
+
+
+class SecureStorePermissionErrorTests(_ut.TestCase):
+    def test_is_permission_error(self):
+        err = SecureStorePermissionError("test")
+        self.assertIsInstance(err, PermissionError)
+
+    def test_message(self):
+        err = SecureStorePermissionError("denied")
+        self.assertIn("denied", str(err))
+
+
+# ============================================================================
+# resolve_store_paths — pure, no disk I/O
+# ============================================================================
+
+
+class TestResolveStorePaths(_ut.TestCase):
+    def test_linux_defaults(self):
+        sp = resolve_store_paths("linux", "/home/user")
+        self.assertEqual(sp.config, "/home/user/.config/aisc")
+        self.assertEqual(sp.state, "/home/user/.local/state/aisc")
+        self.assertEqual(sp.data, "/home/user/.local/share/aisc")
+        self.assertEqual(sp.secrets, "/home/user/.local/share/aisc/secrets")
+
+    def test_linux_custom_xdg(self):
+        env = {"XDG_CONFIG_HOME": "/c/cfg", "XDG_STATE_HOME": "/c/st",
+               "XDG_DATA_HOME": "/c/dat"}
+        sp = resolve_store_paths("linux", "/home/user", env=env)
+        self.assertEqual(sp.secrets, "/c/dat/aisc/secrets")
+
+    def test_linux_empty_env_treated_as_unset(self):
+        env = {"XDG_DATA_HOME": "", "XDG_STATE_HOME": ""}
+        sp = resolve_store_paths("linux", "/home/user", env=env)
+        self.assertIn(".local/share/aisc/secrets", sp.secrets)
+
+    def test_darwin(self):
+        sp = resolve_store_paths("darwin", "/Users/user")
+        base = "/Users/user/Library/Application Support/aisc"
+        self.assertEqual(sp.config, base)
+        self.assertEqual(sp.state, base)
+        self.assertEqual(sp.data, base)
+        self.assertEqual(sp.secrets, base + "/secrets")
+
+    def test_windows(self):
+        env = {"APPDATA": "C:\\Users\\u\\AppData\\Roaming",
+               "LOCALAPPDATA": "C:\\Users\\u\\AppData\\Local"}
+        sp = resolve_store_paths("windows", "C:\\Users\\u", env=env)
+        self.assertIn("Roaming\\aisc", sp.config)
+        self.assertIn("Local\\aisc\\secrets", sp.secrets)
+
+    def test_windows_rejects_bare_drive(self):
+        env = {"APPDATA": "C:\\R", "LOCALAPPDATA": "C:\\L"}
+        with self.assertRaises(ValueError):
+            resolve_store_paths("windows", "C:Users", env=env)
+
+    def test_windows_missing_env(self):
+        with self.assertRaises(ValueError):
+            resolve_store_paths("windows", "C:\\Users\\u", env={"APPDATA": ""})
+        with self.assertRaises(ValueError):
+            resolve_store_paths("windows", "C:\\Users\\u",
+                               env={"APPDATA": "C:\\R", "LOCALAPPDATA": ""})
+
+    def test_pure_no_disk_access(self):
+        sp = resolve_store_paths("linux", "/nonexistent/dir/for/test")
+        self.assertIn(".config/aisc", sp.config)
+
+    def test_windows_strict_home_reject_unc(self):
+        env = {"APPDATA": "C:\\R", "LOCALAPPDATA": "C:\\L"}
+        for bad in ["\\\\server\\share", "\\\\?\\C:\\foo", "\\\\.\\C:\\foo",
+                     "\\??\\C:\\foo", "\\\\server", "\\\\server\\"]:
+            with self.assertRaises(ValueError, msg=f"Should reject UNC/device: {bad!r}"):
+                resolve_store_paths("windows", bad, env=env)
+
+    def test_windows_strict_home_reject_non_drive(self):
+        env = {"APPDATA": "C:\\R", "LOCALAPPDATA": "C:\\L"}
+        for bad in ["C:relative", "\\relative", "relative", "/relative",
+                     "C:", "\\", "/", "", "C:Users"]:
+            with self.assertRaises(ValueError, msg=f"Should reject: {bad!r}"):
+                resolve_store_paths("windows", bad, env=env)
+
+    def test_windows_strict_home_accept_drive(self):
+        env = {"APPDATA": "C:\\R", "LOCALAPPDATA": "C:\\L"}
+        for good in ["C:\\Users\\u", "D:\\path", "C:\\", "A:\\x\\y"]:
+            sp = resolve_store_paths("windows", good, env=env)
+            self.assertIsInstance(sp, StorePaths)
+
+    def test_home_invalid(self):
+        for bad in ["relative", "~/home", "/home/../user", "/home/./user", ""]:
+            with self.assertRaises(ValueError, msg=f"Should reject: {bad!r}"):
+                resolve_store_paths("linux", bad)
+
+    def test_unsupported_platform(self):
+        with self.assertRaises(ValueError):
+            resolve_store_paths("freebsd", "/home/user")
+
+    def test_linux_paths_use_posix_separators(self):
+        import posixpath
+        sp = resolve_store_paths("linux", "/home/user")
+        self.assertIn("/.config/aisc", sp.config)
+        self.assertNotIn("\\", sp.config)
+        self.assertIn(posixpath.sep, sp.config)
+
+    def test_darwin_paths_use_posix_separators(self):
+        import posixpath
+        sp = resolve_store_paths("darwin", "/Users/user")
+        self.assertIn("/Library/Application Support/aisc", sp.config)
+        self.assertNotIn("\\", sp.config)
+        self.assertIn(posixpath.sep, sp.config)
+
+    def test_windows_paths_use_nt_separators(self):
+        import ntpath
+        env = {"APPDATA": "C:\\Users\\u\\AppData\\Roaming",
+               "LOCALAPPDATA": "C:\\Users\\u\\AppData\\Local"}
+        sp = resolve_store_paths("windows", "C:\\Users\\u", env=env)
+        self.assertIn("Roaming\\aisc", sp.config)
+        self.assertIn("Local\\aisc\\secrets", sp.secrets)
+        self.assertNotIn("/", sp.config)
+        self.assertIn(ntpath.sep, sp.config)
+
+
+# ============================================================================
+# Leaf name validation
+# ============================================================================
+
+
+class TestLeafNameValidation(_ut.TestCase):
+    def test_valid_names(self):
+        _validate_leaf_name("ok.txt")
+        _validate_leaf_name("a..b")
+        _validate_leaf_name("test-file_123.dat")
+
+    def test_empty_dot_dotdot(self):
+        for bad in ["", ".", ".."]:
+            with self.assertRaises(ValueError, msg=f"Should reject: {bad!r}"):
+                _validate_leaf_name(bad)
+
+    def test_separators(self):
+        for bad in ["a/b", "a\\b", "sub/file"]:
+            with self.assertRaises(ValueError, msg=f"Should reject: {bad!r}"):
+                _validate_leaf_name(bad)
+
+    def test_nul_and_control(self):
+        with self.assertRaises(ValueError):
+            _validate_leaf_name("foo\x00bar")
+        with self.assertRaises(ValueError):
+            _validate_leaf_name("a\x01b")
+
+    def test_windows_specific(self):
+        if _os.name != "nt":
+            try:
+                _validate_leaf_name("CON", platform="windows")
+                self.fail("CON should be rejected on windows")
+            except ValueError:
+                pass
+            try:
+                _validate_leaf_name("file:stream", platform="windows")
+                self.fail("ADS colon should be rejected on windows")
+            except ValueError:
+                pass
+            try:
+                _validate_leaf_name("file. ", platform="windows")
+                self.fail("Trailing space should be rejected on windows")
+            except ValueError:
+                pass
+
+    def test_reserved_device_names(self):
+        reserved = [
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5",
+            "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
+            "LPT6", "LPT7", "LPT8", "LPT9",
+        ]
+        for name in reserved:
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError, msg=f"Should reject: {name!r}"):
+                    _validate_leaf_name(name, platform="windows")
+
+    def test_reserved_device_names_with_extensions(self):
+        names_with_ext = [
+            "CON.txt", "PRN.log", "AUX.html", "NUL.dat",
+            "COM1.bak", "COM9.ini", "LPT1.cfg", "LPT9.backup",
+            "CON.foo.bar", "NUL.", "CON..txt",
+        ]
+        for name in names_with_ext:
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError, msg=f"Should reject: {name!r}"):
+                    _validate_leaf_name(name, platform="windows")
+
+    def test_reserved_names_not_rejected_on_non_windows(self):
+        _validate_leaf_name("CON")
+        _validate_leaf_name("NUL.txt")
+        _validate_leaf_name("PRN.dat")
+
+    def test_windows_disallowed_chars(self):
+        for ch in '<>"|?*':
+            with self.subTest(ch=ch):
+                with self.assertRaises(ValueError):
+                    _validate_leaf_name(f"a{ch}b", platform="windows")
+
+
+# ============================================================================
+# Invalid paths (POSIX)
+# ============================================================================
+
+
+class TestInvalidPaths(_ut.TestCase):
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_non_absolute_ensure_dir(self):
+        with self.assertRaises(ValueError):
+            ensure_secure_directory("relative/path")
+
+    def test_tilde_ensure_dir(self):
+        with self.assertRaises(ValueError):
+            ensure_secure_directory("~/bad")
+
+    def test_dot_dot_ensure_dir(self):
+        with self.assertRaises(ValueError):
+            ensure_secure_directory("/tmp/../bad")
+
+
+# ============================================================================
+# POSIX — dir_fd based handle-relative ops
+# ============================================================================
+
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestPosixDirFd(_ut.TestCase):
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_open_root_returns_valid_fd(self):
+        fd = _posix_open_root()
+        self.assertIsInstance(fd, int)
+        self.assertGreaterEqual(fd, 0)
+        fd_st = _os.fstat(fd)
+        self.assertTrue(_stat.S_ISDIR(fd_st.st_mode))
+        _os.close(fd)
+
+    def test_walk_to_parent_returns_parent_fd_and_leaf(self):
+        d = _os.path.join(self.tmp, "parent")
+        _os.mkdir(d, 0o700)
+        child = _os.path.join(d, "child")
+        parent_fd, leaf = _posix_walk_to_parent(child)
+        try:
+            self.assertEqual(leaf, "child")
+            fd_st = _os.fstat(parent_fd)
+            self.assertTrue(_stat.S_ISDIR(fd_st.st_mode))
+        finally:
+            _os.close(parent_fd)
+
+    def test_walk_to_directory_returns_dir_fd(self):
+        d = _os.path.join(self.tmp, "mydir")
+        _os.mkdir(d, 0o700)
+        dir_fd = _posix_walk_to_directory(d)
+        try:
+            fd_st = _os.fstat(dir_fd)
+            self.assertTrue(_stat.S_ISDIR(fd_st.st_mode))
+            path_st = _os.stat(d)
+            self.assertEqual(fd_st.st_ino, path_st.st_ino)
+            self.assertEqual(fd_st.st_dev, path_st.st_dev)
+        finally:
+            _os.close(dir_fd)
+
+    def test_walk_rejects_symlink_component(self):
+        real_d = _os.path.join(self.tmp, "real")
+        _os.mkdir(real_d, 0o700)
+        link_d = _os.path.join(self.tmp, "link")
+        _os.symlink(real_d, link_d)
+        child = _os.path.join(link_d, "sub")
+        with self.assertRaises(SecureStorePermissionError):
+            _posix_walk_to_parent(child)
+
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestPosixSecureDirectory(_ut.TestCase):
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_create_secure_directory_0700(self):
+        d = _os.path.join(self.tmp, "sec")
+        ensure_secure_directory(d)
+        st = _os.stat(d)
+        self.assertEqual(_stat.S_IMODE(st.st_mode), 0o700)
+        self.assertEqual(st.st_uid, _os.geteuid())
+        self.assertTrue(_stat.S_ISDIR(st.st_mode))
+
+    def test_existing_secure_directory_ok(self):
+        d = _os.path.join(self.tmp, "sec")
+        _os.mkdir(d, 0o700)
+        ensure_secure_directory(d)
+
+    def test_existing_0755_rejected_not_fixed(self):
+        d = _os.path.join(self.tmp, "bad")
+        _os.mkdir(d, 0o755)
+        with self.assertRaises(SecureStorePermissionError):
+            ensure_secure_directory(d)
+        st = _os.stat(d)
+        self.assertEqual(_stat.S_IMODE(st.st_mode), 0o755,
+                         "Mode was changed — must fail closed")
+
+    def test_symlink_rejected(self):
+        real = _os.path.join(self.tmp, "real")
+        _os.mkdir(real, 0o700)
+        link = _os.path.join(self.tmp, "slink")
+        _os.symlink(real, link)
+        with self.assertRaises(SecureStorePermissionError):
+            ensure_secure_directory(link)
+
+    def test_parent_symlink_rejected(self):
+        real_parent = _os.path.join(self.tmp, "real_parent")
+        _os.mkdir(real_parent, 0o700)
+        link_parent = _os.path.join(self.tmp, "link_parent")
+        _os.symlink(real_parent, link_parent)
+        child = _os.path.join(link_parent, "child")
+        with self.assertRaises(SecureStorePermissionError):
+            ensure_secure_directory(child)
+
+    def test_fifo_rejected(self):
+        f = _os.path.join(self.tmp, "fifo")
+        _os.mkfifo(f)
+        with self.assertRaises(SecureStorePermissionError):
+            ensure_secure_directory(f)
+
+    def test_regular_file_as_dir_rejected(self):
+        f = _os.path.join(self.tmp, "reg")
+        with open(f, "w") as fh:
+            fh.write("data")
+        with self.assertRaises(SecureStorePermissionError):
+            ensure_secure_directory(f)
+
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestPosixCreatePrivateFile(_ut.TestCase):
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def _make_secure_dir(self, name="d"):
+        d = _os.path.join(self.tmp, name)
+        ensure_secure_directory(d)
+        return d
+
+    def test_create_0600(self):
+        d = self._make_secure_dir()
+        fd = create_private_file(d, "f.dat")
+        try:
+            fd_st = _os.fstat(fd)
+            self.assertEqual(_stat.S_IMODE(fd_st.st_mode), 0o600)
+            self.assertEqual(fd_st.st_uid, _os.geteuid())
+            self.assertTrue(_stat.S_ISREG(fd_st.st_mode))
+            self.assertEqual(fd_st.st_nlink, 1)
+        finally:
+            _os.close(fd)
+
+    def test_stat_fstat_identity_file(self):
+        d = self._make_secure_dir()
+        fd = create_private_file(d, "f.dat")
+        try:
+            fd_st = _os.fstat(fd)
+            dir_fd = _os.open(d, _os.O_RDONLY)
+            try:
+                path_st = _os.stat("f.dat", dir_fd=dir_fd, follow_symlinks=False)
+                self.assertEqual(fd_st.st_ino, path_st.st_ino)
+                self.assertEqual(fd_st.st_dev, path_st.st_dev)
+            finally:
+                _os.close(dir_fd)
+        finally:
+            _os.close(fd)
+
+    def test_file_exists_error(self):
+        d = self._make_secure_dir()
+        fd = create_private_file(d, "f.dat")
+        _os.close(fd)
+        with self.assertRaises(FileExistsError):
+            create_private_file(d, "f.dat")
+
+    def test_no_content_written(self):
+        d = self._make_secure_dir()
+        fd = create_private_file(d, "empty.dat")
+        try:
+            self.assertEqual(_os.fstat(fd).st_size, 0)
+        finally:
+            _os.close(fd)
+
+    def test_fd_is_int(self):
+        d = self._make_secure_dir()
+        fd = create_private_file(d, "f.dat")
+        try:
+            self.assertIsInstance(fd, int)
+            self.assertGreaterEqual(fd, 0)
+        finally:
+            _os.close(fd)
+
+    def test_umask_does_not_affect_mode(self):
+        d = self._make_secure_dir()
+        old = _os.umask(0o022)
+        try:
+            fd = create_private_file(d, "umask.dat")
+            try:
+                self.assertEqual(_stat.S_IMODE(_os.fstat(fd).st_mode), 0o600)
+            finally:
+                _os.close(fd)
+        finally:
+            _os.umask(old)
+
+    def test_cannot_create_in_nonexistent_dir(self):
+        with self.assertRaises(FileNotFoundError):
+            create_private_file("/nonexistent/dir", "f.dat")
+
+    def test_cannot_create_in_file(self):
+        f = _os.path.join(self.tmp, "notadir")
+        with open(f, "w") as fh:
+            fh.write("x")
+        with self.assertRaises(SecureStorePermissionError):
+            create_private_file(f, "f.dat")
+
+    def test_cannot_create_in_insecure_dir(self):
+        d = _os.path.join(self.tmp, "baddir")
+        _os.mkdir(d, 0o755)
+        with self.assertRaises(SecureStorePermissionError):
+            create_private_file(d, "f.dat")
+
+
+# ============================================================================
+# Zero filesystem side effects
+# ============================================================================
+
+
+class TestZeroFSSideEffects(_ut.TestCase):
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_ensure_dir_creates_only_target(self):
+        d = _os.path.join(self.tmp, "only_this")
+        before = set(_os.listdir(self.tmp))
+        ensure_secure_directory(d)
+        after = set(_os.listdir(self.tmp))
+        self.assertEqual(after - before, {"only_this"})
+
+
+# ============================================================================
+# No legacy imports / strings
+# ============================================================================
+
+
+class TestNoLegacyImports(_ut.TestCase):
+    def test_no_config_source_import(self):
+        import ast
+        import aisc.adapters.secret_store as ss
+        with open(ss.__file__) as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if "config_source" in alias.name:
+                        self.fail("Module imports config_source")
+            if isinstance(node, ast.ImportFrom):
+                if node.module and "config_source" in node.module:
+                    self.fail("Module imports from config_source")
+
+    def test_no_legacy_strings(self):
+        import aisc.adapters.secret_store as ss
+        with open(ss.__file__) as f:
+            source = f.read().lower()
+        for s in [
+            "legacy_secret", "read_secret", "hmac_key", "migration_journal",
+        ]:
+            self.assertNotIn(s, source, f"Found legacy string: {s}")
+
+
+# ============================================================================
+# Windows ABI / structure tests
+# ============================================================================
+
+
+class TestWindowsABI(_ut.TestCase):
+    def test_struct_sizes(self):
+        self.assertEqual(_ct.sizeof(_BY_HANDLE_FILE_INFO), 52)
+        self.assertEqual(_ct.sizeof(_FILETIME), 8)
+        self.assertEqual(_ct.sizeof(_ACL), 8)
+        self.assertGreaterEqual(_ct.sizeof(_ACE_HEADER), 4)
+        self.assertGreaterEqual(_ct.sizeof(_ACCESS_ALLOWED_ACE), 12)
+        self.assertGreaterEqual(_ct.sizeof(_ACCESS_DENIED_ACE), 12)
+        self.assertEqual(_ct.sizeof(_ACL_SIZE_INFORMATION), 12)
+        self.assertGreaterEqual(_ct.sizeof(_SECURITY_DESCRIPTOR), 20)
+        sa_sz = _ct.sizeof(_SECURITY_ATTRIBUTES)
+        self.assertIn(sa_sz, (12, 16, 24),
+                      f"Unexpected SECURITY_ATTRIBUTES size: {sa_sz}")
+        self.assertEqual(_ct.sizeof(_SID_IDENTIFIER_AUTHORITY), 6)
+        self.assertGreaterEqual(_ct.sizeof(_TOKEN_USER), 8)
+        self.assertGreaterEqual(_ct.sizeof(_SID_AND_ATTRIBUTES), 8)
+
+    def test_constants(self):
+        self.assertEqual(_ACCESS_ALLOWED_ACE_TYPE, 0x00)
+        self.assertEqual(_ACCESS_DENIED_ACE_TYPE, 0x01)
+        self.assertEqual(_CONTAINER_INHERIT_ACE, 0x02)
+        self.assertEqual(_OBJECT_INHERIT_ACE, 0x01)
+        self.assertEqual(_INHERITED_ACE, 0x10)
+        self.assertEqual(_INHERIT_ONLY_ACE, 0x08)
+        self.assertEqual(_NO_PROPAGATE_INHERIT_ACE, 0x04)
+        self.assertEqual(_ACL_REVISION_DS, 4)
+        self.assertEqual(_SE_DACL_PROTECTED, 0x1000)
+        self.assertEqual(_SECURITY_DESCRIPTOR_REVISION, 1)
+        self.assertEqual(_FILE_ALL_ACCESS, 0x001F01FF)
+        self.assertEqual(_FILE_TYPE_DISK, 0x0001)
+        self.assertEqual(_FILE_TYPE_UNKNOWN, 0x0000)
+        self.assertEqual(_FILE_FLAG_OPEN_REPARSE_POINT, 0x00200000)
+        self.assertEqual(_FILE_FLAG_BACKUP_SEMANTICS, 0x02000000)
+        self.assertEqual(_FILE_ATTRIBUTE_REPARSE_POINT, 0x0400)
+        self.assertEqual(_ERROR_FILE_NOT_FOUND, 2)
+        self.assertEqual(_ERROR_ACCESS_DENIED, 5)
+
+    def test_acl_size_formula(self):
+        ace_base = _ct.sizeof(_ACCESS_ALLOWED_ACE) - _ct.sizeof(_ct.c_uint32)
+        sid_len = 28
+        ace_size = ace_base + sid_len
+        self.assertGreater(ace_size, 0)
+        self.assertGreaterEqual(ace_size, _ct.sizeof(_ACCESS_ALLOWED_ACE))
+
+
+# ============================================================================
+# Windows DACL semantic tests
+# ============================================================================
+
+
+class TestDACLStructures(_ut.TestCase):
+    def test_acl_struct_layout(self):
+        acl = _ACL()
+        acl.AclRevision = _ACL_REVISION_DS
+        acl.AclSize = 64
+        self.assertEqual(acl.AclRevision, 4)
+
+    def test_ace_header_layout(self):
+        hdr = _ACE_HEADER()
+        hdr.AceType = _ACCESS_ALLOWED_ACE_TYPE
+        hdr.AceFlags = _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE
+        hdr.AceSize = 32
+        self.assertEqual(hdr.AceType, 0)
+        self.assertEqual(hdr.AceFlags, 3)
+
+    def test_ace_flags_strictness(self):
+        dir_flags = _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE
+        self.assertFalse(dir_flags & _INHERITED_ACE)
+        self.assertFalse(dir_flags & _INHERIT_ONLY_ACE)
+        self.assertFalse(dir_flags & _NO_PROPAGATE_INHERIT_ACE)
+        bad = _INHERIT_ONLY_ACE
+        self.assertTrue(bad & _INHERIT_ONLY_ACE)
+        self.assertFalse(bad & _CONTAINER_INHERIT_ACE)
+        self.assertFalse(bad & _OBJECT_INHERIT_ACE)
+
+    def test_se_dacl_protected_value(self):
+        self.assertEqual(_SE_DACL_PROTECTED, 0x1000)
+
+    def test_file_all_access_value(self):
+        self.assertEqual(_FILE_ALL_ACCESS, 0x001F01FF)
+
+
+# ============================================================================
+# Windows real tests (skip on non-Windows)
+# ============================================================================
+
+
+@_ut.skipUnless(_os.name == "nt", "Windows only")
+class TestWindowsReal(_ut.TestCase):
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+        _set_win_backend(None)
+
+    def tearDown(self):
+        self._t.cleanup()
+        _set_win_backend(None)
+
+    def test_create_secure_dir_real(self):
+        d = _os.path.join(self.tmp, "securedir")
+        ensure_secure_directory(d)
+        self.assertTrue(_os.path.isdir(d))
+
+    def test_create_private_file_real(self):
+        d = _os.path.join(self.tmp, "securedir")
+        ensure_secure_directory(d)
+        fd = create_private_file(d, "f.dat")
+        try:
+            self.assertIsInstance(fd, int)
+            self.assertGreater(fd, 0)
+        finally:
+            _os.close(fd)
+        self.assertTrue(_os.path.isfile(_os.path.join(d, "f.dat")))
+
+    def test_file_exists_real(self):
+        d = _os.path.join(self.tmp, "securedir")
+        ensure_secure_directory(d)
+        fd = create_private_file(d, "f.dat")
+        _os.close(fd)
+        with self.assertRaises(FileExistsError):
+            create_private_file(d, "f.dat")
+
+    def test_empty_file_real(self):
+        d = _os.path.join(self.tmp, "securedir")
+        ensure_secure_directory(d)
+        fd = create_private_file(d, "empty.dat")
+        _os.close(fd)
+        st = _os.stat(_os.path.join(d, "empty.dat"))
+        self.assertEqual(st.st_size, 0)
+
+
+# ============================================================================
+# P2-A: Exception contract tests
+# ============================================================================
+
+
+class TestSecureStoreResidualError(_ut.TestCase):
+    def test_creation(self):
+        p = SecureStorePermissionError("primary")
+        c = (ValueError("c1"), OSError("c2"))
+        r = SecureStoreResidualError(
+            "residual", primary=p, cleanup_errors=c,
+        )
+        self.assertIsInstance(r, SecureStorePermissionError)
+        self.assertIsInstance(r, PermissionError)
+        self.assertEqual(r.primary, p)
+        self.assertEqual(r.cleanup_errors, c)
+
+    def test_empty_cleanup(self):
+        r = SecureStoreResidualError("x")
+        self.assertEqual(r.cleanup_errors, ())
+        self.assertIsNone(r.primary)
+
+    def test_message_contains_reason(self):
+        r = SecureStoreResidualError("rollback failed")
+        self.assertIn("rollback failed", str(r))
+
+
+class TestAttachCleanupErrors(_ut.TestCase):
+    def test_no_errors_returns_same(self):
+        exc = ValueError("a")
+        result = _attach_cleanup_errors(exc, ())
+        self.assertIs(result, exc)
+
+    def test_attaches_to_regular_exception(self):
+        exc = ValueError("a")
+        result = _attach_cleanup_errors(exc, (ValueError("c1"),))
+        self.assertIs(result, exc)
+        errs = exc.cleanup_errors  # type: ignore[attr-defined]
+        self.assertEqual(len(errs), 1)
+        self.assertIsInstance(errs[0], ValueError)
+        self.assertEqual(str(errs[0]), "c1")
+
+    def test_stable_append_order(self):
+        exc = ValueError("a")
+        _attach_cleanup_errors(exc, (ValueError("c1"),))
+        _attach_cleanup_errors(exc, (OSError("c2"),))
+        errs = exc.cleanup_errors  # type: ignore[attr-defined]
+        self.assertEqual(len(errs), 2)
+        self.assertIsInstance(errs[0], ValueError)
+        self.assertIsInstance(errs[1], OSError)
+        self.assertEqual(str(errs[0]), "c1")
+        self.assertEqual(str(errs[1]), "c2")
+
+    def test_accumulates_on_residual(self):
+        r = SecureStoreResidualError("r")
+        _attach_cleanup_errors(r, (ValueError("c1"),))
+        _attach_cleanup_errors(r, (OSError("c2"),))
+        self.assertEqual(len(r.cleanup_errors), 2)
+
+    def test_same_primary_rethrow(self):
+        primary = SecureStorePermissionError("primary")
+        _attach_cleanup_errors(primary, (ValueError("layer1"),))
+        _attach_cleanup_errors(primary, (OSError("layer2"),))
+        self.assertEqual(len(primary.cleanup_errors), 2)  # type: ignore[attr-defined]
+        self.assertIsInstance(primary, SecureStorePermissionError)
+        self.assertNotIsInstance(primary, SecureStoreResidualError)
+
+    def test_no_primary_cleanup(self):
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _raise_no_primary_cleanup((ValueError("c1"), OSError("c2")), "test")
+        exc = ctx.exception
+        self.assertIn("Cleanup failure", str(exc))
+        self.assertIn("test", str(exc))
+        self.assertEqual(len(exc.cleanup_errors), 2)  # type: ignore[attr-defined]
+
+    def test_no_primary_cleanup_empty(self):
+        _raise_no_primary_cleanup((), "test")
+
+
+class TestClassifyNTSTATUS(_ut.TestCase):
+    def test_success_is_not_raised(self):
+        exc = _classify_ntstatus(_STATUS_SUCCESS)
+        self.assertIsInstance(exc, SecureStorePermissionError)
+        self.assertEqual(getattr(exc, "ntstatus", None), _STATUS_SUCCESS)
+
+    def test_reparse_warning(self):
+        exc = _classify_ntstatus(_STATUS_REPARSE)
+        self.assertIsInstance(exc, SecureStorePermissionError)
+
+    def test_not_found(self):
+        for st in (_STATUS_OBJECT_NAME_NOT_FOUND, _STATUS_OBJECT_PATH_NOT_FOUND):
+            with self.subTest(status=hex(st & 0xFFFFFFFF)):
+                exc = _classify_ntstatus(st)
+                self.assertIsInstance(exc, FileNotFoundError)
+                self.assertEqual(
+                    getattr(exc, "ntstatus", None),
+                    _ct.c_int32(st).value,
+                )
+
+    def test_name_collision(self):
+        exc = _classify_ntstatus(_STATUS_OBJECT_NAME_COLLISION)
+        self.assertIsInstance(exc, FileExistsError)
+        self.assertEqual(
+            getattr(exc, "ntstatus", None),
+            _ct.c_int32(_STATUS_OBJECT_NAME_COLLISION).value,
+        )
+
+    def test_access_denied(self):
+        exc = _classify_ntstatus(_STATUS_ACCESS_DENIED)
+        self.assertIsInstance(exc, SecureStorePermissionError)
+        self.assertIn("access denied", str(exc).lower())
+
+    def test_sharing_violation(self):
+        exc = _classify_ntstatus(_STATUS_SHARING_VIOLATION)
+        self.assertIsInstance(exc, SecureStorePermissionError)
+        self.assertIn("sharing violation", str(exc).lower())
+
+    def test_not_a_directory(self):
+        exc = _classify_ntstatus(_STATUS_NOT_A_DIRECTORY)
+        self.assertIsInstance(exc, SecureStorePermissionError)
+        self.assertIn("not a directory", str(exc).lower())
+
+    def test_file_is_a_directory(self):
+        exc = _classify_ntstatus(_STATUS_FILE_IS_A_DIRECTORY)
+        self.assertIsInstance(exc, SecureStorePermissionError)
+        self.assertIn("file is a directory", str(exc).lower())
+
+    def test_reparse_not_resolved(self):
+        exc = _classify_ntstatus(_STATUS_REPARSE_POINT_NOT_RESOLVED)
+        self.assertIsInstance(exc, SecureStorePermissionError)
+        self.assertIn("reparse", str(exc).lower())
+
+    def test_unknown_ntstatus(self):
+        unknown = 0xC0000FFF
+        exc = _classify_ntstatus(unknown)
+        self.assertIsInstance(exc, SecureStorePermissionError)
+        self.assertTrue(hasattr(exc, "ntstatus"))
+
+    def test_no_generic_oserror(self):
+        unknown = 0xDEADBEEF
+        exc = _classify_ntstatus(unknown)
+        self.assertIsInstance(exc, SecureStorePermissionError)
+
+    def test_ntstatus_attribute_is_signed_32bit(self):
+        exc = _classify_ntstatus(_STATUS_ACCESS_DENIED)
+        self.assertEqual(exc.ntstatus, _ct.c_int32(_STATUS_ACCESS_DENIED).value)  # type: ignore[attr-defined]
+        self.assertLess(exc.ntstatus, 0)  # type: ignore[attr-defined]
+
+
+class TestRaiseFromNTSTATUS(_ut.TestCase):
+    def test_raise_with_winerror(self):
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _raise_from_ntstatus(_STATUS_ACCESS_DENIED, winerror=5)
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus, _ct.c_int32(_STATUS_ACCESS_DENIED).value)  # type: ignore[attr-defined]
+        self.assertEqual(exc.winerror, 5)  # type: ignore[attr-defined]
+
+    def test_raise_without_winerror(self):
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _raise_from_ntstatus(_STATUS_ACCESS_DENIED, winerror=None)
+        exc = ctx.exception
+        self.assertFalse(hasattr(exc, "winerror"))
+
+    def test_raise_self_mapping_skipped(self):
+        for we_arg in (317, None, _ct.c_uint32(_STATUS_OBJECT_NAME_NOT_FOUND).value):
+            with self.subTest(winerror_arg=we_arg):
+                with self.assertRaises(FileNotFoundError) as ctx:
+                    _raise_from_ntstatus(_STATUS_OBJECT_NAME_NOT_FOUND, winerror=we_arg)
+                self.assertFalse(hasattr(ctx.exception, "winerror"))
+
+    def test_raise_known_conversion(self):
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _raise_from_ntstatus(_STATUS_OBJECT_NAME_NOT_FOUND, winerror=2)
+        exc = ctx.exception
+        self.assertEqual(exc.winerror, 2)  # type: ignore[attr-defined]
+
+    def test_raise_unknown_conversion(self):
+        unknown = 0xC0000FFF
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _raise_from_ntstatus(unknown, winerror=5)
+        exc = ctx.exception
+        self.assertEqual(exc.winerror, 5)  # type: ignore[attr-defined]
+
+    def test_raise_not_found(self):
+        with self.assertRaises(FileNotFoundError):
+            _raise_from_ntstatus(_STATUS_OBJECT_NAME_NOT_FOUND)
+
+    def test_raise_collision(self):
+        with self.assertRaises(FileExistsError):
+            _raise_from_ntstatus(_STATUS_OBJECT_NAME_COLLISION)
+
+    def test_raise_unavailable_conversion(self):
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _raise_from_ntstatus(_STATUS_SHARING_VIOLATION, winerror=None)
+        exc = ctx.exception
+        self.assertFalse(hasattr(exc, "winerror"))
+
+
+# ============================================================================
+# P2-A: Native ABI size tests
+# ============================================================================
+
+
+class TestNativeABISizes(_ut.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._ptr_size = _ct.sizeof(_ct.c_void_p)
+        cls._is_x64 = cls._ptr_size == 8
+
+    def test_unicode_string_size(self):
+        expected = 16 if self._is_x64 else 8
+        self.assertEqual(_ct.sizeof(_UNICODE_STRING), expected)
+
+    def test_object_attributes_size(self):
+        expected = 48 if self._is_x64 else 24
+        self.assertEqual(_ct.sizeof(_OBJECT_ATTRIBUTES), expected)
+
+    def test_io_status_block_size(self):
+        expected = 16 if self._is_x64 else 8
+        self.assertEqual(_ct.sizeof(_IO_STATUS_BLOCK), expected)
+
+    def test_unicode_string_offsets(self):
+        self.assertEqual(_UNICODE_STRING.Length.offset, 0)
+        self.assertEqual(_UNICODE_STRING.MaximumLength.offset, 2)
+        buf_off = _UNICODE_STRING.Buffer.offset
+        expected = 8 if self._is_x64 else 4
+        self.assertEqual(buf_off, expected)
+
+    def test_io_status_block_offsets(self):
+        self.assertEqual(_IO_STATUS_BLOCK.Status.offset, 0)
+        self.assertEqual(_IO_STATUS_BLOCK.Pointer.offset, 0)
+        info_off = _IO_STATUS_BLOCK.Information.offset
+        union_size = _ct.sizeof(_IO_STATUS_BLOCK_u)
+        self.assertEqual(info_off, union_size)
+
+    def test_file_disposition_info_size(self):
+        self.assertEqual(_ct.sizeof(_FILE_DISPOSITION_INFO), 1)
+
+    def test_io_status_block_get_set_info(self):
+        iosb = _IO_STATUS_BLOCK()
+        iosb.set_info(_FILE_CREATED_INFO)
+        self.assertEqual(iosb.get_info(), _FILE_CREATED_INFO)
+        iosb.set_info(_FILE_OPENED_INFO)
+        self.assertEqual(iosb.get_info(), _FILE_OPENED_INFO)
+        iosb.set_info(0)
+        self.assertEqual(iosb.get_info(), 0)
+
+
+# ============================================================================
+# P2-A: NT Constant tests
+# ============================================================================
+
+
+class TestNTConstants(_ut.TestCase):
+    def test_nt_success(self):
+        self.assertTrue(_NT_SUCCESS(0))
+        self.assertTrue(_NT_SUCCESS(_STATUS_SUCCESS))
+        self.assertTrue(_NT_SUCCESS(_STATUS_REPARSE))
+        self.assertTrue(_NT_SUCCESS(0x3FFFFFFF))
+        self.assertFalse(_NT_SUCCESS(_STATUS_ACCESS_DENIED))
+
+    def test_disposition_values(self):
+        self.assertEqual(_FILE_OPEN, 1)
+        self.assertEqual(_FILE_CREATE, 2)
+        self.assertEqual(_FILE_OPEN_IF, 3)
+
+    def test_info_values(self):
+        self.assertEqual(_FILE_CREATED_INFO, 1)
+        self.assertEqual(_FILE_OPENED_INFO, 2)
+
+    def test_create_options(self):
+        self.assertEqual(_FILE_DIRECTORY_FILE, 0x00000001)
+        self.assertEqual(_FILE_NON_DIRECTORY_FILE, 0x00000040)
+        self.assertEqual(_FILE_SYNCHRONOUS_IO_NONALERT, 0x00000020)
+        self.assertEqual(_FILE_OPEN_FOR_BACKUP_INTENT, 0x00004000)
+        self.assertEqual(_FILE_OPEN_REPARSE_POINT, 0x00200000)
+
+    def test_access_rights(self):
+        self.assertEqual(_FILE_READ_ATTRIBUTES, 0x0080)
+        self.assertEqual(_FILE_TRAVERSE, 0x0020)
+        self.assertEqual(_SYNCHRONIZE, 0x00100000)
+        self.assertEqual(_READ_CONTROL, 0x00020000)
+        self.assertEqual(_DELETE, 0x00010000)
+
+    def test_object_attributes_flags(self):
+        self.assertEqual(_OBJ_CASE_INSENSITIVE, 0x00000040)
+
+    def test_drive_types(self):
+        self.assertEqual(_DRIVE_FIXED, 3)
+        self.assertEqual(_DRIVE_REMOTE, 4)
+        self.assertEqual(_DRIVE_UNKNOWN, 0)
+
+    def test_ntstatus_values_are_signed_negative(self):
+        self.assertLess(_ct.c_int32(_STATUS_ACCESS_DENIED).value, 0)
+        self.assertLess(_ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value, 0)
+        self.assertLess(_ct.c_int32(_STATUS_OBJECT_NAME_COLLISION).value, 0)
+        self.assertLess(_ct.c_int32(_STATUS_NOT_A_DIRECTORY).value, 0)
+
+
+# ============================================================================
+# P2-A: Call‑boundary UTF‑16 lifecycle  (restored — gc.collect + full payload)
+# ============================================================================
+
+
+class TestCallBoundaryGC(_ut.TestCase):
+    """UTF‑16 call boundary with gc.collect(): inject probe that calls
+    gc.collect(), dereferences POBJECT_ATTRIBUTES→ObjectName, asserts
+    full UTF-16LE payload + trailing NUL for each encoding category.
+
+    Production seam: _RealLowLevelAPI.nt_create_file → _native_callable
+    → _build_object_attributes → _build_unicode_string.
+    """
+
+    def _new_api(self):
+        api = _RealLowLevelAPI()
+        api._init = True  # skip WinDLL loading on Linux
+        return api
+
+    def _make_gc_probe(self, name: str):
+        """Return an injectable callable that gc.collect()s, dereferences
+        OBJECT_ATTRIBUTES.ObjectName, and asserts full payload match."""
+        import gc as _gc_mod
+
+        expected_payload = name.encode("utf-16-le")
+        expected_len = len(expected_payload)  # byte length (no NUL)
+
+        def probe(fh, da, oa_byref, iosb_byref, al, fa, sa, cd, co, eb, el):
+            _gc_mod.collect()  # gc.collect() before deref
+            oa_ptr = _ct.cast(oa_byref, _ct.POINTER(_OBJECT_ATTRIBUTES))
+            obj_name_ptr = oa_ptr.contents.ObjectName
+            self.assertIsNotNone(obj_name_ptr, "ObjectName must not be NULL")
+            us = obj_name_ptr.contents
+
+            # Exact Length + MaximumLength
+            self.assertEqual(us.Length, expected_len,
+                f"Length={us.Length} != expected={expected_len}")
+            self.assertEqual(us.MaximumLength, us.Length + 2,
+                f"MaximumLength={us.MaximumLength} != Length+2={us.Length+2}")
+
+            # Read full buffer payload
+            buf_ptr = us.Buffer
+            raw = _ct.string_at(buf_ptr, us.MaximumLength)
+            self.assertEqual(raw[:us.Length], expected_payload,
+                f"payload mismatch: got {raw[:us.Length]!r}")
+            # Trailing NUL
+            self.assertEqual(raw[us.Length:us.Length + 2], b"\x00\x00",
+                f"trailing NUL mismatch at offset {us.Length}: {raw[us.Length:us.Length+2]!r}")
+
+            # Write valid handle + IOSB
+            hout = _ct.cast(fh, _ct.POINTER(_wt.HANDLE))
+            hout.contents.value = 42
+            iosb = _ct.cast(iosb_byref, _ct.POINTER(_IO_STATUS_BLOCK))
+            iosb.contents.Status = _STATUS_SUCCESS
+            iosb.contents.set_info(_FILE_CREATED_INFO)
+            return _STATUS_SUCCESS
+
+        return probe
+
+    def test_ascii_dereference(self):
+        """ASCII name 'data' → payload b'd\x00a\x00t\x00a\x00', NUL b'\x00\x00'."""
+        name = "data"
+        api = self._new_api()
+        api._native_callable = self._make_gc_probe(name)
+        h, st, info = api.nt_create_file(name, 1, 0, 0, _FILE_OPEN, _FILE_DIRECTORY_FILE)
+        self.assertEqual(h, 42)
+        self.assertEqual(info, _FILE_CREATED_INFO)
+
+    def test_bmp_non_ascii_dereference(self):
+        """Genuinely non-ASCII BMP: 'café' has é=U+00E9 (2 bytes in UTF-16LE)."""
+        name = "caf\u00e9"
+        api = self._new_api()
+        api._native_callable = self._make_gc_probe(name)
+        h, st, info = api.nt_create_file(name, 1, 0, 0, _FILE_OPEN, _FILE_DIRECTORY_FILE)
+        self.assertEqual(h, 42)
+        self.assertEqual(info, _FILE_CREATED_INFO)
+
+    def test_nonbmp_dereference(self):
+        """Non-BMP: U+1F389 (🎉) → surrogate pair = 4 UTF-16LE bytes + NUL."""
+        name = "\U0001F389"
+        api = self._new_api()
+        api._native_callable = self._make_gc_probe(name)
+        h, st, info = api.nt_create_file(name, 1, 0, 0, _FILE_OPEN, _FILE_DIRECTORY_FILE)
+        self.assertEqual(h, 42)
+        self.assertEqual(info, _FILE_CREATED_INFO)
+
+
+# ============================================================================
+# P2-A: IOSB sentinel tests  (restored)
+# ============================================================================
+
+
+class TestIOSBSentinel(_ut.TestCase):
+    """Inject failure/success callables with polluted outputs;
+    verify sentinel rejection through _RealLowLevelAPI.nt_create_file."""
+
+    def _new_api(self):
+        api = _RealLowLevelAPI()
+        api._init = True
+        return api
+
+    def test_polluted_handle_returns_zeroed_on_error(self):
+        """Failure + polluted HANDLE → returns (0, status, 0)."""
+        api = self._new_api()
+
+        def _inject(fh, da, oa, io, a, fa, sa, cd, co, eb, el):
+            # Pollute the HANDLE output pointer with a non-zero value
+            hout = _ct.cast(fh, _ct.POINTER(_wt.HANDLE))
+            hout.contents.value = 42
+            return _STATUS_ACCESS_DENIED
+
+        api._native_callable = _inject
+        h, st, info = api.nt_create_file("x", 1, 0, 0, _FILE_OPEN, _FILE_DIRECTORY_FILE)
+        self.assertEqual(h, 0)
+        self.assertEqual(info, 0)
+        self.assertEqual(_ct.c_int32(st).value, _ct.c_int32(_STATUS_ACCESS_DENIED).value)
+
+    def test_polluted_information_returns_zero(self):
+        """Success but polluted Information → still-sentinel → SecureStorePermissionError."""
+        api = self._new_api()
+
+        def _inject(fh, da, oa, io, a, fa, sa, cd, co, eb, el):
+            hout = _ct.cast(fh, _ct.POINTER(_wt.HANDLE))
+            hout.contents.value = 100
+            # Do NOT write Information — leave sentinel
+            return _STATUS_SUCCESS
+
+        api._native_callable = _inject
+        with self.assertRaises(SecureStorePermissionError):
+            api.nt_create_file("x", 1, 0, 0, _FILE_OPEN, _FILE_DIRECTORY_FILE)
+
+    def test_success_null_handle_rejected(self):
+        """NT_SUCCESS but HANDLE is NULL → SecureStorePermissionError."""
+        api = self._new_api()
+
+        def _inject(fh, da, oa, io, a, fa, sa, cd, co, eb, el):
+            hout = _ct.cast(fh, _ct.POINTER(_wt.HANDLE))
+            hout.contents.value = 0
+            # Write a valid Information
+            iosb = _ct.cast(io, _ct.POINTER(_IO_STATUS_BLOCK))
+            iosb.contents.set_info(_FILE_CREATED_INFO)
+            return _STATUS_SUCCESS
+
+        api._native_callable = _inject
+        with self.assertRaises(SecureStorePermissionError):
+            api.nt_create_file("x", 1, 0, 0, _FILE_OPEN_IF, _FILE_DIRECTORY_FILE)
+
+    def test_success_invalid_handle_rejected(self):
+        """NT_SUCCESS but HANDLE is INVALID_HANDLE_VALUE → rejected."""
+        api = self._new_api()
+        _INVALID = _ct.c_void_p(-1).value
+
+        def _inject(fh, da, oa, io, a, fa, sa, cd, co, eb, el):
+            hout = _ct.cast(fh, _ct.POINTER(_wt.HANDLE))
+            hout.contents.value = _INVALID
+            iosb = _ct.cast(io, _ct.POINTER(_IO_STATUS_BLOCK))
+            iosb.contents.set_info(_FILE_CREATED_INFO)
+            return _STATUS_SUCCESS
+
+        api._native_callable = _inject
+        with self.assertRaises(SecureStorePermissionError):
+            api.nt_create_file("x", 1, 0, 0, _FILE_OPEN_IF, _FILE_DIRECTORY_FILE)
+
+
+class _TestDaclEdgeCasesBase(_ut.TestCase):
+    """Base class providing owned ctypes buffer management."""
+    
+    def setUp(self):
+        self._keep_bufs: list = []  # prevent GC of ctypes buffers
+
+
+class TestDaclParserEdgeCases(_TestDaclEdgeCasesBase):
+    """Test _parse_dacl_snapshot_from_sd through injected reader callables.
+
+    Each test asserts trace/reader evidence that the intended branch
+    was reached.  Uses owned ctypes buffers to keep ace_base − dacl_addr
+    within valid range.
+    """
+
+    _ACL_HDR_SZ = _ct.sizeof(_ACL)  # 8
+    _ACE_HDR_SZ = _ct.sizeof(_ACE_HEADER)
+    _MASK_SZ = _ct.sizeof(_ct.c_uint32)  # 4
+
+    def _make_readers(self, *, ctrl=0, rev=1, dacl_ptr=0,
+                      ace_count=0, acl_bytes_used=0,
+                      aces=None, valid_sid=True, sid_length=12,
+                      trace: "list | None" = None):
+        if aces is None:
+            aces = []
+        _tr = trace if trace is not None else []
+
+        def _get_sd_control():
+            _tr.append("get_sd_control")
+            return (ctrl, rev)
+
+        def _get_acl_info():
+            _tr.append("get_acl_info")
+            return (ace_count, acl_bytes_used)
+
+        def _get_ace(i):
+            _tr.append(f"get_ace[{i}]")
+            if i >= len(aces):
+                return 0
+            return aces[i]
+
+        def _is_valid_sid(p):
+            _tr.append("is_valid_sid")
+            return valid_sid
+
+        def _get_sid_length(p):
+            _tr.append("get_sid_length")
+            return sid_length
+
+        return _get_sd_control, _get_acl_info, _get_ace, _is_valid_sid, _get_sid_length
+
+    def _make_aclbuf(self, acl_size: int) -> int:
+        buf = (_ct.c_ubyte * acl_size)()
+        _ct.memset(buf, 0, acl_size)
+        self._keep_bufs.append(buf)  # prevent GC
+        addr = _ct.addressof(buf)
+        acl = _ACL.from_address(addr)
+        acl.AclRevision = _ACL_REVISION_DS
+        acl.AclSize = acl_size
+        acl.AceCount = 0
+        return addr
+
+    def setUp(self):
+        super().setUp()
+        self._keep_bufs: list = []  # prevent GC of ctypes buffers
+
+    def _make_buf_with_ace(self, acl_size: int, ace_sz: int, ace_type: int,
+                           sub_auth_count: int = 1) -> int:
+        """Create buffer with ACL + embedded ACE; return acl_addr.
+        
+        The buffer is stored in self._keep_bufs to prevent garbage collection.
+        """
+        buf = (_ct.c_ubyte * acl_size)()
+        self._keep_bufs.append(buf)  # prevent GC
+        addr = _ct.addressof(buf)
+        acl = _ACL.from_address(addr)
+        acl.AclRevision = _ACL_REVISION_DS
+        acl.AclSize = acl_size
+        acl.AceCount = 1
+        ace_off = self._ACL_HDR_SZ
+        ace_addr = addr + ace_off
+        ace = _ACE_HEADER.from_address(ace_addr)
+        ace.AceType = ace_type
+        ace.AceFlags = 0
+        ace.AceSize = ace_sz
+        sid_off = self._ACE_HDR_SZ + self._MASK_SZ
+        _ct.c_ubyte.from_address(ace_addr + sid_off).value = 1
+        _ct.c_ubyte.from_address(ace_addr + sid_off + 1).value = sub_auth_count
+        return addr
+
+    # -- existing branches -----------------------------------------------
+
+    def test_success_empty_dacl(self):
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ctrl=_SE_DACL_PROTECTED, dacl_ptr=0,
+        )
+        snap = _parse_dacl_snapshot_from_sd(
+            sd_ptr=1, dacl_ptr=0,
+            get_sd_control=get_ctrl, get_acl_info=get_info,
+            get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+        )
+        self.assertTrue(snap.protected)
+        self.assertFalse(snap.dacl_present)
+        self.assertEqual(len(snap.aces), 0)
+
+    def test_acl_size_less_than_struct(self):
+        dacl_addr = self._make_aclbuf(acl_size=4)
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            acl_bytes_used=4, dacl_ptr=dacl_addr,
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("AclSize", str(ctx.exception))
+
+    def test_acl_bytes_in_use_less_than_struct(self):
+        dacl_addr = self._make_aclbuf(acl_size=64)
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            acl_bytes_used=4, dacl_ptr=dacl_addr,
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("AclBytesInUse", str(ctx.exception))
+
+    def test_acl_bytes_in_use_exceeds_size(self):
+        raw = bytearray(64)
+        raw[0] = _ACL_REVISION_DS
+        raw[2] = 64 & 0xFF
+        raw[3] = (64 >> 8) & 0xFF
+        buf = (_ct.c_ubyte * 64).from_buffer(raw)
+        dacl_addr = _ct.addressof(buf)
+        trace: list = []
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=0, acl_bytes_used=128, dacl_ptr=dacl_addr, trace=trace,
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("get_acl_info", trace, "must have called get_acl_info")
+        self.assertIn("> size", str(ctx.exception))
+
+    def test_ace_pointer_outside_used_range(self):
+        dacl_addr = self._make_aclbuf(acl_size=128)
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=1, acl_bytes_used=64, dacl_ptr=dacl_addr,
+            aces=[dacl_addr - 16],
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("outside ACL used range", str(ctx.exception))
+
+    def test_non_allow_ace_rejected(self):
+        ace_sz = self._ACE_HDR_SZ + self._MASK_SZ + 12
+        acl_size = 128
+        dacl_addr = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz, ace_type=_ACCESS_DENIED_ACE_TYPE,
+        )
+        ace_base = dacl_addr + self._ACL_HDR_SZ
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=1, acl_bytes_used=self._ACL_HDR_SZ + ace_sz,
+            dacl_ptr=dacl_addr, aces=[ace_base],
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("only ALLOW accepted", str(ctx.exception))
+
+    # -- new required branches -------------------------------------------
+
+    def test_ace_header_oob(self):
+        """ACE header extends beyond ACL used range."""
+        ace_sz = self._ACE_HDR_SZ + self._MASK_SZ + 12
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        dacl_addr = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE,
+        )
+        ace_base = dacl_addr + self._ACL_HDR_SZ
+        # acl_bytes_used = ACL_HDR + 1 → ACE header OOB
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=1, acl_bytes_used=self._ACL_HDR_SZ + 1,
+            dacl_ptr=dacl_addr, aces=[ace_base],
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("header extends beyond", str(ctx.exception))
+
+    def test_ace_size_too_small(self):
+        """AceSize < ACE_HEADER + sizeof(uint32) → rejected."""
+        ace_sz = self._ACE_HDR_SZ + self._MASK_SZ + 12
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        dacl_addr = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE,
+        )
+        ace_base = dacl_addr + self._ACL_HDR_SZ
+        # Now set AceSize to something too small
+        ace2 = _ACE_HEADER.from_address(ace_base)
+        ace2.AceSize = self._ACE_HDR_SZ + 1  # too small
+
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=1, acl_bytes_used=self._ACL_HDR_SZ + ace_sz,
+            dacl_ptr=dacl_addr, aces=[ace_base],
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("too small", str(ctx.exception))
+
+    def test_ace_end_past_used_range(self):
+        """ACE end (ace_start + AceSize) > acl_bytes_used."""
+        ace_sz = 100  # large ACE
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        dacl_addr = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE,
+        )
+        ace_base = dacl_addr + self._ACL_HDR_SZ
+        # acl_bytes_used too small for the ACE
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=1, acl_bytes_used=self._ACL_HDR_SZ + 30,
+            dacl_ptr=dacl_addr, aces=[ace_base],
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("end", str(ctx.exception).lower())
+
+    def test_invalid_sid_rejected(self):
+        """is_valid_sid returns False → rejected."""
+        ace_sz = self._ACE_HDR_SZ + self._MASK_SZ + 12
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        dacl_addr = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE,
+        )
+        ace_base = dacl_addr + self._ACL_HDR_SZ
+        trace: list = []
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=1, acl_bytes_used=self._ACL_HDR_SZ + ace_sz,
+            dacl_ptr=dacl_addr, aces=[ace_base], valid_sid=False, trace=trace,
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("is_valid_sid", trace, "must call is_valid_sid")
+        self.assertIn("not valid", str(ctx.exception))
+
+    def test_sid_remaining_less_than_8(self):
+        """SID space remaining < 8 (minimum SID header) → rejected."""
+        ace_sz = self._ACE_HDR_SZ + self._MASK_SZ + 4  # only 4 bytes for SID
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        dacl_addr = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE,
+        )
+        ace_base = dacl_addr + self._ACL_HDR_SZ
+        # Re-write AceSize to the (small) value
+        ace2 = _ACE_HEADER.from_address(ace_base)
+        ace2.AceSize = ace_sz
+
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=1, acl_bytes_used=self._ACL_HDR_SZ + ace_sz,
+            dacl_ptr=dacl_addr, aces=[ace_base],
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("remaining", str(ctx.exception).lower())
+
+    def test_sub_auth_required_exceeds_remaining(self):
+        """SubAuthorityCount=15 → required=68, but only 12 remain."""
+        ace_sz = self._ACE_HDR_SZ + self._MASK_SZ + 12
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        dacl_addr = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE, sub_auth_count=15,
+        )
+        ace_base = dacl_addr + self._ACL_HDR_SZ
+
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=1, acl_bytes_used=self._ACL_HDR_SZ + ace_sz,
+            dacl_ptr=dacl_addr, aces=[ace_base],
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("requires", str(ctx.exception))
+
+    def test_zero_sid_length_rejected(self):
+        """get_sid_length returns 0 → rejected."""
+        ace_sz = self._ACE_HDR_SZ + self._MASK_SZ + 12
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        dacl_addr = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE,
+        )
+        ace_base = dacl_addr + self._ACL_HDR_SZ
+        trace: list = []
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=1, acl_bytes_used=self._ACL_HDR_SZ + ace_sz,
+            dacl_ptr=dacl_addr, aces=[ace_base], sid_length=0, trace=trace,
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("get_sid_length", trace, "must invoke get_sid_length")
+        self.assertIn("zero length", str(ctx.exception))
+
+    def test_sid_length_exceeds_remaining(self):
+        """SID length > ACE remaining bytes → rejected."""
+        ace_sz = self._ACE_HDR_SZ + self._MASK_SZ + 12
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        dacl_addr = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE,
+        )
+        ace_base = dacl_addr + self._ACL_HDR_SZ
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=1, acl_bytes_used=self._ACL_HDR_SZ + ace_sz,
+            dacl_ptr=dacl_addr, aces=[ace_base], sid_length=100,
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        self.assertIn("!=", str(ctx.exception))
+
+    def test_null_ace_pointer_rejected(self):
+        """get_ace returns 0 (NULL) → pointer outside range branch."""
+        ace_sz = self._ACE_HDR_SZ + self._MASK_SZ + 12
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        dacl_addr = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE,
+        )
+        get_ctrl, get_info, get_ace, is_valid, get_len = self._make_readers(
+            ace_count=1, acl_bytes_used=self._ACL_HDR_SZ + ace_sz,
+            dacl_ptr=dacl_addr, aces=[0],  # NULL ACE pointer
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=dacl_addr,
+                get_sd_control=get_ctrl, get_acl_info=get_info,
+                get_ace=get_ace, is_valid_sid=is_valid, get_sid_length=get_len,
+            )
+        # NULL ACE pointer → ace_in_acl_start negative → "outside ACL used range"
+        self.assertIn("outside ACL used range", str(ctx.exception))
+
+
+# ============================================================================
+# P2-A: Unified NTSTATUS mapper→raiser  (restored)
+# ============================================================================
+
+
+class TestConvertAndRaiseNTSTATUS(_ut.TestCase):
+    """Test _convert_and_raise_ntstatus through production boundary.
+    
+    Covers all four classification categories: not‑found, collision,
+    access‑denied, unknown — plus mapper 317/self/exception edge cases.
+    Signed ntstatus preserved in every raised exception.
+    """
+
+    def _mapper(self, mapping):
+        def _map(st):
+            return mapping.get(_ct.c_int32(st).value)
+        return _map
+
+    def test_known_mapping_file_not_found_with_winerror(self):
+        mapping = {_ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value: _ERROR_FILE_NOT_FOUND}
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _convert_and_raise_ntstatus(_STATUS_OBJECT_NAME_NOT_FOUND, self._mapper(mapping))
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus, _ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value)  # type: ignore[attr-defined]
+        self.assertLess(exc.ntstatus, 0)  # type: ignore[attr-defined]
+        self.assertEqual(exc.winerror, _ERROR_FILE_NOT_FOUND)  # type: ignore[attr-defined]
+
+    def test_known_mapping_name_collision_signed(self):
+        mapping = {_ct.c_int32(_STATUS_OBJECT_NAME_COLLISION).value: _ERROR_FILE_EXISTS}
+        with self.assertRaises(FileExistsError) as ctx:
+            _convert_and_raise_ntstatus(_STATUS_OBJECT_NAME_COLLISION, self._mapper(mapping))
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus, _ct.c_int32(_STATUS_OBJECT_NAME_COLLISION).value)  # type: ignore[attr-defined]
+        self.assertLess(exc.ntstatus, 0)  # type: ignore[attr-defined]
+        self.assertEqual(exc.winerror, _ERROR_FILE_EXISTS)  # type: ignore[attr-defined]
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+    def test_known_mapping_access_denied_signed(self):
+        mapping = {_ct.c_int32(_STATUS_ACCESS_DENIED).value: _ERROR_ACCESS_DENIED}
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _convert_and_raise_ntstatus(_STATUS_ACCESS_DENIED, self._mapper(mapping))
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus, _ct.c_int32(_STATUS_ACCESS_DENIED).value)  # type: ignore[attr-defined]
+        self.assertLess(exc.ntstatus, 0)  # type: ignore[attr-defined]
+        self.assertEqual(exc.winerror, _ERROR_ACCESS_DENIED)  # type: ignore[attr-defined]
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+    def test_unknown_ntstatus_signed_preserved(self):
+        unknown = 0xC0000FFF
+        mapping = {_ct.c_int32(unknown).value: 123}
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _convert_and_raise_ntstatus(unknown, self._mapper(mapping))
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus, _ct.c_int32(unknown).value)  # type: ignore[attr-defined]
+        self.assertLess(exc.ntstatus, 0)  # type: ignore[attr-defined]
+        self.assertEqual(exc.winerror, 123)  # type: ignore[attr-defined]
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+    def test_mapper_317_no_winerror(self):
+        def mapper_317(st):
+            return 317
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _convert_and_raise_ntstatus(_STATUS_OBJECT_NAME_NOT_FOUND, mapper_317)
+        exc = ctx.exception
+        self.assertFalse(hasattr(exc, "winerror"))
+        self.assertEqual(exc.ntstatus, _ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value)  # type: ignore[attr-defined]
+
+    def test_mapper_exception_no_winerror(self):
+        def mapper_fail(st):
+            raise RuntimeError("unavailable")
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _convert_and_raise_ntstatus(_STATUS_OBJECT_NAME_NOT_FOUND, mapper_fail)
+        exc = ctx.exception
+        self.assertFalse(hasattr(exc, "winerror"))
+        self.assertEqual(exc.ntstatus, _ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value)  # type: ignore[attr-defined]
+
+    def test_self_mapping_no_winerror(self):
+        def mapper_self(st):
+            return _ct.c_uint32(st).value
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _convert_and_raise_ntstatus(_STATUS_OBJECT_NAME_NOT_FOUND, mapper_self)
+        exc = ctx.exception
+        self.assertFalse(hasattr(exc, "winerror"))
+        self.assertEqual(exc.ntstatus, _ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value)  # type: ignore[attr-defined]
+
+    def test_path_not_found_signed_preserved(self):
+        """STATUS_OBJECT_PATH_NOT_FOUND → FileNotFoundError, signed ntstatus."""
+        mapping = {_ct.c_int32(_STATUS_OBJECT_PATH_NOT_FOUND).value: _ERROR_PATH_NOT_FOUND}
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _convert_and_raise_ntstatus(_STATUS_OBJECT_PATH_NOT_FOUND, self._mapper(mapping))
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus, _ct.c_int32(_STATUS_OBJECT_PATH_NOT_FOUND).value)  # type: ignore[attr-defined]
+        self.assertLess(exc.ntstatus, 0)  # type: ignore[attr-defined]
+
+
+# ============================================================================
+# P2-A: cleanup_errors on all classified exceptions  (restored)
+# ============================================================================
+
+
+class TestCleanupErrorsOnAllExceptions(_ut.TestCase):
+    def test_not_found_has_empty_cleanup(self):
+        exc = _classify_ntstatus_exc(_STATUS_OBJECT_NAME_NOT_FOUND)
+        self.assertIsInstance(exc, FileNotFoundError)
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+    def test_collision_has_empty_cleanup(self):
+        exc = _classify_ntstatus_exc(_STATUS_OBJECT_NAME_COLLISION)
+        self.assertIsInstance(exc, FileExistsError)
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+    def test_access_denied_has_empty_cleanup(self):
+        exc = _classify_ntstatus_exc(_STATUS_ACCESS_DENIED)
+        self.assertIsInstance(exc, SecureStorePermissionError)
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+    def test_unknown_has_empty_cleanup(self):
+        exc = _classify_ntstatus_exc(0xC0000FFF)
+        self.assertIsInstance(exc, SecureStorePermissionError)
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+    def test_append_order_preserved(self):
+        exc = _classify_ntstatus_exc(_STATUS_ACCESS_DENIED)
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+
+# ============================================================================
+# P2-A: Prototype helper tests  (restored)
+# ============================================================================
+
+
+class TestPrototypeHelpers(_ut.TestCase):
+    """Linux dummy calls real configurators; assert exact argtypes/restypes
+    for all NtCreateFile args + RtlNtStatusToDosError, all 6 advapi32
+    functions, and exact host-pointer-width _OBJECT_ATTRIBUTES offsets."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._ptr_size = _ct.sizeof(_ct.c_void_p)
+        cls._is_x64 = cls._ptr_size == 8
+
+    def test_configure_ntdll_all_11_args_exact(self):
+        """Assert exact 11 NtCreateFile argtypes + restype + Rtl mapper."""
+        class _Dummy:
+            NtCreateFile = type("F", (), {})()
+            RtlNtStatusToDosError = type("F", (), {})()
+        d = _Dummy()
+        _configure_ntdll_prototypes(d)
+        # restype
+        self.assertIs(d.NtCreateFile.restype, _ct.c_int32)
+        # 11 argument types
+        self.assertEqual(len(d.NtCreateFile.argtypes), 11)
+        # Index 0: PHANDLE (FileHandle out)
+        self.assertIs(d.NtCreateFile.argtypes[0], _ct.POINTER(_wt.HANDLE))
+        # Index 1: ACCESS_MASK (DesiredAccess)
+        self.assertIs(d.NtCreateFile.argtypes[1], _ct.c_uint32)
+        # Index 2: POBJECT_ATTRIBUTES
+        self.assertIs(d.NtCreateFile.argtypes[2], _ct.POINTER(_OBJECT_ATTRIBUTES))
+        # Index 3: PIO_STATUS_BLOCK
+        self.assertIs(d.NtCreateFile.argtypes[3], _ct.POINTER(_IO_STATUS_BLOCK))
+        # Index 4: PLARGE_INTEGER (AllocationSize)
+        self.assertIs(d.NtCreateFile.argtypes[4], _ct.POINTER(_LARGE_INTEGER))
+        # Index 5: ULONG (FileAttributes)
+        self.assertIs(d.NtCreateFile.argtypes[5], _ct.c_uint32)
+        # Index 6: ULONG (ShareAccess)
+        self.assertIs(d.NtCreateFile.argtypes[6], _ct.c_uint32)
+        # Index 7: ULONG (CreateDisposition)
+        self.assertIs(d.NtCreateFile.argtypes[7], _ct.c_uint32)
+        # Index 8: ULONG (CreateOptions)
+        self.assertIs(d.NtCreateFile.argtypes[8], _ct.c_uint32)
+        # Index 9: PVOID (EaBuffer)
+        self.assertIs(d.NtCreateFile.argtypes[9], _ct.c_void_p)
+        # Index 10: ULONG (EaLength)
+        self.assertIs(d.NtCreateFile.argtypes[10], _ct.c_uint32)
+        # Status mapper
+        self.assertIs(d.RtlNtStatusToDosError.restype, _ct.c_uint32)
+        self.assertEqual(len(d.RtlNtStatusToDosError.argtypes), 1)
+        self.assertIs(d.RtlNtStatusToDosError.argtypes[0], _ct.c_int32)
+
+    def test_configure_advapi32_all_6_functions_exact(self):
+        """Assert every argtype and restype for all 6 advapi32 functions,
+        matching production _configure_advapi32_prototypes exactly."""
+        class _Dummy:
+            GetSecurityInfo = type("F", (), {})()
+            GetSecurityDescriptorControl = type("F", (), {})()
+            GetAclInformation = type("F", (), {})()
+            GetAce = type("F", (), {})()
+            GetLengthSid = type("F", (), {})()
+            IsValidSid = type("F", (), {})()
+        d = _Dummy()
+        _configure_advapi32_prototypes(d)
+
+        # --- GetSecurityInfo ---
+        self.assertIs(d.GetSecurityInfo.restype, _wt.DWORD)
+        self.assertEqual(len(d.GetSecurityInfo.argtypes), 8)
+        self.assertIs(d.GetSecurityInfo.argtypes[0], _wt.HANDLE)
+        self.assertIs(d.GetSecurityInfo.argtypes[1], _ct.c_int)
+        self.assertIs(d.GetSecurityInfo.argtypes[2], _wt.DWORD)
+        self.assertIs(d.GetSecurityInfo.argtypes[3], _ct.POINTER(_ct.c_void_p))
+        self.assertIs(d.GetSecurityInfo.argtypes[4], _ct.POINTER(_ct.c_void_p))
+        self.assertIs(d.GetSecurityInfo.argtypes[5], _ct.POINTER(_ct.c_void_p))
+        self.assertIs(d.GetSecurityInfo.argtypes[6], _ct.POINTER(_ct.c_void_p))
+        self.assertIs(d.GetSecurityInfo.argtypes[7], _ct.POINTER(_ct.c_void_p))
+
+        # --- GetSecurityDescriptorControl ---
+        self.assertIs(d.GetSecurityDescriptorControl.restype, _wt.BOOL)
+        self.assertEqual(len(d.GetSecurityDescriptorControl.argtypes), 3)
+        self.assertIs(d.GetSecurityDescriptorControl.argtypes[0], _ct.c_void_p)
+        self.assertIs(d.GetSecurityDescriptorControl.argtypes[1], _ct.POINTER(_wt.WORD))
+        self.assertIs(d.GetSecurityDescriptorControl.argtypes[2], _ct.POINTER(_wt.DWORD))
+
+        # --- GetAclInformation ---
+        self.assertIs(d.GetAclInformation.restype, _wt.BOOL)
+        self.assertEqual(len(d.GetAclInformation.argtypes), 4)
+        self.assertIs(d.GetAclInformation.argtypes[0], _ct.c_void_p)
+        self.assertIs(d.GetAclInformation.argtypes[1], _ct.c_void_p)
+        self.assertIs(d.GetAclInformation.argtypes[2], _wt.DWORD)
+        self.assertIs(d.GetAclInformation.argtypes[3], _ct.c_int)
+
+        # --- GetAce ---
+        self.assertIs(d.GetAce.restype, _wt.BOOL)
+        self.assertEqual(len(d.GetAce.argtypes), 3)
+        self.assertIs(d.GetAce.argtypes[0], _ct.c_void_p)
+        self.assertIs(d.GetAce.argtypes[1], _wt.DWORD)
+        self.assertIs(d.GetAce.argtypes[2], _ct.POINTER(_ct.c_void_p))
+
+        # --- GetLengthSid ---
+        self.assertIs(d.GetLengthSid.restype, _wt.DWORD)
+        self.assertEqual(len(d.GetLengthSid.argtypes), 1)
+        self.assertIs(d.GetLengthSid.argtypes[0], _ct.c_void_p)
+
+        # --- IsValidSid ---
+        self.assertIs(d.IsValidSid.restype, _wt.BOOL)
+        self.assertEqual(len(d.IsValidSid.argtypes), 1)
+        self.assertIs(d.IsValidSid.argtypes[0], _ct.c_void_p)
+
+    def test_object_attributes_offsets_exact_host_pointer_width(self):
+        """Exact offsets for every _OBJECT_ATTRIBUTES field, one layout
+        determined by host pointer width (x86=24 / x64=48)."""
+        # Field sizes for offset computation
+        sz_uint32 = _ct.sizeof(_ct.c_uint32)
+        sz_handle = _ct.sizeof(_wt.HANDLE)
+        sz_void_p = _ct.sizeof(_ct.c_void_p)
+        self.assertEqual(sz_uint32, 4)
+
+        # Length: offset 0, size 4
+        self.assertEqual(_OBJECT_ATTRIBUTES.Length.offset, 0)
+        self.assertEqual(_OBJECT_ATTRIBUTES.Length.size, sz_uint32)
+
+        # RootDirectory: after Length + alignment to HANDLE
+        expected_root = _OBJECT_ATTRIBUTES.Length.offset + _OBJECT_ATTRIBUTES.Length.size
+        if sz_handle > sz_uint32:
+            expected_root = (expected_root + sz_handle - 1) & ~(sz_handle - 1)  # align up
+        self.assertEqual(_OBJECT_ATTRIBUTES.RootDirectory.offset, expected_root,
+            f"RootDirectory offset must be {expected_root} for ptr_size={self._ptr_size}")
+        self.assertEqual(_OBJECT_ATTRIBUTES.RootDirectory.size, sz_handle)
+
+        # ObjectName: after RootDirectory
+        expected_oname = _OBJECT_ATTRIBUTES.RootDirectory.offset + _OBJECT_ATTRIBUTES.RootDirectory.size
+        self.assertEqual(_OBJECT_ATTRIBUTES.ObjectName.offset, expected_oname,
+            f"ObjectName offset must be {expected_oname}")
+        self.assertEqual(_OBJECT_ATTRIBUTES.ObjectName.size, sz_void_p)
+
+        # Attributes: after ObjectName
+        expected_attrs = _OBJECT_ATTRIBUTES.ObjectName.offset + _OBJECT_ATTRIBUTES.ObjectName.size
+        self.assertEqual(_OBJECT_ATTRIBUTES.Attributes.offset, expected_attrs,
+            f"Attributes offset must be {expected_attrs}")
+        self.assertEqual(_OBJECT_ATTRIBUTES.Attributes.size, sz_uint32)
+
+        # SecurityDescriptor: after Attributes (may need alignment to void*)
+        expected_sd = _OBJECT_ATTRIBUTES.Attributes.offset + _OBJECT_ATTRIBUTES.Attributes.size
+        if sz_void_p > sz_uint32:
+            expected_sd = (expected_sd + sz_void_p - 1) & ~(sz_void_p - 1)
+        self.assertEqual(_OBJECT_ATTRIBUTES.SecurityDescriptor.offset, expected_sd,
+            f"SecurityDescriptor offset must be {expected_sd}")
+        self.assertEqual(_OBJECT_ATTRIBUTES.SecurityDescriptor.size, sz_void_p)
+
+        # SecurityQualityOfService: after SecurityDescriptor
+        expected_sqos = _OBJECT_ATTRIBUTES.SecurityDescriptor.offset + _OBJECT_ATTRIBUTES.SecurityDescriptor.size
+        self.assertEqual(_OBJECT_ATTRIBUTES.SecurityQualityOfService.offset, expected_sqos,
+            f"SecurityQualityOfService offset must be {expected_sqos}")
+        self.assertEqual(_OBJECT_ATTRIBUTES.SecurityQualityOfService.size, sz_void_p)
+
+        # Total sizeof
+        total = _ct.sizeof(_OBJECT_ATTRIBUTES)
+        expected_total = 48 if self._is_x64 else 24
+        self.assertEqual(total, expected_total,
+            f"sizeof(OBJECT_ATTRIBUTES)={total}, expected={expected_total}")
+
+
+# ============================================================================
+# P2-A: SID‑length consistency  (restored)
+# ============================================================================
+
+
+class TestDaclSidLengthConsistency(_ut.TestCase):
+    """Test that _parse_dacl_snapshot_from_sd rejects SID length != required."""
+
+    _ACL_HDR_SZ = _ct.sizeof(_ACL)
+
+    def setUp(self):
+        self._keep_bufs: list = []  # prevent GC of ctypes buffers
+
+    def _make_buf_with_ace(self, acl_size: int, ace_sz: int, ace_type: int,
+                           sub_auth_count: int) -> "tuple[int, int]":
+        """Create buffer with ACL + embedded ACE; return (acl_addr, ace_addr)."""
+        buf = (_ct.c_ubyte * acl_size)()
+        self._keep_bufs.append(buf)  # prevent GC
+        addr = _ct.addressof(buf)
+        acl = _ACL.from_address(addr)
+        acl.AclRevision = _ACL_REVISION_DS
+        acl.AclSize = acl_size
+        acl.AceCount = 1
+        ace_off = self._ACL_HDR_SZ
+        ace_addr = addr + ace_off
+        ace = _ACE_HEADER.from_address(ace_addr)
+        ace.AceType = ace_type
+        ace.AceFlags = 0
+        ace.AceSize = ace_sz
+        # SID header: revision=1, subAuthCount
+        sid_off = _ct.sizeof(_ACE_HEADER) + _ct.sizeof(_ct.c_uint32)
+        _ct.c_ubyte.from_address(ace_addr + sid_off).value = 1  # revision
+        _ct.c_ubyte.from_address(ace_addr + sid_off + 1).value = sub_auth_count
+        return addr, ace_addr
+
+    def _make_readers(self, acl_addr, ace_base, acl_bytes_used,
+                      valid_sid=True, sid_length=12):
+        def _get_sd_control():
+            return (_SE_DACL_PROTECTED, 1)
+
+        def _get_acl_info():
+            return (1, acl_bytes_used)
+
+        def _get_ace(i):
+            return ace_base
+
+        def _is_valid_sid(p):
+            return valid_sid
+
+        def _get_sid_length(p):
+            return sid_length
+
+        return _get_sd_control, _get_acl_info, _get_ace, _is_valid_sid, _get_sid_length
+
+    def test_sid_len_mismatch_rejected(self):
+        """sid_len=15 ≠ required=12 → rejected."""
+        ace_sz = _ct.sizeof(_ACE_HEADER) + _ct.sizeof(_ct.c_uint32) + 15
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        acl_addr, ace_base = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE, sub_auth_count=1,
+        )
+        readers = self._make_readers(acl_addr, ace_base, acl_size, sid_length=15)
+        with self.assertRaises(SecureStorePermissionError):
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=acl_addr,
+                get_sd_control=readers[0], get_acl_info=readers[1],
+                get_ace=readers[2], is_valid_sid=readers[3],
+                get_sid_length=readers[4],
+            )
+
+    def test_sid_len_match_succeeds(self):
+        """sid_len=12 == required → succeeds, sid_bytes length=12."""
+        ace_sz = _ct.sizeof(_ACE_HEADER) + _ct.sizeof(_ct.c_uint32) + 12
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        acl_addr, ace_base = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE, sub_auth_count=1,
+        )
+        readers = self._make_readers(acl_addr, ace_base, acl_size, sid_length=12)
+        snap = _parse_dacl_snapshot_from_sd(
+            sd_ptr=1, dacl_ptr=acl_addr,
+            get_sd_control=readers[0], get_acl_info=readers[1],
+            get_ace=readers[2], is_valid_sid=readers[3],
+            get_sid_length=readers[4],
+        )
+        self.assertEqual(len(snap.aces), 1)
+        self.assertEqual(len(snap.aces[0].sid_bytes), 12)
+
+    def test_sid_len_less_than_required_rejected(self):
+        """SubAuthorityCount=1→required=12, GetLengthSid=8 → fail closed
+        with get_sid_length trace evidence."""
+        ace_sz = _ct.sizeof(_ACE_HEADER) + _ct.sizeof(_ct.c_uint32) + 15
+        acl_size = self._ACL_HDR_SZ + ace_sz
+        acl_addr, ace_base = self._make_buf_with_ace(
+            acl_size=acl_size, ace_sz=ace_sz,
+            ace_type=_ACCESS_ALLOWED_ACE_TYPE, sub_auth_count=1,
+        )
+        trace: list = []
+        def _get_sd_control():
+            trace.append("get_sd_control")
+            return (_SE_DACL_PROTECTED, 1)
+        def _get_acl_info():
+            trace.append("get_acl_info")
+            return (1, acl_size)
+        def _get_ace(i):
+            trace.append("get_ace")
+            return ace_base
+        def _is_valid_sid(p):
+            trace.append("is_valid_sid")
+            return True
+        def _get_sid_length(p):
+            trace.append("get_sid_length")
+            return 8  # < 12 (required)
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _parse_dacl_snapshot_from_sd(
+                sd_ptr=1, dacl_ptr=acl_addr,
+                get_sd_control=_get_sd_control, get_acl_info=_get_acl_info,
+                get_ace=_get_ace, is_valid_sid=_is_valid_sid,
+                get_sid_length=_get_sid_length,
+            )
+        self.assertIn("get_sid_length", trace, "must call get_sid_length")
+        self.assertIn("!=", str(ctx.exception))
+
+
+# ============================================================================
+# P2-A: Windows‑only prototype smoke  (restored, 3 skip‑only tests)
+# ============================================================================
+
+
+@_ut.skipUnless(_os.name == "nt", "Windows-only prototype smoke")
+class TestWindowsPrototypeSmoke(_ut.TestCase):
+    def test_ntdll_prototype_types_from_real_dll(self):
+        import ctypes as _ct_local
+        n = _ct_local.WinDLL("ntdll", use_last_error=True)
+        _configure_ntdll_prototypes(n)
+        self.assertEqual(len(n.NtCreateFile.argtypes), 11)
+        self.assertEqual(n.NtCreateFile.restype, _ct.c_int32)
+
+    def test_advapi32_prototype_types_from_real_dll(self):
+        import ctypes as _ct_local
+        a = _ct_local.WinDLL("advapi32", use_last_error=True)
+        _configure_advapi32_prototypes(a)
+        self.assertEqual(len(a.GetSecurityInfo.argtypes), 8)
+        self.assertEqual(a.GetSecurityDescriptorControl.restype, _wt.BOOL)
+
+    def test_object_attributes_root_directory_handle_type(self):
+        self.assertIs(_OBJECT_ATTRIBUTES.RootDirectory, _wt.HANDLE)
+
+
+# ============================================================================
+# P2-B: Fake low-level API (trace/fault fake)
+# ============================================================================
+
+
+class _FakeLowLevelAPI(_WinLowLevelAPI):
+    """Trace/fault fake — namespace/handle separation, per‑HANDLE ledger."""
+
+    class _HandleInstance:
+        __slots__ = ("hid", "obj_key", "closed", "transferred",
+                     "desired_access", "share_access", "create_disposition")
+
+        def __init__(self, hid: int, obj_key: str):
+            self.hid = hid
+            self.obj_key = obj_key
+            self.closed = False
+            self.transferred = False
+            self.desired_access = 0
+            self.share_access = 0
+            self.create_disposition = 0
+
+    def __init__(self):
+        super().__init__()
+        self.trace: list = []
+        self._namespace: dict = {}
+        self._live_handles: dict = {}
+        self._next_hid = 1
+        self._faults: dict = {}
+        self._drive_types: dict = {}
+        self._dacl_snapshots: dict = {}
+        self._closed_hids: set = set()
+        self._osfhandle_map: dict = {}
+        # P2‑B final gate: per‑HANDLE fault injection
+        self._close_fault_hids: set = set()
+        self._close_fault_nth: int | None = None
+        self._close_call_count: int = 0
+        self._info_fault_hids: set = set()
+        self._type_fault_hids: set = set()
+        self._info_fault_obj: dict[int, BaseException] = {}
+        self._type_fault_obj: dict[int, BaseException] = {}
+        self._nt_status_map: dict = {}
+        self._close_attempts: dict[int, int] = {}
+        self._close_successes: dict[int, int] = {}
+        self._close_call_order: list[int] = []
+        self._liveness: list[dict] = []
+        self._on_child_created: "callable | None" = None
+
+    def _obj_key(self, parent_hid: int, name: str) -> str:
+        parent = self._live_handles.get(parent_hid)
+        parent_prefix = parent.obj_key if parent else str(parent_hid)
+        return f"{parent_prefix}:{name}"
+
+    def _check_live(self, hid, operation):
+        inst = self._live_handles.get(hid)
+        if inst is None:
+            raise OSError(f"Handle {hid} is not a live handle ({operation})")
+        if inst.closed:
+            raise OSError(f"Handle {hid} was closed ({operation})")
+        if inst.transferred:
+            raise OSError(f"Handle {hid} was transferred to fd ({operation})")
+        # P3‑B: reject all non-close operations through pending handles
+        if operation != "close_handle":
+            obj = self._namespace.get(inst.obj_key)
+            if obj is not None and obj.get("delete_pending"):
+                raise OSError(
+                    f"Handle {hid} object {inst.obj_key} has delete pending")
+        return inst
+
+    def _record(self, op, args, result):
+        self.trace.append((op, args, result))
+
+    def _check_fault(self, op):
+        fault = self._faults.get(op)
+        if fault is not None:
+            raise fault
+
+    # -- Operations --
+
+    def drive_type(self, root: str) -> int:
+        self._check_fault("drive_type")
+        result = self._drive_types.get(root, _DRIVE_FIXED)
+        self._record("drive_type", (root,), result)
+        return result
+
+    def open_root(self, root: str) -> int:
+        self._check_fault("open_root")
+        obj_key = f"root:{root}"
+        self._namespace.setdefault(obj_key, {
+            "type": "root",
+            "attrs": _FILE_ATTRIBUTE_DIRECTORY,
+            "reparse": False,
+            "identity": (self._next_hid, 0, 0),
+            "file_type": _FILE_TYPE_DISK,
+        })
+        hid = self._next_hid
+        self._next_hid += 1
+        inst = self._HandleInstance(hid, obj_key)
+        self._live_handles[hid] = inst
+        self._record("open_root", (root,), hid)
+        return hid
+
+    def nt_create_file(
+        self,
+        relative_name: str,
+        root_directory: int,
+        desired_access: int,
+        share_access: int,
+        create_disposition: int,
+        create_options: int,
+        security_descriptor: int = 0,
+    ) -> tuple[int, int, int]:
+        self._check_fault("nt_create_file")
+        parent = self._live_handles.get(root_directory)
+        parent_live = parent is not None and not parent.closed and not parent.transferred
+        self._liveness.append({"op": "nt_create_file", "name": relative_name,
+                               "parent_hid": root_directory, "parent_live": parent_live})
+        if not parent_live:
+            return (0, _STATUS_ACCESS_DENIED, 0)
+
+        if relative_name in self._nt_status_map:
+            injected_st = self._nt_status_map[relative_name]
+            self._record("nt_create_file",
+                (relative_name, root_directory, desired_access,
+                 share_access, create_disposition, create_options,
+                 security_descriptor),
+                (0, injected_st, 0))
+            return (0, injected_st, 0)
+
+        obj_key = self._obj_key(root_directory, relative_name)
+        is_dir = bool(create_options & _FILE_DIRECTORY_FILE)
+        existing_obj = self._namespace.get(obj_key)
+
+        if existing_obj is not None:
+            # P3‑B: reject new opens while delete_pending
+            if existing_obj.get("delete_pending"):
+                return (0, _STATUS_ACCESS_DENIED, 0)
+            if create_disposition == _FILE_CREATE:
+                return (0, _STATUS_OBJECT_NAME_COLLISION, 0)
+            if create_disposition in (_FILE_OPEN, _FILE_OPEN_IF):
+                hid = self._next_hid
+                self._next_hid += 1
+                inst = self._HandleInstance(hid, obj_key)
+                inst.desired_access = desired_access
+                inst.share_access = share_access
+                inst.create_disposition = create_disposition
+                self._live_handles[hid] = inst
+                self._record("nt_create_file",
+                    (relative_name, root_directory, desired_access,
+                     share_access, create_disposition, create_options,
+                     security_descriptor),
+                    (hid, _STATUS_SUCCESS, _FILE_OPENED_INFO))
+                if self._on_child_created:
+                    self._on_child_created(hid, relative_name)
+                return (hid, _STATUS_SUCCESS, _FILE_OPENED_INFO)
+
+        if create_disposition == _FILE_OPEN:
+            return (0, _STATUS_OBJECT_NAME_NOT_FOUND, 0)
+
+        self._namespace[obj_key] = {
+            "type": "directory" if is_dir else "file",
+            "attrs": _FILE_ATTRIBUTE_DIRECTORY if is_dir else _FILE_ATTRIBUTE_NORMAL,
+            "reparse": False,
+            "identity": (self._next_hid * 100, self._next_hid * 10, self._next_hid),
+            "file_type": _FILE_TYPE_DISK,
+        }
+        self._dacl_snapshots[obj_key] = DaclSnapshot(
+            control=_SE_DACL_PROTECTED, dacl_present=True, protected=True,
+            aces=(
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                    _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE if is_dir else 0,
+                    _FILE_ALL_ACCESS, b"USER_SID"),
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                    _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE if is_dir else 0,
+                    _FILE_ALL_ACCESS, b"SYSTEM_SID"),
+            ),
+        )
+        hid = self._next_hid
+        self._next_hid += 1
+        inst = self._HandleInstance(hid, obj_key)
+        inst.desired_access = desired_access
+        inst.share_access = share_access
+        inst.create_disposition = create_disposition
+        self._live_handles[hid] = inst
+        info = _FILE_CREATED_INFO
+        self._record("nt_create_file",
+            (relative_name, root_directory, desired_access,
+             share_access, create_disposition, create_options,
+             security_descriptor),
+            (hid, _STATUS_SUCCESS, info))
+        if self._on_child_created:
+            self._on_child_created(hid, relative_name)
+        return (hid, _STATUS_SUCCESS, info)
+
+    def ntstatus_to_winerror(self, ntstatus: int) -> int:
+        self._check_fault("ntstatus_to_winerror")
+        st = _ct.c_int32(ntstatus).value
+        mapping = {
+            _ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value: _ERROR_FILE_NOT_FOUND,
+            _ct.c_int32(_STATUS_OBJECT_PATH_NOT_FOUND).value: _ERROR_PATH_NOT_FOUND,
+            _ct.c_int32(_STATUS_ACCESS_DENIED).value: _ERROR_ACCESS_DENIED,
+            _ct.c_int32(_STATUS_OBJECT_NAME_COLLISION).value: _ERROR_FILE_EXISTS,
+        }
+        result = mapping.get(st, _ct.c_uint32(ntstatus).value)
+        self._record("ntstatus_to_winerror", (ntstatus,), result)
+        return result
+
+    def get_file_info(self, handle: int) -> _BY_HANDLE_FILE_INFO:
+        self._check_fault("get_file_info")
+        if handle in self._info_fault_obj:
+            raise self._info_fault_obj[handle]
+        if handle in self._info_fault_hids:
+            raise OSError(f"per-handle get_file_info fault for {handle}")
+        inst = self._check_live(handle, "get_file_info")
+        self._liveness.append({"op": "get_file_info", "handle": handle,
+                               "handle_live": not inst.closed})
+        obj = self._namespace[inst.obj_key]
+        info = _BY_HANDLE_FILE_INFO()
+        info.dwFileAttributes = obj["attrs"]
+        if obj.get("reparse"):
+            info.dwFileAttributes |= _FILE_ATTRIBUTE_REPARSE_POINT
+        ident = obj.get("identity", (0, 0, 0))
+        info.dwVolumeSerialNumber = ident[0]
+        info.nFileIndexHigh = ident[1]
+        info.nFileIndexLow = ident[2]
+        self._record("get_file_info", (handle,), (info.dwFileAttributes, ident))
+        return info
+
+    def get_file_type(self, handle: int) -> int:
+        self._check_fault("get_file_type")
+        if handle in self._type_fault_obj:
+            raise self._type_fault_obj[handle]
+        if handle in self._type_fault_hids:
+            raise OSError(f"per-handle get_file_type fault for {handle}")
+        inst = self._check_live(handle, "get_file_type")
+        self._liveness.append({"op": "get_file_type", "handle": handle,
+                               "handle_live": not inst.closed})
+        obj = self._namespace[inst.obj_key]
+        result = obj.get("file_type", _FILE_TYPE_DISK)
+        self._record("get_file_type", (handle,), result)
+        return result
+
+    def get_handle_identity(self, handle: int) -> tuple[int, int, int]:
+        self._check_fault("get_handle_identity")
+        inst = self._check_live(handle, "get_handle_identity")
+        obj = self._namespace[inst.obj_key]
+        result = obj.get("identity", (0, 0, 0))
+        self._record("get_handle_identity", (handle,), result)
+        return result
+
+    def read_dacl_snapshot(self, handle: int) -> DaclSnapshot:
+        self._check_fault("read_dacl_snapshot")
+        inst = self._check_live(handle, "read_dacl_snapshot")
+        snap = self._dacl_snapshots.get(inst.obj_key)
+        if snap is None:
+            snap = DaclSnapshot(
+                control=_SE_DACL_PROTECTED, dacl_present=True,
+                protected=True, aces=(),
+            )
+        self._record("read_dacl_snapshot", (handle,), snap)
+        return snap
+
+    def set_delete_disposition(self, handle: int) -> None:
+        self._check_fault("set_delete_disposition")
+        inst = self._check_live(handle, "set_delete_disposition")
+        obj = self._namespace.get(inst.obj_key)
+        if obj is not None and obj.get("delete_pending"):
+            raise OSError(
+                f"Delete already pending for object {inst.obj_key}")
+        if obj is not None and obj.get("type") == "directory":
+            child_keys = [
+                k for k in self._namespace
+                if k.startswith(inst.obj_key + ":")
+            ]
+            if child_keys:
+                raise SecureStorePermissionError(
+                    f"Directory {inst.obj_key} is not empty")
+        if obj is not None:
+            obj["delete_pending"] = True
+        self._record("set_delete_disposition", (handle,), None)
+
+    def close_handle(self, handle: int) -> None:
+        self._close_attempts[handle] = self._close_attempts.get(handle, 0) + 1
+        self._close_call_order.append(handle)
+        self._close_call_count += 1
+        self._check_fault("close_handle")
+        inst = self._check_live(handle, "close_handle")
+        obj = self._namespace.get(inst.obj_key)
+        delete_pending = obj is not None and obj.get("delete_pending", False)
+        if handle in self._close_fault_hids:
+            raise OSError(f"per-handle close fault for {handle}")
+        if self._close_fault_nth is not None and self._close_call_count == self._close_fault_nth:
+            raise OSError(f"Nth close fault (n={self._close_fault_nth})")
+        self._live_handles[handle].closed = True
+        self._close_successes[handle] = self._close_successes.get(handle, 0) + 1
+        # Remove namespace only on final live HANDLE close when delete_pending
+        if delete_pending and obj is not None:
+            other_live = sum(
+                1 for h, i in self._live_handles.items()
+                if h != handle and i.obj_key == inst.obj_key
+                and not i.closed and not i.transferred
+            )
+            if other_live == 0:
+                self._namespace.pop(inst.obj_key, None)
+        self._record("close_handle", (handle,), None)
+
+    def open_osfhandle(self, handle: int) -> int:
+        self._check_fault("open_osfhandle")
+        inst = self._check_live(handle, "open_osfhandle")
+        fd = 1000 + handle
+        inst.transferred = True
+        self._osfhandle_map[handle] = fd
+        self._record("open_osfhandle", (handle,), fd)
+        return fd
+
+    # -- Security context (Blocker #1) --
+
+    def acquire_security_context(self) -> int:
+        """Return a sentinel context handle; store sentinel SID bytes."""
+        self._check_fault("acquire_ctx")
+        ctx = self._next_hid * 50000
+        self._next_hid += 1
+        self._record("acquire_ctx", (), ctx)
+        return ctx
+
+    def get_context_user_sid(self, ctx: int) -> bytes:
+        # Context handles are not HANDLE instances; just verify non-zero
+        if ctx == 0:
+            raise OSError("Security context is zero")
+        self._check_fault("get_ctx_user")
+        from aisc.adapters.secret_store import _USER_SID_BYTES as _USB
+        result = _USB
+        self._record("get_ctx_user", (ctx,), result)
+        return result
+
+    def get_context_system_sid(self, ctx: int) -> bytes:
+        if ctx == 0:
+            raise OSError("Security context is zero")
+        self._check_fault("get_ctx_system")
+        from aisc.adapters.secret_store import _SYSTEM_SID_BYTES as _SSB
+        result = _SSB
+        self._record("get_ctx_system", (ctx,), result)
+        return result
+
+    def release_security_context(self, ctx: int) -> None:
+        if ctx == 0:
+            return
+        self._check_fault("release_ctx")
+        self._record("release_ctx", (ctx,), None)
+
+    # -- Security descriptor (Blocker #2) --
+
+    def build_file_security_descriptor(self, security_context: int) -> int:
+        """Allocate a real _SECURITY_DESCRIPTOR + ACL buffer; return ctypes address.
+
+        Uses actual ctypes structures so the returned handle is the native
+        pointer that NtCreateFile receives as OBJECT_ATTRIBUTES.SecurityDescriptor.
+        """
+        self._check_fault("build_file_sd")
+        if security_context == 0:
+            raise SecureStorePermissionError("build_file_sd requires non-zero security context")
+
+        # Allocate real ctypes structures (works cross-platform)
+        sd = _SECURITY_DESCRIPTOR()
+        acl_buf = (_ct.c_ubyte * 64)()
+        acl_ptr = _ct.cast(acl_buf, _ct.c_void_p)
+        # Set DACL pointer in SD — this is what GetSecurityInfo would read back
+        sd.Dacl = acl_ptr.value
+        # Mark as protected
+        sd.Control = _SE_DACL_PROTECTED
+
+        sd_addr = _ct.addressof(sd)
+        if not hasattr(self, "_sd_store"):
+            self._sd_store: dict = {}
+        self._sd_store[sd_addr] = {
+            "sd": sd,
+            "acl_mem": acl_ptr.value,
+            "acl_buf": acl_buf,
+        }
+        self._record("build_file_sd", (security_context,), sd_addr)
+        return sd_addr
+
+    def free_security_descriptor(self, sd_handle: int) -> None:
+        """Release an SD handle (no‑op if zero or already released)."""
+        if sd_handle == 0:
+            return
+        self._check_fault("free_sd")
+        entry = getattr(self, "_sd_store", {}).pop(sd_handle, None)
+        if entry is None:
+            return  # idempotent
+        self._record("free_sd", (sd_handle,), None)
+
+
+# ============================================================================
+# P2-A: _DaclFakeLowLevelAPI + TestDaclFakeSeam  (restored, after _FakeLowLevelAPI)
+# ============================================================================
+
+
+class _DaclFakeLowLevelAPI(_FakeLowLevelAPI):
+    """Fake with production‑shaped read_dacl_snapshot seam.
+    
+    Each read_dacl_snapshot call goes through acquire→inspect→release
+    exactly once.  Per‑acquire owner tokens track state machine:
+    "active" → "released" or "attempted_failed".
+    """
+
+    class _Token:
+        __slots__ = ("id", "state")
+        def __init__(self, tid):
+            self.id = tid
+            self.state = "active"  # active | released | attempted_failed
+
+    def __init__(self):
+        super().__init__()
+        self._dacl_acquire_attempts = 0
+        self._dacl_acquire_successes = 0
+        self._dacl_release_attempts = 0
+        self._dacl_release_successes = 0
+        self._dacl_tokens: list = []
+        self._dacl_next_token = 1
+        self._dacl_fault_points: dict = {}
+        self._dacl_primary_hook: "BaseException | None" = None
+        self._dacl_pre_cleanup: "tuple[BaseException, ...]" = ()
+        self._dacl_released: set = set()
+        # Inspection fault injection (one per operation)
+        self._dacl_inspect_faults: dict = {}
+        # Snapshot trace
+        self._dacl_snapshots_returned: list = []
+        self._dacl_trace: list = []
+
+    def _acquire_token(self):
+        self._dacl_trace.append("acquire")
+        self._dacl_acquire_attempts += 1
+        if "acquire" in self._dacl_fault_points:
+            raise self._dacl_fault_points["acquire"]
+        t = self._Token(self._dacl_next_token)
+        self._dacl_next_token += 1
+        self._dacl_tokens.append(t)
+        self._dacl_acquire_successes += 1
+        return t
+
+    def _release_token(self, token):
+        self._dacl_trace.append("release")
+        self._dacl_release_attempts += 1
+        if token.state != "active":
+            raise RuntimeError(f"Token {token.id} not active (state={token.state})")
+        if "release" in self._dacl_fault_points:
+            token.state = "attempted_failed"
+            raise self._dacl_fault_points["release"]
+        token.state = "released"
+        self._dacl_released.add(token.id)
+        self._dacl_release_successes += 1
+
+    # -- production‑shaped seam -------------------------------------------
+
+    def read_dacl_snapshot(self, handle: int) -> DaclSnapshot:
+        """Acquire→inspect→release exactly once.  Each call creates
+        a new token that is released before return."""
+        self._check_live(handle, "read_dacl_snapshot")
+
+        token = self._acquire_token()
+
+        # Inspection step: trace THEN fault per inspection op
+        try:
+            self._dacl_trace.append("get_sd_ctrl")
+            if "get_sd_ctrl" in self._dacl_inspect_faults:
+                raise self._dacl_inspect_faults["get_sd_ctrl"]
+            ctrl = _SE_DACL_PROTECTED
+            protected = True
+
+            self._dacl_trace.append("get_acl_info")
+            if "get_acl_info" in self._dacl_inspect_faults:
+                raise self._dacl_inspect_faults["get_acl_info"]
+
+            self._dacl_trace.append("get_ace")
+            if "get_ace" in self._dacl_inspect_faults:
+                raise self._dacl_inspect_faults["get_ace"]
+
+            self._dacl_trace.append("is_valid_sid")
+            if "is_valid_sid" in self._dacl_inspect_faults:
+                raise self._dacl_inspect_faults["is_valid_sid"]
+            # is_valid_sid check passes (True)
+
+            self._dacl_trace.append("get_sid_length")
+            if "get_sid_length" in self._dacl_inspect_faults:
+                raise self._dacl_inspect_faults["get_sid_length"]
+            _sid_len = 12
+
+            # Build snapshot with unique SID bytes
+            snap = DaclSnapshot(
+                control=ctrl, dacl_present=True, protected=protected,
+                aces=(
+                    DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, 0,
+                                    _FILE_ALL_ACCESS,
+                                    f"USER_SID_{self._dacl_next_token:04d}".encode()),
+                ),
+            )
+        except BaseException as inspection_fault:
+            # Release must still happen
+            try:
+                self._release_token(token)
+            except BaseException as release_fault:
+                if self._dacl_primary_hook is not None:
+                    # Attach release fault to hooked primary
+                    existing = getattr(self._dacl_primary_hook, "cleanup_errors", ())
+                    self._dacl_primary_hook.cleanup_errors = existing + (release_fault,)  # type: ignore[attr-defined]
+                else:
+                    _attach_cleanup_errors(inspection_fault, (release_fault,))
+                raise inspection_fault
+            raise inspection_fault
+
+        # Successful inspection → release
+        try:
+            self._release_token(token)
+        except BaseException as release_fault:
+            _raise_no_primary_cleanup((release_fault,), "read_dacl_snapshot")
+        self._dacl_snapshots_returned.append(snap)
+        return snap
+
+
+class TestDaclFakeSeam(_ut.TestCase):
+    """Tests through production‑shaped read_dacl_snapshot acquire→inspect→release.
+
+    All assertions go through the real fake seam, not standalone helper calls.
+    """
+
+    def setUp(self):
+        self.api = _DaclFakeLowLevelAPI()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+
+    def _live_handle(self):
+        return self.api.open_root("C:\\")
+
+    def test_acquire_fault_no_release(self):
+        """Acquire fault → no token, no release attempts."""
+        self.api._dacl_fault_points["acquire"] = SecureStorePermissionError("acquire fail")
+        h = self._live_handle()
+        with self.assertRaises(SecureStorePermissionError):
+            self.api.read_dacl_snapshot(h)
+        self.assertEqual(self.api._dacl_acquire_attempts, 1)
+        self.assertEqual(self.api._dacl_acquire_successes, 0)
+        self.assertEqual(self.api._dacl_release_attempts, 0)
+
+    def test_inspection_fault_releases_once(self):
+        """Inspection fault (get_sd_ctrl) → release exactly once, token released."""
+        self._run_parameterized_inspection_fault("get_sd_ctrl")
+
+    def test_inspection_fault_get_acl_info_releases_once(self):
+        """Inspection fault (get_acl_info) → release exactly once, token released."""
+        self._run_parameterized_inspection_fault("get_acl_info")
+
+    def test_inspection_fault_get_ace_releases_once(self):
+        """Inspection fault (get_ace) → release exactly once, token released."""
+        self._run_parameterized_inspection_fault("get_ace")
+
+    def test_inspection_fault_is_valid_sid_releases_once(self):
+        """Inspection fault (is_valid_sid) → release exactly once."""
+        self._run_parameterized_inspection_fault("is_valid_sid")
+
+    def test_inspection_fault_get_sid_length_releases_once(self):
+        """Inspection fault (get_sid_length) → release exactly once."""
+        self._run_parameterized_inspection_fault("get_sid_length")
+
+    # Ordered list of all inspection steps in the production seam
+    _ALL_INSPECT_STEPS = [
+        "get_sd_ctrl", "get_acl_info", "get_ace",
+        "is_valid_sid", "get_sid_length",
+    ]
+
+    def _run_parameterized_inspection_fault(self, fault_point: str):
+        """Common assertions for a single inspection fault point through
+        read_dacl_snapshot.  Verifies exact trace sequence, token state,
+        and that no later inspection step occurred."""
+        fault_exc = SecureStorePermissionError(f"{fault_point} fail")
+
+        self.api._dacl_inspect_faults[fault_point] = fault_exc
+        h = self._live_handle()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.read_dacl_snapshot(h)
+
+        raised = ctx.exception
+        # assertIs the raised primary
+        self.assertIs(raised, fault_exc,
+            f"must raise exact injected primary for {fault_point}")
+
+        # Acquire exactly once
+        self.assertEqual(self.api._dacl_acquire_attempts, 1,
+            f"{fault_point}: acquire attempts")
+        self.assertEqual(self.api._dacl_acquire_successes, 1,
+            f"{fault_point}: acquire successes")
+
+        # Release exactly once, token released
+        self.assertEqual(self.api._dacl_release_attempts, 1,
+            f"{fault_point}: release attempts")
+        self.assertEqual(self.api._dacl_release_successes, 1,
+            f"{fault_point}: release successes")
+        self.assertEqual(len(self.api._dacl_tokens), 1)
+        token = self.api._dacl_tokens[0]
+        self.assertEqual(token.state, "released",
+            f"{fault_point}: token must be released")
+        self.assertIn(token.id, self.api._dacl_released)
+
+        # Exact trace sequence:
+        #   ['acquire', *steps up to and including fault_point, 'release']
+        fault_idx = self._ALL_INSPECT_STEPS.index(fault_point)
+        expected_trace = (
+            ["acquire"]
+            + self._ALL_INSPECT_STEPS[:fault_idx + 1]
+            + ["release"]
+        )
+        trace = self.api._dacl_trace
+        self.assertEqual(trace, expected_trace,
+            f"{fault_point}: trace mismatch\nexpected: {expected_trace}\ngot:      {trace}")
+
+        # Later inspection steps NOT reached (redundant given exact match above)
+        for later in self._ALL_INSPECT_STEPS[fault_idx + 1:]:
+            self.assertNotIn(later, trace,
+                f"later step '{later}' must NOT be reached after '{fault_point}' fails")
+
+    def test_release_only_fault_no_primary_cleanup(self):
+        """Release fault with no inspection fault → no‑primary cleanup error."""
+        self.api._dacl_fault_points["release"] = SecureStorePermissionError("release fail")
+        h = self._live_handle()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.read_dacl_snapshot(h)
+        exc = ctx.exception
+        self.assertIn("Cleanup failure", str(exc))
+        self.assertEqual(len(exc.cleanup_errors), 1)  # type: ignore[attr-defined]
+        self.assertIn("release fail", str(exc.cleanup_errors[0]))  # type: ignore[attr-defined]
+        self.assertEqual(self.api._dacl_release_attempts, 1)
+        self.assertEqual(self.api._dacl_release_successes, 0)
+
+    def test_primary_plus_release_rethrows_same_object(self):
+        """Inspection fault + release fault → same primary re‑raised,
+        release fault appended to cleanup_errors."""
+        primary = SecureStorePermissionError("inspect primary")
+        primary.cleanup_errors = ()  # type: ignore[attr-defined]
+        self.api._dacl_primary_hook = primary
+        self.api._dacl_inspect_faults["get_ace"] = primary
+        self.api._dacl_fault_points["release"] = SecureStorePermissionError("release fault")
+
+        h = self._live_handle()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.read_dacl_snapshot(h)
+
+        raised = ctx.exception
+        self.assertIs(raised, primary, "must re‑raise the same primary object")
+        errs = raised.cleanup_errors  # type: ignore[attr-defined]
+        self.assertIn("release fault", str(errs[-1]))
+        self.assertEqual(self.api._dacl_release_attempts, 1)
+        self.assertEqual(self.api._dacl_release_successes, 0)
+
+    def test_success_snapshot_tuple_independent(self):
+        """After release, snapshot aces tuple and SID bytes are independent."""
+        h = self._live_handle()
+        snap1 = self.api.read_dacl_snapshot(h)
+        tup1 = snap1.aces
+        self.assertIsInstance(tup1, tuple)
+        self.assertEqual(len(tup1), 1)
+        sid1 = tup1[0].sid_bytes
+
+        # Second snapshot returns new object
+        snap2 = self.api.read_dacl_snapshot(h)
+        tup2 = snap2.aces
+        self.assertIsNot(tup1, tup2, "each snapshot must own its aces tuple")
+        self.assertEqual(len(tup2), 1)
+        self.assertIsNot(sid1, tup2[0].sid_bytes,
+            "SID bytes must be independently owned")
+
+        self.assertEqual(self.api._dacl_acquire_successes, 2)
+        self.assertEqual(self.api._dacl_release_successes, 2)
+
+    def test_post_release_borrow_rejected(self):
+        """After successful read_dacl_snapshot, token is released."""
+        h = self._live_handle()
+        self.api.read_dacl_snapshot(h)
+        # Token was released; verify via counter — no active tokens remain
+        self.assertEqual(len(self.api._dacl_released), 1)
+        self.assertEqual(self.api._dacl_release_successes, 1)
+
+    def test_double_release_rejected(self):
+        """Re‑releasing an already‑released token raises RuntimeError."""
+        h = self._live_handle()
+        self.api.read_dacl_snapshot(h)
+        # The token is already released. A second "double release" scenario
+        # would be calling _release_token on a released token.
+        # Use a direct test of the underlying method.
+        t = self.api._acquire_token()
+        self.api._release_token(t)
+        with self.assertRaises(RuntimeError):
+            self.api._release_token(t)
+
+    def test_failed_release_not_borrowable(self):
+        """After failed release (state=attempted_failed), re‑release rejected."""
+        h = self._live_handle()
+        self.api._dacl_fault_points["release"] = SecureStorePermissionError("rel fail")
+        with self.assertRaises(SecureStorePermissionError):
+            self.api.read_dacl_snapshot(h)
+
+        # Underlying token is in attempted_failed state
+        self.assertEqual(len(self.api._dacl_tokens), 1)
+        token = self.api._dacl_tokens[0]
+        self.assertEqual(token.state, "attempted_failed")
+        # Re‑release rejected
+        with self.assertRaises(RuntimeError):
+            self.api._release_token(token)
+        self.assertEqual(self.api._dacl_release_successes, 0)
+
+
+# ============================================================================
+# P2-A: Handle‑ownership gate + RootDirectory rejection  (restored, after _FakeLowLevelAPI)
+# ============================================================================
+
+
+class TestHandleOwnershipGatePerOp(_ut.TestCase):
+    """All handle‑taking seams reject after close, after transfer,
+    and reject unknown handle."""
+
+    def setUp(self):
+        self.api = _FakeLowLevelAPI()
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+
+    def _live_handle(self):
+        return self.api.open_root("C:\\")
+
+    def _closed_handle(self):
+        h = self.api.open_root("C:\\")
+        self.api.close_handle(h)
+        return h
+
+    def _transferred_handle(self):
+        h = self.api.open_root("C:\\")
+        self.api.open_osfhandle(h)
+        return h
+
+    def test_all_seams_reject_after_close(self):
+        h = self._closed_handle()
+        seams = [
+            ("get_file_info", lambda: self.api.get_file_info(h)),
+            ("get_file_type", lambda: self.api.get_file_type(h)),
+            ("get_handle_identity", lambda: self.api.get_handle_identity(h)),
+            ("read_dacl_snapshot", lambda: self.api.read_dacl_snapshot(h)),
+            ("set_delete_disposition", lambda: self.api.set_delete_disposition(h)),
+            ("close_handle", lambda: self.api.close_handle(h)),
+            ("open_osfhandle", lambda: self.api.open_osfhandle(h)),
+        ]
+        for name, fn in seams:
+            with self.subTest(seam=name):
+                with self.assertRaises(OSError, msg=f"{name} must reject closed handle"):
+                    fn()
+
+    def test_all_seams_reject_after_transfer(self):
+        h = self._transferred_handle()
+        seams = [
+            ("get_file_info", lambda: self.api.get_file_info(h)),
+            ("get_file_type", lambda: self.api.get_file_type(h)),
+            ("get_handle_identity", lambda: self.api.get_handle_identity(h)),
+            ("read_dacl_snapshot", lambda: self.api.read_dacl_snapshot(h)),
+            ("set_delete_disposition", lambda: self.api.set_delete_disposition(h)),
+            ("close_handle", lambda: self.api.close_handle(h)),
+            ("open_osfhandle", lambda: self.api.open_osfhandle(h)),
+        ]
+        for name, fn in seams:
+            with self.subTest(seam=name):
+                with self.assertRaises(OSError, msg=f"{name} must reject transferred handle"):
+                    fn()
+
+    def test_all_seams_reject_unknown_handle(self):
+        unknown = 99999
+        seams = [
+            ("get_file_info", lambda: self.api.get_file_info(unknown)),
+            ("get_file_type", lambda: self.api.get_file_type(unknown)),
+            ("get_handle_identity", lambda: self.api.get_handle_identity(unknown)),
+            ("read_dacl_snapshot", lambda: self.api.read_dacl_snapshot(unknown)),
+            ("set_delete_disposition", lambda: self.api.set_delete_disposition(unknown)),
+            ("close_handle", lambda: self.api.close_handle(unknown)),
+            ("open_osfhandle", lambda: self.api.open_osfhandle(unknown)),
+        ]
+        for name, fn in seams:
+            with self.subTest(seam=name):
+                with self.assertRaises(OSError, msg=f"{name} must reject unknown handle"):
+                    fn()
+
+    def test_double_close_rejected(self):
+        h = self._live_handle()
+        self.api.close_handle(h)
+        with self.assertRaises(OSError):
+            self.api.close_handle(h)
+
+    def test_nt_create_rejects_closed_root(self):
+        root = self._live_handle()
+        self.api.close_handle(root)
+        h, st, info = self.api.nt_create_file(
+            "child", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(h, 0)
+        self.assertEqual(st, _STATUS_ACCESS_DENIED)
+        self.assertEqual(info, 0)
+
+
+class TestRootDirectoryRejection(_ut.TestCase):
+    def setUp(self):
+        self.api = _FakeLowLevelAPI()
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+
+    def test_transferred_root_rejected(self):
+        root = self.api.open_root("C:\\")
+        self.api.open_osfhandle(root)
+        h, st, info = self.api.nt_create_file(
+            "child", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(h, 0)
+        self.assertEqual(st, _STATUS_ACCESS_DENIED)
+        self.assertEqual(info, 0)
+
+    def test_unknown_root_rejected(self):
+        h, st, info = self.api.nt_create_file(
+            "child", 99999, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(h, 0)
+        self.assertEqual(st, _STATUS_ACCESS_DENIED)
+        self.assertEqual(info, 0)
+
+
+# ============================================================================
+# P2-B: Fake low-level API tests (existing)
+# ============================================================================
+
+
+class TestFakeLowLevelAPI(_ut.TestCase):
+    def setUp(self):
+        self.api = _FakeLowLevelAPI()
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+
+    def test_trace_records_calls(self):
+        hid = self.api.open_root("C:\\")
+        self.assertEqual(len(self.api.trace), 1)
+        self.assertEqual(self.api.trace[0][0], "open_root")
+
+    def test_live_handle_creation(self):
+        hid = self.api.open_root("C:\\")
+        self.assertIn(hid, self.api._live_handles)
+        inst = self.api._live_handles[hid]
+        self.assertFalse(inst.closed)
+        self.assertFalse(inst.transferred)
+
+    def test_close_marks_handle_closed(self):
+        hid = self.api.open_root("C:\\")
+        self.api.close_handle(hid)
+        inst = self.api._live_handles[hid]
+        self.assertTrue(inst.closed)
+
+    def test_closed_handle_rejected_in_nt_create(self):
+        hid = self.api.open_root("C:\\")
+        self.api.close_handle(hid)
+        h, st, info = self.api.nt_create_file(
+            "child", hid, _FILE_READ_ATTRIBUTES, 0, _FILE_OPEN, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(st, _STATUS_ACCESS_DENIED)
+        self.assertEqual(h, 0)
+
+    def test_closed_handle_rejected_in_get_file_info(self):
+        hid = self.api.open_root("C:\\")
+        self.api.close_handle(hid)
+        with self.assertRaises(OSError):
+            self.api.get_file_info(hid)
+
+    def test_closed_handle_rejected_in_get_file_type(self):
+        hid = self.api.open_root("C:\\")
+        self.api.close_handle(hid)
+        with self.assertRaises(OSError):
+            self.api.get_file_type(hid)
+
+    def test_transferred_handle_rejected(self):
+        hid = self.api.open_root("C:\\")
+        fd = self.api.open_osfhandle(hid)
+        self.assertGreater(fd, 1000)
+        with self.assertRaises(OSError):
+            self.api.get_file_info(hid)
+
+    def test_transferred_handle_not_re_openable(self):
+        hid = self.api.open_root("C:\\")
+        self.api.open_osfhandle(hid)
+        with self.assertRaises(OSError):
+            self.api.open_osfhandle(hid)
+
+    def test_reopen_same_object(self):
+        root = self.api.open_root("C:\\")
+        h1, st1, i1 = self.api.nt_create_file(
+            "f", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(i1, _FILE_CREATED_INFO)
+        self.api.close_handle(h1)
+        h2, st2, i2 = self.api.nt_create_file(
+            "f", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(i2, _FILE_OPENED_INFO)
+        self.assertNotEqual(h1, h2)
+        obj1 = self.api._live_handles[h1].obj_key
+        obj2 = self.api._live_handles[h2].obj_key
+        self.assertEqual(obj1, obj2)
+
+    def test_close_one_handle_leaves_other_live(self):
+        root = self.api.open_root("C:\\")
+        h1, _, _ = self.api.nt_create_file(
+            "shared", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.api.close_handle(h1)
+        h2, st2, i2 = self.api.nt_create_file(
+            "shared", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(i2, _FILE_OPENED_INFO)
+        self.assertNotEqual(h1, h2)
+
+    def test_nt_create_relative_uses_root_directory(self):
+        root = self.api.open_root("C:\\")
+        child, st, info = self.api.nt_create_file(
+            "child", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(st, _STATUS_SUCCESS)
+        self.assertEqual(info, _FILE_CREATED_INFO)
+
+    def test_nt_create_file_open_nonexistent(self):
+        root = self.api.open_root("C:\\")
+        h, st, info = self.api.nt_create_file(
+            "missing", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(st, _STATUS_OBJECT_NAME_NOT_FOUND)
+
+    def test_nt_create_file_create_collision(self):
+        root = self.api.open_root("C:\\")
+        h1, st1, info1 = self.api.nt_create_file(
+            "exists", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(info1, _FILE_CREATED_INFO)
+        h2, st2, info2 = self.api.nt_create_file(
+            "exists", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_CREATE, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(st2, _STATUS_OBJECT_NAME_COLLISION)
+
+    def test_nt_create_open_if_existing(self):
+        root = self.api.open_root("C:\\")
+        h1, st1, info1 = self.api.nt_create_file(
+            "exists", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(info1, _FILE_CREATED_INFO)
+        h2, st2, info2 = self.api.nt_create_file(
+            "exists", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(info2, _FILE_OPENED_INFO)
+
+    def test_get_handle_identity(self):
+        root = self.api.open_root("C:\\")
+        child, st, info = self.api.nt_create_file(
+            "child", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        ident = self.api.get_handle_identity(child)
+        self.assertEqual(len(ident), 3)
+
+    def test_get_file_info_reparse_detection(self):
+        root = self.api.open_root("C:\\")
+        child, st, info = self.api.nt_create_file(
+            "link", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        obj_key = self.api._live_handles[child].obj_key
+        self.api._namespace[obj_key]["reparse"] = True
+        file_info = self.api.get_file_info(child)
+        self.assertTrue(
+            file_info.dwFileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT
+        )
+
+    def test_dacl_snapshot_created_object(self):
+        root = self.api.open_root("C:\\")
+        child, st, info = self.api.nt_create_file(
+            "child", root, _FILE_READ_ATTRIBUTES, 0,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        snap = self.api.read_dacl_snapshot(child)
+        self.assertIsInstance(snap, DaclSnapshot)
+        self.assertTrue(snap.protected)
+        self.assertTrue(snap.dacl_present)
+        self.assertEqual(len(snap.aces), 2)
+
+    def test_delete_disposition(self):
+        root = self.api.open_root("C:\\")
+        self.api.set_delete_disposition(root)
+        ops = [t for t in self.api.trace if "delete_disposition" in t[0]]
+        self.assertEqual(len(ops), 1)
+
+    def test_drive_type_default_fixed(self):
+        dt = self.api.drive_type("C:\\")
+        self.assertEqual(dt, _DRIVE_FIXED)
+
+    def test_drive_type_custom(self):
+        self.api._drive_types["X:\\"] = _DRIVE_REMOTE
+        dt = self.api.drive_type("X:\\")
+        self.assertEqual(dt, _DRIVE_REMOTE)
+
+    def test_fault_injection(self):
+        self.api._faults["open_root"] = SecureStorePermissionError("injected")
+        with self.assertRaises(SecureStorePermissionError):
+            self.api.open_root("C:\\")
+
+    def test_close_unknown_handle_rejected(self):
+        with self.assertRaises(OSError):
+            self.api.close_handle(99999)
+
+
+# ============================================================================
+# P2‑B: _FakeLowLevelAPI_with_counter
+# ============================================================================
+
+
+class _FakeLowLevelAPI_with_counter(_FakeLowLevelAPI):
+    """Fake with per-handle attempt/success tracking for P2‑B ownership evidence."""
+
+    def __init__(self):
+        super().__init__()
+        self._last_traversal_start = 0
+        self._traversal_nt_create_hids: list[int] = []
+        self._traversal_root_hid: int = 0
+
+    def _start_traversal(self):
+        self._last_traversal_start = self._next_hid
+        self._traversal_nt_create_hids.clear()
+        self._traversal_root_hid = 0
+        self._close_attempts.clear()
+        self._close_successes.clear()
+        self._close_call_count = 0
+        self._close_call_order.clear()
+        self._liveness.clear()
+
+    def _traversal_acquired_handles(self) -> set:
+        s = set(self._traversal_nt_create_hids)
+        if self._traversal_root_hid:
+            s.add(self._traversal_root_hid)
+        return s
+
+    def open_root(self, root: str) -> int:
+        hid = super().open_root(root)
+        self._traversal_root_hid = hid
+        return hid
+
+    def nt_create_file(self, *args, **kwargs) -> tuple[int, int, int]:
+        hid, st, info = super().nt_create_file(*args, **kwargs)
+        if hid > 0:
+            self._traversal_nt_create_hids.append(hid)
+        return (hid, st, info)
+
+
+# ============================================================================
+# P2‑B: Parser + base class
+# ============================================================================
+
+
+class TestParseFixedDriveComponents(_ut.TestCase):
+    def test_normal(self):
+        r, p = _parse_fixed_drive_components("C:\\Users\\u\\aisc")
+        self.assertEqual(r, "C:\\")
+        self.assertEqual(p, ["Users", "u", "aisc"])
+
+    def test_lowercase_drive(self):
+        r, p = _parse_fixed_drive_components("c:\\foo")
+        self.assertEqual(r.lower(), "c:\\")
+        self.assertEqual(p, ["foo"])
+
+    def test_rejects_non_ascii_drive(self):
+        with self.assertRaises(ValueError):
+            _parse_fixed_drive_components("\u00c9:\\foo")
+
+    def test_rejects_forward_slash(self):
+        with self.assertRaises(ValueError):
+            _parse_fixed_drive_components("C:\\Users/u")
+
+    def test_rejects_root_repeated_sep(self):
+        with self.assertRaises(ValueError):
+            _parse_fixed_drive_components("C:\\\\Users")
+
+    def test_rejects_repeated_backslash(self):
+        with self.assertRaises(ValueError):
+            _parse_fixed_drive_components("C:\\a\\\\b")
+
+    def test_rejects_trailing_backslash(self):
+        with self.assertRaises(ValueError):
+            _parse_fixed_drive_components("C:\\foo\\")
+
+    def test_rejects_unc(self):
+        with self.assertRaises(ValueError):
+            _parse_fixed_drive_components("\\\\server\\share\\foo")
+
+    def test_rejects_relative(self):
+        with self.assertRaises(ValueError):
+            _parse_fixed_drive_components("relative")
+
+    def test_rejects_drive_relative(self):
+        with self.assertRaises(ValueError):
+            _parse_fixed_drive_components("C:relative")
+
+    def test_rejects_reserved_component(self):
+        with self.assertRaises(ValueError):
+            _parse_fixed_drive_components("C:\\CON")
+
+    def test_rejects_char_matrix(self):
+        for ch in '<>"|?*':
+            with self.subTest(ch=ch):
+                with self.assertRaises(ValueError):
+                    _parse_fixed_drive_components(f"C:\\a{ch}b")
+
+    def test_parse_fails_before_any_api_call(self):
+        api = _FakeLowLevelAPI()
+        api._drive_types["C:\\"] = _DRIVE_FIXED
+        api.trace.clear()
+        with self.assertRaises(ValueError):
+            _traverse_retained_handle("C:\\Users/u", api)
+        self.assertEqual(len(api.trace), 0)
+
+
+class _TraversalTestBase(_ut.TestCase):
+    def setUp(self):
+        self.api = _FakeLowLevelAPI_with_counter()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+
+    def _build_path(self, components: list):
+        root = self.api.open_root("C:\\")
+        for comp in components:
+            child, st, info = self.api.nt_create_file(
+                comp, root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+                _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+            )
+            self.api.close_handle(root)
+            root = child
+        self.api.close_handle(root)
+
+
+# ============================================================================
+# Blocker #1: Three‑level exact-order with HANDLE IDs + liveness snapshots
+# ============================================================================
+
+
+class TestThreeLevelExactOrder(_TraversalTestBase):
+    def test_three_level_exact_order_with_handles(self):
+        self._build_path(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+        final_h = _traverse_retained_handle("C:\\Users\\u\\aisc", self.api)
+
+        events: list = []
+        for op, args, result in self.api.trace:
+            if op == "drive_type":
+                events.append(("drive_type", args[0]))
+            elif op == "open_root":
+                events.append(("open_root", args[0], result))
+            elif op == "nt_create_file":
+                events.append(("nt_create", args[0], args[1], result[0]))
+            elif op == "get_file_info":
+                events.append(("get_file_info", args[0]))
+            elif op == "get_file_type":
+                events.append(("get_file_type", args[0]))
+            elif op == "close_handle":
+                events.append(("close", args[0]))
+
+        self.assertEqual(len(events), 16)
+
+        # Root
+        self.assertEqual(events[0][0], "drive_type")
+        self.assertEqual(events[1][0], "open_root")
+        root_h = events[1][2]
+        self.assertGreater(root_h, 0)
+        self.assertEqual(events[2][0], "get_file_info")
+        self.assertEqual(events[2][1], root_h)
+        self.assertEqual(events[3][0], "get_file_type")
+        self.assertEqual(events[3][1], root_h)
+
+        # Level 1: Users
+        self.assertEqual(events[4][0], "nt_create")
+        self.assertEqual(events[4][1], "Users")
+        self.assertEqual(events[4][2], root_h)
+        users_h = events[4][3]
+        self.assertNotEqual(users_h, root_h)
+        self.assertEqual(events[5][0], "get_file_info")
+        self.assertEqual(events[5][1], users_h)
+        self.assertEqual(events[6][0], "get_file_type")
+        self.assertEqual(events[6][1], users_h)
+        self.assertEqual(events[7][0], "close")
+        self.assertEqual(events[7][1], root_h)
+
+        # Level 2: u
+        self.assertEqual(events[8][0], "nt_create")
+        self.assertEqual(events[8][1], "u")
+        self.assertEqual(events[8][2], users_h)
+        u_h = events[8][3]
+        self.assertNotEqual(u_h, users_h)
+        self.assertEqual(events[9][0], "get_file_info")
+        self.assertEqual(events[9][1], u_h)
+        self.assertEqual(events[10][0], "get_file_type")
+        self.assertEqual(events[10][1], u_h)
+        self.assertEqual(events[11][0], "close")
+        self.assertEqual(events[11][1], users_h)
+
+        # Level 3: aisc
+        self.assertEqual(events[12][0], "nt_create")
+        self.assertEqual(events[12][1], "aisc")
+        self.assertEqual(events[12][2], u_h)
+        aisc_h = events[12][3]
+        self.assertNotEqual(aisc_h, u_h)
+        self.assertEqual(events[13][0], "get_file_info")
+        self.assertEqual(events[13][1], aisc_h)
+        self.assertEqual(events[14][0], "get_file_type")
+        self.assertEqual(events[14][1], aisc_h)
+        self.assertEqual(events[15][0], "close")
+        self.assertEqual(events[15][1], u_h)
+
+        # Final
+        self.assertEqual(final_h, aisc_h)
+        self.assertFalse(self.api._live_handles[final_h].closed)
+        self.assertEqual(self.api._close_attempts.get(final_h, 0), 0)
+
+        # Liveness snapshots: every nt_create parent_live == True
+        for snap in self.api._liveness:
+            if snap["op"] == "nt_create_file":
+                self.assertTrue(snap["parent_live"],
+                    f"nt_create_file parent must be live: {snap}")
+            elif snap["op"] in ("get_file_info", "get_file_type"):
+                self.assertTrue(snap["handle_live"],
+                    f"{snap['op']} handle must be live: {snap}")
+
+        self.api.close_handle(final_h)
+
+
+# ============================================================================
+# Blocker #2: Success exact‑once ledger
+# ============================================================================
+
+
+class TestExactOnceLedger(_TraversalTestBase):
+    def test_success_exact_once_ledger(self):
+        self._build_path(["Users", "u"])
+        self.api._start_traversal()
+        final_h = _traverse_retained_handle("C:\\Users\\u", self.api)
+
+        acquired = self.api._traversal_acquired_handles()
+        self.assertEqual(len(acquired), 3,
+            f"Expected exactly 3 acquired (root+Users+u), got {len(acquired)}: {acquired}")
+        self.assertIn(final_h, acquired)
+
+        ancestors = acquired - {final_h}
+        self.assertEqual(len(ancestors), 2,
+            f"Expected exactly 2 ancestors, got {len(ancestors)}")
+
+        for hid in ancestors:
+            self.assertEqual(self.api._close_attempts.get(hid, 0), 1)
+            self.assertEqual(self.api._close_successes.get(hid, 0), 1)
+            self.assertTrue(self.api._live_handles[hid].closed)
+
+        self.assertFalse(self.api._live_handles[final_h].closed)
+        self.assertEqual(self.api._close_attempts.get(final_h, 0), 0)
+
+        self.api.close_handle(final_h)
+        self.assertEqual(self.api._close_attempts[final_h], 1)
+        self.assertEqual(self.api._close_successes[final_h], 1)
+        self.assertTrue(self.api._live_handles[final_h].closed)
+
+        # After caller close: every acquired handle attempts == 1 exactly
+        for hid in acquired:
+            self.assertEqual(self.api._close_attempts.get(hid, 0), 1,
+                f"Handle {hid}: attempts={self.api._close_attempts.get(hid,0)}, required 1")
+
+    def test_acquired_exact_classification(self):
+        self._build_path(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        final_h = _traverse_retained_handle("C:\\Users\\u\\aisc", self.api)
+
+        acquired = self.api._traversal_acquired_handles()
+        self.assertEqual(len(acquired), 4)
+
+        closed_ancestors = {h for h in acquired
+                            if h != final_h and self.api._live_handles[h].closed}
+        unclosed = {h for h in acquired if not self.api._live_handles[h].closed}
+        self.assertEqual(unclosed, {final_h})
+        self.assertEqual(closed_ancestors | unclosed, acquired)
+        self.assertEqual(closed_ancestors & unclosed, set())
+
+        self.api.close_handle(final_h)
+
+
+# ============================================================================
+# Blocker #3: Parent‑close failure — exact ledger, no weak assertions
+# ============================================================================
+
+
+class TestParentCloseFailure(_TraversalTestBase):
+    def test_root_close_failure_after_first_child(self):
+        self._build_path(["Users", "u"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        # Nth close = 1: root is first close during traversal
+        self.api._close_fault_nth = 1
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\Users\\u", self.api)
+        exc = ctx.exception
+        self.assertIn("Cleanup failure", str(exc))
+        errs = exc.cleanup_errors  # type: ignore[attr-defined]
+        # Only parent close error (child unwind succeeds, so exactly 1 cleanup error)
+        self.assertEqual(len(errs), 1,
+            f"cleanup_errors must be exactly (parent_close_error,), got {errs}")
+        self.assertIn("Nth close fault", str(errs[0]))
+
+        # Root HID from trace: root close attempt=1, success=0
+        root_hid = None
+        child_hid = None
+        for t in self.api.trace:
+            if t[0] == "open_root":
+                root_hid = t[2]
+            if t[0] == "nt_create_file" and t[1][0] == "Users":
+                child_hid = t[2][0]
+        self.assertIsNotNone(root_hid)
+        self.assertIsNotNone(child_hid)
+        self.assertEqual(self.api._close_attempts.get(root_hid, 0), 1)
+        self.assertEqual(self.api._close_successes.get(root_hid, 0), 0)  # failed
+        # Child unwind: close succeeds
+        self.assertEqual(self.api._close_attempts.get(child_hid, 0), 1)
+        self.assertEqual(self.api._close_successes.get(child_hid, 0), 1)
+        self.assertTrue(self.api._live_handles[child_hid].closed)
+
+        # No subsequent component after failure
+        nt_names = [t[1][0] for t in self.api.trace if t[0] == "nt_create_file"]
+        self.assertNotIn("u", nt_names,
+            f"No 'u' open allowed after root close failure; got {nt_names}")
+
+    def test_mid_parent_close_failure_no_next_component(self):
+        self._build_path(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        self.api._close_fault_nth = 2  # root=1st, Users=2nd (fails)
+
+        with self.assertRaises(SecureStorePermissionError):
+            _traverse_retained_handle("C:\\Users\\u\\aisc", self.api)
+
+        # Root: 1st close, succeeds
+        root_hid = None
+        users_hid = None
+        u_hid = None
+        for t in self.api.trace:
+            if t[0] == "open_root":
+                root_hid = t[2]
+            if t[0] == "nt_create_file" and t[1][0] == "Users":
+                users_hid = t[2][0]
+            if t[0] == "nt_create_file" and t[1][0] == "u":
+                u_hid = t[2][0]
+
+        self.assertIsNotNone(root_hid)
+        self.assertIsNotNone(users_hid)
+        self.assertIsNotNone(u_hid)
+        # Root: attempt=1, success=1, closed
+        self.assertEqual(self.api._close_attempts.get(root_hid, 0), 1)
+        self.assertEqual(self.api._close_successes.get(root_hid, 0), 1)
+        self.assertTrue(self.api._live_handles[root_hid].closed)
+        # Users (failed parent): attempt=1, success=0
+        self.assertEqual(self.api._close_attempts.get(users_hid, 0), 1)
+        self.assertEqual(self.api._close_successes.get(users_hid, 0), 0)
+        # u (validated child unwind): attempt=1, success=1, closed
+        self.assertEqual(self.api._close_attempts.get(u_hid, 0), 1)
+        self.assertEqual(self.api._close_successes.get(u_hid, 0), 1)
+        self.assertTrue(self.api._live_handles[u_hid].closed)
+
+        # No "aisc" open
+        nt_names = [t[1][0] for t in self.api.trace if t[0] == "nt_create_file"]
+        self.assertNotIn("aisc", nt_names)
+
+    def test_child_unwind_close_also_fails(self):
+        """Parent close + child unwind both fail → cleanup_errors == (p_err, c_err)."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        self.api._faults["close_handle"] = OSError("global close fault")
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        exc = ctx.exception
+        errs = exc.cleanup_errors  # type: ignore[attr-defined]
+        self.assertEqual(len(errs), 2,
+            f"cleanup_errors must be exactly (parent_err, child_err), got {len(errs)}: {errs}")
+        self.assertIn("global close fault", str(errs[0]))
+        self.assertIn("global close fault", str(errs[1]))
+
+        # Both handles: attempt=1, success=0
+        for hid, att in self.api._close_attempts.items():
+            self.assertEqual(att, 1, f"Handle {hid}: attempt={att}, must be 1")
+            self.assertEqual(self.api._close_successes.get(hid, 0), 0,
+                f"Handle {hid}: success must be 0")
+
+    def test_global_close_failure_both_parent_child_noniterative(self):
+        """Global close fault → exact acquired={root,child}, attempts 1/1,
+        successes 0/0, neither closed, no later open, cleanup ordered parent→child.
+
+        All ledger assertions use direct key access — never iterate potentially
+        empty dicts.
+        """
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        self.api._faults["close_handle"] = OSError("global close fault")
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        exc = ctx.exception
+        errs = exc.cleanup_errors  # type: ignore[attr-defined]
+        self.assertEqual(len(errs), 2,
+            f"expected exactly 2 cleanup errors (parent, child), got {len(errs)}")
+        self.assertIn("global close fault", str(errs[0]),
+            "first cleanup error must be parent close fault")
+        self.assertIn("global close fault", str(errs[1]),
+            "second cleanup error must be child close fault")
+
+        # Acquired set: exact {root, child} — get handles from trace
+        root_hid = None
+        child_hid = None
+        for t in self.api.trace:
+            if t[0] == "open_root":
+                root_hid = t[2]
+            if t[0] == "nt_create_file" and t[1][0] == "Users":
+                child_hid = t[2][0]
+        self.assertIsNotNone(root_hid, "root handle must be present in trace")
+        self.assertIsNotNone(child_hid, "child handle must be present in trace")
+
+        acquired = self.api._traversal_acquired_handles()
+        self.assertEqual(acquired, {root_hid, child_hid},
+            f"acquired set must be exactly {{root, child}}, got {acquired}")
+
+        # Non-iterative ledger assertions: direct .get(key, default)
+        self.assertEqual(self.api._close_attempts.get(root_hid, -999), 1,
+            f"root {root_hid}: close_attempts must be 1")
+        self.assertEqual(self.api._close_attempts.get(child_hid, -999), 1,
+            f"child {child_hid}: close_attempts must be 1")
+        self.assertEqual(self.api._close_successes.get(root_hid, 0), 0,
+            f"root {root_hid}: close_successes must be 0")
+        self.assertEqual(self.api._close_successes.get(child_hid, 0), 0,
+            f"child {child_hid}: close_successes must be 0")
+
+        # Both handles remain NOT closed
+        self.assertFalse(self.api._live_handles[root_hid].closed,
+            f"root {root_hid} must not be marked closed")
+        self.assertFalse(self.api._live_handles[child_hid].closed,
+            f"child {child_hid} must not be marked closed")
+
+        # No subsequent component open after failure
+        nt_names = [t[1][0] for t in self.api.trace if t[0] == "nt_create_file"]
+        self.assertEqual(nt_names, ["Users"],
+            f"only 'Users' open allowed, got {nt_names}")
+
+        # close_call_order captures attempts in order: root then child
+        self.assertEqual(len(self.api._close_call_order), 2)
+        self.assertEqual(self.api._close_call_order[0], root_hid,
+            "first close attempt must be root")
+        self.assertEqual(self.api._close_call_order[1], child_hid,
+            "second close attempt must be child")
+
+    def test_validation_primary_plus_close_failure_assertis(self):
+        """Validation failure primary + close failure → assertIs identity."""
+        self._build_path(["Users"])
+        for key in self.api._namespace:
+            if "Users" in key.split(":")[-1]:
+                self.api._namespace[key]["attrs"] = _FILE_ATTRIBUTE_NORMAL
+
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        # Set up: _on_child_created will add child HID to _info_fault_obj
+        # with a pre-created primary exception
+        validation_primary = SecureStorePermissionError("injected validation fault")
+
+        def on_child(hid, name):
+            if name == "Users":
+                self.api._info_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+        self.api._faults["close_handle"] = OSError("cleanup close failure")
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        raised = ctx.exception
+        self.assertIs(raised, validation_primary,
+                      "raised must be the same object as the injected validation primary")
+        self.assertIsInstance(raised, SecureStorePermissionError)
+        self.assertIn("injected validation fault", str(raised))
+        errs = raised.cleanup_errors  # type: ignore[attr-defined]
+        # Both root and child close fail (global close fault) → 2 cleanup errors
+        self.assertEqual(len(errs), 2,
+            f"cleanup_errors must be exactly (root_close_err, child_close_err), got {len(errs)}")
+        self.assertIn("cleanup close failure", str(errs[0]))
+        self.assertIn("cleanup close failure", str(errs[1]))
+        # Validation primary is NOT in its own cleanup_errors
+        self.assertNotIn("injected validation fault", str(errs))
+
+
+# ============================================================================
+# Blocker #4: Validation matrix — per‑HANDLE faults hit target
+# ============================================================================
+
+
+class TestValidationMatrix(_TraversalTestBase):
+    # --- Root validation ---
+
+    def test_root_reparse_rejected(self):
+        self._build_path([])
+        for key in self.api._namespace:
+            self.api._namespace[key]["reparse"] = True
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\", self.api)
+        self.assertIn("reparse", str(ctx.exception).lower())
+
+    def test_root_not_directory_rejected(self):
+        self._build_path([])
+        for key in self.api._namespace:
+            self.api._namespace[key]["attrs"] = _FILE_ATTRIBUTE_NORMAL
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\", self.api)
+        self.assertIn("not a directory", str(ctx.exception).lower())
+
+    def test_root_not_disk_rejected(self):
+        self._build_path([])
+        for key in self.api._namespace:
+            self.api._namespace[key]["file_type"] = _FILE_TYPE_UNKNOWN
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\", self.api)
+        self.assertIn("DISK", str(ctx.exception))
+
+    def test_root_get_file_info_exception_per_handle(self):
+        """Root info fault via _info_fault_obj — exact object, root HID only."""
+        fault_obj = OSError("root info fault")
+        self.api._start_traversal()
+        self.api.trace.clear()
+        # Hook: add root HID to fault obj when open_root fires
+        def on_open_root():
+            # After open_root, the latest HID is _traversal_root_hid
+            pass
+        # Simpler: use _info_fault_hids with root HID known after traversal
+        # Actually: pre-open root to get its HID, then set fault
+        probe = self.api.open_root("C:\\")
+        self.api._info_fault_obj[probe] = fault_obj
+        self.api.close_handle(probe)
+        # Re-open during traversal will get a different HID, but...
+        # Better approach: intercept via _on_child_created is for nt_create_file only.
+        # For root: use the global fault but assert on root HID from trace.
+        # OR: use _info_fault_hids set and populate after open_root via hook.
+        # Let me do this cleanly: after traversal fails, check which handle was hit.
+        self.api._start_traversal()
+        self.api.trace.clear()
+        # Pre-set fault on the NEXT root HID that will be opened
+        # The traversal starts at _next_hid, the root open uses that.
+        next_root = self.api._next_hid
+        self.api._info_fault_obj[next_root] = fault_obj
+        with self.assertRaises(OSError) as ctx:
+            _traverse_retained_handle("C:\\", self.api)
+        self.assertIs(ctx.exception, fault_obj)
+        # Verify fault was on root HID
+        for t in self.api.trace:
+            if t[0] == "open_root":
+                self.assertEqual(t[2], next_root)
+
+    def test_root_get_file_type_exception_per_handle(self):
+        fault_obj = OSError("root type fault")
+        self.api._start_traversal()
+        self.api.trace.clear()
+        next_root = self.api._next_hid
+        self.api._type_fault_obj[next_root] = fault_obj
+        with self.assertRaises(OSError) as ctx:
+            _traverse_retained_handle("C:\\", self.api)
+        self.assertIs(ctx.exception, fault_obj)
+
+    # --- Child validation ---
+
+    def test_child_reparse_rejected(self):
+        self._build_path(["Users"])
+        for key in self.api._namespace:
+            if "Users" in key.split(":")[-1]:
+                self.api._namespace[key]["reparse"] = True
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        self.assertIn("reparse", str(ctx.exception).lower())
+
+    def test_child_not_directory_rejected(self):
+        self._build_path(["Users"])
+        for key in self.api._namespace:
+            if "Users" in key.split(":")[-1]:
+                self.api._namespace[key]["attrs"] = _FILE_ATTRIBUTE_NORMAL
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        self.assertIn("not a directory", str(ctx.exception).lower())
+
+    def test_child_not_disk_rejected(self):
+        self._build_path(["Users"])
+        for key in self.api._namespace:
+            if "Users" in key.split(":")[-1]:
+                self.api._namespace[key]["file_type"] = _FILE_TYPE_UNKNOWN
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        self.assertIn("DISK", str(ctx.exception))
+
+    def test_child_get_file_info_exception_exact_handle(self):
+        """Child info fault via _info_fault_obj — hits child only, not root."""
+        fault_obj = OSError("child info fault")
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        def on_child(hid, name):
+            if name == "Users":
+                self.api._info_fault_obj[hid] = fault_obj
+
+        self.api._on_child_created = on_child
+        with self.assertRaises(OSError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        self.assertIs(ctx.exception, fault_obj)
+        # Verify trace: root was validated (get_file_info succeeded for root),
+        # then child nt_create succeeded, then child get_file_info raised
+        root_info_calls = [t for t in self.api.trace
+                          if t[0] == "get_file_info"]
+        self.assertGreaterEqual(len(root_info_calls), 1)
+        # Root+child both closed by finally
+        for hid in self.api._close_attempts:
+            self.assertEqual(self.api._close_attempts[hid], 1)
+            self.assertEqual(self.api._close_successes[hid], 1)
+        # No further component open
+        nt_names = [t[1][0] for t in self.api.trace if t[0] == "nt_create_file"]
+        self.assertEqual(len(nt_names), 1)
+        self.assertEqual(nt_names[0], "Users")
+
+    def test_child_get_file_type_exception_exact_handle(self):
+        """Child type fault via _type_fault_obj — hits child only."""
+        fault_obj = OSError("child type fault")
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        def on_child(hid, name):
+            if name == "Users":
+                self.api._type_fault_obj[hid] = fault_obj
+
+        self.api._on_child_created = on_child
+        with self.assertRaises(OSError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        self.assertIs(ctx.exception, fault_obj)
+        # No further component
+        nt_names = [t[1][0] for t in self.api.trace if t[0] == "nt_create_file"]
+        self.assertEqual(len(nt_names), 1)
+
+    # --- Child validation primary + cleanup close (assertIs) ---
+
+    def test_child_validation_primary_plus_cleanup_close(self):
+        """Child validation primary + close failure → assertIs identity."""
+        validation_primary = SecureStorePermissionError("injected child validation fault")
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        def on_child(hid, name):
+            if name == "Users":
+                self.api._info_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+        self.api._faults["close_handle"] = OSError("cleanup close failure")
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        raised = ctx.exception
+        self.assertIs(raised, validation_primary)
+        self.assertIsInstance(raised, SecureStorePermissionError)
+        self.assertIn("injected child validation fault", str(raised))
+        errs = raised.cleanup_errors  # type: ignore[attr-defined]
+        # Both root and child close fail → 2 cleanup errors
+        self.assertEqual(len(errs), 2,
+            f"Expected 2 cleanup errors (root+child close fail), got {len(errs)}")
+        self.assertIn("cleanup close failure", str(errs[0]))
+        self.assertIn("cleanup close failure", str(errs[1]))
+        self.assertNotIn("injected child validation fault", str(errs))
+
+        # No next relative open
+        nt_names = [t[1][0] for t in self.api.trace if t[0] == "nt_create_file"]
+        self.assertEqual(len(nt_names), 1)
+        self.assertEqual(nt_names[0], "Users")
+
+        # Root+child each attempt=1, success=0
+        for hid in self.api._close_attempts:
+            self.assertEqual(self.api._close_attempts[hid], 1)
+        for hid in self.api._close_successes:
+            self.assertEqual(self.api._close_successes[hid], 0)
+
+
+# ============================================================================
+# Blocker #5: Traversal NTSTATUS seam — exact ledger, signed ntstatus, no child
+# ============================================================================
+
+
+class TestTraversalNTSTATUSSeam(_TraversalTestBase):
+    def test_status_access_denied(self):
+        self._build_path(["Users"])
+        self.api._nt_status_map["Users"] = _STATUS_ACCESS_DENIED
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_ACCESS_DENIED).value)
+        self.assertTrue(hasattr(exc, "winerror"))
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+        # Exactly 1 acquired: root only (no child HANDLE)
+        acquired = self.api._traversal_acquired_handles()
+        self.assertEqual(len(acquired), 1,
+            f"Expected exactly 1 acquired (root only), got {len(acquired)}: {acquired}")
+
+        # Root exact‑once close
+        root_hid = None
+        for t in self.api.trace:
+            if t[0] == "open_root":
+                root_hid = t[2]
+                break
+        self.assertIsNotNone(root_hid)
+        self.assertEqual(self.api._close_attempts.get(root_hid, 0), 1)
+        self.assertEqual(self.api._close_successes.get(root_hid, 0), 1)
+        self.assertTrue(self.api._live_handles[root_hid].closed)
+
+    def test_status_sharing_violation(self):
+        self._build_path(["Users"])
+        self.api._nt_status_map["Users"] = _STATUS_SHARING_VIOLATION
+        self.api._start_traversal()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_SHARING_VIOLATION).value)
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+        acquired = self.api._traversal_acquired_handles()
+        self.assertEqual(len(acquired), 1)
+
+    def test_not_found_signed_ntstatus_winerror_precise(self):
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _traverse_retained_handle("C:\\Users\\Missing", self.api)
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value)
+        self.assertTrue(hasattr(exc, "winerror"))
+        self.assertEqual(exc.winerror, _ERROR_FILE_NOT_FOUND)  # type: ignore[attr-defined]
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+        root_hid = None
+        for t in self.api.trace:
+            if t[0] == "open_root":
+                root_hid = t[2]
+                break
+        self.assertIsNotNone(root_hid)
+        self.assertEqual(self.api._close_attempts.get(root_hid, 0), 1)
+        self.assertEqual(self.api._close_successes.get(root_hid, 0), 1)
+        self.assertTrue(self.api._live_handles[root_hid].closed)
+
+        # Missing returned (0, status, 0)
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "Missing":
+                self.assertEqual(t[2][0], 0)
+
+        # Only root + Users (validated before Missing) acquired; no child for Missing
+        acquired = self.api._traversal_acquired_handles()
+        # root + Users = 2 acquired
+        self.assertEqual(len(acquired), 2)
+
+    def test_not_found_mapper_317_no_winerror(self):
+        def mapper_317(st):
+            return 317
+        self._build_path([])
+        self.api.ntstatus_to_winerror = mapper_317
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _traverse_retained_handle("C:\\Nonexistent", self.api)
+        exc = ctx.exception
+        self.assertFalse(hasattr(exc, "winerror"))
+        self.assertTrue(hasattr(exc, "ntstatus"))
+        self.assertEqual(exc.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value)
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+        # Root exact‑once close, only root acquired
+        acquired = self.api._traversal_acquired_handles()
+        self.assertEqual(len(acquired), 1)
+
+    def test_not_found_mapper_self_map_no_winerror(self):
+        def mapper_self(st):
+            return _ct.c_uint32(st).value
+        self._build_path(["Users"])
+        self.api.ntstatus_to_winerror = mapper_self
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _traverse_retained_handle("C:\\Nonexistent", self.api)
+        exc = ctx.exception
+        self.assertFalse(hasattr(exc, "winerror"))
+        self.assertEqual(exc.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value)
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+    def test_not_found_mapper_exception_no_winerror(self):
+        def mapper_fail(st):
+            raise RuntimeError("unavailable")
+        self._build_path(["Users"])
+        self.api.ntstatus_to_winerror = mapper_fail
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _traverse_retained_handle("C:\\Nonexistent", self.api)
+        exc = ctx.exception
+        self.assertFalse(hasattr(exc, "winerror"))
+        self.assertEqual(exc.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value)
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+    def test_status_primary_plus_parent_cleanup_close_failure(self):
+        self._build_path(["Users"])
+        self.api._nt_status_map["Users"] = _STATUS_ACCESS_DENIED
+        self.api._start_traversal()
+        self.api._faults["close_handle"] = OSError("parent close fault")
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("C:\\Users", self.api)
+        raised = ctx.exception
+        self.assertIsInstance(raised, SecureStorePermissionError)
+        self.assertEqual(raised.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_ACCESS_DENIED).value)
+        errs = raised.cleanup_errors  # type: ignore[attr-defined]
+        self.assertEqual(len(errs), 1)
+        self.assertIn("parent close fault", str(errs[0]))
+
+
+# ============================================================================
+# Blocker #6: Honesty cleanup
+# ============================================================================
+
+
+class TestTraversalFinalGateHonesty(_TraversalTestBase):
+    def test_root_only_final_live(self):
+        self.api._start_traversal()
+        h = _traverse_retained_handle("C:\\", self.api)
+        self.assertGreater(h, 0)
+        self.assertFalse(self.api._live_handles[h].closed)
+        self.assertEqual(self.api._close_attempts.get(h, 0), 0)
+        self.api.close_handle(h)
+        self.assertEqual(self.api._close_attempts[h], 1)
+        self.assertEqual(self.api._close_successes[h], 1)
+
+    def test_non_fixed_drive_rejected(self):
+        self.api._drive_types["D:\\"] = _DRIVE_REMOTE
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_retained_handle("D:\\foo", self.api)
+        self.assertIn("DRIVE_FIXED", str(ctx.exception))
+
+    def test_drive_type_before_any_open(self):
+        self.api._drive_types["X:\\"] = _DRIVE_UNKNOWN
+        self.api.trace.clear()
+        with self.assertRaises(SecureStorePermissionError):
+            _traverse_retained_handle("X:\\foo", self.api)
+        ops = [t[0] for t in self.api.trace]
+        self.assertIn("drive_type", ops)
+        self.assertNotIn("open_root", ops)
+
+
+# ============================================================================
+# P2‑C: traverse-or-create directory leaf  (FILE_OPEN_IF)
+# ============================================================================
+
+
+class _TraverseOrCreateTestBase(_ut.TestCase):
+    """Base class for P2‑C tests — shared fake setup / helpers."""
+
+    def setUp(self):
+        self.api = _FakeLowLevelAPI_with_counter()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+
+    def _build_path(self, components: list):
+        """Pre-create namespace entries so parent traversal succeeds."""
+        root = self.api.open_root("C:\\")
+        for comp in components:
+            child, st, info = self.api.nt_create_file(
+                comp, root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+                _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+            )
+            self.api.close_handle(root)
+            root = child
+        self.api.close_handle(root)
+
+
+class TestFileOpenIfCreatedClassification(_TraverseOrCreateTestBase):
+    """FILE_OPEN_IF → FILE_CREATED_INFO when leaf does not exist."""
+
+    def test_created_classification(self):
+        """Pre-create parent only; leaf absent → created=True."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        handle, created = _traverse_or_create_directory(
+            "C:\\Users\\newdir", self.api,
+        )
+        try:
+            self.assertTrue(created, "Leaf must be classified as created")
+            self.assertGreater(handle, 0)
+            # Verify trace: last nt_create returned FILE_CREATED_INFO
+            for t in self.api.trace:
+                if t[0] == "nt_create_file" and t[1][0] == "newdir":
+                    self.assertEqual(t[2][2], _FILE_CREATED_INFO)
+        finally:
+            self.api.close_handle(handle)
+
+    def test_created_info_value_exact(self):
+        """IOSB Information==FILE_CREATED_INFO (1) on create."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+
+        handle, created = _traverse_or_create_directory(
+            "C:\\Users\\leaf", self.api,
+        )
+        try:
+            self.assertTrue(created)
+            # Check the namespace entry was created
+            obj_key = self.api._live_handles[handle].obj_key
+            self.assertIn(obj_key, self.api._namespace)
+            self.assertEqual(self.api._namespace[obj_key]["type"], "directory")
+        finally:
+            self.api.close_handle(handle)
+
+    def test_created_info_is_not_opened(self):
+        """Created leaf must NOT report FILE_OPENED_INFO."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+
+        handle, created = _traverse_or_create_directory(
+            "C:\\Users\\leaf2", self.api,
+        )
+        try:
+            self.assertTrue(created)
+            for t in self.api.trace:
+                if t[0] == "nt_create_file" and t[1][0] == "leaf2":
+                    self.assertNotEqual(t[2][2], _FILE_OPENED_INFO)
+                    self.assertEqual(t[2][2], _FILE_CREATED_INFO)
+        finally:
+            self.api.close_handle(handle)
+
+
+class TestFileOpenedClassification(_TraverseOrCreateTestBase):
+    """FILE_OPEN_IF → FILE_OPENED_INFO when leaf already exists."""
+
+    def test_opened_classification(self):
+        """Pre-create parent + leaf → opened=False."""
+        self._build_path(["Users", "existingdir"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        handle, created = _traverse_or_create_directory(
+            "C:\\Users\\existingdir", self.api,
+        )
+        try:
+            self.assertFalse(created, "Leaf must be classified as opened")
+            self.assertGreater(handle, 0)
+            for t in self.api.trace:
+                if t[0] == "nt_create_file" and t[1][0] == "existingdir":
+                    self.assertEqual(t[2][2], _FILE_OPENED_INFO)
+        finally:
+            self.api.close_handle(handle)
+
+    def test_opened_info_value_exact(self):
+        """IOSB Information==FILE_OPENED_INFO (2) on open."""
+        self._build_path(["Users", "target"])
+        self.api._start_traversal()
+
+        handle, created = _traverse_or_create_directory(
+            "C:\\Users\\target", self.api,
+        )
+        try:
+            self.assertFalse(created)
+            self.assertNotEqual(handle, 0)
+        finally:
+            self.api.close_handle(handle)
+
+    def test_unexpected_iosb_info_rejected(self):
+        """Unexpected IOSB Information (not 1 or 2) → SecureStorePermissionError."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        # Inject a fake nt_create that returns invalid info
+        orig_nt = self.api.nt_create_file
+
+        def _injected(*args, **kwargs):
+            hid, st, info = orig_nt(*args, **kwargs)
+            if hid != 0:
+                return (hid, st, 99)  # invalid info
+            return (hid, st, info)
+
+        self.api.nt_create_file = _injected
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\weird", self.api)
+        self.assertIn("Unexpected IOSB Information", str(ctx.exception))
+
+
+class TestLeafValidationDirTypeReparseDisk(_TraverseOrCreateTestBase):
+    """Returned leaf: directory, non‑reparse, disk type validation."""
+
+    def test_leaf_not_directory_rejected(self):
+        """Leaf is a file, not a directory → rejected."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+
+        def on_child(hid, name):
+            if name == "notadir":
+                obj_key = self.api._live_handles[hid].obj_key
+                self.api._namespace[obj_key]["attrs"] = _FILE_ATTRIBUTE_NORMAL
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\notadir", self.api)
+        self.assertIn("not a directory", str(ctx.exception).lower())
+
+    def test_leaf_reparse_rejected(self):
+        """Leaf is a reparse point → rejected."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+
+        def on_child(hid, name):
+            if name == "reparse":
+                obj_key = self.api._live_handles[hid].obj_key
+                self.api._namespace[obj_key]["reparse"] = True
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\reparse", self.api)
+        self.assertIn("reparse", str(ctx.exception).lower())
+
+    def test_leaf_not_disk_rejected(self):
+        """Leaf type is not FILE_TYPE_DISK → rejected."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+
+        def on_child(hid, name):
+            if name == "notdisk":
+                obj_key = self.api._live_handles[hid].obj_key
+                self.api._namespace[obj_key]["file_type"] = _FILE_TYPE_UNKNOWN
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\notdisk", self.api)
+        self.assertIn("DISK", str(ctx.exception))
+
+
+class TestParentCloseAfterChildValidation(_TraverseOrCreateTestBase):
+    """Parent close must occur only after child validation succeeds."""
+
+    def test_parent_close_after_child_validation_order(self):
+        """Trace shows: nt_create → get_file_info → get_file_type → close(parent)."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        handle, created = _traverse_or_create_directory(
+            "C:\\Users\\final", self.api,
+        )
+        try:
+            self.assertTrue(created)
+            # Extract events for leaf operations
+            events: list = []
+            leaf_nt_create_seen = False
+            for op, args, result in self.api.trace:
+                if op == "nt_create_file" and args[0] == "final":
+                    leaf_nt_create_seen = True
+                    events.append(("nt_create", args[0], args[1], result[0]))
+                elif leaf_nt_create_seen:
+                    if op == "get_file_info":
+                        events.append(("get_file_info", args[0]))
+                    elif op == "get_file_type":
+                        events.append(("get_file_type", args[0]))
+                    elif op == "close_handle":
+                        events.append(("close", args[0]))
+                        leaf_nt_create_seen = False  # only first close after leaf
+
+            self.assertGreaterEqual(len(events), 4,
+                                    f"Expected at least nt_create+info+type+close, got {len(events)}")
+            self.assertEqual(events[0][0], "nt_create",
+                             "First leaf event must be nt_create")
+            self.assertEqual(events[1][0], "get_file_info",
+                             "Second must be get_file_info (directory check)")
+            self.assertEqual(events[2][0], "get_file_type",
+                             "Third must be get_file_type (disk check)")
+            self.assertEqual(events[3][0], "close",
+                             "Fourth must be parent close")
+            # The parent was closed exactly once
+            parent_hid = events[0][2]
+            self.assertEqual(self.api._close_attempts.get(parent_hid, 0), 1)
+        finally:
+            self.api.close_handle(handle)
+
+    def test_parent_live_during_child_validation(self):
+        """Liveness: parent handle NOT closed during child validation."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api._liveness.clear()
+
+        handle, created = _traverse_or_create_directory(
+            "C:\\Users\\leaf", self.api,
+        )
+        try:
+            self.assertTrue(created)
+            # All get_file_info/get_file_type ops during traversal report handle_live=True
+            for snap in self.api._liveness:
+                if snap["op"] in ("get_file_info", "get_file_type"):
+                    self.assertTrue(snap.get("handle_live", False),
+                                    f"Handle must be live for {snap['op']}")
+        finally:
+            self.api.close_handle(handle)
+
+
+class TestCloseUnwindFailureOrdering(_TraverseOrCreateTestBase):
+    """Close/unwind failure ordering and cleanup_errors on P2‑C path."""
+
+    def test_parent_close_failure_after_child_validation(self):
+        """Parent close failure after successful child validation → cleanup error."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        # Fault parent close (2nd close overall: root=1, parent=2 → faults)
+        self.api._close_fault_nth = 2
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\leaf", self.api)
+        exc = ctx.exception
+        self.assertIn("Cleanup failure", str(exc))
+        errs = exc.cleanup_errors  # type: ignore[attr-defined]
+        self.assertEqual(len(errs), 1,
+                         f"Expected exactly 1 cleanup error (parent close), got {len(errs)}")
+        self.assertIn("Nth close fault", str(errs[0]))
+
+    def test_child_validation_fault_plus_close_failure(self):
+        """Child validation fails + close failure → primary + cleanup_errors.
+        
+        Uses per‑handle validation fault (via _on_child_created + _info_fault_obj)
+        and Nth close fault to target the parent close after child validation
+        (not the root close inside parent traversal)."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        validation_primary = SecureStorePermissionError("child dir validation fault")
+
+        def on_child(hid, name):
+            if name == "badleaf":
+                self.api._info_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+        # Second close overall: root=1st (inside _traverse_retained_handle),
+        # parent=2nd (after child validation fails).  Fault the 2nd.
+        self.api._close_fault_nth = 2
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\badleaf", self.api)
+        raised = ctx.exception
+        # The child validation primary is raised, then close(parent) fails
+        # during finally unwind.  The global fault method means:
+        #   - _traverse_retained_handle for parent: root close succeeds (1st, no fault)
+        #   - leaf validation faults (_info_fault_obj raises)
+        #   - finally: close(parent_handle) = 2nd close → Nth fault triggers
+        self.assertIs(raised, validation_primary,
+                      "Must re‑raise the exact validation primary")
+        self.assertIn("child dir validation fault", str(raised))
+        errs = raised.cleanup_errors  # type: ignore[attr-defined]
+        self.assertGreaterEqual(len(errs), 1,
+                                "Must have at least one cleanup error from close failure")
+        self.assertIn("Nth close fault", str(errs[0]),
+                      "First cleanup error must be from Nth close failure")
+
+    def test_nt_create_failure_cleanup(self):
+        """NtCreateFile FILE_OPEN_IF fails → parent+already‑acquired cleanup, no child."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        # Inject ACCESS_DENIED for the leaf
+        self.api._nt_status_map["denied_leaf"] = _STATUS_ACCESS_DENIED
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\denied_leaf", self.api)
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_ACCESS_DENIED).value)
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+        # Parent handle was closed during cleanup (root closes happen in parent traversal)
+        # Root was opened by _traverse_retained_handle and then... wait.
+        # Actually parent traversal closes root. So by the time we hit the leaf error,
+        # parent_handle is live. In finally, parent_handle is closed.
+        # Let me verify from trace
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "denied_leaf":
+                self.assertEqual(t[2][0], 0, "Leaf handle must be 0 on failure")
+                self.assertEqual(t[2][1], _STATUS_ACCESS_DENIED)
+
+    def test_no_leaf_handle_on_nt_create_failure(self):
+        """When leaf nt_create fails: leaf_handle=0, parent still cleaned up.
+        
+        The trace contains get_file_info calls from parent traversal
+        (_traverse_retained_handle).  Only verify that the leaf's
+        nt_create returns (0, status, 0) and no child validation occurs
+        after the failed call."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        self.api._nt_status_map["missing"] = _STATUS_OBJECT_NAME_COLLISION
+
+        with self.assertRaises(FileExistsError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\missing", self.api)
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_OBJECT_NAME_COLLISION).value)
+
+        # The failing leaf nt_create returned (0, status, 0)
+        found_leaf_fail = False
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "missing":
+                self.assertEqual(t[2][0], 0, "Leaf handle must be 0 on failure")
+                self.assertEqual(t[2][1], _STATUS_OBJECT_NAME_COLLISION)
+                self.assertEqual(t[2][2], 0, "Info must be 0 on failure")
+                found_leaf_fail = True
+                break
+        self.assertTrue(found_leaf_fail, "Must find leaf nt_create in trace")
+
+
+class TestCollisionStatusMapping(_TraverseOrCreateTestBase):
+    """Collision / status mapping as applicable to P2‑C leaf open/create."""
+
+    def test_status_not_found_on_parent(self):
+        """Parent traversal fails → not found propagates."""
+        self._build_path([])
+        self.api._start_traversal()
+
+        # No "Users" component → parent traversal fails
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\leaf", self.api)
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value)
+
+    def test_status_sharing_violation_on_leaf(self):
+        """SHARING_VIOLATION on leaf nt_create → SecureStorePermissionError."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+
+        self.api._nt_status_map["busy"] = _STATUS_SHARING_VIOLATION
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\busy", self.api)
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_SHARING_VIOLATION).value)
+        self.assertEqual(exc.cleanup_errors, ())  # type: ignore[attr-defined]
+
+    def test_status_not_a_directory_on_parent_component(self):
+        """Parent component is not a directory → error during parent traversal."""
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        # Try to traverse to parent where intermediate doesn't exist
+        with self.assertRaises(FileNotFoundError) as ctx:
+            _traverse_or_create_directory("C:\\NoSuchUser\\leaf", self.api)
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus,  # type: ignore[attr-defined]
+                         _ct.c_int32(_STATUS_OBJECT_NAME_NOT_FOUND).value)
+
+
+class TestNoFullPathDescendantOperation(_TraverseOrCreateTestBase):
+    """Every descendant ObjectName must be one validated component, relative to
+    the retained live parent.  The root is the sole full‑path boundary."""
+
+    def test_all_nt_create_names_are_single_components(self):
+        """No NtCreateFile receives a multi‑component or absolute name."""
+        self._build_path(["Users", "u"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        handle, created = _traverse_or_create_directory(
+            "C:\\Users\\u\\leafdir", self.api,
+        )
+        try:
+            self.assertTrue(created)
+            for op, args, result in self.api.trace:
+                if op == "nt_create_file":
+                    name = args[0]
+                    self.assertNotIn("\\", name,
+                                     f"nt_create name must not contain separator: {name!r}")
+                    self.assertNotIn("/", name)
+                    self.assertNotIn(":", name)
+                    # Parent (RootDirectory) must be a valid live handle
+                    parent = args[1]
+                    self.assertGreater(parent, 0,
+                                       f"RootDirectory must be a valid handle, got {parent}")
+        finally:
+            self.api.close_handle(handle)
+
+    def test_root_is_only_full_path_boundary(self):
+        """Only open_root uses a full path; every nt_create uses relative name."""
+        self._build_path(["Users", "u"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        handle, created = _traverse_or_create_directory(
+            "C:\\Users\\u\\leaf", self.api,
+        )
+        try:
+            open_root_count = sum(1 for t in self.api.trace if t[0] == "open_root")
+            self.assertEqual(open_root_count, 1,
+                             "Exactly one open_root call (sole full‑path boundary)")
+            for op, args, _result in self.api.trace:
+                if op == "open_root":
+                    self.assertIn("\\", args[0], "open_root must receive a full path")
+                elif op == "nt_create_file":
+                    self.assertNotIn("\\", args[0],
+                                     f"nt_create name must be a single component: {args[0]!r}")
+        finally:
+            self.api.close_handle(handle)
+
+    def test_no_full_path_name_in_any_nt_create(self):
+        """Regression: no nt_create call uses a full path as ObjectName."""
+        self._build_path(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        handle, created = _traverse_or_create_directory(
+            "C:\\Users\\leaf", self.api,
+        )
+        try:
+            self.assertTrue(created)
+            for op, args, _result in self.api.trace:
+                if op == "nt_create_file":
+                    # ObjectName must be a leaf, not a full path
+                    self.assertNotEqual(args[0], "C:\\Users\\leaf")
+                    self.assertNotIn("C:", args[0])
+        finally:
+            self.api.close_handle(handle)
+
+
+# ============================================================================
+# P2‑D: validate_dir_dacl_snapshot — pure predicate tests (no API needed)
+# ============================================================================
+
+
+class TestValidateDirDaclSnapshot(_ut.TestCase):
+    """Pure validation of DaclSnapshot — SID identity, flags, masks."""
+
+    @staticmethod
+    def _good_snap() -> DaclSnapshot:
+        return DaclSnapshot(
+            control=_SE_DACL_PROTECTED, dacl_present=True, protected=True,
+            aces=(
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                    _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+                    _FILE_ALL_ACCESS, _USER_SID_BYTES),
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                    _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+                    _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES),
+            ),
+        )
+
+    def test_valid_snapshot_passes(self):
+        _validate_dir_dacl_snapshot(self._good_snap(),
+            expected_user_sid=_USER_SID_BYTES,
+            expected_system_sid=_SYSTEM_SID_BYTES)
+
+    def test_swapped_order_acceptance(self):
+        """User and SYSTEM in swapped order → accepted."""
+        snap = DaclSnapshot(
+            control=_SE_DACL_PROTECTED, dacl_present=True, protected=True,
+            aces=(
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                    _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+                    _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES),
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                    _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+                    _FILE_ALL_ACCESS, _USER_SID_BYTES),
+            ),
+        )
+        _validate_dir_dacl_snapshot(snap,
+            expected_user_sid=_USER_SID_BYTES,
+            expected_system_sid=_SYSTEM_SID_BYTES)
+
+    def test_no_dacl_rejected(self):
+        snap = DaclSnapshot(0, dacl_present=False, protected=False, aces=())
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("not present", str(ctx.exception))
+
+    def test_not_protected_rejected(self):
+        snap = self._good_snap()
+        snap.protected = False
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("not protected", str(ctx.exception))
+
+    def test_wrong_ace_count_rejected(self):
+        snap = self._good_snap()
+        snap.aces = (snap.aces[0],)
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("Expected exactly 2", str(ctx.exception))
+
+    def test_three_aces_rejected(self):
+        snap = self._good_snap()
+        extra = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+            _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+            _FILE_ALL_ACCESS, b"EXTRA_SID")
+        snap.aces = snap.aces + (extra,)
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("Expected exactly 2", str(ctx.exception))
+
+    def test_arbitrary_sid_rejected(self):
+        """Blocker #1: ACE with neither user nor SYSTEM SID → rejected."""
+        snap = self._good_snap()
+        bad = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+            _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+            _FILE_ALL_ACCESS, b"ARBITRARY_SID_123")
+        snap.aces = (snap.aces[0], bad)
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("unexpected SID", str(ctx.exception))
+
+    def test_duplicate_user_rejected(self):
+        """Blocker #1: two user ACEs, no SYSTEM → rejected."""
+        snap = DaclSnapshot(
+            control=_SE_DACL_PROTECTED, dacl_present=True, protected=True,
+            aces=(
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                    _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+                    _FILE_ALL_ACCESS, _USER_SID_BYTES),
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                    _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+                    _FILE_ALL_ACCESS, _USER_SID_BYTES),
+            ),
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("user ACE", str(ctx.exception))
+
+    def test_duplicate_system_rejected(self):
+        """Blocker #1: two SYSTEM ACEs, no user → rejected."""
+        snap = DaclSnapshot(
+            control=_SE_DACL_PROTECTED, dacl_present=True, protected=True,
+            aces=(
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                    _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+                    _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES),
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                    _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+                    _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES),
+            ),
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("user", str(ctx.exception).lower())
+
+    def test_deny_ace_type_rejected(self):
+        snap = self._good_snap()
+        bad = DaclAceSnapshot(_ACCESS_DENIED_ACE_TYPE,
+            _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+            _FILE_ALL_ACCESS, _USER_SID_BYTES)
+        snap.aces = (snap.aces[0], bad)
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("not ALLOW type", str(ctx.exception))
+
+    def test_inherited_ace_rejected(self):
+        snap = self._good_snap()
+        bad = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+            _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE | _INHERITED_ACE,
+            _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES)
+        snap.aces = (snap.aces[0], bad)
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("inherited", str(ctx.exception))
+
+    def test_inherit_only_ace_rejected(self):
+        snap = self._good_snap()
+        bad = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, _INHERIT_ONLY_ACE,
+            _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES)
+        snap.aces = (snap.aces[0], bad)
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("INHERIT_ONLY_ACE", str(ctx.exception))
+
+    def test_no_propagate_ace_rejected(self):
+        snap = self._good_snap()
+        bad = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+            _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE | _NO_PROPAGATE_INHERIT_ACE,
+            _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES)
+        snap.aces = (snap.aces[0], bad)
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("NO_PROPAGATE_INHERIT_ACE", str(ctx.exception))
+
+    def test_missing_ci_oi_flags_rejected(self):
+        snap = self._good_snap()
+        bad = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, 0,
+            _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES)
+        snap.aces = (snap.aces[0], bad)
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("missing CI|OI", str(ctx.exception))
+
+    def test_unexpected_flags_rejected(self):
+        snap = self._good_snap()
+        bad = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+            _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE | 0x20,
+            _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES)
+        snap.aces = (snap.aces[0], bad)
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("unexpected flags", str(ctx.exception))
+
+    def test_wrong_mask_rejected(self):
+        snap = self._good_snap()
+        bad = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+            _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+            _GENERIC_READ, _SYSTEM_SID_BYTES)
+        snap.aces = (snap.aces[0], bad)
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_dir_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("!= FILE_ALL_ACCESS", str(ctx.exception))
+
+    # -- _validate_file_dacl_snapshot tests --
+
+    @staticmethod
+    def _good_file_snap() -> DaclSnapshot:
+        return DaclSnapshot(
+            control=_SE_DACL_PROTECTED, dacl_present=True, protected=True,
+            aces=(
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, 0,
+                    _FILE_ALL_ACCESS, _USER_SID_BYTES),
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, 0,
+                    _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES),
+            ),
+        )
+
+    def test_file_dacl_valid_passes(self):
+        _validate_file_dacl_snapshot(self._good_file_snap(),
+            expected_user_sid=_USER_SID_BYTES,
+            expected_system_sid=_SYSTEM_SID_BYTES)
+
+    def test_file_dacl_nonzero_flags_rejected(self):
+        snap = self._good_file_snap()
+        bad = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+            _OBJECT_INHERIT_ACE, _FILE_ALL_ACCESS, _USER_SID_BYTES)
+        snap.aces = (bad, snap.aces[1])
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_file_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("non-zero flags", str(ctx.exception))
+
+    def test_file_dacl_not_protected_rejected(self):
+        snap = self._good_file_snap()
+        snap.protected = False
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_file_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("not protected", str(ctx.exception))
+
+    def test_file_dacl_arbitrary_sid_rejected(self):
+        snap = self._good_file_snap()
+        bad = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, 0,
+            _FILE_ALL_ACCESS, b"BAD_SID")
+        snap.aces = (bad, snap.aces[1])
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_file_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("unexpected SID", str(ctx.exception))
+
+    def test_file_dacl_duplicate_user_rejected(self):
+        snap = DaclSnapshot(
+            control=_SE_DACL_PROTECTED, dacl_present=True, protected=True,
+            aces=(
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, 0,
+                    _FILE_ALL_ACCESS, _USER_SID_BYTES),
+                DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, 0,
+                    _FILE_ALL_ACCESS, _USER_SID_BYTES),
+            ),
+        )
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_file_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("user ACE", str(ctx.exception))
+
+    def test_file_dacl_inherited_rejected(self):
+        snap = self._good_file_snap()
+        bad = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, _INHERITED_ACE,
+            _FILE_ALL_ACCESS, _USER_SID_BYTES)
+        snap.aces = (bad, snap.aces[1])
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_file_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("inherited", str(ctx.exception))
+
+    def test_file_dacl_wrong_mask_rejected(self):
+        snap = self._good_file_snap()
+        bad = DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, 0,
+            _GENERIC_READ, _USER_SID_BYTES)
+        snap.aces = (bad, snap.aces[1])
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _validate_file_dacl_snapshot(snap,
+                expected_user_sid=_USER_SID_BYTES,
+                expected_system_sid=_SYSTEM_SID_BYTES)
+        self.assertIn("!= FILE_ALL_ACCESS", str(ctx.exception))
+
+
+# ============================================================================
+# P2‑D: create_private_file_relative — FULL integration tests via fake API
+# ============================================================================
+
+
+class _P2DTestBase(_ut.TestCase):
+    """Base class for P2‑D tests — shared fake setup."""
+
+    def setUp(self):
+        self.api = _FakeLowLevelAPI_with_counter()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+
+    @staticmethod
+    def _safe_close(fd: int) -> None:
+        try:
+            _os.close(fd)
+        except OSError:
+            pass
+
+    def _build_dir(self, components: list):
+        root = self.api.open_root("C:\\")
+        for comp in components:
+            child, st, info = self.api.nt_create_file(
+                comp, root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+                _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+            )
+            self.api.close_handle(root)
+            root = child
+        self.api.close_handle(root)
+
+
+class TestPrivateFileDaclPrecondition(_P2DTestBase):
+    """DACL precondition on directory with SID identity verification."""
+
+    def test_dacl_precondition_pass_then_create(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+        try:
+            self.assertIsInstance(fd, int)
+            self.assertGreater(fd, 0)
+            dacl_calls = [t for t in self.api.trace if t[0] == "read_dacl_snapshot"]
+            # Two DACL reads: directory precondition + file DACL validation
+            self.assertGreaterEqual(len(dacl_calls), 2,
+                                    "Must read both dir DACL and file DACL")
+        finally:
+            self._safe_close(fd)
+
+    def test_directory_dacl_arbitrary_sid_rejected(self):
+        """Corrupt dir DACL with arbitrary SID → reject before file create."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        for key in self.api._namespace:
+            if key.endswith(":aisc"):
+                self.api._dacl_snapshots[key] = DaclSnapshot(
+                    control=_SE_DACL_PROTECTED, dacl_present=True, protected=True,
+                    aces=(
+                        DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                            _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+                            _FILE_ALL_ACCESS, b"ARBITRARY"),
+                        DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE,
+                            _CONTAINER_INHERIT_ACE | _OBJECT_INHERIT_ACE,
+                            _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES),
+                    ),
+                )
+                break
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+        self.assertIn("unexpected SID", str(ctx.exception))
+        nt_names = [t[1][0] for t in self.api.trace if t[0] == "nt_create_file"]
+        self.assertNotIn("secret.dat", nt_names)
+
+    def test_dacl_not_protected_rejected(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+        for key in self.api._namespace:
+            if key.endswith(":aisc"):
+                self.api._dacl_snapshots[key] = DaclSnapshot(
+                    0, dacl_present=True, protected=False,
+                    aces=self.api._dacl_snapshots[key].aces)
+                break
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+        self.assertIn("not protected", str(ctx.exception))
+
+
+class TestPrivateFileSecurityDescriptor(_P2DTestBase):
+    """Blocker #3: atomic security descriptor on FILE_CREATE."""
+
+    def test_sd_built_and_freed(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            # build_file_sd called exactly once
+            build_calls = [t for t in self.api.trace if t[0] == "build_file_sd"]
+            self.assertEqual(len(build_calls), 1, "build_file_sd must be called once")
+            # free_sd called exactly once
+            free_calls = [t for t in self.api.trace if t[0] == "free_sd"]
+            self.assertEqual(len(free_calls), 1, "free_sd must be called once")
+            # SD handle is non-zero
+            sd_handle = build_calls[0][2]
+            self.assertGreater(sd_handle, 0, "SD handle must be non-zero")
+            # free_sd called with same handle
+            self.assertEqual(free_calls[0][1][0], sd_handle)
+            # nt_create_file receives non-zero security_descriptor
+            for t in self.api.trace:
+                if t[0] == "nt_create_file" and t[1][0] == "f.dat":
+                    sd_arg = t[1][6]
+                    self.assertGreater(sd_arg, 0,
+                        "security_descriptor must be non-zero for FILE_CREATE")
+                    break
+        finally:
+            self._safe_close(fd)
+
+    def test_file_dacl_matches_expected_policy(self):
+        """After creation, file DACL is validated against expected policy."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            # File DACL was read after creation
+            dacl_ops = [t for t in self.api.trace if t[0] == "read_dacl_snapshot"]
+            self.assertGreaterEqual(len(dacl_ops), 2,
+                "Must read both dir DACL and file DACL")
+        finally:
+            self._safe_close(fd)
+
+    def test_file_dacl_mismatch_rejected(self):
+        """Corrupt the file's DACL snapshot → validation fails, no fd returned."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        # Corrupt file DACL to have wrong SID
+        def on_child(hid, name):
+            if name == "badfile.dat":
+                obj_key = self.api._live_handles[hid].obj_key
+                self.api._dacl_snapshots[obj_key] = DaclSnapshot(
+                    control=_SE_DACL_PROTECTED, dacl_present=True, protected=True,
+                    aces=(
+                        DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, 0,
+                            _FILE_ALL_ACCESS, b"EVIL_SID"),
+                        DaclAceSnapshot(_ACCESS_ALLOWED_ACE_TYPE, 0,
+                            _FILE_ALL_ACCESS, _SYSTEM_SID_BYTES),
+                    ),
+                )
+
+        self.api._on_child_created = on_child
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "badfile.dat", self.api)
+        self.assertIn("unexpected SID", str(ctx.exception))
+        # No open_osfhandle because validation failed
+        self.assertFalse(any(t[0] == "open_osfhandle" for t in self.api.trace))
+
+    def test_build_sd_fault_cleanup(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api._faults["build_file_sd"] = SecureStorePermissionError("build fail")
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        self.assertIn("build fail", str(ctx.exception))
+        # No nt_create_file for the file
+        nt_names = [t[1][0] for t in self.api.trace if t[0] == "nt_create_file"]
+        self.assertNotIn("f.dat", nt_names)
+
+
+class TestPrivateFileCreation(_P2DTestBase):
+    """FILE_CREATE: success, collision, SD transfer."""
+
+    def test_create_success_returns_fd(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            self.assertIsInstance(fd, int)
+            self.assertGreater(fd, 0)
+        finally:
+            self._safe_close(fd)
+
+    def test_file_exists_collision(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        self._safe_close(fd)
+        self.api._start_traversal()
+        with self.assertRaises(FileExistsError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        exc = ctx.exception
+        self.assertEqual(exc.ntstatus, _ct.c_int32(_STATUS_OBJECT_NAME_COLLISION).value)  # type: ignore[attr-defined]
+
+    def test_create_uses_read_control_dir_handle(self):
+        """Blocker #2: final directory component gets +READ_CONTROL."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            # Find the nt_create for "aisc" (the final component)
+            for t in self.api.trace:
+                if t[0] == "nt_create_file" and t[1][0] == "aisc":
+                    da = t[1][2]
+                    expected = (_FILE_READ_ATTRIBUTES | _FILE_TRAVERSE
+                                 | _SYNCHRONIZE | _READ_CONTROL)
+                    self.assertEqual(da, expected,
+                        f"Final component desired access 0x{da:08X} must include READ_CONTROL (0x{_READ_CONTROL:08X})")
+                    break
+        finally:
+            self._safe_close(fd)
+
+    def test_intermediate_dir_no_read_control(self):
+        """Blocker #2: intermediate components keep least privilege."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            for t in self.api.trace:
+                if t[0] == "nt_create_file" and t[1][0] in ("Users", "u"):
+                    da = t[1][2]
+                    self.assertFalse(da & _READ_CONTROL,
+                        f"Intermediate '{t[1][0]}' must NOT have READ_CONTROL, got 0x{da:08X}")
+        finally:
+            self._safe_close(fd)
+
+
+class TestPrivateFileHandleValidation(_P2DTestBase):
+    """Returned file handle: type, reparse, disk validation."""
+
+    def test_reparse_rejected(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        def on_child(hid, name):
+            if name == "reparse.dat":
+                self.api._namespace[self.api._live_handles[hid].obj_key]["reparse"] = True
+        self.api._on_child_created = on_child
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "reparse.dat", self.api)
+        self.assertIn("reparse point", str(ctx.exception))
+
+    def test_directory_type_rejected(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        def on_child(hid, name):
+            if name == "isdir.dat":
+                self.api._namespace[self.api._live_handles[hid].obj_key]["attrs"] = _FILE_ATTRIBUTE_DIRECTORY
+        self.api._on_child_created = on_child
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "isdir.dat", self.api)
+        self.assertIn("directory", str(ctx.exception))
+
+    def test_not_disk_type_rejected(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        def on_child(hid, name):
+            if name == "notdisk.dat":
+                self.api._namespace[self.api._live_handles[hid].obj_key]["file_type"] = _FILE_TYPE_UNKNOWN
+        self.api._on_child_created = on_child
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "notdisk.dat", self.api)
+        self.assertIn("DISK", str(ctx.exception))
+
+
+class TestPrivateFileHandleToFdTransfer(_P2DTestBase):
+    """HANDLE-to-fd transfer: ordering (Blockers #4, #5)."""
+
+    def test_dir_close_before_transfer(self):
+        """Blocker #4: dir close happens BEFORE open_osfhandle."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            # Find indices
+            dir_close_idx = None
+            transfer_idx = None
+            for i, (op, _, _) in enumerate(self.api.trace):
+                if op == "close_handle":
+                    dir_close_idx = i
+                elif op == "open_osfhandle":
+                    transfer_idx = i
+                    break
+            self.assertIsNotNone(dir_close_idx, "Dir close must be in trace")
+            self.assertIsNotNone(transfer_idx, "Transfer must be in trace")
+            self.assertLess(dir_close_idx, transfer_idx,
+                            "Dir close must occur BEFORE open_osfhandle (Blocker #4)")
+        finally:
+            self._safe_close(fd)
+
+    def test_transfer_is_last_fallible_action(self):
+        """Blocker #4: open_osfhandle is the last fallible success-path action."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            # After open_osfhandle, no close_handle or free_sd
+            transfer_seen = False
+            ops_after = []
+            for op, args, _ in self.api.trace:
+                if op == "open_osfhandle":
+                    transfer_seen = True
+                elif transfer_seen:
+                    ops_after.append(op)
+            # No fallible operations after transfer
+            fallible = {"close_handle", "free_sd", "read_dacl_snapshot",
+                         "get_file_info", "get_file_type"}
+            for op in ops_after:
+                self.assertNotIn(op, fallible,
+                    f"'{op}' must not occur after open_osfhandle (Blocker #4)")
+        finally:
+            self._safe_close(fd)
+
+    def test_dir_handle_zeroed_before_close(self):
+        """Blocker #5: dir_handle consumed before close — no retry."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            # Find dir handle from fresh trace and verify closed exactly once
+            dir_hid = None
+            for t in self.api.trace:
+                if t[0] == "nt_create_file" and t[1][0] == "aisc":
+                    dir_hid = t[2][0]
+                    break
+            self.assertIsNotNone(dir_hid, "Must find dir handle in trace")
+            self.assertEqual(self.api._close_attempts.get(dir_hid, 0), 1,
+                "Dir handle must be closed exactly once (Blocker #5)")
+        finally:
+            self._safe_close(fd)
+
+    def test_no_double_close_after_successful_transfer(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            file_hid = None
+            for t in self.api.trace:
+                if t[0] == "nt_create_file" and t[1][0] == "f.dat":
+                    file_hid = t[2][0]
+                    break
+            self.assertIsNotNone(file_hid)
+            close_att = self.api._close_attempts.get(file_hid, 0)
+            self.assertEqual(close_att, 0,
+                f"File handle {file_hid} must NOT be closed after transfer")
+        finally:
+            self._safe_close(fd)
+
+    def test_transfer_failure_closes_file_handle(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api._faults["open_osfhandle"] = OSError("transfer fail")
+        with self.assertRaises(OSError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        self.assertIn("transfer fail", str(ctx.exception))
+        # Both file and dir handles closed (dir already closed before transfer attempt)
+        self.assertGreaterEqual(self.api._close_call_count, 1)
+
+
+class TestPrivateFileFailureCleanup(_P2DTestBase):
+    """Cleanup on failures: SD, handles, ordering."""
+
+    def test_dacl_failure_cleanup_dir_and_sd(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        for key in self.api._namespace:
+            if key.endswith(":aisc"):
+                self.api._dacl_snapshots[key] = DaclSnapshot(
+                    0, dacl_present=False, protected=False, aces=())
+                break
+        with self.assertRaises(SecureStorePermissionError):
+            _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        # No build_file_sd (fails before)
+        self.assertFalse(any(t[0] == "build_file_sd" for t in self.api.trace))
+
+    def test_create_failure_cleanup_sd_and_dir(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api._nt_status_map["denied.dat"] = _STATUS_ACCESS_DENIED
+        with self.assertRaises(SecureStorePermissionError):
+            _create_private_file_relative("C:\\Users\\u\\aisc", "denied.dat", self.api)
+        # SD was built and freed
+        self.assertTrue(any(t[0] == "build_file_sd" for t in self.api.trace))
+        self.assertTrue(any(t[0] == "free_sd" for t in self.api.trace))
+
+    def test_validation_failure_cleanup_file_dir_sd(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        def on_child(hid, name):
+            if name == "f.dat":
+                self.api._info_fault_obj[hid] = SecureStorePermissionError("val fail")
+        self.api._on_child_created = on_child
+        with self.assertRaises(SecureStorePermissionError):
+            _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        self.assertGreaterEqual(self.api._close_call_count, 2,
+            "File + dir handles must be closed")
+
+    def test_close_failure_no_primary_dir_already_zeroed(self):
+        """Directory close failure → dir handle not retried (Blocker #5)."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+        # Traversal closes root+Users+u (3 closes). Dir close = 4th → faults.
+        # File handle close in finally = 5th (not faulted).
+        self.api._close_fault_nth = 4
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        exc = ctx.exception
+        self.assertIn("Directory close failure", str(exc))
+        # Dir close attempted + file handle cleaned up in finally
+        self.assertGreaterEqual(self.api._close_call_count, 4)
+
+
+class TestPrivateFileOperationOrdering(_P2DTestBase):
+    """Operation ordering: SD build → DACL read → create → validate → file DACL → free SD → dir close → transfer."""
+
+    def test_full_ordering_on_success(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            ops = [t[0] for t in self.api.trace]
+            # Expected sequence (approximate):
+            seq = []
+            for op in ops:
+                if op in ("build_file_sd", "read_dacl_snapshot", "nt_create_file",
+                          "get_file_info", "get_file_type", "free_sd",
+                          "close_handle", "open_osfhandle"):
+                    seq.append(op)
+
+            # build_file_sd before nt_create for file
+            build_idx = seq.index("build_file_sd")
+            create_indices = [i for i, s in enumerate(seq) if s == "nt_create_file"]
+            self.assertGreater(max(create_indices), build_idx,
+                "SD must be built before file creation")
+
+            # free_sd before close_handle (dir close) and before open_osfhandle
+            free_idx = seq.index("free_sd")
+            close_indices = [i for i, s in enumerate(seq) if s == "close_handle"]
+            if close_indices:
+                self.assertLess(free_idx, close_indices[-1],
+                    "free_sd must occur before dir close")
+            xfer_idx = seq.index("open_osfhandle")
+            self.assertLess(free_idx, xfer_idx,
+                "free_sd must occur before transfer")
+
+            # close_handle before open_osfhandle (Blocker #4)
+            dir_close_idx = max(close_indices) if close_indices else -1
+            self.assertLess(dir_close_idx, xfer_idx,
+                "Dir close must occur before transfer")
+        finally:
+            self._safe_close(fd)
+
+    def test_same_dir_handle_for_dacl_and_file_create(self):
+        """Blocker #2: same live dir handle used for DACL read and file RootDirectory."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            # Find dir handle used for DACL read
+            dir_hid = None
+            for t in self.api.trace:
+                if t[0] == "read_dacl_snapshot":
+                    dir_hid = t[1][0]
+                    break
+            self.assertIsNotNone(dir_hid, "Must read dir DACL")
+            # Verify file nt_create uses same RootDirectory
+            for t in self.api.trace:
+                if t[0] == "nt_create_file" and t[1][0] == "f.dat":
+                    root_dir = t[1][1]
+                    self.assertEqual(root_dir, dir_hid,
+                        "File RootDirectory must be same live handle as DACL read")
+                    break
+        finally:
+            self._safe_close(fd)
+
+
+class TestPrivateFileNoFullPath(_P2DTestBase):
+    """No full-path descendant operations."""
+
+    def test_no_full_path_in_nt_create_names(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            for op, args, _ in self.api.trace:
+                if op == "nt_create_file":
+                    name = args[0]
+                    self.assertNotIn("\\", name)
+                    self.assertNotIn("/", name)
+                    self.assertNotIn(":", name)
+        finally:
+            self._safe_close(fd)
+
+    def test_leaf_name_as_single_component(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "my_file.dat", self.api)
+        try:
+            found = False
+            for op, args, _ in self.api.trace:
+                if op == "nt_create_file" and args[0] == "my_file.dat":
+                    found = True
+                    self.assertGreater(args[1], 0, "RootDirectory must be live")
+            self.assertTrue(found, "leaf nt_create must be in trace")
+        finally:
+            self._safe_close(fd)
+
+
+class TestPrivateFileDriveAndLeaf(_P2DTestBase):
+    """Drive-type gate and leaf‑name validation."""
+
+    def test_non_fixed_drive_rejected(self):
+        self.api._drive_types["D:\\"] = _DRIVE_REMOTE
+        self._build_dir(["Users"])
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("D:\\Users", "f.dat", self.api)
+        self.assertIn("DRIVE_FIXED", str(ctx.exception))
+
+    def test_leaf_name_invalid_rejected(self):
+        self._build_dir(["Users", "u", "aisc"])
+        with self.assertRaises(ValueError):
+            _create_private_file_relative("C:\\Users\\u\\aisc", "CON", self.api)
+
+
+# ============================================================================
+# P2‑D Blocker #3: drive-root rejection (no I/O)
+# ============================================================================
+
+
+class TestDriveRootRejection(_P2DTestBase):
+    """Reject drive-root target before any I/O."""
+
+    def test_drive_root_rejected_no_io(self):
+        """C:\\ as directory → rejected, no API calls."""
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self.api.trace.clear()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\", "f.dat", self.api)
+        self.assertIn("Drive root", str(ctx.exception))
+        # Zero I/O: no drive_type, no open_root, no nt_create_file
+        self.assertEqual(len(self.api.trace), 0,
+                         "No API calls must occur before root rejection")
+
+    def test_drive_root_with_trailing_slash_rejected(self):
+        """C:\\ (just root) rejected, even if path ends with backslash."""
+        self.api.trace.clear()
+        with self.assertRaises(SecureStorePermissionError):
+            _create_private_file_relative("C:\\", "f.dat", self.api)
+        self.assertEqual(len(self.api.trace), 0)
+
+    def test_subdirectory_allowed(self):
+        """C:\\Users is NOT a root — must be accepted."""
+        self._build_dir(["Users"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+        fd = _create_private_file_relative("C:\\Users", "f.dat", self.api)
+        try:
+            self.assertGreater(fd, 0)
+            self.assertGreater(len(self.api.trace), 0,
+                               "API calls must occur for valid directory")
+        finally:
+            self._safe_close(fd)
+
+
+# ============================================================================
+# P2‑D Blocker #1: security context acquire / release lifecycle
+# ============================================================================
+
+
+class TestSecurityContextLifecycle(_P2DTestBase):
+    """Acquire → get SID bytes → build SD → release lifecycle."""
+
+    def test_context_acquired_and_released(self):
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            # Context was acquired
+            acq = [t for t in self.api.trace if t[0] == "acquire_ctx"]
+            self.assertEqual(len(acq), 1, "Context must be acquired exactly once")
+            ctx = acq[0][2]
+            self.assertGreater(ctx, 0)
+
+            # Context was released
+            rel = [t for t in self.api.trace if t[0] == "release_ctx"]
+            self.assertEqual(len(rel), 1, "Context must be released exactly once")
+            self.assertEqual(rel[0][1][0], ctx, "Release must match acquire handle")
+
+            # SID bytes retrieved
+            self.assertIn("get_ctx_user", [t[0] for t in self.api.trace])
+            self.assertIn("get_ctx_system", [t[0] for t in self.api.trace])
+
+            # SD built with context
+            build = [t for t in self.api.trace if t[0] == "build_file_sd"]
+            self.assertEqual(len(build), 1)
+            self.assertEqual(build[0][1][0], ctx,
+                             "build_file_sd must receive the context handle")
+
+            # Context released BEFORE transfer
+            rel_idx = [i for i, t in enumerate(self.api.trace) if t[0] == "release_ctx"][0]
+            xfer_idx = [i for i, t in enumerate(self.api.trace) if t[0] == "open_osfhandle"][0]
+            self.assertLess(rel_idx, xfer_idx,
+                            "Context release must occur before transfer")
+        finally:
+            self._safe_close(fd)
+
+    def test_context_released_on_failure(self):
+        """Context is released even when file creation fails."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api._nt_status_map["f.dat"] = _STATUS_ACCESS_DENIED
+        self.api.trace.clear()
+
+        with self.assertRaises(SecureStorePermissionError):
+            _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+
+        # Context should have been acquired and released
+        self.assertTrue(any(t[0] == "acquire_ctx" for t in self.api.trace))
+        self.assertTrue(any(t[0] == "release_ctx" for t in self.api.trace))
+
+    def test_acquire_ctx_fault_cleanup(self):
+        """acquire_security_context fault → no further operations, no leak."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api._faults["acquire_ctx"] = SecureStorePermissionError("acquire fail")
+        self.api.trace.clear()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        self.assertIn("acquire fail", str(ctx.exception))
+        # No build_file_sd, no nt_create for file
+        self.assertFalse(any(t[0] == "build_file_sd" for t in self.api.trace))
+        self.assertFalse(any(t[0] == "release_ctx" for t in self.api.trace))
+
+    def test_release_ctx_fault_becomes_primary(self):
+        """release_ctx fault in success path → primary error, fd not returned."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        self.api._faults["release_ctx"] = OSError("release_ctx fail")
+
+        with self.assertRaises(OSError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        self.assertIn("release_ctx fail", str(ctx.exception))
+        # File and dir handles were closed in cleanup
+        self.assertGreaterEqual(self.api._close_call_count, 2)
+
+    def test_build_sd_fault_with_context_cleanup(self):
+        """build_file_sd fault → SD not freed, but context + dir closed."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api._faults["build_file_sd"] = SecureStorePermissionError("build fail")
+        self.api.trace.clear()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        self.assertIn("build fail", str(ctx.exception))
+        # context was still released in cleanup
+        self.assertTrue(any(t[0] == "release_ctx" for t in self.api.trace))
+        # no nt_create for file
+        nt_names = [t[1][0] for t in self.api.trace if t[0] == "nt_create_file"]
+        self.assertNotIn("f.dat", nt_names)
+
+    def test_build_sd_requires_nonzero_context(self):
+        """build_file_sd rejects zero context in the fake."""
+        with self.assertRaises(SecureStorePermissionError):
+            self.api.build_file_security_descriptor(0)
+
+
+# ============================================================================
+# P2‑D: SD pointer / ownership lifetime — production-shaped deterministic test
+# ============================================================================
+
+
+class TestSDPointerOwnership(_P2DTestBase):
+    """Verify build_file_security_descriptor returns _ct.addressof(SD),
+    the SD.Dacl references the retained ACL, both remain live until free,
+    and free removes/releases exactly once."""
+
+    def test_returned_handle_equals_addressof_sd(self):
+        """build_file_sd returns the actual ctypes address of the SD struct."""
+        ctx = self.api.acquire_security_context()
+        try:
+            sd_handle = self.api.build_file_security_descriptor(ctx)
+            self.assertGreater(sd_handle, 0)
+
+            # Retrieve the stored SD entry to verify identity
+            entry = self.api._sd_store.get(sd_handle)
+            self.assertIsNotNone(entry, "SD must be retained in store")
+            stored_sd = entry["sd"]
+            self.assertIsInstance(stored_sd, _SECURITY_DESCRIPTOR)
+
+            # The returned handle IS _ct.addressof(stored_sd)
+            expected_addr = _ct.addressof(stored_sd)
+            self.assertEqual(sd_handle, expected_addr,
+                f"Returned handle {sd_handle:#x} != _ct.addressof(sd) {expected_addr:#x}")
+        finally:
+            self.api.free_security_descriptor(sd_handle)
+
+    def test_sd_dacl_references_retained_acl(self):
+        """The SD.Dacl field points to the ACL buffer owned by the store."""
+        ctx = self.api.acquire_security_context()
+        try:
+            sd_handle = self.api.build_file_security_descriptor(ctx)
+            entry = self.api._sd_store[sd_handle]
+            stored_sd = entry["sd"]
+            stored_acl = entry["acl_mem"]
+
+            # SD.Dacl must equal the stored ACL buffer address
+            self.assertEqual(stored_sd.Dacl, stored_acl,
+                f"Dacl {stored_sd.Dacl:#x} != stored ACL {stored_acl:#x}")
+            self.assertGreater(stored_sd.Dacl, 0)
+        finally:
+            self.api.free_security_descriptor(sd_handle)
+
+    def test_sd_and_acl_live_until_free(self):
+        """SD + ACL remain in _sd_store until free_security_descriptor is called."""
+        ctx = self.api.acquire_security_context()
+        try:
+            sd_handle = self.api.build_file_security_descriptor(ctx)
+            self.assertIn(sd_handle, self.api._sd_store)
+
+            self.api.free_security_descriptor(sd_handle)
+            self.assertNotIn(sd_handle, self.api._sd_store,
+                "SD entry must be removed after free")
+        finally:
+            self.api.release_security_context(ctx)
+
+    def test_free_removes_exactly_once(self):
+        """Second free_security_descriptor on same handle is a no-op."""
+        ctx = self.api.acquire_security_context()
+        try:
+            sd_handle = self.api.build_file_security_descriptor(ctx)
+            self.assertIn(sd_handle, self.api._sd_store)
+
+            self.api.free_security_descriptor(sd_handle)
+            self.assertNotIn(sd_handle, self.api._sd_store)
+
+            # Second free: no error, store unchanged
+            self.api.free_security_descriptor(sd_handle)
+            self.assertNotIn(sd_handle, self.api._sd_store)
+        finally:
+            self.api.release_security_context(ctx)
+
+    def test_sd_passed_as_security_descriptor_to_nt_create(self):
+        """The build_file_sd return value is passed verbatim as
+        security_descriptor to nt_create_file(FILE_CREATE)."""
+        self._build_dir(["Users", "u", "aisc"])
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        try:
+            # Extract the SD handle from build_file_sd trace
+            build_entries = [t for t in self.api.trace if t[0] == "build_file_sd"]
+            self.assertEqual(len(build_entries), 1)
+            sd_addr = build_entries[0][2]
+
+            # Find the nt_create_file for f.dat and verify its security_descriptor arg
+            for t in self.api.trace:
+                if t[0] == "nt_create_file" and t[1][0] == "f.dat":
+                    nt_sd = t[1][6]  # security_descriptor is arg index 6
+                    self.assertEqual(nt_sd, sd_addr,
+                        f"nt_create_file security_descriptor {nt_sd:#x} "
+                        f"!= build_file_sd return {sd_addr:#x}")
+                    self.assertGreater(nt_sd, 0,
+                        "security_descriptor must be non-zero live pointer")
+                    break
+        finally:
+            self._safe_close(fd)
+
+    def test_zero_handle_free_noop(self):
+        """free_security_descriptor(0) is a safe no-op."""
+        self.api.free_security_descriptor(0)
+        # No exception = pass
+
+
+# ============================================================================
+# P3-A final: live-fd rollback, exact-identity residuals, fd-0, retry
+# ============================================================================
+
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestP3AUmaskDirFileExactMode(_ut.TestCase):
+    """Umask + runtime os.umask fail-patch (Blocker 7)."""
+
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+        self._saved_umask = _os.umask(0)
+
+    def tearDown(self):
+        _os.umask(self._saved_umask)
+        self._t.cleanup()
+
+    def test_dir_mode_0700_umask_0777(self):
+        _os.umask(0o777)
+        try:
+            d = _os.path.join(self.tmp, "du")
+            ensure_secure_directory(d)
+            self.assertEqual(_stat.S_IMODE(_os.stat(d).st_mode), 0o700)
+        finally:
+            _os.umask(self._saved_umask)
+
+    def test_file_mode_0600_umask_0777(self):
+        _os.umask(0o777)
+        try:
+            d = _os.path.join(self.tmp, "fu")
+            ensure_secure_directory(d)
+            fd = create_private_file(d, "f")
+            try:
+                self.assertEqual(_stat.S_IMODE(_os.fstat(fd).st_mode), 0o600)
+            finally:
+                _os.close(fd)
+        finally:
+            _os.umask(self._saved_umask)
+
+    def test_umask_runtime_patch_both_operations(self):
+        """Runtime _os.umask fail-patch invokes BOTH operations (Blocker 7)."""
+        import aisc.adapters.secret_store as ss
+        from unittest import mock
+
+        def _failing_umask(*args, **kwargs):
+            self.fail("Production code called os.umask()")
+
+        _os.umask(0o777)
+        try:
+            with mock.patch.object(ss._os, "umask", side_effect=_failing_umask):
+                d = _os.path.join(self.tmp, "bothe")
+                ensure_secure_directory(d)
+                self.assertEqual(_stat.S_IMODE(_os.stat(d).st_mode), 0o700)
+                fd = create_private_file(d, "bf")
+                try:
+                    self.assertEqual(_stat.S_IMODE(_os.fstat(fd).st_mode), 0o600)
+                finally:
+                    _os.close(fd)
+        finally:
+            _os.umask(self._saved_umask)
+
+
+# ── Blocker 3: retry after rollback with narrow post-identity seam ──
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestP3AFdZeroOwnership(_ut.TestCase):
+    """Blocker 6: force owned created fd to be 0, prove exact-one close."""
+
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_fd_zero_returned_and_closed_once(self):
+        """Force next open to return fd 0.  Success: returns 0,
+        caller closes exactly once, fd is valid."""
+        d = _os.path.join(self.tmp, "fd0ok")
+        ensure_secure_directory(d)
+
+        # Save stdin, close it so fd 0 is free
+        stdin_save = _os.dup(0)
+        _os.close(0)
+        try:
+            fd = create_private_file(d, "fd0")
+            self.assertEqual(fd, 0, "Created file fd must be exactly 0")
+            st = _os.fstat(fd)
+            self.assertEqual(_stat.S_IMODE(st.st_mode), 0o600)
+            # Close once — must succeed
+            _os.close(fd)
+            # Double-close should fail (fd already closed)
+            with self.assertRaises(OSError):
+                _os.close(fd)
+        finally:
+            _os.dup2(stdin_save, 0)
+            _os.close(stdin_save)
+
+    def test_fd_zero_rollback_closes_once(self):
+        """Force fd 0, inject validation failure → rollback.
+        Assert fd 0 closed internally."""
+        import aisc.adapters.secret_store as ss
+        from unittest import mock
+
+        d = _os.path.join(self.tmp, "fd0rb")
+        ensure_secure_directory(d)
+        primary = SecureStorePermissionError("fd0-primary")
+
+        _imode_call = [0]
+        _real_imode = _stat.S_IMODE
+
+        def _fake_imode(mode):
+            _imode_call[0] += 1
+            if _imode_call[0] == 2:
+                return 0o400  # wrong for file -> mode error
+            return _real_imode(mode)
+
+        close_spy = [0]
+        _real_close = ss._os.close
+
+        def _spy_close(fd):
+            close_spy[0] += 1
+            _real_close(fd)
+
+        stdin_save = _os.dup(0)
+        _os.close(0)
+        try:
+            with mock.patch.object(ss._stat, "S_IMODE",
+                                   side_effect=_fake_imode):
+                with mock.patch.object(ss._os, "close",
+                                       side_effect=_spy_close):
+                    with self.assertRaises(SecureStorePermissionError) as ctx:
+                        create_private_file(d, "fd0rb")
+                self.assertIsInstance(ctx.exception, SecureStorePermissionError)
+            # fd 0 was closed internally (at least once)
+            self.assertGreaterEqual(close_spy[0], 1,
+                f"fd 0 must be closed at least once, got {close_spy[0]}")
+        finally:
+            _os.dup2(stdin_save, 0)
+            _os.close(stdin_save)
+
+    def test_fd_sentinel_negative_one(self):
+        self.assertEqual(_FD_UNOWNED, -1)
+
+
+# ── Supporting test classes (retained, minimal) ──
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestP3AExistingObjectsUnchanged(_ut.TestCase):
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_existing_0700_dir_unchanged(self):
+        d = _os.path.join(self.tmp, "ex")
+        _os.mkdir(d, 0o700)
+        before = _os.stat(d)
+        ensure_secure_directory(d)
+        after = _os.stat(d)
+        self.assertEqual(_stat.S_IMODE(before.st_mode), _stat.S_IMODE(after.st_mode))
+        self.assertEqual(before.st_ino, after.st_ino)
+
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestP3ACloseEintrFdZero(_ut.TestCase):
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_eintr_injected_one_call_only(self):
+        import aisc.adapters.secret_store as ss
+        import errno as _errno
+        from unittest import mock
+
+        fd = _os.open(self.tmp, _os.O_RDONLY)
+        eintr_exc = OSError(_errno.EINTR, "Interrupted system call")
+        calls = [0]
+
+        def _fake_close(f):
+            calls[0] += 1
+            raise eintr_exc
+
+        with mock.patch.object(ss._os, "close", side_effect=_fake_close):
+            err = _posix_close_fd(fd)
+        self.assertEqual(calls[0], 1)
+        self.assertIsNotNone(err)
+        self.assertIn("Interrupted system call", str(err))
+
+    def test_close_fd_returns_error(self):
+        self.assertIsNotNone(_posix_close_fd(-1))
+
+    def test_close_fd_success_returns_none(self):
+        fd = _os.open(self.tmp, _os.O_RDONLY)
+        self.assertIsNone(_posix_close_fd(fd))
+
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestP3AResidualErrorFields(_ut.TestCase):
+    def test_residual_basic(self):
+        p = SecureStorePermissionError("p")
+        c = (SecureStorePermissionError("rb"),)
+        r = SecureStoreResidualError("msg", primary=p, cleanup_errors=c)
+        self.assertIs(r.primary, p)
+        self.assertEqual(r.cleanup_errors, c)
+
+    def test_residual_chaining(self):
+        p = SecureStorePermissionError("p")
+        try:
+            raise SecureStoreResidualError("x", primary=p, cleanup_errors=()) from p
+        except SecureStoreResidualError as e:
+            self.assertIs(e.__cause__, p)
+
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestP3AZeroFdLeaks(_ut.TestCase):
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def _count(self):
+        try:
+            return len(_os.listdir("/proc/self/fd"))
+        except Exception:
+            return -1
+
+    def test_ensure_success(self):
+        b = self._count()
+        if b < 0:
+            self.skipTest("no /proc")
+        ensure_secure_directory(_os.path.join(self.tmp, "nl"))
+        self.assertEqual(b, self._count())
+
+    def test_file_success(self):
+        b = self._count()
+        if b < 0:
+            self.skipTest("no /proc")
+        d = _os.path.join(self.tmp, "nlf")
+        ensure_secure_directory(d)
+        fd = create_private_file(d, "f")
+        _os.close(fd)
+        self.assertEqual(b, self._count())
+
+    def test_ensure_failure(self):
+        b = self._count()
+        if b < 0:
+            self.skipTest("no /proc")
+        d = _os.path.join(self.tmp, "bad")
+        _os.mkdir(d, 0o755)
+        try:
+            ensure_secure_directory(d)
+        except SecureStorePermissionError:
+            pass
+        self.assertEqual(b, self._count())
+
+    def test_file_failure(self):
+        b = self._count()
+        if b < 0:
+            self.skipTest("no /proc")
+        d = _os.path.join(self.tmp, "badf")
+        _os.mkdir(d, 0o755)
+        try:
+            create_private_file(d, "f")
+        except SecureStorePermissionError:
+            pass
+        self.assertEqual(b, self._count())
+
+
+# ============================================================================
+# P3‑C: Native‑seam acquisition context tests (production-shaped, ctypes fakes)
+# ============================================================================
+
+
+# -- helpers for deterministic native-seam tests --
+
+def _make_ctx_fake_k():
+    """kernel32 stub with real ctypes memory for string_at safety."""
+    _buf = _ct.create_string_buffer(256)  # real buffer
+    _addr = _ct.addressof(_buf)
+    class _K:
+        _buf_ref = _buf  # prevent GC
+        GetLastError = staticmethod(lambda: 0)
+        GetCurrentProcess = staticmethod(lambda: 42)
+        CloseHandle = staticmethod(lambda h: 1)
+        @staticmethod
+        def LocalAlloc(flags, size):
+            return _addr  # return address of real buffer
+        @staticmethod
+        def LocalFree(mem):
+            return 0
+    return _K()
+
+
+def _make_ctx_fake_a():
+    """advapi32 stub that succeeds acquisition deterministically.
+    Uses real ctypes memory for all SIDs so string_at doesn't segfault."""
+    _sid_buf = _ct.create_string_buffer(28)
+    _sid_buf_addr = _ct.addressof(_sid_buf)
+    _sys_buf = _ct.create_string_buffer(28)
+    _sys_buf_addr = _ct.addressof(_sys_buf)
+    class _A:
+        _phase = 0
+        _sid_buf_ref = _sid_buf  # prevent GC
+        _sys_buf_ref = _sys_buf  # prevent GC
+        @staticmethod
+        def OpenProcessToken(h, access, out):
+            hnd = _ct.cast(out, _ct.POINTER(_wt.HANDLE))
+            hnd.contents.value = 99
+            return 1
+        @staticmethod
+        def GetTokenInformation(token, cls, buf, size, needed_out):
+            nd = _ct.cast(needed_out, _ct.POINTER(_wt.DWORD))
+            if _A._phase == 0:
+                nd.contents.value = 256
+                _A._phase = 1
+                return 1
+            return 1
+        @staticmethod
+        def GetLengthSid(sid):
+            return 28
+        @staticmethod
+        def CopySid(length, dest, src):
+            return 1
+        @staticmethod
+        def AllocateAndInitializeSid(*args):
+            out = _ct.cast(args[-1], _ct.POINTER(_ct.c_void_p))
+            out.contents.value = _sys_buf_addr  # real memory
+            return 1
+        @staticmethod
+        def FreeSid(sid):
+            return None
+    return _A()
+
+
+# ── C1: OpenProcessToken failure → native trace evidence, no cleanup ──
+
+class TestC1OpenProcessTokenFailure(_ut.TestCase):
+    def test_c1_openprocesstoken_fail_no_cleanup(self):
+        api = _RealLowLevelAPI()
+        api._init = True
+        class _K:
+            GetLastError = staticmethod(lambda: 5)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            CloseHandle_called = 0
+            @staticmethod
+            def CloseHandle(h):
+                _K.CloseHandle_called += 1
+                return 1
+        api._k = _K()
+        class _A:
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                return 0
+        api._a = _A()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        exc = ctx.exception
+        self.assertIn("OpenProcessToken", str(exc))
+        self.assertEqual(_K.CloseHandle_called, 0,
+                         "Token close must NOT be called when OpenProcessToken fails")
+        self.assertEqual(getattr(exc, "cleanup_errors", ()), ())
+
+
+# ── C2: zero token info size ──
+
+class TestC2TokenInfoZeroSize(_ut.TestCase):
+    def test_c2_zero_size_rejected(self):
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _make_ctx_fake_k()
+        class _A:
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                nd.contents.value = 0
+                return 1
+        api._a = _A()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        self.assertIn("zero required size", str(ctx.exception).lower())
+        # Token is owned, must be closed in finally
+        self.assertIsNotNone(ctx.exception)
+
+
+# ── C3: data query failure ──
+
+class TestC3GetTokenInformationDataFailure(_ut.TestCase):
+    def test_c3_data_query_fail(self):
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _make_ctx_fake_k()
+        class _A:
+            _phase = 0
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                if _A._phase == 0:
+                    nd.contents.value = 256
+                    _A._phase = 1
+                    return 1
+                return 0
+        api._a = _A()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        self.assertIn("GetTokenInformation", str(ctx.exception))
+
+
+# ── C4: user GetLengthSid returns 0 ──
+
+class TestC4UserSidLengthZero(_ut.TestCase):
+    def test_c4_user_sid_len_zero(self):
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _make_ctx_fake_k()
+        class _A:
+            _phase = 0
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                if _A._phase == 0:
+                    nd.contents.value = 256
+                    _A._phase = 1
+                    return 1
+                return 1
+            @staticmethod
+            def GetLengthSid(p):
+                return 0
+        api._a = _A()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        self.assertIn("GetLengthSid", str(ctx.exception))
+
+
+# ── C5: LocalAlloc user failure ──
+
+class TestC5LocalAllocUserFailure(_ut.TestCase):
+    def test_c5_localalloc_fail(self):
+        api = _RealLowLevelAPI()
+        api._init = True
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            CloseHandle = staticmethod(lambda h: 1)
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return 0
+        api._k = _K()
+        class _A:
+            _phase = 0
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                if _A._phase == 0:
+                    nd.contents.value = 256
+                    _A._phase = 1
+                    return 1
+                return 1
+            @staticmethod
+            def GetLengthSid(p):
+                return 28
+        api._a = _A()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        self.assertIn("LocalAlloc", str(ctx.exception))
+
+
+# ── C6: CopySid failure (slot stays set, common unwind frees user) ──
+
+class TestC6CopySidFailure(_ut.TestCase):
+    def test_c6_copysid_fail_common_unwind(self):
+        freed_calls = []
+        _real_buf = _ct.create_string_buffer(256)
+        _real_addr = _ct.addressof(_real_buf)
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            CloseHandle = staticmethod(lambda h: 1)
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return _real_addr
+            @staticmethod
+            def LocalFree(mem):
+                freed_calls.append(mem)
+                return 0
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _K()
+        class _A:
+            _phase = 0
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                if _A._phase == 0:
+                    nd.contents.value = 256
+                    _A._phase = 1
+                    return 1
+                return 1
+            @staticmethod
+            def GetLengthSid(p):
+                return 28
+            @staticmethod
+            def CopySid(length, dest, src):
+                return 0  # FAIL
+        api._a = _A()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        exc = ctx.exception
+        self.assertIn("CopySid", str(exc))
+        # Common unwind freed user LocalAlloc exactly once
+        self.assertEqual(len(freed_calls), 1,
+                         "Common unwind must LocalFree user SID once")
+        # No context published
+        self.assertFalse(getattr(api, "_security_contexts", {}),
+                          "No context must be published")
+
+
+# ── C7: SYSTEM allocation failure → common unwind frees user only ──
+
+class TestC7AllocateAndInitializeSidSystemFailure(_ut.TestCase):
+    def test_c7_system_alloc_fail(self):
+        freed_calls = []
+        _real_buf = _ct.create_string_buffer(256)
+        _real_addr = _ct.addressof(_real_buf)
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            CloseHandle = staticmethod(lambda h: 1)
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return _real_addr
+            @staticmethod
+            def LocalFree(mem):
+                freed_calls.append(mem)
+                return 0
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _K()
+        class _A:
+            _phase = 0
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                if _A._phase == 0:
+                    nd.contents.value = 256
+                    _A._phase = 1
+                    return 1
+                return 1
+            @staticmethod
+            def GetLengthSid(p):
+                return 28
+            @staticmethod
+            def CopySid(l, d, s):
+                return 1
+            @staticmethod
+            def AllocateAndInitializeSid(*args):
+                return 0
+        api._a = _A()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        exc = ctx.exception
+        self.assertIn("AllocateAndInitializeSid", str(exc))
+        self.assertEqual(len(freed_calls), 1,
+                         "Common unwind must LocalFree user SID once")
+
+
+# ── C8: SYSTEM SID GetLengthSid zero → both SIDs freed ──
+
+class TestC8SystemSidLengthZero(_ut.TestCase):
+    def test_c8_system_sid_len_zero_both_freed(self):
+        freed_calls = []
+        freesid_calls = []
+        _real_buf = _ct.create_string_buffer(256)
+        _real_addr = _ct.addressof(_real_buf)
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            CloseHandle = staticmethod(lambda h: 1)
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return _real_addr
+            @staticmethod
+            def LocalFree(mem):
+                freed_calls.append(mem)
+                return 0
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _K()
+        class _A:
+            _phase = 0
+            _gls = 0
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                if _A._phase == 0:
+                    nd.contents.value = 256
+                    _A._phase = 1
+                    return 1
+                return 1
+            @staticmethod
+            def GetLengthSid(p):
+                _A._gls += 1
+                if _A._gls == 1:
+                    return 28
+                return 0
+            @staticmethod
+            def CopySid(l, d, s):
+                return 1
+            @staticmethod
+            def AllocateAndInitializeSid(*args):
+                out = _ct.cast(args[-1], _ct.POINTER(_ct.c_void_p))
+                out.contents.value = 0xBEEF
+                return 1
+            @staticmethod
+            def FreeSid(sid):
+                freesid_calls.append(sid)
+                return None
+        api._a = _A()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        exc = ctx.exception
+        self.assertIn("SYSTEM SID", str(exc))
+        self.assertEqual(len(freed_calls), 1, "user LocalFree once")
+        self.assertEqual(len(freesid_calls), 1, "SYSTEM FreeSid once")
+
+
+# ── C9: Successful acquisition → context publish, token close, no double-free ──
+
+class TestC9SuccessAcquisition(_ut.TestCase):
+    def test_c9_success_transfer_no_double_free(self):
+        freed_calls = []
+        freesid_calls = []
+        _real_buf = _ct.create_string_buffer(256)
+        _real_addr = _ct.addressof(_real_buf)
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            CloseHandle = staticmethod(lambda h: 1)
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return _real_addr
+            @staticmethod
+            def LocalFree(mem):
+                freed_calls.append(mem)
+                return 0
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _K()
+        api._a = _make_ctx_fake_a()
+        ctx = api.acquire_security_context()
+        self.assertGreater(ctx, 0, "Valid context handle returned")
+        self.assertIn(ctx, api._security_contexts, "Context published in store")
+        # Verify SID bytes accessible
+        us = api.get_context_user_sid(ctx)
+        ss = api.get_context_system_sid(ctx)
+        self.assertIsInstance(us, bytes)
+        self.assertIsInstance(ss, bytes)
+        # No double-free: LocalFree/FreeSid NOT called in finally (slots zeroed)
+        self.assertEqual(len(freed_calls), 0,
+                         "No user LocalFree in finally (ownership transferred)")
+        self.assertEqual(len(freesid_calls), 0,
+                         "No SYSTEM FreeSid in finally (ownership transferred)")
+        # Release via public API
+        api.release_security_context(ctx)
+        self.assertNotIn(ctx, api._security_contexts, "Context consumed")
+
+
+# ── C10: Token-close-only → context unpublished, SIDs freed once ──
+
+class TestC10TokenCloseOnlyUnwind(_ut.TestCase):
+    def test_c10_token_close_only(self):
+        freed_calls = []
+        freesid_calls = []
+        _real_buf = _ct.create_string_buffer(256)
+        _real_addr = _ct.addressof(_real_buf)
+        _sys_buf = _ct.create_string_buffer(28)
+        _sys_addr = _ct.addressof(_sys_buf)
+        class _K:
+            GetCurrentProcess = staticmethod(lambda: 42)
+            GetLastError = staticmethod(lambda: 6)
+            CloseHandle = staticmethod(lambda h: 0)  # FAIL
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return _real_addr
+            @staticmethod
+            def LocalFree(mem):
+                freed_calls.append(mem)
+                return 0
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _K()
+        class _A2:
+            _phase = 0
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                if _A2._phase == 0:
+                    nd.contents.value = 256
+                    _A2._phase = 1
+                    return 1
+                return 1
+            @staticmethod
+            def GetLengthSid(p):
+                return 28
+            @staticmethod
+            def CopySid(l, d, s):
+                return 1
+            @staticmethod
+            def AllocateAndInitializeSid(*args):
+                out = _ct.cast(args[-1], _ct.POINTER(_ct.c_void_p))
+                out.contents.value = _sys_addr
+                return 1
+            @staticmethod
+            def FreeSid(sid):
+                freesid_calls.append(sid)
+                return None
+        api._a = _A2()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        exc = ctx.exception
+        self.assertIn("token close", str(exc).lower())
+        # Context was popped and SIDs freed exactly once
+        self.assertEqual(len(freed_calls), 1,
+                         "User SID freed once via context-discard")
+        self.assertEqual(len(freesid_calls), 1,
+                         "SYSTEM SID freed once via context-discard")
+        # Context NOT in store
+        self.assertFalse(hasattr(api, "_security_contexts") and api._security_contexts,
+                          "Context must not be published after token close failure")
+
+
+# ── C11: construction primary + token close failure ──
+
+class TestC11ConstructionPrimaryPlusTokenClose(_ut.TestCase):
+    def test_c11_primary_plus_token_close(self):
+        class _K:
+            GetLastError = staticmethod(lambda: 6)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            CloseHandle = staticmethod(lambda h: 0)  # FAIL
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _K()
+        class _A:
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                nd.contents.value = 256
+                return 0  # FAIL
+        api._a = _A()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        exc = ctx.exception
+        self.assertIn("GetTokenInformation", str(exc))
+        errs = exc.cleanup_errors
+        self.assertGreaterEqual(len(errs), 1,
+                                "Token close failure appended to primary")
+        self.assertIn("CloseHandle", str(errs[-1]))
+
+
+# ── C12: post-both-SID primary + all three release failures ──
+
+class TestC12PostBothSidPrimaryPlusAllReleaseFailures(_ut.TestCase):
+    def test_c12_all_three_release_fail_exact_order(self):
+        _real_buf = _ct.create_string_buffer(256)
+        _real_addr = _ct.addressof(_real_buf)
+        class _K:
+            GetLastError = staticmethod(lambda: 99)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            CloseHandle = staticmethod(lambda h: 0)  # FAIL
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return _real_addr
+            @staticmethod
+            def LocalFree(mem):
+                return 0xBAD  # FAIL non-NULL
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _K()
+        class _A:
+            _phase = 0
+            _gls = 0
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                if _A._phase == 0:
+                    nd.contents.value = 256
+                    _A._phase = 1
+                    return 1
+                return 1
+            @staticmethod
+            def GetLengthSid(p):
+                _A._gls += 1
+                if _A._gls == 1:
+                    return 28  # user OK
+                return 0   # SYSTEM → "SYSTEM SID" error (post-both-SID)
+            @staticmethod
+            def CopySid(l, d, s):
+                return 1
+            @staticmethod
+            def AllocateAndInitializeSid(*args):
+                out = _ct.cast(args[-1], _ct.POINTER(_ct.c_void_p))
+                out.contents.value = 0xBEEF
+                return 1
+            @staticmethod
+            def FreeSid(sid):
+                return 0xF00D  # FAIL non-NULL
+            @staticmethod
+            def AllocateAndInitializeSid(*args):
+                out = _ct.cast(args[-1], _ct.POINTER(_ct.c_void_p))
+                out.contents.value = 0xBEEF
+                return 1
+            @staticmethod
+            def FreeSid(sid):
+                return 0xF00D  # FAIL non-NULL
+        api._a = _A()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        exc = ctx.exception
+        self.assertIn("SYSTEM SID", str(exc))
+        errs = exc.cleanup_errors
+        self.assertEqual(len(errs), 3,
+            f"Expected 3 cleanup errors, got {len(errs)}: {errs}")
+        self.assertIn("LocalFree", str(errs[0]),
+                       "First: user LocalFree failure")
+        self.assertIn("FreeSid", str(errs[1]),
+                       "Second: SYSTEM FreeSid failure")
+        self.assertIn("CloseHandle", str(errs[2]),
+                       "Third: token CloseHandle failure")
+
+
+# ── C13: token-close-only discard — both LocalFree raise + FreeSid raise/error ──
+
+class TestC13TokenCloseOnlyDiscardBothFail(_ut.TestCase):
+    def test_c13_token_close_lf_raise_fs_raise(self):
+        """Token-close-only discard: LocalFree raises AND FreeSid raises;
+        both represented; exact one attempts; no context store; no double-release."""
+        lf_raised = []
+        fs_raised = []
+        _real_buf = _ct.create_string_buffer(256)
+        _real_addr = _ct.addressof(_real_buf)
+        _sys_buf = _ct.create_string_buffer(28)
+        _sys_addr = _ct.addressof(_sys_buf)
+
+        class _K:
+            GetCurrentProcess = staticmethod(lambda: 42)
+            GetLastError = staticmethod(lambda: 6)
+            CloseHandle = staticmethod(lambda h: 0)  # FAIL
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return _real_addr
+            @staticmethod
+            def LocalFree(mem):
+                lf_raised.append(mem)
+                raise OSError("LocalFree raised in discard")
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _K()
+        class _A2:
+            _phase = 0
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                if _A2._phase == 0:
+                    nd.contents.value = 256
+                    _A2._phase = 1
+                    return 1
+                return 1
+            @staticmethod
+            def GetLengthSid(p):
+                return 28
+            @staticmethod
+            def CopySid(l, d, s):
+                return 1
+            @staticmethod
+            def AllocateAndInitializeSid(*args):
+                out = _ct.cast(args[-1], _ct.POINTER(_ct.c_void_p))
+                out.contents.value = _sys_addr
+                return 1
+            @staticmethod
+            def FreeSid(sid):
+                fs_raised.append(sid)
+                raise OSError("FreeSid raised in discard")
+        api._a = _A2()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        exc = ctx.exception
+        self.assertIn("token close", str(exc).lower())
+        self.assertIn("acquire_security_context token close", str(exc))
+        errs = exc.cleanup_errors
+        self.assertEqual(len(errs), 3,
+            f"Expected 3 cleanup errors (token close + user LF raise + system FS raise), got {len(errs)}: {errs}")
+        # [0] token CloseHandle failure
+        self.assertIn("CloseHandle", str(errs[0]),
+                       "C13[0]: token close failure")
+        # [1] LocalFree(user SID) raised
+        self.assertIn("LocalFree(user SID) raised", str(errs[1]),
+                       "C13[1]: user LocalFree raise")
+        # [2] FreeSid(SYSTEM) raised
+        self.assertIn("FreeSid(SYSTEM) raised", str(errs[2]),
+                       "C13[2]: SYSTEM FreeSid raise")
+        # Exactly one attempt each
+        self.assertEqual(len(lf_raised), 1,
+                         "C13: exactly one LocalFree call")
+        self.assertEqual(len(fs_raised), 1,
+                         "C13: exactly one FreeSid call")
+        # Context NOT in store
+        self.assertFalse(hasattr(api, "_security_contexts") and api._security_contexts,
+                          "C13: context must not be published after discard")
+
+    def test_c13_token_close_lf_raise_fs_nonnull(self):
+        """Token-close-only discard: LocalFree raises AND FreeSid returns
+        non-NULL; both represented; exact one attempts each."""
+        lf_raised = []
+        fs_called = []
+        _real_buf = _ct.create_string_buffer(256)
+        _real_addr = _ct.addressof(_real_buf)
+        _sys_buf = _ct.create_string_buffer(28)
+        _sys_addr = _ct.addressof(_sys_buf)
+
+        class _K:
+            GetCurrentProcess = staticmethod(lambda: 42)
+            GetLastError = staticmethod(lambda: 6)
+            CloseHandle = staticmethod(lambda h: 0)  # FAIL
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return _real_addr
+            @staticmethod
+            def LocalFree(mem):
+                lf_raised.append(mem)
+                raise OSError("LocalFree raised")
+        api = _RealLowLevelAPI()
+        api._init = True
+        api._k = _K()
+        class _A2:
+            _phase = 0
+            @staticmethod
+            def OpenProcessToken(h, a, t):
+                hnd = _ct.cast(t, _ct.POINTER(_wt.HANDLE))
+                hnd.contents.value = 99
+                return 1
+            @staticmethod
+            def GetTokenInformation(t, c, b, s, n):
+                nd = _ct.cast(n, _ct.POINTER(_wt.DWORD))
+                if _A2._phase == 0:
+                    nd.contents.value = 256
+                    _A2._phase = 1
+                    return 1
+                return 1
+            @staticmethod
+            def GetLengthSid(p):
+                return 28
+            @staticmethod
+            def CopySid(l, d, s):
+                return 1
+            @staticmethod
+            def AllocateAndInitializeSid(*args):
+                out = _ct.cast(args[-1], _ct.POINTER(_ct.c_void_p))
+                out.contents.value = _sys_addr
+                return 1
+            @staticmethod
+            def FreeSid(sid):
+                fs_called.append(sid)
+                return 0xF00D  # non-NULL → failure
+        api._a = _A2()
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            api.acquire_security_context()
+        exc = ctx.exception
+        self.assertIn("token close", str(exc).lower())
+        errs = exc.cleanup_errors
+        self.assertEqual(len(errs), 3,
+            f"Expected 3 cleanup errors, got {len(errs)}: {errs}")
+        self.assertIn("CloseHandle", str(errs[0]),
+                       "C13b[0]: token close failure")
+        self.assertIn("LocalFree(user SID) raised", str(errs[1]),
+                       "C13b[1]: user LocalFree raise")
+        self.assertIn("FreeSid(SYSTEM) in context-discard returned non-NULL",
+                       str(errs[2]),
+                       "C13b[2]: SYSTEM FreeSid non-NULL return")
+        self.assertEqual(len(lf_raised), 1,
+                         "C13b: exactly one LocalFree call")
+        self.assertEqual(len(fs_called), 1,
+                         "C13b: exactly one FreeSid call")
+        self.assertFalse(hasattr(api, "_security_contexts") and api._security_contexts,
+                          "C13b: context not published")
+
+
+# ── P3: combined post-both-SID primary + all three release failures (fake API) ──
+
+class _P3CCombinedTestBase(_ut.TestCase):
+    def setUp(self):
+        self.api = _FakeLowLevelAPI_with_counter()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+    @staticmethod
+    def _safe_close(fd):
+        try: _os.close(fd)
+        except OSError: pass
+    def _build_dir(self, components=None):
+        if components is None:
+            components = ["Users", "u", "aisc"]
+        root = self.api.open_root("C:\\")
+        for comp in components:
+            child, _, _ = self.api.nt_create_file(
+                comp, root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+                _FILE_OPEN_IF, _FILE_DIRECTORY_FILE)
+            self.api.close_handle(root)
+            root = child
+        self.api.close_handle(root)
+
+
+class TestP3PostBothSIDPrimaryPlusAllReleaseFailures(_P3CCombinedTestBase):
+    """P3: Post-both-SID construction, release fails with user LocalFree +
+    SYSTEM FreeSid + token CloseHandle faults all in cleanup_errors."""
+
+    def _build_dir(self):
+        root = self.api.open_root("C:\\")
+        for comp in ["Users", "u", "aisc"]:
+            child, _, _ = self.api.nt_create_file(
+                comp, root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+                _FILE_OPEN_IF, _FILE_DIRECTORY_FILE)
+            self.api.close_handle(root)
+            root = child
+        self.api.close_handle(root)
+
+    def test_p3_release_failures_in_cleanup_tuple(self):
+        self._build_dir()
+        self.api._start_traversal()
+        errs = (
+            SecureStorePermissionError("user LocalFree fail"),
+            SecureStorePermissionError("SYSTEM FreeSid fail"),
+            SecureStorePermissionError("token CloseHandle fail"),
+        )
+        exc = SecureStorePermissionError("release_ctx failure")
+        exc.cleanup_errors = errs
+        self.api._faults["release_ctx"] = exc
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "f.dat", self.api)
+        raised = ctx.exception
+        cleanup = getattr(raised, "cleanup_errors", ())
+        # The release fault IS the primary.  cleanup_errors on the
+        # primary carries the three sub-errors from the fault.
+        self.assertEqual(len(cleanup), 3,
+            f"Expected 3 sub-errors in cleanup_errors, got {len(cleanup)}: {cleanup}")
+        self.assertIn("LocalFree", str(cleanup[0]))
+        self.assertIn("FreeSid", str(cleanup[1]))
+        self.assertIn("CloseHandle", str(cleanup[2]))
+
+
+# ============================================================================
+# P3‑A restored: retry-after-rollback, same‑primary identity, delete‑failure
+# residual exact tuples
+# ============================================================================
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestP3ARetryAfterRollback(_ut.TestCase):
+    """Blocker 3: failure only after creation + identity capture.
+    Spy mkdir/rmdir, assert leaf absent, retry succeeds."""
+
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_dir_retry_narrow_seam(self):
+        import aisc.adapters.secret_store as ss
+        from unittest import mock
+
+        d = _os.path.join(self.tmp, "retryd")
+        _os.mkdir(d, 0o700)
+        child = _os.path.join(d, "c")
+        _imode_call = [0]
+
+        def _fake_imode(mode):
+            _imode_call[0] += 1
+            if _imode_call[0] == 2:
+                return 0o600  # wrong for dir → mode error
+            return _stat.S_IMODE(mode)
+
+        with mock.patch.object(ss._stat, "S_IMODE", side_effect=_fake_imode):
+            with self.assertRaises(SecureStorePermissionError) as ctx:
+                ensure_secure_directory(child)
+            self.assertIn("mode", str(ctx.exception).lower())
+            self.assertFalse(_os.path.exists(child))
+
+        # Retry: must succeed
+        ensure_secure_directory(child)
+        self.assertTrue(_os.path.isdir(child))
+        self.assertEqual(_stat.S_IMODE(_os.stat(child).st_mode), 0o700)
+
+    def test_file_retry_narrow_seam(self):
+        import aisc.adapters.secret_store as ss
+        from unittest import mock
+
+        d = _os.path.join(self.tmp, "retryf")
+        ensure_secure_directory(d)
+        fpath = _os.path.join(d, "rf")
+        _imode_call = [0]
+
+        def _fake_imode(mode):
+            _imode_call[0] += 1
+            if _imode_call[0] == 2:
+                return 0o400  # wrong for file → mode error
+            return _stat.S_IMODE(mode)
+
+        with mock.patch.object(ss._stat, "S_IMODE", side_effect=_fake_imode):
+            with self.assertRaises(SecureStorePermissionError) as ctx:
+                create_private_file(d, "rf")
+            self.assertIn("mode", str(ctx.exception).lower())
+            self.assertFalse(_os.path.exists(fpath))
+
+        fd = create_private_file(d, "rf")
+        try:
+            self.assertEqual(_stat.S_IMODE(_os.fstat(fd).st_mode), 0o600)
+        finally:
+            _os.close(fd)
+        self.assertTrue(_os.path.isfile(fpath))
+
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestP3ASamePrimaryExactIdentity(_ut.TestCase):
+    """Blocker 4: mode fault + close failure →
+    cleanup_errors carries close-fail, primary carries exact mode message."""
+
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_dir_same_primary_exact_close_error(self):
+        import aisc.adapters.secret_store as ss
+        from unittest import mock
+
+        d = _os.path.join(self.tmp, "exactd")
+        _os.mkdir(d, 0o700)
+        child = _os.path.join(d, "c")
+
+        _close_errs: "list[BaseException]" = [
+            SecureStorePermissionError("close-fail"),
+            SecureStorePermissionError("close-fail2"),
+        ]
+        _real_close_fd = _posix_close_fd
+
+        def _fake_validate(fd):
+            raise SecureStorePermissionError("mode fault")
+
+        def _fake_close_fd(fd):
+            if _close_errs:
+                return _close_errs.pop(0)
+            return _real_close_fd(fd)
+
+        with mock.patch.object(ss, "_validate_dir_fd_simple",
+                               side_effect=_fake_validate):
+            with mock.patch.object(ss, "_posix_close_fd",
+                                   side_effect=_fake_close_fd):
+                with self.assertRaises(SecureStorePermissionError) as ctx:
+                    ensure_secure_directory(child)
+                exc = ctx.exception
+                self.assertIn("mode fault", str(exc))
+                self.assertFalse(_os.path.exists(child))
+                errs = exc.cleanup_errors
+                self.assertGreaterEqual(len(errs), 1)
+                self.assertIn("close-fail", str(errs[-1]))
+
+    def test_file_same_primary_exact_close_error(self):
+        import aisc.adapters.secret_store as ss
+        from unittest import mock
+
+        d = _os.path.join(self.tmp, "exactf")
+        ensure_secure_directory(d)
+        fpath = _os.path.join(d, "ef")
+
+        _close_errs: "list[BaseException]" = [
+            SecureStorePermissionError("close-fail"),
+            SecureStorePermissionError("close-fail2"),
+        ]
+        _real_close_fd = _posix_close_fd
+
+        def _fake_validate_fd(fd):
+            raise SecureStorePermissionError("mode fault")
+
+        def _fake_close_fd(fd):
+            if _close_errs:
+                return _close_errs.pop(0)
+            return _real_close_fd(fd)
+
+        with mock.patch.object(ss, "_validate_dir_fd_simple",
+                               side_effect=_fake_validate_fd):
+            with mock.patch.object(ss, "_posix_close_fd",
+                                   side_effect=_fake_close_fd):
+                with self.assertRaises(SecureStorePermissionError) as ctx:
+                    create_private_file(d, "ef")
+                exc = ctx.exception
+                self.assertIn("mode fault", str(exc))
+                self.assertFalse(_os.path.exists(fpath))
+                errs = exc.cleanup_errors
+                self.assertTrue(hasattr(exc, "cleanup_errors"))
+
+
+@_ut.skipUnless(_os.name != "nt", "POSIX only")
+class TestP3ADeleteFailureResidualExact(_ut.TestCase):
+    """Blocker 5: deterministic errors, exact tuple order,
+    residual.primary is primary, __cause__ is primary."""
+
+    def setUp(self):
+        self._t = _tempfile.TemporaryDirectory()
+        self.tmp = self._t.name
+
+    def tearDown(self):
+        self._t.cleanup()
+
+    def test_dir_delete_failure_residual_exact(self):
+        import aisc.adapters.secret_store as ss
+        from unittest import mock
+
+        d = _os.path.join(self.tmp, "dexd")
+        _os.mkdir(d, 0o700)
+        child = _os.path.join(d, "c")
+        rmdir_err = OSError(39, "ENOTEMPTY")
+
+        _close_errs: "list[BaseException]" = [
+            SecureStorePermissionError("leaf-close"),
+            SecureStorePermissionError("parent-close"),
+        ]
+        _real_close_fd = _posix_close_fd
+
+        def _fake_close_fd(fd):
+            if _close_errs:
+                return _close_errs.pop(0)
+            return _real_close_fd(fd)
+
+        # Fault chmod (post-creation) to trigger rollback from chmod failure
+        chmod_err = OSError("injected chmod fail")
+        with mock.patch.object(ss._os, "chmod", side_effect=chmod_err):
+            with mock.patch.object(ss._os, "rmdir", side_effect=rmdir_err):
+                with mock.patch.object(ss, "_posix_close_fd",
+                                       side_effect=_fake_close_fd):
+                    with self.assertRaises(SecureStoreResidualError) as ctx:
+                        ensure_secure_directory(child)
+                    residual = ctx.exception
+                    self.assertIsInstance(residual.primary,
+                                          SecureStorePermissionError)
+                    self.assertTrue(_os.path.exists(child))
+                    errs = residual.cleanup_errors
+                    self.assertGreaterEqual(len(errs), 1)
+                    self.assertIn("ENOTEMPTY", str(errs[0]))
+                    self.assertIn("leaf-close", str(errs[1]))
+                    self.assertIn("parent-close", str(errs[2]))
+
+    def test_file_delete_failure_residual_exact(self):
+        import aisc.adapters.secret_store as ss
+        from unittest import mock
+
+        d = _os.path.join(self.tmp, "dexf")
+        ensure_secure_directory(d)
+        fpath = _os.path.join(d, "df")
+        unlink_err = OSError(13, "EACCES")
+
+        _close_errs: "list[BaseException]" = [
+            SecureStorePermissionError("file-close"),
+            SecureStorePermissionError("dir-close"),
+        ]
+        _real_close_fd = _posix_close_fd
+
+        def _fake_validate_dir(fd):
+            raise SecureStorePermissionError("file-primary")
+
+        def _fake_close_fd(fd):
+            if _close_errs:
+                return _close_errs.pop(0)
+            return _real_close_fd(fd)
+
+        with mock.patch.object(ss._stat, "S_ISREG", return_value=False):
+            with mock.patch.object(ss._os, "unlink", side_effect=unlink_err):
+                with mock.patch.object(ss, "_posix_close_fd",
+                                       side_effect=_fake_close_fd):
+                    with self.assertRaises(SecureStoreResidualError) as ctx:
+                        create_private_file(d, "df")
+                    residual = ctx.exception
+                    self.assertIsInstance(residual.primary,
+                                          SecureStorePermissionError)
+                    self.assertTrue(_os.path.exists(fpath))
+                    errs = residual.cleanup_errors
+                    self.assertGreaterEqual(len(errs), 1)
+                    # rollback wraps the unlink error
+                    self.assertIn("EACCES", str(errs[0]))
+                    self.assertIn("file-close", str(errs[1]))
+                    self.assertIn("dir-close", str(errs[2]))
+
+
+# ============================================================================
+# P3‑B: Fake disposition model — delete_pending, repeat-reject, non-empty dir,
+# pending-handle operation rejection, open-while-pending rejection,
+# two-handle namespace/pending preservation, preserve-pending on close failure.
+# ============================================================================
+
+
+class TestP3BFakeDispositionModel(_ut.TestCase):
+    """Fake set_delete_disposition delete_pending semantics."""
+
+    def setUp(self):
+        self.api = _FakeLowLevelAPI_with_counter()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+
+    def test_single_disposition_sets_pending(self):
+        root = self.api.open_root("C:\\")
+        child, _, _ = self.api.nt_create_file(
+            "d", root, _FILE_READ_ATTRIBUTES | _DELETE, _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        obj_key = self.api._live_handles[child].obj_key
+        obj = self.api._namespace[obj_key]
+        self.assertNotIn("delete_pending", obj)
+        self.api.set_delete_disposition(child)
+        self.assertTrue(obj["delete_pending"])
+        self.api.close_handle(child)
+
+    def test_repeated_disposition_rejected(self):
+        root = self.api.open_root("C:\\")
+        child, _, _ = self.api.nt_create_file(
+            "d", root, _FILE_READ_ATTRIBUTES | _DELETE, _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.api.set_delete_disposition(child)
+        with self.assertRaises(OSError):
+            self.api.set_delete_disposition(child)
+        self.api.close_handle(child)
+
+    def test_non_empty_directory_rejected(self):
+        root = self.api.open_root("C:\\")
+        parent, _, _ = self.api.nt_create_file(
+            "parent", root, _FILE_READ_ATTRIBUTES | _DELETE, _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        child, _, _ = self.api.nt_create_file(
+            "child", parent, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.api.close_handle(child)
+        with self.assertRaises(SecureStorePermissionError):
+            self.api.set_delete_disposition(parent)
+        obj_key = self.api._live_handles[parent].obj_key
+        obj = self.api._namespace[obj_key]
+        self.assertNotIn("delete_pending", obj)
+        self.api.close_handle(parent)
+
+    def test_empty_directory_ok(self):
+        root = self.api.open_root("C:\\")
+        parent, _, _ = self.api.nt_create_file(
+            "empty", root, _FILE_READ_ATTRIBUTES | _DELETE, _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.api.set_delete_disposition(parent)
+        obj_key = self.api._live_handles[parent].obj_key
+        obj = self.api._namespace[obj_key]
+        self.assertTrue(obj["delete_pending"])
+        self.api.close_handle(parent)
+
+    def test_non_close_ops_rejected_through_pending(self):
+        root = self.api.open_root("C:\\")
+        child, _, _ = self.api.nt_create_file(
+            "d", root, _FILE_READ_ATTRIBUTES | _DELETE, _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.api.set_delete_disposition(child)
+        with self.assertRaises(OSError):
+            self.api.get_file_info(child)
+        with self.assertRaises(OSError):
+            self.api.get_file_type(child)
+        with self.assertRaises(OSError):
+            self.api.get_handle_identity(child)
+        with self.assertRaises(OSError):
+            self.api.read_dacl_snapshot(child)
+        with self.assertRaises(OSError):
+            self.api.open_osfhandle(child)
+        self.api.close_handle(child)
+
+    def test_new_opens_rejected_while_pending(self):
+        root = self.api.open_root("C:\\")
+        child, _, _ = self.api.nt_create_file(
+            "d", root, _FILE_READ_ATTRIBUTES | _DELETE, _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.api.set_delete_disposition(child)
+        h2, st, info = self.api.nt_create_file(
+            "d", root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(h2, 0)
+        self.assertEqual(st, _STATUS_ACCESS_DENIED)
+        self.api.close_handle(child)
+
+    def test_two_handles_first_close_preserves_namespace(self):
+        root = self.api.open_root("C:\\")
+        h1, _, _ = self.api.nt_create_file(
+            "shared", root, _FILE_READ_ATTRIBUTES | _DELETE, _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        obj_key = self.api._live_handles[h1].obj_key
+        h2, _, _ = self.api.nt_create_file(
+            "shared", root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.api.set_delete_disposition(h1)
+        self.api.close_handle(h1)
+        self.assertIn(obj_key, self.api._namespace)
+        self.assertTrue(self.api._namespace[obj_key]["delete_pending"])
+        h3, st, _ = self.api.nt_create_file(
+            "shared", root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(h3, 0)
+        self.assertEqual(st, _STATUS_ACCESS_DENIED)
+        self.api.close_handle(h2)
+        self.assertNotIn(obj_key, self.api._namespace)
+
+    def test_pending_preserved_on_close_failure(self):
+        root = self.api.open_root("C:\\")
+        child, _, _ = self.api.nt_create_file(
+            "d", root, _FILE_READ_ATTRIBUTES | _DELETE, _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        obj_key = self.api._live_handles[child].obj_key
+        self.api.set_delete_disposition(child)
+        self.api._close_fault_hids.add(child)
+        with self.assertRaises(OSError):
+            self.api.close_handle(child)
+        self.assertIn(obj_key, self.api._namespace)
+        obj = self.api._namespace[obj_key]
+        self.assertTrue(obj["delete_pending"])
+        self.assertFalse(self.api._live_handles[child].closed)
+
+
+# ============================================================================
+# P3‑B: _traverse_or_create_directory rollback
+# ============================================================================
+
+
+class _P3BDirTestBase(_ut.TestCase):
+    def setUp(self):
+        self.api = _FakeLowLevelAPI_with_counter()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+
+    def _build_parent(self):
+        root = self.api.open_root("C:\\")
+        parent, _, _ = self.api.nt_create_file(
+            "Users", root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.api.close_handle(root)
+        self.api.close_handle(parent)
+
+
+class TestP3BDirRollbackCreated(_P3BDirTestBase):
+
+    def test_created_dir_rollback_on_validation_failure(self):
+        self._build_parent()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        validation_primary = SecureStorePermissionError("dir validation fault")
+
+        def on_child(hid, name):
+            if name == "newdir":
+                self.api._info_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\newdir", self.api)
+        raised = ctx.exception
+        self.assertIs(raised, validation_primary)
+
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 1)
+
+        # Exact NtCreateFile args: no SHARE_DELETE, includes DELETE access
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "newdir":
+                args = t[1]
+                self.assertEqual(args[3], _FILE_SHARE_READ | _FILE_SHARE_WRITE)
+                self.assertTrue(args[2] & _DELETE)
+                self.assertEqual(args[4], _FILE_OPEN_IF)
+                self.assertTrue(args[5] & _FILE_DIRECTORY_FILE)
+                break
+
+        for key in self.api._namespace:
+            self.assertNotIn("newdir", key)
+
+    def test_created_dir_rollback_on_parent_close_failure(self):
+        self._build_parent()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        self.api._close_fault_nth = 2
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\newdir", self.api)
+        exc = ctx.exception
+        self.assertIn("Cleanup failure", str(exc))
+        errs = exc.cleanup_errors
+        self.assertEqual(len(errs), 1)
+
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 1)
+
+        for key in self.api._namespace:
+            self.assertNotIn("newdir", key)
+
+        parent_handle = None
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "newdir":
+                parent_handle = t[1][1]
+                break
+        self.assertIsNotNone(parent_handle)
+        self.assertEqual(self.api._close_attempts.get(parent_handle, 0), 1)
+        self.assertEqual(self.api._close_successes.get(parent_handle, 0), 0)
+
+    def test_parent_close_exact_once(self):
+        self._build_parent()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        handle, created = _traverse_or_create_directory("C:\\Users\\leaf", self.api)
+        try:
+            self.assertTrue(created)
+            parent_handle = None
+            for t in self.api.trace:
+                if t[0] == "nt_create_file" and t[1][0] == "leaf":
+                    parent_handle = t[1][1]
+                    break
+            self.assertIsNotNone(parent_handle)
+            self.assertEqual(self.api._close_attempts.get(parent_handle, 0), 1)
+            self.assertEqual(self.api._close_successes.get(parent_handle, 0), 1)
+        finally:
+            self.api.close_handle(handle)
+
+    def test_created_dir_rollback_identity_mismatch_residual(self):
+        self._build_parent()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        captured_identity = [None]
+        orig_identity_fn = self.api.get_handle_identity
+
+        def _patched_get_identity(hid):
+            result = orig_identity_fn(hid)
+            if captured_identity[0] is not None:
+                return (result[0] + 1, result[1], result[2])
+            captured_identity[0] = result
+            return result
+
+        self.api.get_handle_identity = _patched_get_identity
+
+        validation_primary = SecureStorePermissionError("validation fault")
+
+        def on_child(hid, name):
+            if name == "newdir":
+                self.api._info_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStoreResidualError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\newdir", self.api)
+        residual = ctx.exception
+        self.assertIs(residual.primary, validation_primary)
+        self.assertIs(residual.__cause__, validation_primary)
+        self.assertIn("identity mismatch", str(residual))
+        errs = residual.cleanup_errors
+        self.assertGreaterEqual(len(errs), 1)
+        self.assertIn("identity mismatch", str(errs[0]))
+
+        found = False
+        for key in self.api._namespace:
+            if "newdir" in key:
+                found = True
+                break
+        self.assertTrue(found)
+
+        leaf_handle = None
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "newdir":
+                leaf_handle = t[2][0]
+                break
+        self.assertIsNotNone(leaf_handle)
+        self.assertEqual(self.api._close_attempts.get(leaf_handle, 0), 1)
+
+    def test_created_dir_rollback_disposition_failure_residual(self):
+        self._build_parent()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        self.api._faults["set_delete_disposition"] = SecureStorePermissionError(
+            "disposition fault")
+        validation_primary = SecureStorePermissionError("validation fault")
+
+        def on_child(hid, name):
+            if name == "newdir":
+                self.api._info_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStoreResidualError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\newdir", self.api)
+        residual = ctx.exception
+        self.assertIs(residual.primary, validation_primary)
+        self.assertIs(residual.__cause__, validation_primary)
+        self.assertIn("disposition failed", str(residual))
+        errs = residual.cleanup_errors
+        self.assertGreaterEqual(len(errs), 1)
+        self.assertIn("disposition fault", str(errs[0]))
+
+        leaf_handle = None
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "newdir":
+                leaf_handle = t[2][0]
+                break
+        self.assertIsNotNone(leaf_handle)
+        self.assertEqual(self.api._close_attempts.get(leaf_handle, 0), 1)
+
+    def test_created_dir_rollback_identity_read_failure_residual(self):
+        self._build_parent()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        orig_identity_fn = self.api.get_handle_identity
+        call_count = [0]
+
+        def _patched_get_identity(hid):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise OSError("identity read failure")
+            return orig_identity_fn(hid)
+
+        self.api.get_handle_identity = _patched_get_identity
+
+        validation_primary = SecureStorePermissionError("validation fault")
+
+        def on_child(hid, name):
+            if name == "newdir":
+                self.api._info_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStoreResidualError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\newdir", self.api)
+        residual = ctx.exception
+        self.assertIs(residual.primary, validation_primary)
+        self.assertIs(residual.__cause__, validation_primary)
+        self.assertIn("identity read failed", str(residual))
+        errs = residual.cleanup_errors
+        self.assertGreaterEqual(len(errs), 1)
+        self.assertIn("identity read failure", str(errs[0]))
+
+        leaf_handle = None
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "newdir":
+                leaf_handle = t[2][0]
+                break
+        self.assertIsNotNone(leaf_handle)
+        self.assertEqual(self.api._close_attempts.get(leaf_handle, 0), 1)
+
+    def test_disposition_success_close_failure_raises_primary(self):
+        self._build_parent()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        self.api._close_fault_nth = 2
+
+        validation_primary = SecureStorePermissionError("validation fault")
+
+        def on_child(hid, name):
+            if name == "newdir":
+                self.api._info_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\newdir", self.api)
+        raised = ctx.exception
+        self.assertIs(raised, validation_primary)
+        self.assertIsInstance(raised, SecureStorePermissionError)
+        self.assertNotIsInstance(raised, SecureStoreResidualError)
+        errs = raised.cleanup_errors
+        self.assertGreaterEqual(len(errs), 1)
+        self.assertIn("Nth close fault", str(errs[0]))
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 1)
+        leaf_handle = None
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "newdir":
+                leaf_handle = t[2][0]
+                break
+        self.assertIsNotNone(leaf_handle)
+        self.assertEqual(self.api._close_attempts.get(leaf_handle, 0), 1)
+
+
+class TestP3BDirNoRollbackOpened(_P3BDirTestBase):
+
+    def test_opened_dir_no_rollback_on_validation_failure(self):
+        self._build_parent()
+        root2 = self.api.open_root("C:\\")
+        users_h, _, _ = self.api.nt_create_file(
+            "Users", root2, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        preexisting, _, info = self.api.nt_create_file(
+            "existing", users_h, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.assertEqual(info, _FILE_CREATED_INFO)
+        self.api.close_handle(preexisting)
+        self.api.close_handle(users_h)
+        self.api.close_handle(root2)
+
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        def on_child(hid, name):
+            if name == "existing":
+                self.api._info_fault_obj[hid] = SecureStorePermissionError(
+                    "existing dir fault")
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStorePermissionError):
+            _traverse_or_create_directory("C:\\Users\\existing", self.api)
+
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 0)
+        found = False
+        for key in self.api._namespace:
+            if "existing" in key:
+                found = True
+                break
+        self.assertTrue(found)
+
+    def test_opened_dir_close_cleanup_on_failure(self):
+        self._build_parent()
+        root2 = self.api.open_root("C:\\")
+        users_h, _, _ = self.api.nt_create_file(
+            "Users", root2, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        preexisting, _, _ = self.api.nt_create_file(
+            "exist2", users_h, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+            _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+        )
+        self.api.close_handle(preexisting)
+        self.api.close_handle(users_h)
+        self.api.close_handle(root2)
+
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        def on_child(hid, name):
+            if name == "exist2":
+                self.api._info_fault_obj[hid] = SecureStorePermissionError("fault")
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStorePermissionError):
+            _traverse_or_create_directory("C:\\Users\\exist2", self.api)
+
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 0)
+
+    def test_malformed_iosb_no_rollback_namespace_preserved(self):
+        self._build_parent()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        orig_nt = self.api.nt_create_file
+
+        def _injected(*args, **kwargs):
+            hid, st, info = orig_nt(*args, **kwargs)
+            if hid != 0:
+                return (hid, st, 99)
+            return (hid, st, info)
+
+        self.api.nt_create_file = _injected
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\weird", self.api)
+        exc = ctx.exception
+        self.assertIn("Unexpected IOSB Information", str(exc))
+        self.assertIsInstance(exc, SecureStorePermissionError)
+        self.assertNotIsInstance(exc, SecureStoreResidualError)
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 0)
+        found = False
+        for key in self.api._namespace:
+            if "weird" in key:
+                found = True
+                break
+        self.assertTrue(found)
+
+    def test_dir_identity_capture_failure_residual_primary_is_native(self):
+        self._build_parent()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        identity_fault = OSError("native identity fault")
+        orig_identity = self.api.get_handle_identity
+        call_count = [0]
+
+        def _patched(hid):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise identity_fault
+            return orig_identity(hid)
+
+        self.api.get_handle_identity = _patched
+
+        with self.assertRaises(SecureStoreResidualError) as ctx:
+            _traverse_or_create_directory("C:\\Users\\newdir", self.api)
+        residual = ctx.exception
+        self.assertIs(residual.primary, identity_fault)
+        self.assertIs(residual.__cause__, identity_fault)
+        errs = residual.cleanup_errors
+        self.assertGreaterEqual(len(errs), 1)
+        self.assertIsNot(errs[0], identity_fault)
+        self.assertNotIsInstance(residual.primary, SecureStorePermissionError)
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 0)
+
+
+# ============================================================================
+# P3‑B: _create_private_file_relative rollback
+# ============================================================================
+
+
+class _P3BFileTestBase(_ut.TestCase):
+    def setUp(self):
+        self.api = _FakeLowLevelAPI_with_counter()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+
+    @staticmethod
+    def _safe_close(fd):
+        try:
+            _os.close(fd)
+        except OSError:
+            pass
+
+    def _build_dir(self):
+        root = self.api.open_root("C:\\")
+        for comp in ["Users", "u", "aisc"]:
+            child, _, _ = self.api.nt_create_file(
+                comp, root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+                _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+            )
+            self.api.close_handle(root)
+            root = child
+        self.api.close_handle(root)
+
+
+class TestP3BFileRollbackCreated(_P3BFileTestBase):
+
+    def test_created_file_rollback_on_validation_failure(self):
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        validation_primary = SecureStorePermissionError("file validation fault")
+
+        def on_child(hid, name):
+            if name == "secret.dat":
+                self.api._type_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+        raised = ctx.exception
+        self.assertIs(raised, validation_primary)
+
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 1)
+
+        for key in self.api._namespace:
+            self.assertNotIn("secret.dat", key)
+
+    def test_created_file_rollback_on_dacl_validation_failure(self):
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        orig_dacl = self.api.read_dacl_snapshot
+
+        def _patched_dacl(hid):
+            snap = orig_dacl(hid)
+            if self.api.trace and any(
+                t[0] == "nt_create_file" and t[1][0] == "secret.dat"
+                for t in self.api.trace
+            ):
+                snap.aces = (snap.aces[0],)
+            return snap
+
+        self.api.read_dacl_snapshot = _patched_dacl
+
+        with self.assertRaises(SecureStorePermissionError):
+            _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 1)
+
+    def test_created_file_rollback_on_open_osfhandle_failure(self):
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        osf_fault = OSError("osfhandle fault")
+        self.api._faults["open_osfhandle"] = osf_fault
+
+        with self.assertRaises(OSError):
+            _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 1)
+
+        for key in self.api._namespace:
+            self.assertNotIn("secret.dat", key)
+
+    def test_created_file_successful_transfer_no_rollback(self):
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        fd = _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+        try:
+            self.assertIsInstance(fd, int)
+            self.assertGreater(fd, 0)
+            disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+            self.assertEqual(len(disp_calls), 0)
+            found = False
+            for key in self.api._namespace:
+                if "secret.dat" in key:
+                    found = True
+                    break
+            self.assertTrue(found)
+        finally:
+            self._safe_close(fd)
+
+    def test_created_file_rollback_identity_mismatch_residual(self):
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        captured_identity = [None]
+        orig_identity_fn = self.api.get_handle_identity
+
+        def _patched_get_identity(hid):
+            result = orig_identity_fn(hid)
+            if captured_identity[0] is not None:
+                return (result[0] + 1, result[1], result[2])
+            captured_identity[0] = result
+            return result
+
+        self.api.get_handle_identity = _patched_get_identity
+
+        validation_primary = SecureStorePermissionError("validation fault")
+
+        def on_child(hid, name):
+            if name == "secret.dat":
+                self.api._type_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStoreResidualError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+        residual = ctx.exception
+        self.assertIs(residual.primary, validation_primary)
+        self.assertIs(residual.__cause__, validation_primary)
+        self.assertIn("identity mismatch", str(residual))
+        found = False
+        for key in self.api._namespace:
+            if "secret.dat" in key:
+                found = True
+                break
+        self.assertTrue(found)
+
+        file_handle = None
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "secret.dat":
+                file_handle = t[2][0]
+                break
+        self.assertIsNotNone(file_handle)
+        self.assertEqual(self.api._close_attempts.get(file_handle, 0), 1)
+
+    def test_created_file_rollback_disposition_failure_residual(self):
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        self.api._faults["set_delete_disposition"] = SecureStorePermissionError(
+            "disposition fault")
+        validation_primary = SecureStorePermissionError("validation fault")
+
+        def on_child(hid, name):
+            if name == "secret.dat":
+                self.api._type_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStoreResidualError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+        residual = ctx.exception
+        self.assertIs(residual.primary, validation_primary)
+        self.assertIs(residual.__cause__, validation_primary)
+        self.assertIn("disposition failed", str(residual))
+
+        file_handle = None
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "secret.dat":
+                file_handle = t[2][0]
+                break
+        self.assertIsNotNone(file_handle)
+        self.assertEqual(self.api._close_attempts.get(file_handle, 0), 1)
+
+    def test_created_file_rollback_identity_read_failure_residual(self):
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        orig_identity_fn = self.api.get_handle_identity
+        call_count = [0]
+
+        def _patched_get_identity(hid):
+            call_count[0] += 1
+            if call_count[0] == 2:
+                raise OSError("file identity read failure during rollback")
+            return orig_identity_fn(hid)
+
+        self.api.get_handle_identity = _patched_get_identity
+
+        validation_primary = SecureStorePermissionError("validation fault")
+
+        def on_child(hid, name):
+            if name == "secret.dat":
+                self.api._type_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStoreResidualError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+        residual = ctx.exception
+        self.assertIs(residual.primary, validation_primary)
+        self.assertIs(residual.__cause__, validation_primary)
+        self.assertIn("identity read failed", str(residual))
+        errs = residual.cleanup_errors
+        self.assertGreaterEqual(len(errs), 1)
+        self.assertIn("identity read failure", str(errs[0]))
+
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 0)
+
+        file_handle = None
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "secret.dat":
+                file_handle = t[2][0]
+                break
+        self.assertIsNotNone(file_handle)
+        self.assertEqual(self.api._close_attempts.get(file_handle, 0), 1)
+
+        found = False
+        for key in self.api._namespace:
+            if "secret.dat" in key:
+                found = True
+                break
+        self.assertTrue(found)
+
+    def test_file_disposition_success_close_failure_raises_primary(self):
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        self.api._close_fault_nth = 4
+
+        validation_primary = SecureStorePermissionError("file validation fault")
+
+        def on_child(hid, name):
+            if name == "secret.dat":
+                self.api._type_fault_obj[hid] = validation_primary
+
+        self.api._on_child_created = on_child
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+        raised = ctx.exception
+        self.assertIs(raised, validation_primary)
+        self.assertIsInstance(raised, SecureStorePermissionError)
+        self.assertNotIsInstance(raised, SecureStoreResidualError)
+        errs = raised.cleanup_errors
+        self.assertGreaterEqual(len(errs), 1)
+        self.assertIn("Nth close fault", str(errs[0]))
+        disp_calls = [t for t in self.api.trace if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 1)
+
+        file_handle = None
+        for t in self.api.trace:
+            if t[0] == "nt_create_file" and t[1][0] == "secret.dat":
+                file_handle = t[2][0]
+                break
+        self.assertIsNotNone(file_handle)
+        self.assertEqual(self.api._close_attempts.get(file_handle, 0), 1)
+
+    def test_file_identity_capture_failure_residual_primary_is_native(self):
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        identity_fault = OSError("native identity fault")
+        orig_identity = self.api.get_handle_identity
+        call_count = [0]
+
+        def _patched(hid):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise identity_fault
+            return orig_identity(hid)
+
+        self.api.get_handle_identity = _patched
+
+        with self.assertRaises(SecureStoreResidualError) as ctx:
+            _create_private_file_relative("C:\\Users\\u\\aisc", "secret.dat", self.api)
+        residual = ctx.exception
+        self.assertIs(residual.primary, identity_fault)
+        self.assertIs(residual.__cause__, identity_fault)
+        errs = residual.cleanup_errors
+        self.assertGreaterEqual(len(errs), 1)
+        self.assertIsNot(errs[0], identity_fault)
+        self.assertNotIsInstance(residual.primary, SecureStorePermissionError)
+
+
+# ============================================================================
+# P3‑C G rows: production-shaped read_dacl_snapshot via _RealLowLevelAPI
+# ============================================================================
+
+
+class TestP3CNativeDaclPartialOutput(_ut.TestCase):
+    """G1–G2: read_dacl_snapshot GetSecurityInfo failure paths.
+
+    Uses real _RealLowLevelAPI with injected _k / _a callable fakes
+    and ctypes out-parameter writers.  Asserts exact LocalFree
+    presence/absence and primary/cleanup attachment.
+    """
+
+    def setUp(self):
+        self.api = _RealLowLevelAPI()
+        self.api._init = True
+
+    def test_g1_getsecurityinfo_fail_null_sd_no_localfree(self):
+        """G1: GetSecurityInfo returns non‑0 with NULL sd_ptr →
+        no LocalFree, exact primary message."""
+        loc_free_calls = []
+
+        class _FakeK:
+            GetLastError = staticmethod(lambda: 0)
+            @staticmethod
+            def LocalFree(mem):
+                loc_free_calls.append(mem)
+                return 0
+
+        class _FakeA:
+            @staticmethod
+            def GetSecurityInfo(
+                handle, obj_type, si, psid_owner, psid_group, pdacl,
+                psacl, psd,
+            ):
+                # NULL sd_ptr: do not write into psd
+                return 42  # non-zero → failure
+
+        self.api._k = _FakeK()
+        self.api._a = _FakeA()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.read_dacl_snapshot(1)
+        exc = ctx.exception
+        self.assertIn("GetSecurityInfo failed: 42", str(exc))
+        self.assertEqual(len(loc_free_calls), 0,
+                         "G1: null SD must not trigger LocalFree")
+        # cleanup_errors must be absent / empty since no LocalFree attempt
+        errs = getattr(exc, "cleanup_errors", ())
+        self.assertEqual(len(errs), 0,
+                         "G1: no cleanup errors with null SD")
+
+    # -- G2 helpers that set non-NULL sd_ptr via ctypes out-param --------
+
+    def _g2_setup(self, localfree_return=0, localfree_raises=None):
+        """Common setup for G2: GetSecurityInfo fails but writes
+        non‑NULL sd_ptr.  *localfree_return* is the return value of
+        LocalFree; *localfree_raises* if set LocalFree raises that
+        exception instead of returning."""
+        loc_free_calls = []
+        _sd_buf = _ct.c_void_p(0xDEAD0001)
+
+        class _FakeK:
+            GetLastError = staticmethod(lambda: 0)
+            @staticmethod
+            def LocalFree(mem):
+                loc_free_calls.append(mem)
+                if localfree_raises is not None:
+                    raise localfree_raises
+                return localfree_return
+
+        class _FakeA:
+            @staticmethod
+            def GetSecurityInfo(
+                handle, obj_type, si, psid_owner, psid_group, pdacl,
+                psacl, psd,
+            ):
+                # Write non‑NULL value into output pointer
+                out = _ct.cast(psd, _ct.POINTER(_ct.c_void_p))
+                out.contents.value = _sd_buf.value
+                return 5  # non-zero → failure
+
+        self.api._k = _FakeK()
+        self.api._a = _FakeA()
+        return loc_free_calls, _sd_buf
+
+    def test_g2_getsecurityinfo_fail_nonnull_sd_localfree_once(self):
+        """G2: failed GetSecurityInfo with non‑null partial SD →
+        LocalFree exactly once (succeeds), primary has no extra errors."""
+        loc_free_calls, sd_buf = self._g2_setup(localfree_return=0)
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.read_dacl_snapshot(1)
+        exc = ctx.exception
+        self.assertIn("GetSecurityInfo failed: 5", str(exc))
+        self.assertEqual(len(loc_free_calls), 1,
+                         "G2: exactly one LocalFree on partial SD")
+        self.assertEqual(
+            loc_free_calls[0].value if hasattr(loc_free_calls[0], "value") else loc_free_calls[0],
+            sd_buf.value,
+            "G2: LocalFree received the partial SD pointer")
+        errs = getattr(exc, "cleanup_errors", ())
+        self.assertEqual(len(errs), 0,
+                         "G2: no cleanup errors when LocalFree returns 0")
+
+    def test_g2_localfree_returns_nonnull_attached_to_primary(self):
+        """G2: LocalFree returns non‑NULL → attached to exact primary."""
+        loc_free_calls, sd_buf = self._g2_setup(localfree_return=0xBADC0DE)
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.read_dacl_snapshot(1)
+        exc = ctx.exception
+        self.assertIn("GetSecurityInfo failed: 5", str(exc))
+        self.assertEqual(len(loc_free_calls), 1)
+        errs = exc.cleanup_errors
+        self.assertEqual(len(errs), 1,
+                         "G2: one cleanup error for non-NULL LocalFree return")
+        self.assertIn("returned non-NULL", str(errs[0]))
+        self.assertIn("195936478", str(errs[0]))  # 0xBADC0DE in decimal
+
+    def test_g2_localfree_raises_attached_to_primary(self):
+        """G2: LocalFree raises → attached to exact primary."""
+        loc_free_calls, sd_buf = self._g2_setup(
+            localfree_raises=OSError("LF boom"),
+        )
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.read_dacl_snapshot(1)
+        exc = ctx.exception
+        self.assertIn("GetSecurityInfo failed: 5", str(exc))
+        self.assertEqual(len(loc_free_calls), 1)
+        errs = exc.cleanup_errors
+        self.assertEqual(len(errs), 1,
+                         "G2: one cleanup error for LocalFree raise")
+        self.assertIn("LF boom", str(errs[0]))
+
+
+# ============================================================================
+# P3‑C R rows: production-shaped release_security_context via _RealLowLevelAPI
+# ============================================================================
+
+
+class TestP3CNativeContextRelease(_ut.TestCase):
+    """R1–R5: release_security_context ownership and failure ordering.
+
+    Uses real _RealLowLevelAPI with injected _k / _a callable fakes.
+    Asserts exact native-call counts, ordering, and idempotency.
+    """
+
+    def setUp(self):
+        self.api = _RealLowLevelAPI()
+        self.api._init = True
+        self.ctx = 1
+
+    def _put_context(self, user_sid_buf, user_sid_len=28,
+                     system_sid_ptr=0xBABE):
+        if not hasattr(self.api, "_security_contexts"):
+            self.api._security_contexts: dict = {}
+        self.api._security_contexts[self.ctx] = {
+            "user_sid_buf": user_sid_buf,
+            "user_sid_len": user_sid_len,
+            "system_sid_ptr": system_sid_ptr,
+        }
+
+    def test_r1_release_normal_success(self):
+        """R1: normal release → LocalFree + FreeSid both succeed,
+        context consumed."""
+        lf_calls = []
+        fs_calls = []
+
+        class _FK:
+            GetLastError = staticmethod(lambda: 0)
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0
+
+        class _FA:
+            @staticmethod
+            def FreeSid(sid):
+                fs_calls.append(sid)
+                return None
+
+        self.api._k = _FK()
+        self.api._a = _FA()
+        self._put_context(user_sid_buf=0xAAA, system_sid_ptr=0xBBB)
+
+        self.api.release_security_context(self.ctx)
+
+        self.assertNotIn(self.ctx, self.api._security_contexts,
+                         "R1: context consumed")
+        self.assertEqual(len(lf_calls), 1, "R1: LocalFree exactly once")
+        self.assertEqual(lf_calls[0], 0xAAA)
+        self.assertEqual(len(fs_calls), 1, "R1: FreeSid exactly once")
+        self.assertEqual(fs_calls[0], 0xBBB)
+
+    def test_r2_user_localfree_fault_still_attempts_freesid(self):
+        """R2: user LocalFree returns non‑NULL — still attempts SYSTEM
+        FreeSid; context consumed; ordered cleanup tuple."""
+        lf_calls = []
+        fs_calls = []
+
+        class _FK:
+            GetLastError = staticmethod(lambda: 0)
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0xFF  # non-NULL → failure
+
+        class _FA:
+            @staticmethod
+            def FreeSid(sid):
+                fs_calls.append(sid)
+                return None  # success
+
+        self.api._k = _FK()
+        self.api._a = _FA()
+        self._put_context(user_sid_buf=0xAAA, system_sid_ptr=0xBBB)
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.release_security_context(self.ctx)
+
+        exc = ctx.exception
+        self.assertIn("release_security_context", str(exc))
+        self.assertEqual(len(lf_calls), 1, "R2: LocalFree attempted once")
+        self.assertEqual(len(fs_calls), 1,
+                         "R2: FreeSid still attempted after LocalFree fault")
+        errs = exc.cleanup_errors
+        self.assertEqual(len(errs), 1,
+                         "R2: exactly one cleanup error (LocalFree)")
+        self.assertIn("LocalFree", str(errs[0]))
+        self.assertNotIn(self.ctx, self.api._security_contexts,
+                         "R2: context consumed")
+
+    def test_r3_freesid_fault_raises_no_primary(self):
+        """R3: FreeSid returns non‑NULL → _raise_no_primary_cleanup."""
+        lf_calls = []
+        fs_calls = []
+
+        class _FK:
+            GetLastError = staticmethod(lambda: 0)
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0  # success
+
+        class _FA:
+            @staticmethod
+            def FreeSid(sid):
+                fs_calls.append(sid)
+                return 0xF00D  # non-NULL → failure
+
+        self.api._k = _FK()
+        self.api._a = _FA()
+        self._put_context(user_sid_buf=0xAAA, system_sid_ptr=0xBBB)
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.release_security_context(self.ctx)
+
+        exc = ctx.exception
+        self.assertIn("release_security_context", str(exc))
+        errs = exc.cleanup_errors
+        self.assertEqual(len(errs), 1, "R3: exactly one cleanup error")
+        self.assertIn("FreeSid", str(errs[0]))
+        self.assertNotIn(self.ctx, self.api._security_contexts,
+                         "R3: context consumed")
+
+    def test_r4_both_failures_exact_ordered_tuple(self):
+        """R4: both LocalFree and FreeSid fail → exact ordered
+        [LocalFree, FreeSid] tuple."""
+        lf_calls = []
+        fs_calls = []
+
+        class _FK:
+            GetLastError = staticmethod(lambda: 0)
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0xAA  # non-NULL
+
+        class _FA:
+            @staticmethod
+            def FreeSid(sid):
+                fs_calls.append(sid)
+                return 0xBB  # non-NULL
+
+        self.api._k = _FK()
+        self.api._a = _FA()
+        self._put_context(user_sid_buf=0xAAA, system_sid_ptr=0xBBB)
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.release_security_context(self.ctx)
+
+        exc = ctx.exception
+        errs = exc.cleanup_errors
+        self.assertEqual(len(errs), 2,
+                         "R4: exactly two cleanup errors")
+        self.assertIn("LocalFree", str(errs[0]),
+                      "R4: first error is LocalFree")
+        self.assertIn("FreeSid", str(errs[1]),
+                      "R4: second error is FreeSid")
+        self.assertEqual(len(lf_calls), 1)
+        self.assertEqual(len(fs_calls), 1)
+        self.assertNotIn(self.ctx, self.api._security_contexts)
+
+    def test_r5_consumed_and_second_call_zero_native_calls(self):
+        """R5: consumed store → second release produces no native calls."""
+        lf_calls = []
+        fs_calls = []
+
+        class _FK:
+            GetLastError = staticmethod(lambda: 0)
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0
+
+        class _FA:
+            @staticmethod
+            def FreeSid(sid):
+                fs_calls.append(sid)
+                return None
+
+        self.api._k = _FK()
+        self.api._a = _FA()
+        self._put_context(user_sid_buf=0xAAA, system_sid_ptr=0xBBB)
+
+        # First release — consumes the entry
+        self.api.release_security_context(self.ctx)
+        self.assertEqual(len(lf_calls), 1)
+        self.assertEqual(len(fs_calls), 1)
+
+        # Second call — already popped, no native calls
+        self.api.release_security_context(self.ctx)
+        self.assertEqual(len(lf_calls), 1,
+                         "R5: second release zero LocalFree calls")
+        self.assertEqual(len(fs_calls), 1,
+                         "R5: second release zero FreeSid calls")
+
+
+# ============================================================================
+# P3‑C S rows: production-shaped build_file_security_descriptor / free
+# ============================================================================
+
+
+class TestP3CNativeSecurityDescriptor(_ut.TestCase):
+    """S1–S6: build_file_security_descriptor and free_security_descriptor.
+
+    Uses real _RealLowLevelAPI with injected _k/_a callables and
+    ctypes out-parameter writers.
+    """
+
+    def setUp(self):
+        self.api = _RealLowLevelAPI()
+        self.api._init = True
+        self.ctx = 100
+
+    def _put_context(self):
+        """Store a security context with valid SIDs."""
+        _user_buf = _ct.create_string_buffer(28)
+        _sys_buf = _ct.create_string_buffer(28)
+        if not hasattr(self.api, "_security_contexts"):
+            self.api._security_contexts: dict = {}
+        self.api._security_contexts[self.ctx] = {
+            "user_sid_buf": _ct.addressof(_user_buf),
+            "user_sid_len": 28,
+            "system_sid_ptr": _ct.addressof(_sys_buf),
+        }
+        self._user_buf = _user_buf
+        self._sys_buf = _sys_buf
+
+    # -- helpers -----------------------------------------------------------
+
+    def _make_success_k(self, loc_free_calls, local_alloc_addr):
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            CloseHandle = staticmethod(lambda h: 1)
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return local_alloc_addr
+            @staticmethod
+            def LocalFree(mem):
+                loc_free_calls.append(mem)
+                return 0
+        return _K()
+
+    def _make_success_a(self):
+        """advapi32 stub that succeeds through SetSecurityDescriptorControl."""
+        class _A:
+            @staticmethod
+            def GetLengthSid(p):
+                return 28  # valid
+            @staticmethod
+            def InitializeAcl(acl, size, rev):
+                return True
+            @staticmethod
+            def AddAccessAllowedAceEx(acl, rev, flags, mask, sid):
+                return True
+            @staticmethod
+            def InitializeSecurityDescriptor(sd, rev):
+                return True
+            @staticmethod
+            def SetSecurityDescriptorDacl(sd, present, acl, defaulted):
+                return True
+            @staticmethod
+            def SetSecurityDescriptorControl(sd, ctrl, mask):
+                return True
+            @staticmethod
+            def IsValidSid(p):
+                return True
+        return _A()
+
+    # ------------------------------------------------------------------
+
+    def test_s1_invalid_system_sid_length_no_alloc(self):
+        """S1: GetLengthSid returns 0 for SYSTEM SID → error before
+        ACL allocation; no LocalAlloc/LocalFree calls."""
+        self._put_context()
+        lf_calls = []
+        la_calls = []
+
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            @staticmethod
+            def LocalAlloc(flags, size):
+                la_calls.append(size)
+                return 0xCAFE
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0
+
+        class _A:
+            @staticmethod
+            def GetLengthSid(p):
+                return 0  # invalid
+            @staticmethod
+            def IsValidSid(p):
+                return True
+
+        self.api._k = _K()
+        self.api._a = _A()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.build_file_security_descriptor(self.ctx)
+        exc = ctx.exception
+        self.assertIn("GetLengthSid returned 0", str(exc))
+        self.assertEqual(len(la_calls), 0,
+                         "S1: no LocalAlloc before length check")
+        self.assertEqual(len(lf_calls), 0,
+                         "S1: no LocalFree (nothing allocated)")
+
+    def test_s2_acl_localalloc_failure(self):
+        """S2: ACL LocalAlloc returns 0 → error, no ACL to free."""
+        self._put_context()
+        lf_calls = []
+        la_calls = []
+
+        class _K:
+            GetLastError = staticmethod(lambda: 8)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            @staticmethod
+            def LocalAlloc(flags, size):
+                la_calls.append(size)
+                return 0  # failure
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0
+
+        class _A:
+            @staticmethod
+            def GetLengthSid(p):
+                return 28
+
+        self.api._k = _K()
+        self.api._a = _A()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.build_file_security_descriptor(self.ctx)
+        exc = ctx.exception
+        self.assertIn("LocalAlloc(ACL) failed", str(exc))
+        self.assertEqual(len(la_calls), 1, "S2: LocalAlloc attempted once")
+        self.assertEqual(len(lf_calls), 0, "S2: nothing allocated, no free")
+
+    def test_s3_late_setsecuritydescriptorcontrol_primary_after_acl(self):
+        """S3: SetSecurityDescriptorControl fails AFTER ACL allocation →
+        exact primary preserved, ACL LocalFree attempted once, no
+        _sd_store publication."""
+        self._put_context()
+        lf_calls = []
+        _real_acl_buf = _ct.create_string_buffer(256)
+        _real_acl_addr = _ct.addressof(_real_acl_buf)
+
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return _real_acl_addr
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0
+
+        class _A:
+            @staticmethod
+            def GetLengthSid(p):
+                return 28
+            @staticmethod
+            def InitializeAcl(acl, size, rev):
+                return True
+            @staticmethod
+            def AddAccessAllowedAceEx(acl, rev, flags, mask, sid):
+                return True
+            @staticmethod
+            def InitializeSecurityDescriptor(sd, rev):
+                return True
+            @staticmethod
+            def SetSecurityDescriptorDacl(sd, present, acl, defaulted):
+                return True
+            @staticmethod
+            def SetSecurityDescriptorControl(sd, ctrl, mask):
+                return False  # PRIMARY failure after ACL alloc
+            @staticmethod
+            def IsValidSid(p):
+                return True
+
+        self.api._k = _K()
+        self.api._a = _A()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.build_file_security_descriptor(self.ctx)
+        exc = ctx.exception
+        self.assertIn("SetSecurityDescriptorControl failed", str(exc))
+        # ACL freed exactly once
+        self.assertEqual(len(lf_calls), 1,
+                         "S3: ACL LocalFree exactly once")
+        self.assertEqual(lf_calls[0], _real_acl_addr,
+                         "S3: LocalFree freed the ACL address")
+        # No _sd_store publication
+        store = getattr(self.api, "_sd_store", {})
+        self.assertEqual(len(store), 0,
+                         "S3: no _sd_store entry on failure")
+
+    def test_s3b_localfree_on_acl_returns_nonnull(self):
+        """S3 variant: SetSecurityDescriptorControl fails, LocalFree on
+        ACL returns non‑NULL → attached to exact primary."""
+        self._put_context()
+        lf_calls = []
+        _real_acl_buf = _ct.create_string_buffer(256)
+        _real_acl_addr = _ct.addressof(_real_acl_buf)
+
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            @staticmethod
+            def LocalAlloc(flags, size):
+                return _real_acl_addr
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0xBADF00D  # non-NULL
+
+        class _A:
+            @staticmethod
+            def GetLengthSid(p):
+                return 28
+            @staticmethod
+            def InitializeAcl(acl, size, rev):
+                return True
+            @staticmethod
+            def AddAccessAllowedAceEx(acl, rev, flags, mask, sid):
+                return True
+            @staticmethod
+            def InitializeSecurityDescriptor(sd, rev):
+                return True
+            @staticmethod
+            def SetSecurityDescriptorDacl(sd, present, acl, defaulted):
+                return True
+            @staticmethod
+            def SetSecurityDescriptorControl(sd, ctrl, mask):
+                return False
+
+        self.api._k = _K()
+        self.api._a = _A()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.build_file_security_descriptor(self.ctx)
+        exc = ctx.exception
+        self.assertIn("SetSecurityDescriptorControl", str(exc))
+        self.assertEqual(len(lf_calls), 1)
+        errs = exc.cleanup_errors
+        self.assertEqual(len(errs), 1,
+                         "S3b: LocalFree non-NULL attached to primary")
+        self.assertIn("LocalFree(ACL) returned non-NULL", str(errs[0]))
+        store = getattr(self.api, "_sd_store", {})
+        self.assertEqual(len(store), 0)
+
+    # -- free_security_descriptor -----------------------------------------
+
+    def _build_sd_handle(self, acl_addr=0xCAFE0001):
+        """Build and publish a minimal SD entry for free tests."""
+        sd = _SECURITY_DESCRIPTOR()
+        sd_handle = _ct.addressof(sd)
+        if not hasattr(self.api, "_sd_store"):
+            self.api._sd_store: dict = {}
+        self.api._sd_store[sd_handle] = {
+            "sd": sd,
+            "acl_mem": acl_addr,
+        }
+        return sd_handle
+
+    def test_s4_free_descriptor_normal(self):
+        """S4: free consumes entry, LocalFree called exactly once."""
+        lf_calls = []
+        sd_handle = self._build_sd_handle(acl_addr=0xBEE0001)
+
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0
+
+        self.api._k = _K()
+        self.api.free_security_descriptor(sd_handle)
+
+        self.assertEqual(len(lf_calls), 1, "S4: LocalFree exactly once")
+        self.assertEqual(lf_calls[0], 0xBEE0001)
+        self.assertNotIn(sd_handle, self.api._sd_store,
+                         "S4: entry consumed")
+
+    def test_s5_free_descriptor_localfree_return_failure(self):
+        """S5: LocalFree returns non‑NULL → raises with exact message."""
+        lf_calls = []
+        sd_handle = self._build_sd_handle(acl_addr=0xBEE0002)
+
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0xDEAD  # non-NULL
+
+        self.api._k = _K()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            self.api.free_security_descriptor(sd_handle)
+        exc = ctx.exception
+        self.assertIn("LocalFree(ACL) returned non-NULL", str(exc))
+        self.assertEqual(len(lf_calls), 1, "S5: LocalFree attempted once")
+        self.assertNotIn(sd_handle, self.api._sd_store,
+                         "S5: entry consumed before raise")
+
+    def test_s6_free_descriptor_second_free_noop(self):
+        """S6: second call after free → no native calls."""
+        lf_calls = []
+        sd_handle = self._build_sd_handle(acl_addr=0xBEE0003)
+
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0
+
+        self.api._k = _K()
+
+        # First free
+        self.api.free_security_descriptor(sd_handle)
+        self.assertEqual(len(lf_calls), 1)
+
+        # Second free — already consumed
+        self.api.free_security_descriptor(sd_handle)
+        self.assertEqual(len(lf_calls), 1,
+                         "S6: second free zero LocalFree calls")
+
+    def test_s6b_free_zero_handle_noop(self):
+        """S6 variant: sd_handle=0 → immediate no-op, no native calls."""
+        lf_calls = []
+
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            @staticmethod
+            def LocalFree(mem):
+                lf_calls.append(mem)
+                return 0
+
+        self.api._k = _K()
+        self.api.free_security_descriptor(0)
+        self.assertEqual(len(lf_calls), 0,
+                         "S6b: zero handle zero native calls")
+
+
+# ============================================================================
+# P3‑C compound ledger fake — attempt/state evidence for P4/P5/P7 rows
+# ============================================================================
+
+
+class _FakeLowLevelAPI_CompoundLedger(_FakeLowLevelAPI_with_counter):
+    """Narrow ledger fake: increments attempts and consumes ownership
+    BEFORE injecting each failure.  Tracks terminal state per resource.
+
+    Terminal state per handle: ``"active"`` → ``"attempted_failed"`` or
+    ``"released"``.  Second call to any consumed resource is a no‑op
+    (zero additional attempts).
+    """
+
+    class _LedgerEntry:
+        __slots__ = ("handle", "resource_type", "state", "attempts")
+        def __init__(self, handle: int, rtype: str) -> None:
+            self.handle = handle
+            self.resource_type = rtype  # "sd" | "ctx" | "handle"
+            self.state: str = "active"
+            self.attempts: int = 0
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._ledger: dict[int, _FakeLowLevelAPI_CompoundLedger._LedgerEntry] = {}
+        self._security_contexts: dict[int, bool] = {}
+        # Per‑resource faults
+        self._disp_fault: BaseException | None = None
+        self._sdfree_fault: BaseException | None = None
+        self._ctxrelease_fault: BaseException | None = None
+        # P4 build_file_sd delegation
+        self._build_sd_api: _RealLowLevelAPI | None = None
+        # Operation-level chronological log: list of {"op","handle","state"}
+        self._op_log: list[dict[str, object]] = []
+        # Per-handle exact close-fault objects (takes precedence over _close_fault_hids)
+        self._close_fault_objects: dict[int, BaseException] = {}
+
+    def _ensure_entry(self, handle: int, rtype: str) -> "_FakeLowLevelAPI_CompoundLedger._LedgerEntry":
+        if handle not in self._ledger:
+            self._ledger[handle] = self._LedgerEntry(handle, rtype)
+        return self._ledger[handle]
+
+    def _entry(self, handle: int) -> "_FakeLowLevelAPI_CompoundLedger._LedgerEntry | None":
+        return self._ledger.get(handle)
+
+    # -- security context ------------------------------------------------
+
+    def acquire_security_context(self) -> int:
+        ctx = super().acquire_security_context()
+        self._security_contexts[ctx] = True
+        self._ensure_entry(ctx, "ctx")
+        return ctx
+
+    # -- build_file_sd: delegate to _RealLowLevelAPI if configured --------
+
+    def build_file_security_descriptor(self, security_context: int) -> int:
+        if self._build_sd_api is not None:
+            # Populate the delegate's _security_contexts with a proper dict
+            if not hasattr(self._build_sd_api, "_security_contexts"):
+                self._build_sd_api._security_contexts = {}
+            if security_context not in self._build_sd_api._security_contexts:
+                _fb = _ct.create_string_buffer(28)
+                _fb_addr = _ct.addressof(_fb)
+                self._build_sd_api._security_contexts[security_context] = {
+                    "user_sid_buf": _fb_addr,
+                    "user_sid_len": 28,
+                    "user_sid_bytes": b"U" * 28,
+                    "system_sid_ptr": _fb_addr + 100,
+                    "system_sid_bytes": b"S" * 28,
+                }
+            return self._build_sd_api.build_file_security_descriptor(security_context)
+        return super().build_file_security_descriptor(security_context)
+
+    # -- set_delete_disposition -------------------------------------------
+
+    def set_delete_disposition(self, handle: int) -> None:
+        le = self._ensure_entry(handle, "handle")
+        already = any(r["op"] == "disposition" and r["handle"] == handle
+                      for r in self._op_log)
+        if already:
+            super().set_delete_disposition(handle)
+            return
+        self._op_log.append({"op": "disposition", "handle": handle,
+                              "state": "attempted_failed"})
+        le.attempts += 1
+        le.state = "attempted_failed"
+        if self._disp_fault is not None:
+            raise self._disp_fault
+        super().set_delete_disposition(handle)
+        le.state = "released"
+
+    # -- close_handle -----------------------------------------------------
+
+    def close_handle(self, handle: int) -> None:
+        le = self._ensure_entry(handle, "handle")
+        already = any(r["op"] == "close" and r["handle"] == handle
+                      for r in self._op_log)
+        if already:
+            return  # idempotent: first close already attempted
+        # First close attempt — track and potentially inject fault
+        self._op_log.append({"op": "close", "handle": handle,
+                              "state": "attempted_failed"})
+        if le.state == "active":
+            le.attempts += 1
+            le.state = "attempted_failed"
+        if handle in self._close_fault_objects:
+            self._close_attempts[handle] = self._close_attempts.get(handle, 0) + 1
+            raise self._close_fault_objects[handle]
+        # Delegate to super (tracks _close_attempts, _close_fault_hids, _check_live)
+        try:
+            super().close_handle(handle)
+        except Exception:
+            raise
+        else:
+            le.state = "released"
+
+    # -- free_security_descriptor -----------------------------------------
+
+    def free_security_descriptor(self, sd_handle: int) -> None:
+        if sd_handle == 0:
+            return
+        entry = getattr(self, "_sd_store", {}).pop(sd_handle, None)
+        if entry is None:
+            return
+        le = self._ensure_entry(sd_handle, "sd")
+        le.attempts += 1
+        le.state = "attempted_failed"
+        self._op_log.append({"op": "free_sd", "handle": sd_handle, "state": "attempted_failed"})
+        self._record("free_sd", (sd_handle,), None)
+        if self._sdfree_fault is not None:
+            raise self._sdfree_fault
+        le.state = "released"
+
+    # -- release_security_context -----------------------------------------
+
+    def release_security_context(self, ctx: int) -> None:
+        if ctx == 0:
+            return
+        had_entry = self._security_contexts.pop(ctx, None) is not None
+        if not had_entry:
+            return
+        le = self._ensure_entry(ctx, "ctx")
+        le.attempts += 1
+        le.state = "attempted_failed"
+        self._op_log.append({"op": "release_ctx", "handle": ctx, "state": "attempted_failed"})
+        self._record("release_ctx", (ctx,), None)
+        if self._ctxrelease_fault is not None:
+            raise self._ctxrelease_fault
+        le.state = "released"
+
+
+# ============================================================================
+# P3‑C P4: compound SD‑control failure via _RealLowLevelAPI delegation
+# ============================================================================
+
+
+class TestP3CP4CompoundSD(_ut.TestCase):
+    """P4: build_file_security_descriptor late failure.
+    
+    Delegates to actual ``_RealLowLevelAPI.build_file_security_descriptor``
+    with injected ``_k``/``_a`` where ACL allocation succeeds,
+    ``SetSecurityDescriptorControl`` returns False, and ACL ``LocalFree``
+    returns non‑NULL.
+    """
+
+    def setUp(self) -> None:
+        self.api = _FakeLowLevelAPI_CompoundLedger()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+        # Delegate _RealLowLevelAPI for build_file_sd
+        self._sd_api = _RealLowLevelAPI()
+        self._sd_api._init = True
+        self.api._build_sd_api = self._sd_api
+
+    def tearDown(self) -> None:
+        _set_low_level_api(self._orig)
+
+    @staticmethod
+    def _safe_close(fd: int) -> None:
+        try:
+            _os.close(fd)
+        except OSError:
+            pass
+
+    def _build_dir(self) -> None:
+        root = self.api.open_root("C:\\")
+        for comp in ["Users", "u", "aisc"]:
+            child, _, _ = self.api.nt_create_file(
+                comp, root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+                _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+            )
+            self.api.close_handle(root)
+            root = child
+        self.api.close_handle(root)
+
+    def test_p4_compound_sd_control_failure(self) -> None:
+        """P4: ACL alloc succeeds, SetSecurityDescriptorControl fails,
+        ACL LocalFree returns non-NULL; exact primary preserved with
+        exactly one ACL-free cleanup error; no _sd_store publication;
+        dir close and ctx release each attempted/consumed exactly once."""
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        lf_calls: list[int] = []
+        _real_acl_buf = _ct.create_string_buffer(256)
+        _real_acl_addr = _ct.addressof(_real_acl_buf)
+
+        class _K:
+            GetLastError = staticmethod(lambda: 0)
+            GetCurrentProcess = staticmethod(lambda: 42)
+            @staticmethod
+            def LocalAlloc(flags: int, size: int) -> int:
+                return _real_acl_addr
+            @staticmethod
+            def LocalFree(mem: int) -> int:
+                lf_calls.append(mem)
+                return 0xBADC0DE  # non-NULL
+
+        class _A:
+            @staticmethod
+            def GetLengthSid(p: int) -> int:
+                return 28
+            @staticmethod
+            def InitializeAcl(acl: int, size: int, rev: int) -> bool:
+                return True
+            @staticmethod
+            def AddAccessAllowedAceEx(
+                acl: int, rev: int, flags: int, mask: int, sid: int,
+            ) -> bool:
+                return True
+            @staticmethod
+            def InitializeSecurityDescriptor(sd: int, rev: int) -> bool:
+                return True
+            @staticmethod
+            def SetSecurityDescriptorDacl(
+                sd: int, present: bool, acl: int, defaulted: bool,
+            ) -> bool:
+                return True
+            @staticmethod
+            def SetSecurityDescriptorControl(
+                sd: int, ctrl: int, mask: int,
+            ) -> bool:
+                return False
+
+        self._sd_api._k = _K()
+        self._sd_api._a = _A()
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative(
+                "C:\\Users\\u\\aisc", "f.dat", self.api,
+            )
+        raised = ctx.exception
+        # Exact late primary
+        self.assertIn("SetSecurityDescriptorControl", str(raised),
+                      "P4: primary is SD‑control error")
+        # Exactly one ACL-free cleanup error
+        errs = getattr(raised, "cleanup_errors", ())
+        self.assertEqual(len(errs), 1,
+            f"P4: exactly one ACL-free cleanup error, got {len(errs)}: {errs}")
+        self.assertIn("LocalFree(ACL) returned non-NULL", str(errs[0]),
+                      "P4: ACL LocalFree error attached")
+        # ACL freed exactly once
+        self.assertEqual(len(lf_calls), 1,
+                         "P4: ACL LocalFree exactly once")
+        self.assertEqual(lf_calls[0], _real_acl_addr,
+                         "P4: LocalFree freed the ACL address")
+        # No _sd_store publication on delegate
+        store = getattr(self._sd_api, "_sd_store", {})
+        self.assertEqual(len(store), 0,
+                         "P4: no _sd_store entry on failure")
+
+        # Dir handle: at least 1 close, exactly 1 attempt
+        dir_entries = [le for le in self.api._ledger.values()
+                       if le.resource_type == "handle" and le.attempts > 0]
+        close_entries = [le for le in dir_entries
+                         if le.state in ("attempted_failed", "released")]
+        self.assertGreaterEqual(len(close_entries), 1,
+            f"P4: at least one handle closed, got {len(close_entries)}")
+        for le in close_entries:
+            self.assertEqual(le.attempts, 1,
+                f"P4: handle {le.handle} close attempts={le.attempts}, expected 1")
+
+        # Ctx release: exactly 1 attempt (succeeds in this P4 path)
+        ctx_entries = [le for le in self.api._ledger.values()
+                       if le.resource_type == "ctx" and le.attempts > 0]
+        self.assertEqual(len(ctx_entries), 1,
+                         f"P4: exactly one ctx release entry, got {len(ctx_entries)}")
+        ctx_le = ctx_entries[0]
+        self.assertEqual(ctx_le.attempts, 1,
+                         "P4: ctx release exactly 1 attempt")
+
+
+# ============================================================================
+# P3‑C P5: five‑failure compound with exact ledger evidence
+# ============================================================================
+
+
+class TestP3CP5FiveFailure(_ut.TestCase):
+    """P5: five‑failure compound — every cleanup operation fails exactly
+    once with terminal state ``attempted_failed`` and no retry."""
+
+    def setUp(self) -> None:
+        self.api = _FakeLowLevelAPI_CompoundLedger()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self) -> None:
+        _set_low_level_api(self._orig)
+
+    @staticmethod
+    def _safe_close(fd: int) -> None:
+        try:
+            _os.close(fd)
+        except OSError:
+            pass
+
+    def _build_dir(self) -> None:
+        root = self.api.open_root("C:\\")
+        for comp in ["Users", "u", "aisc"]:
+            child, _, _ = self.api.nt_create_file(
+                comp, root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+                _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+            )
+            self.api.close_handle(root)
+            root = child
+        self.api.close_handle(root)
+
+    def test_p5_five_failure_compound(self) -> None:
+        """P5: inject 6 faults (1 primary + 5 cleanup) through the
+        ledger fake; assert exact 5 ordered cleanup_errors, every
+        resource attempted exactly once with terminal attempted_failed,
+        no owned slot remains."""
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        verification_primary = SecureStorePermissionError("file type fault")
+
+        # Inject all 5 cleanup faults as exact objects for identity checks
+        disp_fault = SecureStorePermissionError("disposition fault")
+        sd_fault = SecureStorePermissionError("sd free fault")
+        ctx_fault = SecureStorePermissionError("context release fault")
+        file_close_fault = OSError("file-close-fault")
+        dir_close_fault = OSError("dir-close-fault")
+
+        self.api._disp_fault = disp_fault
+        self.api._sdfree_fault = sd_fault
+        self.api._ctxrelease_fault = ctx_fault
+
+        # Capture file and dir handles; inject exact close-fault objects
+        file_hids: list[int] = []
+        dir_hids: list[int] = []
+
+        def _on_child(hid: int, name: str) -> None:
+            if name == "f.dat":
+                file_hids.append(hid)
+                self.api._type_fault_obj[hid] = verification_primary
+                self.api._close_fault_objects[hid] = file_close_fault
+            elif name == "aisc":
+                dir_hids.append(hid)
+                self.api._close_fault_objects[hid] = dir_close_fault
+
+        self.api._on_child_created = _on_child
+
+        with self.assertRaises(SecureStoreResidualError) as ctx:
+            _create_private_file_relative(
+                "C:\\Users\\u\\aisc", "f.dat", self.api,
+            )
+        residual = ctx.exception
+        # Exact primary identity
+        self.assertIs(residual.primary, verification_primary,
+                      "P5: residual.primary is exact verification primary")
+        self.assertIs(residual.__cause__, verification_primary,
+                      "P5: __cause__ is exact verification primary")
+
+        # Exactly 5 cleanup_errors in frozen order
+        errs = residual.cleanup_errors
+        self.assertEqual(len(errs), 5,
+            f"P5: expected 5 cleanup errors, got {len(errs)}: {errs}")
+        # [0] disposition rollback — wrapped by _rollback_created_file
+        self.assertIn("disposition failed", str(errs[0]),
+                      "P5[0]: disposition rollback failure")
+        self.assertIn("disposition fault", str(errs[0]),
+                      "P5[0]: disposition error message preserved")
+        # [1] file close — exact injected object
+        self.assertIs(errs[1], file_close_fault,
+                      "P5[1]: exact file-close fault object")
+        # [2] directory close — exact injected object
+        self.assertIs(errs[2], dir_close_fault,
+                      "P5[2]: exact dir-close fault object")
+        # [3] SD free — exact injected object
+        self.assertIs(errs[3], sd_fault,
+                      "P5[3]: exact SD free fault object")
+        # [4] context release — exact injected object
+        self.assertIs(errs[4], ctx_fault,
+                      "P5[4]: exact context release fault object")
+
+        # Exact handles captured
+        self.assertEqual(len(file_hids), 1, "P5: exactly one file handle captured")
+        self.assertEqual(len(dir_hids), 1, "P5: exactly one dir handle captured")
+        file_hid = file_hids[0]
+        dir_hid = dir_hids[0]
+
+        # Capture SD handle and ctx handle from _op_log for sequence assertion
+        sd_ops = [r for r in self.api._op_log if r["op"] == "free_sd"]
+        ctx_ops = [r for r in self.api._op_log if r["op"] == "release_ctx"]
+        self.assertEqual(len(sd_ops), 1, "P5: exactly 1 free_sd op")
+        self.assertEqual(len(ctx_ops), 1, "P5: exactly 1 release_ctx op")
+        sd_handle = sd_ops[0]["handle"]
+        ctx_handle = ctx_ops[0]["handle"]
+
+        # Exact chronological _op_log sequence (relevant ops only)
+        expected_sequence: list[dict[str, object]] = [
+            {"op": "disposition", "handle": file_hid, "state": "attempted_failed"},
+            {"op": "close",       "handle": file_hid, "state": "attempted_failed"},
+            {"op": "close",       "handle": dir_hid,  "state": "attempted_failed"},
+            {"op": "free_sd",     "handle": sd_handle,"state": "attempted_failed"},
+            {"op": "release_ctx", "handle": ctx_handle,"state": "attempted_failed"},
+        ]
+        relevant_ops = [r for r in self.api._op_log
+                        if r["op"] in ("disposition", "close", "free_sd", "release_ctx")]
+        # Filter to only the 5 relevant operations (ignore traversal closes)
+        # The last 5 entries in relevant_ops should match
+        self.assertGreaterEqual(len(relevant_ops), 5,
+            f"P5: at least 5 relevant ops, got {len(relevant_ops)}")
+        tail_5 = relevant_ops[-5:]
+        self.assertEqual(tail_5, expected_sequence,
+            f"P5: last 5 ops sequence mismatch\n  expected: {expected_sequence}\n  got:      {tail_5}")
+
+        # Per-handle close attempts exactly 1
+        self.assertEqual(self.api._close_attempts.get(file_hid, 0), 1,
+                         "P5: file handle parent close_attempts=1")
+        self.assertEqual(self.api._close_attempts.get(dir_hid, 0), 1,
+                         "P5: dir handle parent close_attempts=1")
+
+        # Exactly 1 SD entry, terminal attempted_failed
+        sd_entries = [le for le in self.api._ledger.values()
+                      if le.resource_type == "sd" and le.attempts > 0]
+        self.assertEqual(len(sd_entries), 1)
+        self.assertEqual(sd_entries[0].attempts, 1)
+        self.assertEqual(sd_entries[0].state, "attempted_failed")
+
+        # Exactly 1 ctx entry, terminal attempted_failed
+        ctx_entries = [le for le in self.api._ledger.values()
+                       if le.resource_type == "ctx" and le.attempts > 0]
+        self.assertEqual(len(ctx_entries), 1)
+        self.assertEqual(ctx_entries[0].attempts, 1)
+        self.assertEqual(ctx_entries[0].state, "attempted_failed")
+
+        # No owned slot remains: second SD free / ctx release zero extra attempts
+        for le in sd_entries:
+            prev = le.attempts
+            self.api.free_security_descriptor(le.handle)
+            self.assertEqual(self.api._entry(le.handle).attempts, prev,  # type: ignore[union-attr]
+                             "P5: second SD free zero additional attempts")
+        for le in ctx_entries:
+            prev = le.attempts
+            self.api.release_security_context(le.handle)
+            self.assertEqual(self.api._entry(le.handle).attempts, prev,  # type: ignore[union-attr]
+                             "P5: second ctx release zero additional attempts")
+
+
+# ============================================================================
+# P3‑C P7: consume‑before‑failure exact evidence
+# ============================================================================
+
+
+class TestP3CP7ConsumeFault(_ut.TestCase):
+    """P7: consume‑before‑failure with exact ledger evidence —
+    no vacuously loose assertions."""
+
+    def setUp(self) -> None:
+        self.api = _FakeLowLevelAPI_CompoundLedger()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self) -> None:
+        _set_low_level_api(self._orig)
+
+    @staticmethod
+    def _safe_close(fd: int) -> None:
+        try:
+            _os.close(fd)
+        except OSError:
+            pass
+
+    def _build_dir(self) -> None:
+        root = self.api.open_root("C:\\")
+        for comp in ["Users", "u", "aisc"]:
+            child, _, _ = self.api.nt_create_file(
+                comp, root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+                _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+            )
+            self.api.close_handle(root)
+            root = child
+        self.api.close_handle(root)
+
+    # -- SD-free-only failure with no primary ------------------------------
+
+    def test_p7_sd_free_only_no_primary(self) -> None:
+        """P7a: SD free failure with no primary error.
+        
+        Assert: exact raised object is the injected fault; cleanup_errors
+        from finally block are present; exactly one attempt; store consumed;
+        second free zero additional attempts."""
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        sd_fault = SecureStorePermissionError("sd free consumed fault")
+        self.api._sdfree_fault = sd_fault
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative(
+                "C:\\Users\\u\\aisc", "f.dat", self.api,
+            )
+        raised = ctx.exception
+        # SD free becomes the primary via except BaseException
+        self.assertIs(raised, sd_fault,
+                      "P7a: raised exception is exact injected sd_fault")
+        self.assertIn("sd free consumed fault", str(raised))
+
+        # Exactly one SD free attempt, terminal attempted_failed
+        sd_entries = [le for le in self.api._ledger.values()
+                      if le.resource_type == "sd" and le.attempts > 0]
+        self.assertEqual(len(sd_entries), 1,
+                         "P7a: exactly one SD entry with attempts")
+        sd_le = sd_entries[0]
+        self.assertEqual(sd_le.attempts, 1,
+                         "P7a: exactly one SD free attempt")
+        self.assertEqual(sd_le.state, "attempted_failed",
+                         "P7a: SD free terminal state attempted_failed")
+
+        # Second free produces zero additional attempts
+        prev = sd_le.attempts
+        self.api.free_security_descriptor(sd_le.handle)
+        self.assertEqual(self.api._entry(sd_le.handle).attempts, prev,  # type: ignore[union-attr]
+                         "P7a: second SD free zero additional attempts")
+
+    # -- Context-release-only failure with no primary ---------------------
+
+    def test_p7_context_release_only_no_primary(self) -> None:
+        """P7b: context release failure with no primary error.
+        
+        Assert: exact raised object is the injected fault; exactly one
+        attempt; consumed; second release zero additional attempts."""
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        ctx_fault = SecureStorePermissionError("context release consumed fault")
+        self.api._ctxrelease_fault = ctx_fault
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative(
+                "C:\\Users\\u\\aisc", "f.dat", self.api,
+            )
+        raised = ctx.exception
+        # Context release becomes the primary via except BaseException
+        self.assertIs(raised, ctx_fault,
+                      "P7b: raised exception is exact injected ctx_fault")
+        self.assertIn("context release consumed fault", str(raised))
+
+        # Exactly one context release attempt, terminal attempted_failed
+        ctx_entries = [le for le in self.api._ledger.values()
+                       if le.resource_type == "ctx" and le.attempts > 0]
+        self.assertEqual(len(ctx_entries), 1,
+                         "P7b: exactly one ctx entry with attempts")
+        ctx_le = ctx_entries[0]
+        self.assertEqual(ctx_le.attempts, 1,
+                         "P7b: exactly one ctx release attempt")
+        self.assertEqual(ctx_le.state, "attempted_failed",
+                         "P7b: ctx release terminal state attempted_failed")
+
+        # Second release zero additional attempts
+        prev = ctx_le.attempts
+        self.api.release_security_context(ctx_le.handle)
+        self.assertEqual(self.api._entry(ctx_le.handle).attempts, prev,  # type: ignore[union-attr]
+                         "P7b: second ctx release zero additional attempts")
+
+    # -- Directory-close-only failure, no primary -------------------------
+
+    def test_p7_dir_close_only_no_primary(self) -> None:
+        """P7c: directory close failure with no primary error.
+        
+        Production contract: dir close wraps fault as
+        ``SecureStorePermissionError("Directory close failure...") from e``.
+        Assert exact primary type/message, exact __cause__ fault object,
+        empty cleanup_errors, exactly one close attempt, terminal
+        attempted_failed, second close zero extra ledger attempts."""
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        # Inject an exact fault object on the aisc dir handle
+        dir_close_fault = OSError("dir-close-injected")
+        dir_handle_captured: list[int] = []
+
+        def _on_child(hid: int, name: str) -> None:
+            if name == "aisc":
+                dir_handle_captured.append(hid)
+                self.api._close_fault_objects[hid] = dir_close_fault
+
+        self.api._on_child_created = _on_child
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative(
+                "C:\\Users\\u\\aisc", "f.dat", self.api,
+            )
+        raised = ctx.exception
+        # Exact primary: SecureStorePermissionError wrapping the fault
+        self.assertIsInstance(raised, SecureStorePermissionError,
+                              "P7c: primary is SecureStorePermissionError")
+        self.assertIn("Directory close failure", str(raised),
+                      "P7c: primary message names directory close")
+        # Exact __cause__ is the injected fault object
+        self.assertIs(raised.__cause__, dir_close_fault,
+                      "P7c: __cause__ is exact injected dir-close-fault")
+        # cleanup_errors is empty () — no secondary failures
+        errs = getattr(raised, "cleanup_errors", ())
+        self.assertEqual(errs, (),
+            f"P7c: cleanup_errors must be empty (), got {errs}")
+
+        # Exactly one dir handle captured
+        self.assertEqual(len(dir_handle_captured), 1,
+                         "P7c: exactly one dir handle captured")
+        dir_hid = dir_handle_captured[0]
+
+        # Exactly one close attempt in parent ledger
+        self.assertEqual(self.api._close_attempts.get(dir_hid, 0), 1,
+                         "P7c: dir handle close attempted exactly once")
+
+        # Operation log: exactly 1 close on dir_hid, attempted_failed
+        dir_close_ops = [r for r in self.api._op_log
+                         if r["op"] == "close" and r["handle"] == dir_hid]
+        self.assertEqual(len(dir_close_ops), 1,
+            f"P7c: exactly 1 close op on dir {dir_hid}, got {len(dir_close_ops)}")
+        self.assertEqual(dir_close_ops[0]["state"], "attempted_failed",
+                         "P7c: dir close terminal attempted_failed")
+
+        # Second close: zero additional _op_log entries AND _close_attempts unchanged
+        prev_op_count = len(self.api._op_log)
+        prev_attempts = self.api._close_attempts.get(dir_hid, 0)
+        try:
+            self.api.close_handle(dir_hid)
+        except OSError:
+            pass
+        self.assertEqual(len(self.api._op_log), prev_op_count,
+                         "P7c: second close zero additional _op_log entries")
+        self.assertEqual(self.api._close_attempts.get(dir_hid, 0), prev_attempts,
+                         "P7c: second close _close_attempts unchanged (exactly 1)")
+
+
+# ============================================================================
+# P3‑C P6: transfer/primary + disposition + close paths
+# ============================================================================
+
+
+class TestP3CP6Transfer(_ut.TestCase):
+    """P6: open_osfhandle failure paths — disposition, close, namespace."""
+
+    def setUp(self) -> None:
+        self.api = _FakeLowLevelAPI_with_counter()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self) -> None:
+        _set_low_level_api(self._orig)
+
+    @staticmethod
+    def _safe_close(fd: int) -> None:
+        try:
+            _os.close(fd)
+        except OSError:
+            pass
+
+    def _build_dir(self) -> None:
+        root = self.api.open_root("C:\\")
+        for comp in ["Users", "u", "aisc"]:
+            child, _, _ = self.api.nt_create_file(
+                comp, root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+                _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+            )
+            self.api.close_handle(root)
+            root = child
+        self.api.close_handle(root)
+
+    def test_p6_transfer_primary_disposition_ok(self) -> None:
+        """P6: open_osfhandle raises; disposition succeeds; file close
+        succeeds; primary is exact osf error; namespace removed; transfer
+        never occurred."""
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        osf_primary = OSError("open_osfhandle fault")
+        self.api._faults["open_osfhandle"] = osf_primary
+
+        with self.assertRaises(OSError) as ctx:
+            _create_private_file_relative(
+                "C:\\Users\\u\\aisc", "f.dat", self.api,
+            )
+        raised = ctx.exception
+        self.assertIs(raised, osf_primary,
+                      "P6: exact open_osfhandle primary")
+        disp_calls = [t for t in self.api.trace
+                      if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 1,
+                         "P6: exactly one set_delete_disposition")
+        for hid, inst in self.api._live_handles.items():
+            self.assertFalse(inst.transferred,
+                             "P6: no HANDLE transferred")
+        for key in list(self.api._namespace.keys()):
+            self.assertNotIn("f.dat", key,
+                             "P6: namespace removed after rollback")
+        file_close_found = False
+        for hid in self.api._live_handles:
+            inst = self.api._live_handles[hid]
+            if "f.dat" in inst.obj_key:
+                self.assertEqual(
+                    self.api._close_attempts.get(hid, 0), 1,
+                    "P6: file handle close attempted exactly once"
+                )
+                file_close_found = True
+        self.assertTrue(file_close_found, "P6: file handle found")
+
+    def test_p6b_transfer_primary_close_fail_on_primary(self) -> None:
+        """P6 variant: open_osfhandle primary, disposition success,
+        file close FAILS -> close error in primary.cleanup_errors,
+        exactly one disposition, exactly one close attempt."""
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+
+        osf_primary = OSError("open_osfhandle fault")
+        self.api._faults["open_osfhandle"] = osf_primary
+
+        file_hids: list[int] = []
+
+        def _on_child(hid: int, name: str) -> None:
+            if name == "f.dat":
+                file_hids.append(hid)
+                self.api._close_fault_hids.add(hid)
+        self.api._on_child_created = _on_child
+
+        with self.assertRaises(OSError) as ctx:
+            _create_private_file_relative(
+                "C:\\Users\\u\\aisc", "f.dat", self.api,
+            )
+        raised = ctx.exception
+        self.assertIs(raised, osf_primary,
+                      "P6b: exact open_osfhandle primary")
+        disp_calls = [t for t in self.api.trace
+                      if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 1,
+                         "P6b: exactly one disposition")
+        errs = getattr(raised, "cleanup_errors", ())
+        self.assertEqual(len(errs), 1,
+                         "P6b: exactly one cleanup error (file close)")
+        self.assertEqual(len(file_hids), 1,
+                         "P6b: file handle captured")
+        self.assertEqual(
+            self.api._close_attempts.get(file_hids[0], 0), 1,
+            "P6b: file handle close attempted exactly once"
+        )
+
+
+
+class TestP3CInvalidOpenOsfhandle(_ut.TestCase):
+    """Invalid open_osfhandle return values → rollback before close,
+    no transfer, exact one disposition/close, namespace removal."""
+
+    def setUp(self):
+        self.api = _FakeLowLevelAPI_with_counter()
+        self.api._drive_types["C:\\"] = _DRIVE_FIXED
+        self._orig = _get_low_level_api()
+        _set_low_level_api(self.api)
+
+    def tearDown(self):
+        _set_low_level_api(self._orig)
+
+    @staticmethod
+    def _safe_close(fd):
+        try:
+            _os.close(fd)
+        except OSError:
+            pass
+
+    def _build_dir(self):
+        root = self.api.open_root("C:\\")
+        for comp in ["Users", "u", "aisc"]:
+            child, _, _ = self.api.nt_create_file(
+                comp, root, _FILE_READ_ATTRIBUTES, _FILE_SHARE_READ,
+                _FILE_OPEN_IF, _FILE_DIRECTORY_FILE,
+            )
+            self.api.close_handle(root)
+            root = child
+        self.api.close_handle(root)
+
+    def _patch_open_osfhandle_return(self, return_value):
+        """Patch open_osfhandle to return *return_value* without
+        transferring ownership in the fake."""
+        orig_osf = self.api.open_osfhandle
+
+        def _patched(h):
+            # Do NOT call orig which transfers ownership
+            self.api._record("open_osfhandle", (h,), return_value)
+            return return_value
+
+        self.api.open_osfhandle = _patched
+
+    def _assert_rollback_no_transfer_namespace_removed(self, file_created=True):
+        """Common assertions for invalid open_osfhandle cases."""
+        disp_calls = [t for t in self.api.trace
+                      if t[0] == "set_delete_disposition"]
+        self.assertEqual(len(disp_calls), 1,
+                         "Invalid fd: exactly one set_delete_disposition")
+        # No transfer: no HANDLE should have transferred=True
+        for hid, inst in self.api._live_handles.items():
+            self.assertFalse(
+                inst.transferred,
+                f"Invalid fd: HANDLE {hid} must not be transferred"
+            )
+        # File removed from namespace
+        for key in list(self.api._namespace.keys()):
+            self.assertNotIn("f.dat", key,
+                             "Invalid fd: file removed from namespace")
+
+    def test_invalid_negative_int_rollback_no_transfer(self):
+        """Negative int fd → rollback, no transfer, namespace removed."""
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+        self._patch_open_osfhandle_return(-1)
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative(
+                "C:\\Users\\u\\aisc", "f.dat", self.api,
+            )
+        exc = ctx.exception
+        self.assertIn("invalid fd", str(exc).lower())
+        self._assert_rollback_no_transfer_namespace_removed()
+
+    def test_invalid_non_int_rollback_no_transfer(self):
+        """Non‑int fd (float) → rollback, no transfer, namespace removed."""
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+        self._patch_open_osfhandle_return(3.14)
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative(
+                "C:\\Users\\u\\aisc", "f.dat", self.api,
+            )
+        exc = ctx.exception
+        self.assertIn("invalid fd", str(exc).lower())
+        self._assert_rollback_no_transfer_namespace_removed()
+
+    def test_invalid_bool_rollback_no_transfer(self):
+        """Boolean fd → rollback, no transfer, namespace removed.
+        bool is subclass of int, but type(fd) is int check rejects it."""
+        self._build_dir()
+        self.api._start_traversal()
+        self.api.trace.clear()
+        self._patch_open_osfhandle_return(True)
+
+        with self.assertRaises(SecureStorePermissionError) as ctx:
+            _create_private_file_relative(
+                "C:\\Users\\u\\aisc", "f.dat", self.api,
+            )
+        exc = ctx.exception
+        self.assertIn("invalid fd", str(exc).lower())
+        self._assert_rollback_no_transfer_namespace_removed()
+
+
+# ============================================================================
+# Run
+# ============================================================================
+
+if __name__ == "__main__":
+    _ut.main(verbosity=2)
+

@@ -1,0 +1,8 @@
+# Gitleaks configuration for AISC
+[allowlist]
+  description = "Global allowlist"
+  paths = [
+    '''container/_bundle/.*''',    # Vendored third-party — not our secrets
+    '''docs/.*''',                  # Documentation may contain examples
+    '''vendor/.*''',                # Vendor manifest
+  ]

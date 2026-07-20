@@ -4,5 +4,6 @@ claude-switch text eol=lf
 claude-wrapper text eol=lf
 entrypoint.sh text eol=lf
 *.bat text eol=crlf
+*.ps1 text eol=lf
 *.md text eol=lf
 *.json text eol=lf

@@ -21,12 +21,32 @@ npm-debug.log*
 api-keys
 .git-credentials
 
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
 # Claude Code local state
 .claude/
 .claude_keys
 
 # cs 运行配置（含 api-keys 密钥）
 .cc-config/
+
+# AISC runtime state directory (config, secrets, cache, logs)
+.aisc/
+
+# Mihomo 代理配置（含订阅节点凭据，敏感）— 容器内建 TUN 透明代理
+.claude/mihomo/
+
+# 启动器流水线运行时状态（模块间解耦传参，每次运行重生成）
+.deploy/
+
+# mihomo 二进制 + geodata 预置（由 stage-mihomo.sh 下载）
+# 纳入 git 使 docker build 自包含、国内网络下无需访问 GitHub（同 _bundle 哲学）
+# 升级 mihomo：改 Dockerfile MIHOMO_VERSION 后重跑 bash stage-mihomo.sh 更新本目录
 
 # 注意：_bundle/ 现纳入 git（由 stage-skills.sh 一次性生成），
 # 使 docker build 自包含、不依赖宿主机 ~/.claude。
@@ -36,3 +56,12 @@ super-claude-*.tar
 
 .project
 tasks/
+
+# Local deepwork orchestration state
+.slim/deepwork/
+
+# Local archive (project cleanup snapshots — never delete)
+.archive/
+
+# Backup / temp artefact clutter
+*.bak
