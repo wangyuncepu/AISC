@@ -6,12 +6,11 @@ Container discovery: ``--name`` override → state file → structured error.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from aisc.application.resources import locate_aisc_root, _RootSourceError
-from aisc.adapters.state_file import read_state_key
+from aisc.adapters.container_registry import resolve_target
 from aisc.adapters.docker_ import DockerExecutor, RealDockerExecutor
 from aisc.domain.models import CliError, ProcessResult
 
@@ -57,54 +56,39 @@ def _classify_process_error(proc: ProcessResult, name: str, action: str) -> CliE
 # Container discovery
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Container discovery — delegates to container_registry.resolve_target
+# ---------------------------------------------------------------------------
+
 def discover_container(
     name_override: Optional[str] = None,
     explicit_root: Optional[str] = None,
+    label_override: Optional[str] = None,
+    executor: Optional[DockerExecutor] = None,
 ) -> str:
-    """Discover the target container name.
+    """Discover the target container name via the registry.
 
-    Priority:
-    1. Explicit ``--name`` override
-    2. ``CONTAINER_NAME`` from ``<aisc_root>/.aisc/state.env``
+    Priority (handled in :func:`container_registry.resolve_target`):
+    1. ``name_override``
+    2. ``label_override`` (unique match)
+    3. ``default`` pointer (last ``run``)
+    4. single registered container
+    5. multiple → ``CliError`` listing candidates
+
+    A lazy GC prunes registry entries whose container no longer exists.
 
     Returns:
         Container name string.
 
     Raises:
-        CliError: If no container can be discovered and no name override given.
+        CliError: If no container can be discovered.
     """
-    if name_override:
-        return name_override
-
-    # Try explicit_root path directly first (no structure marker check needed)
-    root: Optional[Path] = None
-    if explicit_root is not None:
-        root = Path(explicit_root).resolve()
-        if root.is_dir():
-            name = read_state_key(root, "CONTAINER_NAME")
-            if name:
-                return name
-
-    # Fall back to locate_aisc_root for auto-discovery
-    if root is None:
-        try:
-            root = locate_aisc_root(explicit_root=explicit_root)
-        except _RootSourceError:
-            pass
-
-    if root is not None:
-        name = read_state_key(root, "CONTAINER_NAME")
-        if name:
-            return name
-
-    raise CliError(
-        message=(
-            "No container discovered.  Either:\n"
-            "  1. Run 'aisc run' in another terminal first (state auto-discovered), or\n"
-            "  2. Pass --name CONTAINER_NAME explicitly."
-        ),
-        exit_code=1,
-        error_code="AISC_ERR_CONTAINER_NOT_FOUND",
+    return resolve_target(
+        root=None,
+        name_override=name_override,
+        label_override=label_override,
+        executor=executor,
+        explicit_root=explicit_root,
     )
 
 
@@ -141,6 +125,7 @@ def cmd_status(
     name_override: Optional[str] = None,
     explicit_root: Optional[str] = None,
     executor: Optional[DockerExecutor] = None,
+    label_override: Optional[str] = None,
 ) -> StatusResult:
     """Query container status via ``docker inspect``.
 
@@ -149,7 +134,9 @@ def cmd_status(
     """
     exec_ = executor or RealDockerExecutor()
     name = discover_container(name_override=name_override,
-                              explicit_root=explicit_root)
+                              explicit_root=explicit_root,
+                              label_override=label_override,
+                              executor=exec_)
 
     # Use docker inspect with Go template for structured output
     fmt = '{{.Name}}\t{{.State.Running}}\t{{.State.Status}}\t{{.Config.Image}}\t{{.Id}}'
@@ -215,15 +202,19 @@ def cmd_stop(
     name_override: Optional[str] = None,
     explicit_root: Optional[str] = None,
     executor: Optional[DockerExecutor] = None,
+    label_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Stop the discovered container via ``docker stop``.
 
     Requires the container to exist. Idempotent: stopping an already-stopped
-    container returns success.
+    container returns success. The container is unregistered from the index
+    after stop (it is no longer an active target).
     """
     exec_ = executor or RealDockerExecutor()
     name = discover_container(name_override=name_override,
-                              explicit_root=explicit_root)
+                              explicit_root=explicit_root,
+                              label_override=label_override,
+                              executor=exec_)
 
     # First check if container exists
     status = cmd_status(name_override=name, explicit_root=explicit_root,
@@ -244,6 +235,19 @@ def cmd_stop(
     if proc.exit_code != 0:
         raise _classify_process_error(proc, name, "stop")
 
+    # Unregister from the multi-container index (no longer an active target)
+    try:
+        from aisc.adapters.container_registry import unregister
+        from aisc.application.resources import locate_aisc_root
+        try:
+            root = locate_aisc_root(explicit_root=explicit_root)
+        except Exception:
+            root = None
+        if root is not None:
+            unregister(root, name)
+    except Exception:
+        pass
+
     return {"name": name, "stopped": True, "already_stopped": False}
 
 
@@ -263,6 +267,7 @@ def cmd_restart(
     name_override: Optional[str] = None,
     explicit_root: Optional[str] = None,
     executor: Optional[DockerExecutor] = None,
+    label_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Restart the discovered container via ``docker restart``.
 
@@ -270,7 +275,9 @@ def cmd_restart(
     """
     exec_ = executor or RealDockerExecutor()
     name = discover_container(name_override=name_override,
-                              explicit_root=explicit_root)
+                              explicit_root=explicit_root,
+                              label_override=label_override,
+                              executor=exec_)
 
     # First check if container exists
     status = cmd_status(name_override=name, explicit_root=explicit_root,
@@ -304,6 +311,7 @@ def cmd_shell(
     name_override: Optional[str] = None,
     explicit_root: Optional[str] = None,
     executor: Optional[DockerExecutor] = None,
+    label_override: Optional[str] = None,
 ) -> ProcessResult:
     """Open an interactive shell via ``docker exec -it NAME bash``.
 
@@ -312,7 +320,9 @@ def cmd_shell(
     """
     exec_ = executor or RealDockerExecutor()
     name = discover_container(name_override=name_override,
-                              explicit_root=explicit_root)
+                              explicit_root=explicit_root,
+                              label_override=label_override,
+                              executor=exec_)
 
     # Verify container exists and is running
     status = cmd_status(name_override=name, explicit_root=explicit_root,
@@ -450,6 +460,7 @@ def cmd_switch(
     explicit_root: Optional[str] = None,
     quick: Optional[str] = None,
     executor: Optional[DockerExecutor] = None,
+    label_override: Optional[str] = None,
 ) -> ProcessResult:
     """Switch AI provider inside the container.
 
@@ -471,7 +482,9 @@ def cmd_switch(
             )
 
     name = discover_container(name_override=name_override,
-                              explicit_root=explicit_root)
+                              explicit_root=explicit_root,
+                              label_override=label_override,
+                              executor=exec_)
 
     # Verify container exists and is running
     status = cmd_status(name_override=name, explicit_root=explicit_root,
@@ -510,3 +523,102 @@ def print_switch_text(data: Dict[str, Any]) -> None:
         print(f"Switched container '{name}' to provider '{provider}'.")
     else:
         print(f"Provider switch completed for container '{name}'.")
+
+
+# ---------------------------------------------------------------------------
+# Ps command — list all registered containers
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PsRow:
+    """One row of the ``aisc ps`` table."""
+    name: str = ""
+    label: str = ""
+    status: str = ""
+    running: bool = False
+    image: str = ""
+    workspace: str = ""
+
+
+def cmd_ps(
+    name_override: Optional[str] = None,
+    explicit_root: Optional[str] = None,
+    executor: Optional[DockerExecutor] = None,
+) -> List[PsRow]:
+    """List all registered containers with live docker status.
+
+    Runs a lazy GC first to prune stale entries, then ``docker inspect`` each
+    remaining entry. Daemon/permission errors do not raise — rows show
+    ``status='?'`` instead so listing degrades gracefully.
+    """
+    from aisc.adapters.container_registry import list_containers
+    from aisc.application.resources import locate_aisc_root
+
+    exec_ = executor or RealDockerExecutor()
+
+    # Resolve root for registry access
+    root = None
+    if explicit_root is not None:
+        rp = Path(explicit_root).resolve()
+        if rp.is_dir():
+            root = rp
+    if root is None:
+        try:
+            root = locate_aisc_root(explicit_root=explicit_root)
+        except Exception:
+            root = None
+
+    if root is None:
+        return []
+
+    # Lazy GC prunes dead entries (best-effort)
+    try:
+        from aisc.adapters.container_registry import gc
+        gc(root, exec_)
+    except Exception:
+        pass
+
+    containers = list_containers(root)
+    rows: List[PsRow] = []
+    fmt = '{{.State.Running}}\t{{.State.Status}}\t{{.Config.Image}}'
+    for nm, meta in containers.items():
+        row = PsRow(
+            name=nm,
+            label=meta.get("label", "") if isinstance(meta, dict) else "",
+            image=meta.get("image", "") if isinstance(meta, dict) else "",
+            workspace=meta.get("workspace", "") if isinstance(meta, dict) else "",
+            status="?",
+            running=False,
+        )
+        argv = ["inspect", "--format", fmt, nm]
+        proc = exec_.run_captured(argv, timeout=10.0)
+        if proc.command_not_found or proc.timed_out:
+            row.status = "?"
+        else:
+            stderr_lower = (proc.stderr or "").lower()
+            if proc.exit_code != 0 and any(kw in stderr_lower for kw in (
+                "no such object", "no such container", "not found",
+            )):
+                row.status = "gone"
+            else:
+                stdout = (proc.stdout or "").strip()
+                if stdout:
+                    parts = stdout.split("\t")
+                    row.running = parts[0].lower() == "true" if parts else False
+                    row.status = parts[1] if len(parts) > 1 else "?"
+                    if len(parts) > 2:
+                        row.image = parts[2]
+        rows.append(row)
+
+    return rows
+
+
+def print_ps_text(rows: List[PsRow]) -> None:
+    """Print the ``aisc ps`` table."""
+    if not rows:
+        print("No containers registered. Run 'aisc run' first.")
+        return
+    print(f"{'NAME':<36} {'LABEL':<10} {'STATUS':<10} {'IMAGE':<24} WORKSPACE")
+    for r in rows:
+        label = r.label or "-"
+        print(f"{r.name:<36} {label:<10} {r.status:<10} {r.image:<24} {r.workspace}")

@@ -145,6 +145,14 @@ class TestRunPlan(unittest.TestCase):
         mount = [a for a in p.docker_argv if "My Docs" in a]
         self.assertEqual(len(mount), 1)
 
+    def test_label_field_default(self):
+        p = RunPlan(image="i", workspace="/w", name="n")
+        self.assertEqual(p.label, "")
+
+    def test_label_field_set(self):
+        p = RunPlan(image="i", workspace="/w", name="n", label="app")
+        self.assertEqual(p.label, "app")
+
 
 # ============================================================================
 # DockerPreflightResult / ImageInspectResult tests

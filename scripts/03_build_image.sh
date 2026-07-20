@@ -65,8 +65,13 @@ if image_exists; then
   read -r -p "请选择 [1/2/3，默认 1]: " choice
   case "${choice:-1}" in
     2) echo "🗑️  删除旧镜像 $IMAGE ..."; docker rmi -f "$IMAGE" 2>/dev/null || true; build_image ;;
-    3) read -r -p "输入新镜像名 (如 super-claude:v2): " NEWIMG
-       [ -n "$NEWIMG" ] && IMAGE="$NEWIMG"
+    3) while :; do
+         read -r -p "输入新镜像名 (如 super-claude:v2): " NEWIMG
+         [ -z "$NEWIMG" ] && { echo "❌ 镜像名不能为空（避免覆盖现有 $IMAGE 且无 rmi 清理）；请重输。"; continue; }
+         [ "$NEWIMG" = "$IMAGE" ] && { echo "❌ 新镜像名不能与现有 $IMAGE 相同（会覆盖且无 rmi 清理）；请重输。"; continue; }
+         break
+       done
+       IMAGE="$NEWIMG"
        build_image ;;
     *) echo "▶️  使用现有镜像。" ;;
   esac

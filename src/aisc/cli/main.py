@@ -133,6 +133,8 @@ def _build_parser() -> _AiscArgumentParser:
                     help="Run without interactive terminal (no -it, stdin=DEVNULL)")
     rp.add_argument("--dry-run", action="store_true", default=False,
                     help="Plan the run without executing")
+    rp.add_argument("--label", type=str, default="",
+                    help="Container label for multi-container addressing (optional)")
 
     # --- config ---
     cp = sub.add_parser("config", help="Config management", allow_abbrev=False)
@@ -207,25 +209,33 @@ def _build_parser() -> _AiscArgumentParser:
     stp = sub.add_parser("status", help="Show container status", allow_abbrev=False)
     _add_global_args(stp, is_subparser=True)
     stp.add_argument("--name", type=str, default=None,
-                     help="Container name (overrides state discovery)")
+                     help="Container name (overrides registry discovery)")
+    stp.add_argument("--label", type=str, default=None,
+                     help="Target container by label")
 
     # --- stop ---
     spp = sub.add_parser("stop", help="Stop the container", allow_abbrev=False)
     _add_global_args(spp, is_subparser=True)
     spp.add_argument("--name", type=str, default=None,
-                     help="Container name (overrides state discovery)")
+                     help="Container name (overrides registry discovery)")
+    spp.add_argument("--label", type=str, default=None,
+                     help="Target container by label")
 
     # --- restart ---
     rsp = sub.add_parser("restart", help="Restart the container", allow_abbrev=False)
     _add_global_args(rsp, is_subparser=True)
     rsp.add_argument("--name", type=str, default=None,
-                     help="Container name (overrides state discovery)")
+                     help="Container name (overrides registry discovery)")
+    rsp.add_argument("--label", type=str, default=None,
+                     help="Target container by label")
 
     # --- shell ---
     shp = sub.add_parser("shell", help="Open a bash shell in the container", allow_abbrev=False)
     _add_global_args(shp, is_subparser=True)
     shp.add_argument("--name", type=str, default=None,
-                     help="Container name (overrides state discovery)")
+                     help="Container name (overrides registry discovery)")
+    shp.add_argument("--label", type=str, default=None,
+                     help="Target container by label")
 
     # --- skill ---
     skp = sub.add_parser("skill", help="Manage skill bundle imports", allow_abbrev=False)
@@ -251,9 +261,15 @@ def _build_parser() -> _AiscArgumentParser:
     swp = sub.add_parser("switch", help="Switch AI provider in the container", allow_abbrev=False)
     _add_global_args(swp, is_subparser=True)
     swp.add_argument("--name", type=str, default=None,
-                     help="Container name (overrides state discovery)")
+                     help="Container name (overrides registry discovery)")
+    swp.add_argument("--label", type=str, default=None,
+                     help="Target container by label")
     swp.add_argument("--quick", type=str, default=None,
                      help="Provider id or alias for quick switch (e.g. deepseek)")
+
+    # --- ps ---
+    psp = sub.add_parser("ps", help="List all registered containers", allow_abbrev=False)
+    _add_global_args(psp, is_subparser=True)
 
     return parser
 
@@ -573,6 +589,7 @@ def _cmd_run(
         dry_run=getattr(args, "dry_run", False),
         interactive=is_interactive,
         non_interactive=non_interactive,
+        label=getattr(args, "label", ""),
         aisc_root=aisc_root,
     )
 
@@ -682,6 +699,7 @@ def _cmd_status(
     result = cmd_status(
         name_override=getattr(args, "name", None),
         explicit_root=getattr(args, "aisc_root", None),
+        label_override=getattr(args, "label", None),
     )
     return result.to_dict(), 0, []
 
@@ -696,6 +714,7 @@ def _cmd_stop(
     data = cmd_stop(
         name_override=getattr(args, "name", None),
         explicit_root=getattr(args, "aisc_root", None),
+        label_override=getattr(args, "label", None),
     )
     return data, 0, []
 
@@ -710,6 +729,7 @@ def _cmd_restart(
     data = cmd_restart(
         name_override=getattr(args, "name", None),
         explicit_root=getattr(args, "aisc_root", None),
+        label_override=getattr(args, "label", None),
     )
     return data, 0, []
 
@@ -892,10 +912,12 @@ def _cmd_shell(
 
     # Discover name once for use in returned data
     name_override = getattr(args, "name", None)
+    label_override = getattr(args, "label", None)
     try:
         discovered_name = name_override or discover_container(
             name_override=None,
             explicit_root=getattr(args, "aisc_root", None),
+            label_override=label_override,
         )
     except Exception:
         discovered_name = name_override or ""
@@ -903,6 +925,7 @@ def _cmd_shell(
     proc = cmd_shell(
         name_override=name_override,
         explicit_root=getattr(args, "aisc_root", None),
+        label_override=label_override,
     )
 
     exit_code = proc.exit_code if proc.exit_code >= 0 else 1
@@ -932,10 +955,12 @@ def _cmd_switch(
 
     # Discover name once for use in returned data
     name_override = getattr(args, "name", None)
+    label_override = getattr(args, "label", None)
     try:
         discovered_name = name_override or discover_container(
             name_override=None,
             explicit_root=getattr(args, "aisc_root", None),
+            label_override=label_override,
         )
     except Exception:
         discovered_name = name_override or ""
@@ -946,6 +971,7 @@ def _cmd_switch(
         name_override=name_override,
         explicit_root=getattr(args, "aisc_root", None),
         quick=quick,
+        label_override=label_override,
     )
 
     exit_code = proc.exit_code if proc.exit_code >= 0 else 1
@@ -964,6 +990,22 @@ def _cmd_switch(
         data["provider"] = quick
         data["quick"] = True
     return data, exit_code, errors
+
+
+def _cmd_ps(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[List[Dict[str, Any]], int, List[Dict[str, Any]]]:
+    """Execute ``aisc ps``.  Supports --format json."""
+    from aisc.cli.commands.container import cmd_ps
+
+    rows = cmd_ps(
+        explicit_root=getattr(args, "aisc_root", None),
+    )
+    data = [{"name": r.name, "label": r.label, "status": r.status,
+             "running": r.running, "image": r.image, "workspace": r.workspace}
+            for r in rows]
+    return data, 0, []
 
 
 # ---------------------------------------------------------------------------
@@ -1144,6 +1186,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_shell(args, effective_format)
         elif args.command == "switch":
             data, exit_code, errors = _cmd_switch(args, effective_format)
+        elif args.command == "ps":
+            data, exit_code, errors = _cmd_ps(args, effective_format)
         elif args.command == "skill":
             data, exit_code, errors = _cmd_skill(args, effective_format, aisc_root)
         else:
@@ -1276,6 +1320,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         elif args.command == "restart":
             from aisc.cli.commands.container import print_restart_text
             print_restart_text(data if isinstance(data, dict) else {})
+        elif args.command == "ps":
+            from aisc.cli.commands.container import print_ps_text, PsRow
+            ps_rows = [PsRow(
+                name=r.get("name", ""), label=r.get("label", ""),
+                status=r.get("status", ""), running=r.get("running", False),
+                image=r.get("image", ""), workspace=r.get("workspace", ""),
+            ) for r in (data if isinstance(data, list) else [])]
+            print_ps_text(ps_rows)
         elif args.command in ("shell", "switch", "skill"):
             # interactive output / skill text printed directly by _cmd_*
             pass

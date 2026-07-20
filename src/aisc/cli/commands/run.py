@@ -26,7 +26,6 @@ from aisc.adapters.docker_ import (
     validate_run_resources,
     validate_proxy_config,
 )
-from aisc.adapters.state_file import write_state_keys
 from aisc.cli.output import JsonlEmitter
 
 
@@ -53,6 +52,7 @@ def plan_run(
     interactive: bool = True,
     non_interactive: bool = False,
     proxy_config: str = "",
+    label: str = "",
     aisc_root: Optional[Path] = None,
 ) -> RunPlan:
     """Create an immutable ``RunPlan`` from user args.
@@ -96,6 +96,7 @@ def plan_run(
         interactive=interactive,
         non_interactive=non_interactive,
         proxy_config=resolved_proxy,
+        label=label,
     )
 
 
@@ -242,17 +243,19 @@ def run_container(
         )
     # EXISTS → proceed
 
-    # --- write container state for discovery by other terminals ---
+    # --- register container in the multi-container index ---
     if aisc_root is not None:
-        state_updates = {
-            "CONTAINER_NAME": plan.name,
-            "IMAGE": plan.image,
-        }
+        from aisc.adapters.container_registry import register
         try:
-            write_state_keys(aisc_root, state_updates)
+            register(aisc_root, plan.name, {
+                "image": plan.image,
+                "workspace": plan.workspace,
+                "network": plan.network,
+                "label": plan.label,
+            })
         except (ValueError, OSError) as exc:
             raise CliError(
-                message=f"Failed to write container state: {exc}",
+                message=f"Failed to write container registry: {exc}",
                 exit_code=1, error_code="AISC_ERR_STATE_WRITE_FAILED",
                 data=result.to_dict(),
             ) from exc

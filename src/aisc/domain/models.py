@@ -260,6 +260,7 @@ class RunPlan:
     interactive: bool = True  # True for text mode, False for json/events
     non_interactive: bool = False  # --non-interactive: omit -it, add env vars, DEVNULL stdin
     proxy_config: str = ""    # host path to .claude/mihomo/config.yaml (when network=proxy)
+    label: str = ""           # optional container label for multi-container addressing
 
     @property
     def docker_argv(self) -> list:

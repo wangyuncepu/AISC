@@ -12,11 +12,10 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# Known safe keys — only these may be written to state.env
-# WORKSPACE intentionally excluded: shell contract says paths are not stored.
+# Known safe keys — only these may be written to state.env.
+# Container-name keys (CONTAINER_NAME, IMAGE) live in containers.json now;
+# state.env retains only boolean flag keys.
 _KNOWN_KEYS = frozenset({
-    "CONTAINER_NAME",
-    "IMAGE",
     "DO_RUN",
     "PROXY_ENABLED",
 })
@@ -26,12 +25,6 @@ _VALID_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 # Shell metacharacters / injection characters rejected from all values
 _SHELL_META_RE = re.compile(r'[\r\n\0`$\'";&|<>]')
-
-# CONTAINER_NAME: Docker-safe simple token  (start alphanumeric, then alnum/_.-)
-_CONTAINER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
-
-# IMAGE: Docker image reference (registry path, colon tag, @digest, dots/dashes/slashes/underscores)
-_IMAGE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-/:@]*$")
 
 # Boolean flags
 _BOOL_VALUES = frozenset({"0", "1"})
@@ -53,19 +46,7 @@ def _validate_value(key: str, value: str) -> None:
         )
 
     # --- field-specific checks ---
-    if key == "CONTAINER_NAME":
-        if not _CONTAINER_NAME_RE.match(value):
-            raise ValueError(
-                f"CONTAINER_NAME must be a Docker-safe token "
-                f"(alphanumeric start, then alnum/underscore/dot/hyphen): {value!r}"
-            )
-    elif key == "IMAGE":
-        if not _IMAGE_RE.match(value):
-            raise ValueError(
-                f"IMAGE must be a Docker image reference "
-                f"(alphanumeric start, then alnum/._-/:@): {value!r}"
-            )
-    elif key in ("DO_RUN", "PROXY_ENABLED"):
+    if key in ("DO_RUN", "PROXY_ENABLED"):
         if value not in _BOOL_VALUES:
             raise ValueError(
                 f"{key} must be 0 or 1, got: {value!r}"
