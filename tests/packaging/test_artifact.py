@@ -686,7 +686,11 @@ class TestCiSmokeLoading(unittest.TestCase):
         with self.assertRaises(SystemExit): cs._find_single_archive(ad)
     def test_version_mismatch(self):
         cs=_lm("cs3",_PROJECT_ROOT/"packaging"/"ci_smoke.py")
-        fe=self.td/"aisc"; fe.write_text("#!/usr/bin/env python3\nimport sys,json\nif '--format' in sys.argv and 'json' in sys.argv:\n    print(json.dumps({'data':{'cli_version':'9.9.9'}}))\nelse:\n    print('version text')\nsys.exit(0)\n",encoding="utf-8"); fe.chmod(0o755)
+        script=self.td/"fake_version.py"; script.write_text("import sys,json\nif '--format' in sys.argv and 'json' in sys.argv:\n    print(json.dumps({'data':{'cli_version':'9.9.9'}}))\nelse:\n    print('version text')\nsys.exit(0)\n",encoding="utf-8")
+        if sys.platform == "win32":
+            fe=self.td/"aisc.cmd"; fe.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',encoding="utf-8")
+        else:
+            fe=self.td/"aisc"; fe.write_text(f"#!{sys.executable}\n"+script.read_text(encoding="utf-8"),encoding="utf-8"); fe.chmod(0o755)
         vf=self.td/"VERSION"; vf.write_text("2.0.0-dev\n")
         with self.assertRaises(SystemExit): cs._smoke_onedir(fe,vf)
 

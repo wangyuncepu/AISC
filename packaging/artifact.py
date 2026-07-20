@@ -570,7 +570,13 @@ def verify_archive(archive_path: Path) -> List[str]:
         ep = td / en; bp = td / "aisc-bundle"
         tns = {e.name for e in td.iterdir()}
         if en not in tns: errors.append(f"Executable not found: {en}")
-        elif not is_zip and not (ep.stat().st_mode & (stat.S_IXUSR|stat.S_IXGRP|stat.S_IXOTH)): errors.append(f"Executable {en} missing execute permission")
+        elif not is_zip:
+            # Validate executable permission from archive member mode (cross-platform);
+            # on-disk stat is unreliable on Windows for Unix permission bits after tar extraction.
+            with tarfile.open(str(archive_path), "r:*") as t:
+                exe_member = next((m for m in t.getmembers() if m.name.endswith("/" + en)), None)
+                if exe_member is not None and not (exe_member.mode & 0o111):
+                    errors.append(f"Executable {en} missing execute permission")
         if "aisc-bundle" not in tns: errors.append("aisc-bundle/ not found in archive")
         elif not bp.is_dir(): errors.append("aisc-bundle exists but is not a directory")
         extra = tns - {en, "aisc-bundle"}

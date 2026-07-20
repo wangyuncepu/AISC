@@ -47,7 +47,7 @@ class TestInstallerIssInvariants(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_adjacent_layout(self):
-        """aisc.exe and aisc-bundle\ must be in {app}."""
+        r"""aisc.exe and aisc-bundle\ must be in {app}."""
         self.assertIn('DestDir: "{app}"', self.text,
                       "aisc.exe must go to {app}")
         self.assertIn('DestDir: "{app}\\aisc-bundle"', self.text,
