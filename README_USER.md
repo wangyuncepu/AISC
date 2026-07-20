@@ -320,49 +320,244 @@ uv tool install --editable .
 
 ## 卸载
 
+### 方案 A（uv 安装）
+
 ```bash
 uv tool uninstall aisc
 ```
 
 这会移除 `aisc` 命令和对应的隔离环境。仓库目录中的源码和配置文件不会被删除，需要可自行删除。
 
+### 方案 B（独立便携版）
+
+详见下方“独立便携版”章节中的卸载说明。
+
+---
+
+## 独立便携版（无需 Python/uv）
+
+> **方案 B**：直接下载预构建归档，解压即用。无需安装 Python、uv 或克隆仓库。
+> 适合不想安装 Python 工具链的用户，或需要在多台机器上快速部署的场景。
+
+### ⚠️ 重要：当前产物获取方式
+
+**AISC 尚未自动发布 GitHub Release。** 所有 Release 必须经维护者明确批准后才会发布。
+当前阶段，预构建归档仅通过以下方式获取：
+
+1. **GitHub Actions workflow artifacts**（推荐）：访问仓库的 [Actions](https://github.com/wangyuncepu/AISC/actions) 页面，选择最新的 `Artifact` workflow run，下载 `AISC-workflow-artifacts` 归档（含三平台构建 + SHA256SUMS）。注意：workflow artifacts 保留 7 天。
+2. **维护者提供**：由项目维护者手动分发的归档文件。
+
+> **绝对不会**通过 `gh release`、tag 自动发布或任何自动化手段创建 Release。在维护者批准前，所有构建产物仅为 workflow artifacts。
+
+### 架构限制
+
+| 平台 | 架构 | 格式 | 说明 |
+| --- | --- | --- | --- |
+| Linux | x86_64 | `.tar.gz` | 仅支持 x86_64；arm64/aarch64 不支持 |
+| macOS | arm64 (Apple Silicon) | `.tar.gz` | 仅支持 Apple Silicon；Intel Mac 不支持 |
+| Windows | x86_64 | `.zip` | 仅支持 x86_64；ARM Windows 不支持 |
+
+**所有平台仍需安装 Docker**（`aisc build` / `aisc run` 等命令依赖 Docker daemon）。
+其他命令（`version`、`doctor`、`config`、`provider`、`profile`）不需要 Docker。
+
+### 归档结构
+
+每个归档文件包含一个顶层目录，内含 `aisc`（或 `aisc.exe`）可执行文件与相邻的 `aisc-bundle/` 目录：
+
+```
+AISC-2.0.0-dev-linux-x86_64/
+├── aisc              # 可执行文件
+└── aisc-bundle/      # 运行时所需资源（必须与可执行文件相邻）
+    ├── VERSION
+    ├── container/
+    │   └── Dockerfile
+    ├── config/
+    │   └── versions.env
+    └── ...
+```
+
+> `aisc` 与 `aisc-bundle/` **必须保持在同一父目录下**。移动或重命名会导致 `AISC root not found` 错误。
+
+---
+
+### Linux（x86_64）
+
+#### 方式一：解压直接运行（无需安装脚本）
+
+```bash
+# 1. 下载归档（从 GitHub Actions 或维护者提供）
+#    假设已下载 AISC-2.0.0-dev-linux-x86_64.tar.gz 到 ~/Downloads/
+
+# 2. 可选：校验 SHA256
+sha256sum -c AISC-2.0.0-dev-linux-x86_64.tar.gz.sha256
+
+# 3. 解压
+tar -xzf AISC-2.0.0-dev-linux-x86_64.tar.gz
+
+# 4. 进入目录，直接运行
+cd AISC-2.0.0-dev-linux-x86_64
+./aisc version
+./aisc doctor
+```
+
+> `./aisc` 会自动在同级目录查找 `aisc-bundle/`。如果你将 `aisc` 移动到其他位置，也必须同步移动 `aisc-bundle/` 到同一目录。
+
+#### 方式二：使用安装脚本（从克隆仓库调用）
+
+如果你已克隆了 AISC 仓库（方案 A 用户），可以复用仓库中的安装脚本将本地归档安装到用户目录：
+
+```bash
+# 在 AISC 仓库根目录下
+bash packaging/install.sh ~/Downloads/AISC-2.0.0-dev-linux-x86_64.tar.gz
+```
+
+安装脚本会：
+- 将 `aisc` + `aisc-bundle/` 安装到 `${XDG_DATA_HOME:-$HOME/.local/share}/aisc`
+- 在 `${XDG_BIN_HOME:-$HOME/.local/bin}/aisc` 创建符号链接
+- 自动处理重复安装（原子替换）
+- 若 `${XDG_BIN_HOME}` 不在 PATH，提示你手动配置
+
+也支持传入已解压的目录：
+
+```bash
+tar -xzf AISC-2.0.0-dev-linux-x86_64.tar.gz
+bash packaging/install.sh ./AISC-2.0.0-dev-linux-x86_64
+```
+
+**卸载：**
+
+```bash
+# 在 AISC 仓库根目录下
+bash packaging/uninstall.sh
+
+# 方案 B 的卸载不会删除 Docker 镜像/容器、~/.aisc 配置或工作区
+```
+
+---
+
+### macOS（arm64 / Apple Silicon）
+
+#### 方式一：安装程序（推荐，需管理员密码）
+
+下载 `AISC-2.0.0-dev-macos-arm64.pkg`，双击运行。
+
+- **仅支持 Apple Silicon（arm64）Mac**；Intel Mac 不支持。
+- 安装时要求**管理员密码**（系统级安装到 `/usr/local/`）。
+- 安装路径：
+  - 可执行文件：`/usr/local/lib/aisc/aisc`
+  - Bundle：`/usr/local/lib/aisc/aisc-bundle/`
+  - 符号链接：`/usr/local/bin/aisc` → `../lib/aisc/aisc`
+- `/usr/local/bin` 默认在 macOS PATH 中，安装后**新开终端**即可直接使用 `aisc`。
+- 卸载：`sudo /usr/local/lib/aisc/uninstall.sh`（会移除文件、符号链接和 pkg 收据，**不删除** `~/.aisc` 或 `~/.cc-config`）。
+- 升级：双击新版 `.pkg` 覆盖安装即可。
+
+> ⚠️ AISC 尚未经过 Apple 开发者签名。首次双击 `.pkg` 时，macOS Gatekeeper 可能阻止运行。
+> 前往 **系统设置 → 隐私与安全性**，滚动到底部点击 **“仍要打开”**。
+> **不要**全局关闭 Gatekeeper（`spctl --master-disable`）。正式签名/公证后续单独实现。
+
+#### 方式二：便携版（备用，无需管理员）
+
+从 tar.gz 解压到用户目录运行，无需管理员权限。适合无法或不愿使用系统级安装的用户。
+
+```bash
+tar -xzf AISC-2.0.0-dev-macos-arm64.tar.gz
+cd AISC-2.0.0-dev-macos-arm64
+./aisc version
+```
+
+或使用安装脚本（安装到 `$HOME/Library/Application Support/AISC`）：
+
+```bash
+bash packaging/install.sh ~/Downloads/AISC-2.0.0-dev-macos-arm64.tar.gz
+```
+
+**卸载：**
+
+```bash
+bash packaging/uninstall.sh
+```
+
+> ⚠️ 两种安装方式使用不同路径（系统级 vs 用户级）。如需切换，先卸载当前方式再安装另一种，避免 PATH 冲突。
+
+---
+
+### Windows（x86_64）
+
+#### 方式一：安装程序（推荐）
+
+下载 `AISC-2.0.0-dev-windows-x86_64-setup.exe`，双击运行即可。
+
+- **无需** Python、uv、ZIP 解压或手动配置。
+- 默认安装到 `%LOCALAPPDATA%\Programs\AISC`。
+- 自动将安装目录加入用户 PATH（安装后**重新打开终端**即可使用 `aisc`）。
+- 通过 **设置 → 应用 → 已安装的应用** 或 **控制面板 → 程序和功能** 卸载。
+- 卸载会移除程序文件和 PATH 条目，**不会删除** `%USERPROFILE%\.aisc` 或 `.cc-config` 用户配置。
+
+> ⚠️ AISC 尚未经过代码签名。首次运行时 Windows SmartScreen 可能弹出“Windows 保护了你的电脑”。点击 **更多信息 → 仍要运行** 即可。
+>
+> 正式 Release 必须经维护者批准后才会发布。当前阶段从 GitHub Actions workflow artifacts 获取。
+
+#### 方式二：便携版（备用）
+
+ZIP 归档和 PowerShell 安装脚本保留作为维护/便携备用方案。
+
+**解压直接运行：**
+
+```powershell
+Expand-Archive AISC-2.0.0-dev-windows-x86_64.zip -DestinationPath .
+cd AISC-2.0.0-dev-windows-x86_64
+.\aisc.exe version
+```
+
+**PowerShell 安装脚本：**
+
+```powershell
+.\packaging\install.ps1 -Source "$env:USERPROFILE\Downloads\AISC-2.0.0-dev-windows-x86_64.zip"
+```
+
+安装脚本会：
+- 将 `aisc.exe` + `aisc-bundle\` 安装到 `%LOCALAPPDATA%\AISC`
+- 自动将安装目录加入用户 PATH（需重启终端生效）
+- 幂等（重复安装会替换旧版本，PATH 不会重复添加）
+
+**卸载（PowerShell）：**
+
+```powershell
+.\packaging\uninstall.ps1
+```
+
+卸载会移除安装目录并清理用户 PATH 中的对应条目，不会删除用户配置或 Docker 资源。
+
+---
+
 ## 常见故障
 
 ### `aisc: command not found`
 
-`uv tool install --editable .` 未执行，或 tool bin 目录未在 PATH 中。
+**方案 A：** `uv tool install --editable .` 未执行，或 tool bin 目录未在 PATH 中。
 
 - 确保已执行 `uv tool update-shell` 并重新打开终端
 - 运行 `uv tool dir --bin` 查看 bin 目录，确认它已加入 PATH
 - 运行 `uv tool list` 确认 `aisc` 已安装
 
+**方案 B（独立便携版）：**
+
+- 若使用安装脚本，确保 `${XDG_BIN_HOME:-$HOME/.local/bin}` 在你的 PATH 中
+- 若解压直接运行，使用 `./aisc` 或 `.\aisc.exe`（当前目录）而非裸 `aisc`
+
 ### `AISC root not found`
 
-`aisc` 命令依赖仓库中的结构文件（`VERSION`、`container/Dockerfile`、`config/versions.env`）。可能的原因：
+`aisc` 命令依赖同目录下的 `aisc-bundle/`。可能的原因：
 
-- 运行 `aisc` 时，仓库目录已被移动或删除
-- 手动删除了上述必要文件
+- `aisc` 可执行文件被移动到没有 `aisc-bundle/` 的目录
+- 手动删除了 `aisc-bundle/` 或其内容
 
-**解决办法：用 `--aisc-root` 显式指定仓库路径**：
-
-```bash
-aisc --aisc-root /path/to/AISC version
-```
-
-或设置环境变量 `AISC_ROOT`：
-
-**macOS / Linux（bash / zsh）**：
+**解决办法：**
+- 将 `aisc` 和 `aisc-bundle/` 放在同一目录下
+- 或用 `--aisc-root` 显式指定包含 `aisc-bundle/` 的目录路径：
 
 ```bash
-export AISC_ROOT=/path/to/AISC
-aisc version
-```
-
-**Windows PowerShell（当前会话）**：
-
-```powershell
-$env:AISC_ROOT = "C:\path\to\AISC"
-aisc version
+aisc --aisc-root /path/to/install/dir version
 ```
 
 ### Docker 相关错误

@@ -69,6 +69,165 @@ jobs:
       - name: Final smoke (checkout-independent)
         run: python packaging/ci_smoke.py --archive-dir "${{ runner.temp }}/dist"
 
+      # ------------------------------------------------------------------
+      # Windows-only: build Inno Setup installer
+      # ------------------------------------------------------------------
+      - name: Install Inno Setup (Windows)
+        if: matrix.platform == 'windows'
+        run: choco install innosetup --no-progress -y
+
+      - name: Build setup.exe (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Locate ISCC.exe robustly — try explicit paths then fallback
+          $candidates = @(
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 5\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 5\ISCC.exe"
+          )
+          try { $choco = Get-Command iscc.exe -ErrorAction SilentlyContinue; if ($choco) { $candidates += $choco.Source } } catch {}
+          $iscc = ($candidates | Where-Object { Test-Path $_ } | Select-Object -First 1)
+          if (-not $iscc) {
+            # Last-resort recursive search (limited depth)
+            $iscc = Get-ChildItem -Path "C:\Program Files*\Inno Setup*" -Recurse -Depth 2 -Filter ISCC.exe -ErrorAction SilentlyContinue |
+                    Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $iscc) { Write-Error "ISCC.exe not found"; exit 1 }
+          Write-Host "ISCC: $iscc"
+
+          $ver = (Get-Content VERSION -First 1).Trim()
+          # Derive numeric X.Y.Z.W for VersionInfoVersion (strip suffix, default 0 for 4th component)
+          $numVer = if ($ver -match '^(\d+\.\d+\.\d+)') { "$($Matches[1]).0" } else { "0.0.0.0" }
+          Write-Host "Display version: $ver  Numeric version: $numVer"
+
+          $exeSrc = "${{ runner.temp }}\onefile-dist\aisc.exe"
+          $bundleSrc = "${{ runner.temp }}\staging\aisc-bundle"
+          $outDir = "${{ runner.temp }}\setup"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          & $iscc /DMyAppVersion=$ver `
+                  /DMyNumericVersion=$numVer `
+                  /DMyExeSource=$exeSrc `
+                  /DBundleSource=$bundleSrc `
+                  /O$outDir `
+                  /F"AISC-${ver}-windows-x86_64-setup" `
+                  "packaging\windows\installer.iss"
+          if ($LASTEXITCODE -ne 0) { Write-Error "ISCC failed"; exit 1 }
+          # Generate SHA256 sidecar
+          $setupFile = Get-ChildItem "$outDir\AISC-*.exe" | Select-Object -First 1
+          $hash = (Get-FileHash -Algorithm SHA256 $setupFile.FullName).Hash.ToLower()
+          "$hash  $($setupFile.Name)" | Out-File -Encoding ascii -NoNewline "$($setupFile.FullName).sha256"
+          Write-Host "Setup: $($setupFile.Name)  SHA256: $hash"
+
+      - name: Installer smoke (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $setupFile = Get-ChildItem "${{ runner.temp }}\setup\AISC-*.exe" | Select-Object -First 1
+          if (-not $setupFile) { Write-Error "Setup .exe not found"; exit 1 }
+          & "packaging\windows\smoke_installer.ps1" -SetupPath $setupFile.FullName
+          if ($LASTEXITCODE -ne 0) { Write-Error "Smoke failed"; exit 1 }
+
+      # ------------------------------------------------------------------
+      # macOS-only: build .pkg installer
+      # ------------------------------------------------------------------
+      - name: Build macOS .pkg (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          set -euo pipefail
+          ver="$(head -1 VERSION | tr -d '[:space:]')"
+          onedir="${{ runner.temp }}/onefile-dist/aisc"
+          bundir="${{ runner.temp }}/staging/aisc-bundle"
+          outdir="${{ runner.temp }}/dist"
+          bash packaging/macos/build_pkg.sh "$ver" "$onedir" "$bundir" "$outdir"
+
+      - name: Structural verify .pkg (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          set -euo pipefail
+          pkgfile="$(echo "${{ runner.temp }}/dist/AISC-"*.pkg)"
+          echo "Verifying: $pkgfile"
+
+          # Verify SHA256 sidecar
+          echo "=== SHA256 check ==="
+          (cd "${{ runner.temp }}/dist" && shasum -a 256 -c "$(basename "$pkgfile").sha256")
+
+          # Expand pkg for inspection
+          tmpdir="$(mktemp -d /tmp/aisc-pkg-verify-XXXXXX)"
+          trap 'rm -rf "$tmpdir"' EXIT
+          pkgutil --expand "$pkgfile" "$tmpdir/expanded"
+
+          # Save full BOM to a file first, then inspect (avoid SIGPIPE 141 from head)
+          echo "=== BOM contents (first 80 lines) ==="
+          if [ -f "$tmpdir/expanded/Bom" ]; then
+            lsbom "$tmpdir/expanded/Bom" > "$tmpdir/bom.txt"
+          else
+            bom="$(find "$tmpdir/expanded" -name Bom -type f 2>/dev/null | head -1)"
+            [ -n "$bom" ] && lsbom "$bom" > "$tmpdir/bom.txt" || true
+          fi
+          if [ -f "$tmpdir/bom.txt" ]; then
+            head -80 "$tmpdir/bom.txt"
+          else
+            echo "WARN: BOM not found for display"
+          fi
+
+          echo ""
+          echo "=== Path assertions ==="
+          fail() { echo "  FAIL: $*"; exit 1; }
+          pass() { echo "  PASS: $*"; }
+
+          # Extract pure paths from BOM (first field, strip leading ./ if present)
+          if [ -f "$tmpdir/bom.txt" ]; then
+            cut -f1 "$tmpdir/bom.txt" | sed 's|^\./||' > "$tmpdir/paths.txt"
+          else
+            touch "$tmpdir/paths.txt"
+          fi
+
+          # Must-have paths (exact match)
+          for p in \
+            "usr/local/lib/aisc/aisc" \
+            "usr/local/lib/aisc/aisc-bundle/VERSION" \
+            "usr/local/lib/aisc/aisc-bundle/container/Dockerfile" \
+            "usr/local/lib/aisc/aisc-bundle/config/versions.env" \
+            "usr/local/lib/aisc/uninstall.sh" \
+            "usr/local/bin/aisc"
+          do
+            if grep -Fx "$p" "$tmpdir/paths.txt" >/dev/null 2>&1; then
+              pass "$p"
+            else
+              fail "$p NOT FOUND"
+            fi
+          done
+
+          # Symlink type + target verification via BOM
+          if [ -f "$tmpdir/bom.txt" ]; then
+            # BOM symlink lines contain the link target; verify relative path
+            if grep -E 'usr/local/bin/aisc[[:space:]]' "$tmpdir/bom.txt" | grep -qE '../lib/aisc/aisc'; then
+              pass "symlink target ../lib/aisc/aisc"
+            else
+              # Fallback: extract Payload and use readlink
+              if [ -f "$tmpdir/expanded/Payload" ]; then
+                mkdir -p "$tmpdir/payload_root"
+                (cd "$tmpdir/payload_root" && cat "$tmpdir/expanded/Payload" | cpio -idmu 2>/dev/null) || true
+                if [ -L "$tmpdir/payload_root/usr/local/bin/aisc" ]; then
+                  target="$(readlink "$tmpdir/payload_root/usr/local/bin/aisc")"
+                  if [ "$target" = "../lib/aisc/aisc" ]; then
+                    pass "symlink target $target (verified via Payload cpio)"
+                  else
+                    fail "symlink target is '$target', expected '../lib/aisc/aisc'"
+                  fi
+                else
+                  echo "  WARN: could not verify symlink target (Payload extraction failed)"
+                fi
+              fi
+            fi
+          fi
+
+          echo ""
+          echo "=== Structural verify PASSED ==="
+
       - name: Upload matrix artifact
         uses: actions/upload-artifact@v4
         with:
@@ -78,6 +237,26 @@ jobs:
             ${{ runner.temp }}/dist/AISC-*.tar.gz.sha256
             ${{ runner.temp }}/dist/AISC-*.zip
             ${{ runner.temp }}/dist/AISC-*.zip.sha256
+          retention-days: 7
+
+      - name: Upload Windows setup artifact
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-windows-x86_64
+          path: |
+            ${{ runner.temp }}/setup/AISC-*-setup.exe
+            ${{ runner.temp }}/setup/AISC-*-setup.exe.sha256
+          retention-days: 7
+
+      - name: Upload macOS pkg artifact
+        if: matrix.platform == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-macos-arm64
+          path: |
+            ${{ runner.temp }}/dist/AISC-*.pkg
+            ${{ runner.temp }}/dist/AISC-*.pkg.sha256
           retention-days: 7
 
   aggregate:
@@ -98,8 +277,50 @@ jobs:
           merge-multiple: true
           path: archives
 
-      - name: Aggregate and verify
+      - name: Aggregate and verify (archives)
         run: python packaging/artifact.py aggregate --directory archives --expected linux-x86_64,windows-x86_64,macos-arm64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: setup-windows-x86_64
+          path: setup
+
+      - name: Include Windows setup in SHA256SUMS
+        run: |
+          cd archives
+          for f in ../setup/AISC-*-setup.exe; do
+            if [ -f "$f" ]; then
+              bn=$(basename "$f")
+              sha256sum "$f" | sed "s|\.\./setup/||" >> SHA256SUMS
+              echo "  added $bn"
+            fi
+          done
+          echo "=== SHA256SUMS ==="
+          cat SHA256SUMS
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pkg-macos-arm64
+          path: pkg
+
+      - name: Include macOS pkg in SHA256SUMS
+        run: |
+          cd archives
+          for f in ../pkg/AISC-*.pkg; do
+            if [ -f "$f" ]; then
+              bn=$(basename "$f")
+              actual=$(sha256sum "$f" | awk '{print $1}')
+              expected=$(grep -E "^[0-9a-f]{64}\s+${bn}$" "../pkg/${bn}.sha256" 2>/dev/null | awk '{print $1}' || true)
+              if [ -n "$expected" ] && [ "$actual" != "$expected" ]; then
+                echo "ERROR: SHA256 mismatch for $bn: expected $expected, got $actual" >&2
+                exit 1
+              fi
+              sha256sum "$f" | sed "s|\.\./pkg/||" >> SHA256SUMS
+              echo "  added $bn"
+            fi
+          done
+          echo "=== SHA256SUMS ==="
+          cat SHA256SUMS
 
       - name: Upload aggregated artifact
         uses: actions/upload-artifact@v4
@@ -111,4 +332,8 @@ jobs:
             archives/AISC-*.zip
             archives/AISC-*.zip.sha256
             archives/SHA256SUMS
+            setup/AISC-*-setup.exe
+            setup/AISC-*-setup.exe.sha256
+            pkg/AISC-*.pkg
+            pkg/AISC-*.pkg.sha256
           retention-days: 7

@@ -392,6 +392,10 @@ def _cmd_brief(
 
     Text-only command.  ``--format json`` and ``--events`` are rejected
     with usage error (exit 2).
+
+    **Frozen mode** (PyInstaller onefile): runs brief.py in-process via
+    ``importlib`` to avoid ``sys.executable`` recursion / missing Python.
+    **Dev mode**: spawns a ``sys.executable`` subprocess (existing behaviour).
     """
     # Machine format rejection
     if effective_format == "json":
@@ -401,7 +405,7 @@ def _cmd_brief(
         )
         sys.exit(2)
 
-    import subprocess as _subprocess
+    import importlib.util as _importlib_util
     from aisc.application.resources import locate_aisc_root, _RootSourceError
 
     # Locate AISC root
@@ -424,8 +428,8 @@ def _cmd_brief(
             exit_code=1, error_code="AISC_ERR_GENERAL",
         )
 
-    # Build passthrough args — always pass explicit flags that match defaults
-    passthrough: List[str] = [sys.executable, str(brief_script)]
+    # Build common passthrough args (without sys.executable prefix)
+    passthrough: List[str] = []
     # String flags
     for flag, argname in [("--date", "date"), ("--source", "source")]:
         val = getattr(args, argname, None)
@@ -442,9 +446,39 @@ def _cmd_brief(
         if getattr(args, argname, False):
             passthrough.append(flag)
 
-    # Run brief.py and stream output directly
+    # ------------------------------------------------------------------
+    # PyInstaller frozen mode: run brief.py in-process (no subprocess)
+    # ------------------------------------------------------------------
+    if getattr(sys, "frozen", False):
+        spec = _importlib_util.spec_from_file_location(
+            "ai_brief", str(brief_script),
+        )
+        if spec is None or spec.loader is None:
+            raise CliError(
+                message=f"Failed to create module spec for: {brief_script}",
+                exit_code=1, error_code="AISC_ERR_GENERAL",
+            )
+        module = _importlib_util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+            exit_code = module.main(argv=passthrough if passthrough else None)
+        except SystemExit as e:
+            if isinstance(e.code, int):
+                exit_code = e.code
+            elif e.code is None:
+                exit_code = 0
+            else:
+                exit_code = 1
+        return {"brief_exit_code": exit_code}, exit_code, []
+
+    # ------------------------------------------------------------------
+    # Dev / editable mode: spawn subprocess (existing behaviour)
+    # ------------------------------------------------------------------
+    import subprocess as _subprocess
+
+    subprocess_argv: List[str] = [sys.executable, str(brief_script)] + passthrough
     try:
-        proc = _subprocess.run(passthrough)
+        proc = _subprocess.run(subprocess_argv)
     except FileNotFoundError:
         raise CliError(
             message="Python interpreter not found",

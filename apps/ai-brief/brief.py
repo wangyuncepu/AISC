@@ -600,7 +600,7 @@ def ai_summarize(results, top=3, timeout=LLM_TIMEOUT):
 # ==========================================
 # main
 # ==========================================
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(
         description="多源 AI 资讯聚合：工具 + 工作流 + 行业（TLDR/Rundown/Simon Willison/Changelog/HN Show HN）")
     ap.add_argument("--date", help="指定日期 YYYY-MM-DD（默认最新）")
@@ -613,7 +613,7 @@ def main():
     ap.add_argument("--no-cache", action="store_true", help="跳过缓存（全量拉取）")
     ap.add_argument("--strict", action="store_true", help="失败时非零退出（调试用）")
     ap.add_argument("--debug", action="store_true", help="输出逐源计时诊断日志（stderr）")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     source_keys = resolve_sources(args.source)
     if not source_keys:
