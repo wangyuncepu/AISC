@@ -110,7 +110,7 @@ jobs:
           & $iscc /DMyAppVersion=$ver `
                   /DMyNumericVersion=$numVer `
                   /DMyExeSource=$exeSrc `
-                  /DBundleSource=$bundleSrc `
+                  /DMyBundleSource=$bundleSrc `
                   /O$outDir `
                   /F"AISC-${ver}-windows-x86_64-setup" `
                   "packaging\windows\installer.iss"

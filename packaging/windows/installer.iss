@@ -1,6 +1,6 @@
 ; AISC Windows Installer — Inno Setup script
 ; 
-; Build: ISCC.exe /DMyAppVersion=<ver> /DMyNumericVersion=<X.Y.Z.W> /DMyExeSource=<path> /DBundleSource=<path> /O<outdir> /F<filename> installer.iss
+; Build: ISCC.exe /DMyAppVersion=<ver> /DMyNumericVersion=<X.Y.Z.W> /DMyExeSource=<path> /DMyBundleSource=<path> /O<outdir> /F<filename> installer.iss
 ; Output: AISC-<version>-windows-x86_64-setup.exe
 ;
 ; Design:

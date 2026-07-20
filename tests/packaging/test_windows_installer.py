@@ -211,8 +211,15 @@ class TestWorkflowSetupInvariants(unittest.TestCase):
 
     def test_numeric_version_passed_to_iscc(self):
         """Workflow must pass /DMyNumericVersion= to ISCC."""
-        self.assertIn("MyNumericVersion", self.text,
+        self.assertIn("/DMyNumericVersion=", self.text,
                       "Missing /DMyNumericVersion in ISCC invocation")
+
+    def test_bundle_source_passed_to_iscc(self):
+        """Workflow and installer must use the same bundle-source define."""
+        self.assertIn("/DMyBundleSource=", self.text,
+                      "Missing /DMyBundleSource in ISCC invocation")
+        self.assertNotIn("/DBundleSource=", self.text,
+                         "Workflow uses BundleSource but installer expects MyBundleSource")
 
     def test_smoke_script_referenced(self):
         """Workflow should use packaging/windows/smoke_installer.ps1."""
