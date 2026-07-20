@@ -162,6 +162,15 @@ class TestInstallerIssInvariants(unittest.TestCase):
         self.assertLess(st_idx, pc_idx,
                         "StringToArray must be defined BEFORE PathContains")
 
+    def test_remove_path_uses_supported_splitter(self):
+        """PATH removal must avoid unsupported TStringList.LineBreak."""
+        self.assertNotIn(".LineBreak", self.text,
+                         "Inno Setup TStringList has no LineBreak property")
+        remove_path = self.text.split("function RemovePathEntry", 1)[1]
+        remove_path = remove_path.split("// Add a directory", 1)[0]
+        self.assertIn("StringToArray(Haystack, ';', Parts, True)", remove_path,
+                      "RemovePathEntry must use the compatible PATH splitter")
+
 
 class TestWorkflowSetupInvariants(unittest.TestCase):
     """Validate .github/workflows/artifact.yml setup-related invariants."""

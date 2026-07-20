@@ -155,28 +155,22 @@ function RemovePathEntry(const Haystack, ToRemove: string): string;
 var
   I: Integer;
   NR: string;
-  Parts: TStringList;
+  Parts: TArrayOfString;
 begin
   Result := Haystack;
   if Length(Haystack) = 0 then Exit;
   NR := NormalisePathEntry(ToRemove);
   if Length(NR) = 0 then Exit;
 
-  Parts := TStringList.Create;
-  try
-    Parts.LineBreak := ';';
-    Parts.Text := StringReplace(Haystack, ';', #13#10, [rfReplaceAll]);
-    Result := '';
-    for I := 0 to Parts.Count - 1 do
-      if NormalisePathEntry(Parts[I]) <> NR then
-      begin
-        if Result <> '' then
-          Result := Result + ';';
-        Result := Result + Trim(Parts[I]);
-      end;
-  finally
-    Parts.Free;
-  end;
+  StringToArray(Haystack, ';', Parts, True);
+  Result := '';
+  for I := Low(Parts) to High(Parts) do
+    if NormalisePathEntry(Parts[I]) <> NR then
+    begin
+      if Result <> '' then
+        Result := Result + ';';
+      Result := Result + Trim(Parts[I]);
+    end;
 end;
 
 // Add a directory to the user PATH if not already present.
