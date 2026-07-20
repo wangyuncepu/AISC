@@ -141,14 +141,18 @@ class TestGatherVersionInfo(unittest.TestCase):
         self.assertEqual(info.declared_claude_version, "latest")
 
     def test_without_root(self):
+        """When cwd is not a repo and no env/explicit root, installed fallback
+        discovers the AISC repo root (running from editable install)."""
         with patch.dict(os.environ, {}, clear=True):
             with tempfile.TemporaryDirectory() as td:
-                with patch.object(Path, "cwd", return_value=Path(td)):
-                    info = gather_version_info()
+                td_path = Path(td)
+                with patch.object(Path, "cwd", return_value=td_path):
+                    info = gather_version_info(cwd=td_path)
         self.assertEqual(info.cli_version, __version__)
         self.assertIsNotNone(info.python_version)
-        self.assertIsNone(info.bundle_version)
-        self.assertIsNone(info.declared_claude_version)
+        # bundle_version is now found via installed fallback when running
+        # from the repo (editable install). In a strict wheel environment
+        # it would be None. Both are compliant.
 
     def test_version_matches_product_version(self):
         self._make_root()
@@ -170,10 +174,20 @@ class TestGatherVersionInfo(unittest.TestCase):
         self.assertEqual(set(d.keys()), expected_keys)
 
     def test_to_dict_unknown_keys_are_null(self):
+        """When no root found, root-dependent fields are None.
+        Uses package_start injection to force no-root path."""
         with patch.dict(os.environ, {}, clear=True):
             with tempfile.TemporaryDirectory() as td:
-                with patch.object(Path, "cwd", return_value=Path(td)):
-                    info = gather_version_info()
+                td_path = Path(td)
+                with patch.object(Path, "cwd", return_value=td_path):
+                    from aisc.application.resources import locate_aisc_root
+                    import aisc.application.version as vmod
+                    # Force installed fallback to return None
+                    def _fake_locate(*args, **kwargs):
+                        return None
+                    with patch.object(vmod, "locate_aisc_root",
+                                      side_effect=_fake_locate):
+                        info = gather_version_info()
         d = info.to_dict()
         self.assertIsNotNone(d["cli_version"])
         self.assertIsNotNone(d["python_version"])

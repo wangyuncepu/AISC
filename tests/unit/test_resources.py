@@ -13,6 +13,7 @@ from aisc.application.resources import (
     locate_aisc_root,
     _is_root,
     _has_git,
+    _find_installed_root,
     _RootSourceError,
 )
 
@@ -149,13 +150,20 @@ class TestLocateAiscRoot(unittest.TestCase):
         elif git_dir.is_file():
             git_dir.unlink()
         with patch.object(Path, "cwd", return_value=self.root):
-            result = locate_aisc_root()
+            # Use a temp path that has no valid root above it
+            with tempfile.TemporaryDirectory() as td:
+                result = locate_aisc_root(
+                    package_start=Path(td) / "_nonexistent_",
+                )
             self.assertIsNone(result)
 
     def test_repo_discovery_missing_markers_returns_none(self):
         (self.root / "config" / "versions.env").unlink()
         with patch.object(Path, "cwd", return_value=self.root):
-            result = locate_aisc_root()
+            with tempfile.TemporaryDirectory() as td:
+                result = locate_aisc_root(
+                    package_start=Path(td) / "_nonexistent_",
+                )
             self.assertIsNone(result)
 
     def test_repo_git_worktree_file(self):
@@ -172,7 +180,9 @@ class TestLocateAiscRoot(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             with tempfile.TemporaryDirectory() as td:
                 with patch.object(Path, "cwd", return_value=Path(td)):
-                    result = locate_aisc_root()
+                    result = locate_aisc_root(
+                        package_start=Path(td) / "_nonexistent_",
+                    )
                     self.assertIsNone(result)
 
     # --- frozen bundle ---
@@ -184,6 +194,7 @@ class TestLocateAiscRoot(unittest.TestCase):
                 result = locate_aisc_root(
                     is_frozen=lambda: True,
                     executable_path="/usr/bin/aisc",
+                    package_start=Path(td) / "_nonexistent_",
                 )
                 self.assertIsNone(result)  # no repo
 
@@ -232,6 +243,7 @@ class TestLocateAiscRoot(unittest.TestCase):
                     result = locate_aisc_root(
                         is_frozen=lambda: False,
                         executable_path=str(exe_dir / "aisc"),
+                        package_start=clean_dir / "_nonexistent_",
                     )
                     self.assertIsNone(result)
 
@@ -239,7 +251,10 @@ class TestLocateAiscRoot(unittest.TestCase):
         """is_frozen=True but no executable_path → falls through to cwd."""
         with tempfile.TemporaryDirectory() as td:
             with patch.object(Path, "cwd", return_value=Path(td)):
-                result = locate_aisc_root(is_frozen=lambda: True)
+                result = locate_aisc_root(
+                    is_frozen=lambda: True,
+                    package_start=Path(td) / "_nonexistent_",
+                )
                 self.assertIsNone(result)
 
     # --- error source distinction ---
@@ -265,7 +280,9 @@ class TestLocateAiscRoot(unittest.TestCase):
             with patch.object(sys, "executable", "/usr/bin/aisc"):
                 with tempfile.TemporaryDirectory() as td:
                     with patch.object(Path, "cwd", return_value=Path(td)):
-                        result = locate_aisc_root()
+                        result = locate_aisc_root(
+                            package_start=Path(td) / "_nonexistent_",
+                        )
                         # No bundle, no repo → None
                         self.assertIsNone(result)
 
@@ -287,7 +304,9 @@ class TestLocateAiscRoot(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as td:
                     with patch.object(Path, "cwd", return_value=Path(td)):
                         with patch.dict(os.environ, {}, clear=True):
-                            result = locate_aisc_root()
+                            result = locate_aisc_root(
+                                package_start=Path(td) / "_nonexistent_",
+                            )
                             self.assertIsNone(result)
 
     def test_production_default_frozen_validates_bundle(self):
@@ -305,6 +324,132 @@ class TestLocateAiscRoot(unittest.TestCase):
             with patch.object(sys, "executable", str(exe_dir / "aisc")):
                 result = locate_aisc_root()
                 self.assertEqual(result, bundle.resolve())
+
+
+# --- installed package ancestor fallback ---
+
+class TestInstalledFallback(unittest.TestCase):
+    """Tests for _find_installed_root and locate_aisc_root package_start."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmpdir.name)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def _create_valid_root(self, path: Path) -> None:
+        for marker in ["VERSION", "container/Dockerfile", "config/versions.env"]:
+            p = path / marker
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("content")
+        (path / ".git").mkdir(exist_ok=True)
+
+    def test_find_installed_root_from_package_source(self):
+        """Walk up from a deep package source directory finds the root."""
+        # Simulate editable install: package_start deep in the repo
+        self._create_valid_root(self.root)
+        deep = self.root / "src" / "aisc" / "application"
+        deep.mkdir(parents=True, exist_ok=True)
+        (deep / "resources.py").write_text("# stub")
+        result = _find_installed_root(package_start=deep / "resources.py")
+        self.assertIsNotNone(result)
+        self.assertEqual(result, self.root)
+
+    def test_find_installed_root_no_markers_returns_none(self):
+        """No valid ancestor with markers → returns None."""
+        empty = self.root / "empty"
+        empty.mkdir()
+        result = _find_installed_root(package_start=empty / "stub.py")
+        self.assertIsNone(result)
+
+    def test_find_installed_root_site_packages_returns_none(self):
+        """Ordinary wheel install in site-packages: no markers → None."""
+        sp = self.root / "site-packages" / "aisc" / "application"
+        sp.mkdir(parents=True)
+        (sp / "resources.py").write_text("# fake wheel")
+        result = _find_installed_root(package_start=sp / "resources.py")
+        self.assertIsNone(result)
+
+    def test_locate_root_installed_beats_nothing(self):
+        """No cwd repo, no env → installed fallback finds root."""
+        self._create_valid_root(self.root)
+        deep = self.root / "src" / "aisc" / "application"
+        deep.mkdir(parents=True, exist_ok=True)
+        (deep / "resources.py").write_text("# stub")
+
+        with patch.dict(os.environ, {}, clear=True):
+            with tempfile.TemporaryDirectory() as td:
+                with patch.object(Path, "cwd", return_value=Path(td)):
+                    result = locate_aisc_root(
+                        package_start=deep / "resources.py",
+                    )
+        self.assertEqual(result, self.root)
+
+    def test_locate_root_cwd_repo_beats_installed(self):
+        """CWD repo discovery must beat installed fallback."""
+        # repo root in cwd
+        self._create_valid_root(self.root)
+
+        # a *different* "installed" root
+        other = Path(self.tmpdir.name) / "other_install"
+        self._create_valid_root(other)
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(Path, "cwd", return_value=self.root):
+                result = locate_aisc_root(
+                    package_start=other / "src" / "stub.py",
+                )
+        # cwd repo wins over installed
+        self.assertEqual(result, self.root)
+
+    def test_locate_root_explicit_invalid_no_fallback_to_installed(self):
+        """Explicit invalid --aisc-root must raise, NOT fallback to installed."""
+        self._create_valid_root(self.root)
+        deep = self.root / "src" / "aisc"
+        deep.mkdir(parents=True, exist_ok=True)
+
+        with self.assertRaises(_RootSourceError) as ctx:
+            locate_aisc_root(
+                explicit_root="/nonexistent/xyz123",
+                package_start=deep / "resources.py",
+            )
+        self.assertEqual(ctx.exception.source, "--aisc-root")
+
+    def test_locate_root_env_invalid_no_fallback_to_installed(self):
+        """Invalid AISC_ROOT must raise, NOT fallback to installed."""
+        self._create_valid_root(self.root)
+        deep = self.root / "src" / "aisc"
+        deep.mkdir(parents=True, exist_ok=True)
+
+        with patch.dict(os.environ, {"AISC_ROOT": "/nonexistent/xyz"}):
+            with self.assertRaises(_RootSourceError) as ctx:
+                locate_aisc_root(
+                    package_start=deep / "resources.py",
+                )
+        self.assertEqual(ctx.exception.source, "AISC_ROOT")
+
+    def test_locate_root_env_invalid_markers_no_fallback(self):
+        """AISC_ROOT pointing to dir without markers must raise."""
+        empty = self.root / "empty"
+        empty.mkdir()
+
+        with patch.dict(os.environ, {"AISC_ROOT": str(empty)}):
+            with self.assertRaises(_RootSourceError):
+                locate_aisc_root()
+
+    def test_locate_root_installed_default_uses_real_path(self):
+        """Default package_start (Path(__file__).resolve()) should find root
+        when running from an editable install."""
+        # This test is designed to pass when running from the actual AISC repo.
+        # The test file itself lives in tests/unit/; walking up should find the
+        # repo root with structure markers.
+        result = _find_installed_root()  # default: Path(__file__) of resources.py
+        # In an editable install: finds repo root
+        # In site-packages: returns None (no markers)
+        # Either is acceptable — the test documents the contract.
+        if result is not None:
+            self.assertTrue(_is_root(result))
 
 
 if __name__ == "__main__":

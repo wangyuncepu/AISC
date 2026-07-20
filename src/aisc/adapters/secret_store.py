@@ -26,6 +26,7 @@ import os as _os
 import posixpath as _posixpath
 import ntpath as _ntpath
 import stat as _stat
+from collections.abc import Mapping as _Mapping
 from dataclasses import dataclass
 
 try:
@@ -124,7 +125,7 @@ def _raise_no_primary_cleanup(
 def resolve_store_paths(
     platform_name: str,
     home: str,
-    env: "dict | None" = None,
+    env: _Mapping[str, str] | None = None,
 ) -> StorePaths:
     """Resolve the four standard store directories.
 
@@ -143,8 +144,7 @@ def resolve_store_paths(
 
     Raises ``ValueError`` for invalid inputs.
     """
-    if env is None:
-        env = _os.environ
+    resolved_env: _Mapping[str, str] = _os.environ if env is None else env
 
     platform = platform_name.lower()
     _validate_home(home, platform)
@@ -156,9 +156,9 @@ def resolve_store_paths(
         _pathmod = _posixpath
 
     if platform == "linux":
-        cfg = _env_or(env, "XDG_CONFIG_HOME") or _pathmod.join(home, ".config")
-        st_ = _env_or(env, "XDG_STATE_HOME") or _pathmod.join(home, ".local", "state")
-        dat = _env_or(env, "XDG_DATA_HOME") or _pathmod.join(home, ".local", "share")
+        cfg = _env_or(resolved_env, "XDG_CONFIG_HOME") or _pathmod.join(home, ".config")
+        st_ = _env_or(resolved_env, "XDG_STATE_HOME") or _pathmod.join(home, ".local", "state")
+        dat = _env_or(resolved_env, "XDG_DATA_HOME") or _pathmod.join(home, ".local", "share")
         cfg = _pathmod.join(cfg, "aisc")
         st_ = _pathmod.join(st_, "aisc")
         dat = _pathmod.join(dat, "aisc")
@@ -168,8 +168,8 @@ def resolve_store_paths(
         cfg = st_ = dat = base
         sec = _pathmod.join(base, "secrets")
     elif platform == "windows":
-        appdata = _env_or(env, "APPDATA")
-        local = _env_or(env, "LOCALAPPDATA")
+        appdata = _env_or(resolved_env, "APPDATA")
+        local = _env_or(resolved_env, "LOCALAPPDATA")
         if not appdata:
             raise ValueError("APPDATA is not set")
         if not local:
@@ -251,7 +251,7 @@ def _validate_absolute_path(path: str, platform: str = "") -> None:
             raise ValueError(f"path must not contain '{part}' component: {path!r}")
 
 
-def _env_or(env: dict, key: str) -> str | None:
+def _env_or(env: _Mapping[str, str], key: str) -> str | None:
     """Return env[key] or None when missing / empty string."""
     v = env.get(key)
     if v is None or v == "":

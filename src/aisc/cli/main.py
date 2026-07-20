@@ -203,6 +203,58 @@ def _build_parser() -> _AiscArgumentParser:
     _add_global_args(ps, is_subparser=True)
     ps.add_argument("name", type=str, help="Provider id or alias")
 
+    # --- status ---
+    stp = sub.add_parser("status", help="Show container status", allow_abbrev=False)
+    _add_global_args(stp, is_subparser=True)
+    stp.add_argument("--name", type=str, default=None,
+                     help="Container name (overrides state discovery)")
+
+    # --- stop ---
+    spp = sub.add_parser("stop", help="Stop the container", allow_abbrev=False)
+    _add_global_args(spp, is_subparser=True)
+    spp.add_argument("--name", type=str, default=None,
+                     help="Container name (overrides state discovery)")
+
+    # --- restart ---
+    rsp = sub.add_parser("restart", help="Restart the container", allow_abbrev=False)
+    _add_global_args(rsp, is_subparser=True)
+    rsp.add_argument("--name", type=str, default=None,
+                     help="Container name (overrides state discovery)")
+
+    # --- shell ---
+    shp = sub.add_parser("shell", help="Open a bash shell in the container", allow_abbrev=False)
+    _add_global_args(shp, is_subparser=True)
+    shp.add_argument("--name", type=str, default=None,
+                     help="Container name (overrides state discovery)")
+
+    # --- skill ---
+    skp = sub.add_parser("skill", help="Manage skill bundle imports", allow_abbrev=False)
+    _add_global_args(skp, is_subparser=True)
+    sksub = skp.add_subparsers(dest="skill_command", title="skill commands",
+                                parser_class=_AiscArgumentParser)
+
+    ska = sksub.add_parser("add", help="Add a skill from GitHub URL", allow_abbrev=False)
+    _add_global_args(ska, is_subparser=True)
+    ska.add_argument("url", type=str, help="GitHub HTTPS blob/tree/raw URL for SKILL.md or directory")
+
+    skl = sksub.add_parser("list", help="List lock-managed skills", allow_abbrev=False)
+    _add_global_args(skl, is_subparser=True)
+
+    skr = sksub.add_parser("remove", help="Remove a lock-managed skill", allow_abbrev=False)
+    _add_global_args(skr, is_subparser=True)
+    skr.add_argument("name", type=str, help="Skill name to remove")
+
+    skc = sksub.add_parser("check", help="Check lock integrity offline", allow_abbrev=False)
+    _add_global_args(skc, is_subparser=True)
+
+    # --- switch ---
+    swp = sub.add_parser("switch", help="Switch AI provider in the container", allow_abbrev=False)
+    _add_global_args(swp, is_subparser=True)
+    swp.add_argument("--name", type=str, default=None,
+                     help="Container name (overrides state discovery)")
+    swp.add_argument("--quick", type=str, default=None,
+                     help="Provider id or alias for quick switch (e.g. deepseek)")
+
     return parser
 
 
@@ -224,11 +276,27 @@ def _detect_events(argv: List[str]) -> bool:
 
 
 def _detect_command(argv: List[str]) -> Optional[str]:
-    known = {"version", "doctor", "build", "run", "config", "provider", "profile", "brief"}
+    known = {"version", "doctor", "build", "run", "config", "provider", "profile",
+             "brief", "status", "stop", "restart", "shell", "switch", "skill"}
     for arg in argv:
         if arg in known:
             return arg
     return None
+
+
+def _resolve_aisc_root_from_argv(argv: List[str]) -> Optional[str]:
+    """Resolve ``--aisc-root`` from raw *argv* with last-wins semantics.
+
+    Returns the last ``--aisc-root VALUE`` or ``--aisc-root=VALUE``,
+    or ``None`` if the flag is absent.
+    """
+    last = None
+    for i, arg in enumerate(argv):
+        if arg == "--aisc-root" and i + 1 < len(argv):
+            last = argv[i + 1]
+        elif arg.startswith("--aisc-root="):
+            last = arg.split("=", 1)[1]
+    return last
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +542,8 @@ def _cmd_run(
         aisc_root=aisc_root,
     )
 
-    result = run_container(plan, emitter=emitter, capture=capture)
+    result = run_container(plan, emitter=emitter, capture=capture,
+                           aisc_root=aisc_root)
     return result.to_dict(), 0, []
 
 
@@ -566,6 +635,304 @@ def _cmd_provider(
 
 
 # ---------------------------------------------------------------------------
+# Container lifecycle command handlers
+# ---------------------------------------------------------------------------
+
+def _cmd_status(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc status``.  Supports --format json."""
+    from aisc.cli.commands.container import cmd_status
+
+    result = cmd_status(
+        name_override=getattr(args, "name", None),
+        explicit_root=getattr(args, "aisc_root", None),
+    )
+    return result.to_dict(), 0, []
+
+
+def _cmd_stop(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc stop``.  Supports --format json."""
+    from aisc.cli.commands.container import cmd_stop
+
+    data = cmd_stop(
+        name_override=getattr(args, "name", None),
+        explicit_root=getattr(args, "aisc_root", None),
+    )
+    return data, 0, []
+
+
+def _cmd_restart(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc restart``.  Supports --format json."""
+    from aisc.cli.commands.container import cmd_restart
+
+    data = cmd_restart(
+        name_override=getattr(args, "name", None),
+        explicit_root=getattr(args, "aisc_root", None),
+    )
+    return data, 0, []
+
+
+def _cmd_skill(
+    args: argparse.Namespace,
+    effective_format: str,
+    aisc_root_arg: Optional[str],
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Dispatch aisc skill add/list/remove/check."""
+    from aisc.application.resources import locate_aisc_root, _RootSourceError
+    from aisc.application import skill_service
+
+    # Resolve AISC root
+    try:
+        root = locate_aisc_root(explicit_root=aisc_root_arg)
+    except _RootSourceError as exc:
+        raise CliError(message=str(exc), exit_code=1,
+                       error_code="AISC_ERR_GENERAL") from exc
+    if root is None:
+        raise CliError(
+            message="AISC root not found. Use --aisc-root to specify a path, "
+                    "or run from within an AISC repository.",
+            exit_code=1, error_code="AISC_ERR_GENERAL",
+        )
+
+    sub = getattr(args, "skill_command", None)
+    if sub not in ("add", "list", "remove", "check"):
+        if effective_format == "json":
+            emit_json_usage_error(
+                command="skill", version=__version__,
+                message="Unknown skill subcommand. Use: add, list, remove, check",
+            )
+        else:
+            print("Error: Unknown skill subcommand. Use: add, list, remove, check",
+                  file=sys.stderr)
+        sys.exit(2)
+
+    if sub == "add":
+        url = getattr(args, "url", "")
+        if not url:
+            raise CliError(message="URL required for skill add", exit_code=2,
+                           error_code="AISC_ERR_USAGE")
+        try:
+            entry, warnings = skill_service.skill_add(url, root=root)
+        except Exception as exc:
+            raise CliError(message=str(exc), exit_code=1,
+                           error_code="AISC_ERR_GENERAL") from exc
+
+        data: Dict[str, Any] = {
+            "name": entry.name,
+            "source_url": entry.source_url,
+            "resolved_commit": entry.resolved_commit,
+            "requested_ref": entry.requested_ref,
+            "owner": entry.owner,
+            "repo": entry.repo,
+            "file_count": len(entry.files),
+            "warnings": warnings,
+            "dependencies": sorted(entry.detected_references),
+        }
+        if effective_format == "text":
+            _print_skill_add_text(entry, warnings)
+        return data, 0, []
+
+    elif sub == "list":
+        try:
+            entries = skill_service.skill_list(root=root)
+        except Exception as exc:
+            raise CliError(message=str(exc), exit_code=1,
+                           error_code="AISC_ERR_GENERAL") from exc
+        data = {"skills": [
+            {
+                "name": e.name,
+                "source_url": e.source_url,
+                "resolved_commit": e.resolved_commit,
+                "file_count": len(e.files),
+                "dependencies": sorted(e.detected_references),
+            }
+            for e in entries
+        ]}
+        if effective_format == "text":
+            _print_skill_list_text(entries)
+        return data, 0, []
+
+    elif sub == "remove":
+        name = getattr(args, "name", "")
+        if not name:
+            raise CliError(message="Skill name required for remove", exit_code=2,
+                           error_code="AISC_ERR_USAGE")
+        try:
+            removed, info = skill_service.skill_remove(name, root=root)
+        except Exception as exc:
+            raise CliError(message=str(exc), exit_code=1,
+                           error_code="AISC_ERR_GENERAL") from exc
+
+        data: Dict[str, Any] = {"removed": removed}
+        if info.get("directory_missing"):
+            data["directory_missing"] = True
+        if info.get("stale_backup"):
+            data["stale_backup"] = info["stale_backup"]
+            data["cleanup_warning"] = info.get("cleanup_warning", "")
+        if effective_format == "text":
+            print(f"Removed skill: {removed}")
+            if info.get("directory_missing"):
+                print("  Note: managed directory was already missing")
+            if info.get("stale_backup"):
+                print(f"  Warning: stale backup at {info['stale_backup']}: {info.get('cleanup_warning','')}")
+        return data, 0, []
+
+    elif sub == "check":
+        try:
+            result = skill_service.skill_check(root=root)
+        except Exception as exc:
+            raise CliError(message=str(exc), exit_code=1,
+                           error_code="AISC_ERR_GENERAL") from exc
+        data = {
+            "in_sync": result.in_sync,
+            "drift_items": result.drift_items,
+        }
+        exit_code = 0 if result.in_sync else 1
+        if effective_format == "text":
+            _print_skill_check_text(result)
+        return data, exit_code, []
+
+    return {}, 0, []
+
+
+def _print_skill_add_text(entry: Any, warnings: List[str]) -> None:
+    """Print text output for skill add."""
+    print(f"Added skill: {entry.name}")
+    print(f"  Source:   {entry.source_url}")
+    print(f"  Commit:   {entry.resolved_commit}")
+    print(f"  Ref:      {entry.requested_ref}")
+    print(f"  Files:    {len(entry.files)}")
+    if entry.detected_references:
+        print(f"  Deps:     {', '.join(sorted(entry.detected_references))}")
+    for w in warnings:
+        print(f"  Warning:  {w}")
+
+
+def _print_skill_list_text(entries: List[Any]) -> None:
+    """Print text output for skill list."""
+    if not entries:
+        print("No skills managed by skills-lock.json")
+        return
+    for e in entries:
+        print(f"  {e.name}")
+        print(f"    Source: {e.source_url}")
+        print(f"    Commit: {e.resolved_commit[:12]}...")
+        print(f"    Files:  {len(e.files)}")
+        if e.detected_references:
+            print(f"    Deps:   {', '.join(sorted(e.detected_references))}")
+        print()
+
+
+def _print_skill_check_text(result: Any) -> None:
+    """Print text output for skill check."""
+    if result.in_sync:
+        print("Skills are in sync with lock.")
+        return
+    print("Drift detected:")
+    for item in result.drift_items:
+        print(f"  - {item}")
+
+
+
+def _cmd_shell(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc shell``.  Text-only interactive."""
+    from aisc.cli.commands.container import cmd_shell, discover_container
+
+    if effective_format == "json":
+        emit_json_usage_error(
+            command="shell", version=__version__,
+            message="shell only supports text output, --format json is not supported",
+        )
+        sys.exit(2)
+
+    # Discover name once for use in returned data
+    name_override = getattr(args, "name", None)
+    try:
+        discovered_name = name_override or discover_container(
+            name_override=None,
+            explicit_root=getattr(args, "aisc_root", None),
+        )
+    except Exception:
+        discovered_name = name_override or ""
+
+    proc = cmd_shell(
+        name_override=name_override,
+        explicit_root=getattr(args, "aisc_root", None),
+    )
+
+    exit_code = proc.exit_code if proc.exit_code >= 0 else 1
+    errors: List[Dict[str, Any]] = []
+    if exit_code != 0:
+        errors.append(build_error(
+            "AISC_ERR_GENERAL",
+            proc.stderr or f"docker exec exited with code {exit_code}",
+        ))
+
+    return {"name": discovered_name, "exit_code": exit_code}, exit_code, errors
+
+
+def _cmd_switch(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc switch``.  Text-only interactive."""
+    from aisc.cli.commands.container import cmd_switch, discover_container
+
+    if effective_format == "json":
+        emit_json_usage_error(
+            command="switch", version=__version__,
+            message="switch only supports text output, --format json is not supported",
+        )
+        sys.exit(2)
+
+    # Discover name once for use in returned data
+    name_override = getattr(args, "name", None)
+    try:
+        discovered_name = name_override or discover_container(
+            name_override=None,
+            explicit_root=getattr(args, "aisc_root", None),
+        )
+    except Exception:
+        discovered_name = name_override or ""
+
+    quick = getattr(args, "quick", None)
+
+    proc = cmd_switch(
+        name_override=name_override,
+        explicit_root=getattr(args, "aisc_root", None),
+        quick=quick,
+    )
+
+    exit_code = proc.exit_code if proc.exit_code >= 0 else 1
+    errors: List[Dict[str, Any]] = []
+    if exit_code != 0:
+        errors.append(build_error(
+            "AISC_ERR_GENERAL",
+            proc.stderr or f"docker exec exited with code {exit_code}",
+        ))
+
+    data: Dict[str, Any] = {
+        "name": discovered_name,
+        "exit_code": exit_code,
+    }
+    if quick:
+        data["provider"] = quick
+        data["quick"] = True
+    return data, exit_code, errors
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -616,6 +983,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     except SystemExit:
         raise
 
+    # Resolve --aisc-root from raw argv with last-wins semantics.
+    # This decouples root resolution from argparse's subparser defaults
+    # and ensures --aisc-root works both before and after any command.
+    resolved_root = _resolve_aisc_root_from_argv(args_list)
+    if resolved_root is not None:
+        args.aisc_root = resolved_root
+
     # Resolve effective format
     effective_format = _resolve_format(args, args_list)
     parser._aisc_format = effective_format
@@ -648,6 +1022,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     use_color = sys.stdout.isatty() and not getattr(args, "no_color", False)
     aisc_root = getattr(args, "aisc_root", None)
+    # Raw-argv resolver may have set this to a valid string; keep it as-is.
+    # If the raw-argv resolver set it, argparse.SUPPRESS is irrelevant.
     if aisc_root is argparse.SUPPRESS:
         aisc_root = None
 
@@ -655,7 +1031,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     emitter: Optional[JsonlEmitter] = None
     if args_events and args.command in ("build", "run"):
         emitter = JsonlEmitter(command=args.command)
-    elif args_events and args.command in ("version", "doctor", "config", "provider", "profile", "brief"):
+    elif args_events and args.command in ("version", "doctor", "config", "provider", "profile", "brief",
+                                            "status", "stop", "restart", "shell", "switch", "skill"):
         if effective_format == "json":
             emit_json_usage_error(
                 command=args.command, version=__version__,
@@ -695,6 +1072,18 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_profile(args, effective_format)
         elif args.command == "brief":
             data, exit_code, errors = _cmd_brief(args, effective_format)
+        elif args.command == "status":
+            data, exit_code, errors = _cmd_status(args, effective_format)
+        elif args.command == "stop":
+            data, exit_code, errors = _cmd_stop(args, effective_format)
+        elif args.command == "restart":
+            data, exit_code, errors = _cmd_restart(args, effective_format)
+        elif args.command == "shell":
+            data, exit_code, errors = _cmd_shell(args, effective_format)
+        elif args.command == "switch":
+            data, exit_code, errors = _cmd_switch(args, effective_format)
+        elif args.command == "skill":
+            data, exit_code, errors = _cmd_skill(args, effective_format, aisc_root)
         else:
             if effective_format == "json":
                 emit_json_usage_error(
@@ -807,6 +1196,26 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 print_profile_list_text(data)
         elif args.command == "brief":
             # brief outputs directly via subprocess; nothing extra to print
+            pass
+        elif args.command == "status":
+            from aisc.cli.commands.container import print_status_text, StatusResult
+            sr = StatusResult(
+                name=data.get("name", ""),
+                exists=data.get("exists", False),
+                running=data.get("running", False),
+                status=data.get("status", ""),
+                image=data.get("image", ""),
+                container_id=data.get("container_id", ""),
+            )
+            print_status_text(sr)
+        elif args.command == "stop":
+            from aisc.cli.commands.container import print_stop_text
+            print_stop_text(data if isinstance(data, dict) else {})
+        elif args.command == "restart":
+            from aisc.cli.commands.container import print_restart_text
+            print_restart_text(data if isinstance(data, dict) else {})
+        elif args.command in ("shell", "switch", "skill"):
+            # interactive output / skill text printed directly by _cmd_*
             pass
 
     sys.exit(exit_code)

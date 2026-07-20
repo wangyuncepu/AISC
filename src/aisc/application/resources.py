@@ -6,6 +6,9 @@ Priority:
   3. Frozen executable: adjacent ``aisc-bundle/`` directory
      (bundle missing → continue to repo discovery; bundle corrupt → raise)
   4. Walk up from *cwd* discovering a repo (``.git`` + structure markers)
+  5. Installed package ancestor fallback: walk ancestors of the aisc package
+     source (``Path(__file__).resolve()``) looking for structure markers.
+     Supports editable installs; ordinary site-packages wheels return ``None``.
 """
 
 from __future__ import annotations
@@ -42,6 +45,26 @@ def _find_repo_root(start: Path) -> Optional[Path]:
     current = start.resolve()
     while True:
         if _has_git(current) and _is_root(current):
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
+def _find_installed_root(package_start: Optional[Path] = None) -> Optional[Path]:
+    """Walk ancestors of *package_start* looking for a valid AISC root.
+
+    Used as the final fallback when no explicit/env/frozen/repo root is found.
+    Supports editable installs where ``Path(__file__).resolve()`` points into
+    the actual repo tree.  For ordinary wheel installs the walk will reach the
+    filesystem root without matching structure markers and return ``None``.
+    """
+    start = (package_start or Path(__file__).resolve()).parent
+    current = start
+    while True:
+        if _is_root(current):
             return current
         parent = current.parent
         if parent == current:
@@ -94,6 +117,7 @@ def locate_aisc_root(
     cwd: Optional[Path] = None,
     is_frozen: Optional[Callable[[], bool]] = None,
     executable_path: Optional[str] = None,
+    package_start: Optional[Path] = None,
 ) -> Optional[Path]:
     """Find the AISC root directory.
 
@@ -108,6 +132,10 @@ def locate_aisc_root(
         Default: ``getattr(sys, 'frozen', False)`` (lazy, at call time).
     executable_path:
         Path to the executable when frozen.  Default: ``sys.executable``.
+    package_start:
+        Path to use as starting point for installed-package ancestor walk.
+        Default: ``Path(__file__).resolve()`` in this module.
+        Injection point for deterministic tests.
 
     Returns
     -------
@@ -166,4 +194,11 @@ def locate_aisc_root(
 
     # -- 4. Repo discovery --
     start = cwd if cwd is not None else Path.cwd()
-    return _find_repo_root(start)
+    repo = _find_repo_root(start)
+    if repo is not None:
+        return repo
+
+    # -- 5. Installed package ancestor fallback --
+    # Walks up from the aisc package source. Supports editable installs.
+    # Ordinary site-packages wheels will reach filesystem root and return None.
+    return _find_installed_root(package_start)

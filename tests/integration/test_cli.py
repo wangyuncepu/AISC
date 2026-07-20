@@ -12,9 +12,11 @@ JSON envelope schema (via existing harness), and new S2-review fixes:
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Optional
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -433,6 +435,312 @@ class TestProviderList(unittest.TestCase):
         r = _run_aisc("provider", "list", "--format", "json")
         data = assert_json_envelope(r)
         self.assertEqual(data["meta"]["exit_code"], 0)
+
+
+# ---------------------------------------------------------------------------
+# --aisc-root positioning (before and after command)
+# ---------------------------------------------------------------------------
+
+class TestAiscRootPositioning(unittest.TestCase):
+    """Verify --aisc-root works both before and after any command."""
+
+    def setUp(self):
+        self.project_root = str(Path(__file__).resolve().parent.parent.parent)
+
+    def test_root_before_version_command(self):
+        """--aisc-root before 'version' is recognized."""
+        r = _run_aisc("--aisc-root", self.project_root, "version")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("AISC CLI version", r.stdout)
+
+    def test_root_after_version_command(self):
+        """--aisc-root after 'version' is recognized."""
+        r = _run_aisc("version", "--aisc-root", self.project_root)
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("AISC CLI version", r.stdout)
+
+    def test_root_before_provider_list(self):
+        """--aisc-root before 'provider list' is recognized."""
+        r = _run_aisc("--aisc-root", self.project_root, "provider", "list",
+                       "--format", "json")
+        data = assert_json_envelope(r)
+        self.assertGreater(len(data["data"]["providers"]), 0)
+
+    def test_root_after_provider_command(self):
+        """--aisc-root after 'provider' before 'list' is recognized."""
+        r = _run_aisc("provider", "--aisc-root", self.project_root, "list",
+                       "--format", "json")
+        data = assert_json_envelope(r)
+        self.assertGreater(len(data["data"]["providers"]), 0)
+
+    def test_root_after_provider_list(self):
+        """--aisc-root after 'provider list' is recognized."""
+        r = _run_aisc("provider", "list", "--aisc-root", self.project_root,
+                       "--format", "json")
+        data = assert_json_envelope(r)
+        self.assertGreater(len(data["data"]["providers"]), 0)
+
+    def test_root_before_provider_show(self):
+        """--aisc-root before 'provider show' is recognized."""
+        r = _run_aisc("--aisc-root", self.project_root, "provider", "show",
+                       "deepseek", "--format", "json")
+        data = assert_json_envelope(r)
+        self.assertEqual(data["data"]["id"], "deepseek")
+
+    def test_root_after_provider_show(self):
+        """--aisc-root after 'provider show NAME' is recognized."""
+        r = _run_aisc("provider", "show", "deepseek",
+                       "--aisc-root", self.project_root, "--format", "json")
+        data = assert_json_envelope(r)
+        self.assertEqual(data["data"]["id"], "deepseek")
+
+    def test_root_equals(self):
+        """--aisc-root=VALUE form works."""
+        r = _run_aisc("--aisc-root=" + self.project_root, "version")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("AISC CLI version", r.stdout)
+
+    def test_invalid_root_error(self):
+        """--aisc-root pointing to a non-root directory raises clear error."""
+        with tempfile.TemporaryDirectory() as td:
+            r = _run_aisc("--aisc-root", td, "version", "--format", "json")
+            parsed = parse_json_envelope(r.stdout)
+            self.assertIsNotNone(parsed)
+            self.assertEqual(parsed["meta"]["exit_code"], 1)
+            self.assertGreater(len(parsed["errors"]), 0)
+            self.assertIn("missing required structure markers",
+                          parsed["errors"][0]["message"])
+
+    def test_invalid_root_before_provider_list_error(self):
+        """--aisc-root invalid before provider list returns error, not empty."""
+        with tempfile.TemporaryDirectory() as td:
+            r = _run_aisc("--aisc-root", td, "provider", "list",
+                           "--format", "json")
+            parsed = parse_json_envelope(r.stdout)
+            self.assertIsNotNone(parsed)
+            self.assertEqual(parsed["meta"]["exit_code"], 1)
+            self.assertGreater(len(parsed["errors"]), 0)
+            self.assertIn("missing required structure markers",
+                          parsed["errors"][0]["message"])
+
+
+# ---------------------------------------------------------------------------
+# Provider from arbitrary cwd (installed fallback)
+# ---------------------------------------------------------------------------
+
+class TestProviderFromArbitraryCwd(unittest.TestCase):
+    """Provider list/show must work from non-AISC working directory."""
+
+    def test_provider_list_from_temp_directory(self):
+        """provider list works from arbitrary temp directory."""
+        with tempfile.TemporaryDirectory() as td:
+            r = _run_aisc("provider", "list", "--format", "json", cwd=td)
+            data = assert_json_envelope(r)
+            self.assertIn("schema_version", data["data"])
+            self.assertGreater(len(data["data"]["providers"]), 0)
+
+    def test_provider_show_deepseek_from_temp_directory(self):
+        """provider show deepseek works from arbitrary temp directory."""
+        with tempfile.TemporaryDirectory() as td:
+            r = _run_aisc("provider", "show", "deepseek", "--format", "json",
+                           cwd=td)
+            data = assert_json_envelope(r)
+            self.assertEqual(data["data"]["id"], "deepseek")
+
+    def test_provider_show_cc_from_temp_directory(self):
+        """provider show cc works from arbitrary temp directory."""
+        with tempfile.TemporaryDirectory() as td:
+            r = _run_aisc("provider", "show", "cc", "--format", "json", cwd=td)
+            data = assert_json_envelope(r)
+            self.assertEqual(data["data"]["id"], "cc")
+
+
+# ---------------------------------------------------------------------------
+# Version / brief / build from arbitrary cwd (installed fallback)
+# ---------------------------------------------------------------------------
+
+class TestCommandsFromArbitraryCwd(unittest.TestCase):
+    """Commands requiring AISC root must work from non-AISC working directory."""
+
+    def test_version_bundle_present(self):
+        """version from temp dir shows bundle version via installed fallback."""
+        with tempfile.TemporaryDirectory() as td:
+            r = _run_aisc("version", cwd=td)
+            self.assertEqual(r.exit_code, 0)
+            self.assertIn("AISC CLI version", r.stdout)
+            self.assertIn("Bundle version", r.stdout)
+            self.assertNotIn("(not found)", r.stdout)
+
+    def test_version_json_from_temp(self):
+        """version --format json from temp dir."""
+        with tempfile.TemporaryDirectory() as td:
+            r = _run_aisc("version", "--format", "json", cwd=td)
+            data = assert_json_envelope(r)
+            self.assertIsNotNone(data["data"].get("bundle_version"))
+            self.assertIsNotNone(data["data"].get("cli_version"))
+
+    def test_build_dry_run_from_temp(self):
+        """build --dry-run from temp dir resolves AISC root."""
+        with tempfile.TemporaryDirectory() as td:
+            r = _run_aisc("build", "--dry-run", cwd=td)
+            self.assertEqual(r.exit_code, 0)
+            self.assertIn("Build plan", r.stdout)
+
+    def test_run_dry_run_workspace_is_temp_cwd(self):
+        """run --dry-run from temp dir: workspace = temp dir, root = installed."""
+        with tempfile.TemporaryDirectory() as td:
+            r = _run_aisc("run", "--dry-run", "--format", "json", cwd=td)
+            data = assert_json_envelope(r)
+            # workspace in docker_argv should be the temp cwd
+            argv = data["data"]["docker_argv"]
+            # Find the -v workspace mount
+            vol_idx = argv.index("-v") if "-v" in argv else None
+            if vol_idx is not None:
+                vol = argv[vol_idx + 1]
+                # <workspace>:/home/AISC/app — workspace should be temp dir
+                self.assertTrue(vol.startswith(td + ":"),
+                                f"Expected workspace starting with {td}, got {vol}")
+
+    def test_brief_resolves_installed_root_in_process(self):
+        """``_cmd_brief`` resolves AISC root and passes correct paths to
+        subprocess — zero network, zero script execution, same-process proof.
+
+        ``_cmd_brief`` imports ``locate_aisc_root`` and ``subprocess``
+        locally at call time, so patching module-level sources before the
+        call is both deterministic and sufficient.
+        """
+        import argparse
+        from aisc.cli.main import _cmd_brief
+
+        with tempfile.TemporaryDirectory() as td:
+            fake_root = Path(td)
+            # --- minimal valid AISC root ---
+            for marker in ["VERSION", "container/Dockerfile", "config/versions.env"]:
+                p = fake_root / marker
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text("content")
+            # --- brief.py stub ---
+            apps_brief = fake_root / "apps" / "ai-brief"
+            apps_brief.mkdir(parents=True)
+            brief_script = apps_brief / "brief.py"
+            brief_script.write_text("# AI brief stub")
+
+            # --- fake args (defaults, no explicit root) ---
+            ns = argparse.Namespace()
+            ns.aisc_root = None
+            ns.date = None
+            ns.source = "all"
+            ns.days = 1
+            ns.top = 5
+            ns.ai = False
+            ns.save = False
+            ns.no_cache = False
+            ns.strict = False
+            ns.debug = False
+
+            # --- capture subprocess argv to verify paths ---
+            captured_argv: list = []
+
+            def _fake_subprocess_run(argv, **kwargs):
+                captured_argv.extend(argv)
+                # return a simple object with returncode=0
+                return MagicMock(returncode=0)
+
+            with patch(
+                "subprocess.run",
+                side_effect=_fake_subprocess_run,
+            ), patch(
+                "aisc.application.resources.locate_aisc_root",
+                return_value=fake_root,
+            ):
+                data, exit_code, errors = _cmd_brief(ns, "text")
+
+            # --- assertions ---
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(errors), 0)
+            self.assertIn("brief_exit_code", data)
+            self.assertEqual(data["brief_exit_code"], 0)
+
+            # Exact script path
+            self.assertIn(str(brief_script), captured_argv,
+                          f"brief.py path not in argv: {captured_argv}")
+            # Uses current interpreter
+            self.assertIn(sys.executable, captured_argv,
+                          f"sys.executable not in argv: {captured_argv}")
+            # First two positional args are [python, script]
+            self.assertEqual(captured_argv[0], sys.executable)
+            self.assertEqual(captured_argv[1], str(brief_script))
+            # --source flag present (default "all")
+            self.assertIn("--source", captured_argv)
+            self.assertIn("all", captured_argv)
+
+
+# ---------------------------------------------------------------------------
+# Container discovery from installed AISC root (same-process)
+# ---------------------------------------------------------------------------
+
+class TestContainerDiscoveryRoot(unittest.TestCase):
+    """Prove ``discover_container`` reads state from installed AISC root,
+    not from an arbitrary cwd.  Uses temp fake root + patched resolver.
+    """
+
+    def test_discover_container_reads_installed_root_state(self):
+        """Without --name or explicit_root, discover_container must fall back
+        to ``locate_aisc_root`` and read ``<root>/.aisc/state.env``.
+
+        Sets up a temp fake root with a state file and patches the resolver
+        to return it.  Cwd is a different empty temp dir — proving root
+        selection is resolver-driven, not cwd-driven.
+        """
+        from aisc.cli.commands.container import discover_container
+
+        with tempfile.TemporaryDirectory() as root_td, \
+             tempfile.TemporaryDirectory() as cwd_td:
+
+            fake_root = Path(root_td)
+            state_dir = fake_root / ".aisc"
+            state_dir.mkdir()
+            (state_dir / "state.env").write_text(
+                "CONTAINER_NAME=installed-container-abc\n"
+            )
+
+            with patch(
+                "aisc.cli.commands.container.locate_aisc_root",
+                return_value=fake_root,
+            ), patch.object(Path, "cwd", return_value=Path(cwd_td)):
+                name = discover_container(explicit_root=None)
+
+            self.assertEqual(name, "installed-container-abc")
+
+    def test_discover_container_falls_back_from_cwd_to_installed(self):
+        """When cwd is NOT a repo, discover_container must use installed
+        fallback via ``locate_aisc_root``.  Proves no silent None."""
+        from aisc.cli.commands.container import discover_container
+
+        with tempfile.TemporaryDirectory() as root_td, \
+             tempfile.TemporaryDirectory() as cwd_td:
+
+            fake_root = Path(root_td)
+            state_dir = fake_root / ".aisc"
+            state_dir.mkdir()
+            (state_dir / "state.env").write_text(
+                "CONTAINER_NAME=fallback-container-xyz\n"
+            )
+
+            # cwd is an empty dir with no repo → repo discovery returns None
+            # installed fallback returns fake_root
+            with patch.object(Path, "cwd", return_value=Path(cwd_td)):
+                # locate_aisc_root is imported in container.py at module level
+                # from aisc.application.resources.  Patch the module-level
+                # function in the resources module.
+                import aisc.application.resources as _resmod
+                with patch.object(_resmod, "_find_repo_root",
+                                  return_value=None), \
+                     patch.object(_resmod, "_find_installed_root",
+                                  return_value=fake_root):
+                    name = discover_container(explicit_root=None)
+
+            self.assertEqual(name, "fallback-container-xyz")
 
 
 if __name__ == "__main__":

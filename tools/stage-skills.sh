@@ -15,9 +15,14 @@ IMG_HOME="/home/AISC/.claude"   # 镜像内目标路径，用于重写绝对路�
 # 需要的 4 个 marketplace（skill-creator 由 claude-plugins-official 本地源解析）
 MARKETS=(caveman claude-hud claude-plugins-official anthropic-agent-skills)
 
-echo "🧹 清理旧 _bundle ..."
-rm -rf "$DST"
+echo "🧹 清理旧 _bundle (仅插件输出与 gstack) ..."
+# Preserve any aisc-skill-imported directories under skills/
 mkdir -p "$DST/plugins/cache" "$DST/plugins/marketplaces" "$DST/skills"
+# Only remove the directories we own: plugins/ and skills/gstack
+rm -rf "$DST/plugins/cache" "$DST/plugins/marketplaces"
+# Remove gstack but preserve all other skill dirs imported by aisc skill
+[ -d "$DST/skills/gstack" ] && rm -rf "$DST/skills/gstack"
+mkdir -p "$DST/plugins/cache" "$DST/plugins/marketplaces"
 
 echo "📦 复制插件 cache ..."
 for mp in "${MARKETS[@]}"; do
@@ -97,6 +102,8 @@ for (const [pp, vers] of Object.entries(keep)) {
 NODE
 
 echo "🌐 复制 gstack（仅文档，且只保留指定子技能）..."
+# Ensure skills dir exists (may have been skipped if no prior skills exist)
+mkdir -p "$DST/skills"
 # 只保留这些 gstack 子技能（docs-only：仅 *.md，无二进制）
 GSTACK_SKILLS=(office-hours plan-ceo-review plan-eng-review plan-design-review autoplan plan-devex-review)
 mkdir -p "$DST/skills/gstack"
@@ -111,12 +118,10 @@ for sk in "${GSTACK_SKILLS[@]}"; do
 done
 find "$DST/skills/gstack" -type d -empty -delete 2>/dev/null || true
 
-echo "🧽 剥离嵌入 .git / 运行锁 / 嵌套 .gitignore（后者会让 dist 等被外层 git 忽略而漏提交）..."
-find "$DST" -name '.git' -prune -exec rm -rf {} + 2>/dev/null || true
-find "$DST" -name '.in_use' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-# 关键：插件自带的 .gitignore 含 dist/ 等，复制进 _bundle 后会导致 git 漏提交
-# 编译产物(claude-hud dist/index.js) → 用户 clone 后镜像缺文件、HUD 失效
-find "$DST" -name '.gitignore' -delete 2>/dev/null || true
+echo "🧽 剥离插件树和 gstack 中的嵌入 .git / 运行锁 / .gitignore ..."
+# Delegated to shared helper — only cleans plugins/ and skills/gstack.
+export DST
+"$(dirname "$0")/stage-skills-cleanup.sh"
 
 echo "✅ 暂存完成。体积："
 du -sh "$DST" "$DST/plugins/cache" "$DST/plugins/marketplaces" "$DST/skills/gstack" 2>/dev/null
