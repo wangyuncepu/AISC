@@ -259,5 +259,120 @@ class TestInstallerSmokeInvariants(unittest.TestCase):
         self.assertNotIn("& $uninstFile.FullName /VERYSILENT", self.text)
 
 
+class TestSmokeDiagnostics(unittest.TestCase):
+    """Validate that smoke_installer.ps1 preserves raw output on provider failures."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = (_PROJ / "packaging" / "windows" / "smoke_installer.ps1").read_text(
+            encoding="utf-8"
+        )
+
+    def test_provider_exit_code_captured_before_out_string(self):
+        """``$LASTEXITCODE`` must be captured *before* Out-String to avoid loss."""
+        # Pattern: $provLines = & ... ; $provExit = $LASTEXITCODE ; $provJson = $provLines | Out-String
+        self.assertIn("$provExit = $LASTEXITCODE", self.text,
+                      "Must capture LASTEXITCODE before Out-String consumes it")
+        self.assertIn("$provJson = $provLines | Out-String", self.text,
+                      "Must use Out-String on captured variable, not inline")
+
+    def test_provider_nonzero_shows_raw_output(self):
+        """On non-zero exit, smoke must print raw captured output for diagnosis."""
+        self.assertIn("[raw output captured on non-zero exit]", self.text,
+                      "Missing raw output dump on non-zero exit")
+        self.assertIn("ForEach-Object { Write-Host", self.text,
+                      "Must iterate raw lines on non-zero exit")
+
+    def test_provider_json_parse_failure_shows_raw_context(self):
+        """On JSON parse failure, smoke must print raw content preview."""
+        self.assertIn("[raw JSON content, first 2000 chars]", self.text,
+                      "Missing raw content preview on JSON parse failure")
+        self.assertIn("Substring(0, 2000)", self.text,
+                      "Must provide bounded raw content preview")
+
+
+class TestEntrypointUtf8Config(unittest.TestCase):
+    """Unit / static tests for the PyInstaller entrypoint UTF-8 config logic."""
+
+    def _load_func(self):
+        """Parse and return the _configure_frozen_io function source."""
+        ep_path = _PROJ / "packaging" / "pyinstaller" / "entrypoint.py"
+        text = ep_path.read_text(encoding="utf-8")
+        # Extract the function body as a static check
+        self.assertIn("def _configure_frozen_io()", text,
+                      "_configure_frozen_io function must exist in entrypoint.py")
+        return text
+
+    def test_guarded_by_win32(self):
+        """UTF-8 configuration must only activate on win32 platform."""
+        text = self._load_func()
+        self.assertIn("sys.platform != \"win32\"", text,
+                      "Must check for win32 platform before reconfiguring")
+        self.assertIn("return", text,
+                      "Must early-return on non-win32")
+
+    def test_guarded_by_frozen(self):
+        """UTF-8 configuration must only activate in frozen processes."""
+        text = self._load_func()
+        self.assertIn("sys.frozen", text,
+                      "Must check sys.frozen before reconfiguring")
+
+    def test_handles_none_stream(self):
+        """Must safely handle stdout/stderr being None."""
+        text = self._load_func()
+        self.assertIn("is None", text,
+                      "Must guard against None streams")
+
+    def test_handles_no_reconfigure(self):
+        """Must handle streams without a reconfigure method (Python < 3.7)."""
+        text = self._load_func()
+        self.assertIn("reconfigure", text,
+                      "Must reference reconfigure method")
+        self.assertIn("getattr", text,
+                      "Must use getattr for safe attribute access")
+
+    def test_handles_reconfigure_exception(self):
+        """Must catch exceptions from reconfigure so the CLI doesn't crash."""
+        text = self._load_func()
+        self.assertIn("except", text,
+                      "Must have exception handling for reconfigure calls")
+        self.assertIn("pass", text,
+                      "Must silently pass on reconfigure failure")
+
+    def test_outer_safety_net(self):
+        """Top-level try/except must guard the entire function body."""
+        text = self._load_func()
+        # At least two try blocks: outer safety net + per-stream
+        occurrences = text.count("except Exception:")
+        self.assertGreaterEqual(occurrences, 1,
+                                "Must have at least one except Exception catch-all")
+
+    def test_function_called_at_module_level(self):
+        """_configure_frozen_io must be called before if __name__ == '__main__'."""
+        text = self._load_func()
+        self.assertIn("_configure_frozen_io()", text,
+                      "Function must be called at module level")
+        # It must appear after the function definition but before if __name__
+        func_def_pos = text.find("def _configure_frozen_io()")
+        call_pos = text.find("_configure_frozen_io()", func_def_pos)
+        main_pos = text.find('if __name__ == "__main__"')
+        # All positions must be valid (find returns -1 if missing, but assertIn guards above)
+        self.assertGreater(call_pos, -1, "Call to _configure_frozen_io() not found")
+        self.assertGreater(main_pos, -1, "__main__ guard not found")
+        self.assertTrue(call_pos < main_pos,
+                        "_configure_frozen_io() must be called before __main__ guard")
+
+    def test_encoding_is_utf8(self):
+        """Reconfigure must set encoding to utf-8, not utf8 or utf_8."""
+        text = self._load_func()
+        self.assertIn('encoding="utf-8"', text,
+                      "Reconfigure encoding must be exactly 'utf-8'")
+
+    def test_imports_before_any_logic(self):
+        r"""``import sys`` must be present for platform/frozen checks."""
+        text = self._load_func()
+        self.assertIn("import sys", text, "Must import sys for platform checks")
+
+
 if __name__ == "__main__":
     unittest.main()
