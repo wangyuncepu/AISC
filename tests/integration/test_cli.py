@@ -743,5 +743,144 @@ class TestContainerDiscoveryRoot(unittest.TestCase):
             self.assertEqual(name, "fallback-container-xyz")
 
 
+# ---------------------------------------------------------------------------
+# Bare grouped commands → help, exit 0 (usability fix)
+# ---------------------------------------------------------------------------
+
+class TestBareGroupHelp(unittest.TestCase):
+    """Bare ``aisc config``, ``aisc provider``, ``aisc profile``, ``aisc skill``
+    must print the group help and exit 0 instead of ``Unknown ... subcommand``.
+    """
+
+    def test_bare_config_shows_help_exit_0(self):
+        r = _run_aisc("config")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("validate", r.stdout)
+        self.assertIn("effective", r.stdout)
+        self.assertIn("show", r.stdout)
+        self.assertNotIn("Unknown config", r.stderr)
+
+    def test_bare_provider_shows_help_exit_0(self):
+        r = _run_aisc("provider")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("list", r.stdout)
+        self.assertIn("show", r.stdout)
+        self.assertNotIn("Unknown provider", r.stderr)
+
+    def test_bare_profile_shows_help_exit_0(self):
+        r = _run_aisc("profile")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("list", r.stdout)
+        self.assertIn("show", r.stdout)
+        self.assertNotIn("Unknown profile", r.stderr)
+
+    def test_bare_skill_shows_help_exit_0(self):
+        r = _run_aisc("skill")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("add", r.stdout)
+        self.assertIn("list", r.stdout)
+        self.assertIn("remove", r.stdout)
+        self.assertIn("check", r.stdout)
+        self.assertNotIn("Unknown skill", r.stderr)
+
+    # --- global option placement: before group ---
+
+    def test_format_json_before_config_shows_help(self):
+        """--format json before bare group: still help text, exit 0, not JSON."""
+        r = _run_aisc("--format", "json", "config")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("validate", r.stdout)
+        self.assertIn("effective", r.stdout)
+        self.assertNotIn("Unknown config", r.stderr)
+        # Must NOT be a JSON envelope
+        stripped = r.stdout.strip()
+        if stripped:
+            self.assertNotIn('"meta"', stripped[:100])
+
+    def test_format_json_after_config_shows_help(self):
+        """--format json after bare group: still help text, exit 0."""
+        r = _run_aisc("config", "--format", "json")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("validate", r.stdout)
+        self.assertIn("effective", r.stdout)
+        self.assertNotIn("Unknown config", r.stderr)
+
+    def test_no_color_before_skill_shows_help(self):
+        r = _run_aisc("--no-color", "skill")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("add", r.stdout)
+        self.assertIn("check", r.stdout)
+
+    def test_no_color_after_skill_shows_help(self):
+        r = _run_aisc("skill", "--no-color")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("add", r.stdout)
+
+    def test_aisc_root_before_provider_shows_help(self):
+        """--aisc-root before bare provider: still help, exit 0."""
+        r = _run_aisc("--aisc-root", "/nonexistent/xyz", "provider")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("list", r.stdout)
+        self.assertIn("show", r.stdout)
+
+    def test_aisc_root_after_provider_shows_help(self):
+        """--aisc-root after bare provider: still help, exit 0."""
+        r = _run_aisc("provider", "--aisc-root", "/nonexistent/xyz")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("list", r.stdout)
+
+    # --- explicit unknown nested subcommand → nonzero ---
+
+    def test_unknown_config_subcommand_nonzero(self):
+        r = _run_aisc("config", "bogus-subcmd")
+        self.assertNotEqual(r.exit_code, 0)
+
+    def test_unknown_skill_subcommand_nonzero(self):
+        r = _run_aisc("skill", "bogus-subcmd")
+        self.assertNotEqual(r.exit_code, 0)
+
+    def test_unknown_provider_subcommand_nonzero(self):
+        r = _run_aisc("provider", "bogus-subcmd")
+        self.assertNotEqual(r.exit_code, 0)
+
+    def test_unknown_profile_subcommand_nonzero(self):
+        r = _run_aisc("profile", "bogus-subcmd")
+        self.assertNotEqual(r.exit_code, 0)
+
+    # --- existing subcommands still work ---
+
+    def test_config_validate_still_works(self):
+        r = _run_aisc("config", "validate", "--format", "json")
+        self.assertIn(r.exit_code, (0, 1, 6, 7, 9))
+
+    def test_provider_list_still_works(self):
+        r = _run_aisc("provider", "list")
+        self.assertEqual(r.exit_code, 0)
+        self.assertIn("Provider List", r.stdout)
+
+    def test_profile_list_still_works(self):
+        r = _run_aisc("profile", "list", "--format", "json")
+        data = _parse_stdout(r)
+        self.assertIsNotNone(data)
+        self.assertIn("profiles", data.get("data", {}))
+
+    def test_skill_list_still_works(self):
+        r = _run_aisc("skill", "list", "--format", "json")
+        data = _parse_stdout(r)
+        self.assertIsNotNone(data)
+
+    # --- JSON behavior for actual subcommands is preserved ---
+
+    def test_config_effective_json_output(self):
+        r = _run_aisc("config", "effective", "--format", "json")
+        parsed = parse_json_envelope(r.stdout)
+        self.assertEqual(parsed["meta"]["command"], "config")
+
+    def test_provider_show_json_output(self):
+        r = _run_aisc("provider", "show", "deepseek", "--format", "json")
+        parsed = parse_json_envelope(r.stdout)
+        self.assertIn("deepseek", parsed["data"]["id"])
+
+
 if __name__ == "__main__":
     unittest.main()

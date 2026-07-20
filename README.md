@@ -174,10 +174,10 @@ aisc doctor
 | --- | --- | --- |
 | 基础 | `version` · `doctor` | 显示版本信息；检查宿主机环境 |
 | 镜像与运行 | `build` · `run` | 构建镜像；以前台方式运行容器 |
-| 配置查看 | `config` · `provider` · `profile` | 校验/查看配置；查看 Provider 与 Profile 目录，均不执行切换或应用 |
+| 配置查看 | `config validate/effective/show` · `provider list/show` · `profile list/show` | 校验/查看配置；查看 Provider 与 Profile 目录；仅运行 `aisc config`/`provider`/`profile` 会显示其帮助 |
 | 简讯 | `brief` | 在宿主机运行 AI 简讯工具（仅文本） |
 | 容器管理 | `status` · `stop` · `restart` · `shell` · `switch` | 管理已运行的容器；见“生命周期命令” |
-| 构建期 Skill | `skill` | 导入、列出、移除、校验 Skill；见“持久化导入 Skill” |
+| 构建期 Skill | `skill add/list/remove/check` | 导入、列出、移除、校验 Skill；仅运行 `aisc skill` 会显示其帮助 |
 
 所有顶层命令都能在命令前或后接受 `--aisc-root PATH`；它指定 AISC 安装根目录。其余通用选项如下：
 

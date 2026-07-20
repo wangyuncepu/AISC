@@ -39,6 +39,12 @@ jobs:
       - name: Run Python packaging smoke test
         run: bash tests/smoke/packaging_smoke.sh
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Run editable install smoke test
+        run: bash tests/smoke/editable_install_smoke.sh
+
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
         env:

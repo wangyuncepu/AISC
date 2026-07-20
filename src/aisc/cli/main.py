@@ -1020,6 +1020,34 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             parser.print_help()
             sys.exit(2)
 
+    # --- Bare grouped commands → print group help, exit 0 ---
+    _grouped_dests: Dict[str, str] = {
+        "config": "config_command",
+        "provider": "provider_command",
+        "profile": "profile_command",
+        "skill": "skill_command",
+    }
+    if args.command in _grouped_dests:
+        if getattr(args, _grouped_dests[args.command], None) is None:
+            # Bare group — print the group's own help.  Use the actual
+            # argparse subparser so that future options stay synchronised
+            # across all sub-subcommands.  No JSON envelope; always text
+            # help and exit 0.
+            try:
+                group_choices = [
+                    a for a in parser._subparsers._group_actions
+                    if a.dest == "command"
+                ][0].choices
+                group_parser_obj = group_choices.get(args.command)
+                if group_parser_obj is not None:
+                    group_parser_obj.print_help()
+                    sys.exit(0)
+            except (AttributeError, IndexError, KeyError):
+                pass
+            # Fallback (should not be reached)
+            parser.print_help()
+            sys.exit(0)
+
     use_color = sys.stdout.isatty() and not getattr(args, "no_color", False)
     aisc_root = getattr(args, "aisc_root", None)
     # Raw-argv resolver may have set this to a valid string; keep it as-is.
