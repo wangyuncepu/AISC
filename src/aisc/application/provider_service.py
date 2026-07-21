@@ -1,6 +1,7 @@
-"""Provider service — read-only ``provider list`` from user catalog.
+"""Provider service — read-only ``provider list`` from catalog.
 
-Reads ``~/.aisc/providers.json`` using the existing strict catalog loader.
+Reads providers.json with the existing strict catalog loader.
+Priority: ~/.aisc/providers.json → <aisc-root>/config/providers.json
 Does NOT read user config, write files, or fall back to hard-coded data.
 """
 
@@ -36,14 +37,41 @@ class ProviderShowResult:
 
 
 def run_provider_list(explicit_root: Optional[str] = None) -> ProviderListResult:
-    """Read the user provider catalog and return a structured result.
+    """Read the provider catalog and return a structured result.
 
-    Reads ``~/.aisc/providers.json`` with the existing strict catalog loader.
+    Priority: ~/.aisc/providers.json → <aisc-root>/config/providers.json
     """
-    # Get user config directory
+    # Try user config directory first
     home = os.path.expanduser("~")
-    aisc_dir = Path(home) / ".aisc"
-    catalog_path = aisc_dir / "providers.json"
+    user_catalog = Path(home) / ".aisc" / "providers.json"
+
+    catalog_path = None
+    if user_catalog.exists():
+        catalog_path = user_catalog
+    else:
+        # Fallback to aisc-root/config/providers.json
+        try:
+            root = locate_aisc_root(explicit_root=explicit_root)
+        except _RootSourceError as exc:
+            return ProviderListResult(
+                data={},
+                exit_code=1,
+                error_code="AISC_ERR_GENERAL",
+                error_message=str(exc),
+            )
+
+        if root is None:
+            return ProviderListResult(
+                data={},
+                exit_code=1,
+                error_code="AISC_ERR_GENERAL",
+                error_message=(
+                    "AISC root not found. Use --aisc-root to specify a path, "
+                    "or run from within an AISC repository."
+                ),
+            )
+
+        catalog_path = root / "config" / "providers.json"
 
     # Read raw bytes
     try:
@@ -110,13 +138,41 @@ def run_provider_show(
 ) -> ProviderShowResult:
     """Look up a single provider by id or alias and return its full details.
 
+    Priority: ~/.aisc/providers.json → <aisc-root>/config/providers.json
     Matches exactly against ``spec.id`` first, then ``spec.aliases``.
     Does NOT read user config, write files, or access secrets.
     """
-    # Get user config directory
+    # Try user config directory first
     home = os.path.expanduser("~")
-    aisc_dir = Path(home) / ".aisc"
-    catalog_path = aisc_dir / "providers.json"
+    user_catalog = Path(home) / ".aisc" / "providers.json"
+
+    catalog_path = None
+    if user_catalog.exists():
+        catalog_path = user_catalog
+    else:
+        # Fallback to aisc-root/config/providers.json
+        try:
+            root = locate_aisc_root(explicit_root=explicit_root)
+        except _RootSourceError as exc:
+            return ProviderShowResult(
+                data={},
+                exit_code=1,
+                error_code="AISC_ERR_GENERAL",
+                error_message=str(exc),
+            )
+
+        if root is None:
+            return ProviderShowResult(
+                data={},
+                exit_code=1,
+                error_code="AISC_ERR_GENERAL",
+                error_message=(
+                    "AISC root not found. Use --aisc-root to specify a path, "
+                    "or run from within an AISC repository."
+                ),
+            )
+
+        catalog_path = root / "config" / "providers.json"
 
     # Read raw bytes
     try:

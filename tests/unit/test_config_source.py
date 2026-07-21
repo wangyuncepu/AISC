@@ -21,7 +21,7 @@ from aisc.domain.config import (
 class TestInventory(unittest.TestCase):
     def test_fixed_ids(self):
         ids = {s.source_id for s in _build_source_inventory()}
-        self.assertEqual(ids, {"w-aisc-secrets-api-keys","w-cc-config-api-keys",
+        self.assertEqual(ids, {"w-aisc-secrets-api-keys",
             "w-claude-api-keys","w-claude-settings","r-aisc-state-env","r-deploy-state-env"})
 
     def test_root_kind(self):
