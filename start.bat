@@ -20,4 +20,11 @@ echo Usage: start.bat [--workspace PATH]
 exit /b 1
 
 :run
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\run.ps1"
+REM Verify scripts\run.ps1 exists in current directory
+set "RUN_SCRIPT=%CD%\scripts\run.ps1"
+if not exist "%RUN_SCRIPT%" (
+    echo Error: scripts\run.ps1 not found at: %RUN_SCRIPT%
+    echo Please run start.bat from the AISC repository root directory.
+    exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%RUN_SCRIPT%"

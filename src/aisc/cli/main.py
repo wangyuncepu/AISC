@@ -532,12 +532,35 @@ def _cmd_build(
             exit_code=1, error_code="AISC_ERR_GENERAL",
         )
 
+    # Run wizard if in interactive text mode and no explicit flags provided
+    tag = getattr(args, "tag", "super-claude:latest")
+    no_cache = getattr(args, "no_cache", False)
+    pull = getattr(args, "pull", False)
+    dry_run = getattr(args, "dry_run", False)
+
+    # Check if user provided explicit build options
+    tag_provided = any(arg in sys.argv for arg in ["--tag", "-t"])
+    cache_provided = "--no-cache" in sys.argv
+    pull_provided = "--pull" in sys.argv
+
+    # Run wizard if: text mode + interactive + no explicit options
+    if (effective_format == "text" and emitter is None and
+        not dry_run and not tag_provided and not cache_provided and not pull_provided):
+        from aisc.cli.commands.wizard import run_build_wizard
+        try:
+            tag, no_cache, pull, proxy_config = run_build_wizard(
+                default_tag=tag, aisc_root=root
+            )
+        except KeyboardInterrupt:
+            raise CliError(message="Build cancelled by user", exit_code=130,
+                           error_code="AISC_ERR_CANCELLED")
+
     plan = plan_build(
         root=root,
-        tag=getattr(args, "tag", "super-claude:latest"),
-        no_cache=getattr(args, "no_cache", False),
-        pull=getattr(args, "pull", False),
-        dry_run=getattr(args, "dry_run", False),
+        tag=tag,
+        no_cache=no_cache,
+        pull=pull,
+        dry_run=dry_run,
     )
 
     # text mode → streaming (real-time build log); json/events → captured
