@@ -124,10 +124,10 @@ class TestGatherVersionInfo(unittest.TestCase):
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text("content")
         (self.root / ".git").mkdir(exist_ok=True)
-        (self.root / "VERSION").write_text("2.0.2-dev\n")
+        (self.root / "VERSION").write_text("2.0.3-dev\n")
         (self.root / "config" / "versions.env").write_text(
             "CLAUDE_CODE_VERSION=latest  # TODO: pin\n"
-            "AISC_VERSION=2.0.2-dev\n"
+            "AISC_VERSION=2.0.3-dev\n"
         )
 
     def test_with_root(self):
