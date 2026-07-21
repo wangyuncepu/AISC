@@ -179,6 +179,23 @@ def run_build(
             data=result.to_dict(),
         )
 
+    # --- check if image already exists ---
+    from aisc.domain.models import ImageInspectStatus
+    inspect_result = exec_.inspect_image(plan.tag)
+    if inspect_result.status == ImageInspectStatus.EXISTS:
+        if streaming and emitter is None:
+            # Text mode: warn user about existing image
+            _sys.stderr.write(f"\n⚠️  Image already exists: {plan.tag}\n")
+            _sys.stderr.write("   Building will replace it (may create dangling <none> images).\n")
+            _sys.stderr.write("   Tip: Use 'docker rmi {tag}' before build, or use a different tag.\n\n")
+            _sys.stderr.flush()
+        elif emitter is not None:
+            # Events mode: emit warning event
+            emitter.emit("build.warning", data={
+                "message": f"Image already exists: {plan.tag}",
+                "hint": "Building will replace it (may create dangling <none> images).",
+            })
+
     # --- plan event (non-dry-run) ---
     if emitter is not None:
         emitter.emit("build.plan", data={
