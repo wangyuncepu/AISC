@@ -1,33 +1,35 @@
 #!/usr/bin/env bash
-# cs / claude-switch — switch Claude Code between cc / deepseek / ark / 1y / duo-cc / xf / orange
-# API Keys stored in ~/.claude/api-keys (chmod 600), never in this file.
+# cs / claude-switch — switch Claude Code between providers
+# API Keys stored in ~/.aisc/secrets/api-keys (chmod 600), never in this file.
 # Modifies ~/.claude/settings.json env block only; everything else untouched.
-# Provider data is in providers.json (data-driven, no hardcoded backend config).
+# Provider data is in ~/.aisc/providers.json (data-driven, no hardcoded backend config).
 
 # env 块写进 Claude CLI 原生 settings.json（CLAUDE_CONFIG_DIR/settings.json）。
 # 这样 Claude Code 原生读取并实时生效（与非 docker 行为一致，!cs ds 立即更新）。
 CFG_DIR="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
 SETTINGS_RAW="${CFG_DIR}/settings.json"
 
-# api-keys 密钥仍独立存于 .cc-config（与 .claude 分离）解析顺序：
-#   1) CC_CONFIG_DIR（entrypoint 导出，恒为 /home/AISC/app/.cc-config）
-#   2) Docker 项目卷 /home/AISC/app/.cc-config
-#   3) 当前目录 ./.cc-config
-#   4) 全局 ~/.cc-config
-if [ -n "${CC_CONFIG_DIR:-}" ]; then
-  KEY_DIR="$CC_CONFIG_DIR"
-elif [ -d /home/AISC/app ]; then
-  KEY_DIR="/home/AISC/app/.cc-config"
-elif [ -f "./.cc-config/api-keys" ]; then
-  KEY_DIR="$(pwd)/.cc-config"
+# api-keys 密钥存于 .aisc/secrets/ 解析顺序：
+#   1) AISC_DIR（entrypoint 导出，恒为 /home/AISC/app/.aisc）
+#   2) Docker 项目卷 /home/AISC/app/.aisc
+#   3) 全局 ~/.aisc
+if [ -n "${AISC_DIR:-}" ]; then
+  KEY_DIR="$AISC_DIR/secrets"
+elif [ -d /home/AISC/app/.aisc ]; then
+  KEY_DIR="/home/AISC/app/.aisc/secrets"
 else
-  KEY_DIR="${HOME}/.cc-config"
+  KEY_DIR="${HOME}/.aisc/secrets"
 fi
 KEY_STORE="${KEY_DIR}/api-keys"
 
-# .aisc/secrets/ — new key storage location (P1.4 migration from .cc-config/api-keys)
-AISC_SECRETS_DIR="$(dirname "$KEY_DIR")/.aisc/secrets"
-AISC_KEY_STORE="${AISC_SECRETS_DIR}/api-keys"
+# providers.json 位置
+if [ -n "${AISC_DIR:-}" ]; then
+  PROVIDERS_JSON="$AISC_DIR/providers.json"
+elif [ -d /home/AISC/app/.aisc ]; then
+  PROVIDERS_JSON="/home/AISC/app/.aisc/providers.json"
+else
+  PROVIDERS_JSON="${HOME}/.aisc/providers.json"
+fi
 
 # Windows Git Bash needs cygpath for Node.js; Linux containers use the POSIX path directly.
 if command -v cygpath >/dev/null 2>&1; then
@@ -36,8 +38,8 @@ else
   SETTINGS="$SETTINGS_RAW"
 fi
 
-# Ensure config dirs exist (.claude for settings, .cc-config for keys)
-mkdir -p "$(dirname "$SETTINGS_RAW")" "$KEY_DIR"
+# Ensure config dirs exist (.claude for settings, .aisc for keys and providers)
+mkdir -p "$(dirname "$SETTINGS_RAW")" "$KEY_DIR" "$(dirname "$PROVIDERS_JSON")"
 
 # Init settings.json if missing
 if [ ! -f "$SETTINGS_RAW" ]; then
@@ -49,9 +51,6 @@ if [ ! -f "$KEY_STORE" ]; then
   touch "$KEY_STORE"
   chmod 600 "$KEY_STORE"
 fi
-
-# Path to providers.json — same location in Docker image
-export PROVIDERS_JSON="${PROVIDERS_JSON:-/home/AISC/providers.json}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 

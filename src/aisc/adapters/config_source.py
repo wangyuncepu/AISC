@@ -35,8 +35,6 @@ def _build_source_inventory() -> List[SourceDescriptor]:
     return [
         SourceDescriptor("w-aisc-secrets-api-keys", "workspace",
             (".aisc", "secrets", "api-keys"), "api_keys"),
-        SourceDescriptor("w-cc-config-api-keys", "workspace",
-            (".cc-config", "api-keys"), "api_keys"),
         SourceDescriptor("w-claude-api-keys", "workspace",
             (".claude", "api-keys"), "api_keys"),
         SourceDescriptor("w-claude-settings", "workspace",

@@ -18,14 +18,14 @@ source /usr/local/bin/lib/path-resolve.sh
 
 # ==========================================
 # 路径模型（全程非 root，用户 AISC，家目录 /home/AISC）
-#   .claude   = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
-#               临时模式用镜像内置 /home/AISC/.claude；项目模式整目录拷到 /home/AISC/app/.claude（不改名）
-#   .cc-config = cs 运行时生成的特殊配置（settings.json + api-keys），独立于 .claude
-#               固定放当前项目 /home/AISC/app/.cc-config（临时与项目模式都用它）
+#   .claude = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
+#             临时模式用镜像内置 /home/AISC/.claude；项目模式整目录拷到 /home/AISC/app/.claude（不改名）
+#   .aisc   = AISC 配置目录（providers.json + secrets/api-keys）
+#             固定放当前项目 /home/AISC/app/.aisc（临时与项目模式都用它）
 # ==========================================
 GLOBAL_CLAUDE_DIR="/home/AISC/.claude"
 PROJECT_CLAUDE_DIR="/home/AISC/app/.claude"
-CC_CONFIG_DIR="/home/AISC/app/.cc-config"   # cs 配置目录，恒定项目内
+AISC_DIR="/home/AISC/app/.aisc"
 
 echo -e "\n🚀 [Super Claude] 工作站初始化中..."
 
@@ -106,14 +106,8 @@ else
 fi
 
 export CLAUDE_CONFIG_DIR
-export CC_CONFIG_DIR
 
-# .cc-config（cs 配置）目录确保存在
-ensure_writable "$CC_CONFIG_DIR"
-
-# .aisc/secrets/（密钥新位置，P1.4）目录确保存在
-# 通过 ensure_writable 初始化目录及权限（含 sudo 兜底），避免绑定挂载权限导致 plain mkdir 失败
-AISC_DIR="$(dirname "$CC_CONFIG_DIR")/.aisc"
+# .aisc（配置）目录确保存在
 ensure_writable "$AISC_DIR"
 ensure_writable "$AISC_DIR/secrets"
 
@@ -129,7 +123,7 @@ fi
 # Also detects CIFS "fake success": chmod returns 0 but mode unchanged.
 # 旧镜像曾以 root 运行，绑定挂载把 root 所有权持久化到宿主；
 # ensure_writable 以 sudo chown AISC:AISC 自愈，不依赖外部 bat 的宿主侧 root pass。
-for _d in "$CC_CONFIG_DIR" "$AISC_DIR" "$AISC_DIR/secrets"; do
+for _d in "$AISC_DIR" "$AISC_DIR/secrets"; do
   if sudo chmod 700 -- "$_d" 2>/dev/null; then
     # chmod reported success — verify it actually took effect (CIFS may silently ignore)
     if command -v stat >/dev/null 2>&1; then
@@ -147,21 +141,31 @@ done
 
 # 让用户进入 bash 后再次运行 cs / claude 时仍能拿到同一作用域
 # （非 root，只能写家目录 ~/.bashrc；不再写 /etc/profile.d）
-if ! grep -q 'CC_CONFIG_DIR' "$HOME/.bashrc" 2>/dev/null; then
+if ! grep -q 'CLAUDE_CONFIG_DIR' "$HOME/.bashrc" 2>/dev/null; then
     {
+        echo ""
+        echo "# AISC runtime exports"
         echo "export CLAUDE_CONFIG_DIR='$CLAUDE_CONFIG_DIR'"
-        echo "export CC_CONFIG_DIR='$CC_CONFIG_DIR'"
+        echo "export AISC_DIR='$AISC_DIR'"
     } >> "$HOME/.bashrc"
+fi
+
+# 初始化 providers.json：首次启动时从 aisc-bundle/config/providers.json 复制
+PROVIDERS_JSON="$AISC_DIR/providers.json"
+PROVIDERS_TEMPLATE="/home/AISC/app/aisc-bundle/config/providers.json"
+if [ ! -f "$PROVIDERS_JSON" ] && [ -f "$PROVIDERS_TEMPLATE" ]; then
+    echo "📋 初始化 providers.json..."
+    cp "$PROVIDERS_TEMPLATE" "$PROVIDERS_JSON"
+    chmod 600 "$PROVIDERS_JSON"
 fi
 
 # ==========================================
 # 3. 环境变量与网络状态展示
 #    env 块读 CLAUDE_CONFIG_DIR/settings.json（Claude CLI 原生文件，cs 写此处）
-#    api-keys 密钥位于 .aisc/secrets/（主）与 .cc-config/（兼容）
+#    api-keys 密钥位于 .aisc/secrets/api-keys
 # ==========================================
 SETTINGS_FILE="$CLAUDE_CONFIG_DIR/settings.json"
-KEY_STORE="$CC_CONFIG_DIR/api-keys"
-AISC_KEY_STORE="$(dirname "$CC_CONFIG_DIR")/.aisc/secrets/api-keys"
+AISC_KEY_STORE="$AISC_DIR/secrets/api-keys"
 
 if [ -f "$SETTINGS_FILE" ]; then
     MODEL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_MODEL||'')}catch(e){}" 2>/dev/null)

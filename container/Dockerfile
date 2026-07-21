@@ -132,7 +132,6 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 #   - 让 Claude CLI 自己生成原生结构（projects/todos/statsig/plugins/shell-snapshots…）
 #   - 再叠加我们的全局 skills + CLAUDE.md + claude.json
 #   - 项目模式整目录拷贝到 /home/AISC/app/.claude（不改名）
-#   - cs 运行配置（settings.json + api-keys）独立存放在 /home/AISC/app/.cc-config，不混进 .claude
 # ==========================================
 # 跳过首次启动联网 onboarding（绕过 api.anthropic.com 检查）。
 # 新版 CLI 核心状态在 .claude.json（非 config.json）；缺失会报
@@ -212,13 +211,6 @@ COPY container/mihomo-build-config.js /usr/local/bin/mihomo-build-config.js
 COPY container/claude-switch /usr/local/bin/cs
 RUN chmod +x /usr/local/bin/cs \
     && ln -sf /usr/local/bin/cs /usr/local/bin/claude-switch
-
-# 模型提供商元数据（data-driven config），cs/claude-switch 在运行时读取。
-# 所有 provider 的 base URL / model / alias 等均在此定义，脚本中无硬编码。
-COPY container/providers.json /home/AISC/providers.json
-
-# cs 运行配置（settings.json + api-keys）存于 .cc-config，独立于 CLI 的 .claude。
-# 不在此预建 —— cs 首次运行时按 CLAUDE_CONFIG_DIR 同级的 .cc-config 目录自动创建。
 
 # Claude 包装器：每次启动前从 settings.json 注入 env，并默认追加
 # --dangerously-skip-permissions（跳过权限确认，容器内自动流；root 下 Claude
