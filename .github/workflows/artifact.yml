@@ -49,13 +49,13 @@ jobs:
         run: python -m unittest discover -s tests/packaging -p "test_*.py" -v
 
       - name: Build onedir (CI smoke only)
-        run: python -m PyInstaller --onedir --name aisc --paths src --distpath "${{ runner.temp }}/onedir-dist" --workpath "${{ runner.temp }}/onedir-work" --specpath "${{ runner.temp }}" --icon packaging/favicon_logosc/favicon.ico packaging/pyinstaller/entrypoint.py
+        run: python -m PyInstaller --onedir --name aisc --paths src --distpath "${{ runner.temp }}/onedir-dist" --workpath "${{ runner.temp }}/onedir-work" --specpath "${{ runner.temp }}" --icon ${{ github.workspace }}/packaging/favicon_logosc/favicon.ico packaging/pyinstaller/entrypoint.py
 
       - name: Smoke onedir version
         run: python packaging/ci_smoke.py --executable "${{ runner.temp }}/onedir-dist/aisc/aisc${{ matrix.exe_suffix }}" --expected-version-file VERSION
 
       - name: Build onefile
-        run: python -m PyInstaller --onefile --name aisc --paths src --distpath "${{ runner.temp }}/onefile-dist" --workpath "${{ runner.temp }}/onefile-work" --specpath "${{ runner.temp }}" --icon packaging/favicon_logosc/favicon.ico packaging/pyinstaller/entrypoint.py
+        run: python -m PyInstaller --onefile --name aisc --paths src --distpath "${{ runner.temp }}/onefile-dist" --workpath "${{ runner.temp }}/onefile-work" --specpath "${{ runner.temp }}" --icon ${{ github.workspace }}/packaging/favicon_logosc/favicon.ico packaging/pyinstaller/entrypoint.py
 
       - name: Stage bundle
         run: python packaging/artifact.py stage --output "${{ runner.temp }}/staging"
