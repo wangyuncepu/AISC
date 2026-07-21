@@ -48,10 +48,12 @@ python3 -m venv "$TMPDIR/metavenv" > /dev/null 2>&1
 DIST_VERSION=$("$TMPDIR/metavenv/bin/python3" -c \
     "import importlib.metadata; print(importlib.metadata.version('aisc'))")
 echo "  Distribution version: $DIST_VERSION"
-if [ "$DIST_VERSION" = "2.0.0.dev0" ]; then
-    echo "  PASS: exact PEP440 match (2.0.0.dev0)"
+# Read expected version from VERSION file and convert to PEP440
+EXPECTED_VERSION=$(cat "$SRCCOPY/VERSION" | tr -d '\n' | sed 's/-dev/.dev0/')
+if [ "$DIST_VERSION" = "$EXPECTED_VERSION" ]; then
+    echo "  PASS: exact PEP440 match ($EXPECTED_VERSION)"
 else
-    echo "  FAIL: expected 2.0.0.dev0, got $DIST_VERSION"
+    echo "  FAIL: expected $EXPECTED_VERSION, got $DIST_VERSION"
     exit 1
 fi
 
