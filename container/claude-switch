@@ -286,49 +286,57 @@ show_current() {
   echo ""
   node -e "
     const fs = require('fs');
-    const cfg = JSON.parse(fs.readFileSync('${SETTINGS}','utf8'));
-    const env = cfg.env || {};
-    const labels = {
-      ANTHROPIC_BASE_URL:       'BASE URL',
-      ANTHROPIC_AUTH_TOKEN:     'AUTH TOKEN',
-      ANTHROPIC_API_KEY:        'API KEY',
-      ANTHROPIC_MODEL:          'MODEL',
-      ANTHROPIC_DEFAULT_OPUS_MODEL: 'OPUS',
-      ANTHROPIC_DEFAULT_SONNET_MODEL: 'SONNET',
-      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'HAIKU',
-      CLAUDE_CODE_SUBAGENT_MODEL: 'SUBAGENT',
-      CLAUDE_CODE_EFFORT_LEVEL: 'EFFORT',
-      CLAUDE_CODE_AUTO_COMPACT_WINDOW: 'COMPACT'
-    };
-    console.log('=== 当前配置 ===');
-    for (const [k, v] of Object.entries(env)) {
-      const label = labels[k] || k;
-      const val = v || '(empty)';
-      const sensitive = (k.includes('TOKEN') || k.includes('KEY')) && v;
-      console.log('  ' + label.padEnd(12) + ' = ' + (sensitive ? v.slice(0,12) + '...' + v.slice(-4) : val));
+    try {
+      const cfg = JSON.parse(fs.readFileSync('${SETTINGS}','utf8'));
+      const env = cfg.env || {};
+      const labels = {
+        ANTHROPIC_BASE_URL:       'BASE URL',
+        ANTHROPIC_AUTH_TOKEN:     'AUTH TOKEN',
+        ANTHROPIC_API_KEY:        'API KEY',
+        ANTHROPIC_MODEL:          'MODEL',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: 'OPUS',
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'SONNET',
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: 'HAIKU',
+        CLAUDE_CODE_SUBAGENT_MODEL: 'SUBAGENT',
+        CLAUDE_CODE_EFFORT_LEVEL: 'EFFORT',
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: 'COMPACT'
+      };
+      console.log('=== 当前配置 ===');
+      for (const [k, v] of Object.entries(env)) {
+        const label = labels[k] || k;
+        const val = v || '(empty)';
+        const sensitive = (k.includes('TOKEN') || k.includes('KEY')) && v;
+        console.log('  ' + label.padEnd(12) + ' = ' + (sensitive ? v.slice(0,12) + '...' + v.slice(-4) : val));
+      }
+      const base = env.ANTHROPIC_BASE_URL || '';
+      // Build backend fragments from providers.json
+      const pj=process.env.PROVIDERS_JSON;if(!pj)throw Error('PROVIDERS_JSON env var not set');const provCfg=JSON.parse(fs.readFileSync(pj,'utf8'));
+      const providers = provCfg.providers || {};
+      let backend = '';
+      for (const [id, p] of Object.entries(providers)) {
+        const frag = p.url_fragment || '';
+        if (frag && base.includes(frag)) { backend = id; break; }
+      }
+      if (!backend && !base) {
+        backend = 'cc';
+      }
+      if (backend) {
+        const p = providers[backend];
+        const showLabel = p ? (p.switch_msg || p.name || backend) : backend;
+        console.log('\\n  后端: ' + backend + (p && p.name ? ' (' + p.name + ')' : ''));
+      } else if (base) {
+        console.log('\\n  后端: custom → ' + base);
+      } else {
+        console.log('\\n  后端: cc (Anthropic)');
+      }
+    } catch (e) {
+      console.error('❌ 无法读取配置文件');
+      console.error('   路径: ${SETTINGS}');
+      console.error('   错误: ' + e.message);
+      console.error('   提示: 检查文件是否存在，权限是否正确，或环境变量 CLAUDE_CONFIG_DIR 是否设置');
+      process.exit(1);
     }
-    const base = env.ANTHROPIC_BASE_URL || '';
-    // Build backend fragments from providers.json
-    const pj=process.env.PROVIDERS_JSON;if(!pj)throw Error("PROVIDERS_JSON env var not set");const provCfg=JSON.parse(fs.readFileSync(pj,'utf8'));
-    const providers = provCfg.providers || {};
-    let backend = '';
-    for (const [id, p] of Object.entries(providers)) {
-      const frag = p.url_fragment || '';
-      if (frag && base.includes(frag)) { backend = id; break; }
-    }
-    if (!backend && !base) {
-      backend = 'cc';
-    }
-    if (backend) {
-      const p = providers[backend];
-      const showLabel = p ? (p.switch_msg || p.name || backend) : backend;
-      console.log('\\n  后端: ' + backend + (p && p.name ? ' (' + p.name + ')' : ''));
-    } else if (base) {
-      console.log('\\n  后端: custom → ' + base);
-    } else {
-      console.log('\\n  后端: cc (Anthropic)');
-    }
-  " 2>/dev/null || echo "  unable to read settings"
+  "
 
   echo ""
   echo "Saved keys:"

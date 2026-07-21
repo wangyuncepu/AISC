@@ -122,6 +122,19 @@ fi
 echo "🔧 修正 /home/AISC/app 目录权限..."
 sudo chown -R AISC:AISC /home/AISC/app 2>/dev/null || true
 
+# 确保 settings.json 存在且格式正确
+SETTINGS_FILE="$CLAUDE_CONFIG_DIR/settings.json"
+if [ ! -f "$SETTINGS_FILE" ]; then
+    echo "📝 初始化 settings.json..."
+    mkdir -p "$(dirname "$SETTINGS_FILE")"
+    printf '{\n  "env": {}\n}\n' > "$SETTINGS_FILE"
+    chmod 644 "$SETTINGS_FILE"
+elif ! grep -q '"env"' "$SETTINGS_FILE" 2>/dev/null; then
+    echo "⚠️  修复损坏的 settings.json..."
+    printf '{\n  "env": {}\n}\n' > "$SETTINGS_FILE"
+    chmod 644 "$SETTINGS_FILE"
+fi
+
 # Tighten sensitive dirs to 700 (owner-only), non-recursive, best-effort.
 # If the underlying fs rejects chmod (bind/CIFS/NFS) but the dir remains writable,
 # emit a security warning and continue — do NOT fail startup over a chmod.
