@@ -124,10 +124,10 @@ class TestGatherVersionInfo(unittest.TestCase):
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text("content")
         (self.root / ".git").mkdir(exist_ok=True)
-        (self.root / "VERSION").write_text("2.0.1-dev\n")
+        (self.root / "VERSION").write_text("2.0.2-dev\n")
         (self.root / "config" / "versions.env").write_text(
             "CLAUDE_CODE_VERSION=latest  # TODO: pin\n"
-            "AISC_VERSION=2.0.1-dev\n"
+            "AISC_VERSION=2.0.2-dev\n"
         )
 
     def test_with_root(self):
@@ -137,7 +137,7 @@ class TestGatherVersionInfo(unittest.TestCase):
                 info = gather_version_info()
         self.assertEqual(info.cli_version, __version__)
         self.assertIsNotNone(info.python_version)
-        self.assertEqual(info.bundle_version, "2.0.1-dev")
+        self.assertEqual(info.bundle_version, "2.0.2-dev")
         self.assertEqual(info.declared_claude_version, "latest")
 
     def test_without_root(self):

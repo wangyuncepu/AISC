@@ -3,6 +3,26 @@
 在 Docker 容器中使用 Claude Code，并按项目保存配置的个人开发工具。
 
 > **状态：Alpha / 开发中。** AISC 面向个人和开发环境，不是生产级工作站产品。请先阅读文末的安全边界与已知限制。
+>
+> **当前版本：v2.0.2-dev**
+
+## v2.0.2-dev 更新 (2025-01)
+
+### 新增功能
+
+- **`--keep-alive` 标志**：`aisc run` 支持 `--keep-alive` 参数，容器退出后保留（不使用 `--rm`），便于调试和重用
+- **自动构建镜像**：`aisc run` 在镜像不存在时自动调用 `build` 命令，无需手动先运行 `aisc build`
+- **完整的 Docker 操作 API**：在 `docker_.py` 模块中统一整合容器和镜像的 CRUD 操作
+  - 容器：list、stop、remove、inspect
+  - 镜像：list、remove、pull、tag
+
+### 改进
+
+- **修复挂载权限问题**：容器自动使用宿主机用户的 uid:gid 运行（`--user`），确保挂载文件可正常读写
+- **Windows 安装说明优化**：明确安装位置 `%LOCALAPPDATA%\Programs\AISC` 和查找方法
+- **CI/CD 优化**：所有分支推送都运行测试，只有 `v*` 标签触发二进制构建
+
+详细的命令行使用文档请参考 [README_USER.md](README_USER.md)。
 
 ## 从这里开始
 

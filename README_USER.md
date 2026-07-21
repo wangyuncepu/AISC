@@ -2,7 +2,34 @@
 
 AISC 是一个在 Docker 容器中运行 Claude Code 的个人开发工具。提供 `aisc` 命令行，可在宿主机上构建镜像、管理容器、切换 AI 模型服务。
 
-> **状态：Alpha / 开发中。** 当前版本 `v2.0.1-dev`。
+> **状态：Alpha / 开发中。** 当前版本 `v2.0.2-dev`。
+
+## v2.0.2-dev 更新内容
+
+### 新增功能
+
+- **`--keep-alive` 参数**：`aisc run` 现在支持 `--keep-alive` 标志
+  - 默认行为：容器退出时自动删除（`--rm`）
+  - 使用 `--keep-alive`：容器退出后保持，便于调试或重用
+  - 示例：`aisc run --keep-alive`
+
+- **自动构建镜像**：`aisc run` 在镜像不存在时自动调用 `build`
+  - 无需手动先运行 `aisc build`
+  - 交互模式下显示构建过程
+  - 构建失败时提供清晰的错误信息
+
+- **完整的容器和镜像 CRUD 操作**：
+  - 容器操作：`list_containers`、`stop_container`、`remove_container`、`inspect_container`
+  - 镜像操作：`list_images`、`remove_image`、`pull_image`、`tag_image`
+  - 所有 Docker 操作统一整合在 `docker_.py` 模块
+
+### 改进
+
+- **修复挂载权限问题**：自动使用宿主机用户的 uid:gid 运行容器，确保挂载文件可正常读写
+- **CI/CD 优化**：
+  - 所有分支推送都运行语法检查和测试
+  - 只有带 `v*` 标签时才构建和发布二进制包
+- **Windows 安装说明优化**：明确安装位置和查找方法
 
 ## 目录
 
@@ -57,27 +84,32 @@ docker version
 
 ### 方式一：GitHub Release 安装包（推荐）
 
-从 [GitHub Release v2.0.1-dev](https://github.com/wangyuncepu/AISC/releases/tag/v2.0.1-dev) 下载对应平台的安装包。
+从 [GitHub Release v2.0.2-dev](https://github.com/wangyuncepu/AISC/releases/tag/v2.0.2-dev) 下载对应平台的安装包。
 
 当前版本已作为 GitHub **Pre-release** 发布；普通用户直接从上面的 Release 页面下载即可，无需进入 Actions 页面。
 
 #### Windows
 
-下载 `AISC-2.0.1-dev-windows-x86_64-setup.exe`，双击运行。
+下载 `AISC-2.0.2-dev-windows-x86_64-setup.exe`，双击运行。
 
 - **仅支持 x86_64**；ARM Windows 不支持。
-- 默认安装到 `%LOCALAPPDATA%\Programs\AISC`。
+- **默认安装位置**：`%LOCALAPPDATA%\Programs\AISC`
+  - 完整路径通常为：`C:\Users\<你的用户名>\AppData\Local\Programs\AISC`
+  - 安装后在该目录下可找到 `aisc.exe` 和 `aisc-bundle\` 文件夹
 - 自动将安装目录加入用户 PATH（安装后**重新打开终端**生效）。
+- 验证安装：打开新的 PowerShell 或 CMD 窗口，运行 `aisc version`
 - 通过 **设置 → 应用 → 已安装的应用** 或 **控制面板 → 程序和功能** 卸载。
 - 卸载会移除程序文件和 PATH 条目，**不删除** `%USERPROFILE%\.aisc`、`.cc-config` 或 Docker 资源。
 
-> **未签名提示：** AISC 尚未经代码签名。首次运行时 Windows SmartScreen 可能弹出“Windows 保护了你的电脑”，点击 **更多信息 → 仍要运行**。
+> **未签名提示：** AISC 尚未经代码签名。首次运行时 Windows SmartScreen 可能弹出”Windows 保护了你的电脑”，点击 **更多信息 → 仍要运行**。
+>
+> **找不到安装文件？** 在文件资源管理器地址栏中输入 `%LOCALAPPDATA%\Programs\AISC` 并回车，即可直接打开安装目录。
 
 备用：ZIP 便携版
 
 ```powershell
-Expand-Archive AISC-2.0.1-dev-windows-x86_64.zip -DestinationPath .
-cd AISC-2.0.1-dev-windows-x86_64
+Expand-Archive AISC-2.0.2-dev-windows-x86_64.zip -DestinationPath .
+cd AISC-2.0.2-dev-windows-x86_64
 .\aisc.exe version
 ```
 
@@ -87,7 +119,7 @@ cd AISC-2.0.1-dev-windows-x86_64
 
 ##### 安装程序（推荐）
 
-下载 `AISC-2.0.1-dev-macos-arm64.pkg`，双击运行。
+下载 `AISC-2.0.2-dev-macos-arm64.pkg`，双击运行。
 
 - **仅支持 Apple Silicon（arm64）**；Intel Mac 不支持。
 - 需**管理员密码**（安装到 `/usr/local/`）。
@@ -104,8 +136,8 @@ cd AISC-2.0.1-dev-windows-x86_64
 ##### 便携版（备用）
 
 ```bash
-tar -xzf AISC-2.0.1-dev-macos-arm64.tar.gz
-cd AISC-2.0.1-dev-macos-arm64
+tar -xzf AISC-2.0.2-dev-macos-arm64.tar.gz
+cd AISC-2.0.2-dev-macos-arm64
 ./aisc version
 ```
 
@@ -115,7 +147,7 @@ cd AISC-2.0.1-dev-macos-arm64
 # install.sh / uninstall.sh 位于 AISC 源码仓库的 packaging/ 目录
 git clone --depth 1 https://github.com/wangyuncepu/AISC.git
 cd AISC
-bash packaging/install.sh ~/Downloads/AISC-2.0.1-dev-macos-arm64.tar.gz
+bash packaging/install.sh ~/Downloads/AISC-2.0.2-dev-macos-arm64.tar.gz
 bash packaging/uninstall.sh   # 卸载
 ```
 
@@ -124,15 +156,15 @@ bash packaging/uninstall.sh   # 卸载
 ##### tar.gz + 安装脚本
 
 ```bash
-# 1. 下载 AISC-2.0.1-dev-linux-x86_64.tar.gz
+# 1. 下载 AISC-2.0.2-dev-linux-x86_64.tar.gz
 
 # 2. 可选的 SHA256 校验
-sha256sum -c AISC-2.0.1-dev-linux-x86_64.tar.gz.sha256
+sha256sum -c AISC-2.0.2-dev-linux-x86_64.tar.gz.sha256
 
 # 3. 获取仓库中的安装脚本并安装
 git clone --depth 1 https://github.com/wangyuncepu/AISC.git
 cd AISC
-bash packaging/install.sh ~/Downloads/AISC-2.0.1-dev-linux-x86_64.tar.gz
+bash packaging/install.sh ~/Downloads/AISC-2.0.2-dev-linux-x86_64.tar.gz
 ```
 
 安装脚本会：
@@ -144,8 +176,8 @@ bash packaging/install.sh ~/Downloads/AISC-2.0.1-dev-linux-x86_64.tar.gz
 解压直接运行（无需安装脚本）：
 
 ```bash
-tar -xzf AISC-2.0.1-dev-linux-x86_64.tar.gz
-cd AISC-2.0.1-dev-linux-x86_64
+tar -xzf AISC-2.0.2-dev-linux-x86_64.tar.gz
+cd AISC-2.0.2-dev-linux-x86_64
 ./aisc version
 ```
 
@@ -349,10 +381,10 @@ aisc build --events
 ```bash
 aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
          [--network direct|proxy] [--profile proxy] [--non-interactive]
-         [--dry-run] [--format json] [--events]
+         [--keep-alive] [--dry-run] [--format json] [--events]
 ```
 
-**会调用 Docker**（`docker run --rm`），需要 Docker daemon。容器退出后自动删除。
+**会调用 Docker**（`docker run`），需要 Docker daemon。默认容器退出后自动删除（`--rm`），使用 `--keep-alive` 则保留容器。
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -363,20 +395,22 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 | `--network` | `direct` / `proxy` | `direct` | 网络模式；`proxy` 需 `.claude/mihomo/config.yaml` |
 | `--profile` | `proxy` | — | 兼容别名，等价于 `--network proxy`；与 `--network direct` 冲突 |
 | `--non-interactive` | flag | `False` | 非交互模式：无 `-it`，stdin=DEVNULL，设置 `AISC_NON_INTERACTIVE=1`、`CLAUDE_SCOPE=project` |
+| `--keep-alive` | flag | `False` | 容器退出后保持（不使用 `--rm`），便于调试或重用 |
 | `--dry-run` | flag | `False` | 仅输出运行计划，不执行 |
 
 **效果：**
 - 生成唯一容器名（`<name>-<8 位 hex>`）。
 - 启动容器前注册到 `<aisc-root>/.aisc/containers.json`，供其他终端通过 `status`/`shell`/`ps` 等自动发现。`aisc stop` 后自动从注册表移除。
-- 容器由 `--rm` 退出后自动删除；注册表通过懒 GC 清理死条目。
+- 默认行为（无 `--keep-alive`）：容器由 `--rm` 退出后自动删除；注册表通过懒 GC 清理死条目。
+- 使用 `--keep-alive`：容器退出后保留，可通过 `docker ps -a` 查看，需手动 `docker rm` 删除。
 - `--dry-run`：验证工作区和 proxy 配置后输出 `docker run ...` 命令行，不调用 Docker。
 - 非 `--dry-run` 时：
   - 检查 Docker 可用性（preflight）。
-  - 检查镜像是否存在（`docker inspect`），不存在则报错（exit 5）。
-  - 文本交互模式（默认）：`docker run -it --rm`，stdin/stdout 直通。
-  - `--non-interactive` 模式：`docker run --rm`，无 `-it`。
+  - 检查镜像是否存在（`docker inspect`），不存在则**自动构建镜像**。
+  - 文本交互模式（默认）：`docker run -it --rm`（或无 `--rm` 若 `--keep-alive`），stdin/stdout 直通。
+  - `--non-interactive` 模式：`docker run --rm`（或无 `--rm`），无 `-it`。
   - JSON / events 模式：Docker 输出转发到 stderr，stdout 纯净。
-- 退出后容器自动删除（`--rm`）。
+- 容器使用宿主机用户的 uid:gid 运行（`--user $(id -u):$(id -g)`），确保挂载文件权限正确。
 
 **退出码：**
 
@@ -385,7 +419,7 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 | 0 | — | 容器正常退出 |
 | 1 | `AISC_ERR_GENERAL` | proxy 配置缺失等 |
 | 3 | `AISC_ERR_DOCKER_UNAVAILABLE` | Docker CLI 未找到或 daemon 不可达 |
-| 5 | `AISC_ERR_IMAGE_NOT_FOUND` | 镜像不存在（先运行 `aisc build`） |
+| 5 | `AISC_ERR_IMAGE_NOT_FOUND` | 镜像构建失败 |
 | 9 | `AISC_ERR_PERMISSION_DENIED` | 工作区不可访问 |
 | 10 | `AISC_ERR_CONTAINER_FAILED` | 容器以非零退出码退出 |
 
@@ -403,6 +437,9 @@ aisc run --network proxy
 
 # 非交互模式（脚本/CI）
 aisc run --non-interactive
+
+# 保持容器用于调试
+aisc run --keep-alive
 
 # 预览运行计划
 aisc run --dry-run
