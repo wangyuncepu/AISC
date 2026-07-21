@@ -53,15 +53,14 @@ class TestProviderShow(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def _create_fake_root(self, path: Path) -> None:
-        (path / "container").mkdir(parents=True, exist_ok=True)
-        (path / "container" / "providers.json").write_text(
+        (path / "config").mkdir(parents=True, exist_ok=True)
+        (path / "config" / "providers.json").write_text(
             _json.dumps(_SAMPLE_PROVIDERS, ensure_ascii=False)
         )
         # Also create markers so locate_aisc_root works via explicit_root
         (path / "VERSION").write_text("test")
         (path / "container" / "Dockerfile").parent.mkdir(parents=True, exist_ok=True)
         (path / "container" / "Dockerfile").write_text("FROM test")
-        (path / "config").mkdir(parents=True, exist_ok=True)
         (path / "config" / "versions.env").write_text("NODE_IMAGE=node:20-slim\n")
         (path / ".git").mkdir(exist_ok=True)
 

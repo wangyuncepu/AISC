@@ -137,7 +137,7 @@ class TestGatherVersionInfo(unittest.TestCase):
                 info = gather_version_info()
         self.assertEqual(info.cli_version, __version__)
         self.assertIsNotNone(info.python_version)
-        self.assertEqual(info.bundle_version, "2.0.2-dev")
+        self.assertEqual(info.bundle_version, "2.0.3-dev")
         self.assertEqual(info.declared_claude_version, "latest")
 
     def test_without_root(self):
