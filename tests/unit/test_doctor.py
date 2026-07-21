@@ -655,14 +655,14 @@ class TestRunDoctor(unittest.TestCase):
 
             with patch("sys.platform", "linux"):
                 original_stat = Path.stat
-                def selective_stat(self):
+                def selective_stat(self, follow_symlinks=True):
                     if str(self) == "/dev/net/tun":
                         import stat as st_mod
                         from unittest.mock import Mock
                         m = Mock()
                         m.st_mode = st_mod.S_IFCHR
                         return m
-                    return original_stat(self)
+                    return original_stat(self, follow_symlinks=follow_symlinks)
 
                 with patch.object(Path, "stat", selective_stat):
                     report = run_doctor(runner=r, root=root, which=fake_which)
