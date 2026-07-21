@@ -53,6 +53,7 @@ def plan_run(
     non_interactive: bool = False,
     proxy_config: str = "",
     label: str = "",
+    keep_alive: bool = False,
     aisc_root: Optional[Path] = None,
 ) -> RunPlan:
     """Create an immutable ``RunPlan`` from user args.
@@ -69,6 +70,7 @@ def plan_run(
         proxy_config: Host path to ``.claude/mihomo/config.yaml``.
             If omitted but ``network=proxy``, use
             ``<aisc_root>/.claude/mihomo/config.yaml``.
+        keep_alive: ``True`` → omit ``--rm``, keep container after exit.
         aisc_root: AISC root path for proxy config resolution.
 
     Returns:
@@ -97,6 +99,7 @@ def plan_run(
         non_interactive=non_interactive,
         proxy_config=resolved_proxy,
         label=label,
+        keep_alive=keep_alive,
     )
 
 

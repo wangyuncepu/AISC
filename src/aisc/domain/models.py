@@ -261,6 +261,7 @@ class RunPlan:
     non_interactive: bool = False  # --non-interactive: omit -it, add env vars, DEVNULL stdin
     proxy_config: str = ""    # host path to .claude/mihomo/config.yaml (when network=proxy)
     label: str = ""           # optional container label for multi-container addressing
+    keep_alive: bool = False  # --keep-alive: omit --rm, keep container after exit
 
     @property
     def docker_argv(self) -> list:
@@ -270,10 +271,16 @@ class RunPlan:
         - interactive=False → omits ``-it``
         - non_interactive=True → also omits ``-it``, adds AISC_NON_INTERACTIVE + CLAUDE_SCOPE
         - network=proxy     → adds NET_ADMIN, TUN device, mihomo config mount
+        - keep_alive=False  → includes ``--rm`` (default: remove on exit)
+        - keep_alive=True   → omits ``--rm`` (persist after exit)
         - Always runs with --user $(id -u):$(id -g) to match host file ownership
         """
         import os
-        argv = ["run", "--rm"]
+        argv = ["run"]
+
+        # Only add --rm if keep_alive is False (default behavior)
+        if not self.keep_alive:
+            argv.append("--rm")
 
         # Add user mapping to prevent permission issues with mounted files
         uid = os.getuid()

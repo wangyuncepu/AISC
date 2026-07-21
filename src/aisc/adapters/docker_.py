@@ -69,6 +69,32 @@ class DockerExecutor(Protocol):
         """Execute ``docker <argv>`` with DEVNULL stdin, inherited stdout / stderr.
         For ``--non-interactive`` mode."""
 
+    # Container operations
+    def list_containers(self, all: bool = False) -> ProcessResult:
+        """List containers via ``docker ps`` (or ``docker ps -a`` if all=True)."""
+
+    def stop_container(self, container_name: str, timeout: int = 10) -> ProcessResult:
+        """Stop a container via ``docker stop``."""
+
+    def remove_container(self, container_name: str, force: bool = False) -> ProcessResult:
+        """Remove a container via ``docker rm`` (with -f if force=True)."""
+
+    def inspect_container(self, container_name: str) -> ProcessResult:
+        """Inspect a container via ``docker inspect``."""
+
+    # Image operations
+    def list_images(self) -> ProcessResult:
+        """List images via ``docker images``."""
+
+    def remove_image(self, image_name: str, force: bool = False) -> ProcessResult:
+        """Remove an image via ``docker rmi`` (with -f if force=True)."""
+
+    def pull_image(self, image_name: str) -> ProcessResult:
+        """Pull an image via ``docker pull``."""
+
+    def tag_image(self, source: str, target: str) -> ProcessResult:
+        """Tag an image via ``docker tag``."""
+
 
 # Factory functions are below; Protocol methods don't have bodies.
 
@@ -329,6 +355,62 @@ class RealDockerExecutor:
     def docker_path(self) -> str:
         return self._resolve_path() or "docker"
 
+    # ------------------------------------------------------------------
+    # Container operations
+    # ------------------------------------------------------------------
+
+    def list_containers(self, all: bool = False) -> ProcessResult:
+        """List containers via ``docker ps`` (or ``docker ps -a`` if all=True)."""
+        argv = ["ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}"]
+        if all:
+            argv.insert(1, "-a")
+        return self.run_captured(argv, timeout=10.0)
+
+    def stop_container(self, container_name: str, timeout: int = 10) -> ProcessResult:
+        """Stop a container via ``docker stop``."""
+        argv = ["stop", "-t", str(timeout), container_name]
+        return self.run_captured(argv, timeout=float(timeout + 5))
+
+    def remove_container(self, container_name: str, force: bool = False) -> ProcessResult:
+        """Remove a container via ``docker rm`` (with -f if force=True)."""
+        argv = ["rm"]
+        if force:
+            argv.append("-f")
+        argv.append(container_name)
+        return self.run_captured(argv, timeout=10.0)
+
+    def inspect_container(self, container_name: str) -> ProcessResult:
+        """Inspect a container via ``docker inspect``."""
+        argv = ["inspect", container_name]
+        return self.run_captured(argv, timeout=10.0)
+
+    # ------------------------------------------------------------------
+    # Image operations
+    # ------------------------------------------------------------------
+
+    def list_images(self) -> ProcessResult:
+        """List images via ``docker images``."""
+        argv = ["images", "--format", "{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}"]
+        return self.run_captured(argv, timeout=10.0)
+
+    def remove_image(self, image_name: str, force: bool = False) -> ProcessResult:
+        """Remove an image via ``docker rmi`` (with -f if force=True)."""
+        argv = ["rmi"]
+        if force:
+            argv.append("-f")
+        argv.append(image_name)
+        return self.run_captured(argv, timeout=30.0)
+
+    def pull_image(self, image_name: str) -> ProcessResult:
+        """Pull an image via ``docker pull``."""
+        argv = ["pull", image_name]
+        return self.run_captured(argv, timeout=300.0)
+
+    def tag_image(self, source: str, target: str) -> ProcessResult:
+        """Tag an image via ``docker tag``."""
+        argv = ["tag", source, target]
+        return self.run_captured(argv, timeout=10.0)
+
 
 # ---------------------------------------------------------------------------
 # Fake Docker executor (testing — zero process calls)
@@ -461,6 +543,70 @@ class FakeDockerExecutor:
             raise AssertionError(
                 f"Expected zero docker calls, got {self.total_calls}. {msg}"
             )
+
+    # ------------------------------------------------------------------
+    # Container operations (fake implementations)
+    # ------------------------------------------------------------------
+
+    def list_containers(self, all: bool = False) -> ProcessResult:
+        """Fake container list."""
+        self.calls.append(("list_containers", {"all": all}))
+        return self._default_captured or ProcessResult(
+            stdout="", stderr="", exit_code=0
+        )
+
+    def stop_container(self, container_name: str, timeout: int = 10) -> ProcessResult:
+        """Fake container stop."""
+        self.calls.append(("stop_container", {"name": container_name, "timeout": timeout}))
+        return self._default_captured or ProcessResult(
+            stdout="", stderr="", exit_code=0
+        )
+
+    def remove_container(self, container_name: str, force: bool = False) -> ProcessResult:
+        """Fake container removal."""
+        self.calls.append(("remove_container", {"name": container_name, "force": force}))
+        return self._default_captured or ProcessResult(
+            stdout="", stderr="", exit_code=0
+        )
+
+    def inspect_container(self, container_name: str) -> ProcessResult:
+        """Fake container inspect."""
+        self.calls.append(("inspect_container", {"name": container_name}))
+        return self._default_captured or ProcessResult(
+            stdout="[]", stderr="", exit_code=0
+        )
+
+    # ------------------------------------------------------------------
+    # Image operations (fake implementations)
+    # ------------------------------------------------------------------
+
+    def list_images(self) -> ProcessResult:
+        """Fake image list."""
+        self.calls.append(("list_images", {}))
+        return self._default_captured or ProcessResult(
+            stdout="", stderr="", exit_code=0
+        )
+
+    def remove_image(self, image_name: str, force: bool = False) -> ProcessResult:
+        """Fake image removal."""
+        self.calls.append(("remove_image", {"name": image_name, "force": force}))
+        return self._default_captured or ProcessResult(
+            stdout="", stderr="", exit_code=0
+        )
+
+    def pull_image(self, image_name: str) -> ProcessResult:
+        """Fake image pull."""
+        self.calls.append(("pull_image", {"name": image_name}))
+        return self._default_captured or ProcessResult(
+            stdout="", stderr="", exit_code=0
+        )
+
+    def tag_image(self, source: str, target: str) -> ProcessResult:
+        """Fake image tag."""
+        self.calls.append(("tag_image", {"source": source, "target": target}))
+        return self._default_captured or ProcessResult(
+            stdout="", stderr="", exit_code=0
+        )
 
 
 # ---------------------------------------------------------------------------

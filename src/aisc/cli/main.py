@@ -135,6 +135,8 @@ def _build_parser() -> _AiscArgumentParser:
                     help="Plan the run without executing")
     rp.add_argument("--label", type=str, default="",
                     help="Container label for multi-container addressing (optional)")
+    rp.add_argument("--keep-alive", action="store_true", default=False,
+                    help="Keep container after exit (omit --rm flag)")
 
     # --- config ---
     cp = sub.add_parser("config", help="Config management", allow_abbrev=False)
@@ -590,6 +592,7 @@ def _cmd_run(
         interactive=is_interactive,
         non_interactive=non_interactive,
         label=getattr(args, "label", ""),
+        keep_alive=getattr(args, "keep_alive", False),
         aisc_root=aisc_root,
     )
 
