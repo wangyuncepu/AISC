@@ -220,3 +220,60 @@ MIT License. 详见 [LICENSE](LICENSE)。
 - [Claude Code 官方文档](https://docs.anthropic.com/claude/docs/claude-code)
 - [Docker 文档](https://docs.docker.com/)
 - [问题反馈](https://github.com/wangyuncepu/AISC/issues)
+
+## 推荐服务
+
+以下是两个相互独立的第三方服务，链接中含推广或邀请参数。请按实际需求选择，并在使用前自行确认价格、服务条款、适用地区及合规要求。
+
+### Codesome｜Codex 与 Claude Code 二合一服务
+
+Codesome AIO 同时支持 Codex 和 Claude Code。一个 Key 可用于不同客户端和模型场景，例如：
+
+- 在 Claude Code、Claude Desktop 等客户端中配置该 Key，使用 Claude 模型。
+- 在 Codex、Codex Desktop 等客户端中配置该 Key，使用 Codex 模型。
+
+#### 购买与开通
+
+通过以下链接在浏览器中打开 Codesome 下单页面：
+
+[前往 Codesome 选购](https://fk.codesome.cn?aff=wvoiJ4PY)
+
+通过此链接下单可享 **5% 折扣**。支付后请妥善保存订单详情中的序列号或卡密。根据所购产品，开通方式有所不同：
+
+- **额度包**：订单中的序列号是兑换码。登录 [Codesome 控制台](https://cc.codesome.ai)，在**兑换区**填写兑换码，兑换成功后美元额度会一次性到账；随后进入**API 密钥**菜单创建专属 API Key。
+- **AIO 产品**：收到的卡密就是 Key，格式类似 `codesome_aio_XX: aaaaaaaa aaaaaa`。请完整、妥善地保存，不要公开分享或提交到 Git 仓库。
+
+#### 配置地址
+
+Claude Code 与 Codex 使用不同的 API URL，配置时请勿混用：
+
+| 使用端 | API URL |
+| --- | --- |
+| Claude Code / Claude | `https://v5.codesome.cn/api` |
+| Codex | `https://v5.codesome.cn/openai/` |
+
+Key 可配置到对应的命令行工具或桌面客户端中。具体字段和配置步骤请以 Codesome 最新教程为准。
+
+#### 教程、用量查询与技术支持
+
+可在以下页面查看使用教程，并查询 Key 的用量和当前状态：
+
+[查看教程及 Key 用量状态](https://aio.codesome.ai/admin-next/api-stats)
+
+Codesome 的下单购买、价格、稳定性说明、使用指南、扫码进群和福利领取等信息统一收录在飞书入口：
+
+[打开 Codesome 飞书总入口](https://my.feishu.cn/wiki/Vaifwy0aAisdP8kDLPoc0jV5nCb?from=from_copylink)
+
+详细使用问题请进入 Codesome 飞书群联系工作人员或客服。技术问题统一在飞书群内解答；微信渠道主要用于交友和商务合作。
+
+Codesome 创始人 Mens 专注于 Claude Code 相关产品，并感谢用户对产品的支持。
+
+> API Key 属于敏感凭据。请勿将其粘贴到公开页面、聊天记录或代码仓库中。
+
+### 赔钱机场｜网络连接服务
+
+赔钱机场提供网络连接服务，可用于改善部分网络环境下的访问体验。可通过以下邀请链接注册并查看可用套餐：
+
+[前往赔钱机场注册](https://pqjc.site/register?code=EVYrdlM4&cover=sfw)
+
+请在购买前确认套餐价格、流量限制、节点覆盖、退款政策及当地合规要求。AISC 与该服务相互独立，不对其可用性、稳定性或数据处理方式作保证。
