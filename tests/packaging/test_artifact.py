@@ -433,6 +433,16 @@ class TestStaging(unittest.TestCase):
         for fb in (".git",".github","src","tests","docs","packaging","tools","scripts","cli"):
             self.assertFalse((b/fb).exists(), f"Forbidden: {fb}")
 
+    def test_config_providers_json_staged_when_present(self):
+        """config/providers.json is included in staged bundle when present at build time."""
+        self._cr(self.td)
+        providers_content = '{"schema_version":1,"providers":{}}'
+        (self.td / "config" / "providers.json").write_text(providers_content)
+        b = _art.stage_bundle(self.td, self.td / "out")
+        target = b / "config" / "providers.json"
+        self.assertTrue(target.is_file(), f"config/providers.json missing from bundle at {target}")
+        self.assertEqual(target.read_text(), providers_content)
+
 class TestManifestValidation(unittest.TestCase):
     def setUp(self): self.td = Path(tempfile.mkdtemp(prefix="mv-"))
     def tearDown(self): shutil.rmtree(self.td, ignore_errors=True)

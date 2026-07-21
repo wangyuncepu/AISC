@@ -9509,4 +9509,3 @@ class TestP3CInvalidOpenOsfhandle(_ut.TestCase):
 
 if __name__ == "__main__":
     _ut.main(verbosity=2)
-

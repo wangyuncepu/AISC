@@ -153,6 +153,16 @@ class TestRunPlan(unittest.TestCase):
         p = RunPlan(image="i", workspace="/w", name="n", label="app")
         self.assertEqual(p.label, "app")
 
+    def test_provider_config_directory_mount(self):
+        p = RunPlan(
+            image="i", workspace="/w", name="n",
+            provider_config_dir="/home/user/.aisc",
+        )
+        self.assertIn(
+            "/home/user/.aisc:/home/AISC/app/.aisc",
+            p.docker_argv,
+        )
+
 
 # ============================================================================
 # DockerPreflightResult / ImageInspectResult tests
@@ -828,13 +838,13 @@ class TestProxyWithFixture(unittest.TestCase):
             image="img:1",
             workspace=str(self.ws),
             network="proxy",
-            dry_run=False,  # Changed to False: validation only runs when not dry-run
+            dry_run=False,
             interactive=False,
             aisc_root=empty_root,
         )
         # Should still resolve path (even if missing)
         self.assertIn("config.yaml", plan.proxy_config)
-        # But validation will fail at run time
+        # Non-dry-run validation fails at run time.
         with self.assertRaises(CliError) as ctx:
             run_container(plan, executor=FakeDockerExecutor())
         self.assertEqual(ctx.exception.exit_code, 1)

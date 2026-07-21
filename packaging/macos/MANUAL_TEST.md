@@ -16,7 +16,7 @@ the install / uninstall / Gatekeeper user experience.
 ## 1. SHA256 verification
 
 ```bash
-shasum -a 256 -c AISC-2.0.0-dev-macos-arm64.pkg.sha256
+shasum -a 256 -c AISC-2.0.4-dev-macos-arm64.pkg.sha256
 ```
 
 Expected: `OK`.
@@ -123,7 +123,7 @@ install).  Verify `aisc version` works.
 
 ```bash
 # Not recommended, but pkg should support alternate install root
-installer -pkg AISC-2.0.0-dev-macos-arm64.pkg -target /
+installer -pkg AISC-2.0.4-dev-macos-arm64.pkg -target /
 # (equivalent to double-click)
 ```
 

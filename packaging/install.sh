@@ -2,7 +2,7 @@
 # AISC portable install — user-level installation without Python/uv
 #
 # Usage:
-#   ./install.sh /path/to/AISC-2.0.0-dev-linux-x86_64.tar.gz
+#   ./install.sh /path/to/AISC-2.0.4-dev-linux-x86_64.tar.gz
 #   ./install.sh /path/to/extracted-archive/
 #
 # Installs the aisc executable and aisc-bundle/ into a user-local directory

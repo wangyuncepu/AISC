@@ -202,13 +202,15 @@ class TestWorkflowSetupInvariants(unittest.TestCase):
                       "Setup filename must end with -setup.exe")
 
     def test_permissions_read_only(self):
-        """Top-level workflow permissions must NOT have contents: write.
-        Job-level permissions may request it (e.g. release job)."""
-        top_perm = self.text.split("jobs:")[0]
-        self.assertIn("contents: read", top_perm,
-                      "Missing contents: read permission")
-        self.assertNotIn("contents: write", top_perm,
-                         "contents: write found in top-level permissions")
+        """Build defaults to read-only; only the release job may write."""
+        self.assertIn("permissions:\n  contents: read", self.text,
+                      "Missing top-level contents: read permission")
+        self.assertEqual(self.text.count("contents: write"), 1,
+                         "Write permission must be scoped to one release job")
+        self.assertRegex(
+            self.text,
+            r"(?s)\n  release:.*?permissions:\n      contents: write",
+        )
 
     def test_setup_artifact_uploaded(self):
         """Setup artifact must be uploaded as a separate artifact."""
