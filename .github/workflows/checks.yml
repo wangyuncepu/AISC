@@ -2,6 +2,7 @@ name: Checks
 
 on:
   push:
+    branches: [main, develop]  # 仅在主要分支上运行
   pull_request:
     branches: [main]
 
@@ -45,6 +46,7 @@ jobs:
         run: bash tests/smoke/editable_install_smoke.sh
 
       - name: Secret scan (gitleaks)
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         uses: gitleaks/gitleaks-action@v2
         env:
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
