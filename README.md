@@ -521,50 +521,86 @@ aisc config show      [--config PATH] [--workspace PATH] [--format json]
 ```bash
 aisc provider list                [--format json] [--aisc-root PATH]
 aisc provider show NAME           [--format json] [--aisc-root PATH]
-aisc provider add --id ID --name NAME --auth-type token|api_key
-                  --auth-key-name ENV_NAME --base-url URL
-                  [--alias ALIAS]... [--model MODEL]
-                  [--default-opus MODEL] [--default-sonnet MODEL]
-                  [--default-haiku MODEL] [--subagent MODEL]
-                  [--effort VALUE] [--compact VALUE] [--overwrite]
 ```
 
-不依赖 Docker 或网络。`list` / `show` 优先读取 `~/.aisc/providers.json`；用户目录尚未创建时，读取安装包的 `<aisc-root>/config/providers.json`（旧版源码布局回退到 `container/providers.json`）。`add` 会在首次写入时复制完整内置目录，再将自定义 Provider 原子写入用户目录。
+不依赖 Docker 或网络。`list` / `show` 优先读取 `~/.aisc/providers.json`；用户目录尚未创建时，读取安装包的 `<aisc-root>/config/providers.json`（旧版源码布局回退到 `container/providers.json`）。
 
 | 子命令 | 说明 |
 | --- | --- |
 | `list` | 列出所有可用 Provider（id、name、auth_type、aliases） |
 | `show NAME` | 查看指定 Provider 详情（id、name、auth_type、auth_key_name、base_url、aliases）；NAME 为 id 或别名 |
-| `add` | 新增自定义 Provider；`--alias` 可重复指定，`--overwrite` 只能更新已有的自定义 Provider |
 
 `provider show NAME` 中 NAME 为必填参数（缺少报 usage error，exit 2）。
 
-**新增 Provider：**
+**新增自定义 Provider：**
+
+推荐直接编辑 `~/.aisc/providers.json` 文件添加自定义 Provider。首次运行 `aisc run` 后，该文件会从内置配置初始化。
+
+**配置示例：**
 
 ```bash
-# 在宿主机新增
-aisc provider add \
-  --id my-provider \
-  --name "My Provider" \
-  --auth-type api_key \
-  --auth-key-name MY_PROVIDER_API_KEY \
-  --base-url https://api.example.com \
-  --alias my
-
-# 验证 id 或别名
-aisc provider show my-provider
-aisc provider show my
+# 编辑 ~/.aisc/providers.json
+vim ~/.aisc/providers.json
 ```
 
-进入正在运行的容器后，也可以使用同一组核心参数新增：
+在 `providers` 对象中添加新的 provider 配置：
+
+```json
+{
+  "schema_version": 1,
+  "providers": {
+    "my-provider": {
+      "id": "my-provider",
+      "name": "My Custom Provider",
+      "aliases": ["my", "mp"],
+      "auth_type": "api_key",
+      "auth_key_name": "MY_PROVIDER_API_KEY",
+      "auth_prompt": "My Custom Provider",
+      "key_display": "My Custom Provider",
+      "base_url": "https://api.example.com/v1/",
+      "model": "claude-opus-4-8",
+      "default_opus": "",
+      "default_sonnet": "",
+      "default_haiku": "",
+      "subagent": "",
+      "effort": "",
+      "compact": "",
+      "clear_all": false,
+      "url_fragment": "api.example.com",
+      "switch_msg": "My Custom Provider",
+      "help_desc": "My custom API provider",
+      "custom": true
+    }
+  }
+}
+```
+
+**字段说明：**
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `id` | ✓ | Provider 唯一标识符（小写字母、数字、点、破折号，最多 64 字符） |
+| `name` | ✓ | 显示名称 |
+| `auth_type` | ✓ | 认证类型：`token` 或 `api_key` |
+| `auth_key_name` | ✓ | 环境变量名（大写字母、数字、下划线，最多 128 字符） |
+| `base_url` | ✓ | API 基础 URL（HTTP/HTTPS） |
+| `aliases` |  | 别名列表（可选，用于快速切换） |
+| `model` |  | 默认模型名称 |
+| `custom` | ✓ | 必须设为 `true`（标识为自定义 provider） |
+
+**验证配置：**
 
 ```bash
+# 查看所有 Provider
+aisc provider list
+
+# 查看自定义 Provider 详情
+aisc provider show my-provider
+aisc provider show my
+
+# 在容器内切换到自定义 Provider
 aisc shell
-cs add --id another-provider \
-  --name "Another Provider" \
-  --auth-type token \
-  --auth-key-name ANOTHER_PROVIDER_TOKEN \
-  --base-url https://api.another.example
+cs my-provider
 ```
 
 两端写入同一个 `~/.aisc/providers.json`，因此新增结果即时互通。`aisc switch --quick ID` 和容器内 `cs ID` 只切换已有 Provider，不负责新增。
