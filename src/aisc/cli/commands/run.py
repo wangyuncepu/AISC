@@ -220,11 +220,52 @@ def run_container(
     # --- image inspect (structured result) ---
     inspect = exec_.inspect_image(plan.image)
     if inspect.status == ImageInspectStatus.MISSING:
-        raise CliError(
-            message=inspect.message or f"Image '{plan.image}' not found. Run 'aisc build' first.",
-            exit_code=5, error_code="AISC_ERR_IMAGE_NOT_FOUND",
-            data=result.to_dict(),
+        # Auto-build the image if it doesn't exist
+        if emitter is not None:
+            emitter.emit("run.image_missing", data={
+                "image": plan.image,
+                "action": "building",
+            })
+
+        # Import build functions
+        from aisc.cli.commands.build import plan_build, run_build
+
+        if aisc_root is None:
+            raise CliError(
+                message=f"Image '{plan.image}' not found and AISC root not available for building.",
+                exit_code=5, error_code="AISC_ERR_IMAGE_NOT_FOUND",
+                data=result.to_dict(),
+            )
+
+        # Create build plan with same image tag
+        build_plan = plan_build(
+            root=aisc_root,
+            tag=plan.image,
+            no_cache=False,
+            pull=False,
+            dry_run=False,
         )
+
+        # Run build (streaming mode for interactive, captured for non-interactive)
+        is_streaming = (emitter is None and plan.interactive)
+        build_result = run_build(build_plan, emitter=emitter, streaming=is_streaming)
+
+        if build_result.exit_code != 0:
+            raise CliError(
+                message=f"Failed to build image '{plan.image}'",
+                exit_code=build_result.exit_code,
+                error_code="AISC_ERR_BUILD_FAILED",
+                data=result.to_dict(),
+            )
+
+        # Re-inspect after successful build
+        inspect = exec_.inspect_image(plan.image)
+        if inspect.status != ImageInspectStatus.EXISTS:
+            raise CliError(
+                message=f"Image '{plan.image}' built successfully but still not found.",
+                exit_code=5, error_code="AISC_ERR_IMAGE_NOT_FOUND",
+                data=result.to_dict(),
+            )
     elif inspect.status == ImageInspectStatus.DOCKER_UNAVAILABLE:
         raise CliError(
             message=inspect.message, exit_code=3,
