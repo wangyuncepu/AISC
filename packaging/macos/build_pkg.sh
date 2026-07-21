@@ -5,10 +5,10 @@
 #   bash build_pkg.sh <version> <onefile-path> <bundle-path> <output-dir>
 #
 # Example:
-#   bash build_pkg.sh "2.0.0-dev" ./dist/aisc ./staging/aisc-bundle ./out
+#   bash build_pkg.sh "2.0.4-dev" ./dist/aisc ./staging/aisc-bundle ./out
 #
 # Output:
-#   AISC-2.0.0-dev-macos-arm64.pkg + .sha256
+#   AISC-2.0.4-dev-macos-arm64.pkg + .sha256
 #
 # Requirements: macOS with pkgbuild (included in Xcode CLT or full Xcode).
 #

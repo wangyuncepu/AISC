@@ -292,7 +292,7 @@ class SecureStorePermissionErrorTests(_ut.TestCase):
 
 class TestResolveStorePaths(_ut.TestCase):
     def test_linux_defaults(self):
-        sp = resolve_store_paths("linux", "/home/user")
+        sp = resolve_store_paths("linux", "/home/user", env={})
         self.assertEqual(sp.config, "/home/user/.config/aisc")
         self.assertEqual(sp.state, "/home/user/.local/state/aisc")
         self.assertEqual(sp.data, "/home/user/.local/share/aisc")
@@ -9509,4 +9509,3 @@ class TestP3CInvalidOpenOsfhandle(_ut.TestCase):
 
 if __name__ == "__main__":
     _ut.main(verbosity=2)
-

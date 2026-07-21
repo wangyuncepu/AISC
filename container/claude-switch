@@ -50,8 +50,16 @@ if [ ! -f "$KEY_STORE" ]; then
   chmod 600 "$KEY_STORE"
 fi
 
-# Path to providers.json — same location in Docker image
-export PROVIDERS_JSON="${PROVIDERS_JSON:-/home/AISC/providers.json}"
+# Resolve providers.json — prefer .aisc config directory, fall back to Docker default.
+# Priority: AISC_DIR > ~/.aisc > existing PROVIDERS_JSON env > Docker path.
+if [ -n "${AISC_DIR:-}" ] && [ -f "$AISC_DIR/providers.json" ]; then
+  PROVIDERS_JSON="$AISC_DIR/providers.json"
+elif [ -f "${HOME}/.aisc/providers.json" ]; then
+  PROVIDERS_JSON="${HOME}/.aisc/providers.json"
+else
+  PROVIDERS_JSON="${PROVIDERS_JSON:-/home/AISC/providers.json}"
+fi
+export PROVIDERS_JSON
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -106,7 +114,7 @@ migrate_keys
 _node_resolve_provider() {
   node -e '
     var fs = require("fs");
-    var cfg = JSON.parse(fs.readFileSync(process.env.PROVIDERS_JSON || "/home/AISC/providers.json", "utf8"));
+    var pj=process.env.PROVIDERS_JSON;if(!pj)throw Error("PROVIDERS_JSON env var not set");var cfg=JSON.parse(fs.readFileSync(pj,"utf8"));
     var input = process.argv[1] || "";
     var providers = cfg.providers || {};
     var id = "";
@@ -150,7 +158,7 @@ _node_resolve_provider() {
 _node_list_providers() {
   node -e '
     var fs = require("fs");
-    var cfg = JSON.parse(fs.readFileSync(process.env.PROVIDERS_JSON || "/home/AISC/providers.json", "utf8"));
+    var pj=process.env.PROVIDERS_JSON;if(!pj)throw Error("PROVIDERS_JSON env var not set");var cfg=JSON.parse(fs.readFileSync(pj,"utf8"));
     var providers = cfg.providers || {};
     var keys = Object.keys(providers);
     var q = JSON.stringify;
@@ -169,6 +177,128 @@ _node_list_providers() {
       console.log("_PL_ALLNAMES_" + i + "=" + q(allNames.join("|")));
     }
   '
+}
+
+# ==========================================
+# add_provider — atomically add a custom provider to the shared catalog
+# ==========================================
+add_provider() {
+  node - "$@" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const catalogPath = process.env.PROVIDERS_JSON;
+if (!catalogPath) throw new Error('PROVIDERS_JSON env var not set');
+
+const args = process.argv.slice(2);
+const values = { aliases: [] };
+const valueOptions = new Map([
+  ['--id', 'id'], ['--name', 'name'], ['--auth-type', 'auth_type'],
+  ['--auth-key-name', 'auth_key_name'], ['--base-url', 'base_url'],
+  ['--model', 'model'], ['--default-opus', 'default_opus'],
+  ['--default-sonnet', 'default_sonnet'], ['--default-haiku', 'default_haiku'],
+  ['--subagent', 'subagent'], ['--effort', 'effort'], ['--compact', 'compact'],
+]);
+let overwrite = false;
+for (let i = 0; i < args.length; i += 1) {
+  const arg = args[i];
+  if (arg === '--overwrite') {
+    overwrite = true;
+  } else if (arg === '--alias') {
+    if (i + 1 >= args.length) throw new Error('--alias requires a value');
+    values.aliases.push(args[++i]);
+  } else if (valueOptions.has(arg)) {
+    if (i + 1 >= args.length) throw new Error(`${arg} requires a value`);
+    values[valueOptions.get(arg)] = args[++i];
+  } else {
+    throw new Error(`unknown option: ${arg}`);
+  }
+}
+
+for (const key of ['id', 'name', 'auth_type', 'auth_key_name', 'base_url']) {
+  if (!values[key]) throw new Error(`missing required option: --${key.replaceAll('_', '-')}`);
+}
+if (!values.name.trim()) throw new Error('provider name must not be empty');
+const validId = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+if (!validId.test(values.id) || values.id.includes('..')) throw new Error('invalid provider id');
+if (!['token', 'api_key'].includes(values.auth_type)) throw new Error('auth-type must be token or api_key');
+if (!/^[A-Z][A-Z0-9_]{0,127}$/.test(values.auth_key_name)) throw new Error('invalid auth key name');
+if (new Set(values.aliases).size !== values.aliases.length || values.aliases.includes(values.id) ||
+    values.aliases.some((alias) => !validId.test(alias) || alias.includes('..'))) {
+  throw new Error('aliases must be unique valid provider ids and differ from --id');
+}
+
+function canonicalUrl(raw) {
+  let url;
+  try { url = new URL(raw); } catch (_) { throw new Error('base-url must be a valid HTTP(S) URL'); }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    throw new Error('base-url must be a valid HTTP(S) URL without user info');
+  }
+  if (!url.pathname.endsWith('/')) url.pathname += '/';
+  return url.toString();
+}
+const wantedUrl = canonicalUrl(values.base_url);
+
+const document = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+if (document.schema_version !== 1 || !document.providers || Array.isArray(document.providers)) {
+  throw new Error('invalid provider catalog');
+}
+const providers = document.providers;
+const existing = providers[values.id];
+if (existing && !overwrite) throw new Error(`provider already exists: ${values.id}`);
+if (existing && !existing.custom) throw new Error(`built-in provider cannot be overwritten: ${values.id}`);
+
+const newNames = new Set([values.id, ...values.aliases]);
+for (const [id, provider] of Object.entries(providers)) {
+  if (id === values.id && existing) continue;
+  const names = [id, ...(provider.aliases || [])];
+  if (names.some((name) => newNames.has(name))) throw new Error('provider id or alias conflicts with an existing provider');
+  if (provider.auth_key_name === values.auth_key_name) throw new Error('auth-key-name conflicts with an existing provider');
+  if (provider.base_url && canonicalUrl(provider.base_url) === wantedUrl) throw new Error('base-url conflicts with an existing provider');
+}
+
+const hostname = new URL(values.base_url).hostname;
+providers[values.id] = {
+  id: values.id,
+  name: values.name.trim(),
+  aliases: values.aliases,
+  auth_type: values.auth_type,
+  auth_key_name: values.auth_key_name,
+  auth_prompt: values.name.trim(),
+  key_display: values.name.trim(),
+  base_url: values.base_url,
+  model: values.model || '',
+  default_opus: values.default_opus || '',
+  default_sonnet: values.default_sonnet || '',
+  default_haiku: values.default_haiku || '',
+  subagent: values.subagent || '',
+  effort: values.effort || '',
+  compact: values.compact || '',
+  clear_all: false,
+  url_fragment: hostname,
+  switch_msg: values.name.trim(),
+  help_desc: values.base_url,
+  custom: true,
+};
+
+const directory = path.dirname(catalogPath);
+const temporary = path.join(directory, `.${path.basename(catalogPath)}.${process.pid}.${Date.now()}.tmp`);
+let fd;
+try {
+  fd = fs.openSync(temporary, 'wx', 0o600);
+  fs.writeFileSync(fd, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+  fs.fsyncSync(fd);
+  fs.closeSync(fd);
+  fd = undefined;
+  fs.renameSync(temporary, catalogPath);
+  fs.chmodSync(catalogPath, 0o600);
+} finally {
+  if (fd !== undefined) fs.closeSync(fd);
+  try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
+console.log(`Provider '${values.id}' ${existing ? 'updated' : 'added'}.`);
+console.log(`Catalog: ${catalogPath}`);
+NODE
 }
 
 # ==========================================
@@ -307,7 +437,7 @@ show_current() {
     }
     const base = env.ANTHROPIC_BASE_URL || '';
     // Build backend fragments from providers.json
-    const provCfg = JSON.parse(fs.readFileSync(process.env.PROVIDERS_JSON || '/home/AISC/providers.json','utf8'));
+    const pj=process.env.PROVIDERS_JSON;if(!pj)throw Error("PROVIDERS_JSON env var not set");const provCfg=JSON.parse(fs.readFileSync(pj,'utf8'));
     const providers = provCfg.providers || {};
     let backend = '';
     for (const [id, p] of Object.entries(providers)) {
@@ -437,7 +567,7 @@ do_upgrade() {
 # show_help — generate help text from providers.json
 # ==========================================
 show_help() {
-  echo "Usage: cs {cc|deepseek|ark|1y|duo-cc|xf|orange|upgrade|show}"
+  echo "Usage: cs PROVIDER | cs add OPTIONS | cs {upgrade|show}"
   echo ""
   # Generate provider listing from providers.json
   eval "$(_node_list_providers)"
@@ -449,6 +579,7 @@ show_help() {
   done
   echo "  upgrade   合并镜像出厂 .claude 到当前项目（保留后端配置/历史）"
   echo "  show      Show current backend & saved keys"
+  echo "  add       Add a custom provider (run 'cs add --help' for options)"
   echo ""
   echo "Keys are stored in .aisc/secrets/api-keys and never committed to git."
 }
@@ -461,7 +592,7 @@ _match_provider() {
   local input="$1"
   node -e '
     var fs = require("fs");
-    var cfg = JSON.parse(fs.readFileSync(process.env.PROVIDERS_JSON || "/home/AISC/providers.json", "utf8"));
+    var pj=process.env.PROVIDERS_JSON;if(!pj)throw Error("PROVIDERS_JSON env var not set");var cfg=JSON.parse(fs.readFileSync(pj,"utf8"));
     var input = process.argv[1] || "";
     var providers = cfg.providers || {};
     for (var k in providers) {
@@ -479,7 +610,7 @@ _match_provider() {
 _list_all_provider_names() {
   node -e '
     var fs = require("fs");
-    var cfg = JSON.parse(fs.readFileSync(process.env.PROVIDERS_JSON || "/home/AISC/providers.json", "utf8"));
+    var pj=process.env.PROVIDERS_JSON;if(!pj)throw Error("PROVIDERS_JSON env var not set");var cfg=JSON.parse(fs.readFileSync(pj,"utf8"));
     var providers = cfg.providers || {};
     var names = [];
     for (var k in providers) {
@@ -498,12 +629,20 @@ case "${1:-}" in
   show|current|"")  show_current ;;
   -h|--help)        show_help ;;
   upgrade|up)       do_upgrade ;;
+  add)
+    shift
+    if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+      echo "Usage: cs add --id ID --name NAME --auth-type {token|api_key} --auth-key-name ENV --base-url URL [--alias ID] [--overwrite]"
+    else
+      add_provider "$@" || die "failed to add provider"
+    fi
+    ;;
   *)
     if [ -z "${1:-}" ]; then
       show_current
     else
       # Try to resolve as a provider id or alias
-      resolved=$(_match_provider "$1") || die "unknown: $1  —  use cc, deepseek, ark, 1y, duo-cc, xf, orange, upgrade, or show"
+      resolved=$(_match_provider "$1") || die "unknown provider or command: $1 — run 'cs --help'"
       switch "$resolved"
     fi
     ;;

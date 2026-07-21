@@ -156,6 +156,10 @@ class TestGatherVersionInfo(unittest.TestCase):
 
     def test_version_matches_product_version(self):
         self._make_root()
+        (self.root / "VERSION").write_text(f"{__version__}\n")
+        (self.root / "config" / "versions.env").write_text(
+            f"CLAUDE_CODE_VERSION=latest\nAISC_VERSION={__version__}\n"
+        )
         with patch.object(Path, "cwd", return_value=self.root):
             info = gather_version_info()
         self.assertEqual(info.bundle_version, __version__)

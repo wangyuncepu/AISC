@@ -145,6 +145,16 @@ class TestRunPlan(unittest.TestCase):
         mount = [a for a in p.docker_argv if "My Docs" in a]
         self.assertEqual(len(mount), 1)
 
+    def test_provider_config_directory_mount(self):
+        p = RunPlan(
+            image="i", workspace="/w", name="n",
+            provider_config_dir="/home/user/.aisc",
+        )
+        self.assertIn(
+            "/home/user/.aisc:/home/AISC/app/.aisc",
+            p.docker_argv,
+        )
+
 
 # ============================================================================
 # DockerPreflightResult / ImageInspectResult tests
@@ -474,7 +484,7 @@ class TestRunWithFakeExecutor(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_proxy_config_missing_exit_1(self):
-        plan = self._plan(dry_run=True, network="proxy", interactive=False,
+        plan = self._plan(dry_run=False, network="proxy", interactive=False,
                           proxy_config="/nonexistent/config.yaml")
         with self.assertRaises(CliError) as ctx:
             run_container(plan, executor=FakeDockerExecutor())
@@ -820,13 +830,13 @@ class TestProxyWithFixture(unittest.TestCase):
             image="img:1",
             workspace=str(self.ws),
             network="proxy",
-            dry_run=True,
+            dry_run=False,
             interactive=False,
             aisc_root=empty_root,
         )
         # Should still resolve path (even if missing)
         self.assertIn("config.yaml", plan.proxy_config)
-        # But validation will fail at run time
+        # Non-dry-run validation fails at run time.
         with self.assertRaises(CliError) as ctx:
             run_container(plan, executor=FakeDockerExecutor())
         self.assertEqual(ctx.exception.exit_code, 1)

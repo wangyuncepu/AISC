@@ -2,7 +2,7 @@
 
 AISC 是一个在 Docker 容器中运行 Claude Code 的个人开发工具。提供 `aisc` 命令行，可在宿主机上构建镜像、管理容器、切换 AI 模型服务。
 
-> **状态：Alpha / 开发中。** 当前版本 `v2.0.0-dev`。
+> **状态：Alpha / 开发中。** 当前版本 `v2.0.4-dev`。
 
 ## 目录
 
@@ -56,13 +56,13 @@ docker version
 
 ### 方式一：GitHub Release 安装包（推荐）
 
-从 [GitHub Release v2.0.0-dev](https://github.com/wangyuncepu/AISC/releases/tag/v2.0.0-dev) 下载对应平台的安装包。
+从 [GitHub Release v2.0.4-dev](https://github.com/wangyuncepu/AISC/releases/tag/v2.0.4-dev) 下载对应平台的安装包。
 
 当前版本已作为 GitHub **Pre-release** 发布；普通用户直接从上面的 Release 页面下载即可，无需进入 Actions 页面。
 
 #### Windows
 
-下载 `AISC-2.0.0-dev-windows-x86_64-setup.exe`，双击运行。
+下载 `AISC-2.0.4-dev-windows-x86_64-setup.exe`，双击运行。
 
 - **仅支持 x86_64**；ARM Windows 不支持。
 - 默认安装到 `%LOCALAPPDATA%\Programs\AISC`。
@@ -75,8 +75,8 @@ docker version
 备用：ZIP 便携版
 
 ```powershell
-Expand-Archive AISC-2.0.0-dev-windows-x86_64.zip -DestinationPath .
-cd AISC-2.0.0-dev-windows-x86_64
+Expand-Archive AISC-2.0.4-dev-windows-x86_64.zip -DestinationPath .
+cd AISC-2.0.4-dev-windows-x86_64
 .\aisc.exe version
 ```
 
@@ -86,7 +86,7 @@ cd AISC-2.0.0-dev-windows-x86_64
 
 ##### 安装程序（推荐）
 
-下载 `AISC-2.0.0-dev-macos-arm64.pkg`，双击运行。
+下载 `AISC-2.0.4-dev-macos-arm64.pkg`，双击运行。
 
 - **仅支持 Apple Silicon（arm64）**；Intel Mac 不支持。
 - 需**管理员密码**（安装到 `/usr/local/`）。
@@ -103,8 +103,8 @@ cd AISC-2.0.0-dev-windows-x86_64
 ##### 便携版（备用）
 
 ```bash
-tar -xzf AISC-2.0.0-dev-macos-arm64.tar.gz
-cd AISC-2.0.0-dev-macos-arm64
+tar -xzf AISC-2.0.4-dev-macos-arm64.tar.gz
+cd AISC-2.0.4-dev-macos-arm64
 ./aisc version
 ```
 
@@ -114,7 +114,7 @@ cd AISC-2.0.0-dev-macos-arm64
 # install.sh / uninstall.sh 位于 AISC 源码仓库的 packaging/ 目录
 git clone --depth 1 https://github.com/wangyuncepu/AISC.git
 cd AISC
-bash packaging/install.sh ~/Downloads/AISC-2.0.0-dev-macos-arm64.tar.gz
+bash packaging/install.sh ~/Downloads/AISC-2.0.4-dev-macos-arm64.tar.gz
 bash packaging/uninstall.sh   # 卸载
 ```
 
@@ -123,15 +123,15 @@ bash packaging/uninstall.sh   # 卸载
 ##### tar.gz + 安装脚本
 
 ```bash
-# 1. 下载 AISC-2.0.0-dev-linux-x86_64.tar.gz
+# 1. 下载 AISC-2.0.4-dev-linux-x86_64.tar.gz
 
 # 2. 可选的 SHA256 校验
-sha256sum -c AISC-2.0.0-dev-linux-x86_64.tar.gz.sha256
+sha256sum -c AISC-2.0.4-dev-linux-x86_64.tar.gz.sha256
 
 # 3. 获取仓库中的安装脚本并安装
 git clone --depth 1 https://github.com/wangyuncepu/AISC.git
 cd AISC
-bash packaging/install.sh ~/Downloads/AISC-2.0.0-dev-linux-x86_64.tar.gz
+bash packaging/install.sh ~/Downloads/AISC-2.0.4-dev-linux-x86_64.tar.gz
 ```
 
 安装脚本会：
@@ -143,8 +143,8 @@ bash packaging/install.sh ~/Downloads/AISC-2.0.0-dev-linux-x86_64.tar.gz
 解压直接运行（无需安装脚本）：
 
 ```bash
-tar -xzf AISC-2.0.0-dev-linux-x86_64.tar.gz
-cd AISC-2.0.0-dev-linux-x86_64
+tar -xzf AISC-2.0.4-dev-linux-x86_64.tar.gz
+cd AISC-2.0.4-dev-linux-x86_64
 ./aisc version
 ```
 
@@ -218,7 +218,8 @@ aisc switch        # 打开服务切换界面
 | 路径 | 说明 |
 | --- | --- |
 | `<aisc-root>/config/versions.env` | 镜像版本环境变量（`NODE_IMAGE`、`USE_CN_MIRROR`） |
-| `<aisc-root>/container/providers.json` | Provider 目录 |
+| `<aisc-root>/config/providers.json` | 安装包中的内置 Provider 目录（旧版源码布局回退到 `container/providers.json`） |
+| `~/.aisc/providers.json` | 用户 Provider 目录；宿主机 `aisc` 与容器内 `cs` 共享，首次写入时从内置目录初始化 |
 | `<aisc-root>/container/Dockerfile` | 镜像构建文件 |
 | `<aisc-root>/skills-lock.json` | Skill 锁定文件 |
 | `<aisc-root>/.aisc/state.env` | 容器状态（`CONTAINER_NAME`、`IMAGE`，由 `aisc run` 写入） |
@@ -362,7 +363,8 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 **效果：**
 - 生成唯一容器名（`<name>-<8 位 hex>`）。
 - 实际启动容器前写入 `<aisc-root>/.aisc/state.env` 中的 `CONTAINER_NAME` 和 `IMAGE`，供其他终端通过 `status`/`shell` 等自动发现。容器退出并由 `--rm` 删除后，该文件可能保留最近一次容器名。
-- `--dry-run`：验证工作区和 proxy 配置后输出 `docker run ...` 命令行，不调用 Docker。
+- 将宿主机 `~/.aisc/` 挂载到容器 `/home/AISC/app/.aisc`，使宿主机 `aisc provider add` 与容器内 `cs add` 共用 Provider 目录。
+- 非 `--dry-run` 首次运行时会用内置 Provider 目录初始化 `~/.aisc/providers.json`；`--dry-run` 只输出包含该挂载的 `docker run ...` 命令行，不创建或修改 Provider 目录，也不校验本地 proxy 配置文件。
 - 非 `--dry-run` 时：
   - 检查 Docker 可用性（preflight）。
   - 检查镜像是否存在（`docker inspect`），不存在则报错（exit 5）。
@@ -519,16 +521,62 @@ aisc config show      [--config PATH] [--workspace PATH] [--format json]
 ```bash
 aisc provider list                [--format json] [--aisc-root PATH]
 aisc provider show NAME           [--format json] [--aisc-root PATH]
+aisc provider add --id ID --name NAME --auth-type token|api_key
+                  --auth-key-name ENV_NAME --base-url URL
+                  [--alias ALIAS]... [--model MODEL]
+                  [--default-opus MODEL] [--default-sonnet MODEL]
+                  [--default-haiku MODEL] [--subagent MODEL]
+                  [--effort VALUE] [--compact VALUE] [--overwrite]
 ```
 
-**只读**，读取 `<aisc-root>/container/providers.json`（不读用户配置、不写入、无硬编码回退）。
+不依赖 Docker 或网络。`list` / `show` 优先读取 `~/.aisc/providers.json`；用户目录尚未创建时，读取安装包的 `<aisc-root>/config/providers.json`（旧版源码布局回退到 `container/providers.json`）。`add` 会在首次写入时复制完整内置目录，再将自定义 Provider 原子写入用户目录。
 
 | 子命令 | 说明 |
 | --- | --- |
 | `list` | 列出所有可用 Provider（id、name、auth_type、aliases） |
 | `show NAME` | 查看指定 Provider 详情（id、name、auth_type、auth_key_name、base_url、aliases）；NAME 为 id 或别名 |
+| `add` | 新增自定义 Provider；`--alias` 可重复指定，`--overwrite` 只能更新已有的自定义 Provider |
 
 `provider show NAME` 中 NAME 为必填参数（缺少报 usage error，exit 2）。
+
+**新增 Provider：**
+
+```bash
+# 在宿主机新增
+aisc provider add \
+  --id my-provider \
+  --name "My Provider" \
+  --auth-type api_key \
+  --auth-key-name MY_PROVIDER_API_KEY \
+  --base-url https://api.example.com \
+  --alias my
+
+# 验证 id 或别名
+aisc provider show my-provider
+aisc provider show my
+```
+
+进入正在运行的容器后，也可以使用同一组核心参数新增：
+
+```bash
+aisc shell
+cs add --id another-provider \
+  --name "Another Provider" \
+  --auth-type token \
+  --auth-key-name ANOTHER_PROVIDER_TOKEN \
+  --base-url https://api.another.example
+```
+
+两端写入同一个 `~/.aisc/providers.json`，因此新增结果即时互通。`aisc switch --quick ID` 和容器内 `cs ID` 只切换已有 Provider，不负责新增。
+
+**约束与安全性：**
+
+- Provider id 和 alias 仅允许小写字母、数字、点、下划线及连字符，且最长 64 个字符。
+- `--auth-key-name` 必须是大写环境变量名；`--base-url` 必须是无用户名、密码的 HTTP(S) URL。
+- id、alias、认证环境变量名和规范化后的 base URL 不能与其他 Provider 冲突。
+- 内置 Provider 不允许覆盖；`--overwrite` 仅能替换带 `custom: true` 标记的自定义条目。
+- `add` 不接收 API Key 或 Token 值，避免敏感信息进入 shell history。这里只登记认证环境变量名，密钥仍按现有 Secrets / API Key 配置方式管理。
+- 用户目录权限设置为 `0700`，`providers.json` 以 `0600` 权限原子写入。
 
 ### profile — Profile 管理
 

@@ -53,6 +53,7 @@ def plan_run(
     interactive: bool = True,
     non_interactive: bool = False,
     proxy_config: str = "",
+    provider_config_dir: str = "",
     aisc_root: Optional[Path] = None,
 ) -> RunPlan:
     """Create an immutable ``RunPlan`` from user args.
@@ -96,6 +97,7 @@ def plan_run(
         interactive=interactive,
         non_interactive=non_interactive,
         proxy_config=resolved_proxy,
+        provider_config_dir=provider_config_dir,
     )
 
 
@@ -180,7 +182,7 @@ def run_container(
                        error_code="AISC_ERR_PERMISSION_DENIED",
                        data=result.to_dict()) from exc
 
-    # --- validate proxy config ---
+    # --- validate proxy config (skip file checks in dry-run) ---
     if plan.network == "proxy":
         if not plan.proxy_config:
             raise CliError(
@@ -189,12 +191,13 @@ def run_container(
                 exit_code=1, error_code="AISC_ERR_GENERAL",
                 data=result.to_dict(),
             )
-        try:
-            validate_proxy_config(Path(plan.proxy_config))
-        except (FileNotFoundError, PermissionError) as exc:
-            raise CliError(message=str(exc), exit_code=1,
-                           error_code="AISC_ERR_GENERAL",
-                           data=result.to_dict()) from exc
+        if not plan.dry_run:
+            try:
+                validate_proxy_config(Path(plan.proxy_config))
+            except (FileNotFoundError, PermissionError) as exc:
+                raise CliError(message=str(exc), exit_code=1,
+                               error_code="AISC_ERR_GENERAL",
+                               data=result.to_dict()) from exc
 
     # --- dry-run: zero docker calls, validated locally ---
     if plan.dry_run:

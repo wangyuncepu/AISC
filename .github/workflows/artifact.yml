@@ -2,7 +2,8 @@ name: Artifact
 
 on:
   push:
-    branches: [main, develop]
+    branches: [develop]
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -49,13 +50,13 @@ jobs:
         run: python -m unittest discover -s tests/packaging -p "test_*.py" -v
 
       - name: Build onedir (CI smoke only)
-        run: python -m PyInstaller --onedir --name aisc --paths src --distpath "${{ runner.temp }}/onedir-dist" --workpath "${{ runner.temp }}/onedir-work" --specpath "${{ runner.temp }}" packaging/pyinstaller/entrypoint.py
+        run: python -m PyInstaller --onedir --name aisc --paths src --distpath "${{ runner.temp }}/onedir-dist" --workpath "${{ runner.temp }}/onedir-work" --specpath "${{ runner.temp }}" --icon ${{ github.workspace }}/packaging/favicon_logosc/favicon.ico packaging/pyinstaller/entrypoint.py
 
       - name: Smoke onedir version
         run: python packaging/ci_smoke.py --executable "${{ runner.temp }}/onedir-dist/aisc/aisc${{ matrix.exe_suffix }}" --expected-version-file VERSION
 
       - name: Build onefile
-        run: python -m PyInstaller --onefile --name aisc --paths src --distpath "${{ runner.temp }}/onefile-dist" --workpath "${{ runner.temp }}/onefile-work" --specpath "${{ runner.temp }}" packaging/pyinstaller/entrypoint.py
+        run: python -m PyInstaller --onefile --name aisc --paths src --distpath "${{ runner.temp }}/onefile-dist" --workpath "${{ runner.temp }}/onefile-work" --specpath "${{ runner.temp }}" --icon ${{ github.workspace }}/packaging/favicon_logosc/favicon.ico packaging/pyinstaller/entrypoint.py
 
       - name: Stage bundle
         run: python packaging/artifact.py stage --output "${{ runner.temp }}/staging"
@@ -262,6 +263,7 @@ jobs:
   aggregate:
     name: Aggregate SHA256SUMS
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -337,3 +339,34 @@ jobs:
             pkg/AISC-*.pkg
             pkg/AISC-*.pkg.sha256
           retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: aggregate
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AISC-workflow-artifacts
+          path: artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          tag_name: ${{ github.ref_name }}
+          name: AISC ${{ github.ref_name }}${{ contains(github.ref_name, '-dev') && ' Preview' || '' }}
+          prerelease: ${{ contains(github.ref_name, '-dev') }}
+          files: |
+            artifacts/archives/AISC-*.tar.gz
+            artifacts/archives/AISC-*.tar.gz.sha256
+            artifacts/archives/AISC-*.zip
+            artifacts/archives/AISC-*.zip.sha256
+            artifacts/archives/SHA256SUMS
+            artifacts/setup/AISC-*-setup.exe
+            artifacts/setup/AISC-*-setup.exe.sha256
+            artifacts/pkg/AISC-*.pkg
+            artifacts/pkg/AISC-*.pkg.sha256

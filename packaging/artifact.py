@@ -109,6 +109,9 @@ def stage_bundle(root: Path, output_dir: Path, *, verify_version: bool = True) -
         if not (root / fn).is_file(): sys.exit(f"ERROR: required file missing: {fn}")
         _stage_file(root / fn, br, fn)
     _stage_file(root / "config" / "versions.env", br, "config/versions.env")
+    # providers.json is optional (tests may not have it)
+    if (root / "config" / "providers.json").is_file():
+        _stage_file(root / "config" / "providers.json", br, "config/providers.json")
     for rel in _find_files(root, "container"): _stage_file(root / rel, br, rel)
     base = root / "apps" / "ai-brief"
     if base.exists():

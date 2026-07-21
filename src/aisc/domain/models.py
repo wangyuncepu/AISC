@@ -260,6 +260,7 @@ class RunPlan:
     interactive: bool = True  # True for text mode, False for json/events
     non_interactive: bool = False  # --non-interactive: omit -it, add env vars, DEVNULL stdin
     proxy_config: str = ""    # host path to .claude/mihomo/config.yaml (when network=proxy)
+    provider_config_dir: str = ""  # writable host .aisc directory shared with container cs
 
     @property
     def docker_argv(self) -> list:
@@ -278,6 +279,10 @@ class RunPlan:
             "--name", self.name,
             "-v", f"{self.workspace}:/home/AISC/app",
         ])
+        if self.provider_config_dir:
+            argv.extend([
+                "-v", f"{self.provider_config_dir}:/home/AISC/app/.aisc",
+            ])
         if self.non_interactive:
             argv.extend([
                 "-e", "AISC_NON_INTERACTIVE=1",

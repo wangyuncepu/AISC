@@ -203,6 +203,23 @@ def _build_parser() -> _AiscArgumentParser:
     _add_global_args(ps, is_subparser=True)
     ps.add_argument("name", type=str, help="Provider id or alias")
 
+    pa = psub.add_parser("add", help="Add a custom provider", allow_abbrev=False)
+    _add_global_args(pa, is_subparser=True)
+    pa.add_argument("--id", dest="provider_id", required=True, help="Provider id")
+    pa.add_argument("--name", required=True, help="Display name")
+    pa.add_argument("--auth-type", required=True, choices=("token", "api_key"))
+    pa.add_argument("--auth-key-name", required=True, help="Environment key name")
+    pa.add_argument("--base-url", required=True, help="Provider HTTP(S) base URL")
+    pa.add_argument("--alias", dest="aliases", action="append", default=[], help="Alias (repeatable)")
+    pa.add_argument("--model", default="")
+    pa.add_argument("--default-opus", default="")
+    pa.add_argument("--default-sonnet", default="")
+    pa.add_argument("--default-haiku", default="")
+    pa.add_argument("--subagent", default="")
+    pa.add_argument("--effort", default="")
+    pa.add_argument("--compact", default="")
+    pa.add_argument("--overwrite", action="store_true", help="Replace an existing custom provider")
+
     # --- status ---
     stp = sub.add_parser("status", help="Show container status", allow_abbrev=False)
     _add_global_args(stp, is_subparser=True)
@@ -537,6 +554,10 @@ def _cmd_run(
     """Execute ``aisc run``. Returns (data, exit_code, errors)."""
     from aisc.cli.commands.run import plan_run, run_container
     from aisc.application.resources import locate_aisc_root, _RootSourceError
+    from aisc.application.provider_service import (
+        ensure_user_provider_catalog,
+        user_provider_catalog_path,
+    )
 
     # Locate AISC root for proxy config resolution
     aisc_root = None
@@ -565,6 +586,24 @@ def _cmd_run(
     is_interactive = (effective_format == "text" and emitter is None and not non_interactive)
     capture = (effective_format != "text" or emitter is not None)
 
+    provider_config_dir = str(user_provider_catalog_path().parent)
+    if aisc_root is not None:
+        try:
+            if not getattr(args, "dry_run", False):
+                provider_config_dir = str(
+                    ensure_user_provider_catalog(str(aisc_root)).parent
+                )
+        except PermissionError as exc:
+            raise CliError(
+                message=f"Cannot initialize provider catalog: {exc}",
+                exit_code=9, error_code="AISC_ERR_PERMISSION_DENIED",
+            ) from exc
+        except (OSError, ValueError) as exc:
+            raise CliError(
+                message=f"Cannot initialize provider catalog: {exc}",
+                exit_code=1, error_code="AISC_ERR_GENERAL",
+            ) from exc
+
     plan = plan_run(
         image=getattr(args, "image", "super-claude:latest"),
         workspace=getattr(args, "workspace", None) or str(Path.cwd()),
@@ -573,6 +612,7 @@ def _cmd_run(
         dry_run=getattr(args, "dry_run", False),
         interactive=is_interactive,
         non_interactive=non_interactive,
+        provider_config_dir=provider_config_dir,
         aisc_root=aisc_root,
     )
 
@@ -627,11 +667,11 @@ def _cmd_provider(
     args: argparse.Namespace,
     effective_format: str,
 ) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
-    """Dispatch provider list/show."""
-    from aisc.cli.commands.provider import cmd_provider_list, cmd_provider_show
+    """Dispatch provider list/show/add."""
+    from aisc.cli.commands.provider import cmd_provider_add, cmd_provider_list, cmd_provider_show
 
     sub = getattr(args, "provider_command", None)
-    if sub not in ("list", "show"):
+    if sub not in ("list", "show", "add"):
         if effective_format == "json":
             emit_json_usage_error(
                 command="provider", version=__version__,
@@ -643,7 +683,7 @@ def _cmd_provider(
 
     if sub == "list":
         result = cmd_provider_list(aisc_root=getattr(args, "aisc_root", None))
-    else:
+    elif sub == "show":
         # show
         name = getattr(args, "name", None)
         if not name:
@@ -657,6 +697,16 @@ def _cmd_provider(
             sys.exit(2)
         result = cmd_provider_show(
             name=name,
+            aisc_root=getattr(args, "aisc_root", None),
+        )
+    else:
+        result = cmd_provider_add(
+            provider_id=args.provider_id, name=args.name,
+            auth_type=args.auth_type, auth_key_name=args.auth_key_name,
+            base_url=args.base_url, aliases=args.aliases, model=args.model,
+            default_opus=args.default_opus, default_sonnet=args.default_sonnet,
+            default_haiku=args.default_haiku, subagent=args.subagent,
+            effort=args.effort, compact=args.compact, overwrite=args.overwrite,
             aisc_root=getattr(args, "aisc_root", None),
         )
 
@@ -1243,10 +1293,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                                    data=data)
                 print_effective_text(sr)
         elif args.command == "provider":
-            from aisc.cli.commands.provider import print_provider_list_text, print_provider_show_text
+            from aisc.cli.commands.provider import (
+                print_provider_add_text, print_provider_list_text, print_provider_show_text,
+            )
             sub = getattr(args, "provider_command", "list")
             if sub == "show":
                 print_provider_show_text(data)
+            elif sub == "add":
+                print_provider_add_text(data)
             else:
                 print_provider_list_text(data)
         elif args.command == "profile":
