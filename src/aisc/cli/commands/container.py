@@ -384,6 +384,11 @@ def cmd_shell(
 #      exec "$@"
 #    ' aisc-scope /proc/1/environ -- cc-switch
 _SCOPE_WRAPPER = "\n".join([
+    'if [ ! -r "$1" ]; then',
+    "  echo 'Error: Cannot read scope environment from PID 1' >&2",
+    '  exit 101',
+    'fi',
+    'unset CLAUDE_CONFIG_DIR CC_CONFIG_DIR',
     "while IFS= read -r -d '' entry; do",
     '  case "$entry" in',
     '    CLAUDE_CONFIG_DIR=*) CLAUDE_CONFIG_DIR=${entry#*=} ;;',
