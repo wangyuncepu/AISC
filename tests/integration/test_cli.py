@@ -682,33 +682,50 @@ class TestCommandsFromArbitraryCwd(unittest.TestCase):
 class TestContainerDiscoveryRoot(unittest.TestCase):
     """Prove ``discover_container`` reads state from installed AISC root,
     not from an arbitrary cwd.  Uses temp fake root + patched resolver.
+    Since the switch to ``containers.json``, discovery goes through the
+    container registry with lazy GC (needs a FakeDockerExecutor).
     """
+
+    @classmethod
+    def setUpClass(cls):
+        from aisc.adapters.docker_ import FakeDockerExecutor, ProcessResult
+        cls._FakeDockerExecutor = FakeDockerExecutor
+        cls._ProcessResult = ProcessResult
+
+    def _make_executor(self, container_name):
+        exec_ = self._FakeDockerExecutor()
+        exec_.set_captured("inspect", self._ProcessResult(
+            stdout=f"/{container_name}\ttrue\trunning\timg\tid\n",
+            stderr="", exit_code=0,
+        ))
+        return exec_
 
     def test_discover_container_reads_installed_root_state(self):
         """Without --name or explicit_root, discover_container must fall back
-        to ``locate_aisc_root`` and read ``<root>/.aisc/state.env``.
+        to ``locate_aisc_root`` and read ``<root>/.aisc/containers.json``.
 
-        Sets up a temp fake root with a state file and patches the resolver
+        Sets up a temp fake root with a registry and patches the resolver
         to return it.  Cwd is a different empty temp dir — proving root
         selection is resolver-driven, not cwd-driven.
         """
         from aisc.cli.commands.container import discover_container
+        from aisc.adapters.container_registry import register as reg_register
+        import json
 
         with tempfile.TemporaryDirectory() as root_td, \
              tempfile.TemporaryDirectory() as cwd_td:
 
             fake_root = Path(root_td)
-            state_dir = fake_root / ".aisc"
-            state_dir.mkdir()
-            (state_dir / "state.env").write_text(
-                "CONTAINER_NAME=installed-container-abc\n"
-            )
+            reg_register(fake_root, "installed-container-abc", {
+                "image": "img", "workspace": "/w", "network": "d", "label": "",
+            })
 
+            exec_ = self._make_executor("installed-container-abc")
             with patch(
-                "aisc.cli.commands.container.locate_aisc_root",
+                "aisc.application.resources.locate_aisc_root",
                 return_value=fake_root,
             ), patch.object(Path, "cwd", return_value=Path(cwd_td)):
-                name = discover_container(explicit_root=None)
+                name = discover_container(explicit_root=None, executor=exec_)
 
             self.assertEqual(name, "installed-container-abc")
 
@@ -716,29 +733,26 @@ class TestContainerDiscoveryRoot(unittest.TestCase):
         """When cwd is NOT a repo, discover_container must use installed
         fallback via ``locate_aisc_root``.  Proves no silent None."""
         from aisc.cli.commands.container import discover_container
+        from aisc.adapters.container_registry import register as reg_register
 
         with tempfile.TemporaryDirectory() as root_td, \
              tempfile.TemporaryDirectory() as cwd_td:
 
             fake_root = Path(root_td)
-            state_dir = fake_root / ".aisc"
-            state_dir.mkdir()
-            (state_dir / "state.env").write_text(
-                "CONTAINER_NAME=fallback-container-xyz\n"
-            )
+            reg_register(fake_root, "fallback-container-xyz", {
+                "image": "img", "workspace": "/w", "network": "d", "label": "",
+            })
 
+            exec_ = self._make_executor("fallback-container-xyz")
             # cwd is an empty dir with no repo → repo discovery returns None
             # installed fallback returns fake_root
             with patch.object(Path, "cwd", return_value=Path(cwd_td)):
-                # locate_aisc_root is imported in container.py at module level
-                # from aisc.application.resources.  Patch the module-level
-                # function in the resources module.
                 import aisc.application.resources as _resmod
                 with patch.object(_resmod, "_find_repo_root",
                                   return_value=None), \
                      patch.object(_resmod, "_find_installed_root",
                                   return_value=fake_root):
-                    name = discover_container(explicit_root=None)
+                    name = discover_container(explicit_root=None, executor=exec_)
 
             self.assertEqual(name, "fallback-container-xyz")
 

@@ -27,12 +27,12 @@ class TestReadVersionFile(unittest.TestCase):
         self.tmpdir.cleanup()
 
     def test_reads_version(self):
-        (self.root / "VERSION").write_text("2.0.0-dev\n")
-        self.assertEqual(_read_version_file(self.root), "2.0.0-dev")
+        (self.root / "VERSION").write_text("2.0.1-dev\n")
+        self.assertEqual(_read_version_file(self.root), "2.0.1-dev")
 
     def test_reads_version_no_trailing_newline(self):
-        (self.root / "VERSION").write_text("2.0.0-dev")
-        self.assertEqual(_read_version_file(self.root), "2.0.0-dev")
+        (self.root / "VERSION").write_text("2.0.1-dev")
+        self.assertEqual(_read_version_file(self.root), "2.0.1-dev")
 
     def test_empty_file(self):
         (self.root / "VERSION").write_text("")
@@ -84,10 +84,10 @@ class TestParseVersionsEnv(unittest.TestCase):
         self.assertEqual(env.get("CLAUDE_CODE_VERSION"), "latest")
 
     def test_multiple_keys(self):
-        self._write_env("CLAUDE_CODE_VERSION=latest\nAISC_VERSION=2.0.0-dev\n")
+        self._write_env("CLAUDE_CODE_VERSION=latest\nAISC_VERSION=2.0.1-dev\n")
         env = _parse_versions_env(self.root)
         self.assertEqual(env.get("CLAUDE_CODE_VERSION"), "latest")
-        self.assertEqual(env.get("AISC_VERSION"), "2.0.0-dev")
+        self.assertEqual(env.get("AISC_VERSION"), "2.0.1-dev")
 
     def test_missing_file(self):
         env = _parse_versions_env(self.root)
@@ -124,10 +124,10 @@ class TestGatherVersionInfo(unittest.TestCase):
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text("content")
         (self.root / ".git").mkdir(exist_ok=True)
-        (self.root / "VERSION").write_text("2.0.0-dev\n")
+        (self.root / "VERSION").write_text("2.0.1-dev\n")
         (self.root / "config" / "versions.env").write_text(
             "CLAUDE_CODE_VERSION=latest  # TODO: pin\n"
-            "AISC_VERSION=2.0.0-dev\n"
+            "AISC_VERSION=2.0.1-dev\n"
         )
 
     def test_with_root(self):
@@ -137,7 +137,7 @@ class TestGatherVersionInfo(unittest.TestCase):
                 info = gather_version_info()
         self.assertEqual(info.cli_version, __version__)
         self.assertIsNotNone(info.python_version)
-        self.assertEqual(info.bundle_version, "2.0.0-dev")
+        self.assertEqual(info.bundle_version, "2.0.1-dev")
         self.assertEqual(info.declared_claude_version, "latest")
 
     def test_without_root(self):
