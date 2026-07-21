@@ -358,12 +358,12 @@ jobs:
           name: AISC ${{ github.ref_name }}${{ contains(github.ref_name, '-dev') && ' Preview' || '' }}
           prerelease: ${{ contains(github.ref_name, '-dev') }}
           files: |
-            artifacts/AISC-*.tar.gz
-            artifacts/AISC-*.tar.gz.sha256
-            artifacts/AISC-*.zip
-            artifacts/AISC-*.zip.sha256
-            artifacts/AISC-*-setup.exe
-            artifacts/AISC-*-setup.exe.sha256
-            artifacts/AISC-*.pkg
-            artifacts/AISC-*.pkg.sha256
-            artifacts/SHA256SUMS
+            artifacts/archives/AISC-*.tar.gz
+            artifacts/archives/AISC-*.tar.gz.sha256
+            artifacts/archives/AISC-*.zip
+            artifacts/archives/AISC-*.zip.sha256
+            artifacts/archives/SHA256SUMS
+            artifacts/setup/AISC-*-setup.exe
+            artifacts/setup/AISC-*-setup.exe.sha256
+            artifacts/pkg/AISC-*.pkg
+            artifacts/pkg/AISC-*.pkg.sha256
