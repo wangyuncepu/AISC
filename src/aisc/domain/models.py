@@ -283,9 +283,10 @@ class RunPlan:
             argv.append("--rm")
 
         # Add user mapping to prevent permission issues with mounted files
-        uid = os.getuid()
-        gid = os.getgid()
-        argv.extend(["--user", f"{uid}:{gid}"])
+        if hasattr(os, 'getuid') and hasattr(os, 'getgid'):
+            uid = os.getuid()
+            gid = os.getgid()
+            argv.extend(["--user", f"{uid}:{gid}"])
 
         if self.interactive and not self.non_interactive:
             argv.append("-it")
