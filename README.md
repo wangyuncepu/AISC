@@ -76,9 +76,9 @@ claude
 | --- | --- | --- | --- |
 | `start.sh` / `start.command` / `start.bat` | 宿主机 | 大多数使用者 | 检查环境、配置代理、构建并启动容器 |
 | `cs` | **容器内** | 容器使用者 | 配置或切换模型服务、执行 `cs upgrade` |
-| `aisc` | **宿主机** | 开发者预览 | 构建镜像、运行/管理容器、导入构建期 Skill |
+| `aisc` | **宿主机** | 宿主侧主 CLI | 构建镜像、运行/管理容器、导入构建期 Skill |
 
-`cs` 在宿主机找不到是正常的。`aisc` 也不是默认安装的命令：它需要 Python 3.11+ 并按下文“开发者 CLI”安装。
+`cs` 在宿主机找不到是正常的。`aisc` 可通过 GitHub Release 安装包安装（独立可执行文件，无需 Python），详见 [README_USER.md](README_USER.md)。
 
 ## 工作区、AISC 根目录与配置
 
@@ -86,7 +86,7 @@ claude
 
 | 概念 | 是什么 | 主要内容 |
 | --- | --- | --- |
-| **AISC 安装根目录** | 克隆得到的 `AISC` 仓库 | `container/`、镜像构建输入、`skills-lock.json`、`.aisc/state.env` |
+| **AISC 安装根目录** | 克隆得到的 `AISC` 仓库 | `container/`、镜像构建输入、`skills-lock.json`、`.aisc/containers.json` |
 | **工作区** | 你希望交给 Claude 操作的项目目录 | 代码，以及项目模式下的 `.claude`、`.aisc/`、`.cc-config/` |
 | **当前工作目录** | 你执行命令时所在的目录 | `aisc run` 未指定 `--workspace` 时，它就是工作区 |
 
@@ -128,33 +128,17 @@ aisc run --workspace /path/to/your-project
 | `cs xf` | `xf` |
 | `cs orange` | `orange` |
 
-## 开发者 CLI（预览）
+## aisc CLI
 
 > `aisc` 是独立的宿主机管理 CLI，不替代启动器，也不替代容器内的 `cs`。
 
-在 AISC 安装根目录中创建虚拟环境并安装：
+**推荐方式：** 从 [GitHub Releases](https://github.com/wangyuncepu/AISC/releases) 下载安装包（独立可执行文件，无需 Python）。详见 [README_USER.md](README_USER.md)。
+
+**开发者方式：** 源码安装（需 Python 3.11+）：
 
 ```bash
-# Linux / macOS（Bash / Zsh）
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 python3 -m pip install -e .
-```
-
-Fish：
-
-```fish
-python3 -m venv .venv
-source .venv/bin/activate.fish
-python3 -m pip install -e .
-```
-
-Windows PowerShell：
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -e .
 ```
 
 安装后可先检查环境：
@@ -176,7 +160,7 @@ aisc doctor
 | 镜像与运行 | `build` · `run` | 构建镜像；以前台方式运行容器 |
 | 配置查看 | `config validate/effective/show` · `provider list/show` · `profile list/show` | 校验/查看配置；查看 Provider 与 Profile 目录；仅运行 `aisc config`/`provider`/`profile` 会显示其帮助 |
 | 简讯 | `brief` | 在宿主机运行 AI 简讯工具（仅文本） |
-| 容器管理 | `status` · `stop` · `restart` · `shell` · `switch` | 管理已运行的容器；见“生命周期命令” |
+| 容器管理 | `status` · `stop` · `restart` · `shell` · `switch` · `ps` | 管理已运行的容器；见”生命周期命令” |
 | 构建期 Skill | `skill add/list/remove/check` | 导入、列出、移除、校验 Skill；仅运行 `aisc skill` 会显示其帮助 |
 
 所有顶层命令都能在命令前或后接受 `--aisc-root PATH`；它指定 AISC 安装根目录。其余通用选项如下：
@@ -242,13 +226,21 @@ aisc run --dry-run
 
 ### 生命周期命令：操作已经运行的容器
 
-`status`、`stop`、`restart`、`shell`、`switch` **不会创建容器，也不会把容器转到后台**。它们的目标是一个已经运行的容器。
+`status`、`stop`、`restart`、`shell`、`switch`、`ps` **不会创建容器，也不会把容器转到后台**。它们的目标是一个已经运行的容器。
 
-当容器由 `aisc run` 启动时，CLI 会把容器名写入 `<AISC 根目录>/.aisc/state.env`，后续命令可自动找到它；也可以用 `--name NAME` 指定目标。`aisc run` 仍须在另一个终端保持前台运行。
+`aisc run` 启动容器时会把容器名注册到 `<AISC 根目录>/.aisc/containers.json`，后续命令自动发现目标。容器发现优先级：
+
+1. `--name NAME` 显式指定
+2. `--label LABEL` 按标签匹配
+3. 最后一次 `run` 的容器（默认）
+4. 唯一已注册容器
+5. 多个容器且未指定 → 列出候选，要求选择
+
+`aisc run` 仍须在另一个终端保持前台运行。
 
 ```bash
 # 终端 1：保持运行
-aisc run
+aisc run --label app
 
 # 终端 2：管理同一个已运行容器
 aisc status
@@ -259,14 +251,15 @@ aisc stop
 
 | 命令 | 作用 | 条件 |
 | --- | --- | --- |
-| `aisc status [--name NAME]` | 查看容器存在与运行状态 | 容器可已退出；不存在会明确显示 |
-| `aisc stop [--name NAME]` | 停止容器 | 容器必须存在；已停止时幂等成功 |
-| `aisc restart [--name NAME]` | 重启容器 | 容器必须存在 |
-| `aisc shell [--name NAME]` | 进入容器的 Bash | 容器必须正在运行 |
-| `aisc switch [--name NAME]` | 打开容器内的完整服务切换界面 | 容器必须正在运行 |
+| `aisc ps` | 列出所有已注册容器（含 Docker 状态） | — |
+| `aisc status [--name NAME] [--label LABEL]` | 查看容器存在与运行状态 | 容器可已退出；不存在会明确显示 |
+| `aisc stop [--name NAME] [--label LABEL]` | 停止容器并从注册表移除 | 容器必须存在；已停止时幂等成功 |
+| `aisc restart [--name NAME] [--label LABEL]` | 重启容器 | 容器必须存在 |
+| `aisc shell [--name NAME] [--label LABEL]` | 进入容器的 Bash | 容器必须正在运行 |
+| `aisc switch [--name NAME] [--label LABEL]` | 打开容器内的完整服务切换界面 | 容器必须正在运行 |
 | `aisc switch --quick PROVIDER` | 在容器内执行 `cs PROVIDER` | 容器必须正在运行 |
 
-`shell` 与 `switch` 是交互式文本命令，不支持 JSON 输出。`status`、`stop`、`restart` 支持 `--format json`。所有命令可用 `--help` 查看实际参数。
+`shell` 与 `switch` 是交互式文本命令，不支持 JSON 输出。`ps`、`status`、`stop`、`restart` 支持 `--format json`。所有命令可用 `--help` 查看实际参数。
 
 ### 通过 `aisc switch` 切换服务
 

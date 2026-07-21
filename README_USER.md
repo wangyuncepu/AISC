@@ -2,7 +2,7 @@
 
 AISC 是一个在 Docker 容器中运行 Claude Code 的个人开发工具。提供 `aisc` 命令行，可在宿主机上构建镜像、管理容器、切换 AI 模型服务。
 
-> **状态：Alpha / 开发中。** 当前版本 `v2.0.0-dev`。
+> **状态：Alpha / 开发中。** 当前版本 `v2.0.1-dev`。
 
 ## 目录
 
@@ -21,6 +21,7 @@ AISC 是一个在 Docker 容器中运行 Claude Code 的个人开发工具。提
   - [doctor — 环境诊断](#doctor--环境诊断)
   - [build — 构建镜像](#build--构建镜像)
   - [run — 运行容器](#run--运行容器)
+  - [ps — 列出所有容器](#ps--列出所有容器)
   - [status — 容器状态](#status--容器状态)
   - [stop — 停止容器](#stop--停止容器)
   - [restart — 重启容器](#restart--重启容器)
@@ -56,13 +57,13 @@ docker version
 
 ### 方式一：GitHub Release 安装包（推荐）
 
-从 [GitHub Release v2.0.0-dev](https://github.com/wangyuncepu/AISC/releases/tag/v2.0.0-dev) 下载对应平台的安装包。
+从 [GitHub Release v2.0.1-dev](https://github.com/wangyuncepu/AISC/releases/tag/v2.0.1-dev) 下载对应平台的安装包。
 
 当前版本已作为 GitHub **Pre-release** 发布；普通用户直接从上面的 Release 页面下载即可，无需进入 Actions 页面。
 
 #### Windows
 
-下载 `AISC-2.0.0-dev-windows-x86_64-setup.exe`，双击运行。
+下载 `AISC-2.0.1-dev-windows-x86_64-setup.exe`，双击运行。
 
 - **仅支持 x86_64**；ARM Windows 不支持。
 - 默认安装到 `%LOCALAPPDATA%\Programs\AISC`。
@@ -75,8 +76,8 @@ docker version
 备用：ZIP 便携版
 
 ```powershell
-Expand-Archive AISC-2.0.0-dev-windows-x86_64.zip -DestinationPath .
-cd AISC-2.0.0-dev-windows-x86_64
+Expand-Archive AISC-2.0.1-dev-windows-x86_64.zip -DestinationPath .
+cd AISC-2.0.1-dev-windows-x86_64
 .\aisc.exe version
 ```
 
@@ -86,7 +87,7 @@ cd AISC-2.0.0-dev-windows-x86_64
 
 ##### 安装程序（推荐）
 
-下载 `AISC-2.0.0-dev-macos-arm64.pkg`，双击运行。
+下载 `AISC-2.0.1-dev-macos-arm64.pkg`，双击运行。
 
 - **仅支持 Apple Silicon（arm64）**；Intel Mac 不支持。
 - 需**管理员密码**（安装到 `/usr/local/`）。
@@ -103,8 +104,8 @@ cd AISC-2.0.0-dev-windows-x86_64
 ##### 便携版（备用）
 
 ```bash
-tar -xzf AISC-2.0.0-dev-macos-arm64.tar.gz
-cd AISC-2.0.0-dev-macos-arm64
+tar -xzf AISC-2.0.1-dev-macos-arm64.tar.gz
+cd AISC-2.0.1-dev-macos-arm64
 ./aisc version
 ```
 
@@ -114,7 +115,7 @@ cd AISC-2.0.0-dev-macos-arm64
 # install.sh / uninstall.sh 位于 AISC 源码仓库的 packaging/ 目录
 git clone --depth 1 https://github.com/wangyuncepu/AISC.git
 cd AISC
-bash packaging/install.sh ~/Downloads/AISC-2.0.0-dev-macos-arm64.tar.gz
+bash packaging/install.sh ~/Downloads/AISC-2.0.1-dev-macos-arm64.tar.gz
 bash packaging/uninstall.sh   # 卸载
 ```
 
@@ -123,15 +124,15 @@ bash packaging/uninstall.sh   # 卸载
 ##### tar.gz + 安装脚本
 
 ```bash
-# 1. 下载 AISC-2.0.0-dev-linux-x86_64.tar.gz
+# 1. 下载 AISC-2.0.1-dev-linux-x86_64.tar.gz
 
 # 2. 可选的 SHA256 校验
-sha256sum -c AISC-2.0.0-dev-linux-x86_64.tar.gz.sha256
+sha256sum -c AISC-2.0.1-dev-linux-x86_64.tar.gz.sha256
 
 # 3. 获取仓库中的安装脚本并安装
 git clone --depth 1 https://github.com/wangyuncepu/AISC.git
 cd AISC
-bash packaging/install.sh ~/Downloads/AISC-2.0.0-dev-linux-x86_64.tar.gz
+bash packaging/install.sh ~/Downloads/AISC-2.0.1-dev-linux-x86_64.tar.gz
 ```
 
 安装脚本会：
@@ -143,8 +144,8 @@ bash packaging/install.sh ~/Downloads/AISC-2.0.0-dev-linux-x86_64.tar.gz
 解压直接运行（无需安装脚本）：
 
 ```bash
-tar -xzf AISC-2.0.0-dev-linux-x86_64.tar.gz
-cd AISC-2.0.0-dev-linux-x86_64
+tar -xzf AISC-2.0.1-dev-linux-x86_64.tar.gz
+cd AISC-2.0.1-dev-linux-x86_64
 ./aisc version
 ```
 
@@ -209,8 +210,11 @@ aisc run
 
 ```bash
 aisc status        # 查看容器状态
+aisc ps            # 列出所有已注册容器
 aisc shell         # 进入容器 Bash
 aisc switch        # 打开服务切换界面
+aisc run --label app     # 启动并打标签
+aisc status --label app  # 按标签查找
 ```
 
 ## 配置位置
@@ -221,7 +225,8 @@ aisc switch        # 打开服务切换界面
 | `<aisc-root>/container/providers.json` | Provider 目录 |
 | `<aisc-root>/container/Dockerfile` | 镜像构建文件 |
 | `<aisc-root>/skills-lock.json` | Skill 锁定文件 |
-| `<aisc-root>/.aisc/state.env` | 容器状态（`CONTAINER_NAME`、`IMAGE`，由 `aisc run` 写入） |
+| `<aisc-root>/.aisc/containers.json` | 容器注册表（多容器索引，`aisc run` 写入，`aisc ps` 查看） |
+| `<aisc-root>/.aisc/state.env` | 运行时标志（`DO_RUN`、`PROXY_ENABLED`） |
 | `<aisc-root>/.aisc/secrets/` | Secrets 目录 |
 | `<aisc-root>/.cc-config/api-keys` | API Key 配置 |
 
@@ -354,6 +359,7 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 | `--image, -i` | string | `super-claude:latest` | Docker 镜像名；若不含 `:` 自动追加 `:latest` |
 | `--workspace` | string | 当前目录 | 宿主机工作区路径，bind-mount 进容器 |
 | `--name` | string | `super-claude-station` | 容器名前缀（自动追加 8 位随机后缀确保唯一） |
+| `--label` | string | — | 容器标签，用于多容器场景下的 `--label` 寻址 |
 | `--network` | `direct` / `proxy` | `direct` | 网络模式；`proxy` 需 `.claude/mihomo/config.yaml` |
 | `--profile` | `proxy` | — | 兼容别名，等价于 `--network proxy`；与 `--network direct` 冲突 |
 | `--non-interactive` | flag | `False` | 非交互模式：无 `-it`，stdin=DEVNULL，设置 `AISC_NON_INTERACTIVE=1`、`CLAUDE_SCOPE=project` |
@@ -361,7 +367,8 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 
 **效果：**
 - 生成唯一容器名（`<name>-<8 位 hex>`）。
-- 实际启动容器前写入 `<aisc-root>/.aisc/state.env` 中的 `CONTAINER_NAME` 和 `IMAGE`，供其他终端通过 `status`/`shell` 等自动发现。容器退出并由 `--rm` 删除后，该文件可能保留最近一次容器名。
+- 启动容器前注册到 `<aisc-root>/.aisc/containers.json`，供其他终端通过 `status`/`shell`/`ps` 等自动发现。`aisc stop` 后自动从注册表移除。
+- 容器由 `--rm` 退出后自动删除；注册表通过懒 GC 清理死条目。
 - `--dry-run`：验证工作区和 proxy 配置后输出 `docker run ...` 命令行，不调用 Docker。
 - 非 `--dry-run` 时：
   - 检查 Docker 可用性（preflight）。
@@ -404,16 +411,17 @@ aisc run --dry-run
 ### status — 容器状态
 
 ```bash
-aisc status [--name NAME] [--format json]
+aisc status [--name NAME] [--label LABEL] [--format json]
 ```
 
 **会调用 Docker**（`docker inspect`）。容器不存在返回 `exists=False`（exit 0），daemon 不可达则报错。
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `--name` | string | 自动发现 | 显式指定容器名；未指定则从 `<aisc-root>/.aisc/state.env` 读取 `CONTAINER_NAME` |
+| `--name` | string | 自动发现 | 显式指定容器名 |
+| `--label` | string | 自动发现 | 按标签匹配容器 |
 
-**容器发现优先级：** `--name` 覆盖 → 状态文件（`<aisc-root>/.aisc/state.env`）→ 报错（`AISC_ERR_CONTAINER_NOT_FOUND`）。
+**容器发现优先级：** `--name` 覆盖 → `--label` 匹配 → 默认（最后一次 `run`）→ 唯一已注册容器 → 多容器时列候选（`AISC_ERR_MULTIPLE_CONTAINERS`）。注册表位于 `<aisc-root>/.aisc/containers.json`，含懒 GC（已退出容器自动清理）。
 
 文本输出示例：
 
@@ -426,22 +434,37 @@ Image:      super-claude:latest
 ID:         a1b2c3d4e5f6
 ```
 
+### ps — 列出所有容器
+
+```bash
+aisc ps [--format json]
+```
+
+**会调用 Docker**（`docker inspect` 每个已注册容器）。先执行懒 GC，再列出所有已注册容器。输出表格：
+
+```
+NAME                              LABEL   STATUS    IMAGE                 WORKSPACE
+super-claude-station-a1b2c3d4     app     running   super-claude:latest   /home/project
+super-claude-station-e5f6g7h8     -       gone      alpine:latest         /tmp/test
+```
+
 ### stop — 停止容器
 
 ```bash
-aisc stop [--name NAME] [--format json]
+aisc stop [--name NAME] [--label LABEL] [--format json]
 ```
 
-**会调用 Docker**（`docker stop`）。幂等：容器已停止返回成功（`already_stopped: true`）。容器不存在报错。
+**会调用 Docker**（`docker stop`）。幂等：容器已停止返回成功（`already_stopped: true`）。停止后自动从注册表移除容器名。容器不存在报错。
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `--name` | string | 自动发现 | 显式指定容器名 |
+| `--label` | string | 自动发现 | 按标签匹配容器 |
 
 ### restart — 重启容器
 
 ```bash
-aisc restart [--name NAME] [--format json]
+aisc restart [--name NAME] [--label LABEL] [--format json]
 ```
 
 **会调用 Docker**（`docker restart`）。容器不存在报错。
@@ -449,11 +472,12 @@ aisc restart [--name NAME] [--format json]
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `--name` | string | 自动发现 | 显式指定容器名 |
+| `--label` | string | 自动发现 | 按标签匹配容器 |
 
 ### shell — 进入容器 Shell
 
 ```bash
-aisc shell [--name NAME]
+aisc shell [--name NAME] [--label LABEL]
 ```
 
 **会调用 Docker**（`docker exec -it <name> bash`）。仅支持文本交互模式，`--format json` 和 `--events` 均不支持（报 usage error，exit 2）。
@@ -467,7 +491,7 @@ aisc shell [--name NAME]
 ### switch — 切换 AI 后端
 
 ```bash
-aisc switch [--name NAME] [--quick PROVIDER]
+aisc switch [--name NAME] [--label LABEL] [--quick PROVIDER]
 ```
 
 **会调用 Docker**（`docker exec`）。仅支持文本交互模式，`--format json` 和 `--events` 均不支持。
@@ -475,6 +499,7 @@ aisc switch [--name NAME] [--quick PROVIDER]
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `--name` | string | 自动发现 | 显式指定容器名 |
+| `--label` | string | 自动发现 | 按标签匹配容器 |
 | `--quick` | string | — | Provider id 或别名，快速切换（跳过 TUI） |
 
 **效果：**
