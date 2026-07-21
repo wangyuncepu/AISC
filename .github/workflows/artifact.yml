@@ -3,6 +3,7 @@ name: Artifact
 on:
   push:
     branches: [main, develop]
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -337,3 +338,33 @@ jobs:
             pkg/AISC-*.pkg
             pkg/AISC-*.pkg.sha256
           retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: aggregate
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AISC-workflow-artifacts
+          path: artifacts
+
+      - name: Publish pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: AISC ${{ github.ref_name }} Preview
+          prerelease: true
+          files: |
+            artifacts/AISC-*.tar.gz
+            artifacts/AISC-*.tar.gz.sha256
+            artifacts/AISC-*.zip
+            artifacts/AISC-*.zip.sha256
+            artifacts/AISC-*-setup.exe
+            artifacts/AISC-*-setup.exe.sha256
+            artifacts/AISC-*.pkg
+            artifacts/AISC-*.pkg.sha256
+            artifacts/SHA256SUMS
