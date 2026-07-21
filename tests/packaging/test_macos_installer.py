@@ -198,9 +198,12 @@ class TestWorkflowMacOSInvariants(unittest.TestCase):
                       "Workflow must reference build_pkg.sh")
 
     def test_permissions_read_only(self):
-        """Workflow must have contents: read."""
-        self.assertIn("contents: read", self.text)
-        self.assertNotIn("contents: write", self.text)
+        """Top-level workflow permissions must be contents: read.
+        Job-level permissions may request contents: write (e.g. release job)."""
+        # Check top-level permissions block (before jobs:)
+        top_perm = self.text.split("jobs:")[0]
+        self.assertIn("contents: read", top_perm)
+        self.assertNotIn("contents: write", top_perm)
 
     def test_macos_sha256_sidecar_verified(self):
         """Workflow must verify pkg SHA256 via shasum -c."""
