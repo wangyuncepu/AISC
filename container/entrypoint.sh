@@ -117,11 +117,6 @@ if [ "$SCOPE" = "project" ]; then
     ensure_writable "$CLAUDE_CONFIG_DIR"
 fi
 
-# 新电脑挂载 /home/AISC/app 时，所有文件权限可能不属于 AISC:AISC
-# 递归修正整个 app 目录及子文件权限，确保容器内用户有完整读写权限
-echo "🔧 修正 /home/AISC/app 目录权限..."
-sudo chown -R AISC:AISC /home/AISC/app 2>/dev/null || true
-
 # 确保 settings.json 存在且格式正确
 SETTINGS_FILE="$CLAUDE_CONFIG_DIR/settings.json"
 if [ ! -f "$SETTINGS_FILE" ]; then
