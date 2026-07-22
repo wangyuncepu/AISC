@@ -363,7 +363,26 @@ if [ "$1" = "claude" ] && [ -t 0 ]; then
 fi
 
 # ==========================================
-# 6. 执行控制权移交 (极其关键)
+# 6. 容器退出时修正文件权限 (修复 Windows 宿主机文件权限问题)
+# ==========================================
+# 问题：entrypoint.sh 中的 sudo 操作会创建 root:root 文件
+# 影响：在 WSL2/Linux 环境下这些文件显示为 root 所有，可能导致权限问题
+# 解决：容器退出时将 root 文件改回 AISC 用户
+cleanup_permissions() {
+    # 只修正关键目录，避免扫描整个项目（性能考虑）
+    if [ -d "/home/AISC/app/.aisc" ]; then
+        find /home/AISC/app/.aisc -user root -exec sudo chown AISC:AISC {} + 2>/dev/null || true
+    fi
+    if [ -d "/home/AISC/app/.claude" ]; then
+        find /home/AISC/app/.claude -user root -exec sudo chown AISC:AISC {} + 2>/dev/null || true
+    fi
+}
+
+# 注册清理函数（容器退出、中断、终止时执行）
+trap cleanup_permissions EXIT SIGTERM SIGINT
+
+# ==========================================
+# 7. 执行控制权移交 (极其关键)
 # ==========================================
 # 使用 exec 是 Docker 入口脚本的最佳实践！
 # 它会让 claude 进程直接替换掉当前的 bash 进程成为 PID 1。
