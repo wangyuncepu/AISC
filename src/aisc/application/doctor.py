@@ -506,56 +506,6 @@ def _check_launcher(root: Optional[Path]) -> List[CheckResult]:
     return results
 
 
-def _check_brief_py_syntax(root: Optional[Path]) -> CheckResult:
-    """Check 12: ``apps/ai-brief/brief.py`` Python syntax (read-only compile)."""
-    if root is None:
-        return CheckResult(
-            name="brief-py-syntax",
-            status=CheckStatus.SKIP,
-            message="No AISC root found — syntax check skipped",
-        )
-    fpath = root / "apps" / "ai-brief" / "brief.py"
-    try:
-        source = fpath.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return CheckResult(
-            name="brief-py-syntax",
-            status=CheckStatus.WARN,
-            message=f"apps/ai-brief/brief.py not found",
-            detail=f"Expected at {fpath}",
-        )
-    except (OSError, UnicodeError) as exc:
-        return CheckResult(
-            name="brief-py-syntax",
-            status=CheckStatus.FAIL,
-            message=f"Cannot read brief.py: {exc}",
-            detail=str(fpath),
-        )
-
-    try:
-        compile(source, str(fpath), "exec")
-    except SyntaxError as exc:
-        return CheckResult(
-            name="brief-py-syntax",
-            status=CheckStatus.FAIL,
-            message=f"Syntax error in apps/ai-brief/brief.py at line {exc.lineno}",
-            detail=f"Error at {fpath}:{exc.lineno}",
-            hint="Fix the syntax error before running the application",
-        )
-    except Exception as exc:
-        return CheckResult(
-            name="brief-py-syntax",
-            status=CheckStatus.FAIL,
-            message=f"Unexpected error checking brief.py syntax: {exc}",
-            detail=str(fpath),
-        )
-
-    return CheckResult(
-        name="brief-py-syntax",
-        status=CheckStatus.PASS,
-        message="apps/ai-brief/brief.py syntax is valid",
-    )
-
 
 # ---------------------------------------------------------------------------
 # Exit code priority logic
@@ -732,9 +682,6 @@ def run_doctor(
 
     # 11. launcher scripts
     checks.extend(_check_launcher(root))
-
-    # 12. brief.py syntax
-    checks.append(_check_brief_py_syntax(root))
 
     exit_code, error_code, error_message = _compute_exit_code(checks)
 

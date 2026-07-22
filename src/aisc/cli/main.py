@@ -180,20 +180,6 @@ def _build_parser() -> _AiscArgumentParser:
     prs.add_argument("name", type=str, nargs="?", default=None,
                       help="Profile name (default: safe)")
 
-    # --- brief ---
-    bp2 = sub.add_parser("brief", help="AI news brief (text-only)", allow_abbrev=False)
-    _add_global_args(bp2, is_subparser=True)
-    bp2.add_argument("--date", type=str, default=None, help="Date YYYY-MM-DD (default: latest)")
-    bp2.add_argument("--days", type=int, default=1, help="Number of recent issues (default: 1)")
-    bp2.add_argument("--top", type=int, default=5, help="Top N per source (default: 5)")
-    bp2.add_argument("--source", type=str, default="all",
-                     help="Source selection: all / tools / industry / workflow / tldr,simon,...")
-    bp2.add_argument("--ai", action="store_true", help="LLM cross-source Chinese curation")
-    bp2.add_argument("--save", action="store_true", help="Save cache file")
-    bp2.add_argument("--no-cache", action="store_true", help="Skip cache (full fetch)")
-    bp2.add_argument("--strict", action="store_true", help="Non-zero exit on failure (debug)")
-    bp2.add_argument("--debug", action="store_true", help="Per-source timing diagnostics (stderr)")
-
     # --- provider ---
     pp = sub.add_parser("provider", help="Provider management", allow_abbrev=False)
     _add_global_args(pp, is_subparser=True)
@@ -207,14 +193,14 @@ def _build_parser() -> _AiscArgumentParser:
     _add_global_args(ps, is_subparser=True)
     ps.add_argument("name", type=str, help="Provider id or alias")
 
-    pa = psub.add_parser("add", help="Add a custom provider", allow_abbrev=False)
+    pa = psub.add_parser("add", help="Open providers.json for editing", allow_abbrev=False)
     _add_global_args(pa, is_subparser=True)
-    pa.add_argument("--id", dest="provider_id", required=True, help="Provider id")
-    pa.add_argument("--name", required=True, help="Display name")
-    pa.add_argument("--auth-type", required=True, choices=("token", "api_key"))
-    pa.add_argument("--auth-key-name", required=True, help="Environment key name")
-    pa.add_argument("--base-url", required=True, help="Provider HTTP(S) base URL")
-    pa.add_argument("--alias", dest="aliases", action="append", default=[], help="Alias (repeatable)")
+    pa.add_argument("--id", dest="provider_id", default="", help="(Deprecated) Provider id")
+    pa.add_argument("--name", default="", help="(Deprecated) Display name")
+    pa.add_argument("--auth-type", default="", choices=("", "token", "api_key"), help="(Deprecated) Auth type")
+    pa.add_argument("--auth-key-name", default="", help="(Deprecated) Environment key name")
+    pa.add_argument("--base-url", default="", help="(Deprecated) Provider HTTP(S) base URL")
+    pa.add_argument("--alias", dest="aliases", action="append", default=[], help="(Deprecated) Alias")
     pa.add_argument("--model", default="")
     pa.add_argument("--default-opus", default="")
     pa.add_argument("--default-sonnet", default="")
@@ -222,7 +208,7 @@ def _build_parser() -> _AiscArgumentParser:
     pa.add_argument("--subagent", default="")
     pa.add_argument("--effort", default="")
     pa.add_argument("--compact", default="")
-    pa.add_argument("--overwrite", action="store_true", help="Replace an existing custom provider")
+    pa.add_argument("--overwrite", action="store_true", help="(Deprecated) Replace existing provider")
 
     # --- status ---
     stp = sub.add_parser("status", help="Show container status", allow_abbrev=False)
@@ -312,7 +298,7 @@ def _detect_events(argv: List[str]) -> bool:
 
 def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "provider", "profile",
-             "brief", "status", "stop", "restart", "shell", "switch", "skill"}
+             "status", "stop", "restart", "shell", "switch", "skill"}
     for arg in argv:
         if arg in known:
             return arg
@@ -419,108 +405,6 @@ def _cmd_profile(
     return result.data, result.exit_code, errors
 
 
-def _cmd_brief(
-    args: argparse.Namespace,
-    effective_format: str,
-) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
-    """Execute ``aisc brief`` — thin wrapper around apps/ai-brief/brief.py.
-
-    Text-only command.  ``--format json`` and ``--events`` are rejected
-    with usage error (exit 2).
-
-    **Frozen mode** (PyInstaller onefile): runs brief.py in-process via
-    ``importlib`` to avoid ``sys.executable`` recursion / missing Python.
-    **Dev mode**: spawns a ``sys.executable`` subprocess (existing behaviour).
-    """
-    # Machine format rejection
-    if effective_format == "json":
-        emit_json_usage_error(
-            command="brief", version=__version__,
-            message="brief only supports text output, --format json is not supported",
-        )
-        sys.exit(2)
-
-    import importlib.util as _importlib_util
-    from aisc.application.resources import locate_aisc_root, _RootSourceError
-
-    # Locate AISC root
-    try:
-        root = locate_aisc_root(explicit_root=args.aisc_root)
-    except _RootSourceError as exc:
-        raise CliError(message=str(exc), exit_code=1,
-                       error_code="AISC_ERR_GENERAL") from exc
-    if root is None:
-        raise CliError(
-            message="AISC root not found. Use --aisc-root to specify a path, "
-                    "or run from within an AISC repository.",
-            exit_code=1, error_code="AISC_ERR_GENERAL",
-        )
-
-    brief_script = root / "apps" / "ai-brief" / "brief.py"
-    if not brief_script.is_file():
-        raise CliError(
-            message=f"Brief script not found: {brief_script}",
-            exit_code=1, error_code="AISC_ERR_GENERAL",
-        )
-
-    # Build common passthrough args (without sys.executable prefix)
-    passthrough: List[str] = []
-    # String flags
-    for flag, argname in [("--date", "date"), ("--source", "source")]:
-        val = getattr(args, argname, None)
-        if val is not None:
-            passthrough.extend([flag, str(val)])
-    # Int flags — only pass when non-default
-    for flag, argname, default in [("--days", "days", 1), ("--top", "top", 5)]:
-        val = getattr(args, argname, default)
-        if val != default:
-            passthrough.extend([flag, str(val)])
-    # Boolean flags
-    for flag in ["--ai", "--save", "--no-cache", "--strict", "--debug"]:
-        argname = flag[2:].replace("-", "_")
-        if getattr(args, argname, False):
-            passthrough.append(flag)
-
-    # ------------------------------------------------------------------
-    # PyInstaller frozen mode: run brief.py in-process (no subprocess)
-    # ------------------------------------------------------------------
-    if getattr(sys, "frozen", False):
-        spec = _importlib_util.spec_from_file_location(
-            "ai_brief", str(brief_script),
-        )
-        if spec is None or spec.loader is None:
-            raise CliError(
-                message=f"Failed to create module spec for: {brief_script}",
-                exit_code=1, error_code="AISC_ERR_GENERAL",
-            )
-        module = _importlib_util.module_from_spec(spec)
-        try:
-            spec.loader.exec_module(module)
-            exit_code = module.main(argv=passthrough if passthrough else None)
-        except SystemExit as e:
-            if isinstance(e.code, int):
-                exit_code = e.code
-            elif e.code is None:
-                exit_code = 0
-            else:
-                exit_code = 1
-        return {"brief_exit_code": exit_code}, exit_code, []
-
-    # ------------------------------------------------------------------
-    # Dev / editable mode: spawn subprocess (existing behaviour)
-    # ------------------------------------------------------------------
-    import subprocess as _subprocess
-
-    subprocess_argv: List[str] = [sys.executable, str(brief_script)] + passthrough
-    try:
-        proc = _subprocess.run(subprocess_argv)
-    except FileNotFoundError:
-        raise CliError(
-            message="Python interpreter not found",
-            exit_code=1, error_code="AISC_ERR_GENERAL",
-        )
-
-    return {"brief_exit_code": proc.returncode}, proc.returncode, []
 
 
 # ---------------------------------------------------------------------------
@@ -1211,7 +1095,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     emitter: Optional[JsonlEmitter] = None
     if args_events and args.command in ("build", "run"):
         emitter = JsonlEmitter(command=args.command)
-    elif args_events and args.command in ("version", "doctor", "config", "provider", "profile", "brief",
+    elif args_events and args.command in ("version", "doctor", "config", "provider", "profile",
                                             "status", "stop", "restart", "shell", "switch", "skill"):
         if effective_format == "json":
             emit_json_usage_error(
@@ -1250,8 +1134,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_provider(args, effective_format)
         elif args.command == "profile":
             data, exit_code, errors = _cmd_profile(args, effective_format)
-        elif args.command == "brief":
-            data, exit_code, errors = _cmd_brief(args, effective_format)
         elif args.command == "status":
             data, exit_code, errors = _cmd_status(args, effective_format)
         elif args.command == "stop":
@@ -1380,9 +1262,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 print_profile_show_text(data)
             else:
                 print_profile_list_text(data)
-        elif args.command == "brief":
-            # brief outputs directly via subprocess; nothing extra to print
-            pass
         elif args.command == "status":
             from aisc.cli.commands.container import print_status_text, StatusResult
             sr = StatusResult(

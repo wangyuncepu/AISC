@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json as _json
+import os
+import platform
+import subprocess
 import sys
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from aisc.application.provider_service import (
     run_provider_list, ProviderListResult,
     run_provider_show, ProviderShowResult,
     run_provider_add, ProviderAddResult,
+    user_provider_catalog_path,
+    ensure_user_provider_catalog,
 )
 
 
@@ -24,19 +30,61 @@ def cmd_provider_show(name: str, *, aisc_root: Optional[str] = None) -> Provider
 
 
 def cmd_provider_add(
-    *, provider_id: str, name: str, auth_type: str, auth_key_name: str,
-    base_url: str, aliases: Any = (), model: str = "", default_opus: str = "",
+    *, provider_id: str = "", name: str = "", auth_type: str = "", auth_key_name: str = "",
+    base_url: str = "", aliases: Any = (), model: str = "", default_opus: str = "",
     default_sonnet: str = "", default_haiku: str = "", subagent: str = "",
     effort: str = "", compact: str = "", overwrite: bool = False,
     aisc_root: Optional[str] = None,
 ) -> ProviderAddResult:
-    return run_provider_add(
-        provider_id=provider_id, name=name, auth_type=auth_type,
-        auth_key_name=auth_key_name, base_url=base_url, aliases=aliases,
-        model=model, default_opus=default_opus, default_sonnet=default_sonnet,
-        default_haiku=default_haiku, subagent=subagent, effort=effort,
-        compact=compact, overwrite=overwrite, explicit_root=aisc_root,
-    )
+    """Open providers.json in default editor for manual editing."""
+    try:
+        # Ensure user catalog exists (initialize from builtin if needed)
+        user_catalog = ensure_user_provider_catalog(explicit_root=aisc_root)
+    except Exception as e:
+        return ProviderAddResult(
+            exit_code=1,
+            error_code="AISC_ERR_GENERAL",
+            error_message=f"Failed to initialize providers catalog: {e}",
+            data={},
+        )
+
+    # Open in default editor
+    system = platform.system()
+    try:
+        if system == "Windows":
+            # Windows: use start command to open with default editor
+            os.startfile(str(user_catalog))
+        elif system == "Darwin":
+            # macOS: use open command
+            subprocess.run(["open", str(user_catalog)], check=True)
+        else:
+            # Linux: try xdg-open, fallback to common editors
+            editor = os.environ.get("EDITOR", "")
+            if editor:
+                subprocess.run([editor, str(user_catalog)], check=True)
+            else:
+                try:
+                    subprocess.run(["xdg-open", str(user_catalog)], check=True)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    # Fallback to common editors
+                    for editor in ["nano", "vim", "vi"]:
+                        try:
+                            subprocess.run([editor, str(user_catalog)], check=True)
+                            break
+                        except (subprocess.CalledProcessError, FileNotFoundError):
+                            continue
+
+        return ProviderAddResult(
+            exit_code=0,
+            data={"message": f"Opened {user_catalog} for editing", "catalog": str(user_catalog)},
+        )
+    except Exception as e:
+        return ProviderAddResult(
+            exit_code=1,
+            error_code="AISC_ERR_GENERAL",
+            error_message=f"Failed to open editor: {e}",
+            data={},
+        )
 
 
 def print_provider_list_text(data: Dict[str, Any]) -> None:
@@ -84,6 +132,10 @@ def print_provider_show_text(data: Dict[str, Any]) -> None:
 
 
 def print_provider_add_text(data: Dict[str, Any]) -> None:
-    action = "updated" if data.get("overwritten") else "added"
-    print(f"Provider '{data.get('id', '')}' {action}.")
-    print(f"Catalog: {data.get('catalog', '')}")
+    message = data.get("message", "")
+    if message:
+        print(message)
+    catalog = data.get("catalog", "")
+    if catalog:
+        print(f"\n💡 Tip: After editing, use 'aisc provider list' to verify your changes.")
+
