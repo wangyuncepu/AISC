@@ -163,6 +163,37 @@ if ! grep -q 'CLAUDE_CONFIG_DIR' "$HOME/.bashrc" 2>/dev/null; then
     } >> "$HOME/.bashrc"
 fi
 
+# ==========================================
+# 2.5. 修正挂载目录权限（Windows 宿主机兼容）
+# ==========================================
+# 问题：Windows 宿主机挂载到 WSL2/Docker 的文件默认是 root:root (UID=0)
+# 影响：容器内以 AISC 用户运行时无法写入这些文件
+# 解决：启动时检查并修正关键目录的文件所有者
+fix_mount_permissions() {
+    local target="$1"
+    if [ ! -d "$target" ]; then
+        return 0
+    fi
+
+    # 只修正非 AISC:AISC 的文件（条件 chown，性能更好）
+    local count
+    count=$(find "$target" ! \( -user AISC -group AISC \) 2>/dev/null | wc -l)
+
+    if [ "$count" -gt 0 ]; then
+        echo "🔧 修正 $target 权限（$count 个文件需要调整）..."
+        find "$target" ! \( -user AISC -group AISC \) -exec sudo chown AISC:AISC {} + 2>/dev/null || true
+    fi
+}
+
+# 修正关键目录（.aisc 和 .claude）
+if [ -d "/home/AISC/app/.aisc" ]; then
+    fix_mount_permissions "/home/AISC/app/.aisc"
+fi
+
+if [ -d "/home/AISC/app/.claude" ]; then
+    fix_mount_permissions "/home/AISC/app/.claude"
+fi
+
 # 初始化 providers.json：首次启动时从 aisc-bundle/config/providers.json 复制
 PROVIDERS_JSON="$AISC_DIR/providers.json"
 PROVIDERS_TEMPLATE="/opt/aisc/bundle/config/providers.json"
