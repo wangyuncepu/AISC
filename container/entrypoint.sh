@@ -139,15 +139,17 @@ if [ "$SCOPE" = "project" ]; then
     ensure_writable "$CLAUDE_CONFIG_DIR"
 fi
 
-# 确保 settings.json 存在且格式正确
+# 确保 settings.json 存在且可解析
+# 注意：settings.json 可能没有 env 字段（如镜像内置的 claude-settings.json），
+# 这是正常的，不应该覆盖。只有在文件不存在或 JSON 格式错误时才需要修复。
 SETTINGS_FILE="$CLAUDE_CONFIG_DIR/settings.json"
 if [ ! -f "$SETTINGS_FILE" ]; then
     echo "📝 初始化 settings.json..."
     mkdir -p "$(dirname "$SETTINGS_FILE")"
     printf '{\n  "env": {}\n}\n' > "$SETTINGS_FILE"
     chmod 644 "$SETTINGS_FILE"
-elif ! grep -q '"env"' "$SETTINGS_FILE" 2>/dev/null; then
-    echo "⚠️  修复损坏的 settings.json..."
+elif ! python3 -c "import json; json.load(open('$SETTINGS_FILE'))" 2>/dev/null; then
+    echo "⚠️  修复损坏的 settings.json（JSON 格式错误）..."
     printf '{\n  "env": {}\n}\n' > "$SETTINGS_FILE"
     chmod 644 "$SETTINGS_FILE"
 fi
