@@ -363,7 +363,7 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 **效果：**
 - 生成唯一容器名（`<name>-<8 位 hex>`）。
 - 实际启动容器前写入 `<aisc-root>/.aisc/state.env` 中的 `CONTAINER_NAME` 和 `IMAGE`，供其他终端通过 `status`/`shell` 等自动发现。容器退出并由 `--rm` 删除后，该文件可能保留最近一次容器名。
-- 将宿主机 `~/.aisc/` 挂载到容器 `/home/AISC/app/.aisc`，使宿主机 `aisc provider add` 与容器内 `cs add` 共用 Provider 目录。
+- 将宿主机 `~/.aisc/` 挂载到容器 `/home/AISC/app/.aisc`，使宿主机编辑的 `providers.json` 与容器内 `cs add` 共用 Provider 目录。
 - 非 `--dry-run` 首次运行时会用内置 Provider 目录初始化 `~/.aisc/providers.json`；`--dry-run` 只输出包含该挂载的 `docker run ...` 命令行，不创建或修改 Provider 目录，也不校验本地 proxy 配置文件。
 - 非 `--dry-run` 时：
   - 检查 Docker 可用性（preflight）。
@@ -521,6 +521,7 @@ aisc config show      [--config PATH] [--workspace PATH] [--format json]
 ```bash
 aisc provider list                [--format json] [--aisc-root PATH]
 aisc provider show NAME           [--format json] [--aisc-root PATH]
+aisc provider add                 [--aisc-root PATH]
 ```
 
 不依赖 Docker 或网络。`list` / `show` 优先读取 `~/.aisc/providers.json`；用户目录尚未创建时，读取安装包的 `<aisc-root>/config/providers.json`（旧版源码布局回退到 `container/providers.json`）。
@@ -529,12 +530,15 @@ aisc provider show NAME           [--format json] [--aisc-root PATH]
 | --- | --- |
 | `list` | 列出所有可用 Provider（id、name、auth_type、aliases） |
 | `show NAME` | 查看指定 Provider 详情（id、name、auth_type、auth_key_name、base_url、aliases）；NAME 为 id 或别名 |
+| `add` | 打开默认编辑器手动编辑 `~/.aisc/providers.json`，添加或修改自定义 Provider |
 
 `provider show NAME` 中 NAME 为必填参数（缺少报 usage error，exit 2）。
 
 **新增自定义 Provider：**
 
-推荐直接编辑 `~/.aisc/providers.json` 文件添加自定义 Provider。首次运行 `aisc run` 后，该文件会从内置配置初始化。
+使用 `aisc provider add` 命令打开编辑器直接编辑 `~/.aisc/providers.json` 文件。首次运行 `aisc run` 后，该文件会从内置配置初始化。
+
+或者手动编辑 `~/.aisc/providers.json` 文件添加自定义 Provider。
 
 **配置示例：**
 
