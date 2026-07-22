@@ -4,6 +4,8 @@
 # pin the digest in NODE_IMAGE itself, e.g. node:20-slim@sha256:...
 
 # 使用官方轻量级 Node 镜像；国内网络可通过 --build-arg NODE_IMAGE=... 替换拉取源
+# USE_CN_MIRROR=1 时自动使用国内镜像加速（docker.1ms.run）
+ARG USE_CN_MIRROR=1
 ARG NODE_IMAGE=node:20-slim
 FROM ${NODE_IMAGE}
 

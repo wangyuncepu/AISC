@@ -33,6 +33,7 @@ class _BuildEnv:
     """Parsed values from config/versions.env used during build."""
     use_cn_mirror: str = "1"
     node_image: str = ""
+    node_image_cn: str = ""
 
 
 def _parse_build_env(root: Path) -> _BuildEnv:
@@ -40,7 +41,8 @@ def _parse_build_env(root: Path) -> _BuildEnv:
     env = _parse_versions_env(root)
     use_cn = env.get("USE_CN_MIRROR", "1")
     node_image = env.get("NODE_IMAGE", "")
-    return _BuildEnv(use_cn_mirror=use_cn, node_image=node_image)
+    node_image_cn = env.get("NODE_IMAGE_CN", "")
+    return _BuildEnv(use_cn_mirror=use_cn, node_image=node_image, node_image_cn=node_image_cn)
 
 
 def plan_build(
@@ -81,6 +83,11 @@ def plan_build(
     if ":" not in tag:
         tag = f"{tag}:latest"
 
+    # Select node image based on USE_CN_MIRROR
+    selected_node_image = build_env.node_image
+    if build_env.use_cn_mirror == "1" and build_env.node_image_cn:
+        selected_node_image = build_env.node_image_cn
+
     return BuildPlan(
         tag=tag,
         root=str(root),
@@ -88,7 +95,7 @@ def plan_build(
         no_cache=no_cache,
         pull=pull,
         build_arg_use_cn_mirror=build_env.use_cn_mirror,
-        build_arg_node_image=build_env.node_image,
+        build_arg_node_image=selected_node_image,
         dry_run=dry_run,
     )
 
