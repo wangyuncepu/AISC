@@ -262,13 +262,6 @@ RUN python3 -m venv /home/AISC/.venv \
 ENV PATH="/home/AISC/.venv/bin:${PATH}"
 
 # ==========================================
-# ai_brief - AI 每日简讯工具（TLDR + The Rundown），entrypoint 启动头注入
-#   stdlib-only，无需 pip；python3 已装（:224）。构建脚本临时带入 build context。
-# ==========================================
-COPY --chown=AISC:AISC apps/ai-brief/ /home/AISC/ai_brief/
-RUN chmod +x /home/AISC/ai_brief/*.sh 2>/dev/null || true
-
-# ==========================================
 # cc-switch-cli（Rust 二进制）：跨平台 AI CLI 管理工具，与内置 cs 共存（命令名 cc-switch）
 #   临时切 root 写 /usr/local/bin，再切回 AISC。
 #   复用 mihomo 的 GH_PROXY 多镜像 fallback；musl 静态版兼容 glibc/musl。
