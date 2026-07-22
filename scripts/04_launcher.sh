@@ -33,7 +33,8 @@ echo
 docker ps -aq -f "name=super-claude-station" -f "status=exited" 2>/dev/null | xargs -r docker rm >/dev/null 2>&1 || true
 
 # 拼接 docker run 参数；启用代理时追加 NET_ADMIN + /dev/net/tun + 配置只读挂载
-RUN_ARGS=(-it --rm -e TERM=xterm-256color --name "$NAME" -v "$WORKSPACE:/home/AISC/app")
+# 使用 --user 1000:1000 确保挂载文件权限映射到 AISC 用户（特别是 Windows 宿主机）
+RUN_ARGS=(-it --rm --user 1000:1000 -e TERM=xterm-256color --name "$NAME" -v "$WORKSPACE:/home/AISC/app")
 if [ "$PROXY" = "1" ]; then
   RUN_ARGS+=(--cap-add=NET_ADMIN --device /dev/net/tun \
     -v "$PROJECT_ROOT/.claude/mihomo/config.yaml:/etc/mihomo/config.yaml:ro")
