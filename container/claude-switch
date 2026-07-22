@@ -201,12 +201,35 @@ get_key() {
       return 1
     fi
     # Double-write: save to both new and old locations (backward compat)
-    _ensure_dir "$AISC_SECRETS_DIR" || return 1
-    echo "${name}=${key}" >> "$AISC_KEY_STORE" 2>/dev/null || true
-    chmod 600 "$AISC_KEY_STORE" 2>/dev/null || true
-    echo "${name}=${key}" >> "$KEY_STORE"
-    chmod 600 "$KEY_STORE"
-    echo "✅ Key 已保存" >&2
+    local saved=0
+
+    # Try to save to primary location (.aisc/secrets/api-keys)
+    if _ensure_dir "$AISC_SECRETS_DIR" 2>&1; then
+      if echo "${name}=${key}" >> "$AISC_KEY_STORE" 2>&1; then
+        chmod 600 "$AISC_KEY_STORE" 2>/dev/null || true
+        saved=1
+        echo "✅ Key 已保存到 ${AISC_KEY_STORE}" >&2
+      else
+        echo "⚠️  无法保存到 ${AISC_KEY_STORE}" >&2
+      fi
+    else
+      echo "⚠️  无法创建目录 ${AISC_SECRETS_DIR}" >&2
+    fi
+
+    # Always try fallback location (.cc-config/api-keys)
+    _ensure_dir "$(dirname "$KEY_STORE")" 2>/dev/null || true
+    if echo "${name}=${key}" >> "$KEY_STORE" 2>&1; then
+      chmod 600 "$KEY_STORE" 2>/dev/null || true
+      if [ "$saved" = "0" ]; then
+        echo "✅ Key 已保存到 ${KEY_STORE}（备用位置）" >&2
+        saved=1
+      fi
+    fi
+
+    if [ "$saved" = "0" ]; then
+      echo "❌ 无法保存 Key 到任何位置，请检查目录权限" >&2
+      return 1
+    fi
   fi
 
   printf '%s' "$key"
