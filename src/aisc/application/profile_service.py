@@ -1,17 +1,18 @@
 """Profile service — read-only ``profile list`` and ``profile show``.
 
-First version: only built-in ``safe`` and ``unsafe``.
-No user-defined profiles, no confirmation flow, no run integration.
+Reads profiles from ~/.aisc/profiles.json with fallback to built-in definitions.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
-# Built-in profile definitions (per §9.2 of PLAN-p3-unified-cli.md)
+# Built-in profile definitions (fallback when profiles.json not found)
 # ---------------------------------------------------------------------------
 
 _BUILTIN_PROFILES: Dict[str, Dict[str, Any]] = {
@@ -26,6 +27,31 @@ _BUILTIN_PROFILES: Dict[str, Dict[str, Any]] = {
         "dangerously_skip_permissions": True,
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Profile loading from .aisc/profiles.json
+# ---------------------------------------------------------------------------
+
+def _profiles_path(home: Optional[str] = None) -> Path:
+    """Return the path to profiles.json."""
+    home_path = Path(home).expanduser() if home is not None else Path.home()
+    return home_path / ".aisc" / "profiles.json"
+
+
+def _load_profiles(home: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """Load profiles from ~/.aisc/profiles.json, fallback to built-in."""
+    path = _profiles_path(home)
+    try:
+        if not path.is_file():
+            return _BUILTIN_PROFILES
+        raw = path.read_bytes()
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("profiles"), dict):
+            return _BUILTIN_PROFILES
+        return data["profiles"]
+    except (OSError, ValueError, json.JSONDecodeError):
+        return _BUILTIN_PROFILES
 
 
 # ---------------------------------------------------------------------------
@@ -52,19 +78,21 @@ class ProfileShowResult:
 # Service functions
 # ---------------------------------------------------------------------------
 
-def run_profile_list() -> ProfileListResult:
-    """Return all built-in profiles as a list."""
+def run_profile_list(home: Optional[str] = None) -> ProfileListResult:
+    """Return all profiles as a list."""
+    profiles_dict = _load_profiles(home)
     profiles: List[Dict[str, Any]] = []
-    for key in ("safe", "unsafe"):
-        profiles.append(dict(_BUILTIN_PROFILES[key]))
+    for key in sorted(profiles_dict.keys()):
+        profiles.append(dict(profiles_dict[key]))
 
     data: Dict[str, Any] = {"profiles": profiles}
     return ProfileListResult(data=data, exit_code=0)
 
 
-def run_profile_show(name: str) -> ProfileShowResult:
-    """Return a single built-in profile by name."""
-    profile = _BUILTIN_PROFILES.get(name)
+def run_profile_show(name: str, home: Optional[str] = None) -> ProfileShowResult:
+    """Return a single profile by name."""
+    profiles_dict = _load_profiles(home)
+    profile = profiles_dict.get(name)
     if profile is None:
         return ProfileShowResult(
             data={},

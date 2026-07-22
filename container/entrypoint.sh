@@ -172,6 +172,24 @@ if [ ! -f "$PROVIDERS_JSON" ] && [ -f "$PROVIDERS_TEMPLATE" ]; then
     chmod 600 "$PROVIDERS_JSON"
 fi
 
+# 初始化 config.json：首次启动时从 aisc-bundle/config/config.json 复制
+CONFIG_JSON="$AISC_DIR/config.json"
+CONFIG_TEMPLATE="/home/AISC/app/aisc-bundle/config/config.json"
+if [ ! -f "$CONFIG_JSON" ] && [ -f "$CONFIG_TEMPLATE" ]; then
+    echo "📋 初始化 config.json..."
+    cp "$CONFIG_TEMPLATE" "$CONFIG_JSON"
+    chmod 600 "$CONFIG_JSON"
+fi
+
+# 初始化 profiles.json：首次启动时从 aisc-bundle/config/profiles.json 复制
+PROFILES_JSON="$AISC_DIR/profiles.json"
+PROFILES_TEMPLATE="/home/AISC/app/aisc-bundle/config/profiles.json"
+if [ ! -f "$PROFILES_JSON" ] && [ -f "$PROFILES_TEMPLATE" ]; then
+    echo "📋 初始化 profiles.json..."
+    cp "$PROFILES_TEMPLATE" "$PROFILES_JSON"
+    chmod 600 "$PROFILES_JSON"
+fi
+
 # ==========================================
 # 3. 环境变量与网络状态展示
 #    env 块读 CLAUDE_CONFIG_DIR/settings.json（Claude CLI 原生文件，cs 写此处）

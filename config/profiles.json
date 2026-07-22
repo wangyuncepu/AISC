@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "safe": {
+      "name": "safe",
+      "description": "Secure defaults (default profile)",
+      "dangerously_skip_permissions": false
+    },
+    "unsafe": {
+      "name": "unsafe",
+      "description": "Explicit dangerous permissions for trusted projects",
+      "dangerously_skip_permissions": true
+    }
+  }
+}

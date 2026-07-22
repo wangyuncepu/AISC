@@ -205,6 +205,12 @@ RUN chmod +x /usr/local/bin/lib/*.sh
 COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# 复制配置文件模板到 aisc-bundle（供 entrypoint.sh 初始化 .aisc/ 配置）
+RUN mkdir -p /home/AISC/app/aisc-bundle/config
+COPY config/providers.json /home/AISC/app/aisc-bundle/config/providers.json
+COPY config/config.json /home/AISC/app/aisc-bundle/config/config.json
+COPY config/profiles.json /home/AISC/app/aisc-bundle/config/profiles.json
+
 # Mihomo 配置构建器：原始订阅 → mihomo 配置（格式自动转换 yaml/base64订阅/URI直链/JSON
 #   + 强制注入 TUN/DNS）。entrypoint 调用，Node 运行，无外部依赖。
 COPY container/mihomo-build-config.js /usr/local/bin/mihomo-build-config.js
