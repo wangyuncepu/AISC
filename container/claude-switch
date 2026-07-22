@@ -9,18 +9,19 @@
 CFG_DIR="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
 SETTINGS_RAW="${CFG_DIR}/settings.json"
 
-# api-keys 密钥存于 .aisc/secrets/ 解析顺序：
+# api-keys 密钥存于 .aisc/secrets/api-keys
+# 解析顺序：
 #   1) AISC_DIR（entrypoint 导出，恒为 /home/AISC/app/.aisc）
 #   2) Docker 项目卷 /home/AISC/app/.aisc
 #   3) 全局 ~/.aisc
 if [ -n "${AISC_DIR:-}" ]; then
-  KEY_DIR="$AISC_DIR/secrets"
+  AISC_SECRETS_DIR="$AISC_DIR/secrets"
 elif [ -d /home/AISC/app/.aisc ]; then
-  KEY_DIR="/home/AISC/app/.aisc/secrets"
+  AISC_SECRETS_DIR="/home/AISC/app/.aisc/secrets"
 else
-  KEY_DIR="${HOME}/.aisc/secrets"
+  AISC_SECRETS_DIR="${HOME}/.aisc/secrets"
 fi
-KEY_STORE="${KEY_DIR}/api-keys"
+AISC_KEY_STORE="${AISC_SECRETS_DIR}/api-keys"
 
 # Windows Git Bash needs cygpath for Node.js; Linux containers use the POSIX path directly.
 if command -v cygpath >/dev/null 2>&1; then
@@ -29,8 +30,8 @@ else
   SETTINGS="$SETTINGS_RAW"
 fi
 
-# Ensure config dirs exist (.claude for settings, .aisc for keys and providers)
-mkdir -p "$(dirname "$SETTINGS_RAW")" "$KEY_DIR"
+# Ensure config dirs exist (.claude for settings, .aisc/secrets for keys)
+mkdir -p "$(dirname "$SETTINGS_RAW")" "$AISC_SECRETS_DIR"
 
 # Init settings.json if missing
 if [ ! -f "$SETTINGS_RAW" ]; then
@@ -38,9 +39,9 @@ if [ ! -f "$SETTINGS_RAW" ]; then
 fi
 
 # Init key store if missing
-if [ ! -f "$KEY_STORE" ]; then
-  touch "$KEY_STORE"
-  chmod 600 "$KEY_STORE"
+if [ ! -f "$AISC_KEY_STORE" ]; then
+  touch "$AISC_KEY_STORE"
+  chmod 600 "$AISC_KEY_STORE"
 fi
 
 # Resolve providers.json — prefer .aisc config directory, fall back to Docker default.
@@ -71,30 +72,6 @@ _ensure_dir() {
   echo "ERROR: cannot create directory '$d'" >&2
   return 1
 }
-
-# ==========================================
-# migrate_keys — idempotent copy from .cc-config/api-keys → .aisc/secrets/api-keys
-#   Only runs if .aisc/ exists (project scope) and the old store has keys
-#   while the new secrets directory is empty. Safe to call multiple times.
-# ==========================================
-migrate_keys() {
-  local aisc_dir
-  aisc_dir="$(dirname "$KEY_DIR")/.aisc"
-  [ -d "$aisc_dir" ] || return 0
-
-  if [ -f "$KEY_STORE" ] && [ -s "$KEY_STORE" ]; then
-    if [ ! -d "$AISC_SECRETS_DIR" ] || [ -z "$(ls -A "$AISC_SECRETS_DIR" 2>/dev/null)" ]; then
-      _ensure_dir "$AISC_SECRETS_DIR" || return 1
-      chmod 700 "$AISC_SECRETS_DIR"
-      cp "$KEY_STORE" "$AISC_KEY_STORE"
-      chmod 600 "$AISC_KEY_STORE"
-      echo "密钥已迁移到 .aisc/secrets/（旧位置 .cc-config/api-keys 保留可用）" >&2
-    fi
-  fi
-}
-
-# Run migration early, before any key read/write operations
-migrate_keys
 
 # ==========================================
 # _node_read_providers — output shell variable assignments for a provider
@@ -174,21 +151,16 @@ _node_list_providers() {
 }
 
 # ==========================================
-# get_key — read key from .aisc/secrets/ (primary) or .cc-config/ (fallback),
-#   prompt user if missing, then double-write to both locations.
+# get_key — read key from .aisc/secrets/api-keys, prompt user if missing
 # ==========================================
 get_key() {
   local name="$1"
   local label="$2"
   local key
 
-  # Primary: read from .aisc/secrets/api-keys
+  # Read from .aisc/secrets/api-keys
   if [ -f "$AISC_KEY_STORE" ]; then
     key=$(grep "^${name}=" "$AISC_KEY_STORE" 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d '\r')
-  fi
-  # Fallback: read from .cc-config/api-keys
-  if [ -z "$key" ]; then
-    key=$(grep "^${name}=" "$KEY_STORE" 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d '\r')
   fi
 
   if [ -z "$key" ]; then
@@ -200,36 +172,20 @@ get_key() {
       echo "❌ Key 不能为空，已取消。" >&2
       return 1
     fi
-    # Double-write: save to both new and old locations (backward compat)
-    local saved=0
 
-    # Try to save to primary location (.aisc/secrets/api-keys)
-    if _ensure_dir "$AISC_SECRETS_DIR" 2>&1; then
-      if echo "${name}=${key}" >> "$AISC_KEY_STORE" 2>&1; then
-        chmod 600 "$AISC_KEY_STORE" 2>/dev/null || true
-        saved=1
-        echo "✅ Key 已保存到 ${AISC_KEY_STORE}" >&2
-      else
-        echo "⚠️  无法保存到 ${AISC_KEY_STORE}" >&2
-      fi
-    else
-      echo "⚠️  无法创建目录 ${AISC_SECRETS_DIR}" >&2
-    fi
-
-    # Always try fallback location (.cc-config/api-keys)
-    _ensure_dir "$(dirname "$KEY_STORE")" 2>/dev/null || true
-    if echo "${name}=${key}" >> "$KEY_STORE" 2>&1; then
-      chmod 600 "$KEY_STORE" 2>/dev/null || true
-      if [ "$saved" = "0" ]; then
-        echo "✅ Key 已保存到 ${KEY_STORE}（备用位置）" >&2
-        saved=1
-      fi
-    fi
-
-    if [ "$saved" = "0" ]; then
-      echo "❌ 无法保存 Key 到任何位置，请检查目录权限" >&2
+    # Save to .aisc/secrets/api-keys
+    if ! _ensure_dir "$AISC_SECRETS_DIR" 2>&1; then
+      echo "❌ 无法创建目录 ${AISC_SECRETS_DIR}" >&2
       return 1
     fi
+
+    if ! echo "${name}=${key}" >> "$AISC_KEY_STORE" 2>&1; then
+      echo "❌ 无法保存 Key 到 ${AISC_KEY_STORE}" >&2
+      return 1
+    fi
+
+    chmod 600 "$AISC_KEY_STORE" 2>/dev/null || true
+    echo "✅ Key 已保存到 ${AISC_KEY_STORE}" >&2
   fi
 
   printf '%s' "$key"
@@ -369,7 +325,7 @@ show_current() {
   for i in $(seq 0 $((_PL_COUNT - 1))); do
     eval 'local keyname="${_PL_KEYNAME_'${i}'}"'
     eval 'local keydisp="${_PL_KEYDISP_'${i}'}"'
-    if [ -n "$keyname" ] && { grep -q "^${keyname}=." "$AISC_KEY_STORE" 2>/dev/null || grep -q "^${keyname}=." "$KEY_STORE" 2>/dev/null; }; then
+    if [ -n "$keyname" ] && grep -q "^${keyname}=." "$AISC_KEY_STORE" 2>/dev/null; then
       echo "  $keydisp ✓"
     else
       echo "  $keydisp ✗"
