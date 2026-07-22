@@ -164,6 +164,13 @@ COPY container/global-claude.md /home/AISC/.claude/CLAUDE.md
 #    由 stage-skills.sh 预暂存到 _bundle/plugins（含 cache + marketplaces + 注册表）
 COPY container/_bundle/plugins/ /home/AISC/.claude/plugins/
 
+# 2b. 修正插件注册表中的路径：/root/.claude → /home/AISC/.claude
+#     _bundle 可能来自旧的 root 用户镜像，路径需要更新为当前用户路径
+RUN for j in installed_plugins.json known_marketplaces.json; do \
+        f="/home/AISC/.claude/plugins/$j"; \
+        [ -f "$f" ] && sed -i 's#/root/.claude#/home/AISC/.claude#g' "$f"; \
+    done
+
 # 3. 注入扁平技能（来源 _bundle/skills）：gstack（仅文档，6 子技能）
 COPY container/_bundle/skills/ /home/AISC/.claude/skills/
 
