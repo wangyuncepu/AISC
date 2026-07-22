@@ -165,7 +165,7 @@ fi
 
 # 初始化 providers.json：首次启动时从 aisc-bundle/config/providers.json 复制
 PROVIDERS_JSON="$AISC_DIR/providers.json"
-PROVIDERS_TEMPLATE="/home/AISC/app/aisc-bundle/config/providers.json"
+PROVIDERS_TEMPLATE="/opt/aisc/bundle/config/providers.json"
 if [ ! -f "$PROVIDERS_JSON" ] && [ -f "$PROVIDERS_TEMPLATE" ]; then
     echo "📋 初始化 providers.json..."
     cp "$PROVIDERS_TEMPLATE" "$PROVIDERS_JSON"
@@ -174,7 +174,7 @@ fi
 
 # 初始化 config.json：首次启动时从 aisc-bundle/config/config.json 复制
 CONFIG_JSON="$AISC_DIR/config.json"
-CONFIG_TEMPLATE="/home/AISC/app/aisc-bundle/config/config.json"
+CONFIG_TEMPLATE="/opt/aisc/bundle/config/config.json"
 if [ ! -f "$CONFIG_JSON" ] && [ -f "$CONFIG_TEMPLATE" ]; then
     echo "📋 初始化 config.json..."
     cp "$CONFIG_TEMPLATE" "$CONFIG_JSON"
@@ -183,7 +183,7 @@ fi
 
 # 初始化 profiles.json：首次启动时从 aisc-bundle/config/profiles.json 复制
 PROFILES_JSON="$AISC_DIR/profiles.json"
-PROFILES_TEMPLATE="/home/AISC/app/aisc-bundle/config/profiles.json"
+PROFILES_TEMPLATE="/opt/aisc/bundle/config/profiles.json"
 if [ ! -f "$PROFILES_JSON" ] && [ -f "$PROFILES_TEMPLATE" ]; then
     echo "📋 初始化 profiles.json..."
     cp "$PROFILES_TEMPLATE" "$PROFILES_JSON"
