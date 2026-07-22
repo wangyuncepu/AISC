@@ -491,21 +491,24 @@ def _cmd_run(
     is_interactive = (effective_format == "text" and emitter is None and not non_interactive)
     capture = (effective_format != "text" or emitter is not None)
 
-    provider_config_dir = str(user_provider_catalog_path().parent)
-    if aisc_root is not None:
+    # 使用项目本地的 .aisc 目录（相对于 workspace）
+    workspace_path = Path(getattr(args, "workspace", None) or Path.cwd())
+    provider_config_dir = str(workspace_path / ".aisc")
+
+    # 确保 .aisc 和 .aisc/secrets 目录存在
+    if not getattr(args, "dry_run", False):
         try:
-            if not getattr(args, "dry_run", False):
-                provider_config_dir = str(
-                    ensure_user_provider_catalog(str(aisc_root)).parent
-                )
+            aisc_dir = workspace_path / ".aisc"
+            aisc_dir.mkdir(exist_ok=True)
+            (aisc_dir / "secrets").mkdir(exist_ok=True)
         except PermissionError as exc:
             raise CliError(
-                message=f"Cannot initialize provider catalog: {exc}",
+                message=f"Cannot create .aisc directory: {exc}",
                 exit_code=9, error_code="AISC_ERR_PERMISSION_DENIED",
             ) from exc
-        except (OSError, ValueError) as exc:
+        except OSError as exc:
             raise CliError(
-                message=f"Cannot initialize provider catalog: {exc}",
+                message=f"Cannot create .aisc directory: {exc}",
                 exit_code=1, error_code="AISC_ERR_GENERAL",
             ) from exc
 
