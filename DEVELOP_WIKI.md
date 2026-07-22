@@ -143,9 +143,9 @@ src/aisc/
 │   ├── output.py        # JSON envelope、JSONL emitter、文本格式化
 │   └── commands/        # 每个子命令的具体实现
 │       ├── build.py
-│       ├── run.py
+│       ├── run.py       # --keep-alive: 后台模式 + docker attach
 │       ├── config.py
-│       ├── provider.py
+│       ├── provider.py  # provider add: 编辑器模式
 │       ├── profile.py
 │       ├── container.py
 ├── application/         # 应用服务层：业务逻辑编排

@@ -29,7 +29,6 @@ AISC 是一个在 Docker 容器中运行 Claude Code 的个人开发工具。提
   - [config — 配置管理](#config--配置管理)
   - [provider — Provider 管理](#provider--provider-管理)
   - [profile — Profile 管理](#profile--profile-管理)
-  - [brief — AI 资讯简报](#brief--ai-资讯简报)
   - [skill — Skill 管理](#skill--skill-管理)
 - [升级](#升级)
 - [卸载](#卸载)
@@ -345,10 +344,10 @@ aisc build --events
 ```bash
 aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
          [--network direct|proxy] [--profile proxy] [--non-interactive]
-         [--dry-run] [--format json] [--events]
+         [--keep-alive] [--dry-run] [--format json] [--events]
 ```
 
-**会调用 Docker**（`docker run --rm`），需要 Docker daemon。容器退出后自动删除。
+**会调用 Docker**（`docker run`），需要 Docker daemon。默认容器退出后自动删除（`--rm`）；使用 `--keep-alive` 可保持容器运行。
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -358,6 +357,7 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 | `--network` | `direct` / `proxy` | `direct` | 网络模式；`proxy` 需 `.claude/mihomo/config.yaml` |
 | `--profile` | `proxy` | — | 兼容别名，等价于 `--network proxy`；与 `--network direct` 冲突 |
 | `--non-interactive` | flag | `False` | 非交互模式：无 `-it`，stdin=DEVNULL，设置 `AISC_NON_INTERACTIVE=1`、`CLAUDE_SCOPE=project` |
+| `--keep-alive` | flag | `False` | 保持容器运行：省略 `--rm`，使用后台模式（`-d`）启动并自动 attach；客户端断开后容器继续运行，不会导致 CPU/Memory 状态变为 N/A |
 | `--dry-run` | flag | `False` | 仅输出运行计划，不执行 |
 
 **效果：**
@@ -627,99 +627,6 @@ aisc profile show [NAME]          [--format json]
 | --- | --- |
 | `list` | 列出所有可用 Profile（name、description、dangerously_skip_permissions） |
 | `show [NAME]` | 查看指定 Profile 详情；NAME 默认 `safe`（可选参数） |
-
-### brief — AI 资讯简报
-
-```bash
-aisc brief [--date DATE] [--days N] [--top N] [--source SOURCE]
-           [--ai] [--save] [--no-cache] [--strict] [--debug]
-```
-
-**仅支持文本输出**（`--format json` 和 `--events` 均报 usage error，exit 2）。需要网络（拉取新闻源）。不依赖 Docker。
-
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--date` | string | 最新 | 指定日期 `YYYY-MM-DD` |
-| `--days` | int | `1` | 取最近 N 期 |
-| `--top` | int | `5` | 每源 Top N 条 |
-| `--source` | string | `all` | 源选择（见下表） |
-| `--ai` | flag | — | LLM 跨源中文精选摘要 |
-| `--save` | flag | — | 强制保存渲染结果；默认 latest 模式本身也会使用并更新当日缓存 |
-| `--no-cache` | flag | — | 跳过 rendered 简报缓存并重新抓取；底层 raw HTTP 缓存仍可在网络失败时提供 1 小时内的兜底 |
-| `--strict` | flag | — | 失败时非零退出（默认静默 exit 0） |
-| `--debug` | flag | — | 逐源计时诊断输出到 stderr |
-
-**数据源（5 个）：**
-
-| key | 源名称 | 类别 |
-| --- | --- | --- |
-| `tldr` | TLDR AI | industry |
-| `rundown` | The Rundown AI | industry |
-| `simon` | Simon Willison | tools |
-| `changelog` | Changelog News | tools |
-| `hn` | HN Show HN | tools（AI/dev 关键词过滤） |
-
-**`--source` 取值：**
-
-| 值 | 效果 |
-| --- | --- |
-| `all`（默认） | 全部 5 源 |
-| `tools` | simon, changelog, hn |
-| `industry` | tldr, rundown |
-| `workflow` | simon, changelog |
-| `tldr,simon,...` | 逗号分隔的源 key |
-
-**输出模式：**
-
-| 模式 | 效果 |
-| --- | --- |
-| 默认（无 `--ai`） | 按类别（🛠️ 新工具 / 🔧 工作流 / 📰 行业）分组渲染 |
-| `--ai` | LLM 按类别跨源中文一句话精选，按 emoji 分组输出 |
-
-**LLM 环境变量（`--ai` 模式）：**
-
-`--ai` 通过 `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`（或 `ANTHROPIC_API_KEY`）调用 `/v1/messages` 端点。模型选择优先级：
-
-```
-AI_BRIEF_MODEL > ANTHROPIC_DEFAULT_HAIKU_MODEL > ANTHROPIC_MODEL > "claude-haiku-4-5"
-```
-
-- 首次 `max_tokens=4096`；若 reasoning 模型仅返回 thinking 无文本，自动降素材 + 提至 `max_tokens=8192` 重试。
-- 若 LLM 调用失败：**回退到规则输出**（`render_categorized`），附加“（AI 摘要失败，已回退规则输出）”。
-- AI 失败时不写入缓存（避免错误缓存整天）。
-
-**缓存策略：**
-- 缓存目录：`~/.cache/ai-brief/`（raw 缓存 TTL 1 小时，rendered 缓存同日有效）。
-- stale-while-revalidate：有同日缓存立即返回（毫秒级）；有旧缓存时先抓取，抓取失败则兜底使用旧缓存。
-- `--no-cache` 跳过当日 rendered 简报缓存；底层 raw HTTP 缓存仍会写入，并可能在抓取失败时作为短期兜底。
-
-**退出码：**
-
-| 场景 | `--strict` 未开启 | `--strict` 开启 |
-| --- | --- | --- |
-| 全部成功 | 0 | 0 |
-| 部分源失败、仍有可用内容 | 0（渲染可用来源） | 0（当前实现不会因部分来源失败而单独报错） |
-| 全部源失败且无旧缓存 | 0（输出“(简讯获取失败，已跳过)”） | 1 |
-| LLM 失败（`--ai` 模式） | 0（回退规则输出） | 1 |
-
-**示例：**
-
-```bash
-# 默认：全部源，top 5，最新
-aisc brief
-
-# 仅工具类源，top 3
-aisc brief --source tools --top 3
-
-# LLM 中文精选
-aisc brief --ai
-
-# 调试模式
-aisc brief --debug --no-cache
-
-# 严格模式（CI 检测失败）
-aisc brief --strict
-```
 
 ### skill — Skill 管理
 

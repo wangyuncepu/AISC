@@ -305,28 +305,53 @@ def run_container(
             )
     elif plan.interactive and not plan.non_interactive:
         # Text mode: streaming with inherited streams
-        proc = exec_.run_streaming(argv)
-        result.container_exit_code = proc.exit_code if proc.exit_code >= 0 else proc.exit_code
-        result.executed = True
+        # For keep_alive mode, container runs in background (-d), then we attach
+        if plan.keep_alive:
+            # Step 1: Start container in detached mode
+            proc = exec_.run_captured(argv)
+            if proc.exit_code != 0:
+                raise CliError(
+                    message=f"Failed to start container: {proc.stderr}",
+                    exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
+                    data=result.to_dict(),
+                )
 
-        if proc.command_not_found:
-            raise CliError(
-                message="Docker CLI not found",
-                exit_code=3, error_code="AISC_ERR_DOCKER_UNAVAILABLE",
-                data=result.to_dict(),
-            )
-        if proc.timed_out:
-            raise CliError(
-                message="Container run timed out",
-                exit_code=1, error_code="AISC_ERR_GENERAL",
-                data=result.to_dict(),
-            )
-        if proc.exit_code != 0:
-            raise CliError(
-                message=f"Container exited with code {proc.exit_code}",
-                exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
-                data=result.to_dict(),
-            )
+            # Step 2: Attach to the running container
+            attach_argv = ["attach", "--sig-proxy=true", plan.name]
+            proc = exec_.run_streaming(attach_argv)
+            result.container_exit_code = 0  # Container keeps running after detach
+            result.executed = True
+
+            if proc.command_not_found:
+                raise CliError(
+                    message="Docker CLI not found",
+                    exit_code=3, error_code="AISC_ERR_DOCKER_UNAVAILABLE",
+                    data=result.to_dict(),
+                )
+        else:
+            # Normal interactive mode (container removed on exit)
+            proc = exec_.run_streaming(argv)
+            result.container_exit_code = proc.exit_code if proc.exit_code >= 0 else proc.exit_code
+            result.executed = True
+
+            if proc.command_not_found:
+                raise CliError(
+                    message="Docker CLI not found",
+                    exit_code=3, error_code="AISC_ERR_DOCKER_UNAVAILABLE",
+                    data=result.to_dict(),
+                )
+            if proc.timed_out:
+                raise CliError(
+                    message="Container run timed out",
+                    exit_code=1, error_code="AISC_ERR_GENERAL",
+                    data=result.to_dict(),
+                )
+            if proc.exit_code != 0:
+                raise CliError(
+                    message=f"Container exited with code {proc.exit_code}",
+                    exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
+                    data=result.to_dict(),
+                )
     elif plan.non_interactive and not capture:
         # Non-interactive mode: streaming with DEVNULL stdin
         proc = exec_.run_non_interactive(argv)

@@ -289,7 +289,10 @@ class RunPlan:
             gid = os.getgid()
             argv.extend(["--user", f"{uid}:{gid}"])
 
-        if self.interactive and not self.non_interactive:
+        # For keep_alive mode, use -d (detached) instead of -it to prevent container exit on client disconnect
+        if self.keep_alive and self.interactive and not self.non_interactive:
+            argv.append("-d")
+        elif self.interactive and not self.non_interactive:
             argv.append("-it")
         argv.extend([
             "-e", "TERM=xterm-256color",
