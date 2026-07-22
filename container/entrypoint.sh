@@ -168,31 +168,41 @@ fi
 # ==========================================
 # 问题：Windows 宿主机挂载到 WSL2/Docker 的文件默认是 root:root (UID=0)
 # 影响：容器内以 AISC 用户运行时无法写入这些文件
-# 解决：启动时检查并修正关键目录的文件所有者
+# 解决：启动时检查并修正整个挂载目录的文件所有者（排除大型依赖目录）
 fix_mount_permissions() {
     local target="$1"
     if [ ! -d "$target" ]; then
         return 0
     fi
 
+    # 排除大型依赖目录以提升性能
+    local exclude_patterns=(
+        -path "*/node_modules" -prune -o
+        -path "*/.git" -prune -o
+        -path "*/venv" -prune -o
+        -path "*/.venv" -prune -o
+        -path "*/build" -prune -o
+        -path "*/dist" -prune -o
+        -path "*/__pycache__" -prune -o
+        -path "*/.next" -prune -o
+        -path "*/.nuxt" -prune -o
+        -path "*/.cache" -prune -o
+        -path "*/.pytest_cache" -prune -o
+        -path "*/.mypy_cache" -prune -o
+    )
+
     # 只修正非 AISC:AISC 的文件（条件 chown，性能更好）
     local count
-    count=$(find "$target" ! \( -user AISC -group AISC \) 2>/dev/null | wc -l)
+    count=$(find "$target" "${exclude_patterns[@]}" ! \( -user AISC -group AISC \) -print 2>/dev/null | wc -l)
 
     if [ "$count" -gt 0 ]; then
-        echo "🔧 修正 $target 权限（$count 个文件需要调整）..."
-        find "$target" ! \( -user AISC -group AISC \) -exec sudo chown AISC:AISC {} + 2>/dev/null || true
+        echo "🔧 修正 $target 权限（$count 个文件需要调整，跳过依赖目录）..."
+        find "$target" "${exclude_patterns[@]}" ! \( -user AISC -group AISC \) -exec sudo chown AISC:AISC {} + 2>/dev/null || true
     fi
 }
 
-# 修正关键目录（.aisc 和 .claude）
-if [ -d "/home/AISC/app/.aisc" ]; then
-    fix_mount_permissions "/home/AISC/app/.aisc"
-fi
-
-if [ -d "/home/AISC/app/.claude" ]; then
-    fix_mount_permissions "/home/AISC/app/.claude"
-fi
+# 修正整个挂载目录（/home/AISC/app）
+fix_mount_permissions "/home/AISC/app"
 
 # 初始化 providers.json：首次启动时从 aisc-bundle/config/providers.json 复制
 PROVIDERS_JSON="$AISC_DIR/providers.json"
@@ -398,14 +408,27 @@ fi
 # ==========================================
 # 问题：entrypoint.sh 中的 sudo 操作会创建 root:root 文件
 # 影响：在 WSL2/Linux 环境下这些文件显示为 root 所有，可能导致权限问题
-# 解决：容器退出时将 root 文件改回 AISC 用户
+# 解决：容器退出时将整个挂载目录的 root 文件改回 AISC 用户
 cleanup_permissions() {
-    # 只修正关键目录，避免扫描整个项目（性能考虑）
-    if [ -d "/home/AISC/app/.aisc" ]; then
-        find /home/AISC/app/.aisc -user root -exec sudo chown AISC:AISC {} + 2>/dev/null || true
-    fi
-    if [ -d "/home/AISC/app/.claude" ]; then
-        find /home/AISC/app/.claude -user root -exec sudo chown AISC:AISC {} + 2>/dev/null || true
+    # 排除大型依赖目录以提升性能（与启动时相同的排除规则）
+    local exclude_patterns=(
+        -path "*/node_modules" -prune -o
+        -path "*/.git" -prune -o
+        -path "*/venv" -prune -o
+        -path "*/.venv" -prune -o
+        -path "*/build" -prune -o
+        -path "*/dist" -prune -o
+        -path "*/__pycache__" -prune -o
+        -path "*/.next" -prune -o
+        -path "*/.nuxt" -prune -o
+        -path "*/.cache" -prune -o
+        -path "*/.pytest_cache" -prune -o
+        -path "*/.mypy_cache" -prune -o
+    )
+
+    # 修正整个挂载目录中的 root 文件
+    if [ -d "/home/AISC/app" ]; then
+        find /home/AISC/app "${exclude_patterns[@]}" -user root -exec sudo chown AISC:AISC {} + 2>/dev/null || true
     fi
 }
 
