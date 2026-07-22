@@ -199,9 +199,32 @@ else
     AUTH="no"
 fi
 
-echo "🌐 当前大模型后端: ${MODEL:-未配置}"
+# 从 providers.json 读取当前 provider 名称
+PROVIDER_NAME="未配置"
+if [ -f "$PROVIDERS_JSON" ] && [ -n "$BASE_URL" ]; then
+    PROVIDER_NAME=$(node -e "
+        try {
+            const fs = require('fs');
+            const providers = JSON.parse(fs.readFileSync('$PROVIDERS_JSON', 'utf8'));
+            const baseUrl = '$BASE_URL';
+            for (const [id, config] of Object.entries(providers.providers || {})) {
+                if (config.base_url && baseUrl.includes(config.base_url)) {
+                    console.log(config.name);
+                    process.exit(0);
+                }
+            }
+            console.log('自定义后端');
+        } catch(e) {
+            console.log('未配置');
+        }
+    " 2>/dev/null || echo "未配置")
+elif [ -z "$BASE_URL" ] && [ -z "$MODEL" ]; then
+    PROVIDER_NAME="Claude (官方默认)"
+fi
+
+echo "🌐 当前供应商: ${PROVIDER_NAME}"
 if [ -n "$BASE_URL" ]; then
-    echo "🔗 自定义 API 节点: $BASE_URL"
+    echo "🔗 API 节点: $BASE_URL"
 fi
 echo -e "----------------------------------------\n"
 
