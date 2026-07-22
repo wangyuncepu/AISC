@@ -67,19 +67,41 @@ else
     echo "📁 作用域: 项目 (project) → $CLAUDE_CONFIG_DIR"
 
     # 项目 .claude 不存在或残缺 → 从镜像内置 .claude 完整复制
-    #   完整性判据：skills 与 plugins 同时存在。残缺多因旧版在 Windows 绑定挂载上
-    #   cp 符号链接失败中断所致；此处自动修复。cp -rL 解引用符号链接，兼容 grpcfuse。
+    #   完整性判据：skills 与 plugins 同时存在且非空。
+    #   残缺多因旧版在 Windows 绑定挂载上 cp 符号链接失败中断所致；此处自动修复。
+    #   cp -rL 解引用符号链接，兼容 grpcfuse。
     NEED_COPY=0
-    if [ ! -d "$PROJECT_CLAUDE_DIR" ]; then
+    if [ "${FORCE_COPY_CLAUDE:-0}" = "1" ]; then
+        NEED_COPY=1
+        echo "🔄 FORCE_COPY_CLAUDE=1，强制重新复制 .claude..."
+    elif [ ! -d "$PROJECT_CLAUDE_DIR" ]; then
         NEED_COPY=1
         echo "📦 当前项目首次运行，正在从镜像复制完整 .claude（含技能库与 CLI 状态）..."
     elif [ ! -d "$PROJECT_CLAUDE_DIR/skills" ] || [ ! -d "$PROJECT_CLAUDE_DIR/plugins" ]; then
         NEED_COPY=1
         echo "⚠️  检测到项目 .claude 残缺（缺 skills/plugins），正在从镜像补全复制..."
+    elif [ -z "$(ls -A "$PROJECT_CLAUDE_DIR/skills" 2>/dev/null)" ] || [ -z "$(ls -A "$PROJECT_CLAUDE_DIR/plugins" 2>/dev/null)" ]; then
+        NEED_COPY=1
+        echo "⚠️  检测到项目 .claude skills/plugins 为空，正在从镜像补全复制..."
     fi
+
     if [ "$NEED_COPY" = 1 ]; then
         mkdir -p "$PROJECT_CLAUDE_DIR"
-        cp -rL "$GLOBAL_CLAUDE_DIR/." "$PROJECT_CLAUDE_DIR/"
+        if ! cp -rL "$GLOBAL_CLAUDE_DIR/." "$PROJECT_CLAUDE_DIR/" 2>&1; then
+            echo "❌ 复制 .claude 失败，请检查权限和磁盘空间" >&2
+            exit 1
+        fi
+
+        # 验证关键目录存在且非空
+        if [ ! -d "$PROJECT_CLAUDE_DIR/skills" ] || [ ! -d "$PROJECT_CLAUDE_DIR/plugins" ]; then
+            echo "❌ 复制后 skills/plugins 目录仍然不存在" >&2
+            exit 1
+        fi
+        if [ -z "$(ls -A "$PROJECT_CLAUDE_DIR/skills" 2>/dev/null)" ] || [ -z "$(ls -A "$PROJECT_CLAUDE_DIR/plugins" 2>/dev/null)" ]; then
+            echo "❌ 复制后 skills/plugins 目录为空" >&2
+            exit 1
+        fi
+
         echo "✅ 项目 .claude 已就绪。"
     else
         echo "🔍 检测到当前项目已有完整 .claude，跳过复制 (保护您的自定义修改)。"
