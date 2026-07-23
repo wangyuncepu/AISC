@@ -152,7 +152,7 @@ else
         fi
         echo "✅ 项目 .codex 已就绪。"
     else
-        echo "🔍 检测到当前项目已有 .codex 配置，跳过复制。"
+        echo "🔍 检测到当前项目已有 .codex 配置，跳过复制 (保护您的自定义修改)。"
     fi
 fi
 
@@ -309,36 +309,10 @@ if command -v cc-switch >/dev/null 2>&1; then
     cc-switch daemon start >"$CC_SWITCH_DAEMON_LOG" 2>&1 &
     CC_SWITCH_DAEMON_PID=$!
     echo "✅ cc-switch 后台服务启动中（PID: $CC_SWITCH_DAEMON_PID，配置: $CC_SWITCH_CONFIG_DIR）"
+    # 为 claude 和 codex 开启代理接管
+    cc-switch proxy -a claude enable >/dev/null 2>&1 || true
+    cc-switch proxy -a codex enable >/dev/null 2>&1 || true
 fi
-
-# 从 providers.json 读取当前 provider 名称
-PROVIDER_NAME="未配置"
-if [ -f "$PROVIDERS_JSON" ] && [ -n "$BASE_URL" ]; then
-    PROVIDER_NAME=$(node -e "
-        try {
-            const fs = require('fs');
-            const providers = JSON.parse(fs.readFileSync('$PROVIDERS_JSON', 'utf8'));
-            const baseUrl = '$BASE_URL';
-            for (const [id, config] of Object.entries(providers.providers || {})) {
-                if (config.base_url && baseUrl.includes(config.base_url)) {
-                    console.log(config.name);
-                    process.exit(0);
-                }
-            }
-            console.log('自定义后端');
-        } catch(e) {
-            console.log('未配置');
-        }
-    " 2>/dev/null || echo "未配置")
-elif [ -z "$BASE_URL" ] && [ -z "$MODEL" ]; then
-    PROVIDER_NAME="Claude (官方默认)"
-fi
-
-echo "🌐 当前供应商: ${PROVIDER_NAME}"
-if [ -n "$BASE_URL" ]; then
-    echo "🔗 API 节点: $BASE_URL"
-fi
-echo -e "----------------------------------------\n"
 
 # ==========================================
 # 3.5 容器内 Mihomo TUN 透明代理（若挂载了配置 /etc/mihomo/config.yaml）
