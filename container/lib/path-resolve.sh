@@ -48,8 +48,15 @@ ensure_writable() {
   for d in "$@"; do
     [ -n "$d" ] || { echo "ensure_writable: empty path" >&2; return 1; }
 
-    if ! mkdir -p -- "$d" 2>/dev/null; then
+    if ! mkdir -p -- "$d" 2>/tmp/aisc-mkdir-err.log; then
       echo "ensure_writable: cannot create directory '$d'" >&2
+      if [ -s /tmp/aisc-mkdir-err.log ]; then
+        echo "  mkdir stderr: $(tr '\n' ' ' < /tmp/aisc-mkdir-err.log)" >&2
+      fi
+      echo "  current user: $(id 2>/dev/null || echo 'unknown')" >&2
+      if command -v stat >/dev/null 2>&1; then
+        echo "  parent stat: $(stat -c 'perm=%a owner=%U:%G' -- "$(dirname -- "$d")" 2>/dev/null || echo 'unavailable')" >&2
+      fi
       return 1
     fi
 
