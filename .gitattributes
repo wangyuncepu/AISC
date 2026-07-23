@@ -1,3 +1,4 @@
+.gitattributes text eol=lf
 *.sh text eol=lf
 *.command text eol=lf
 claude-switch text eol=lf
@@ -7,3 +8,7 @@ entrypoint.sh text eol=lf
 *.ps1 text eol=lf
 *.md text eol=lf
 *.json text eol=lf
+
+# vendor/checksums.txt hashes container files byte-for-byte. Keep text files
+# LF on every checkout while preserving binary files through auto detection.
+container/** text=auto eol=lf

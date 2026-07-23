@@ -1,6 +1,6 @@
 """Tests for packaging artifact module — staging, verification, archive, safety, aggregate."""
 
-import gzip, hashlib, io, json, os, shutil, stat, struct, sys, tarfile, tempfile, unittest, zipfile
+import gzip, hashlib, io, json, os, shutil, stat, struct, subprocess, sys, tarfile, tempfile, unittest, zipfile
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -10,6 +10,35 @@ import importlib.util as _iu
 def _lm(n,p):
     s=_iu.spec_from_file_location(n,p); m=_iu.module_from_spec(s); s.loader.exec_module(m); return m
 _art = _lm("artifact", _PROJECT_ROOT/"packaging"/"artifact.py")
+
+
+class TestContainerCheckoutContract(unittest.TestCase):
+    def test_checksumming_inputs_force_lf_even_below_nested_attributes(self):
+        paths = [
+            "container/_bundle/plugins/cache/caveman/caveman/63a91ecadbf4/.codex/config.toml",
+            "container/_bundle/plugins/marketplaces/caveman/tests/test_validate_inline.py",
+            "container/cc-switch-wrapper",
+        ]
+        proc = subprocess.run(
+            ["git", "check-attr", "eol", "--", *paths],
+            cwd=_PROJECT_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        attrs = {}
+        for line in proc.stdout.splitlines():
+            path, attribute, value = line.rsplit(": ", 2)
+            self.assertEqual(attribute, "eol")
+            attrs[path] = value
+        self.assertEqual(attrs, {path: "lf" for path in paths})
+
+        for path in paths:
+            self.assertNotIn(
+                b"\r\n",
+                (_PROJECT_ROOT / path).read_bytes(),
+                f"{path} was checked out with CRLF",
+            )
 
 # ========================================================================
 # Helpers
