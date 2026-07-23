@@ -590,6 +590,116 @@ tests/integration/test_cli.py      # subprocess 集成: version/doctor text+json
 
 ---
 
+## v2.1.0-dev (2026-07-23) - 集成 OpenAI Codex CLI
+
+### 动机
+
+集成 OpenAI Codex CLI 到 AISC 项目中，与 Claude Code CLI 并行安装，为用户提供多 AI CLI 选择。参考 Claude Code CLI 的安装模式，使用 npm 全局安装，无需 tmux 依赖。
+
+### 变更
+
+- **Dockerfile**：
+  - 新增 `CODEX_VERSION` 构建参数（默认 `latest`）
+  - npm 安装层同时安装 `@openai/codex@${CODEX_VERSION}`
+  - 创建 `codex-wrapper` 脚本并集成到镜像
+  - 更新 CRLF 清理逻辑，包含 codex 包装器
+  - 更新注释说明不处理 `codex-real` 二进制（与 `claude-real` 同理）
+
+- **codex-wrapper**（新增）：
+  - 类似 `claude-wrapper` 的结构
+  - 从 `$CODEX_CONFIG_DIR/settings.json` 注入环境变量
+  - 直接执行 `codex-real`，无需 `--dangerously-skip-permissions` flag
+  - 支持 Codex 配置文件的环境变量注入
+
+- **entrypoint.sh**：
+  - 路径模型新增 `GLOBAL_CODEX_DIR`（`/home/AISC/.codex`）和 `PROJECT_CODEX_DIR`（`/home/AISC/app/.codex`）
+  - 作用域选择从 "Claude 作用域" 改为 "AI CLI 作用域"，适用于 Claude + Codex
+  - 支持 `CLI_SCOPE` 环境变量（兼容旧的 `CLAUDE_SCOPE`）
+  - 按作用域初始化 Codex 配置目录（项目模式创建 `.codex` 目录）
+  - 启动菜单新增第三个选项：`3) codex` 直接启动 Codex
+  - 支持 `docker run ... codex` 直接启动 Codex CLI
+  - 导出 `CODEX_CONFIG_DIR` 环境变量到 `~/.bashrc`
+  - 初始化消息从 "Super Claude 工作站" 改为 "AISC AI 工作站"
+
+- **版本更新**：
+  - `VERSION`: `2.0.5` → `2.1.0-dev`
+  - `config/versions.env`: 新增 `CODEX_VERSION=latest`
+  - `AISC_VERSION`: `v2.0.5` → `v2.1.0-dev`
+
+- **README.md**：
+  - 项目描述更新为"运行 Claude Code 和 OpenAI Codex 的个人开发工具"
+  - 所有版本号从 `v2.0.4-dev` 更新到 `v2.1.0-dev`
+  - 新增"使用 Claude Code 或 Codex"章节
+  - 添加 Codex 配置说明和使用示例
+  - 说明两种作用域模式对两个 CLI 的支持
+
+- **CHANGELOG.md**（新增）：
+  - 详细记录 v2.1.0-dev 的所有变更
+  - 包含技术细节和设计决策
+
+- **docs/v2.1.0-dev-testing.md**（新增）：
+  - 完整的测试清单
+  - 覆盖构建、启动、配置、功能和兼容性测试
+
+### 设计决策
+
+- **双 CLI 并行**：Codex 与 Claude Code 同时安装在容器中，互不干扰
+- **独立配置目录**：Codex 使用 `.codex`，Claude 使用 `.claude`，配置隔离
+- **统一作用域管理**：临时/项目两种模式同时适用于两个 CLI
+- **共享 AISC 配置**：providers.json、API keys 等配置在 `.aisc` 目录中共享
+- **无 tmux 依赖**：按要求，容器中不安装 tmux
+
+### 关键特性
+
+1. **双 CLI 支持**：容器内同时提供 Claude Code 和 Codex
+2. **独立配置**：每个 CLI 有独立的配置目录，互不干扰
+3. **统一管理**：共享 AISC 配置目录（providers.json、API keys）
+4. **灵活启动**：支持交互式菜单或直接指定 CLI
+5. **作用域隔离**：临时模式和项目模式对两个 CLI 都生效
+
+### 取舍
+
+- **Codex 配置简化**：Codex 配置目录结构比 Claude 简单，仅创建目录，首次运行时由 Codex 自动生成配置文件
+- **环境变量命名**：新增 `CODEX_CONFIG_DIR`，保持与 `CLAUDE_CONFIG_DIR` 命名一致性
+- **启动菜单扩展**：从 2 个选项（bash/claude）扩展到 3 个（bash/claude/codex）
+- **向后兼容**：保持 `CLAUDE_SCOPE` 环境变量兼容性，新增 `CLI_SCOPE` 作为统一名称
+
+### 验证
+
+- 所有代码文件已提交到本地 main 分支
+- 文件变更统计：+242 行, -48 行
+- 创建 2 个提交：
+  1. `feat: 集成 OpenAI Codex CLI 作为 v2.1.0-dev` (6b4372c)
+  2. `docs: 添加 v2.1.0-dev 变更日志和测试清单` (4914645)
+- 由于当前 WSL 环境无 Docker daemon，未执行构建测试
+
+### 已知限制
+
+- Codex 需要 OpenAI API 认证（ChatGPT Plus/Pro/Enterprise 或 API Key）
+- 两个 CLI 使用不同的配置目录，不共享历史记录
+- 当前环境无法执行 Docker 构建测试，需在有 Docker 的环境中验证
+
+### 测试建议
+
+在有 Docker 的环境中执行以下测试：
+
+```bash
+# 构建镜像
+docker build -t aisc:v2.1.0-dev -f container/Dockerfile .
+
+# 验证两个 CLI 都已安装
+docker run -it --rm aisc:v2.1.0-dev claude --version
+docker run -it --rm aisc:v2.1.0-dev codex --version
+
+# 测试启动菜单
+docker run -it --rm aisc:v2.1.0-dev
+
+# 测试直接启动 Codex
+docker run -it --rm aisc:v2.1.0-dev codex
+```
+
+---
+
 ### 已知未完成 / 技术债（如实记录，不做为已完成）
 
 - **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。
