@@ -20,31 +20,36 @@ source /usr/local/bin/lib/path-resolve.sh
 # 路径模型（全程非 root，用户 AISC，家目录 /home/AISC）
 #   .claude = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
 #             临时模式用镜像内置 /home/AISC/.claude；项目模式整目录拷到 /home/AISC/app/.claude（不改名）
+#   .codex  = Codex CLI 配置目录（类似 .claude 结构）
+#             临时模式用镜像内置 /home/AISC/.codex；项目模式整目录拷到 /home/AISC/app/.codex
 #   .aisc   = AISC 配置目录（providers.json + secrets/api-keys）
 #             固定放当前项目 /home/AISC/app/.aisc（临时与项目模式都用它）
 # ==========================================
 GLOBAL_CLAUDE_DIR="/home/AISC/.claude"
 PROJECT_CLAUDE_DIR="/home/AISC/app/.claude"
+GLOBAL_CODEX_DIR="/home/AISC/.codex"
+PROJECT_CODEX_DIR="/home/AISC/app/.codex"
 AISC_DIR="/home/AISC/app/.aisc"
 
-echo -e "\n🚀 [Super Claude] 工作站初始化中..."
+echo -e "\n🚀 [AISC] AI 工作站初始化中..."
 
 # ==========================================
-# 1. 选择 .claude 作用域：临时 / 项目
-#    临时(temporary) = 用镜像内置 /home/AISC/.claude，容器退出即重置，改动不保留
-#    项目(project)   = /home/AISC/app/.claude，持久到宿主机卷，跨 run 保留
-#    - 优先环境变量 CLAUDE_SCOPE=global|project（global 即临时；无交互，适合脚本）
+# 1. 选择 CLI 作用域：临时 / 项目
+#    临时(temporary) = 用镜像内置配置，容器退出即重置，改动不保留
+#    项目(project)   = 项目独立配置，持久到宿主机卷，跨 run 保留
+#    - 优先环境变量 CLI_SCOPE=global|project（global 即临时；无交互，适合脚本）
+#    - 兼容旧环境变量 CLAUDE_SCOPE
 #    - 否则交互终端弹菜单
 #    - 非交互且无变量 → 默认 project
 # ==========================================
-SCOPE="${CLAUDE_SCOPE:-}"
+SCOPE="${CLI_SCOPE:-${CLAUDE_SCOPE:-}}"
 
 if [ -z "$SCOPE" ]; then
     if [ -t 0 ]; then
         echo ""
-        echo "请选择 Claude (.claude) 作用域："
-        echo "  1) 临时 temporary — 使用镜像内置 .claude (${GLOBAL_CLAUDE_DIR})，容器退出即重置、改动不保留"
-        echo "  2) 项目 project   — 当前项目独立 .claude (${PROJECT_CLAUDE_DIR})，持久到宿主机，从镜像完整复制"
+        echo "请选择 AI CLI 作用域（Claude + Codex）："
+        echo "  1) 临时 temporary — 使用镜像内置配置，容器退出即重置、改动不保留"
+        echo "  2) 项目 project   — 当前项目独立配置，持久到宿主机，从镜像完整复制"
         echo ""
         read -r -p "输入 1 或 2 [默认 2]: " choice
         case "$choice" in
@@ -57,19 +62,18 @@ if [ -z "$SCOPE" ]; then
 fi
 
 # ==========================================
-# 2. 按作用域确定 CLAUDE_CONFIG_DIR（CLI 原生目录）
+# 2. 按作用域确定 CLI 配置目录
 # ==========================================
 if [ "$SCOPE" = "global" ] || [ "$SCOPE" = "temp" ] || [ "$SCOPE" = "temporary" ]; then
     CLAUDE_CONFIG_DIR="$GLOBAL_CLAUDE_DIR"
-    echo "🧪 作用域: 临时 (temporary) → $CLAUDE_CONFIG_DIR （容器退出即重置）"
+    CODEX_CONFIG_DIR="$GLOBAL_CODEX_DIR"
+    echo "🧪 作用域: 临时 (temporary) → Claude: $CLAUDE_CONFIG_DIR, Codex: $CODEX_CONFIG_DIR （容器退出即重置）"
 else
     CLAUDE_CONFIG_DIR="$PROJECT_CLAUDE_DIR"
-    echo "📁 作用域: 项目 (project) → $CLAUDE_CONFIG_DIR"
+    CODEX_CONFIG_DIR="$PROJECT_CODEX_DIR"
+    echo "📁 作用域: 项目 (project) → Claude: $CLAUDE_CONFIG_DIR, Codex: $CODEX_CONFIG_DIR"
 
-    # 项目 .claude 不存在或残缺 → 从镜像内置 .claude 完整复制
-    #   完整性判据：skills 与 plugins 同时存在且非空。
-    #   残缺多因旧版在 Windows 绑定挂载上 cp 符号链接失败中断所致；此处自动修复。
-    #   cp -rL 解引用符号链接，兼容 grpcfuse。
+    # 项目 .claude 初始化（保持原有逻辑）
     NEED_COPY=0
     if [ "${FORCE_COPY_CLAUDE:-0}" = "1" ]; then
         NEED_COPY=1
@@ -107,27 +111,31 @@ else
         echo "🔍 检测到当前项目已有完整 .claude，跳过复制 (保护您的自定义修改)。"
     fi
 
-    # 修正插件注册表绝对路径 → /home/AISC/app/.claude（幂等）。
-    # 否则 installPath 仍指向镜像内路径，CLI 误判项目内插件副本为 orphan，
-    # 可能在后续插件操作时删除其 dist → claude-hud(HUD) 等失效。
-    # 兼容两类历史路径：当前镜像 /home/AISC/.claude，更早 root 镜像 /root/.claude
-    # （后者 AISC 读不了 /root → 插件加载失败、skills 不出现）。
+    # 修正插件注册表绝对路径（幂等）
     for j in installed_plugins.json known_marketplaces.json; do
         f="$PROJECT_CLAUDE_DIR/plugins/$j"
         [ -f "$f" ] && sed -i -e "s#${GLOBAL_CLAUDE_DIR}#${PROJECT_CLAUDE_DIR}#g" \
                                 -e "s#/root/.claude#${PROJECT_CLAUDE_DIR}#g" "$f" 2>/dev/null || true
     done
 
-    # 检测镜像出厂配置是否比项目新 → 仅提示，由用户手动 cs upgrade
+    # 检测镜像出厂配置更新
     FV_IMG="$GLOBAL_CLAUDE_DIR/.factory-version"
     FV_PRJ="$PROJECT_CLAUDE_DIR/.factory-version"
     if [ -f "$FV_IMG" ] && [ "$(cat "$FV_IMG" 2>/dev/null)" != "$(cat "$FV_PRJ" 2>/dev/null)" ]; then
         echo "⚠️  镜像出厂配置已更新（skills/插件/命令等）。"
         echo "    运行  cs upgrade  升级当前项目 .claude（保留你的后端配置与历史）。"
     fi
+
+    # 项目 .codex 初始化（Codex 配置通常较简单，仅创建目录）
+    if [ ! -d "$PROJECT_CODEX_DIR" ]; then
+        echo "📦 初始化 Codex 配置目录..."
+        mkdir -p "$PROJECT_CODEX_DIR"
+        # Codex 会在首次运行时自动创建必要的配置文件
+    fi
 fi
 
 export CLAUDE_CONFIG_DIR
+export CODEX_CONFIG_DIR
 
 # .aisc（配置）目录确保存在
 ensure_writable "$AISC_DIR"
@@ -176,13 +184,14 @@ for _d in "$AISC_DIR" "$AISC_DIR/secrets"; do
   fi
 done
 
-# 让用户进入 bash 后再次运行 cs / claude 时仍能拿到同一作用域
+# 让用户进入 bash 后再次运行 CLI 时仍能拿到同一作用域
 # （非 root，只能写家目录 ~/.bashrc；不再写 /etc/profile.d）
 if ! grep -q 'CLAUDE_CONFIG_DIR' "$HOME/.bashrc" 2>/dev/null; then
     {
         echo ""
         echo "# AISC runtime exports"
         echo "export CLAUDE_CONFIG_DIR='$CLAUDE_CONFIG_DIR'"
+        echo "export CODEX_CONFIG_DIR='$CODEX_CONFIG_DIR'"
         echo "export AISC_DIR='$AISC_DIR'"
     } >> "$HOME/.bashrc"
 fi
@@ -366,7 +375,7 @@ case "${AI_BRIEF_ON_START,,}" in
 esac
 
 # ==========================================
-# 4. 智能引导：支持 cs 直连切换
+# 4. 智能引导：支持 cs 直连切换和 CLI 选择
 # ==========================================
 # 如果用户用 Docker 命令行传入 cs，表示切换后自动重启 Claude
 if [ "$1" = "cs" ]; then
@@ -374,8 +383,13 @@ if [ "$1" = "cs" ]; then
     SC_RESTART=1 exec /usr/local/bin/cs "$@"
 fi
 
+# 支持直接启动 codex
+if [ "$1" = "codex" ]; then
+    exec codex "$@"
+fi
+
 # ==========================================
-# 5. 启动方式菜单：bash（可选）/ claude（默认）
+# 5. 启动方式菜单：bash / claude / codex（默认）
 #    仅在交互终端、且以默认 claude 启动时弹出
 #    无任何 cs 配置时不再拦截 —— 空配置即走 cc 官方默认端点
 # ==========================================
@@ -385,12 +399,14 @@ if [ "$1" = "claude" ] && [ -t 0 ]; then
     fi
     echo ""
     echo "请选择启动方式："
-    echo "  1) bash   进入命令行（可手动 cs 配置后再 claude）"
-    echo "  2) claude 直接启动 Claude（默认）"
+    echo "  1) bash   进入命令行（可手动配置后再启动 AI CLI）"
+    echo "  2) claude 直接启动 Claude Code（默认）"
+    echo "  3) codex  直接启动 OpenAI Codex"
     echo ""
-    read -r -p "输入 1 或 2 [默认 2]: " launch
+    read -r -p "输入 1、2 或 3 [默认 2]: " launch
     case "$launch" in
         1) echo "▶️  进入 bash。"; exec bash ;;
+        3) echo "▶️  启动 Codex..."; exec codex ;;
         *) ;;  # 继续往下启动 claude
     esac
 fi

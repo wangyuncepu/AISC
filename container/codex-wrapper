@@ -1,0 +1,19 @@
+#!/bin/bash
+# Codex 包装器：每次启动 Codex 前从配置注入环境变量
+# 类似 claude-wrapper，但适配 Codex 的配置结构
+set -e
+
+source /usr/local/bin/lib/env-inject.sh
+
+# Codex 配置目录（类似 Claude 的 CLAUDE_CONFIG_DIR）
+CODEX_CONFIG_DIR="${CODEX_CONFIG_DIR:-/home/AISC/.codex}"
+CODEX_SETTINGS="${CODEX_CONFIG_DIR}/settings.json"
+
+# 如果存在 Codex 专用配置，从中注入环境变量
+# Codex 使用 OPENAI_API_KEY 等环境变量
+if [ -f "$CODEX_SETTINGS" ]; then
+    env_inject "$CODEX_SETTINGS"
+fi
+
+# Codex 不需要 --dangerously-skip-permissions flag，直接执行
+exec codex-real "$@"

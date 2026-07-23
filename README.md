@@ -1,8 +1,8 @@
 # AISC 用户手册
 
-AISC 是一个在 Docker 容器中运行 Claude Code 的个人开发工具。提供 `aisc` 命令行，可在宿主机上构建镜像、管理容器、切换 AI 模型服务。
+AISC 是一个在 Docker 容器中运行 Claude Code 和 OpenAI Codex 的个人开发工具。提供 `aisc` 命令行，可在宿主机上构建镜像、管理容器、切换 AI 模型服务。
 
-> **状态：Alpha / 开发中。** 当前版本 `v2.0.4-dev`。
+> **状态：Alpha / 开发中。** 当前版本 `v2.1.0-dev`。
 
 ## 目录
 
@@ -55,13 +55,13 @@ docker version
 
 ### 方式一：GitHub Release 安装包（推荐）
 
-从 [GitHub Release v2.0.4-dev](https://github.com/wangyuncepu/AISC/releases/tag/v2.0.4-dev) 下载对应平台的安装包。
+从 [GitHub Release v2.1.0-dev](https://github.com/wangyuncepu/AISC/releases/tag/v2.1.0-dev) 下载对应平台的安装包。
 
 当前版本已作为 GitHub **Pre-release** 发布；普通用户直接从上面的 Release 页面下载即可，无需进入 Actions 页面。
 
 #### Windows
 
-下载 `AISC-2.0.4-dev-windows-x86_64-setup.exe`，双击运行。
+下载 `AISC-2.1.0-dev-windows-x86_64-setup.exe`，双击运行。
 
 - **仅支持 x86_64**；ARM Windows 不支持。
 - 默认安装到 `%LOCALAPPDATA%\Programs\AISC`。
@@ -74,8 +74,8 @@ docker version
 备用：ZIP 便携版
 
 ```powershell
-Expand-Archive AISC-2.0.4-dev-windows-x86_64.zip -DestinationPath .
-cd AISC-2.0.4-dev-windows-x86_64
+Expand-Archive AISC-2.1.0-dev-windows-x86_64.zip -DestinationPath .
+cd AISC-2.1.0-dev-windows-x86_64
 .\aisc.exe version
 ```
 
@@ -85,7 +85,7 @@ cd AISC-2.0.4-dev-windows-x86_64
 
 ##### 安装程序（推荐）
 
-下载 `AISC-2.0.4-dev-macos-arm64.pkg`，双击运行。
+下载 `AISC-2.1.0-dev-macos-arm64.pkg`，双击运行。
 
 - **仅支持 Apple Silicon（arm64）**；Intel Mac 不支持。
 - 需**管理员密码**（安装到 `/usr/local/`）。
@@ -102,8 +102,8 @@ cd AISC-2.0.4-dev-windows-x86_64
 ##### 便携版（备用）
 
 ```bash
-tar -xzf AISC-2.0.4-dev-macos-arm64.tar.gz
-cd AISC-2.0.4-dev-macos-arm64
+tar -xzf AISC-2.1.0-dev-macos-arm64.tar.gz
+cd AISC-2.1.0-dev-macos-arm64
 ./aisc version
 ```
 
@@ -113,7 +113,7 @@ cd AISC-2.0.4-dev-macos-arm64
 # install.sh / uninstall.sh 位于 AISC 源码仓库的 packaging/ 目录
 git clone --depth 1 https://github.com/wangyuncepu/AISC.git
 cd AISC
-bash packaging/install.sh ~/Downloads/AISC-2.0.4-dev-macos-arm64.tar.gz
+bash packaging/install.sh ~/Downloads/AISC-2.1.0-dev-macos-arm64.tar.gz
 bash packaging/uninstall.sh   # 卸载
 ```
 
@@ -122,15 +122,15 @@ bash packaging/uninstall.sh   # 卸载
 ##### tar.gz + 安装脚本
 
 ```bash
-# 1. 下载 AISC-2.0.4-dev-linux-x86_64.tar.gz
+# 1. 下载 AISC-2.1.0-dev-linux-x86_64.tar.gz
 
 # 2. 可选的 SHA256 校验
-sha256sum -c AISC-2.0.4-dev-linux-x86_64.tar.gz.sha256
+sha256sum -c AISC-2.1.0-dev-linux-x86_64.tar.gz.sha256
 
 # 3. 获取仓库中的安装脚本并安装
 git clone --depth 1 https://github.com/wangyuncepu/AISC.git
 cd AISC
-bash packaging/install.sh ~/Downloads/AISC-2.0.4-dev-linux-x86_64.tar.gz
+bash packaging/install.sh ~/Downloads/AISC-2.1.0-dev-linux-x86_64.tar.gz
 ```
 
 安装脚本会：
@@ -142,8 +142,8 @@ bash packaging/install.sh ~/Downloads/AISC-2.0.4-dev-linux-x86_64.tar.gz
 解压直接运行（无需安装脚本）：
 
 ```bash
-tar -xzf AISC-2.0.4-dev-linux-x86_64.tar.gz
-cd AISC-2.0.4-dev-linux-x86_64
+tar -xzf AISC-2.1.0-dev-linux-x86_64.tar.gz
+cd AISC-2.1.0-dev-linux-x86_64
 ./aisc version
 ```
 
@@ -211,6 +211,40 @@ aisc status        # 查看容器状态
 aisc shell         # 进入容器 Bash
 aisc switch        # 打开服务切换界面
 ```
+
+### 使用 Claude Code 或 Codex
+
+容器启动时会提示选择要使用的 AI CLI：
+
+1. **bash** - 进入命令行，可手动配置后启动任意 CLI
+2. **claude** - 直接启动 Claude Code（默认）
+3. **codex** - 直接启动 OpenAI Codex
+
+你也可以直接指定启动方式：
+
+```bash
+# 启动 Claude Code
+aisc run
+
+# 启动 Codex
+docker exec -it <container-name> codex
+
+# 或在容器内切换
+aisc shell
+codex   # 启动 Codex
+claude  # 启动 Claude
+```
+
+**Codex 配置说明：**
+
+Codex CLI 使用 `OPENAI_API_KEY` 环境变量进行身份验证。你可以：
+
+1. 在容器内通过 `codex` 命令首次运行时进行登录配置
+2. 或预先设置环境变量（在 `~/.codex/settings.json` 中配置）
+
+Codex 配置目录与 Claude 类似，支持临时模式和项目模式：
+- **临时模式**：使用 `/home/AISC/.codex`，容器退出后重置
+- **项目模式**：使用 `/home/AISC/app/.codex`，持久化到宿主机
 
 ## 配置位置
 

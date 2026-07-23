@@ -27,6 +27,9 @@ ARG CC_SWITCH_VERSION=v5.9.0
 # Claude Code npm 版本（@anthropic-ai/claude-code）
 ARG CLAUDE_CODE_VERSION=latest  # TODO: pin to specific version
 
+# Codex CLI npm 版本（@openai/codex）
+ARG CODEX_VERSION=latest  # TODO: pin to specific version
+
 # Geodata 发布版本（MetaCubeX/meta-rules-dat release tag）
 ARG GEODATA_VERSION=latest  # TODO: pin to dated release tag
 
@@ -121,13 +124,15 @@ RUN set -eux; \
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-# 替换 NPM 源（按 USE_CN_MIRROR）并全局安装 Claude Code
+# 替换 NPM 源（按 USE_CN_MIRROR）并全局安装 Claude Code 和 Codex CLI
 # --no-cache + 版本校验：防止镜像源返回损坏 tarball 导致装出的二进制 segfault
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
         npm config set registry https://registry.npmmirror.com/ ; echo "npm: 淘宝镜像" ; \
     else echo "npm: 官方源" ; fi \
     && npm install -g --no-cache @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    && claude --version
+    && npm install -g --no-cache @openai/codex@${CODEX_VERSION} \
+    && claude --version \
+    && codex --version
 
 # ==========================================
 # 全局 Claude CLI 目录：/home/AISC/.claude（CLI 原生完整目录）
@@ -235,14 +240,20 @@ RUN mv /usr/local/bin/claude /usr/local/bin/claude-real
 COPY container/claude-wrapper /usr/local/bin/claude
 RUN chmod +x /usr/local/bin/claude
 
+# Codex 包装器：类似 Claude，从配置注入环境变量
+RUN mv /usr/local/bin/codex /usr/local/bin/codex-real
+COPY container/codex-wrapper /usr/local/bin/codex
+RUN chmod +x /usr/local/bin/codex
+
 # 防御：若构建上下文来自 Windows（CRLF），脚本 shebang 会变成 "#!/bin/bash\r"，
 # 导致 "cannot execute: required file not found"。统一剥离 CR，确保镜像内脚本可执行。
-# 注意：只处理文本脚本，绝不能 sed claude-real —— 那是 244MB 原生 ELF 二进制，
+# 注意：只处理文本脚本，绝不能 sed claude-real/codex-real —— 那些是原生 ELF 二进制，
 # sed -i 会破坏其结构导致运行时 segfault。
 RUN sed -i 's/\r$//' \
         /usr/local/bin/entrypoint.sh \
         /usr/local/bin/cs \
         /usr/local/bin/claude \
+        /usr/local/bin/codex \
         /usr/local/bin/mihomo-build-config.js \
         /usr/local/bin/lib/env-inject.sh \
         /usr/local/bin/lib/path-resolve.sh 2>/dev/null || true
