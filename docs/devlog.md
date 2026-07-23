@@ -10,6 +10,7 @@
 - 容器交互启动菜单新增第 4 个入口，可直接打开 cc-switch 的 Provider、代理路由与 Skills 管理 TUI。
 - 内置 skills 同步改为默认 `auto`：镜像构建时生成 bundle 哈希，普通重启在内容、登记和已启用目标均完整时直接跳过，避免重复复制、写库和全量 `skills sync`。
 - cc-switch 中已有 skill 仅刷新元数据，不再在容器启动时强制写回 `enabled_claude=1` / `enabled_codex=1`，用户手动停用状态可跨重启保留；另提供 `AISC_SKILLS_SYNC=always|off`。
+- Windows/Docker Desktop 挂载无法取得文件锁时不再静默复制：仅当 `.cc-switch/skills`、`.claude/skills`、`.codex/skills` 全部不存在才直接安装；任一已存在则以 `[y/N]` 请求确认，非交互默认保留宿主内容。
 - 重写 README 与开发者手册中的当前版本、cc-switch 配置边界、故障排查和自动发布说明。
 - 将本开发日志按版本发布时间重新排序，并依据真实 commit 历史重写 `v2.0.0-dev`。
 - 将已经在 `v2.1.2-dev` 验证的 root/cc-switch/单一版本源运行时提升为首个 `v2.1.x` 稳定发布，并补齐 cc-switch 容器启动入口。

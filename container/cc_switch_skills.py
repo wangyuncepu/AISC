@@ -34,6 +34,11 @@ BUNDLED_SKILLS = (
 REVISION_FILE = ".aisc-bundle.sha256"
 MARKER_FILE = ".aisc-bundled-skills.sha256"
 LOCK_FILE = ".aisc-bundled-skills.lock"
+UNLOCKED_PROMPT = (
+    "⚠️  cc-switch skills 文件锁不可用，检测到宿主 Skills 目录已存在：\n"
+    "{paths}\n"
+    "    是否复制/更新内置 skills？同名文件会被覆盖，其他文件会保留。[y/N]: "
+)
 
 
 def _read_text(path: Path) -> str:
@@ -159,6 +164,97 @@ def _run_cc_switch(args: list[str], log: TextIO, *, check: bool) -> None:
     )
 
 
+def _try_acquire_lock(
+    *,
+    config_dir: Path,
+    log: TextIO,
+) -> tuple[TextIO | None, bool]:
+    lock_path = config_dir / LOCK_FILE
+    try:
+        lock = lock_path.open("a+", encoding="utf-8")
+    except OSError as exc:
+        print(
+            f"skill sync lock file unavailable; using confirmation fallback: {exc}",
+            file=log,
+        )
+        return None, False
+
+    try:
+        import fcntl
+
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    except (ImportError, OSError) as exc:
+        lock.close()
+        print(
+            f"skill sync lock unavailable; using confirmation fallback: {exc}",
+            file=log,
+        )
+        return None, False
+    return lock, True
+
+
+def _path_exists(path: Path) -> bool:
+    """Treat broken symlinks as existing host content."""
+    return os.path.lexists(path)
+
+
+def _approve_unlocked_sync(
+    *,
+    config_dir: Path,
+    skills_home: Path,
+    input_stream: TextIO,
+    prompt_stream: TextIO,
+    log: TextIO,
+) -> bool:
+    skills_dirs = (
+        config_dir / "skills",
+        skills_home / ".claude" / "skills",
+        skills_home / ".codex" / "skills",
+    )
+    existing = [path for path in skills_dirs if _path_exists(path)]
+
+    if not existing:
+        # mkdir is the lock-free, exclusive first-install claim. If another
+        # process wins the race, fall through to the confirmation path.
+        try:
+            skills_dirs[0].mkdir()
+        except FileExistsError:
+            existing = [path for path in skills_dirs if _path_exists(path)]
+        else:
+            print(
+                "no host skills directories found; claimed .cc-switch/skills "
+                "for first install",
+                file=log,
+            )
+            return True
+
+    invalid = [path for path in existing if not path.is_dir()]
+    if invalid:
+        joined = ", ".join(str(path) for path in invalid)
+        raise NotADirectoryError(f"host skills path is not a directory: {joined}")
+
+    if not input_stream.isatty():
+        print(
+            "host skills directories exist and stdin is non-interactive; "
+            "declining unlocked sync",
+            file=log,
+        )
+        return False
+
+    paths = "\n".join(f"    - {path}" for path in existing)
+    prompt_stream.write(UNLOCKED_PROMPT.format(paths=paths))
+    prompt_stream.flush()
+    answer = input_stream.readline()
+    approved = answer.strip().lower() in {"y", "yes"}
+    print(
+        "user approved unlocked skill sync"
+        if approved
+        else "user declined unlocked skill sync",
+        file=log,
+    )
+    return approved
+
+
 def synchronize(
     *,
     config_dir: Path,
@@ -219,18 +315,11 @@ def main(argv: list[str] | None = None) -> int:
             if not revision:
                 raise ValueError("bundled skills revision is empty")
 
-            import fcntl
-
-            with (args.config_dir / LOCK_FILE).open("a+", encoding="utf-8") as lock:
-                try:
-                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-                except OSError as exc:
-                    # Docker Desktop bind mounts may not implement advisory locks.
-                    # Synchronization is idempotent, so continue without the guard.
-                    print(
-                        f"skill sync lock unavailable; continuing without it: {exc}",
-                        file=log,
-                    )
+            lock, locked = _try_acquire_lock(
+                config_dir=args.config_dir,
+                log=log,
+            )
+            try:
                 required, reason = sync_required(
                     config_dir=args.config_dir,
                     skills_home=args.skills_home,
@@ -243,6 +332,16 @@ def main(argv: list[str] | None = None) -> int:
                     print("current")
                     return 0
 
+                if not locked and not _approve_unlocked_sync(
+                    config_dir=args.config_dir,
+                    skills_home=args.skills_home,
+                    input_stream=sys.stdin,
+                    prompt_stream=sys.stderr,
+                    log=log,
+                ):
+                    print("declined")
+                    return 0
+
                 print(f"sync required: {reason}", file=log)
                 synchronize(
                     config_dir=args.config_dir,
@@ -250,6 +349,9 @@ def main(argv: list[str] | None = None) -> int:
                     revision=revision,
                     log=log,
                 )
+            finally:
+                if lock is not None:
+                    lock.close()
         except Exception:
             traceback.print_exc(file=log)
             return 1

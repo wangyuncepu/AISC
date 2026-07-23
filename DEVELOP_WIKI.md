@@ -318,6 +318,8 @@ Provider 和认证信息只由 cc-switch 管理。AISC 不再维护独立 Provid
 
 `AISC_SKILLS_SYNC` 支持 `auto`（默认）、`always`、`off`。`auto` 通过构建期 bundle 哈希、SQLite 登记状态和已启用目标目录决定是否同步；已有记录只更新元数据，不修改 `enabled_claude` / `enabled_codex`。因此用户在 cc-switch 中停用 skill 后，容器重启不会重新启用。
 
+正常情况下同步使用 `.cc-switch/.aisc-bundled-skills.lock` 的 `flock` 串行化。若 Windows/Docker Desktop 绑定挂载不支持该锁，则在确认确实需要同步后进入保护性降级：`.cc-switch/skills` 是 cc-switch Skills 源目录，并同时检查 `.claude/skills`、`.codex/skills` 两个目标目录。三者全不存在时以排他 `mkdir` 认领首次安装；任一存在或仅部分存在时显示 `[y/N]`，非交互和空输入均跳过且不更新 bundle 标记。`always` 不绕过该确认。
+
 注意：cc-switch 的“路由已启用”只表示本地代理接管成功，不证明 Provider 已有可用凭据或上游地址。排障时必须分别检查 `daemon status`、`provider current` 和 `proxy show`。caveman 等 skill 只影响 agent 指令，不参与网络路由。
 
 **最低验证命令**:

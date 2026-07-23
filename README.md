@@ -596,6 +596,8 @@ Provider、认证信息和路由状态都由 cc-switch 管理。请用 cc-switch
 
 内置 skills 默认使用 `AISC_SKILLS_SYNC=auto`：首次安装或检测到内容/目标变化时才同步，普通重启直接跳过，并保留你在 cc-switch 中设置的 Claude/Codex 启停状态。排障时可用 `AISC_SKILLS_SYNC=always` 强制重建；如需完全禁止 AISC 自动同步，可设为 `off`。
 
+在 Windows/Docker Desktop 绑定挂载不支持文件锁时，AISC 会启用保护性确认：只有宿主项目的 `.cc-switch/skills`、`.claude/skills`、`.codex/skills` 三个目录都不存在时才直接复制；任一目录已存在都会询问是否合并并覆盖同名文件，默认 `[y/N]`。非交互运行默认不复制并保留宿主内容；`always` 在文件锁失效时同样需要确认。
+
 ### profile — Profile 管理
 
 ```bash

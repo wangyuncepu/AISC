@@ -1,5 +1,6 @@
 """Regression tests for the AISC/cc-switch runtime wiring."""
 
+import io
 import importlib.util
 import sqlite3
 import subprocess
@@ -98,6 +99,7 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         self.assertIn("/usr/local/bin/lib/cc_switch_skills.py", entrypoint)
         self.assertIn('--mode "${AISC_SKILLS_SYNC:-auto}"', entrypoint)
         self.assertIn("cc-switch 内置 skills 已是最新，跳过同步", entrypoint)
+        self.assertIn("宿主 Skills 已存在", entrypoint)
         self.assertIn("INSERT OR IGNORE INTO skills", helper)
         self.assertIn('f"aisc:{name}"', helper)
         self.assertIn('["skills", "sync-method", "copy"]', helper)
@@ -476,3 +478,190 @@ class CcSwitchSkillSyncTests(unittest.TestCase):
             marker_exists = marker.exists()
 
         self.assertFalse(marker_exists)
+
+    def test_unlocked_first_install_claims_missing_skills_directory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_dir = root / ".cc-switch"
+            skills_home = root / "home"
+            config_dir.mkdir()
+            log = io.StringIO()
+            prompt = io.StringIO()
+
+            approved = SKILLS_HELPER._approve_unlocked_sync(
+                config_dir=config_dir,
+                skills_home=skills_home,
+                input_stream=io.StringIO(),
+                prompt_stream=prompt,
+                log=log,
+            )
+
+            claimed = (config_dir / "skills").is_dir()
+
+        self.assertTrue(approved)
+        self.assertTrue(claimed)
+        self.assertEqual(prompt.getvalue(), "")
+        self.assertIn("claimed .cc-switch/skills", log.getvalue())
+
+    def test_unusable_lock_file_selects_confirmation_fallback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir) / ".cc-switch"
+            config_dir.mkdir()
+            (config_dir / SKILLS_HELPER.LOCK_FILE).mkdir()
+            log = io.StringIO()
+
+            lock, locked = SKILLS_HELPER._try_acquire_lock(
+                config_dir=config_dir,
+                log=log,
+            )
+
+        self.assertIsNone(lock)
+        self.assertFalse(locked)
+        self.assertIn("confirmation fallback", log.getvalue())
+
+    def test_unlocked_existing_host_skills_accepts_yes(self):
+        class InteractiveInput(io.StringIO):
+            def isatty(self):
+                return True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_dir = root / ".cc-switch"
+            skills_home = root / "home"
+            (config_dir / "skills").mkdir(parents=True)
+            (skills_home / ".claude" / "skills").mkdir(parents=True)
+            (skills_home / ".codex" / "skills").mkdir(parents=True)
+            log = io.StringIO()
+            prompt = io.StringIO()
+
+            approved = SKILLS_HELPER._approve_unlocked_sync(
+                config_dir=config_dir,
+                skills_home=skills_home,
+                input_stream=InteractiveInput("YES\n"),
+                prompt_stream=prompt,
+                log=log,
+            )
+
+        self.assertTrue(approved)
+        self.assertIn(".cc-switch/skills", prompt.getvalue())
+        self.assertIn(".claude/skills", prompt.getvalue())
+        self.assertIn(".codex/skills", prompt.getvalue())
+        self.assertIn("[y/N]", prompt.getvalue())
+
+    def test_unlocked_partial_host_skills_still_prompts_and_defaults_no(self):
+        class InteractiveInput(io.StringIO):
+            def isatty(self):
+                return True
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_dir = root / ".cc-switch"
+            skills_home = root / "home"
+            config_dir.mkdir()
+            (skills_home / ".claude" / "skills").mkdir(parents=True)
+            log = io.StringIO()
+            prompt = io.StringIO()
+
+            approved = SKILLS_HELPER._approve_unlocked_sync(
+                config_dir=config_dir,
+                skills_home=skills_home,
+                input_stream=InteractiveInput("\n"),
+                prompt_stream=prompt,
+                log=log,
+            )
+
+        self.assertFalse(approved)
+        self.assertIn(".claude/skills", prompt.getvalue())
+        self.assertNotIn(".codex/skills", prompt.getvalue())
+        self.assertIn("declined", log.getvalue())
+
+    def test_unlocked_noninteractive_existing_skills_declines_without_prompt(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_dir = root / ".cc-switch"
+            skills_home = root / "home"
+            (config_dir / "skills").mkdir(parents=True)
+            log = io.StringIO()
+            prompt = io.StringIO()
+
+            approved = SKILLS_HELPER._approve_unlocked_sync(
+                config_dir=config_dir,
+                skills_home=skills_home,
+                input_stream=io.StringIO("y\n"),
+                prompt_stream=prompt,
+                log=log,
+            )
+
+        self.assertFalse(approved)
+        self.assertEqual(prompt.getvalue(), "")
+        self.assertIn("non-interactive", log.getvalue())
+
+    def test_unlocked_non_directory_skills_path_fails_safely(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_dir = root / ".cc-switch"
+            skills_home = root / "home"
+            config_dir.mkdir()
+            (config_dir / "skills").write_text("not a directory", encoding="utf-8")
+
+            with self.assertRaises(NotADirectoryError):
+                SKILLS_HELPER._approve_unlocked_sync(
+                    config_dir=config_dir,
+                    skills_home=skills_home,
+                    input_stream=io.StringIO(),
+                    prompt_stream=io.StringIO(),
+                    log=io.StringIO(),
+                )
+
+    def test_always_mode_still_requires_unlocked_approval(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_dir = root / ".cc-switch"
+            skills_home = root / "home"
+            bundle_dir = root / "bundle"
+            log_path = root / "skills.log"
+            bundle_dir.mkdir()
+            (bundle_dir / SKILLS_HELPER.REVISION_FILE).write_text(
+                "bundle-v2\n",
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+
+            with (
+                patch.object(
+                    SKILLS_HELPER,
+                    "_try_acquire_lock",
+                    return_value=(None, False),
+                ),
+                patch.object(
+                    SKILLS_HELPER,
+                    "sync_required",
+                    return_value=(False, "current"),
+                ),
+                patch.object(
+                    SKILLS_HELPER,
+                    "_approve_unlocked_sync",
+                    return_value=False,
+                ) as approve,
+                patch.object(SKILLS_HELPER, "synchronize") as synchronize,
+                patch.object(SKILLS_HELPER.sys, "stdout", stdout),
+            ):
+                result = SKILLS_HELPER.main(
+                    [
+                        "--config-dir",
+                        str(config_dir),
+                        "--skills-home",
+                        str(skills_home),
+                        "--bundle-dir",
+                        str(bundle_dir),
+                        "--log",
+                        str(log_path),
+                        "--mode",
+                        "always",
+                    ]
+                )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(stdout.getvalue(), "declined\n")
+        approve.assert_called_once()
+        synchronize.assert_not_called()

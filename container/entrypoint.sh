@@ -306,6 +306,9 @@ if command -v cc-switch >/dev/null 2>&1; then
                 off)
                     echo "ℹ️  AISC_SKILLS_SYNC=off，已跳过 cc-switch 内置 skills 同步。"
                     ;;
+                declined)
+                    echo "ℹ️  文件锁不可用且宿主 Skills 已存在，已按默认选择保留现有内容并跳过同步。"
+                    ;;
             esac
         else
             echo "⚠️  cc-switch skills 离线安装失败；日志: $CC_SWITCH_SKILLS_LOG" >&2
