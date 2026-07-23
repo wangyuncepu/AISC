@@ -1,5 +1,5 @@
 #!/bin/bash
-# cc-switch 用 HOME 推导 skills 目标。项目态使用挂载后的 /root；
+# cc-switch 用 HOME 推导 skills 目标。项目态使用挂载后的 /root/app；
 # 临时态改用 /tmp/aisc-home，避免写入宿主工作区。
 set -e
 
@@ -7,7 +7,7 @@ if [ "${CLAUDE_CONFIG_DIR:-}" = "/tmp/aisc-home/.claude" ] || \
    [ "${CODEX_HOME:-}" = "/tmp/aisc-home/.codex" ]; then
     export HOME="/tmp/aisc-home"
 else
-    export HOME="/root"
+    export HOME="/root/app"
 fi
 
 exec cc-switch-real "$@"

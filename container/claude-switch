@@ -12,13 +12,13 @@ SETTINGS_RAW="${CFG_DIR}/settings.json"
 
 # api-keys 密钥存于 .aisc/secrets/api-keys
 # 解析顺序：
-#   1) AISC_DIR（entrypoint 导出，恒为 /root/.aisc）
-#   2) Docker 项目卷 /root/.aisc
+#   1) AISC_DIR（entrypoint 导出，恒为 /root/app/.aisc）
+#   2) Docker 项目卷 /root/app/.aisc
 #   3) 全局 ~/.aisc
 if [ -n "${AISC_DIR:-}" ]; then
   AISC_SECRETS_DIR="$AISC_DIR/secrets"
-elif [ -d /root/.aisc ]; then
-  AISC_SECRETS_DIR="/root/.aisc/secrets"
+elif [ -d /root/app/.aisc ]; then
+  AISC_SECRETS_DIR="/root/app/.aisc/secrets"
 else
   AISC_SECRETS_DIR="${HOME}/.aisc/secrets"
 fi

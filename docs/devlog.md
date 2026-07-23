@@ -1512,13 +1512,13 @@ Windows `.bat` 的 no.4 需在 Windows + Windows Terminal 环境实测确认。
 
 ### 动机
 
-Windows → WSL2 → Docker bind mount 场景下，宿主机工作区直接挂载到 `/root`，统一容器运行身份与文件权限模型，并避免挂载 `/root` 覆盖镜像内置 CLI 资源。
+Windows → WSL2 → Docker bind mount 场景下，容器保持 root 运行身份，同时将宿主机工作区挂载到 `/root/app`，避免覆盖 root 家目录中的容器运行时文件。
 
 ### 变更
 
-- **Docker 挂载路径**：宿主工作区由 `/root/app` 改为直接挂载到 `/root`，容器默认工作目录同步改为 `/root`。
-- **出厂资源隔离**：Claude/Codex 出厂配置与 skills/plugins 迁移到 `/opt/aisc/factory`，Python venv 迁移到 `/opt/aisc/venv`，Mihomo geodata 迁移到 `/opt/aisc/mihomo`。
-- **项目配置路径**：项目作用域使用 `/root/.claude`、`/root/.codex` 和 `/root/.aisc`，首次启动从 `/opt/aisc/factory` 复制并持久化到宿主工作区。
+- **Docker 挂载路径**：宿主工作区挂载到 `/root/app`，容器默认工作目录同步为 `/root/app`。
+- **出厂资源隔离**：Claude/Codex 出厂配置与 skills/plugins 保持在 `/opt/aisc/factory`，Python venv 在 `/opt/aisc/venv`，Mihomo geodata 在 `/opt/aisc/mihomo`。
+- **项目配置路径**：项目作用域使用 `/root/app/.claude`、`/root/app/.codex` 和 `/root/app/.aisc`，首次启动从 `/opt/aisc/factory` 复制并持久化到宿主工作区。
 - **临时作用域**：使用 `/tmp/aisc-home`，不把临时 Claude/Codex 配置写入宿主机工作区。
 - **cc-switch 集成**：启动时自动拉起 daemon、初始化 Codex provider、启用 Claude/Codex 路由，并离线登记和同步 gstack skills。
 - **Codex 权限**：默认启用 bypass approvals/sandbox 与 hook trust，等价于 Claude 容器 bypass 模式。
@@ -1531,7 +1531,8 @@ Windows → WSL2 → Docker bind mount 场景下，宿主机工作区直接挂�
 - cc-switch daemon、Codex provider、Claude/Codex 路由和 gstack skills 验证通过。
 - 完整测试：189 项通过，1 项按既有条件跳过。
 
-### v2.1.1-dev 增量：Windows bind mount `.aisc` 文件兼容
+### v2.1.1-dev 增量：Windows bind mount 与 cc-switch 兼容修复
 
-- 修复宿主机 `.aisc` 被映射为普通文件时的启动错误：`mkdir: ... File exists`。
-- entrypoint 检测到 `/root/.aisc` 非目录后，不删除或覆盖宿主文件，自动切换到 `/tmp/aisc-home/.aisc` 并输出警告，确保容器仍可进入和使用。
+- 项目工作区挂载路径恢复为 `/root/app`，避免宿主机工作区覆盖容器 root 家目录中的运行时文件。
+- 修复 Windows 构建上下文中的 cc-switch 包装脚本 CRLF shebang，避免 `cannot execute: required file not found`。
+- entrypoint 检测到 `/root/app/.aisc` 被映射为普通文件时，不删除或覆盖宿主文件，自动切换到 `/tmp/aisc-home/.aisc` 并输出警告。

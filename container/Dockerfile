@@ -134,7 +134,7 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 # Claude/Codex 出厂目录：/opt/aisc/factory（不会被 /root bind mount 遮蔽）
 #   - 让 Claude CLI 自己生成原生结构（projects/todos/statsig/plugins/shell-snapshots…）
 #   - 再叠加我们的全局 skills + CLAUDE.md + claude.json
-#   - 项目模式整目录拷贝到 /root/.claude（宿主工作区）
+#   - 项目模式整目录拷贝到 /root/app/.claude（宿主工作区）
 # ==========================================
 # 跳过首次启动联网 onboarding（绕过 api.anthropic.com 检查）。
 # 新版 CLI 核心状态在 .claude.json（非 config.json）；缺失会报
@@ -265,7 +265,8 @@ RUN sed -i 's/\r$//' \
         /usr/local/bin/codex \
         /usr/local/bin/mihomo-build-config.js \
         /usr/local/bin/lib/env-inject.sh \
-        /usr/local/bin/lib/path-resolve.sh 2>/dev/null || true
+        /usr/local/bin/lib/path-resolve.sh \
+        /usr/local/bin/cc-switch 2>/dev/null || true
 
 # ==========================================
 # Python 运行时：python3 + pip + venv + python-is-python3
@@ -276,8 +277,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-pip python3-venv python-is-python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# 设置工作目录；宿主工作区直接挂载为 root 家目录。
-WORKDIR /root
+# 设置工作目录；宿主工作区挂载到 /root/app。
+WORKDIR /root/app
 
 # git 系统配置：core.autocrlf=input（/root 会被宿主工作区挂载覆盖）
 #   commit 时 CRLF→LF（仓库永远干净 LF），checkout 不转（保持仓库原样）。
@@ -317,7 +318,8 @@ RUN set -eux; \
     /usr/local/bin/cc-switch-real --version
 
 COPY container/cc-switch-wrapper /usr/local/bin/cc-switch
-RUN chmod +x /usr/local/bin/cc-switch
+RUN sed -i 's/\r$//' /usr/local/bin/cc-switch \
+    && chmod +x /usr/local/bin/cc-switch
 # 设置入口点
 ENTRYPOINT ["entrypoint.sh"]
 

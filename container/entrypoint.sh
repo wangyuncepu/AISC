@@ -20,12 +20,12 @@ source /usr/local/bin/lib/path-resolve.sh
 # ==========================================
 # 路径模型（全程以 root 运行，宿主工作区挂载为 /root）
 #   .claude = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
-#             出厂模板在 /opt/aisc/factory；项目模式复制到 /root/.claude
+#             出厂模板在 /opt/aisc/factory；项目模式复制到 /root/app/.claude
 #             临时模式复制到 /tmp/aisc-home/.claude
 #   .codex  = Codex CLI 配置目录（类似 .claude 结构）
-#             项目模式使用 /root/.codex；临时模式使用 /tmp/aisc-home/.codex
+#             项目模式使用 /root/app/.codex；临时模式使用 /tmp/aisc-home/.codex
 #   .aisc   = AISC 配置目录（config/profiles + secrets/api-keys）
-#             固定放当前项目 /root/.aisc（临时与项目模式都用它）
+#             固定放当前项目 /root/app/.aisc（临时与项目模式都用它）
 #   .cc-switch = cc-switch 运行时目录（数据库、设置、备份等）
 #             固定放 .aisc/.cc-switch，providers.json 也以此为唯一项目路径
 # ==========================================
@@ -35,15 +35,15 @@ FACTORY_CODEX_DIR="$FACTORY_HOME/.codex"
 TEMP_HOME="/tmp/aisc-home"
 TEMP_CLAUDE_DIR="$TEMP_HOME/.claude"
 TEMP_CODEX_DIR="$TEMP_HOME/.codex"
-PROJECT_CLAUDE_DIR="/root/.claude"
-PROJECT_CODEX_DIR="/root/.codex"
-AISC_DIR="/root/.aisc"
+PROJECT_CLAUDE_DIR="/root/app/.claude"
+PROJECT_CODEX_DIR="/root/app/.codex"
+AISC_DIR="/root/app/.aisc"
 
 # Windows bind mount occasionally exposes a host-side `.aisc` file as a file
 # rather than a directory.  Never try to remove or overwrite user data; use an
 # ephemeral container-local config root so startup can continue safely.
 if [ -e "$AISC_DIR" ] && [ ! -d "$AISC_DIR" ]; then
-    echo "⚠️  /root/.aisc 不是目录（检测到普通文件），改用临时配置目录: $TEMP_HOME/.aisc" >&2
+    echo "⚠️  /root/app/.aisc 不是目录（检测到普通文件），改用临时配置目录: $TEMP_HOME/.aisc" >&2
     AISC_DIR="$TEMP_HOME/.aisc"
 fi
 CC_SWITCH_CONFIG_DIR="$AISC_DIR/.cc-switch"
@@ -342,7 +342,7 @@ if command -v cc-switch >/dev/null 2>&1; then
         if [ "$SCOPE" = "global" ] || [ "$SCOPE" = "temp" ] || [ "$SCOPE" = "temporary" ]; then
             CC_SWITCH_SKILLS_HOME="$TEMP_HOME"
         else
-            CC_SWITCH_SKILLS_HOME="/root"
+            CC_SWITCH_SKILLS_HOME="/root/app"
         fi
         CC_SWITCH_SKILLS_SSOT="$CC_SWITCH_CONFIG_DIR/skills/gstack"
 

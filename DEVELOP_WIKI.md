@@ -209,7 +209,7 @@ tests/
 
 ```
 docker run --rm \
-  -v $(pwd):/root \              # 工作区挂载为 root 家目录
+  -v $(pwd):/root/app \          # 工作区挂载
   -e CLAUDE_SCOPE=project \     # 配置作用域
   super-claude:latest
 

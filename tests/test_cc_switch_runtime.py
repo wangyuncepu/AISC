@@ -68,7 +68,7 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
 
         self.assertIn("cc-switch skills sync-method copy", entrypoint)
-        self.assertIn('CC_SWITCH_SKILLS_HOME="/root"', entrypoint)
+        self.assertIn('CC_SWITCH_SKILLS_HOME="/root/app"', entrypoint)
         self.assertIn('CC_SWITCH_SKILLS_SSOT="$CC_SWITCH_CONFIG_DIR/skills/gstack"', entrypoint)
         self.assertIn("INSERT OR IGNORE INTO skills", entrypoint)
         self.assertIn('"aisc:gstack"', entrypoint)
@@ -84,14 +84,14 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         self.assertIn("has_permission_flag", wrapper)
         self.assertIn('exec codex-real "${full_access_flags[@]}" "$@"', wrapper)
 
-    def test_cc_switch_wrapper_maps_temp_scope_and_defaults_project_to_root(self):
+    def test_cc_switch_wrapper_maps_temp_scope_and_defaults_project_to_root_app(self):
         wrapper = (ROOT / "container" / "cc-switch-wrapper").read_text(
             encoding="utf-8"
         )
         dockerfile = (ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
 
         self.assertIn('export HOME="/tmp/aisc-home"', wrapper)
-        self.assertIn('export HOME="/root"', wrapper)
+        self.assertIn('export HOME="/root/app"', wrapper)
         self.assertIn('exec cc-switch-real "$@"', wrapper)
         self.assertIn(
             "COPY container/cc-switch-wrapper /usr/local/bin/cc-switch", dockerfile
@@ -102,7 +102,7 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
 
         self.assertIn('export IS_SANDBOX="${IS_SANDBOX:-1}"', entrypoint)
-        self.assertIn('AISC_DIR="/root/.aisc"', entrypoint)
+        self.assertIn('AISC_DIR="/root/app/.aisc"', entrypoint)
         self.assertNotIn("chown -R", entrypoint)
         self.assertNotIn("cleanup_permissions", entrypoint)
 
@@ -112,7 +112,7 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         self.assertIn("/opt/aisc/factory/.codex/config.toml", dockerfile)
         self.assertIn("COPY container/_bundle/skills/ /opt/aisc/factory/.codex/skills/", dockerfile)
         self.assertIn("COPY container/global-claude.md /opt/aisc/factory/.codex/AGENTS.md", dockerfile)
-        self.assertIn("WORKDIR /root", dockerfile)
+        self.assertIn("WORKDIR /root/app", dockerfile)
         self.assertIn('ENV PATH="/opt/aisc/venv/bin:${PATH}"', dockerfile)
         self.assertIn("ENV IS_SANDBOX=1", dockerfile)
         self.assertIn("USER root", dockerfile)
@@ -133,8 +133,8 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         ).docker_argv
 
         self.assertNotIn("--user", argv)
-        self.assertIn("/tmp/workspace:/root", argv)
-        self.assertIn("/tmp/workspace/.aisc:/root/.aisc", argv)
+        self.assertIn("/tmp/workspace:/root/app", argv)
+        self.assertIn("/tmp/workspace/.aisc:/root/app/.aisc", argv)
 
     def test_cs_prefers_shared_catalog_and_syncs_live_provider(self):
         cs = (ROOT / "container" / "claude-switch").read_text(encoding="utf-8")

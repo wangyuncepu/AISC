@@ -26,14 +26,14 @@ fi
 
 echo "🚀 [4/4] 启动容器..."
 echo "💡 容器内：cs ark / cs deepseek / cs show 切换模型后端"
-echo "📂 Workspace: $WORKSPACE -> /root"
+echo "📂 Workspace: $WORKSPACE -> /root/app"
 echo
 
 # 仅清理已退出的旧工作站容器（保留运行中的，支持多开并行）
 docker ps -aq -f "name=super-claude-station" -f "status=exited" 2>/dev/null | xargs -r docker rm >/dev/null 2>&1 || true
 
 # 拼接 docker run 参数；镜像默认以 root 运行，启用代理时追加 NET_ADMIN + /dev/net/tun + 配置只读挂载
-RUN_ARGS=(-it --rm -e TERM=xterm-256color --name "$NAME" -v "$WORKSPACE:/root")
+RUN_ARGS=(-it --rm -e TERM=xterm-256color --name "$NAME" -v "$WORKSPACE:/root/app")
 if [ "$PROXY" = "1" ]; then
   RUN_ARGS+=(--cap-add=NET_ADMIN --device /dev/net/tun \
     -v "$PROJECT_ROOT/.claude/mihomo/config.yaml:/etc/mihomo/config.yaml:ro")
