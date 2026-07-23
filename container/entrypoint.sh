@@ -288,18 +288,60 @@ fi
 
 # ==========================================
 # 3.1. 启动 cc-switch 默认后台服务
-#   只启动 daemon supervisor，不自动启用 proxy route；配置完全使用
-#   $CC_SWITCH_CONFIG_DIR 下的默认值。daemon 是常驻前台进程，必须放到后台，
-#   否则 entrypoint 会永远等不到后续的启动菜单/exec。
+#   使用 cc-switch 自带的 detach 模式，避免 shell 后台任务与 proxy enable
+#   同时争抢 pidfile/socket。必须确认 daemon 可达并初始化 Codex provider
+#   后再启用应用路由。
 # ==========================================
 CC_SWITCH_DAEMON_LOG="/tmp/cc-switch-daemon.log"
+CC_SWITCH_CODEX_INIT_LOG="/tmp/cc-switch-codex-init.log"
 if command -v cc-switch >/dev/null 2>&1; then
-    cc-switch daemon start >"$CC_SWITCH_DAEMON_LOG" 2>&1 &
-    CC_SWITCH_DAEMON_PID=$!
-    echo "✅ cc-switch 后台服务启动中（PID: $CC_SWITCH_DAEMON_PID，配置: $CC_SWITCH_CONFIG_DIR）"
-    # 为 claude 和 codex 开启代理接管
-    cc-switch proxy -a claude enable >/dev/null 2>&1 || true
-    cc-switch proxy -a codex enable >/dev/null 2>&1 || true
+    CC_SWITCH_DAEMON_READY=0
+    if cc-switch daemon start --detach >"$CC_SWITCH_DAEMON_LOG" 2>&1; then
+        # Windows bind mount 上首次初始化 SQLite 可能较慢，最多等待 10 秒。
+        for _attempt in $(seq 1 40); do
+            _daemon_status="$(cc-switch daemon status 2>&1 || true)"
+            case "$_daemon_status" in
+                "cc-switch daemon"*)
+                    CC_SWITCH_DAEMON_READY=1
+                    break
+                    ;;
+            esac
+            sleep 0.25
+        done
+    fi
+
+    if [ "$CC_SWITCH_DAEMON_READY" = "1" ]; then
+        echo "✅ cc-switch 后台服务已就绪（配置: $CC_SWITCH_CONFIG_DIR）"
+
+        # 全新数据库会预置 codex-official，但不会自动选为当前 provider，
+        # 此时直接启用 Codex 路由会被 cc-switch 拒绝。
+        # 优先导入用户现有的 config.toml；仍无当前 provider 时才使用内置项。
+        if ! cc-switch -a codex provider current >/dev/null 2>&1; then
+            if [ -s "$CODEX_CONFIG_DIR/config.toml" ]; then
+                cc-switch -a codex provider import-live \
+                    >>"$CC_SWITCH_CODEX_INIT_LOG" 2>&1 || true
+            fi
+            if ! cc-switch -a codex provider current >/dev/null 2>&1; then
+                if cc-switch -a codex provider switch codex-official \
+                    >>"$CC_SWITCH_CODEX_INIT_LOG" 2>&1; then
+                    echo "✅ cc-switch 已初始化 Codex provider: codex-official"
+                else
+                    echo "⚠️  cc-switch Codex provider 初始化失败；日志: $CC_SWITCH_CODEX_INIT_LOG" >&2
+                fi
+            fi
+        fi
+
+        cc-switch proxy -a claude enable >/dev/null 2>&1 || true
+        if cc-switch -a codex provider current >/dev/null 2>&1; then
+            cc-switch proxy -a codex enable >/dev/null 2>&1 || true
+        else
+            echo "⚠️  未找到可用的 Codex provider，已跳过 Codex 路由启用" >&2
+        fi
+    else
+        echo "⚠️  cc-switch 后台服务启动失败；启动日志: $CC_SWITCH_DAEMON_LOG" >&2
+        [ ! -s "$CC_SWITCH_DAEMON_LOG" ] || sed -n '1,20p' "$CC_SWITCH_DAEMON_LOG" >&2
+        echo "    详细日志: $(cc-switch daemon logs 2>/dev/null || echo '/root/.local/state/cc-switch/cc-switchd.log')" >&2
+    fi
 fi
 
 # ==========================================

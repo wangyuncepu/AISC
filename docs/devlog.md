@@ -724,6 +724,14 @@ docker run -it --rm aisc:v2.1.0-dev codex
   - 统一 installer/mihomo/cc-switch 等所有组件以 root 身份运行
   - `cs`/`entrypoint`/`launcher`/`path-resolve` 全链路路径更新
 
+- **cc-switch daemon 启动加固**（commit `0511280` + 后续提交）：
+  - daemon 改用 `--detach` 模式，避免 shell 后台任务与 proxy enable 争抢 pidfile/socket
+  - 增加 readiness 轮询（40 次 × 0.25s = 最多 10s），确认 daemon 可达后再操作
+  - 启动前初始化 Codex provider：优先导入用户现有 `config.toml`，fallback 到内置 `codex-official`
+  - Codex 路由仅在 provider 已配置时才启用，缺失时给出明确警告
+  - daemon 启动失败时输出启动日志和 `daemon logs` 路径用于排障
+  - 更新测试覆盖新流程（断言 readiness → provider init → proxy enable 顺序）
+
 ---
 
 ### cc-switch 运行时集成与 Provider 目录共享 (2026-07-23)

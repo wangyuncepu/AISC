@@ -28,10 +28,41 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         process_handoff = entrypoint.rindex('exec "$@"')
         self.assertLess(daemon_start, process_handoff)
         self.assertIn(
+            'cc-switch daemon start --detach >"$CC_SWITCH_DAEMON_LOG" 2>&1',
+            entrypoint,
+        )
+        self.assertNotIn(
             'cc-switch daemon start >"$CC_SWITCH_DAEMON_LOG" 2>&1 &',
             entrypoint,
         )
-        self.assertNotIn("proxy enable", entrypoint)
+        readiness_check = entrypoint.index('CC_SWITCH_DAEMON_READY=1', daemon_start)
+        proxy_enable = entrypoint.index("cc-switch proxy -a claude enable", daemon_start)
+        self.assertLess(readiness_check, proxy_enable)
+        self.assertIn('if [ "$CC_SWITCH_DAEMON_READY" = "1" ]; then', entrypoint)
+
+    def test_entrypoint_initializes_codex_provider_before_enabling_route(self):
+        entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
+
+        daemon_ready = entrypoint.index(
+            'if [ "$CC_SWITCH_DAEMON_READY" = "1" ]; then'
+        )
+        current_check = entrypoint.index(
+            "cc-switch -a codex provider current", daemon_ready
+        )
+        import_live = entrypoint.index(
+            "cc-switch -a codex provider import-live", current_check
+        )
+        official_fallback = entrypoint.index(
+            "cc-switch -a codex provider switch codex-official", import_live
+        )
+        route_enable = entrypoint.index(
+            "cc-switch proxy -a codex enable", official_fallback
+        )
+
+        self.assertIn('[ -s "$CODEX_CONFIG_DIR/config.toml" ]', entrypoint)
+        self.assertLess(current_check, import_live)
+        self.assertLess(import_live, official_fallback)
+        self.assertLess(official_fallback, route_enable)
 
     def test_entrypoint_runs_as_sandboxed_root_without_permission_churn(self):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
