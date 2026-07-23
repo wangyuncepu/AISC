@@ -12,13 +12,13 @@ SETTINGS_RAW="${CFG_DIR}/settings.json"
 
 # api-keys 密钥存于 .aisc/secrets/api-keys
 # 解析顺序：
-#   1) AISC_DIR（entrypoint 导出，恒为 /root/app/.aisc）
-#   2) Docker 项目卷 /root/app/.aisc
+#   1) AISC_DIR（entrypoint 导出，恒为 /root/.aisc）
+#   2) Docker 项目卷 /root/.aisc
 #   3) 全局 ~/.aisc
 if [ -n "${AISC_DIR:-}" ]; then
   AISC_SECRETS_DIR="$AISC_DIR/secrets"
-elif [ -d /root/app/.aisc ]; then
-  AISC_SECRETS_DIR="/root/app/.aisc/secrets"
+elif [ -d /root/.aisc ]; then
+  AISC_SECRETS_DIR="/root/.aisc/secrets"
 else
   AISC_SECRETS_DIR="${HOME}/.aisc/secrets"
 fi
@@ -348,7 +348,7 @@ show_current() {
 #   再对“项目独有”项逐项询问删除（默认保留），最后同步版本戳。
 # ==========================================
 do_upgrade() {
-  local SRC="/root/.claude"
+  local SRC="/opt/aisc/factory/.claude"
   local DST="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
   [ -d "$SRC" ] || die "未找到镜像出厂 .claude: $SRC"
   [ "$DST" = "$SRC" ] && die "临时模式（$SRC 即出厂本体），无需升级"
@@ -364,7 +364,7 @@ do_upgrade() {
   [ -f "$SRC/CLAUDE.md" ]          && cp -f "$SRC/CLAUDE.md" "$DST/CLAUDE.md"
   [ -f "$SRC/settings.local.json" ] && cp -f "$SRC/settings.local.json" "$DST/settings.local.json"
 
-  # 修正插件注册表路径 /root/.claude → 项目目录（避免 orphan 误删）
+  # 修正插件注册表出厂路径 → 项目目录（避免 orphan 误删）
   for j in installed_plugins.json known_marketplaces.json; do
     [ -f "$DST/plugins/$j" ] && sed -i "s#${SRC}#${DST}#g" "$DST/plugins/$j" 2>/dev/null || true
   done

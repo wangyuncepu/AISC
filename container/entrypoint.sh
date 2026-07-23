@@ -18,21 +18,26 @@ source /usr/local/bin/lib/env-inject.sh
 source /usr/local/bin/lib/path-resolve.sh
 
 # ==========================================
-# 路径模型（全程以 root 运行，家目录 /root）
+# 路径模型（全程以 root 运行，宿主工作区挂载为 /root）
 #   .claude = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
-#             临时模式用镜像内置 /root/.claude；项目模式整目录拷到 /root/app/.claude（不改名）
+#             出厂模板在 /opt/aisc/factory；项目模式复制到 /root/.claude
+#             临时模式复制到 /tmp/aisc-home/.claude
 #   .codex  = Codex CLI 配置目录（类似 .claude 结构）
-#             临时模式用镜像内置 /root/.codex；项目模式整目录拷到 /root/app/.codex
+#             项目模式使用 /root/.codex；临时模式使用 /tmp/aisc-home/.codex
 #   .aisc   = AISC 配置目录（config/profiles + secrets/api-keys）
-#             固定放当前项目 /root/app/.aisc（临时与项目模式都用它）
+#             固定放当前项目 /root/.aisc（临时与项目模式都用它）
 #   .cc-switch = cc-switch 运行时目录（数据库、设置、备份等）
 #             固定放 .aisc/.cc-switch，providers.json 也以此为唯一项目路径
 # ==========================================
-GLOBAL_CLAUDE_DIR="/root/.claude"
-PROJECT_CLAUDE_DIR="/root/app/.claude"
-GLOBAL_CODEX_DIR="/root/.codex"
-PROJECT_CODEX_DIR="/root/app/.codex"
-AISC_DIR="/root/app/.aisc"
+FACTORY_HOME="/opt/aisc/factory"
+FACTORY_CLAUDE_DIR="$FACTORY_HOME/.claude"
+FACTORY_CODEX_DIR="$FACTORY_HOME/.codex"
+TEMP_HOME="/tmp/aisc-home"
+TEMP_CLAUDE_DIR="$TEMP_HOME/.claude"
+TEMP_CODEX_DIR="$TEMP_HOME/.codex"
+PROJECT_CLAUDE_DIR="/root/.claude"
+PROJECT_CODEX_DIR="/root/.codex"
+AISC_DIR="/root/.aisc"
 CC_SWITCH_CONFIG_DIR="$AISC_DIR/.cc-switch"
 PROVIDERS_JSON="$CC_SWITCH_CONFIG_DIR/providers.json"
 
@@ -70,8 +75,11 @@ fi
 # 2. 按作用域确定 CLI 配置目录
 # ==========================================
 if [ "$SCOPE" = "global" ] || [ "$SCOPE" = "temp" ] || [ "$SCOPE" = "temporary" ]; then
-    CLAUDE_CONFIG_DIR="$GLOBAL_CLAUDE_DIR"
-    CODEX_CONFIG_DIR="$GLOBAL_CODEX_DIR"
+    CLAUDE_CONFIG_DIR="$TEMP_CLAUDE_DIR"
+    CODEX_CONFIG_DIR="$TEMP_CODEX_DIR"
+    mkdir -p "$CLAUDE_CONFIG_DIR" "$CODEX_CONFIG_DIR"
+    cp -rL "$FACTORY_CLAUDE_DIR/." "$CLAUDE_CONFIG_DIR/"
+    cp -rL "$FACTORY_CODEX_DIR/." "$CODEX_CONFIG_DIR/"
     echo "🧪 作用域: 临时 (temporary) → Claude: $CLAUDE_CONFIG_DIR, Codex: $CODEX_CONFIG_DIR （容器退出即重置）"
 else
     CLAUDE_CONFIG_DIR="$PROJECT_CLAUDE_DIR"
@@ -96,7 +104,7 @@ else
 
     if [ "$NEED_COPY" = 1 ]; then
         mkdir -p "$PROJECT_CLAUDE_DIR"
-        if ! cp -rL "$GLOBAL_CLAUDE_DIR/." "$PROJECT_CLAUDE_DIR/" 2>&1; then
+        if ! cp -rL "$FACTORY_CLAUDE_DIR/." "$PROJECT_CLAUDE_DIR/" 2>&1; then
             echo "❌ 复制 .claude 失败，请检查权限和磁盘空间" >&2
             exit 1
         fi
@@ -116,15 +124,8 @@ else
         echo "🔍 检测到当前项目已有完整 .claude，跳过复制 (保护您的自定义修改)。"
     fi
 
-    # 修正插件注册表绝对路径（幂等）
-    for j in installed_plugins.json known_marketplaces.json; do
-        f="$PROJECT_CLAUDE_DIR/plugins/$j"
-        [ -f "$f" ] && sed -i -e "s#${GLOBAL_CLAUDE_DIR}#${PROJECT_CLAUDE_DIR}#g" \
-                                -e "s#/root/.claude#${PROJECT_CLAUDE_DIR}#g" "$f" 2>/dev/null || true
-    done
-
     # 检测镜像出厂配置更新
-    FV_IMG="$GLOBAL_CLAUDE_DIR/.factory-version"
+    FV_IMG="$FACTORY_CLAUDE_DIR/.factory-version"
     FV_PRJ="$PROJECT_CLAUDE_DIR/.factory-version"
     if [ -f "$FV_IMG" ] && [ "$(cat "$FV_IMG" 2>/dev/null)" != "$(cat "$FV_PRJ" 2>/dev/null)" ]; then
         echo "⚠️  镜像出厂配置已更新（skills/插件/命令等）。"
@@ -143,11 +144,11 @@ else
 
     if [ "$NEED_COPY_CODEX" = 1 ]; then
         mkdir -p "$PROJECT_CODEX_DIR"
-        if [ ! -f "$GLOBAL_CODEX_DIR/config.toml" ] || [ ! -d "$GLOBAL_CODEX_DIR/skills" ]; then
+        if [ ! -f "$FACTORY_CODEX_DIR/config.toml" ] || [ ! -d "$FACTORY_CODEX_DIR/skills" ]; then
             echo "❌ 镜像内置 .codex 不完整（缺 config.toml 或 skills），请重新构建镜像。" >&2
             exit 1
         fi
-        if ! cp -rL "$GLOBAL_CODEX_DIR/." "$PROJECT_CODEX_DIR/" 2>&1; then
+        if ! cp -rL "$FACTORY_CODEX_DIR/." "$PROJECT_CODEX_DIR/" 2>&1; then
             echo "❌ 复制 .codex 失败，请检查权限和磁盘空间。" >&2
             exit 1
         fi
@@ -156,6 +157,15 @@ else
         echo "🔍 检测到当前项目已有 .codex 配置，跳过复制 (保护您的自定义修改)。"
     fi
 fi
+
+# 插件 bundle 的注册表包含构建期绝对路径；统一修正到当前作用域（幂等）。
+for j in installed_plugins.json known_marketplaces.json; do
+    f="$CLAUDE_CONFIG_DIR/plugins/$j"
+    [ -f "$f" ] && sed -i \
+        -e "s#${FACTORY_CLAUDE_DIR}#${CLAUDE_CONFIG_DIR}#g" \
+        -e "s#/root/.claude#${CLAUDE_CONFIG_DIR}#g" \
+        "$f" 2>/dev/null || true
+done
 
 export CLAUDE_CONFIG_DIR
 export CODEX_CONFIG_DIR
@@ -169,10 +179,9 @@ ensure_writable "$AISC_DIR"
 ensure_writable "$AISC_DIR/secrets"
 ensure_writable "$CC_SWITCH_CONFIG_DIR"
 
-# .claude 目录同理：确认挂载卷实际可写。
-if [ "$SCOPE" = "project" ]; then
-    ensure_writable "$CLAUDE_CONFIG_DIR"
-fi
+# CLI 配置目录同理：确认实际可写。
+ensure_writable "$CLAUDE_CONFIG_DIR"
+ensure_writable "$CODEX_CONFIG_DIR"
 
 # 确保 settings.json 存在且可解析
 # 注意：settings.json 可能没有 env 字段（如镜像内置的 claude-settings.json），
@@ -209,19 +218,7 @@ for _d in "$AISC_DIR" "$AISC_DIR/secrets" "$CC_SWITCH_CONFIG_DIR"; do
   fi
 done
 
-# 让用户进入 bash 后再次运行 CLI 时仍能拿到同一作用域。
-if ! grep -q 'CC_SWITCH_CONFIG_DIR' "$HOME/.bashrc" 2>/dev/null; then
-    {
-        echo ""
-        echo "# AISC runtime exports"
-        echo "export CLAUDE_CONFIG_DIR='$CLAUDE_CONFIG_DIR'"
-        echo "export CODEX_CONFIG_DIR='$CODEX_CONFIG_DIR'"
-        echo "export CODEX_HOME='$CODEX_HOME'"
-        echo "export AISC_DIR='$AISC_DIR'"
-        echo "export CC_SWITCH_CONFIG_DIR='$CC_SWITCH_CONFIG_DIR'"
-        echo "export PROVIDERS_JSON='$PROVIDERS_JSON'"
-    } >> "$HOME/.bashrc"
-fi
+# 后续 exec 的 bash/CLI 会继承以上导出变量；不改写宿主工作区中的 /root/.bashrc。
 
 # 初始化 providers.json：cc-switch 配置根是唯一项目路径。
 # 兼容旧项目：若旧版 .aisc/providers.json 存在，首次启动迁移后删除旧文件。
@@ -294,6 +291,7 @@ fi
 # ==========================================
 CC_SWITCH_DAEMON_LOG="/tmp/cc-switch-daemon.log"
 CC_SWITCH_CODEX_INIT_LOG="/tmp/cc-switch-codex-init.log"
+CC_SWITCH_SKILLS_LOG="/tmp/cc-switch-skills-init.log"
 if command -v cc-switch >/dev/null 2>&1; then
     CC_SWITCH_DAEMON_READY=0
     if cc-switch daemon start --detach >"$CC_SWITCH_DAEMON_LOG" 2>&1; then
@@ -331,6 +329,56 @@ if command -v cc-switch >/dev/null 2>&1; then
             fi
         fi
 
+        # cc-switch 的 skills 路径以 HOME 为根：项目态同步到挂载的 /root，
+        # 临时态同步到 /tmp/aisc-home，不污染宿主工作区。
+        if [ "$SCOPE" = "global" ] || [ "$SCOPE" = "temp" ] || [ "$SCOPE" = "temporary" ]; then
+            CC_SWITCH_SKILLS_HOME="$TEMP_HOME"
+        else
+            CC_SWITCH_SKILLS_HOME="/root"
+        fi
+        CC_SWITCH_SKILLS_SSOT="$CC_SWITCH_CONFIG_DIR/skills/gstack"
+
+        # 离线登记镜像内置 gstack 为 cc-switch 的相对 SSOT skill。
+        # 相对 directory=gstack 是 cc-switch 原生 install 使用的形式，
+        # 可正常执行 enable/disable/sync，且不依赖首次启动网络。
+        if ! HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills info gstack >/dev/null 2>&1; then
+            mkdir -p "$CC_SWITCH_SKILLS_SSOT"
+            cp -a "$FACTORY_CLAUDE_DIR/skills/gstack/." "$CC_SWITCH_SKILLS_SSOT/"
+            HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills list \
+                >>"$CC_SWITCH_SKILLS_LOG" 2>&1 || true
+            CC_SWITCH_SKILL_DB="$CC_SWITCH_CONFIG_DIR/cc-switch.db" python3 - <<'PY' \
+                >>"$CC_SWITCH_SKILLS_LOG" 2>&1
+import os
+import sqlite3
+import time
+
+db = sqlite3.connect(os.environ["CC_SWITCH_SKILL_DB"], timeout=10)
+now = int(time.time())
+db.execute(
+    """
+    INSERT OR IGNORE INTO skills (
+        id, name, description, directory,
+        repo_owner, repo_name, repo_branch,
+        enabled_claude, enabled_codex, installed_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+    (
+        "aisc:gstack", "gstack", "AISC bundled gstack skills", "gstack",
+        "garrytan", "gstack", "main", 1, 1, now, now,
+    ),
+)
+db.commit()
+PY
+            if HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills sync-method copy \
+                    >>"$CC_SWITCH_SKILLS_LOG" 2>&1 && \
+                HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills sync \
+                    >>"$CC_SWITCH_SKILLS_LOG" 2>&1; then
+                echo "✅ cc-switch 已离线接管 gstack skills（Claude + Codex）"
+            else
+                echo "⚠️  cc-switch skills 离线接管失败，继续使用镜像出厂副本；日志: $CC_SWITCH_SKILLS_LOG" >&2
+            fi
+        fi
+
         cc-switch proxy -a claude enable >/dev/null 2>&1 || true
         if cc-switch -a codex provider current >/dev/null 2>&1; then
             cc-switch proxy -a codex enable >/dev/null 2>&1 || true
@@ -356,8 +404,10 @@ fi
 # ==========================================
 if [ -f /etc/mihomo/config.yaml ]; then
     echo "🚀 正在内建 TUN 透明代理网络..."
-    MIHOMO_DATA_DIR="/root/.mihomo"
+    MIHOMO_DATA_DIR="/tmp/aisc-mihomo"
     MIHOMO_CFG="$MIHOMO_DATA_DIR/config.yaml"
+    mkdir -p "$MIHOMO_DATA_DIR"
+    cp -n /opt/aisc/mihomo/* "$MIHOMO_DATA_DIR/" 2>/dev/null || true
 
     # 原始订阅 → mihomo 配置（格式自动转换 + TUN/DNS 强制注入）到可写副本。
     # 支持 yaml / base64 订阅 / URI 直链 / JSON(SIP008)；失败仅告警不阻断，便于进 bash 排障。
@@ -395,11 +445,11 @@ AI_BRIEF_ON_START="${AI_BRIEF_ON_START:-}"
 
 case "${AI_BRIEF_ON_START,,}" in
     background)
-        if command -v python3 >/dev/null 2>&1 && [ -d /root/ai_brief ]; then
+        if command -v python3 >/dev/null 2>&1 && [ -d /opt/aisc/apps/ai-brief ]; then
             if [ -n "$BASE_URL" ] && [ "$AUTH" = "yes" ]; then
                 echo "📰 AI 简讯后台抓取中（日志: /tmp/ai-brief.log，容器启动后 cat /tmp/ai-brief.log 查看）"
                 (
-                    python3 /root/ai_brief/brief.py --ai --top 5 \
+                    python3 /opt/aisc/apps/ai-brief/brief.py --ai --top 5 \
                         > /tmp/ai-brief.log 2>&1
                     printf '--- DONE (%s) ---\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> /tmp/ai-brief.log
                 ) &
@@ -410,19 +460,19 @@ case "${AI_BRIEF_ON_START,,}" in
         ;;
     foreground)
         # 阻塞同步模式（会延长启动时间，仅调试/手动触发用）
-        if command -v python3 >/dev/null 2>&1 && [ -d /root/ai_brief ]; then
+        if command -v python3 >/dev/null 2>&1 && [ -d /opt/aisc/apps/ai-brief ]; then
             if [ -n "$BASE_URL" ] && [ "$AUTH" = "yes" ]; then
                 BRIEF_EXIT=0
-                BRIEF="$(timeout 50 python3 /root/ai_brief/brief.py --ai --top 5 2>/tmp/ai-brief.log)" || BRIEF_EXIT=$?
+                BRIEF="$(timeout 50 python3 /opt/aisc/apps/ai-brief/brief.py --ai --top 5 2>/tmp/ai-brief.log)" || BRIEF_EXIT=$?
                 if [ -n "$BRIEF" ]; then
                     echo "📰 今日 AI 简讯："
                     echo "$BRIEF"
                     echo "----------------------------------------"
                 elif [ "$BRIEF_EXIT" = "124" ]; then
-                    echo "📰 简讯加载超时（50s），已跳过（容器内可手跑：python3 /root/ai_brief/brief.py）"
+                    echo "📰 简讯加载超时（50s），已跳过（容器内可手跑：python3 /opt/aisc/apps/ai-brief/brief.py）"
                     echo "----------------------------------------"
                 else
-                    echo "📰 简讯加载失败，已跳过（容器内可手跑：python3 /root/ai_brief/brief.py）"
+                    echo "📰 简讯加载失败，已跳过（容器内可手跑：python3 /opt/aisc/apps/ai-brief/brief.py）"
                     echo "----------------------------------------"
                 fi
             else

@@ -7,10 +7,10 @@
 //   2) 强制注入 TUN：剥离已有 tun:/dns: 顶层块 → 追加规范 tun:（+ 缺失时补 dns:）。
 //   退出码：0=成功产出配置；1=硬失败（空 / 识别为订阅但 0 节点 / 读取失败）。
 //   用法：node mihomo-build-config.js [src] [dst]
-//     默认 src=/etc/mihomo/config.yaml  dst=/root/.mihomo/config.yaml
+//     默认 src=/etc/mihomo/config.yaml  dst=/tmp/aisc-mihomo/config.yaml
 const fs = require('fs');
 const SRC = process.argv[2] || '/etc/mihomo/config.yaml';
-const DST = process.argv[3] || '/root/.mihomo/config.yaml';
+const DST = process.argv[3] || '/tmp/aisc-mihomo/config.yaml';
 
 // ==================== YAML 输出 ====================
 function isPlainStr(s) {

@@ -3,8 +3,8 @@
 resolve_cc_config_dir() {
   if [ -n "${CC_CONFIG_DIR:-}" ]; then
     echo "$CC_CONFIG_DIR"
-  elif [ -d /root/app ]; then
-    echo "/root/app/.cc-config"
+  elif [ -d /root ]; then
+    echo "/root/.cc-config"
   elif [ -f "./.cc-config/api-keys" ]; then
     echo "$(pwd)/.cc-config"
   else

@@ -15,5 +15,27 @@ if [ -f "$CODEX_SETTINGS" ]; then
     env_inject "$CODEX_SETTINGS"
 fi
 
-# Codex 不需要 --dangerously-skip-permissions flag，直接执行
-exec codex-real "$@"
+# 容器本身是外部沙箱（IS_SANDBOX=1），默认给 Codex 完全执行权限，
+# 与 Claude 的 --dangerously-skip-permissions 模式保持一致。
+# 若用户显式指定权限/沙箱参数，则尊重用户选择，不再追加默认值。
+full_access_flags=(
+    "--dangerously-bypass-approvals-and-sandbox"
+    "--dangerously-bypass-hook-trust"
+)
+has_permission_flag=0
+for a in "$@"; do
+    case "$a" in
+        --dangerously-bypass-approvals-and-sandbox|\
+        --sandbox|--sandbox=*|-s|\
+        --ask-for-approval|--ask-for-approval=*|-a)
+            has_permission_flag=1
+            break
+            ;;
+    esac
+done
+
+if [ "$has_permission_flag" = "0" ]; then
+    exec codex-real "${full_access_flags[@]}" "$@"
+else
+    exec codex-real "$@"
+fi

@@ -290,11 +290,11 @@ class RunPlan:
         argv.extend([
             "-e", "TERM=xterm-256color",
             "--name", self.name,
-            "-v", f"{self.workspace}:/root/app",
+            "-v", f"{self.workspace}:/root",
         ])
         if self.provider_config_dir:
             argv.extend([
-                "-v", f"{self.provider_config_dir}:/root/app/.aisc",
+                "-v", f"{self.provider_config_dir}:/root/.aisc",
             ])
         if self.non_interactive:
             argv.extend([

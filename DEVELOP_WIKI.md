@@ -209,7 +209,7 @@ tests/
 
 ```
 docker run --rm \
-  -v $(pwd):/root/app \          # 工作区挂载
+  -v $(pwd):/root \              # 工作区挂载为 root 家目录
   -e CLAUDE_SCOPE=project \     # 配置作用域
   super-claude:latest
 
@@ -564,7 +564,7 @@ bash tests/smoke/check-syntax.sh # 语法验证
   .deploy/state.env       ← 历史路径（仅读取，不再写入新数据）
 ```
 
-- `.cc-config/` 是待彻底移除的兼容层；容器当前以 `/root/app/.aisc` 作为项目配置目录，`container/lib/path-resolve.sh` 仍保留 `.cc-config` 回退路径，Python 侧 `config_source.py` 仍将其列为配置源。
+- `.cc-config/` 是待彻底移除的兼容层；容器当前以 `/root/.aisc` 作为项目配置目录，`container/lib/path-resolve.sh` 仍保留 `.cc-config` 回退路径，Python 侧 `config_source.py` 仍将其列为配置源。
 - 这是 **Legacy Shell / 容器脚本的现存兼容行为**，不是目标设计。
 - **禁止**在新代码（Python CLI 或宿主机逻辑）中添加 `.cc-config/` 依赖或将其作为新写入路径。
 - 后续移除兼容双写前需：确认所有密钥已存在于 `.aisc/secrets/`；修改 `claude-switch` 的 `get_key()` 移除双写和 fallback 读取；修改 `entrypoint.sh` / `path-resolve.sh` 的路径解析；更新 `config_source.py` 的配置源清单；运行容器内 `cs` 命令兼容测试。
@@ -745,7 +745,7 @@ python3 packaging/artifact.py verify --bundle <staging>/aisc-bundle
 |------|------|-------------|
 | `工作区/.aisc/secrets/api-keys` | 密钥存储 | cs 脚本优先读取；新密钥时写入 |
 | `工作区/.cc-config/api-keys` | 兼容层 | cs 脚本 fallback 读取；新密钥时**同时写入**（双写兼容）；`config_source.py` 仍列为配置源 |
-| `容器内 /root/app/.aisc/secrets/api-keys` | 容器内密钥 | cs 命令写入 |
+| `容器内 /root/.aisc/secrets/api-keys` | 容器内密钥 | cs 命令写入 |
 
 - `.cc-config/` 双写是 Legacy Shell / 容器脚本的现存兼容行为，不是目标设计。详见 §6.3。
 - API Key 使用 `CredentialValue` 类型（`src/aisc/domain/config.py`），`__str__` 和 `__repr__` 始终返回 `"****"`

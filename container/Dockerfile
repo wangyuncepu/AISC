@@ -62,7 +62,7 @@ USER root
 #   优先用构建上下文 downloads/ 里预放的本地文件（离线/网络差时，由 stage-mihomo.sh 下载）；
 #   否则多镜像轮询下载（ghfast.top 实测稳）+ 强制 --http1.1（绕开 curl/GitHub CDN 的 HTTP/2 流异常）
 #   + 短 connect-timeout 快失败 + 直连兜底。
-#   mihomo → /usr/local/bin/mihomo（root:root 755），geodata → /root/.mihomo。
+#   mihomo → /usr/local/bin/mihomo（root:root 755），geodata → /opt/aisc/mihomo。
 #   注意：mihomo 是 ELF 二进制，绝不能 sed 处理（同 claude-real 教训）。
 # ==========================================
 COPY container/downloads/ /tmp/dl/
@@ -93,20 +93,20 @@ RUN set -eux; \
     /usr/local/bin/mihomo -v
 
 RUN set -eux; \
-    mkdir -p /root/.mihomo; \
+    mkdir -p /opt/aisc/mihomo; \
     if [ -n "${GH_PROXY:-}" ]; then mirrors="${GH_PROXY}"; \
     elif [ "$USE_CN_MIRROR" = "1" ]; then mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ https://ghproxy.net/ https://mirror.ghproxy.com/"; \
     else mirrors=""; fi; \
     for f in geoip.metadb geosite.dat country.mmdb; do \
         if [ -f /tmp/dl/$f ]; then \
-            echo "📦 使用本地预置 geodata: $f"; cp /tmp/dl/$f /root/.mihomo/$f; rm -f /tmp/dl/$f; \
+            echo "📦 使用本地预置 geodata: $f"; cp /tmp/dl/$f /opt/aisc/mihomo/$f; rm -f /tmp/dl/$f; \
         else \
             url="https://github.com/MetaCubeX/meta-rules-dat/releases/download/${GEODATA_VERSION}/$f"; \
             ok=0; \
             for m in $mirrors ""; do \
                 u="${m}${url}"; \
                 if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
-                        --connect-timeout 8 --max-time 120 "$u" -o "/root/.mihomo/$f"; then ok=1; break; fi; \
+                        --connect-timeout 8 --max-time 120 "$u" -o "/opt/aisc/mihomo/$f"; then ok=1; break; fi; \
             done; \
             [ "$ok" = "1" ] || echo "⚠️  geodata $f 下载失败（mihomo 仍可启动，GEO 规则可能受限）"; \
         fi; \
@@ -131,92 +131,92 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
     && codex --version
 
 # ==========================================
-# 全局 Claude CLI 目录：/root/.claude（CLI 原生完整目录）
+# Claude/Codex 出厂目录：/opt/aisc/factory（不会被 /root bind mount 遮蔽）
 #   - 让 Claude CLI 自己生成原生结构（projects/todos/statsig/plugins/shell-snapshots…）
 #   - 再叠加我们的全局 skills + CLAUDE.md + claude.json
-#   - 项目模式整目录拷贝到 /root/app/.claude（不改名）
+#   - 项目模式整目录拷贝到 /root/.claude（宿主工作区）
 # ==========================================
 # 跳过首次启动联网 onboarding（绕过 api.anthropic.com 检查）。
 # 新版 CLI 核心状态在 .claude.json（非 config.json）；缺失会报
 # "Claude configuration file not found"。先写入完整 onboarding 状态，
 # 再跑一次 CLI 让它补全 machineID / userID / migrationVersion 等运行字段。
-RUN mkdir -p /root/.claude \
-    && echo '{'                                           >  /root/.claude/.claude.json \
-    && echo '  "hasCompletedOnboarding": true,'           >> /root/.claude/.claude.json \
-    && echo '  "acceptedTos": true,'                      >> /root/.claude/.claude.json \
-    && echo '  "autoUpdates": false,'                     >> /root/.claude/.claude.json \
-    && echo '  "installMethod": "npm",'                   >> /root/.claude/.claude.json \
-    && echo '  "firstStartTime": "2025-01-01T00:00:00Z"'  >> /root/.claude/.claude.json \
-    && echo '}'                                           >> /root/.claude/.claude.json \
-    && echo '{ "hasCompletedOnboarding": true }'          >  /root/.claude/config.json
+RUN mkdir -p /opt/aisc/factory/.claude \
+    && echo '{'                                           >  /opt/aisc/factory/.claude/.claude.json \
+    && echo '  "hasCompletedOnboarding": true,'           >> /opt/aisc/factory/.claude/.claude.json \
+    && echo '  "acceptedTos": true,'                      >> /opt/aisc/factory/.claude/.claude.json \
+    && echo '  "autoUpdates": false,'                     >> /opt/aisc/factory/.claude/.claude.json \
+    && echo '  "installMethod": "npm",'                   >> /opt/aisc/factory/.claude/.claude.json \
+    && echo '  "firstStartTime": "2025-01-01T00:00:00Z"'  >> /opt/aisc/factory/.claude/.claude.json \
+    && echo '}'                                           >> /opt/aisc/factory/.claude/.claude.json \
+    && echo '{ "hasCompletedOnboarding": true }'          >  /opt/aisc/factory/.claude/config.json
 
 # 触发 CLI 初始化：补全 .claude.json 运行字段并生成原生目录（projects/sessions/backups…）
-RUN CLAUDE_CONFIG_DIR=/root/.claude claude -p "init" >/dev/null 2>&1 || true \
-    && CLAUDE_CONFIG_DIR=/root/.claude claude --version >/dev/null 2>&1 || true
+RUN CLAUDE_CONFIG_DIR=/opt/aisc/factory/.claude claude -p "init" >/dev/null 2>&1 || true \
+    && CLAUDE_CONFIG_DIR=/opt/aisc/factory/.claude claude --version >/dev/null 2>&1 || true
 
 # 初始化 Codex 全局出厂目录。codex --version 不会生成 CODEX_HOME，
 # 因此显式创建可复制的原生目录骨架与合法空配置。
-RUN mkdir -p /root/.codex/skills \
-             /root/.codex/rules \
-             /root/.codex/sessions \
-             /root/.codex/shell_snapshots \
-             /root/.codex/tmp \
-    && : > /root/.codex/config.toml
+RUN mkdir -p /opt/aisc/factory/.codex/skills \
+             /opt/aisc/factory/.codex/rules \
+             /opt/aisc/factory/.codex/sessions \
+             /opt/aisc/factory/.codex/shell_snapshots \
+             /opt/aisc/factory/.codex/tmp \
+    && : > /opt/aisc/factory/.codex/config.toml
 
 # 创建技能目录与项目挂载点
-RUN mkdir -p /root/.claude/skills /root/app
+RUN mkdir -p /opt/aisc/factory/.claude/skills
 
 # 1. 注入全局 CLAUDE.md
-COPY container/global-claude.md /root/.claude/CLAUDE.md
+COPY container/global-claude.md /opt/aisc/factory/.claude/CLAUDE.md
 
 # 2. 注入插件机制技能套件（离线可用）：
 #    caveman（默认激活）/ claude-hud / document-skills / superpowers / skill-creator
 #    由 stage-skills.sh 预暂存到 _bundle/plugins（含 cache + marketplaces + 注册表）
-COPY container/_bundle/plugins/ /root/.claude/plugins/
+COPY container/_bundle/plugins/ /opt/aisc/factory/.claude/plugins/
 
-# 2b. 插件 bundle 原生使用 /root/.claude，无需重写注册表路径。
+# 2b. entrypoint 会把插件 bundle 中的构建期绝对路径改为当前运行作用域。
 
 # 3. 注入扁平技能（来源 _bundle/skills）：gstack（仅文档，6 子技能）
-COPY container/_bundle/skills/ /root/.claude/skills/
+COPY container/_bundle/skills/ /opt/aisc/factory/.claude/skills/
 
 # Codex 使用同一套 SKILL.md 格式；预置到镜像的完整 .codex，项目模式整目录复制。
-COPY container/_bundle/skills/ /root/.codex/skills/
-COPY container/global-claude.md /root/.codex/AGENTS.md
+COPY container/_bundle/skills/ /opt/aisc/factory/.codex/skills/
+COPY container/global-claude.md /opt/aisc/factory/.codex/AGENTS.md
 RUN sed -i -e 's/Super Claude/Super Codex/' \
-           -e 's/Claude Code/Codex/g' /root/.codex/AGENTS.md \
-    && find /root/.codex/skills /root/.codex/AGENTS.md /root/.codex/config.toml \
+           -e 's/Claude Code/Codex/g' /opt/aisc/factory/.codex/AGENTS.md \
+    && find /opt/aisc/factory/.codex/skills /opt/aisc/factory/.codex/AGENTS.md /opt/aisc/factory/.codex/config.toml \
         -type f 2>/dev/null | sort | xargs sha1sum 2>/dev/null | sha1sum | cut -d' ' -f1 \
-        > /root/.codex/.factory-version
+        > /opt/aisc/factory/.codex/.factory-version
 
 # 3c. 解引用 .claude 内所有符号链接 → 真文件
 #     Windows 绑定挂载(grpcfuse)不支持创建 symlink，cp -r 会失败导致项目复制残缺。
 #     在镜像内把 symlink 替换为内容，使 cp -r 在任何宿主上都成功。
-RUN find /root/.claude -type l | while read -r l; do \
+RUN find /opt/aisc/factory/.claude -type l | while read -r l; do \
         t="$(readlink -f "$l")"; \
         if [ -e "$t" ]; then cp -f --remove-destination "$t" "$l"; fi; \
     done
 
 # 3b. gstack 6 个技能的斜杠命令（/plan-ceo-review 等，包装对应 skill）
-COPY container/commands/ /root/.claude/commands/
+COPY container/commands/ /opt/aisc/factory/.claude/commands/
 
 # 5. CLI settings.json：启用 5 个插件 + marketplace 来源 + claude-hud 状态栏(statusLine)
 #    statusLine 用 node 跑 claude-hud 的 dist/index.js（容器无 bun）
-COPY container/claude-settings.json /root/.claude/settings.json
+COPY container/claude-settings.json /opt/aisc/factory/.claude/settings.json
 
 # 6. skill-creator 在 host 未预装，从本地 marketplace 离线安装（写入 installed_plugins.json）
-RUN CLAUDE_CONFIG_DIR=/root/.claude claude plugin install skill-creator@claude-plugins-official 2>&1 | tail -1 || true
+RUN CLAUDE_CONFIG_DIR=/opt/aisc/factory/.claude claude plugin install skill-creator@claude-plugins-official 2>&1 | tail -1 || true
 
 # 7. 默认 settings.local.json 放入 CLI 原生目录（随 .claude 一并复制到项目）
-RUN echo '{ "enableAllProjectMcpServers": true }' > /root/.claude/settings.local.json
+RUN echo '{ "enableAllProjectMcpServers": true }' > /opt/aisc/factory/.claude/settings.local.json
 
 # 8. 出厂版本戳（内容哈希）：项目模式据此检测镜像是否更新，提示 cs upgrade
 #    仅哈希出厂内容（skills/plugins/commands/CLAUDE.md/settings*），排除 .claude.json
 #    （含每次构建随机的 machineID，会无谓变动）
-RUN find /root/.claude/skills /root/.claude/plugins /root/.claude/commands \
-        /root/.claude/CLAUDE.md /root/.claude/settings.json /root/.claude/settings.local.json \
+RUN find /opt/aisc/factory/.claude/skills /opt/aisc/factory/.claude/plugins /opt/aisc/factory/.claude/commands \
+        /opt/aisc/factory/.claude/CLAUDE.md /opt/aisc/factory/.claude/settings.json /opt/aisc/factory/.claude/settings.local.json \
         -type f 2>/dev/null | sort | xargs sha1sum 2>/dev/null | sha1sum | cut -d' ' -f1 \
-        > /root/.claude/.factory-version \
-    && echo "factory-version: $(cat /root/.claude/.factory-version)"
+        > /opt/aisc/factory/.claude/.factory-version \
+    && echo "factory-version: $(cat /opt/aisc/factory/.claude/.factory-version)"
 
 # 共享库脚本（entrypoint / claude-wrapper 复用 env 注入与路径/权限逻辑）
 COPY container/lib/ /usr/local/bin/lib/
@@ -276,20 +276,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-pip python3-venv python-is-python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# 设置工作目录，后续用户的代码将挂载到这里
-WORKDIR /root/app
+# 设置工作目录；宿主工作区直接挂载为 root 家目录。
+WORKDIR /root
 
-# git 全局配置：core.autocrlf=input
+# git 系统配置：core.autocrlf=input（/root 会被宿主工作区挂载覆盖）
 #   commit 时 CRLF→LF（仓库永远干净 LF），checkout 不转（保持仓库原样）。
 #   跨平台(Win 宿主 + Linux 容器)场景避免 CRLF 噪音进历史；.gitattributes 优先于此。
-RUN git config --global core.autocrlf input
+RUN git config --system core.autocrlf input
 
 # 默认 Python venv（root 可写，pip install 不受 PEP 668 限制）
 #   python/pip → venv（PATH 优先）；pip install 直达，无需 --break-system-packages。
 #   venv 在镜像内（--rm 容器每次重启重置为出厂；如需持久化包，加 requirements.txt + 启动安装）。
-RUN python3 -m venv /root/.venv \
-    && /root/.venv/bin/python -m pip install --upgrade pip --quiet
-ENV PATH="/root/.venv/bin:${PATH}"
+RUN python3 -m venv /opt/aisc/venv \
+    && /opt/aisc/venv/bin/python -m pip install --upgrade pip --quiet
+ENV PATH="/opt/aisc/venv/bin:${PATH}"
 
 # ==========================================
 # cc-switch-cli（Rust 二进制）：跨平台 AI CLI 管理工具，与内置 cs 共存（命令名 cc-switch）
@@ -311,10 +311,13 @@ RUN set -eux; \
     done; \
     [ "$ok" = "1" ] || { echo "❌ cc-switch 下载失败（可 --build-arg GH_PROXY=<镜像前缀> 重试）"; exit 1; }; \
     tar -xzf /tmp/ccs.tar.gz -C /tmp; \
-    mv /tmp/cc-switch /usr/local/bin/cc-switch; \
-    chmod +x /usr/local/bin/cc-switch; \
+    mv /tmp/cc-switch /usr/local/bin/cc-switch-real; \
+    chmod +x /usr/local/bin/cc-switch-real; \
     rm -f /tmp/ccs.tar.gz; \
-    /usr/local/bin/cc-switch --version
+    /usr/local/bin/cc-switch-real --version
+
+COPY container/cc-switch-wrapper /usr/local/bin/cc-switch
+RUN chmod +x /usr/local/bin/cc-switch
 # 设置入口点
 ENTRYPOINT ["entrypoint.sh"]
 

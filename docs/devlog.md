@@ -589,7 +589,6 @@ tests/integration/test_cli.py      # subprocess 集成: version/doctor text+json
 **边界**：未实现/仍延期——裸 `config` 交互写、`provider use/show`、`run --provider`、`proxy enable/disable`、`profile safe/unsafe`、`brief/logs/clean`。
 
 ---
-
 ## v2.1.0-dev (2026-07-23) - 集成 OpenAI Codex CLI
 
 ### 动机
@@ -1508,3 +1507,26 @@ Windows `.bat` 的 no.4 需在 Windows + Windows Terminal 环境实测确认。
 - [x] ~~Skill 引入（andrej-karpathy-skills）~~ → v1.1.0 完成
 - [x] ~~全局 claude-switch 命令~~ → v1.1.0 完成
 - [ ] Termius SSH 配置文档未编写
+
+## v2.1.1-dev (2026-07-23) - root 家目录挂载与运行时资源隔离
+
+### 动机
+
+Windows → WSL2 → Docker bind mount 场景下，宿主机工作区直接挂载到 `/root`，统一容器运行身份与文件权限模型，并避免挂载 `/root` 覆盖镜像内置 CLI 资源。
+
+### 变更
+
+- **Docker 挂载路径**：宿主工作区由 `/root/app` 改为直接挂载到 `/root`，容器默认工作目录同步改为 `/root`。
+- **出厂资源隔离**：Claude/Codex 出厂配置与 skills/plugins 迁移到 `/opt/aisc/factory`，Python venv 迁移到 `/opt/aisc/venv`，Mihomo geodata 迁移到 `/opt/aisc/mihomo`。
+- **项目配置路径**：项目作用域使用 `/root/.claude`、`/root/.codex` 和 `/root/.aisc`，首次启动从 `/opt/aisc/factory` 复制并持久化到宿主工作区。
+- **临时作用域**：使用 `/tmp/aisc-home`，不把临时 Claude/Codex 配置写入宿主机工作区。
+- **cc-switch 集成**：启动时自动拉起 daemon、初始化 Codex provider、启用 Claude/Codex 路由，并离线登记和同步 gstack skills。
+- **Codex 权限**：默认启用 bypass approvals/sandbox 与 hook trust，等价于 Claude 容器 bypass 模式。
+- **环境变量**：容器默认设置 `IS_SANDBOX=1`。
+
+### 验证
+
+- Docker 镜像 `aisc:v2.1.1-dev-root-home` 构建成功。
+- 真实宿主目录 bind mount 到 `/root` 的项目/临时两种作用域均验证通过。
+- cc-switch daemon、Codex provider、Claude/Codex 路由和 gstack skills 验证通过。
+- 完整测试：189 项通过，1 项按既有条件跳过。

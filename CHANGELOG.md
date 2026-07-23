@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1-dev] - 2026-07-23
+
+### Changed
+
+- **工作区挂载点**：宿主工作区由 `/root/app` 改为直接挂载到 root 家目录 `/root`
+- **出厂资源隔离**：Claude/Codex 模板、Python venv 与 Mihomo geodata 移至 `/opt/aisc`，避免被 `/root` bind mount 遮蔽
+- **运行时目录**：项目配置使用 `/root/.claude`、`/root/.codex`、`/root/.aisc`；临时配置使用 `/tmp/aisc-home`
+- **cc-switch 启动**：自动启动 daemon、初始化 Codex provider，并管理 Claude/Codex 的内置 gstack skills
+- **Codex 权限**：容器内默认启用 bypass approvals/sandbox 与 hook trust
+
 ## [2.1.0-dev] - 2026-07-23
 
 ### Added
