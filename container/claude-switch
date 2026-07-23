@@ -2,7 +2,8 @@
 # cs / claude-switch — switch Claude Code between providers
 # API Keys stored in ~/.aisc/secrets/api-keys (chmod 600), never in this file.
 # Modifies ~/.claude/settings.json env block only; everything else untouched.
-# Provider data is in ~/.aisc/providers.json (data-driven, no hardcoded backend config).
+# Provider data comes from PROVIDERS_JSON; AISC entrypoint points it at the
+# project-local .aisc/.cc-switch/providers.json shared catalog.
 
 # env 块写进 Claude CLI 原生 settings.json（CLAUDE_CONFIG_DIR/settings.json）。
 # 这样 Claude Code 原生读取并实时生效（与非 docker 行为一致，!cs ds 立即更新）。
@@ -44,9 +45,11 @@ if [ ! -f "$AISC_KEY_STORE" ]; then
   chmod 600 "$AISC_KEY_STORE"
 fi
 
-# Resolve providers.json — prefer .aisc config directory, fall back to Docker default.
-# Priority: AISC_DIR > ~/.aisc > existing PROVIDERS_JSON env > Docker path.
-if [ -n "${AISC_DIR:-}" ] && [ -f "$AISC_DIR/providers.json" ]; then
+# Resolve providers.json — the entrypoint exports the canonical shared catalog.
+# Priority: explicit PROVIDERS_JSON > AISC_DIR > ~/.aisc > Docker fallback.
+if [ -n "${PROVIDERS_JSON:-}" ] && [ -f "$PROVIDERS_JSON" ]; then
+  PROVIDERS_JSON="$PROVIDERS_JSON"
+elif [ -n "${AISC_DIR:-}" ] && [ -f "$AISC_DIR/providers.json" ]; then
   PROVIDERS_JSON="$AISC_DIR/providers.json"
 elif [ -f "${HOME}/.aisc/providers.json" ]; then
   PROVIDERS_JSON="${HOME}/.aisc/providers.json"
@@ -250,6 +253,14 @@ switch() {
   export CS_COMPACT="${_PR_COMPACT:-}"
 
   write_settings
+
+  # cc-switch v5+ stores providers in SQLite. Import the live Claude config
+  # after a cs switch so its TUI/daemon sees the same selected provider.
+  # Best-effort: cs remains usable if cc-switch is unavailable or rejects an
+  # unsupported live configuration.
+  if command -v cc-switch >/dev/null 2>&1; then
+    cc-switch --app claude provider import-live >/tmp/cc-switch-import-live.log 2>&1 || true
+  fi
   echo "Switched to: ${_PR_SWITCH_MSG}"
 
   if [ "${SC_RESTART:-}" = "1" ]; then

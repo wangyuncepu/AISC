@@ -158,6 +158,10 @@ RUN mkdir -p /home/AISC/.claude \
 RUN CLAUDE_CONFIG_DIR=/home/AISC/.claude claude -p "init" >/dev/null 2>&1 || true \
     && CLAUDE_CONFIG_DIR=/home/AISC/.claude claude --version >/dev/null 2>&1 || true
 
+# 初始化 Codex 全局配置目录（类似 .claude 初始化，首次触发 codex 生成配置）
+RUN mkdir -p /home/AISC/.codex \
+    && codex --version >/dev/null 2>&1 || true
+
 # 创建技能目录与项目挂载点
 RUN mkdir -p /home/AISC/.claude/skills /home/AISC/app
 

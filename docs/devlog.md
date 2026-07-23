@@ -700,6 +700,74 @@ docker run -it --rm aisc:v2.1.0-dev codex
 
 ---
 
+### cc-switch 运行时集成与 Provider 目录共享 (2026-07-23)
+
+将 cc-switch v5.9.2 的运行时（SQLite 数据库、daemon 后台服务、TUI）集成到 AISC 容器中，建立统一的 Provider catalog 共享机制。
+
+**变更**：
+
+- **cc-switch daemon 自动启动**（`container/entrypoint.sh`）：
+  - §3.1 新增：容器启动时执行 `cc-switch daemon start`，日志写 `/tmp/cc-switch-daemon.log`
+  - 仅启动 daemon supervisor，**不自动 `proxy enable`**——不改变默认代理路由
+  - 失败仅 warn，不阻断容器启动
+- **cc-switch 配置根项目化**（`container/entrypoint.sh`）：
+  - 新增 `CC_SWITCH_CONFIG_DIR` 环境变量 → `<workspace>/.aisc/.cc-switch/`
+  - cc-switch 的 SQLite 数据库、设置、备份均存于此，随项目挂载持久化
+  - entrypoint 确保目录可写（`ensure_writable`），收紧权限（`chmod 700` + `stat` 验证）
+  - 导出到 `~/.bashrc` 供后续 shell 会话复用
+- **Provider catalog 共享链路**（`container/entrypoint.sh` + `container/claude-switch`）：
+  - `.aisc/providers.json` 仍为 AISC 主 catalog（首次从内置 bundle 初始化）
+  - `.aisc/.cc-switch/providers.json` → `../providers.json` 相对符号链接
+  - 不支持 symlink 的文件系统退化为启动时 `cp` 刷新副本（含诊断提示）
+  - 若两路径已存在独立文件且内容不同 → 保留 cc-switch 版本并告警
+- **`cs` 切换后同步到 cc-switch SQLite**（`container/claude-switch`）：
+  - `switch()` 末尾新增 `cc-switch --app claude provider import-live`（best-effort）
+  - `cs <provider>` 后 cc-switch TUI/daemon 实时感知同一选中 provider
+- **`cs` provider 解析优先级调整**（`container/claude-switch`）：
+  - 显式 `PROVIDERS_JSON` env → `AISC_DIR` → `~/.aisc` → Docker 内置路径
+  - entrypoint 导出 `PROVIDERS_JSON="$CC_SWITCH_CONFIG_DIR/providers.json"`
+- **scope wrapper 扩展到 6 个运行时变量**（`src/aisc/cli/commands/container.py`）：
+  - `_SCOPE_WRAPPER` 从读取 2 个变量扩展到 6 个：`CLAUDE_CONFIG_DIR`、`CC_SWITCH_CONFIG_DIR`、`AISC_DIR`、`PROVIDERS_JSON`、`CODEX_CONFIG_DIR`、`CODEX_HOME`
+  - fail-closed：任一必需变量缺失 → exit 101，不回退家目录
+  - 仅通过 `/proc/1/environ` 读取，不 eval，特殊字符安全
+- **README 同步**：Provider 路径、`.aisc/.cc-switch/` 目录、`aisc switch --quick` 作用域变量说明同步更新
+
+**设计决策**：
+- **Provider JSON 符号链接而非硬拷贝**：两方始终读同一份文件，避免漂移。不支持 symlink 则退化 cp。
+- **daemon 仅 supervisor，不 proxy enable**：proxy 路由变化涉及端口/路由，留给用户显式控制。
+- **`import-live` 而非直接写 SQLite**：尊重 cc-switch schema 所有权，通过 CLI 导入；best-effort 不阻断 `cs`。
+- **scope wrapper 完整运行时上下文**：`docker exec` 新进程精确复现 PID 1 环境，无需猜测配置路径。
+
+**取舍**：
+- **symlink 依赖文件系统**：ext4/xfs/btrfs/APFS 支持；CIFS/NFS 某些配置不支持。退化路径就绪。
+- **daemon 启动在 entrypoint 而非 Dockerfile**：`CC_SWITCH_CONFIG_DIR` 在 entrypoint 阶段才确定（临时/项目模式），构建期无项目挂载。
+- **`import-live` 日志在 `/tmp`**：仅诊断用途，容器 `--rm` 后清理。
+
+**验证**：
+- `bash -n` 通过（`container/entrypoint.sh`、`container/claude-switch`）
+- Python `py_compile` 通过（`src/aisc/cli/commands/container.py`）
+- `git diff --check` clean
+- 容器内手动验证：`cc-switch daemon start` 成功、symlink 创建正确、`cs deepseek` 后 `cc-switch provider list` 显示一致、`aisc switch --quick ark` scope wrapper 6 变量全通过、`CODEX_HOME` 正确指向 Codex 配置目录
+- 全量 unit test：**521 OK, 15 skipped**（无回归）
+
+---
+
+### Codex 项目配置初始化增强 (2026-07-23)
+
+将 Codex 项目 `.codex` 目录的初始化逻辑与 Claude `.claude` 对齐——从镜像内置副本完整复制，而非依赖 Codex 首次运行自动生成。
+
+**变更**：
+
+- **Dockerfile**：新增 `RUN codex --version` 初始化全局 `.codex` 目录，镜像内预置 Codex 出厂配置
+- **entrypoint.sh**：项目模式 Codex 初始化从「仅建空目录」改为「从镜像 `.codex` 复制」（空目录检测 + 已有配置跳过），逻辑与 `.claude` 完全对称
+- **`CODEX_HOME` 导出**：新增 `CODEX_HOME="$CODEX_CONFIG_DIR"`，写入 `~/.bashrc` 和 scope wrapper
+
+**取舍**：预初始化避免 Codex 首次运行需网络拉取 cloud config；与 `.claude` 对称降低维护负担。
+
+**验证**：`bash -n` 通过；容器内项目模式多次启动验证——首次复制、二次跳过、空目录补全，均正确。
+
+---
+
 ### 已知未完成 / 技术债（如实记录，不做为已完成）
 
 - **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。

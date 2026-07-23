@@ -354,8 +354,8 @@ def cmd_shell(
 # ---------------------------------------------------------------------------
 #
 # ``docker exec`` starts a new process that does **not** inherit
-# CLAUDE_CONFIG_DIR / CC_CONFIG_DIR dynamically exported by entrypoint.sh
-# for PID 1.  This wrapper reads the NUL-delimited /proc/1/environ
+# ``entrypoint.sh`` dynamically exports runtime paths for PID 1.  This
+# wrapper reads the NUL-delimited /proc/1/environ
 # **without eval** using a ``while IFS= read -r -d ''`` loop and a ``case``
 # statement, so literal special characters (spaces, ``$``, ``;``, quotes,
 # backticks, glob chars) in the values survive exactly.
@@ -366,8 +366,8 @@ def cmd_shell(
 # ``--`` guard, then ``exec "$@"`` with the target command.  The provider
 # / subcommand is always positional — never shell-interpolated.
 #
-# Fail-closed: if the source cannot be read or either variable is absent
-# or empty the wrapper exits 101.  No ``$HOME/.claude`` fallback.
+# Fail-closed: if the source cannot be read or a required runtime path is
+# absent or empty the wrapper exits 101.  No home-directory fallback.
 #
 # .. code-block:: text
 #
@@ -375,12 +375,12 @@ def cmd_shell(
 #      while IFS= read -r -d """" entry; do
 #        case "$entry" in
 #          CLAUDE_CONFIG_DIR=*) ... ;;
-#          CC_CONFIG_DIR=*)     ... ;;
+#          CC_SWITCH_CONFIG_DIR=*) ... ;;
 #        esac
 #      done < "$1"
 #      shift; shift   # past source, past --
-#      [ -n "${CLAUDE_CONFIG_DIR:-}" ] && [ -n "${CC_CONFIG_DIR:-}" ] || exit 101
-#      export CLAUDE_CONFIG_DIR CC_CONFIG_DIR
+#      [ -n "${CLAUDE_CONFIG_DIR:-}" ] && [ -n "${CC_SWITCH_CONFIG_DIR:-}" ] || exit 101
+#      export CLAUDE_CONFIG_DIR CC_SWITCH_CONFIG_DIR AISC_DIR PROVIDERS_JSON CODEX_CONFIG_DIR CODEX_HOME
 #      exec "$@"
 #    ' aisc-scope /proc/1/environ -- cc-switch
 _SCOPE_WRAPPER = "\n".join([
@@ -388,20 +388,25 @@ _SCOPE_WRAPPER = "\n".join([
     "  echo 'Error: Cannot read scope environment from PID 1' >&2",
     '  exit 101',
     'fi',
-    'unset CLAUDE_CONFIG_DIR CC_CONFIG_DIR',
+    'unset CLAUDE_CONFIG_DIR CC_SWITCH_CONFIG_DIR AISC_DIR PROVIDERS_JSON CODEX_CONFIG_DIR CODEX_HOME',
     "while IFS= read -r -d '' entry; do",
     '  case "$entry" in',
     '    CLAUDE_CONFIG_DIR=*) CLAUDE_CONFIG_DIR=${entry#*=} ;;',
-    '    CC_CONFIG_DIR=*)     CC_CONFIG_DIR=${entry#*=}     ;;',
+    '    CC_SWITCH_CONFIG_DIR=*) CC_SWITCH_CONFIG_DIR=${entry#*=} ;;',
+    '    AISC_DIR=*)             AISC_DIR=${entry#*=}             ;;',
+    '    PROVIDERS_JSON=*)       PROVIDERS_JSON=${entry#*=}       ;;',
+    '    CODEX_CONFIG_DIR=*)     CODEX_CONFIG_DIR=${entry#*=}     ;;',
+    '    CODEX_HOME=*)           CODEX_HOME=${entry#*=}           ;;',
     '  esac',
     'done < "$1"',
     'shift',
     'shift',
-    'if [ -z "${CLAUDE_CONFIG_DIR:-}" ] || [ -z "${CC_CONFIG_DIR:-}" ]; then',
+    'if [ -z "${CLAUDE_CONFIG_DIR:-}" ] || [ -z "${CC_SWITCH_CONFIG_DIR:-}" ] || '
+    '[ -z "${AISC_DIR:-}" ] || [ -z "${PROVIDERS_JSON:-}" ]; then',
     "  echo 'Error: Cannot read scope environment from PID 1' >&2",
     '  exit 101',
     'fi',
-    'export CLAUDE_CONFIG_DIR CC_CONFIG_DIR',
+    'export CLAUDE_CONFIG_DIR CC_SWITCH_CONFIG_DIR AISC_DIR PROVIDERS_JSON CODEX_CONFIG_DIR CODEX_HOME',
     'exec "$@"',
     '',  # trailing newline
 ])
@@ -413,8 +418,8 @@ _SCOPE_ENV_SOURCE = "/proc/1/environ"
 def _build_switch_argv(name: str, quick: Optional[str]) -> list:
     """Build the ``docker exec`` argv for switch.
 
-    Wraps the target command in a Bash snippet that reads PID 1's
-    ``CLAUDE_CONFIG_DIR`` / ``CC_CONFIG_DIR`` from ``_SCOPE_ENV_SOURCE``
+    Wraps the target command in a Bash snippet that reads the AISC and
+    cc-switch runtime paths from PID 1's ``_SCOPE_ENV_SOURCE``
     (a NUL-delimited environ file, normally ``/proc/1/environ``).
 
     The source path and the ``--`` guard are passed as positional
