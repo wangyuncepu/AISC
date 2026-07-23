@@ -15,7 +15,9 @@ class CcSwitchRuntimeTests(unittest.TestCase):
 
         self.assertIn('CC_SWITCH_CONFIG_DIR="$AISC_DIR/.cc-switch"', entrypoint)
         self.assertIn('PROVIDERS_JSON="$CC_SWITCH_CONFIG_DIR/providers.json"', entrypoint)
-        self.assertIn('ln -s ../providers.json "$CC_SWITCH_PROVIDERS_JSON"', entrypoint)
+        self.assertNotIn('AISC_PROVIDERS_JSON="$AISC_DIR/providers.json"', entrypoint)
+        self.assertIn('LEGACY_PROVIDERS_JSON="$AISC_DIR/providers.json"', entrypoint)
+        self.assertIn('rm -f "$LEGACY_PROVIDERS_JSON"', entrypoint)
         self.assertIn("export CC_SWITCH_CONFIG_DIR", entrypoint)
         self.assertIn("export PROVIDERS_JSON", entrypoint)
 
@@ -25,7 +27,22 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         daemon_start = entrypoint.index("cc-switch daemon start")
         process_handoff = entrypoint.rindex('exec "$@"')
         self.assertLess(daemon_start, process_handoff)
+        self.assertIn(
+            'cc-switch daemon start >"$CC_SWITCH_DAEMON_LOG" 2>&1 &',
+            entrypoint,
+        )
         self.assertNotIn("proxy enable", entrypoint)
+
+    def test_docker_image_contains_copyable_codex_factory_directory(self):
+        dockerfile = (ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
+
+        self.assertIn("/home/AISC/.codex/config.toml", dockerfile)
+        self.assertIn("COPY container/_bundle/skills/ /home/AISC/.codex/skills/", dockerfile)
+        self.assertIn("COPY container/global-claude.md /home/AISC/.codex/AGENTS.md", dockerfile)
+        self.assertNotIn(
+            "codex --version >/dev/null 2>&1 || true",
+            dockerfile,
+        )
 
     def test_cs_prefers_shared_catalog_and_syncs_live_provider(self):
         cs = (ROOT / "container" / "claude-switch").read_text(encoding="utf-8")
@@ -57,7 +74,7 @@ class CcSwitchRuntimeTests(unittest.TestCase):
             "CLAUDE_CONFIG_DIR": "/tmp/claude config",
             "CC_SWITCH_CONFIG_DIR": "/tmp/.aisc/.cc-switch",
             "AISC_DIR": "/tmp/project $literal/.aisc",
-            "PROVIDERS_JSON": "/tmp/project $literal/.aisc/providers.json",
+            "PROVIDERS_JSON": "/tmp/project $literal/.aisc/.cc-switch/providers.json",
             "CODEX_CONFIG_DIR": "/tmp/codex config",
             "CODEX_HOME": "/tmp/codex config",
         }

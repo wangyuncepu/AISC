@@ -768,6 +768,51 @@ docker run -it --rm aisc:v2.1.0-dev codex
 
 ---
 
+### Provider 路径收敛与 Codex 出厂目录固化 (2026-07-23)
+
+第二轮迭代：简化 Provider 目录结构、固化 Codex 镜像出厂骨架、cc-switch daemon 后台化。
+
+**变更**：
+
+- **Provider 路径收敛**（`container/entrypoint.sh` + `container/claude-switch`）：
+  - 删除 `.aisc/providers.json` 中间路径、删除符号链接策略
+  - `providers.json` 唯一项目路径：`<workspace>/.aisc/.cc-switch/providers.json`
+  - 旧项目兼容：若检测到旧版 `.aisc/providers.json`，首次启动时 `cp` 迁移到 `.cc-switch/` 后 `rm` 旧文件
+  - `cs` fallback 优先级：`PROVIDERS_JSON` env → `.aisc/.cc-switch/providers.json` → `~/.aisc/providers.json` → Docker 内置
+  - 删除 `AISC_PROVIDERS_JSON` 变量，仅保留 `PROVIDERS_JSON`
+- **Codex 出厂目录固化**（`container/Dockerfile`）：
+  - 不再依赖 `codex --version` 自动生成配置（该命令不创建 `CODEX_HOME`）
+  - 显式创建 Codex 目录骨架：`config.toml`（空但合法）、`skills/`、`rules/`、`sessions/`、`shell_snapshots/`、`tmp/`
+  - 从 `_bundle/skills/` 预置 Codex skills（与 Claude 共享 SKILL.md 格式）
+  - `global-claude.md` → `.codex/AGENTS.md`（sed 替换 Claude→Codex），保留 karpathy-flow 编码规范
+  - 生成 `.factory-version` 哈希用于后续项目 `.codex` 升级检测
+  - 镜像内 `.codex` 目录完整性硬 fail：entrypoint 检测不完整则 `exit 1`（不静默降级）
+  - 复制失败也硬 fail（与 `.claude` 的错误处理不一致问题修复）
+- **cc-switch daemon 后台化**（`container/entrypoint.sh`）：
+  - `cc-switch daemon start` 改为后台执行（`&`），不再阻塞 entrypoint 启动流程
+  - 保留日志到 `/tmp/cc-switch-daemon.log`，不阻塞不告警
+- **scope wrapper + 测试同步**（`tests/test_cc_switch_runtime.py`）：
+  - Provider 路径断言更新：`PROVIDERS_JSON` → `.cc-switch/providers.json`
+  - 新增 Dockerfile Codex 出厂目录静态验证
+  - 新增 legacy migration 断言
+  - `cs` fallback 优先级断言更新
+
+**设计决策**：
+- **单一路径而非符号链接**：符号链接在跨文件系统场景（CIFS/NFS/某些容器运行时）不可靠。单一路径 + 旧文件迁移更稳健。
+- **Codex 出厂目录与 Claude 技能共享**：两个 CLI 原生支持同一 SKILL.md 格式，`_bundle/skills/` 重复 COPY 两份而非共享目录——保证项目模式整目录复制时各自独立、互不污染。
+- **daemon `&` 后台化**：`cc-switch daemon start` 是常驻前台进程，不放后台则 entrypoint 永远等不到启动菜单。
+
+**取舍**：
+- **旧 `.aisc/providers.json` 被迁移后删除**：不再保留备份。用户若手动编辑旧路径，数据会在下次启动时丢失——README 已更新文档指向新路径。
+- **Codex skills 从 `_bundle` COPY 而非构建期 install**：与 Claude skills 策略一致（自包含构建、离线可用）。
+
+**验证**：
+- `bash -n` 通过；Python `py_compile` 通过；`git diff --check` clean
+- `PYTHONPATH=src python3 -m unittest tests.test_cc_switch_runtime -v`：全通过
+- 全量 unit test：521 OK, 15 skipped（无回归）
+
+---
+
 ### 已知未完成 / 技术债（如实记录，不做为已完成）
 
 - **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。

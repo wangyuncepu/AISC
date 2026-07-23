@@ -158,9 +158,14 @@ RUN mkdir -p /home/AISC/.claude \
 RUN CLAUDE_CONFIG_DIR=/home/AISC/.claude claude -p "init" >/dev/null 2>&1 || true \
     && CLAUDE_CONFIG_DIR=/home/AISC/.claude claude --version >/dev/null 2>&1 || true
 
-# 初始化 Codex 全局配置目录（类似 .claude 初始化，首次触发 codex 生成配置）
-RUN mkdir -p /home/AISC/.codex \
-    && codex --version >/dev/null 2>&1 || true
+# 初始化 Codex 全局出厂目录。codex --version 不会生成 CODEX_HOME，
+# 因此显式创建可复制的原生目录骨架与合法空配置。
+RUN mkdir -p /home/AISC/.codex/skills \
+             /home/AISC/.codex/rules \
+             /home/AISC/.codex/sessions \
+             /home/AISC/.codex/shell_snapshots \
+             /home/AISC/.codex/tmp \
+    && : > /home/AISC/.codex/config.toml
 
 # 创建技能目录与项目挂载点
 RUN mkdir -p /home/AISC/.claude/skills /home/AISC/app
@@ -182,6 +187,15 @@ RUN for j in installed_plugins.json known_marketplaces.json; do \
 
 # 3. 注入扁平技能（来源 _bundle/skills）：gstack（仅文档，6 子技能）
 COPY container/_bundle/skills/ /home/AISC/.claude/skills/
+
+# Codex 使用同一套 SKILL.md 格式；预置到镜像的完整 .codex，项目模式整目录复制。
+COPY container/_bundle/skills/ /home/AISC/.codex/skills/
+COPY container/global-claude.md /home/AISC/.codex/AGENTS.md
+RUN sed -i -e 's/Super Claude/Super Codex/' \
+           -e 's/Claude Code/Codex/g' /home/AISC/.codex/AGENTS.md \
+    && find /home/AISC/.codex/skills /home/AISC/.codex/AGENTS.md /home/AISC/.codex/config.toml \
+        -type f 2>/dev/null | sort | xargs sha1sum 2>/dev/null | sha1sum | cut -d' ' -f1 \
+        > /home/AISC/.codex/.factory-version
 
 # 3c. 解引用 .claude 内所有符号链接 → 真文件
 #     Windows 绑定挂载(grpcfuse)不支持创建 symlink，cp -r 会失败导致项目复制残缺。

@@ -46,11 +46,11 @@ if [ ! -f "$AISC_KEY_STORE" ]; then
 fi
 
 # Resolve providers.json — the entrypoint exports the canonical shared catalog.
-# Priority: explicit PROVIDERS_JSON > AISC_DIR > ~/.aisc > Docker fallback.
+# Priority: explicit PROVIDERS_JSON > project cc-switch > ~/.aisc > Docker fallback.
 if [ -n "${PROVIDERS_JSON:-}" ] && [ -f "$PROVIDERS_JSON" ]; then
   PROVIDERS_JSON="$PROVIDERS_JSON"
-elif [ -n "${AISC_DIR:-}" ] && [ -f "$AISC_DIR/providers.json" ]; then
-  PROVIDERS_JSON="$AISC_DIR/providers.json"
+elif [ -n "${AISC_DIR:-}" ] && [ -f "$AISC_DIR/.cc-switch/providers.json" ]; then
+  PROVIDERS_JSON="$AISC_DIR/.cc-switch/providers.json"
 elif [ -f "${HOME}/.aisc/providers.json" ]; then
   PROVIDERS_JSON="${HOME}/.aisc/providers.json"
 else

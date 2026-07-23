@@ -22,10 +22,10 @@ source /usr/local/bin/lib/path-resolve.sh
 #             临时模式用镜像内置 /home/AISC/.claude；项目模式整目录拷到 /home/AISC/app/.claude（不改名）
 #   .codex  = Codex CLI 配置目录（类似 .claude 结构）
 #             临时模式用镜像内置 /home/AISC/.codex；项目模式整目录拷到 /home/AISC/app/.codex
-#   .aisc   = AISC 配置目录（providers.json + secrets/api-keys）
+#   .aisc   = AISC 配置目录（config/profiles + secrets/api-keys）
 #             固定放当前项目 /home/AISC/app/.aisc（临时与项目模式都用它）
 #   .cc-switch = cc-switch 运行时目录（数据库、设置、备份等）
-#             固定放 .aisc/.cc-switch，随项目挂载持久化
+#             固定放 .aisc/.cc-switch，providers.json 也以此为唯一项目路径
 # ==========================================
 GLOBAL_CLAUDE_DIR="/home/AISC/.claude"
 PROJECT_CLAUDE_DIR="/home/AISC/app/.claude"
@@ -33,7 +33,6 @@ GLOBAL_CODEX_DIR="/home/AISC/.codex"
 PROJECT_CODEX_DIR="/home/AISC/app/.codex"
 AISC_DIR="/home/AISC/app/.aisc"
 CC_SWITCH_CONFIG_DIR="$AISC_DIR/.cc-switch"
-AISC_PROVIDERS_JSON="$AISC_DIR/providers.json"
 PROVIDERS_JSON="$CC_SWITCH_CONFIG_DIR/providers.json"
 
 echo -e "\n🚀 [AISC] AI 工作站初始化中..."
@@ -131,7 +130,7 @@ else
         echo "    运行  cs upgrade  升级当前项目 .claude（保留你的后端配置与历史）。"
     fi
 
-    # 项目 .codex 初始化：从镜像内置 .codex 复制（类似 .claude 逻辑）
+    # 项目 .codex 初始化：从镜像内置完整出厂目录复制（类似 .claude 逻辑）
     NEED_COPY_CODEX=0
     if [ ! -d "$PROJECT_CODEX_DIR" ]; then
         NEED_COPY_CODEX=1
@@ -143,12 +142,15 @@ else
 
     if [ "$NEED_COPY_CODEX" = 1 ]; then
         mkdir -p "$PROJECT_CODEX_DIR"
-        if [ -d "$GLOBAL_CODEX_DIR" ] && [ -n "$(ls -A "$GLOBAL_CODEX_DIR" 2>/dev/null)" ]; then
-            cp -rL "$GLOBAL_CODEX_DIR/." "$PROJECT_CODEX_DIR/" 2>/dev/null || true
-            echo "✅ 项目 .codex 已就绪。"
-        else
-            echo "ℹ️  镜像 .codex 无预置内容，Codex 首次运行时会自动初始化。"
+        if [ ! -f "$GLOBAL_CODEX_DIR/config.toml" ] || [ ! -d "$GLOBAL_CODEX_DIR/skills" ]; then
+            echo "❌ 镜像内置 .codex 不完整（缺 config.toml 或 skills），请重新构建镜像。" >&2
+            exit 1
         fi
+        if ! cp -rL "$GLOBAL_CODEX_DIR/." "$PROJECT_CODEX_DIR/" 2>&1; then
+            echo "❌ 复制 .codex 失败，请检查权限和磁盘空间。" >&2
+            exit 1
+        fi
+        echo "✅ 项目 .codex 已就绪。"
     else
         echo "🔍 检测到当前项目已有 .codex 配置，跳过复制。"
     fi
@@ -233,33 +235,27 @@ fi
 echo "🔧 修正挂载目录权限..."
 sudo chown -R AISC:AISC /home/AISC/app 2>/dev/null || true
 
-# 初始化 providers.json：首次启动时从 aisc-bundle/config/providers.json 复制
+# 初始化 providers.json：cc-switch 配置根是唯一项目路径。
+# 兼容旧项目：若旧版 .aisc/providers.json 存在，首次启动迁移后删除旧文件。
 PROVIDERS_TEMPLATE="/opt/aisc/bundle/config/providers.json"
-if [ ! -f "$AISC_PROVIDERS_JSON" ] && [ -f "$PROVIDERS_TEMPLATE" ]; then
-    echo "📋 初始化 providers.json..."
-    cp "$PROVIDERS_TEMPLATE" "$AISC_PROVIDERS_JSON"
-    chmod 600 "$AISC_PROVIDERS_JSON"
+LEGACY_PROVIDERS_JSON="$AISC_DIR/providers.json"
+if [ -L "$PROVIDERS_JSON" ]; then
+    rm -f "$PROVIDERS_JSON"
 fi
-
-# cc-switch 的主数据是 .cc-switch/cc-switch.db；把 AISC catalog 暴露在同一
-# 配置根下，并由 cs/诊断工具始终读取这一份。优先使用相对符号链接保证两条
-# 路径指向同一文件；不支持符号链接的挂载上退化为启动时刷新副本。
-CC_SWITCH_PROVIDERS_JSON="$CC_SWITCH_CONFIG_DIR/providers.json"
-if [ -L "$CC_SWITCH_PROVIDERS_JSON" ]; then
-    if [ "$(readlink "$CC_SWITCH_PROVIDERS_JSON" 2>/dev/null || true)" != "../providers.json" ]; then
-        rm -f "$CC_SWITCH_PROVIDERS_JSON"
-    fi
-elif [ -e "$CC_SWITCH_PROVIDERS_JSON" ]; then
-    if ! cmp -s "$AISC_PROVIDERS_JSON" "$CC_SWITCH_PROVIDERS_JSON"; then
-        echo "⚠️  cc-switch/providers.json 是独立文件且内容不同；保留该文件并将其作为本次运行的 catalog。" >&2
+if [ ! -f "$PROVIDERS_JSON" ]; then
+    if [ -f "$LEGACY_PROVIDERS_JSON" ]; then
+        echo "📦 迁移 providers.json 到 .cc-switch..."
+        cp "$LEGACY_PROVIDERS_JSON" "$PROVIDERS_JSON"
+    elif [ -f "$PROVIDERS_TEMPLATE" ]; then
+        echo "📋 初始化 .cc-switch/providers.json..."
+        cp "$PROVIDERS_TEMPLATE" "$PROVIDERS_JSON"
     fi
 fi
-if [ ! -e "$CC_SWITCH_PROVIDERS_JSON" ] && [ ! -L "$CC_SWITCH_PROVIDERS_JSON" ]; then
-    ln -s ../providers.json "$CC_SWITCH_PROVIDERS_JSON" 2>/dev/null || {
-        cp "$AISC_PROVIDERS_JSON" "$CC_SWITCH_PROVIDERS_JSON"
-        chmod 600 "$CC_SWITCH_PROVIDERS_JSON"
-        echo "⚠️  当前挂载不支持符号链接；cc-switch/providers.json 将在每次启动时刷新。" >&2
-    }
+if [ -f "$PROVIDERS_JSON" ]; then
+    chmod 600 "$PROVIDERS_JSON"
+    if [ -f "$LEGACY_PROVIDERS_JSON" ]; then
+        rm -f "$LEGACY_PROVIDERS_JSON"
+    fi
 fi
 
 # 初始化 config.json：首次启动时从 aisc-bundle/config/config.json 复制
@@ -305,15 +301,14 @@ fi
 # ==========================================
 # 3.1. 启动 cc-switch 默认后台服务
 #   只启动 daemon supervisor，不自动启用 proxy route；配置完全使用
-#   $CC_SWITCH_CONFIG_DIR 下的默认值。失败不阻断 AI CLI 启动，但保留日志。
+#   $CC_SWITCH_CONFIG_DIR 下的默认值。daemon 是常驻前台进程，必须放到后台，
+#   否则 entrypoint 会永远等不到后续的启动菜单/exec。
 # ==========================================
 CC_SWITCH_DAEMON_LOG="/tmp/cc-switch-daemon.log"
 if command -v cc-switch >/dev/null 2>&1; then
-    if cc-switch daemon start >"$CC_SWITCH_DAEMON_LOG" 2>&1; then
-        echo "✅ cc-switch 后台服务已启动（配置: $CC_SWITCH_CONFIG_DIR）"
-    else
-        echo "⚠️  cc-switch 后台服务启动失败，继续启动容器（日志: $CC_SWITCH_DAEMON_LOG）" >&2
-    fi
+    cc-switch daemon start >"$CC_SWITCH_DAEMON_LOG" 2>&1 &
+    CC_SWITCH_DAEMON_PID=$!
+    echo "✅ cc-switch 后台服务启动中（PID: $CC_SWITCH_DAEMON_PID，配置: $CC_SWITCH_CONFIG_DIR）"
 fi
 
 # 从 providers.json 读取当前 provider 名称
