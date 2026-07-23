@@ -1530,3 +1530,8 @@ Windows → WSL2 → Docker bind mount 场景下，宿主机工作区直接挂�
 - 真实宿主目录 bind mount 到 `/root` 的项目/临时两种作用域均验证通过。
 - cc-switch daemon、Codex provider、Claude/Codex 路由和 gstack skills 验证通过。
 - 完整测试：189 项通过，1 项按既有条件跳过。
+
+### v2.1.1-dev 增量：Windows bind mount `.aisc` 文件兼容
+
+- 修复宿主机 `.aisc` 被映射为普通文件时的启动错误：`mkdir: ... File exists`。
+- entrypoint 检测到 `/root/.aisc` 非目录后，不删除或覆盖宿主文件，自动切换到 `/tmp/aisc-home/.aisc` 并输出警告，确保容器仍可进入和使用。

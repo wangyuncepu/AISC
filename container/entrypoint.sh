@@ -38,6 +38,14 @@ TEMP_CODEX_DIR="$TEMP_HOME/.codex"
 PROJECT_CLAUDE_DIR="/root/.claude"
 PROJECT_CODEX_DIR="/root/.codex"
 AISC_DIR="/root/.aisc"
+
+# Windows bind mount occasionally exposes a host-side `.aisc` file as a file
+# rather than a directory.  Never try to remove or overwrite user data; use an
+# ephemeral container-local config root so startup can continue safely.
+if [ -e "$AISC_DIR" ] && [ ! -d "$AISC_DIR" ]; then
+    echo "⚠️  /root/.aisc 不是目录（检测到普通文件），改用临时配置目录: $TEMP_HOME/.aisc" >&2
+    AISC_DIR="$TEMP_HOME/.aisc"
+fi
 CC_SWITCH_CONFIG_DIR="$AISC_DIR/.cc-switch"
 PROVIDERS_JSON="$CC_SWITCH_CONFIG_DIR/providers.json"
 
