@@ -12,13 +12,13 @@ SETTINGS_RAW="${CFG_DIR}/settings.json"
 
 # api-keys 密钥存于 .aisc/secrets/api-keys
 # 解析顺序：
-#   1) AISC_DIR（entrypoint 导出，恒为 /home/AISC/app/.aisc）
-#   2) Docker 项目卷 /home/AISC/app/.aisc
+#   1) AISC_DIR（entrypoint 导出，恒为 /root/app/.aisc）
+#   2) Docker 项目卷 /root/app/.aisc
 #   3) 全局 ~/.aisc
 if [ -n "${AISC_DIR:-}" ]; then
   AISC_SECRETS_DIR="$AISC_DIR/secrets"
-elif [ -d /home/AISC/app/.aisc ]; then
-  AISC_SECRETS_DIR="/home/AISC/app/.aisc/secrets"
+elif [ -d /root/app/.aisc ]; then
+  AISC_SECRETS_DIR="/root/app/.aisc/secrets"
 else
   AISC_SECRETS_DIR="${HOME}/.aisc/secrets"
 fi
@@ -54,22 +54,19 @@ elif [ -n "${AISC_DIR:-}" ] && [ -f "$AISC_DIR/.cc-switch/providers.json" ]; the
 elif [ -f "${HOME}/.aisc/providers.json" ]; then
   PROVIDERS_JSON="${HOME}/.aisc/providers.json"
 else
-  PROVIDERS_JSON="${PROVIDERS_JSON:-/home/AISC/providers.json}"
+  PROVIDERS_JSON="${PROVIDERS_JSON:-/root/providers.json}"
 fi
 export PROVIDERS_JSON
 mkdir -p "$(dirname "$PROVIDERS_JSON")"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-# _ensure_dir DIR — create directory with sudo fallback for bind-mount permission resilience
+# _ensure_dir DIR — create a directory as the container's root user
 _ensure_dir() {
   local d="$1"
   [ -n "$d" ] || return 1
   [ -d "$d" ] && return 0
   if mkdir -p -- "$d" 2>/dev/null; then
-    return 0
-  fi
-  if sudo mkdir -p -- "$d" 2>/dev/null; then
     return 0
   fi
   echo "ERROR: cannot create directory '$d'" >&2
@@ -351,7 +348,7 @@ show_current() {
 #   再对“项目独有”项逐项询问删除（默认保留），最后同步版本戳。
 # ==========================================
 do_upgrade() {
-  local SRC="/home/AISC/.claude"
+  local SRC="/root/.claude"
   local DST="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
   [ -d "$SRC" ] || die "未找到镜像出厂 .claude: $SRC"
   [ "$DST" = "$SRC" ] && die "临时模式（$SRC 即出厂本体），无需升级"
@@ -367,7 +364,7 @@ do_upgrade() {
   [ -f "$SRC/CLAUDE.md" ]          && cp -f "$SRC/CLAUDE.md" "$DST/CLAUDE.md"
   [ -f "$SRC/settings.local.json" ] && cp -f "$SRC/settings.local.json" "$DST/settings.local.json"
 
-  # 修正插件注册表路径 /home/AISC/.claude → 项目目录（避免 orphan 误删）
+  # 修正插件注册表路径 /root/.claude → 项目目录（避免 orphan 误删）
   for j in installed_plugins.json known_marketplaces.json; do
     [ -f "$DST/plugins/$j" ] && sed -i "s#${SRC}#${DST}#g" "$DST/plugins/$j" 2>/dev/null || true
   done
@@ -429,7 +426,7 @@ do_upgrade() {
   # 4) 同步版本戳
   [ -f "$SRC/.factory-version" ] && cp -f "$SRC/.factory-version" "$DST/.factory-version"
 
-  # 全程非 root（AISC），挂载卷由 AISC 直接读写，无需 chown 交还宿主机用户。
+  # 全程以 root 运行，挂载卷可直接读写，无需 chown。
   echo "🎉 升级完成。"
 }
 

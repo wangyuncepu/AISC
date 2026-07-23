@@ -4,7 +4,7 @@
     "superpowers@claude-plugins-official": [
       {
         "scope": "user",
-        "installPath": "/home/AISC/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3",
+        "installPath": "/root/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.3",
         "version": "6.0.3",
         "installedAt": "2026-05-20T07:48:37.924Z",
         "lastUpdated": "2026-06-23T08:09:26.307Z",
@@ -14,7 +14,7 @@
     "claude-hud@claude-hud": [
       {
         "scope": "user",
-        "installPath": "/home/AISC/.claude/plugins/cache/claude-hud/claude-hud/0.0.11",
+        "installPath": "/root/.claude/plugins/cache/claude-hud/claude-hud/0.0.11",
         "version": "0.0.11",
         "installedAt": "2026-03-26T00:20:51.652Z",
         "lastUpdated": "2026-03-26T00:20:51.652Z",
@@ -24,7 +24,7 @@
     "caveman@caveman": [
       {
         "scope": "user",
-        "installPath": "/home/AISC/.claude/plugins/cache/caveman/caveman/63a91ecadbf4",
+        "installPath": "/root/.claude/plugins/cache/caveman/caveman/63a91ecadbf4",
         "version": "63a91ecadbf4",
         "installedAt": "2026-05-16T04:24:45.766Z",
         "lastUpdated": "2026-05-16T04:24:45.766Z",
@@ -34,7 +34,7 @@
     "document-skills@anthropic-agent-skills": [
       {
         "scope": "user",
-        "installPath": "/home/AISC/.claude/plugins/cache/anthropic-agent-skills/document-skills/35414756ca55",
+        "installPath": "/root/.claude/plugins/cache/anthropic-agent-skills/document-skills/35414756ca55",
         "version": "35414756ca55",
         "installedAt": "2026-05-16T17:10:34.054Z",
         "lastUpdated": "2026-06-29T09:35:27.028Z",

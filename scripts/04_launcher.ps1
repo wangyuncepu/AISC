@@ -23,15 +23,14 @@ if (-not (Test-Path $workspace -PathType Container)) {
 
 Write-Host '🚀 [4/4] 启动容器...'
 Write-Host '💡 容器内：cs ark / cs deepseek / cs show 切换模型后端'
-Write-Host "📂 Workspace: $workspace -> /home/AISC/app"
+Write-Host "📂 Workspace: $workspace -> /root/app"
 Write-Host ''
 
 # 仅清理已退出的旧工作站容器（保留运行中的，支持多开并行）
 docker ps -aq -f 'name=super-claude-station' -f 'status=exited' 2>$null | ForEach-Object { docker rm $_ 2>$null | Out-Null }
 
-# 拼接 docker run 参数；启用代理时追加 NET_ADMIN + /dev/net/tun + 配置只读挂载
-# Windows: 使用 --user 1000:1000 确保挂载文件权限映射到 AISC 用户
-$runArgs = @('run', '-it', '--rm', '--user', '1000:1000', '-e', 'TERM=xterm-256color', '--name', $Name, '-v', "${workspace}:/home/AISC/app")
+# 拼接 docker run 参数；镜像默认以 root 运行，启用代理时追加 NET_ADMIN + /dev/net/tun + 配置只读挂载
+$runArgs = @('run', '-it', '--rm', '-e', 'TERM=xterm-256color', '--name', $Name, '-v', "${workspace}:/root/app")
 if ($Proxy -eq '1') {
     Write-Host '🛡️  已启用容器内 TUN 透明代理（NET_ADMIN + /dev/net/tun）'
     $runArgs += @('--cap-add=NET_ADMIN', '--device=/dev/net/tun', '-v', "$ProjectRoot\.claude\mihomo\config.yaml:/etc/mihomo/config.yaml:ro")

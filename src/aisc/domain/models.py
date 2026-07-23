@@ -274,20 +274,13 @@ class RunPlan:
         - network=proxy     → adds NET_ADMIN, TUN device, mihomo config mount
         - keep_alive=False  → includes ``--rm`` (default: remove on exit)
         - keep_alive=True   → omits ``--rm`` (persist after exit)
-        - Always runs with --user $(id -u):$(id -g) to match host file ownership
+        - Runs as the image default user (root) so bind-mounted WSL2 files remain writable
         """
-        import os
         argv = ["run"]
 
         # Only add --rm if keep_alive is False (default behavior)
         if not self.keep_alive:
             argv.append("--rm")
-
-        # Add user mapping to prevent permission issues with mounted files
-        if hasattr(os, 'getuid') and hasattr(os, 'getgid'):
-            uid = os.getuid()
-            gid = os.getgid()
-            argv.extend(["--user", f"{uid}:{gid}"])
 
         # For keep_alive mode, use -d (detached) instead of -it to prevent container exit on client disconnect
         if self.keep_alive and self.interactive and not self.non_interactive:
@@ -297,11 +290,11 @@ class RunPlan:
         argv.extend([
             "-e", "TERM=xterm-256color",
             "--name", self.name,
-            "-v", f"{self.workspace}:/home/AISC/app",
+            "-v", f"{self.workspace}:/root/app",
         ])
         if self.provider_config_dir:
             argv.extend([
-                "-v", f"{self.provider_config_dir}:/home/AISC/app/.aisc",
+                "-v", f"{self.provider_config_dir}:/root/app/.aisc",
             ])
         if self.non_interactive:
             argv.extend([

@@ -7,7 +7,7 @@ source /usr/local/bin/lib/env-inject.sh
 
 # env 块在 Claude CLI 原生 settings.json（CLAUDE_CONFIG_DIR/settings.json）。
 # 启动时兜底注入一次；Claude Code 自身也会原生读取该文件并实时生效。
-CFG_DIR="${CLAUDE_CONFIG_DIR:-/home/AISC/.claude}"
+CFG_DIR="${CLAUDE_CONFIG_DIR:-/root/.claude}"
 SETTINGS_FILE="${CFG_DIR}/settings.json"
 
 env_inject "$SETTINGS_FILE"

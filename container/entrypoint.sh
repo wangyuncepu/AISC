@@ -4,6 +4,7 @@ set -e
 
 # 运行期 UTF-8 兜底：即便镜像未注入 locale 也保证中文不乱码 (no.5)
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
+export IS_SANDBOX="${IS_SANDBOX:-1}"
 
 # 终端能力兜底：Windows(cmd/docker) 下容器 TERM 常缺失，导致 Claude Code
 # 判定终端不支持而隐藏 statusLine(claude-hud HUD)。强制设为支持 VT 的值。
@@ -17,21 +18,21 @@ source /usr/local/bin/lib/env-inject.sh
 source /usr/local/bin/lib/path-resolve.sh
 
 # ==========================================
-# 路径模型（全程非 root，用户 AISC，家目录 /home/AISC）
+# 路径模型（全程以 root 运行，家目录 /root）
 #   .claude = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
-#             临时模式用镜像内置 /home/AISC/.claude；项目模式整目录拷到 /home/AISC/app/.claude（不改名）
+#             临时模式用镜像内置 /root/.claude；项目模式整目录拷到 /root/app/.claude（不改名）
 #   .codex  = Codex CLI 配置目录（类似 .claude 结构）
-#             临时模式用镜像内置 /home/AISC/.codex；项目模式整目录拷到 /home/AISC/app/.codex
+#             临时模式用镜像内置 /root/.codex；项目模式整目录拷到 /root/app/.codex
 #   .aisc   = AISC 配置目录（config/profiles + secrets/api-keys）
-#             固定放当前项目 /home/AISC/app/.aisc（临时与项目模式都用它）
+#             固定放当前项目 /root/app/.aisc（临时与项目模式都用它）
 #   .cc-switch = cc-switch 运行时目录（数据库、设置、备份等）
 #             固定放 .aisc/.cc-switch，providers.json 也以此为唯一项目路径
 # ==========================================
-GLOBAL_CLAUDE_DIR="/home/AISC/.claude"
-PROJECT_CLAUDE_DIR="/home/AISC/app/.claude"
-GLOBAL_CODEX_DIR="/home/AISC/.codex"
-PROJECT_CODEX_DIR="/home/AISC/app/.codex"
-AISC_DIR="/home/AISC/app/.aisc"
+GLOBAL_CLAUDE_DIR="/root/.claude"
+PROJECT_CLAUDE_DIR="/root/app/.claude"
+GLOBAL_CODEX_DIR="/root/.codex"
+PROJECT_CODEX_DIR="/root/app/.codex"
+AISC_DIR="/root/app/.aisc"
 CC_SWITCH_CONFIG_DIR="$AISC_DIR/.cc-switch"
 PROVIDERS_JSON="$CC_SWITCH_CONFIG_DIR/providers.json"
 
@@ -168,8 +169,7 @@ ensure_writable "$AISC_DIR"
 ensure_writable "$AISC_DIR/secrets"
 ensure_writable "$CC_SWITCH_CONFIG_DIR"
 
-# .claude 目录同理：挂载卷上文件可能属于宿主机用户（非 uid 1000），
-# AISC 无写权限会导致 cs 写 settings.json 时报 EACCES。
+# .claude 目录同理：确认挂载卷实际可写。
 if [ "$SCOPE" = "project" ]; then
     ensure_writable "$CLAUDE_CONFIG_DIR"
 fi
@@ -193,10 +193,8 @@ fi
 # If the underlying fs rejects chmod (bind/CIFS/NFS) but the dir remains writable,
 # emit a security warning and continue — do NOT fail startup over a chmod.
 # Also detects CIFS "fake success": chmod returns 0 but mode unchanged.
-# 旧镜像曾以 root 运行，绑定挂载把 root 所有权持久化到宿主；
-# ensure_writable 以 sudo chown AISC:AISC 自愈，不依赖外部 bat 的宿主侧 root pass。
 for _d in "$AISC_DIR" "$AISC_DIR/secrets" "$CC_SWITCH_CONFIG_DIR"; do
-  if sudo chmod 700 -- "$_d" 2>/dev/null; then
+  if chmod 700 -- "$_d" 2>/dev/null; then
     # chmod reported success — verify it actually took effect (CIFS may silently ignore)
     if command -v stat >/dev/null 2>&1; then
       _mode=$(stat -c '%a' -- "$_d" 2>/dev/null || echo '')
@@ -211,8 +209,7 @@ for _d in "$AISC_DIR" "$AISC_DIR/secrets" "$CC_SWITCH_CONFIG_DIR"; do
   fi
 done
 
-# 让用户进入 bash 后再次运行 CLI 时仍能拿到同一作用域
-# （非 root，只能写家目录 ~/.bashrc；不再写 /etc/profile.d）
+# 让用户进入 bash 后再次运行 CLI 时仍能拿到同一作用域。
 if ! grep -q 'CC_SWITCH_CONFIG_DIR' "$HOME/.bashrc" 2>/dev/null; then
     {
         echo ""
@@ -225,15 +222,6 @@ if ! grep -q 'CC_SWITCH_CONFIG_DIR' "$HOME/.bashrc" 2>/dev/null; then
         echo "export PROVIDERS_JSON='$PROVIDERS_JSON'"
     } >> "$HOME/.bashrc"
 fi
-
-# ==========================================
-# 2.5. 修正挂载目录权限（Windows 宿主机兼容）
-# ==========================================
-# 问题：Windows 宿主机挂载到 WSL2/Docker 的文件默认是 root:root (UID=0)
-# 影响：容器内以 AISC 用户运行时无法写入这些文件
-# 解决：启动时无条件修正整个挂载目录的文件所有者到 AISC:AISC
-echo "🔧 修正挂载目录权限..."
-sudo chown -R AISC:AISC /home/AISC/app 2>/dev/null || true
 
 # 初始化 providers.json：cc-switch 配置根是唯一项目路径。
 # 兼容旧项目：若旧版 .aisc/providers.json 存在，首次启动迁移后删除旧文件。
@@ -319,21 +307,21 @@ fi
 #    - 宿主侧启动器仅下载/拷贝用户原始配置/订阅（ro 挂载），由 mihomo-build-config.js 处理：
 #      读 ro 源 → 识别格式(yaml/base64订阅/URI直链/JSON) 非yaml自动转最小Clash配置
 #      → 剥离已有 tun:/dns: 顶层块 → 追加规范 tun:（+ 缺失时补 dns:）→ 写可写副本
-#      → sudo mihomo -f 副本
-#    - mihomo 建 TUN 设备 + auto-route iptables 需 CAP_NET_ADMIN → 以 root(sudo) 后台启动
-#      （AISC 已在 sudoers NOPASSWD；容器需 --cap-add=NET_ADMIN --device /dev/net/tun）
+#      → mihomo -f 副本
+#    - mihomo 建 TUN 设备 + auto-route iptables 需 CAP_NET_ADMIN → 以 root 后台启动
+#      （容器需 --cap-add=NET_ADMIN --device /dev/net/tun）
 #    - 启动后再 exec claude：TUN 已接管容器全部出站，API 请求经代理
 # ==========================================
 if [ -f /etc/mihomo/config.yaml ]; then
     echo "🚀 正在内建 TUN 透明代理网络..."
-    MIHOMO_DATA_DIR="/home/AISC/.mihomo"
+    MIHOMO_DATA_DIR="/root/.mihomo"
     MIHOMO_CFG="$MIHOMO_DATA_DIR/config.yaml"
 
     # 原始订阅 → mihomo 配置（格式自动转换 + TUN/DNS 强制注入）到可写副本。
     # 支持 yaml / base64 订阅 / URI 直链 / JSON(SIP008)；失败仅告警不阻断，便于进 bash 排障。
     if node /usr/local/bin/mihomo-build-config.js /etc/mihomo/config.yaml "$MIHOMO_CFG"; then
-        # 后台启动 mihomo（root），日志写 AISC 可写目录
-        sudo -b bash -c "mihomo -d '$MIHOMO_DATA_DIR' -f '$MIHOMO_CFG' > '$MIHOMO_DATA_DIR/mihomo.log' 2>&1"
+        # 后台启动 mihomo（root）
+        bash -c "mihomo -d '$MIHOMO_DATA_DIR' -f '$MIHOMO_CFG' > '$MIHOMO_DATA_DIR/mihomo.log' 2>&1" &
         # 等待 TUN 接管路由 + url-test 初选节点（节点多时需几秒）
         sleep 4
         # 健康探测：经代理能否到达 api.anthropic.com（不带 -f：401/404 等任何 HTTP 响应都算可达，只看连接是否成功）
@@ -341,7 +329,7 @@ if [ -f /etc/mihomo/config.yaml ]; then
             echo "✅ Mihomo TUN 已就绪，代理连通: api.anthropic.com 可达"
         else
             # curl 失败：区分 mihomo 进程是否存活，给出更准确的排障提示
-            if sudo pgrep -f 'mihomo -d' >/dev/null 2>&1; then
+            if pgrep -f 'mihomo -d' >/dev/null 2>&1; then
                 echo "⚠️  mihomo 运行中但代理暂未通（可能仍在 url-test 初选节点，或节点异常）。可继续；若 claude 连不上请查 $MIHOMO_DATA_DIR/mihomo.log"
             else
                 echo "❌ mihomo 进程已退出，请查日志: $MIHOMO_DATA_DIR/mihomo.log"
@@ -365,11 +353,11 @@ AI_BRIEF_ON_START="${AI_BRIEF_ON_START:-}"
 
 case "${AI_BRIEF_ON_START,,}" in
     background)
-        if command -v python3 >/dev/null 2>&1 && [ -d /home/AISC/ai_brief ]; then
+        if command -v python3 >/dev/null 2>&1 && [ -d /root/ai_brief ]; then
             if [ -n "$BASE_URL" ] && [ "$AUTH" = "yes" ]; then
                 echo "📰 AI 简讯后台抓取中（日志: /tmp/ai-brief.log，容器启动后 cat /tmp/ai-brief.log 查看）"
                 (
-                    python3 /home/AISC/ai_brief/brief.py --ai --top 5 \
+                    python3 /root/ai_brief/brief.py --ai --top 5 \
                         > /tmp/ai-brief.log 2>&1
                     printf '--- DONE (%s) ---\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> /tmp/ai-brief.log
                 ) &
@@ -380,19 +368,19 @@ case "${AI_BRIEF_ON_START,,}" in
         ;;
     foreground)
         # 阻塞同步模式（会延长启动时间，仅调试/手动触发用）
-        if command -v python3 >/dev/null 2>&1 && [ -d /home/AISC/ai_brief ]; then
+        if command -v python3 >/dev/null 2>&1 && [ -d /root/ai_brief ]; then
             if [ -n "$BASE_URL" ] && [ "$AUTH" = "yes" ]; then
                 BRIEF_EXIT=0
-                BRIEF="$(timeout 50 python3 /home/AISC/ai_brief/brief.py --ai --top 5 2>/tmp/ai-brief.log)" || BRIEF_EXIT=$?
+                BRIEF="$(timeout 50 python3 /root/ai_brief/brief.py --ai --top 5 2>/tmp/ai-brief.log)" || BRIEF_EXIT=$?
                 if [ -n "$BRIEF" ]; then
                     echo "📰 今日 AI 简讯："
                     echo "$BRIEF"
                     echo "----------------------------------------"
                 elif [ "$BRIEF_EXIT" = "124" ]; then
-                    echo "📰 简讯加载超时（50s），已跳过（容器内可手跑：python3 /home/AISC/ai_brief/brief.py）"
+                    echo "📰 简讯加载超时（50s），已跳过（容器内可手跑：python3 /root/ai_brief/brief.py）"
                     echo "----------------------------------------"
                 else
-                    echo "📰 简讯加载失败，已跳过（容器内可手跑：python3 /home/AISC/ai_brief/brief.py）"
+                    echo "📰 简讯加载失败，已跳过（容器内可手跑：python3 /root/ai_brief/brief.py）"
                     echo "----------------------------------------"
                 fi
             else
@@ -443,20 +431,7 @@ if [ "$1" = "claude" ] && [ -t 0 ]; then
 fi
 
 # ==========================================
-# 6. 容器退出时修正文件权限 (修复 Windows 宿主机文件权限问题)
-# ==========================================
-# 问题：entrypoint.sh 中的 sudo 操作会创建 root:root 文件
-# 影响：在 WSL2/Linux 环境下这些文件显示为 root 所有，可能导致权限问题
-# 解决：容器退出时无条件修正整个挂载目录的所有者到 AISC:AISC
-cleanup_permissions() {
-    sudo chown -R AISC:AISC /home/AISC/app 2>/dev/null || true
-}
-
-# 注册清理函数（容器退出、中断、终止时执行）
-trap cleanup_permissions EXIT SIGTERM SIGINT
-
-# ==========================================
-# 7. 执行控制权移交 (极其关键)
+# 6. 执行控制权移交 (极其关键)
 # ==========================================
 # 使用 exec 是 Docker 入口脚本的最佳实践！
 # 它会让 claude 进程直接替换掉当前的 bash 进程成为 PID 1。

@@ -33,16 +33,41 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         )
         self.assertNotIn("proxy enable", entrypoint)
 
+    def test_entrypoint_runs_as_sandboxed_root_without_permission_churn(self):
+        entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
+
+        self.assertIn('export IS_SANDBOX="${IS_SANDBOX:-1}"', entrypoint)
+        self.assertIn('AISC_DIR="/root/app/.aisc"', entrypoint)
+        self.assertNotIn("chown -R", entrypoint)
+        self.assertNotIn("cleanup_permissions", entrypoint)
+
     def test_docker_image_contains_copyable_codex_factory_directory(self):
         dockerfile = (ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
 
-        self.assertIn("/home/AISC/.codex/config.toml", dockerfile)
-        self.assertIn("COPY container/_bundle/skills/ /home/AISC/.codex/skills/", dockerfile)
-        self.assertIn("COPY container/global-claude.md /home/AISC/.codex/AGENTS.md", dockerfile)
+        self.assertIn("/root/.codex/config.toml", dockerfile)
+        self.assertIn("COPY container/_bundle/skills/ /root/.codex/skills/", dockerfile)
+        self.assertIn("COPY container/global-claude.md /root/.codex/AGENTS.md", dockerfile)
+        self.assertIn("ENV IS_SANDBOX=1", dockerfile)
+        self.assertIn("USER root", dockerfile)
+        self.assertNotIn("USER AISC", dockerfile)
+        self.assertNotIn("/home/AISC", dockerfile)
         self.assertNotIn(
             "codex --version >/dev/null 2>&1 || true",
             dockerfile,
         )
+
+    def test_run_plan_uses_root_mounts_without_user_override(self):
+        from aisc.domain.models import RunPlan
+
+        argv = RunPlan(
+            workspace="/tmp/workspace",
+            provider_config_dir="/tmp/workspace/.aisc",
+            name="aisc-test",
+        ).docker_argv
+
+        self.assertNotIn("--user", argv)
+        self.assertIn("/tmp/workspace:/root/app", argv)
+        self.assertIn("/tmp/workspace/.aisc:/root/app/.aisc", argv)
 
     def test_cs_prefers_shared_catalog_and_syncs_live_provider(self):
         cs = (ROOT / "container" / "claude-switch").read_text(encoding="utf-8")

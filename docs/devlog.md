@@ -715,6 +715,15 @@ docker run -it --rm aisc:v2.1.0-dev codex
   - 删除"当前供应商"显示行（`🌐 当前供应商: ...` / `🔗 API 节点: ...`）
   - `.codex` 跳过复制提示对齐 `.claude` 文案，追加"(保护您的自定义修改)"
 
+- **容器运行身份 root 化**（commit `f8c41ef` + 后续提交）：
+  - 放弃 AISC 用户，全程以 root 运行
+  - 移除 `sudo` 调用、移除 `--user 1000:1000` docker run 参数
+  - 路径模型从 `/home/AISC` → `/root`
+  - `IS_SANDBOX=1` 环境变量告知 AI CLI 当前处于隔离容器
+  - 简化权限修复逻辑（不再需要 chown/sudo fallback）
+  - 统一 installer/mihomo/cc-switch 等所有组件以 root 身份运行
+  - `cs`/`entrypoint`/`launcher`/`path-resolve` 全链路路径更新
+
 ---
 
 ### cc-switch 运行时集成与 Provider 目录共享 (2026-07-23)

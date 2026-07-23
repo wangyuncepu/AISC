@@ -243,8 +243,8 @@ Codex CLI 使用 `OPENAI_API_KEY` 环境变量进行身份验证。你可以：
 2. 或预先设置环境变量（在 `~/.codex/settings.json` 中配置）
 
 Codex 配置目录与 Claude 类似，支持临时模式和项目模式：
-- **临时模式**：使用 `/home/AISC/.codex`，容器退出后重置
-- **项目模式**：使用 `/home/AISC/app/.codex`，持久化到宿主机
+- **临时模式**：使用 `/root/.codex`，容器退出后重置
+- **项目模式**：使用 `/root/app/.codex`，持久化到宿主机
 
 ## 配置位置
 
@@ -398,7 +398,7 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 **效果：**
 - 生成唯一容器名（`<name>-<8 位 hex>`）。
 - 实际启动容器前写入 `<aisc-root>/.aisc/state.env` 中的 `CONTAINER_NAME` 和 `IMAGE`，供其他终端通过 `status`/`shell` 等自动发现。容器退出并由 `--rm` 删除后，该文件可能保留最近一次容器名。
-- 将宿主机 `<workspace>/.aisc/` 挂载到容器 `/home/AISC/app/.aisc`，项目配置随工作区持久化。
+- 将宿主机 `<workspace>/.aisc/` 挂载到容器 `/root/app/.aisc`，项目配置随工作区持久化。
 - 首次启动时用内置 Provider 目录初始化 `<workspace>/.aisc/.cc-switch/providers.json`，并将 cc-switch 配置根设为 `<workspace>/.aisc/.cc-switch/`。旧版 `<workspace>/.aisc/providers.json` 会在首次启动时迁移后删除。
 - entrypoint 会先运行 `cc-switch daemon start` 启动默认后台服务；不会自动执行 `proxy enable`，因此不改变默认代理路由。
 - `cs <provider>` 写入 Claude live config 后会让 cc-switch 导入该配置，使 cc-switch SQLite 状态与快捷切换结果保持同步。

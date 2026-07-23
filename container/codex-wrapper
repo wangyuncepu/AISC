@@ -6,7 +6,7 @@ set -e
 source /usr/local/bin/lib/env-inject.sh
 
 # Codex 配置目录（类似 Claude 的 CLAUDE_CONFIG_DIR）
-CODEX_CONFIG_DIR="${CODEX_CONFIG_DIR:-/home/AISC/.codex}"
+CODEX_CONFIG_DIR="${CODEX_CONFIG_DIR:-/root/.codex}"
 CODEX_SETTINGS="${CODEX_CONFIG_DIR}/settings.json"
 
 # 如果存在 Codex 专用配置，从中注入环境变量

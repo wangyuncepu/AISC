@@ -3,8 +3,8 @@
 resolve_cc_config_dir() {
   if [ -n "${CC_CONFIG_DIR:-}" ]; then
     echo "$CC_CONFIG_DIR"
-  elif [ -d /home/AISC/app ]; then
-    echo "/home/AISC/app/.cc-config"
+  elif [ -d /root/app ]; then
+    echo "/root/app/.cc-config"
   elif [ -f "./.cc-config/api-keys" ]; then
     echo "$(pwd)/.cc-config"
   else
@@ -40,20 +40,17 @@ _probe_writable() {
 
 # ensure_writable DIR... — mkdir + real-I/O probe with non-recursive best-effort repair
 # Does NOT use [ -w ]; probes with actual create/write/rename/delete.
-# On first probe success skips sudo/chown/chmod entirely (no unnecessary privilege ops).
-# On failure applies best-effort non-recursive sudo chown + sudo chmod, then re-probes.
+# On first probe success skips repair operations.
+# On failure applies a best-effort chmod, then re-probes.
 # Final failure prints diagnostics (id / stat / possible root causes) without leaking content.
 ensure_writable() {
   local d
   for d in "$@"; do
     [ -n "$d" ] || { echo "ensure_writable: empty path" >&2; return 1; }
 
-    # --- mkdir: plain → sudo fallback ---
     if ! mkdir -p -- "$d" 2>/dev/null; then
-      if ! sudo mkdir -p -- "$d" 2>/dev/null; then
-        echo "ensure_writable: cannot create directory '$d'" >&2
-        return 1
-      fi
+      echo "ensure_writable: cannot create directory '$d'" >&2
+      return 1
     fi
 
     # --- First probe: real I/O ---
@@ -61,9 +58,8 @@ ensure_writable() {
       continue
     fi
 
-    # --- Probe failed: best-effort non-recursive repair (no -R) ---
-    sudo chown "$(id -u):$(id -g)" -- "$d" 2>/dev/null || true
-    sudo chmod u+rwx -- "$d"               2>/dev/null || true
+    # --- Probe failed: root can repair mode bits without changing ownership ---
+    chmod u+rwx -- "$d" 2>/dev/null || true
 
     # --- Second probe ---
     if _probe_writable "$d"; then

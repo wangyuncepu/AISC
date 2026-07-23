@@ -2,7 +2,7 @@
 # Super Claude AI 工作站入口（薄壳）—— 按序调用 scripts/ 流水线模块
 # 模块：01_check_env → 02_config_wizard → 03_build_image → 04_launcher
 # 用法：start.sh [--workspace PATH]
-#   --workspace PATH  指定要挂载到容器内 /home/AISC/app 的工作目录
+#   --workspace PATH  指定要挂载到容器内 /root/app 的工作目录
 #                     默认：当前工作目录
 set -uo pipefail
 
