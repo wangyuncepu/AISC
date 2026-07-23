@@ -2,7 +2,7 @@
 
 AISC 是一个在 Docker 容器中运行 Claude Code 和 OpenAI Codex 的个人开发工具。提供 `aisc` 命令行，可在宿主机上构建镜像、管理容器、切换 AI 模型服务。
 
-> **状态：Alpha / 开发中。** 当前版本 `v2.1.1-dev`。
+> **状态：Alpha / 开发中。** 当前版本以仓库根目录 [`VERSION`](VERSION) 为准。
 
 ## 目录
 
@@ -27,9 +27,8 @@ AISC 是一个在 Docker 容器中运行 Claude Code 和 OpenAI Codex 的个人�
   - [shell — 进入容器 Shell](#shell--进入容器-shell)
   - [switch — 切换 AI 后端](#switch--切换-ai-后端)
   - [config — 配置管理](#config--配置管理)
-  - [provider — Provider 管理](#provider--provider-管理)
+  - [cc-switch — Provider 与 Skill 管理](#cc-switch--provider-与-skill-管理)
   - [profile — Profile 管理](#profile--profile-管理)
-  - [skill — Skill 管理](#skill--skill-管理)
 - [升级](#升级)
 - [卸载](#卸载)
 - [常见故障](#常见故障)
@@ -55,27 +54,27 @@ docker version
 
 ### 方式一：GitHub Release 安装包（推荐）
 
-从 [GitHub Release v2.1.1-dev](https://github.com/wangyuncepu/AISC/releases/tag/v2.1.1-dev) 下载对应平台的安装包。
+从 [GitHub Releases](https://github.com/wangyuncepu/AISC/releases) 下载目标版本对应平台的安装包。发布标签使用 `v<VERSION>`，安装包文件名使用 `VERSION` 中的值（不带前导 `v`）。
 
 当前版本已作为 GitHub **Pre-release** 发布；普通用户直接从上面的 Release 页面下载即可，无需进入 Actions 页面。
 
 #### Windows
 
-下载 `AISC-2.1.1-dev-windows-x86_64-setup.exe`，双击运行。
+下载 `AISC-<VERSION>-windows-x86_64-setup.exe`，双击运行。
 
 - **仅支持 x86_64**；ARM Windows 不支持。
 - 默认安装到 `%LOCALAPPDATA%\Programs\AISC`。
 - 自动将安装目录加入用户 PATH（安装后**重新打开终端**生效）。
 - 通过 **设置 → 应用 → 已安装的应用** 或 **控制面板 → 程序和功能** 卸载。
-- 卸载会移除程序文件和 PATH 条目，**不删除** `%USERPROFILE%\.aisc`、`.cc-config` 或 Docker 资源。
+- 卸载会移除程序文件和 PATH 条目，**不删除** `%USERPROFILE%\.aisc`、工作区中的 `.cc-switch` 或 Docker 资源。
 
 > **未签名提示：** AISC 尚未经代码签名。首次运行时 Windows SmartScreen 可能弹出“Windows 保护了你的电脑”，点击 **更多信息 → 仍要运行**。
 
 备用：ZIP 便携版
 
 ```powershell
-Expand-Archive AISC-2.1.1-dev-windows-x86_64.zip -DestinationPath .
-cd AISC-2.1.1-dev-windows-x86_64
+Expand-Archive AISC-*-windows-x86_64.zip -DestinationPath .
+cd AISC-*-windows-x86_64
 .\aisc.exe version
 ```
 
@@ -85,7 +84,7 @@ cd AISC-2.1.1-dev-windows-x86_64
 
 ##### 安装程序（推荐）
 
-下载 `AISC-2.1.1-dev-macos-arm64.pkg`，双击运行。
+下载 `AISC-<VERSION>-macos-arm64.pkg`，双击运行。
 
 - **仅支持 Apple Silicon（arm64）**；Intel Mac 不支持。
 - 需**管理员密码**（安装到 `/usr/local/`）。
@@ -94,7 +93,7 @@ cd AISC-2.1.1-dev-windows-x86_64
   - Bundle：`/usr/local/lib/aisc/aisc-bundle/`
   - 符号链接：`/usr/local/bin/aisc` → `../lib/aisc/aisc`
 - `/usr/local/bin` 默认在 macOS PATH 中，安装后**新开终端**即可使用。
-- 卸载：`sudo /usr/local/lib/aisc/uninstall.sh`（移除文件、符号链接和 pkg 收据；**不删** `~/.aisc`、`~/.cc-config`）。
+- 卸载：`sudo /usr/local/lib/aisc/uninstall.sh`（移除文件、符号链接和 pkg 收据；**不删** `~/.aisc` 或工作区中的 `.cc-switch`）。
 - 升级：双击新版 `.pkg` 覆盖安装。
 
 > **未签名提示：** AISC 尚未经 Apple 开发者签名。首次双击 `.pkg` 时，macOS Gatekeeper 可能阻止运行。前往 **系统设置 → 隐私与安全性**，滚动到底部点击 **“仍要打开”**。不要全局关闭 Gatekeeper（`spctl --master-disable`）。
@@ -102,8 +101,8 @@ cd AISC-2.1.1-dev-windows-x86_64
 ##### 便携版（备用）
 
 ```bash
-tar -xzf AISC-2.1.1-dev-macos-arm64.tar.gz
-cd AISC-2.1.1-dev-macos-arm64
+tar -xzf AISC-*-macos-arm64.tar.gz
+cd AISC-*-macos-arm64
 ./aisc version
 ```
 
@@ -113,7 +112,7 @@ cd AISC-2.1.1-dev-macos-arm64
 # install.sh / uninstall.sh 位于 AISC 源码仓库的 packaging/ 目录
 git clone --depth 1 https://github.com/wangyuncepu/AISC.git
 cd AISC
-bash packaging/install.sh ~/Downloads/AISC-2.1.1-dev-macos-arm64.tar.gz
+bash packaging/install.sh ~/Downloads/AISC-*-macos-arm64.tar.gz
 bash packaging/uninstall.sh   # 卸载
 ```
 
@@ -122,15 +121,15 @@ bash packaging/uninstall.sh   # 卸载
 ##### tar.gz + 安装脚本
 
 ```bash
-# 1. 下载 AISC-2.1.1-dev-linux-x86_64.tar.gz
+# 1. 下载 AISC-<VERSION>-linux-x86_64.tar.gz
 
 # 2. 可选的 SHA256 校验
-sha256sum -c AISC-2.1.1-dev-linux-x86_64.tar.gz.sha256
+sha256sum -c AISC-*-linux-x86_64.tar.gz.sha256
 
 # 3. 获取仓库中的安装脚本并安装
 git clone --depth 1 https://github.com/wangyuncepu/AISC.git
 cd AISC
-bash packaging/install.sh ~/Downloads/AISC-2.1.1-dev-linux-x86_64.tar.gz
+bash packaging/install.sh ~/Downloads/AISC-*-linux-x86_64.tar.gz
 ```
 
 安装脚本会：
@@ -142,8 +141,8 @@ bash packaging/install.sh ~/Downloads/AISC-2.1.1-dev-linux-x86_64.tar.gz
 解压直接运行（无需安装脚本）：
 
 ```bash
-tar -xzf AISC-2.1.1-dev-linux-x86_64.tar.gz
-cd AISC-2.1.1-dev-linux-x86_64
+tar -xzf AISC-*-linux-x86_64.tar.gz
+cd AISC-*-linux-x86_64
 ./aisc version
 ```
 
@@ -251,14 +250,11 @@ Codex 配置目录与 Claude 类似，支持临时模式和项目模式：
 | 路径 | 说明 |
 | --- | --- |
 | `<aisc-root>/config/versions.env` | 镜像版本环境变量（`NODE_IMAGE`、`USE_CN_MIRROR`） |
-| `<aisc-root>/config/providers.json` | 安装包中的内置 Provider 目录（旧版源码布局回退到 `container/providers.json`） |
-| `<workspace>/.aisc/.cc-switch/providers.json` | 项目 Provider 目录；容器内 `cs` 与 cc-switch 共用，首次启动时从内置目录初始化 |
-| `<workspace>/.aisc/.cc-switch/` | cc-switch 项目配置根（SQLite 数据库、Provider、设置及备份） |
+| `<workspace>/.cc-switch/` | cc-switch 项目配置根（SQLite 数据库、Provider、设置、备份及 skills SSOT） |
+| `<workspace>/.claude/` | 项目作用域的 Claude 配置、插件与同步后的 skills |
+| `<workspace>/.codex/` | 项目作用域的 Codex 配置与同步后的 skills |
 | `<aisc-root>/container/Dockerfile` | 镜像构建文件 |
-| `<aisc-root>/skills-lock.json` | Skill 锁定文件 |
 | `<aisc-root>/.aisc/state.env` | 容器状态（`CONTAINER_NAME`、`IMAGE`，由 `aisc run` 写入） |
-| `<aisc-root>/.aisc/secrets/` | Secrets 目录 |
-| `<aisc-root>/.cc-config/api-keys` | API Key 配置 |
 
 `<aisc-root>` 由 `--aisc-root` 显式指定，或自动定位到可执行文件同目录下的 `aisc-bundle/`。
 
@@ -278,7 +274,7 @@ Codex 配置目录与 Claude 类似，支持临时模式和项目模式：
 - `--format json` 与 `--events` 互斥，同时指定报错退出（exit 2）。
 - `--aisc-root` 支持 “last wins” 语义（无论放在命令前还是命令后，以最后一个为准）。
 - 裸 `aisc`（不带子命令）打印帮助。
-- 裸分组命令（`aisc config`、`aisc provider`、`aisc profile`、`aisc skill`）打印该分组的帮助，exit 0。
+- 裸分组命令（`aisc config`、`aisc profile`）打印该分组的帮助，exit 0。
 
 ### version — 版本信息
 
@@ -292,7 +288,7 @@ aisc version [--format json]
 
 | 字段 | 说明 |
 | --- | --- |
-| `cli_version` | CLI 版本号（来自 `aisc.__version__`） |
+| `cli_version` | CLI 版本号（源自 `VERSION`；PyInstaller 构建时将该文件嵌入可执行文件） |
 | `python_version` | Python 运行版本 |
 | `bundle_version` | Bundle 中的 VERSION 文件内容 |
 | `image_version` | 镜像版本（`IMAGE_VERSION` 来自 `versions.env`） |
@@ -309,7 +305,7 @@ aisc doctor [--format json] [--no-color]
 
 **只读**，仅诊断宿主机（无 `--container` 选项）。不依赖 Docker daemon 也会检查（部分检查会 SKIP）。
 
-主要检查 Docker CLI/daemon/权限与 buildx、TUN 设备、Git、AISC 资源根及关键文件、目录可写性和 launcher/brief 文件。前置检查失败时，依赖它的后续项目会显示为 SKIP。
+主要检查 Docker CLI/daemon/权限与 buildx、TUN 设备、Git、AISC 资源根及关键文件、目录可写性和 brief 文件。前置检查失败时，依赖它的后续项目会显示为 SKIP。
 
 文本模式下带 ANSI 颜色标记 PASS（绿）、WARN（黄）、FAIL（红）。
 
@@ -399,10 +395,10 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 - 生成唯一容器名（`<name>-<8 位 hex>`）。
 - 实际启动容器前写入 `<aisc-root>/.aisc/state.env` 中的 `CONTAINER_NAME` 和 `IMAGE`，供其他终端通过 `status`/`shell` 等自动发现。容器退出并由 `--rm` 删除后，该文件可能保留最近一次容器名。
 - 将宿主机 `<workspace>/` 挂载到容器 `/root/app`；项目文件及 `.aisc`、`.claude`、`.codex` 配置都随工作区持久化。
-- 首次启动时用内置 Provider 目录初始化 `<workspace>/.aisc/.cc-switch/providers.json`，并将 cc-switch 配置根设为 `<workspace>/.aisc/.cc-switch/`。旧版 `<workspace>/.aisc/providers.json` 会在首次启动时迁移后删除。
-- entrypoint 会先运行 `cc-switch daemon start` 启动默认后台服务；不会自动执行 `proxy enable`，因此不改变默认代理路由。
-- `cs <provider>` 写入 Claude live config 后会让 cc-switch 导入该配置，使 cc-switch SQLite 状态与快捷切换结果保持同步。
-- `--dry-run` 只输出包含 `.aisc` 挂载的 `docker run ...` 命令行，不创建或修改项目配置目录，也不校验本地 proxy 配置文件。
+- 首次启动时将 cc-switch 配置根初始化为 `<workspace>/.cc-switch/`；Provider 只由 cc-switch 的 SQLite 状态管理。
+- entrypoint 会先运行 `cc-switch daemon start`，确保 Codex 有当前 Provider 后启用 Claude/Codex 路由。
+- entrypoint 将 caveman、document-skills、grill-me、superpowers 登记到 cc-switch，并以 copy 模式同步给 Claude 和 Codex。
+- `--dry-run` 只输出 `docker run ...` 命令行，不创建或修改项目配置目录，也不校验本地 proxy 配置文件。
 - 非 `--dry-run` 时：
   - 检查 Docker 可用性（preflight）。
   - 检查镜像是否存在（`docker inspect`），不存在则报错（exit 5）。
@@ -519,7 +515,7 @@ aisc switch [--name NAME] [--quick PROVIDER]
 
 **效果：**
 - 默认（无 `--quick`）：运行 `cc-switch`（全功能 TUI 界面）。
-- `--quick` 模式：验证 Provider 存在后，通过 scope-preserving wrapper 读取 PID 1 的 `CLAUDE_CONFIG_DIR`、`CC_SWITCH_CONFIG_DIR`、`AISC_DIR` 和 `PROVIDERS_JSON`，再执行 `cs <provider>`，避免 `docker exec` 丢失项目配置。
+- `--quick` 模式：通过 scope-preserving wrapper 读取 PID 1 的 `CLAUDE_CONFIG_DIR`、`CODEX_CONFIG_DIR` 和 `CC_SWITCH_CONFIG_DIR`，再执行 `cc-switch -a claude provider switch <provider>`。
 - 容器必须存在且正在运行。
 
 **示例：**
@@ -554,107 +550,23 @@ aisc config show      [--config PATH] [--workspace PATH] [--format json]
 | `validate` | 校验配置文件合法性，输出每项来源的状态（FOUND / MISSING / ERROR）、有效性与问题清单 |
 | `effective` / `show` | 显示合并后的有效配置（JSON），包含来源、有效值、来源追溯（provenance）和问题清单 |
 
-### provider — Provider 管理
+### cc-switch — Provider 与 Skill 管理
+
+旧的宿主机 Provider 目录和容器快捷命令已经移除。进入容器后直接使用 cc-switch：
 
 ```bash
-aisc provider list                [--format json] [--aisc-root PATH]
-aisc provider show NAME           [--format json] [--aisc-root PATH]
-aisc provider add                 [--aisc-root PATH]
+# Provider
+cc-switch -a claude provider list
+cc-switch -a claude provider switch <provider>
+cc-switch -a codex provider list
+cc-switch -a codex provider switch <provider>
+
+# Skills
+cc-switch skills list
+cc-switch skills sync
 ```
 
-不依赖 Docker 或网络。`list` / `show` 优先读取 `~/.aisc/providers.json`；用户目录尚未创建时，读取安装包的 `<aisc-root>/config/providers.json`（旧版源码布局回退到 `container/providers.json`）。
-
-| 子命令 | 说明 |
-| --- | --- |
-| `list` | 列出所有可用 Provider（id、name、auth_type、aliases） |
-| `show NAME` | 查看指定 Provider 详情（id、name、auth_type、auth_key_name、base_url、aliases）；NAME 为 id 或别名 |
-| `add` | 打开默认编辑器手动编辑 `~/.aisc/providers.json`，添加或修改自定义 Provider |
-
-`provider show NAME` 中 NAME 为必填参数（缺少报 usage error，exit 2）。
-
-**新增自定义 Provider：**
-
-使用 `aisc provider add` 命令打开编辑器直接编辑宿主机的 `~/.aisc/providers.json`；若文件不存在，该命令会从内置配置初始化。项目容器使用 `<workspace>/.aisc/.cc-switch/providers.json`，需要项目级自定义时请编辑该文件。
-
-或者手动编辑 `~/.aisc/providers.json` 文件添加自定义 Provider。
-
-**配置示例：**
-
-```bash
-# 编辑 ~/.aisc/providers.json
-vim ~/.aisc/providers.json
-```
-
-在 `providers` 对象中添加新的 provider 配置：
-
-```json
-{
-  "schema_version": 1,
-  "providers": {
-    "my-provider": {
-      "id": "my-provider",
-      "name": "My Custom Provider",
-      "aliases": ["my", "mp"],
-      "auth_type": "api_key",
-      "auth_key_name": "MY_PROVIDER_API_KEY",
-      "auth_prompt": "My Custom Provider",
-      "key_display": "My Custom Provider",
-      "base_url": "https://api.example.com/v1/",
-      "model": "claude-opus-4-8",
-      "default_opus": "",
-      "default_sonnet": "",
-      "default_haiku": "",
-      "subagent": "",
-      "effort": "",
-      "compact": "",
-      "clear_all": false,
-      "url_fragment": "api.example.com",
-      "switch_msg": "My Custom Provider",
-      "help_desc": "My custom API provider",
-      "custom": true
-    }
-  }
-}
-```
-
-**字段说明：**
-
-| 字段 | 必填 | 说明 |
-| --- | --- | --- |
-| `id` | ✓ | Provider 唯一标识符（小写字母、数字、点、破折号，最多 64 字符） |
-| `name` | ✓ | 显示名称 |
-| `auth_type` | ✓ | 认证类型：`token` 或 `api_key` |
-| `auth_key_name` | ✓ | 环境变量名（大写字母、数字、下划线，最多 128 字符） |
-| `base_url` | ✓ | API 基础 URL（HTTP/HTTPS） |
-| `aliases` |  | 别名列表（可选，用于快速切换） |
-| `model` |  | 默认模型名称 |
-| `custom` | ✓ | 必须设为 `true`（标识为自定义 provider） |
-
-**验证配置：**
-
-```bash
-# 查看所有 Provider
-aisc provider list
-
-# 查看自定义 Provider 详情
-aisc provider show my-provider
-aisc provider show my
-
-# 在容器内切换到自定义 Provider
-aisc shell
-cs my-provider
-```
-
-容器内 `cs` 直接读取 `<workspace>/.aisc/.cc-switch/providers.json`；`.aisc/` 根目录不再保存项目 Provider 副本。`aisc switch --quick ID` 和容器内 `cs ID` 只切换已有 Provider，不负责新增。
-
-**约束与安全性：**
-
-- Provider id 和 alias 仅允许小写字母、数字、点、下划线及连字符，且最长 64 个字符。
-- `--auth-key-name` 必须是大写环境变量名；`--base-url` 必须是无用户名、密码的 HTTP(S) URL。
-- id、alias、认证环境变量名和规范化后的 base URL 不能与其他 Provider 冲突。
-- 内置 Provider 不允许覆盖；`--overwrite` 仅能替换带 `custom: true` 标记的自定义条目。
-- `add` 不接收 API Key 或 Token 值，避免敏感信息进入 shell history。这里只登记认证环境变量名，密钥仍按现有 Secrets / API Key 配置方式管理。
-- 用户目录权限设置为 `0700`，`providers.json` 以 `0600` 权限原子写入。
+Provider、认证信息和路由状态都由 cc-switch 管理。请用 cc-switch TUI 或其 provider 命令新增、编辑和切换 Provider；不要在工作区维护第二份 AISC Provider 配置。
 
 ### profile — Profile 管理
 
@@ -669,26 +581,6 @@ aisc profile show [NAME]          [--format json]
 | --- | --- |
 | `list` | 列出所有可用 Profile（name、description、dangerously_skip_permissions） |
 | `show [NAME]` | 查看指定 Profile 详情；NAME 默认 `safe`（可选参数） |
-
-### skill — Skill 管理
-
-```bash
-aisc skill add URL            [--format json] [--aisc-root PATH]
-aisc skill list               [--format json] [--aisc-root PATH]
-aisc skill remove NAME        [--format json] [--aisc-root PATH]
-aisc skill check              [--format json] [--aisc-root PATH]
-```
-
-**`add` 需要网络**（从 GitHub 拉取）。`add` / `remove` **会写** `<aisc-root>/skills-lock.json`。`list` / `check` 只读。不依赖 Docker。
-
-| 子命令 | 说明 | 副作用 |
-| --- | --- | --- |
-| `add URL` | 从 GitHub HTTPS URL（blob/tree/raw）导入 Skill | 更新 `skills-lock.json`，下载文件 |
-| `list` | 列出 `skills-lock.json` 中已导入的 Skill | 无 |
-| `remove NAME` | 移除 Skill（删除托管目录） | 更新 `skills-lock.json` |
-| `check` | 离线核对 Skill 文件完整性 | 无（exit 1 表示 drift） |
-
-`skill add` 支持 GitHub blob、tree、raw URL。导入后需**重新构建镜像**（`aisc build`）才能生效。
 
 ## 升级
 
@@ -721,7 +613,7 @@ uv tool upgrade aisc  # 如有新增依赖
 
 卸载**不会删除**以下内容（需手动清理）：
 - `~/.aisc/` 配置目录
-- `~/.cc-config/` API Key 配置
+- 工作区中的 `.cc-switch/` 配置目录
 - `~/.cache/ai-brief/` 资讯缓存
 - Docker 镜像（`docker rmi`）和容器
 

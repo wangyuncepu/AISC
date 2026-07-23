@@ -45,7 +45,7 @@ done
 if [ -f "config/versions.env" ]; then
   # shellcheck source=/dev/null
   source config/versions.env
-  echo "📋 Loaded config/versions.env (AISC_VERSION=${AISC_VERSION:-unset})"
+  echo "📋 Loaded external dependency pins from config/versions.env"
 fi
 
 echo ""

@@ -854,6 +854,65 @@ docker run -it --rm aisc:v2.1.0-dev codex
 
 ---
 
+## v2.1.1-dev (2026-07-23) - root 家目录挂载与运行时资源隔离
+
+### 动机
+
+Windows → WSL2 → Docker bind mount 场景下，容器保持 root 运行身份，同时将宿主机工作区挂载到 `/root/app`，避免覆盖 root 家目录中的容器运行时文件。
+
+### 变更
+
+- **Docker 挂载路径**：宿主工作区挂载到 `/root/app`，容器默认工作目录同步为 `/root/app`。
+- **出厂资源隔离**：Claude/Codex 出厂配置与 skills/plugins 保持在 `/opt/aisc/factory`，Python venv 在 `/opt/aisc/venv`，Mihomo geodata 在 `/opt/aisc/mihomo`。
+- **项目配置路径**：项目作用域使用 `/root/app/.claude`、`/root/app/.codex` 和 `/root/app/.cc-switch`，首次启动从 `/opt/aisc/factory` 复制并持久化到宿主工作区。
+- **临时作用域**：使用 `/tmp/aisc-home`，不把临时 Claude/Codex 配置写入宿主机工作区。
+- **cc-switch 集成**：启动时自动拉起 daemon、初始化 Codex provider、启用 Claude/Codex 路由，并离线登记和同步 caveman、document-skills、grill-me、superpowers。
+- **Codex 权限**：默认启用 bypass approvals/sandbox 与 hook trust，等价于 Claude 容器 bypass 模式。
+- **环境变量**：容器默认设置 `IS_SANDBOX=1`。
+
+### 验证
+
+- Docker 镜像 `aisc:v2.1.1-dev-root-home` 构建成功。
+- 真实宿主目录 bind mount 到 `/root/app` 的项目/临时两种作用域均验证通过。
+- cc-switch daemon、Codex provider、Claude/Codex 路由和四个内置 skills 的运行时接线验证通过。
+- 完整测试：189 项通过，1 项按既有条件跳过。
+
+### v2.1.1-dev 增量：Windows bind mount 与 cc-switch 兼容修复
+
+- 项目工作区挂载路径恢复为 `/root/app`，避免宿主机工作区覆盖容器 root 家目录中的运行时文件。
+- 修复 Windows 构建上下文中的 cc-switch 包装脚本 CRLF shebang，避免 `cannot execute: required file not found`。
+- cc-switch 的项目配置固定使用 `/root/app/.cc-switch`，不再创建或挂载 `/root/app/.aisc` Provider 配置目录。
+
+### v2.1.1-dev 增量：cc-switch 统一 Provider 与 Skills 管理
+
+- 删除容器内旧快捷切换命令及其 Dockerfile 安装、参数分发和包装器引用。
+- 删除 AISC 自有 Provider 目录、宿主 Provider CLI/service，以及旧密钥存储、发现和迁移文件。
+- `aisc switch --quick` 直接委托 `cc-switch -a claude provider switch`；Provider 和认证状态只保存在 cc-switch 管理的数据中。
+- 删除旧 Provider/密钥路径解析库，保留独立的 Windows bind mount 可写性探测库。
+- 镜像离线内置 caveman、document-skills、grill-me、superpowers；entrypoint 幂等登记并启用 Claude/Codex，同步方式固定为 copy。
+- README、开发维基、demo 和文档一致性检查全部改用 cc-switch 契约。
+
+---
+
+## v2.1.2-dev (2026-07-24) - 单一版本源与宿主入口收敛
+
+### 变更
+
+- 删除根目录 `CHANGELOG.md`，版本演进统一记录在 `docs/devlog.md`。
+- 删除 `start.sh`、`start.command`、`start.bat`、专属 Shell/PowerShell 流水线和旧 Shell doctor；宿主机只保留 `aisc` Python CLI。
+- 将根目录 `VERSION` 设为项目版本唯一事实源；`src/aisc/__init__.py`、setuptools、PyInstaller、artifact、CI 和安装包命名均从该文件派生。
+- 从 `config/versions.env` 删除重复的 `AISC_VERSION`，该文件只维护外部依赖 pin。
+- Wheel 将根 `VERSION` 原样安装为 data-file，避免包元数据把 `-dev` 规范化为 `.dev0` 后改变 CLI 显示值。
+- PyInstaller onedir/onefile 构建嵌入 `VERSION`，冻结程序从 `_MEIPASS/VERSION` 读取，保证 checkout 外运行仍返回正确版本。
+- README、DEVELOP_WIKI 和文档一致性检查同步为单一 CLI、单一版本源契约。
+
+### 发布
+
+- 项目版本：`2.1.2-dev`
+- Git 标签：`v2.1.2-dev`
+
+---
+
 ## v1.5.1 (2026-07-14) - 权限修复 + 简讯 URL 增强
 
 ### 变更
@@ -1507,32 +1566,3 @@ Windows `.bat` 的 no.4 需在 Windows + Windows Terminal 环境实测确认。
 - [x] ~~Skill 引入（andrej-karpathy-skills）~~ → v1.1.0 完成
 - [x] ~~全局 claude-switch 命令~~ → v1.1.0 完成
 - [ ] Termius SSH 配置文档未编写
-
-## v2.1.1-dev (2026-07-23) - root 家目录挂载与运行时资源隔离
-
-### 动机
-
-Windows → WSL2 → Docker bind mount 场景下，容器保持 root 运行身份，同时将宿主机工作区挂载到 `/root/app`，避免覆盖 root 家目录中的容器运行时文件。
-
-### 变更
-
-- **Docker 挂载路径**：宿主工作区挂载到 `/root/app`，容器默认工作目录同步为 `/root/app`。
-- **出厂资源隔离**：Claude/Codex 出厂配置与 skills/plugins 保持在 `/opt/aisc/factory`，Python venv 在 `/opt/aisc/venv`，Mihomo geodata 在 `/opt/aisc/mihomo`。
-- **项目配置路径**：项目作用域使用 `/root/app/.claude`、`/root/app/.codex` 和 `/root/app/.aisc`，首次启动从 `/opt/aisc/factory` 复制并持久化到宿主工作区。
-- **临时作用域**：使用 `/tmp/aisc-home`，不把临时 Claude/Codex 配置写入宿主机工作区。
-- **cc-switch 集成**：启动时自动拉起 daemon、初始化 Codex provider、启用 Claude/Codex 路由，并离线登记和同步 gstack skills。
-- **Codex 权限**：默认启用 bypass approvals/sandbox 与 hook trust，等价于 Claude 容器 bypass 模式。
-- **环境变量**：容器默认设置 `IS_SANDBOX=1`。
-
-### 验证
-
-- Docker 镜像 `aisc:v2.1.1-dev-root-home` 构建成功。
-- 真实宿主目录 bind mount 到 `/root` 的项目/临时两种作用域均验证通过。
-- cc-switch daemon、Codex provider、Claude/Codex 路由和 gstack skills 验证通过。
-- 完整测试：189 项通过，1 项按既有条件跳过。
-
-### v2.1.1-dev 增量：Windows bind mount 与 cc-switch 兼容修复
-
-- 项目工作区挂载路径恢复为 `/root/app`，避免宿主机工作区覆盖容器 root 家目录中的运行时文件。
-- 修复 Windows 构建上下文中的 cc-switch 包装脚本 CRLF shebang，避免 `cannot execute: required file not found`。
-- entrypoint 检测到 `/root/app/.aisc` 被映射为普通文件时，不删除或覆盖宿主文件，自动切换到 `/tmp/aisc-home/.aisc` 并输出警告。
