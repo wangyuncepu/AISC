@@ -399,15 +399,15 @@ if [ "$1" = "claude" ] && [ -t 0 ]; then
     fi
     echo ""
     echo "请选择启动方式："
-    echo "  1) bash   进入命令行（可手动配置后再启动 AI CLI）"
-    echo "  2) claude 直接启动 Claude Code（默认）"
+    echo "  1) bash   进入命令行（可手动配置后再启动 AI CLI，默认）"
+    echo "  2) claude 直接启动 Claude Code"
     echo "  3) codex  直接启动 OpenAI Codex"
     echo ""
-    read -r -p "输入 1、2 或 3 [默认 2]: " launch
+    read -r -p "输入 1、2 或 3 [默认 1]: " launch
     case "$launch" in
-        1) echo "▶️  进入 bash。"; exec bash ;;
+        2) ;;  # 继续往下启动 claude
         3) echo "▶️  启动 Codex..."; exec codex ;;
-        *) ;;  # 继续往下启动 claude
+        *) echo "▶️  进入 bash。"; exec bash ;;
     esac
 fi
 
