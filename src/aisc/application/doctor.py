@@ -424,89 +424,6 @@ def _check_root_writable(root: Optional[Path]) -> CheckResult:
         )
 
 
-def _check_launcher(root: Optional[Path]) -> List[CheckResult]:
-    """Check 11: Launcher script executability (start.sh, start.command on macOS)."""
-    if sys.platform == "win32":
-        return [
-            CheckResult(
-                name="launcher",
-                status=CheckStatus.SKIP,
-                message="Windows — POSIX executable-bit checks skipped",
-            )
-        ]
-
-    results: List[CheckResult] = []
-    scripts: List[tuple] = [("start.sh", "chmod +x start.sh")]
-    if sys.platform == "darwin":
-        scripts.append(("start.command", "chmod +x start.command"))
-
-    if root is None:
-        for fname, _ in scripts:
-            results.append(
-                CheckResult(
-                    name=f"launcher:{fname}",
-                    status=CheckStatus.SKIP,
-                    message="No AISC root found — launcher check skipped",
-                )
-            )
-        return results
-
-    for fname, fix_cmd in scripts:
-        fpath = root / fname
-        try:
-            if not fpath.exists():
-                results.append(
-                    CheckResult(
-                        name=f"launcher:{fname}",
-                        status=CheckStatus.WARN,
-                        message=f"{fname} not found",
-                        detail=f"Expected at {fpath}",
-                        hint="Verify the launcher script exists in the project root",
-                    )
-                )
-                continue
-            if not fpath.is_file():
-                results.append(
-                    CheckResult(
-                        name=f"launcher:{fname}",
-                        status=CheckStatus.WARN,
-                        message=f"{fname} exists but is not a regular file",
-                    )
-                )
-                continue
-            st = fpath.stat()
-            if st.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH):
-                results.append(
-                    CheckResult(
-                        name=f"launcher:{fname}",
-                        status=CheckStatus.PASS,
-                        message=f"{fname} is executable",
-                    )
-                )
-            else:
-                results.append(
-                    CheckResult(
-                        name=f"launcher:{fname}",
-                        status=CheckStatus.WARN,
-                        message=f"{fname} is not executable",
-                        detail=f"Found at {fpath} but missing execute permission",
-                        hint=f"Run '{fix_cmd}' to make it executable",
-                    )
-                )
-        except OSError as exc:
-            results.append(
-                CheckResult(
-                    name=f"launcher:{fname}",
-                    status=CheckStatus.WARN,
-                    message=f"Cannot check {fname}",
-                    detail=str(exc),
-                )
-            )
-
-    return results
-
-
-
 # ---------------------------------------------------------------------------
 # Exit code priority logic
 # ---------------------------------------------------------------------------
@@ -679,9 +596,6 @@ def run_doctor(
 
     # 10. root writability
     checks.append(_check_root_writable(root))
-
-    # 11. launcher scripts
-    checks.extend(_check_launcher(root))
 
     exit_code, error_code, error_message = _compute_exit_code(checks)
 

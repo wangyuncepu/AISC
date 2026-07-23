@@ -24,9 +24,6 @@ scripts/
 tools/
 docs/
 api_route_demo/
-start.sh
-start.bat
-start.command
 README.md
 skills-lock.json
 .project

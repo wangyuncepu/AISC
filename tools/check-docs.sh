@@ -139,9 +139,9 @@ echo ""
 
 # Paths from the README body that should exist as repo files
 body_paths=(
-  "container/claude-switch"
   "container/claude-wrapper"
-  "config/providers.json"
+  "container/cc-switch-wrapper"
+  "container/cc-switch-skills"
   "container/Dockerfile"
   "container/entrypoint.sh"
   "container/mihomo-build-config.js"
@@ -158,7 +158,7 @@ done
 
 # Runtime paths that README references (gitignored by design)
 runtime_paths=(
-  ".cc-config/api-keys"
+  ".cc-switch/cc-switch.db"
   ".claude/settings.json"
   ".claude/mihomo/config.yaml"
   ".deploy/state.env"
@@ -169,101 +169,51 @@ for rp in "${runtime_paths[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
-# Check 2: Provider consistency
+# Check 2: cc-switch factory skills
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- Check 2: Provider consistency ---"
+echo "--- Check 2: cc-switch factory skills ---"
 echo ""
 
-PROVIDERS_JSON="config/providers.json"
-if [ ! -f "$PROVIDERS_JSON" ]; then
-  PROVIDERS_JSON="container/providers.json"
-fi
-
-if [ ! -f "$PROVIDERS_JSON" ]; then
-  _fail "providers.json not found in config/ or container/"
-else
-  # Count providers in JSON
-  json_count=$(python3 -c "
-import json
-with open('$PROVIDERS_JSON') as f:
-    data = json.load(f)
-providers = data.get('providers', {})
-print(len(providers))
-")
-
-  # Extract provider IDs from JSON
-  json_ids=$(python3 -c "
-import json
-with open('$PROVIDERS_JSON') as f:
-    data = json.load(f)
-for pid in data.get('providers', {}):
-    print(pid)
-")
-
-  _pass "providers.json loaded ($json_count providers)"
-
-  # Count provider mentions in README (e.g., "5 大模型后端")
-  readme_count_match=$(grep -oP '\d+(?=\s*(大模型|模型\s*后端|模型后端))' README.md | head -1 || echo "")
-
-  if [ -n "$readme_count_match" ]; then
-    if [ "$readme_count_match" -eq "$json_count" ]; then
-      _pass "Provider count matches: README says $readme_count_match, providers.json has $json_count"
-    else
-      _fail "Provider count: README says $readme_count_match, providers.json has $json_count — MISMATCH"
-    fi
+for skill in caveman document-skills grill-me superpowers; do
+  if [ -f "container/cc-switch-skills/$skill/SKILL.md" ]; then
+    _pass "cc-switch factory skill present: $skill"
   else
-    _warn "Could not extract provider count from README"
+    _fail "cc-switch factory skill missing: $skill"
   fi
-
-  # Check README provider table has same provider IDs as providers.json
-  # Extract provider IDs from the README cs commands table (lines starting with | `cs XX` |)
-  readme_ids=$(grep -oP '^\|\s*`cs\s+\K[a-zA-Z0-9-]+(?=`\s*\|)' README.md | sort -u || echo "")
-
-  if [ -n "$readme_ids" ]; then
-    missing_in_readme=()
-    while IFS= read -r pid; do
-      if ! echo "$readme_ids" | grep -qFx "$pid"; then
-        missing_in_readme+=("$pid")
-      fi
-    done <<< "$json_ids"
-
-    extra_in_readme=()
-    while IFS= read -r rid; do
-      if ! echo "$json_ids" | grep -qFx "$rid"; then
-        extra_in_readme+=("$rid")
-      fi
-    done <<< "$readme_ids"
-
-    if [ ${#missing_in_readme[@]} -gt 0 ]; then
-      _fail "Providers in providers.json but missing from README table: ${missing_in_readme[*]}"
-    fi
-    if [ ${#extra_in_readme[@]} -gt 0 ]; then
-      _fail "Providers in README table but not in providers.json: ${extra_in_readme[*]}"
-    fi
-    if [ ${#missing_in_readme[@]} -eq 0 ] && [ ${#extra_in_readme[@]} -eq 0 ]; then
-      _pass "README provider table matches providers.json ($json_count providers)"
-    fi
-  else
-    _warn "Could not extract provider IDs from README table"
-  fi
-fi
+done
 
 # ---------------------------------------------------------------------------
-# Check 3: File extensions match platform docs
+# Check 3: Legacy launchers stay removed
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- Check 3: Platform launcher extensions ---"
+echo "--- Check 3: Legacy launcher removal ---"
 echo ""
 
-launcher_files=("start.sh:Linux" "start.bat:Windows" "start.command:macOS")
-for entry in "${launcher_files[@]}"; do
-  file="${entry%%:*}"
-  platform="${entry##*:}"
-  if [ -f "$file" ]; then
-    _pass "$file ($platform) — exists, correct extension"
+legacy_launcher_paths=(
+  "start.sh"
+  "start.bat"
+  "start.command"
+  "scripts/01_check_env.sh"
+  "scripts/01_check_env.ps1"
+  "scripts/02_config_wizard.sh"
+  "scripts/02_config_wizard.ps1"
+  "scripts/03_build_image.sh"
+  "scripts/03_build_image.ps1"
+  "scripts/04_launcher.sh"
+  "scripts/04_launcher.ps1"
+  "scripts/run.sh"
+  "scripts/run.ps1"
+  "scripts/_state.sh"
+  "scripts/_state.ps1"
+  "cli/commands/doctor.sh"
+  "cli/lib"
+)
+for path in "${legacy_launcher_paths[@]}"; do
+  if [ -e "$path" ]; then
+    _fail "$path — legacy launcher content must remain removed"
   else
-    _fail "$file ($platform) — MISSING"
+    _pass "$path — removed"
   fi
 done
 
