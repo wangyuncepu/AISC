@@ -228,6 +228,7 @@ aisc switch        # 打开服务切换界面
 1. **bash** - 进入命令行，可手动配置后启动任意 CLI
 2. **claude** - 直接启动 Claude Code
 3. **codex** - 直接启动 OpenAI Codex
+4. **cc-switch** - 打开 Provider、代理路由与 Skills 管理界面
 
 默认选择为 **bash**。
 
@@ -240,10 +241,14 @@ aisc run
 # 启动 Codex
 docker exec -it <container-name> codex
 
+# 打开 cc-switch 管理界面
+docker exec -it <container-name> cc-switch
+
 # 或在容器内切换
 aisc shell
 codex   # 启动 Codex
 claude  # 启动 Claude
+cc-switch  # 管理 Provider、路由与 Skills
 ```
 
 **Codex 配置说明：**
@@ -416,6 +421,7 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 - 首次启动时将 cc-switch 配置根初始化为 `<workspace>/.cc-switch/`；Provider 只由 cc-switch 的 SQLite 状态管理。
 - entrypoint 会以 detach 模式启动 cc-switch daemon，等待其可达，尝试初始化 Codex 当前 Provider，再以 best-effort 方式启用 Claude/Codex 路由。Provider 缺少真实凭据时，路由“已启用”不等于上游模型可用。
 - entrypoint 将 caveman、document-skills、grill-me、superpowers 登记到 cc-switch，并以 copy 模式同步给 Claude 和 Codex。
+- 交互式启动菜单的第 4 项会直接进入 cc-switch TUI；退出 TUI 即结束该前台容器会话。
 - `--dry-run` 只输出 `docker run ...` 命令行，不创建或修改项目配置目录，也不校验本地 proxy 配置文件。
 - 非 `--dry-run` 时：
   - 检查 Docker 可用性（preflight）。
@@ -570,7 +576,7 @@ aisc config show      [--config PATH] [--workspace PATH] [--format json]
 
 ### cc-switch — Provider 与 Skill 管理
 
-旧的宿主机 Provider 目录和容器快捷命令已经移除。进入容器后直接使用 cc-switch：
+旧的宿主机 Provider 目录和容器快捷命令已经移除。可在容器启动菜单选择 **4** 进入 cc-switch TUI，也可进入容器后直接使用命令：
 
 ```bash
 # Provider

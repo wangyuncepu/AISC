@@ -462,7 +462,7 @@ if [ "$1" = "codex" ]; then
 fi
 
 # ==========================================
-# 5. 启动方式菜单：bash / claude / codex（默认）
+# 5. 启动方式菜单：bash / claude / codex / cc-switch
 #    仅在交互终端、且以默认 claude 启动时弹出
 #    无 provider 配置时不拦截 —— CLI 使用各自官方默认端点
 # ==========================================
@@ -475,11 +475,13 @@ if [ "$1" = "claude" ] && [ -t 0 ]; then
     echo "  1) bash   进入命令行（可手动配置后再启动 AI CLI，默认）"
     echo "  2) claude 直接启动 Claude Code"
     echo "  3) codex  直接启动 OpenAI Codex"
+    echo "  4) cc-switch 打开 Provider、路由与 Skills 管理界面"
     echo ""
-    read -r -p "输入 1、2 或 3 [默认 1]: " launch
+    read -r -p "输入 1、2、3 或 4 [默认 1]: " launch
     case "$launch" in
         2) ;;  # 继续往下启动 claude
         3) echo "▶️  启动 Codex..."; exec codex ;;
+        4) echo "▶️  启动 cc-switch 管理界面..."; exec cc-switch ;;
         *) echo "▶️  进入 bash。"; exec bash ;;
     esac
 fi

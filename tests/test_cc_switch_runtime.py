@@ -40,6 +40,20 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         self.assertLess(readiness_check, proxy_enable)
         self.assertIn('if [ "$CC_SWITCH_DAEMON_READY" = "1" ]; then', entrypoint)
 
+    def test_entrypoint_menu_opens_cc_switch_management_tui(self):
+        entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
+
+        menu_prompt = entrypoint.index('read -r -p "输入 1、2、3 或 4 [默认 1]: "')
+        cc_switch_option = entrypoint.index(
+            'echo "  4) cc-switch 打开 Provider、路由与 Skills 管理界面"'
+        )
+        cc_switch_handoff = entrypoint.index(
+            '4) echo "▶️  启动 cc-switch 管理界面..."; exec cc-switch ;;'
+        )
+
+        self.assertLess(cc_switch_option, menu_prompt)
+        self.assertLess(menu_prompt, cc_switch_handoff)
+
     def test_entrypoint_initializes_codex_provider_before_enabling_route(self):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
 

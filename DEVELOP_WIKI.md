@@ -310,6 +310,7 @@ aisc version --format json | python3 -m json.tool
 ```
 entrypoint → cc-switch daemon readiness → 初始化 Codex 当前 Provider → best-effort 启用 Claude/Codex 路由
 镜像 /opt/aisc/skills → cc-switch SQLite 登记 → copy sync → .claude/.codex
+交互启动菜单 4 → exec cc-switch → 项目作用域管理 TUI
 ```
 
 Provider 和认证信息只由 cc-switch 管理。AISC 不再维护独立 Provider 目录、密钥目录或第二套快捷切换脚本。
@@ -410,6 +411,7 @@ find container tools -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 ### 6.3 运行时状态契约
 
 - 工作区 `.cc-switch/` 是容器内 Provider、路由和 skills 的唯一管理状态。
+- 容器交互启动菜单提供 bash、Claude、Codex、cc-switch 四个入口；第 4 项通过现有 wrapper 打开项目作用域管理 TUI。
 - AISC 根目录 `.aisc/state.env` 只保存容器发现信息，不保存 Provider 或认证数据。
 - `.deploy/state.env` 是历史容器状态路径，只读兼容，不写入新数据。
 
