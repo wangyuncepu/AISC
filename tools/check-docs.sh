@@ -141,7 +141,7 @@ echo ""
 body_paths=(
   "container/claude-switch"
   "container/claude-wrapper"
-  "container/providers.json"
+  "config/providers.json"
   "container/Dockerfile"
   "container/entrypoint.sh"
   "container/mihomo-build-config.js"
@@ -175,10 +175,13 @@ echo ""
 echo "--- Check 2: Provider consistency ---"
 echo ""
 
-PROVIDERS_JSON="container/providers.json"
+PROVIDERS_JSON="config/providers.json"
+if [ ! -f "$PROVIDERS_JSON" ]; then
+  PROVIDERS_JSON="container/providers.json"
+fi
 
 if [ ! -f "$PROVIDERS_JSON" ]; then
-  _fail "container/providers.json not found"
+  _fail "providers.json not found in config/ or container/"
 else
   # Count providers in JSON
   json_count=$(python3 -c "
