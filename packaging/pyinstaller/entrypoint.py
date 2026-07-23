@@ -21,7 +21,7 @@ def _configure_frozen_io() -> None:
 
     PyInstaller-bundled Windows CLI can produce non-UTF-8 output when
     captured by PowerShell, causing encoding errors downstream (e.g.
-    JSON parsing failures for provider data containing CJK characters).
+    JSON parsing failures for CLI output containing CJK characters).
 
     This is a narrow, defensive fix: it only activates on Windows when
     ``sys.frozen`` is truthy, and handles every known edge case

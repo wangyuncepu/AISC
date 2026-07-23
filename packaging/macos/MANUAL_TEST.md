@@ -33,7 +33,7 @@ After install:
 ```bash
 # Open a NEW Terminal window
 aisc version
-aisc provider list --format json
+aisc config effective --format json
 aisc build --dry-run
 aisc doctor
 ```
@@ -94,9 +94,8 @@ ls /usr/local/lib/aisc/aisc-bundle/
 Before uninstall, create marker files:
 
 ```bash
-mkdir -p ~/.aisc ~/.cc-config
+mkdir -p ~/.aisc
 echo "keep-me" > ~/.aisc/test-marker
-echo "keep-me" > ~/.cc-config/test-marker
 ```
 
 ## 6. Uninstall
@@ -111,7 +110,6 @@ Verify:
 - `/usr/local/lib/aisc/` directory removed.
 - `pkgutil --pkg-info com.aisc.cli` shows "No receipt".
 - `~/.aisc/test-marker` still exists ("keep-me").
-- `~/.cc-config/test-marker` still exists ("keep-me").
 - Docker images/containers still present.
 
 ## 7. Re-install after uninstall
@@ -134,12 +132,12 @@ installer -pkg AISC-2.0.4-dev-macos-arm64.pkg -target /
 | SHA256 check | OK |
 | Install (double-click) | Prompts for admin password, installs |
 | `aisc version` | Shows version |
-| `aisc provider list --format json` | Shows providers |
+| `aisc config effective --format json` | Shows AISC-owned defaults |
 | `aisc build --dry-run` | Shows docker build plan |
 | Symlink | `../lib/aisc/aisc` |
 | Receipt | `com.aisc.cli` version 2.0.0 |
 | Gatekeeper | Blocked → override via Settings |
 | Upgrade (reinstall) | New version, no stale files |
-| Config preserved | `~/.aisc`, `~/.cc-config` intact |
+| Config preserved | `~/.aisc` intact |
 | Uninstall | Files removed, receipt forgotten, config kept |
 | Reinstall after uninstall | Works cleanly |

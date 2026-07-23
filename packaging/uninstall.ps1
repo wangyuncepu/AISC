@@ -8,7 +8,7 @@
 #   - The install directory from the user PATH
 #
 # Does NOT remove:
-#   - User configuration (e.g. %USERPROFILE%\.aisc, %USERPROFILE%\.cc-config)
+#   - User configuration (e.g. %USERPROFILE%\.aisc)
 #   - Docker images or containers
 #   - Workspace directories
 
@@ -117,7 +117,7 @@ if ($removedAny) {
     Write-Info "AISC has been uninstalled."
     Write-Info ""
     Write-Info "The following were NOT removed (preserve these manually if desired):"
-    Write-Info "  - User configuration: %USERPROFILE%\.aisc, %USERPROFILE%\.cc-config"
+    Write-Info "  - User configuration: %USERPROFILE%\.aisc"
     Write-Info "  - Docker images and containers (use 'docker' commands)"
     Write-Info "  - Workspace directories"
     Write-Info ""

@@ -151,99 +151,6 @@ else
 fi
 
 # -------------------------------------------------------------------
-# 4. provider list / show
-# -------------------------------------------------------------------
-echo "--- [4] provider ---"
-if aisc provider list > "$tmpdir/pvlist.out" 2>/dev/null; then
-    if grep -q "Provider List" "$tmpdir/pvlist.out" 2>/dev/null; then
-        log_pass "provider list (text)"
-    else
-        log_fail "provider list (no header)"
-    fi
-else
-    log_fail "provider list exit=$?"
-fi
-
-if aisc provider list --format json > "$tmpdir/pvlist.json" 2>/dev/null; then
-    if python3 -c "
-import json
-d=json.load(open('$tmpdir/pvlist.json'))
-assert d['meta']['command']=='provider'
-assert len(d['data']['providers']) >= 1
-" 2>/dev/null; then
-        log_pass "provider list --format json"
-    else
-        log_fail "provider list --format json"
-    fi
-else
-    log_fail "provider list --format json"
-fi
-
-# provider show by id
-if aisc provider show cc > "$tmpdir/pvshow.out" 2>/dev/null; then
-    if grep -q "Provider Detail" "$tmpdir/pvshow.out" 2>/dev/null; then
-        log_pass "provider show cc (text, by id)"
-    else
-        log_fail "provider show cc (no output)"
-    fi
-else
-    log_fail "provider show cc exit=$?"
-fi
-
-# provider show by alias
-if aisc provider show default > "$tmpdir/pvshow2.out" 2>/dev/null; then
-    if grep -q "Provider Detail" "$tmpdir/pvshow2.out" 2>/dev/null; then
-        log_pass "provider show default (text, by alias → cc)"
-    else
-        log_fail "provider show default (no output)"
-    fi
-else
-    log_fail "provider show default exit=$?"
-fi
-
-# provider show json
-if aisc provider show deepseek --format json > "$tmpdir/pvshow.json" 2>/dev/null; then
-    if python3 -c "
-import json
-d=json.load(open('$tmpdir/pvshow.json'))
-assert d['data']['id']=='deepseek'
-assert 'aliases' in d['data']
-" 2>/dev/null; then
-        log_pass "provider show deepseek --format json"
-    else
-        log_fail "provider show deepseek --format json"
-    fi
-else
-    log_fail "provider show deepseek --format json"
-fi
-
-# provider show unknown → non-zero
-set +e
-aisc provider show nonexistent > "$tmpdir/pvunk.out" 2>/dev/null
-pvunk_exit=$?
-set -e
-if [ "$pvunk_exit" -ne 0 ]; then
-    log_pass "provider show nonexistent (non-zero exit=$pvunk_exit)"
-else
-    log_fail "provider show nonexistent (should fail)"
-fi
-
-# provider show unknown json
-set +e
-aisc provider show nonexistent --format json > "$tmpdir/pvunk.json" 2>/dev/null
-pvunkj=$?
-set -e
-if [ "$pvunkj" -ne 0 ] && python3 -c "
-import json
-d=json.load(open('$tmpdir/pvunk.json'))
-assert d['meta']['exit_code'] != 0
-" 2>/dev/null; then
-    log_pass "provider show unknown --format json (non-zero)"
-else
-    log_fail "provider show unknown --format json"
-fi
-
-# -------------------------------------------------------------------
 # 5. profile list / show
 # -------------------------------------------------------------------
 echo "--- [5] profile ---"
@@ -401,10 +308,10 @@ fi
 # 9. global arg position (--format before/after subcommand)
 # -------------------------------------------------------------------
 echo "--- [9] global arg position compatibility ---"
-if aisc --format json provider list > /dev/null 2>/dev/null; then
-    log_pass "--format json provider list (global before subcommand)"
+if aisc --format json config effective > /dev/null 2>/dev/null; then
+    log_pass "--format json config effective (global before subcommand)"
 else
-    log_fail "--format json provider list"
+    log_fail "--format json config effective"
 fi
 
 if aisc profile --format json list > /dev/null 2>/dev/null; then
@@ -473,26 +380,9 @@ else
 fi
 
 # -------------------------------------------------------------------
-# 11. unknown provider/profile subcommand JSON (Task C)
+# 11. unknown profile subcommand JSON (Task C)
 # -------------------------------------------------------------------
 echo "--- [11] unknown subcommand JSON ---"
-# provider unknown subcommand
-set +e
-aisc provider --format json unknown_cmd > "$tmpdir/pv_unk.json" 2>/dev/null
-pv_unkj=$?
-set -e
-if [ "$pv_unkj" -eq 2 ] && python3 -c "
-import json
-d=json.load(open('$tmpdir/pv_unk.json'))
-assert d['meta']['command']=='provider'
-assert d['meta']['exit_code']==2
-assert d['errors'][0]['code']=='AISC_ERR_USAGE'
-" 2>/dev/null; then
-    log_pass "provider unknown subcommand --format json (exit 2, envelope)"
-else
-    log_fail "provider unknown subcommand --format json"
-fi
-
 # profile unknown subcommand
 set +e
 aisc profile --format json unknown_cmd > "$tmpdir/pr_unk.json" 2>/dev/null

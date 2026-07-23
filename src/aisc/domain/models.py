@@ -262,7 +262,6 @@ class RunPlan:
     proxy_config: str = ""    # host path to .claude/mihomo/config.yaml (when network=proxy)
     label: str = ""           # optional container label for multi-container addressing
     keep_alive: bool = False  # --keep-alive: omit --rm, keep container after exit
-    provider_config_dir: str = ""  # writable host .aisc directory shared with container cs
 
     @property
     def docker_argv(self) -> list:
@@ -292,10 +291,6 @@ class RunPlan:
             "--name", self.name,
             "-v", f"{self.workspace}:/root/app",
         ])
-        if self.provider_config_dir:
-            argv.extend([
-                "-v", f"{self.provider_config_dir}:/root/app/.aisc",
-            ])
         if self.non_interactive:
             argv.extend([
                 "-e", "AISC_NON_INTERACTIVE=1",

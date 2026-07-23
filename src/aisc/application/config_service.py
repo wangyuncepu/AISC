@@ -152,13 +152,6 @@ def _read_layer(file_path: Path, is_explicit: bool, kind: str) -> Tuple[Optional
 
 def _overlay(base: dict, overrides: dict) -> dict:
     result = dict(base)
-    if "provider" in overrides and isinstance(overrides["provider"], dict):
-        op = overrides["provider"]
-        if "id" in op:
-            cur = result.get("provider", {})
-            if not isinstance(cur, dict): cur = {}
-            result["provider"] = {**cur, "id": op["id"],
-                                  "auth": {"secret_ref": f"provider:{op['id']}"}}
     if "defaults" in overrides and isinstance(overrides["defaults"], dict):
         od = overrides["defaults"]
         cur = result.get("defaults", {})
@@ -183,7 +176,7 @@ def _read_layers(
     if explicit_config:
         explicit_config = os.path.abspath(explicit_config)
         user_cfg_path = Path(explicit_config)
-        pp = PlatformPathConfig(config_dir="", state_dir="", secrets_dir="")
+        pp = PlatformPathConfig(config_dir="", state_dir="")
         user_status = STATUS_MISSING  # not yet read, but path is known
     else:
         try:
@@ -387,8 +380,10 @@ def run_config_effective(*, explicit_config=None, workspace=None, home=None,
     if has_any:
         return _finalize_classify(False, sources, issues, effective=None, provenance={})
 
-    effective = {"schema_version": 1, "provider": None,
-                 "defaults": {"profile": "safe", "network": "direct"}}
+    effective = {
+        "schema_version": 1,
+        "defaults": {"profile": "safe", "network": "direct"},
+    }
     provenance: dict = {"defaults.profile": "default", "defaults.network": "default"}
 
     if user_data is not None:
@@ -397,27 +392,12 @@ def run_config_effective(*, explicit_config=None, workspace=None, home=None,
             ud = user_data["defaults"]
             if "profile" in ud: provenance["defaults.profile"] = "user"
             if "network" in ud: provenance["defaults.network"] = "user"
-        if "provider" in user_data and isinstance(user_data["provider"], dict) and \
-           "id" in user_data["provider"]:
-            provenance["provider.id"] = "user"
-            if "auth" in user_data["provider"] and isinstance(user_data["provider"]["auth"], dict):
-                provenance["provider.auth.secret_ref"] = "user"
-
     if ws_data is not None:
         effective = _overlay(effective, ws_data)
         if "defaults" in ws_data and isinstance(ws_data["defaults"], dict):
             wd = ws_data["defaults"]
             if "profile" in wd: provenance["defaults.profile"] = "workspace"
             if "network" in wd: provenance["defaults.network"] = "workspace"
-        if "provider" in ws_data and isinstance(ws_data["provider"], dict) and \
-           "id" in ws_data["provider"]:
-            provenance["provider.id"] = "workspace"
-            provenance["provider.auth.secret_ref"] = "derived"
-
-    if effective.get("provider") and isinstance(effective["provider"], dict):
-        if "id" not in effective["provider"]:
-            effective["provider"] = None
-
     return _finalize_classify(True, sources, issues, effective=effective, provenance=provenance)
 
 
@@ -442,4 +422,4 @@ def _resolve_platform(home=None, env=None, platform=None):
         if not os.path.isabs(xdg):
             raise ReadError("structural_error", "XDG_CONFIG_HOME must be absolute")
         config_dir = os.path.join(xdg, "aisc")
-    return PlatformPathConfig(config_dir=config_dir, state_dir="", secrets_dir="")
+    return PlatformPathConfig(config_dir=config_dir, state_dir="")

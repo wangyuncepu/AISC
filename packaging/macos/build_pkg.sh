@@ -108,7 +108,6 @@ cat > "$LIB_DIR/uninstall.sh" << 'UNINSTALL_EOF'
 #
 # Does NOT remove:
 #   - $HOME/.aisc  (user config)
-#   - $HOME/.cc-config  (Claude Code backend config)
 #   - Docker images / containers
 #   - Workspace directories
 set -euo pipefail
@@ -160,7 +159,6 @@ if [ "$removed" = true ]; then
     echo ""
     echo "The following were NOT removed:"
     echo "  - \$HOME/.aisc"
-    echo "  - \$HOME/.cc-config"
     echo "  - Docker images/containers"
 else
     echo "AISC installation not found — nothing to uninstall."

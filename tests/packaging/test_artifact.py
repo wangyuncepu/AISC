@@ -386,16 +386,15 @@ class TestAggregateStrict(unittest.TestCase):
 class TestVersionGuard(unittest.TestCase):
     def setUp(self): self.td = Path(tempfile.mkdtemp(prefix="vg-"))
     def tearDown(self): shutil.rmtree(self.td, ignore_errors=True)
-    def _mk(self,fv,pv):
-        r=self.td; (r/"VERSION").write_text(fv+"\n"); si=r/"src"/"aisc"; si.mkdir(parents=True); (si/"__init__.py").write_text(f'__version__ = "{pv}"\n'); (r/"container").mkdir(); (r/"container"/"Dockerfile").write_text("FROM node\n")
-    def test_match(self): self._mk("2.0.0-dev","2.0.0-dev"); self.assertEqual(_art._assert_version_guard(self.td),"2.0.0-dev")
-    def test_mismatch(self): self._mk("2.0.0-dev","3.0.0"); self.assertRaises(SystemExit, _art._assert_version_guard, self.td)
-    def test_missing_init(self): self._mk("2.0.0-dev","2.0.0-dev"); (self.td/"src"/"aisc"/"__init__.py").unlink(); self.assertRaises(SystemExit, _art.get_package_version, self.td)
-    def test_no_hardcoded(self): self._mk("1.2.3-test","1.2.3-test"); self.assertEqual(_art._assert_version_guard(self.td),"1.2.3-test")
+    def _mk(self, version):
+        r=self.td; (r/"VERSION").write_text(version+"\n"); (r/"container").mkdir(); (r/"container"/"Dockerfile").write_text("FROM node\n")
+    def test_reads_canonical_version(self): self._mk("2.0.0-dev"); self.assertEqual(_art._assert_version_guard(self.td),"2.0.0-dev")
+    def test_missing_version(self): self.assertRaises(SystemExit, _art._assert_version_guard, self.td)
+    def test_no_hardcoded_package_version_required(self): self._mk("1.2.3-test"); self.assertEqual(_art._assert_version_guard(self.td),"1.2.3-test")
     def test_staged(self):
-        self._mk("2.0.0-dev","2.0.0-dev");
+        self._mk("2.0.0-dev");
         for x in ["README.md","LICENSE",".dockerignore"]: (self.td/x).write_text("#T\n")
-        cfg=self.td/"config"; cfg.mkdir(); (cfg/"versions.env").write_text("AISC_VERSION=2.0.0-dev\n")
+        cfg=self.td/"config"; cfg.mkdir(); (cfg/"versions.env").write_text("NODE_IMAGE=node:20-slim\n")
         c=self.td/"container"; (c/"_bundle"/"plugins"/"d").mkdir(parents=True); (c/"_bundle"/"plugins"/"d"/"x.txt").write_text("x\n"); (c/"downloads").mkdir(); (c/"downloads"/"x.dat").write_text("x\n")
         ab=self.td/"apps"/"ai-brief"; ab.mkdir(parents=True); (ab/"brief.py").write_text("ok\n")
         v=self.td/"vendor"; v.mkdir(); (v/"manifest.json").write_text("{}"); (v/"checksums.txt").write_text("#e\n"); vl=v/"licenses"; vl.mkdir(); (vl/"README.md").write_text("#lic\n")
@@ -406,21 +405,23 @@ class TestStaging(unittest.TestCase):
     def setUp(self): self.td = Path(tempfile.mkdtemp(prefix="stg-"))
     def tearDown(self): shutil.rmtree(self.td, ignore_errors=True)
     def _cr(self,r):
-        (r/"VERSION").write_text("2.0.0-dev\n"); si=r/"src"/"aisc"; si.mkdir(parents=True); (si/"__init__.py").write_text('__version__="2.0.0-dev"\n')
+        (r/"VERSION").write_text("2.0.0-dev\n")
         for x in ["README.md","LICENSE",".dockerignore"]: (r/x).write_text("#T\n")
-        cfg=r/"config"; cfg.mkdir(); (cfg/"versions.env").write_text("AISC_VERSION=2.0.0-dev\nNODE_IMAGE=node:20-slim\n")
+        cfg=r/"config"; cfg.mkdir(); (cfg/"versions.env").write_text("NODE_IMAGE=node:20-slim\n")
         c=r/"container"; c.mkdir(); (c/"Dockerfile").write_text("FROM node\nCOPY container/entrypoint.sh /\nCOPY container/_bundle/ /home/\nCOPY apps/ai-brief/ /home/\n"); (c/"entrypoint.sh").write_text("#!/bin/bash\necho ok\n")
         (c/"_bundle"/"plugins"/"marketplaces"/"tp").mkdir(parents=True); (c/"_bundle"/"plugins"/"marketplaces"/"tp"/"README.md").write_text("#t\n")
+        (c/"_bundle"/"plugins"/"marketplaces"/"tp"/".github").mkdir(); (c/"_bundle"/"plugins"/"marketplaces"/"tp"/".github"/"ci.yml").write_text("name: test\n")
         (c/"_bundle"/"plugins"/"cache").mkdir(parents=True); (c/"_bundle"/"plugins"/"cache"/"data.json").write_text('{"k":"v"}\n')
         (c/"downloads").mkdir(); (c/"downloads"/"test.dat").write_text("data\n"); (c/"lib").mkdir(); (c/"lib"/"test.sh").write_text("#!/bin/bash\n")
         ab=r/"apps"/"ai-brief"; ab.mkdir(parents=True); (ab/"brief.py").write_text("ok\n"); (ab/"README.md").write_text("#ab\n")
         v=r/"vendor"; v.mkdir(); (v/"manifest.json").write_text('{"t":true}\n'); vl=v/"licenses"; vl.mkdir(); (vl/"README.md").write_text("#lic\n")
         cs=[]; import hashlib as hh
-        for f in ["container/downloads/test.dat","container/_bundle/plugins/marketplaces/tp/README.md"]:
+        for f in ["container/downloads/test.dat","container/_bundle/plugins/marketplaces/tp/README.md","container/_bundle/plugins/marketplaces/tp/.github/ci.yml"]:
             fp=r/f; cs.append(f"{hh.sha256(fp.read_bytes()).hexdigest()}  {f}")
         (v/"checksums.txt").write_text("\n".join(cs)+"\n")
     def test_basic(self): self._cr(self.td); b=_art.stage_bundle(self.td,self.td/"out"); self.assertTrue(b.is_dir()); self.assertTrue((b/"manifest.json").is_file()); self.assertTrue((b/"VERSION").is_file())
     def test_cache_preserved(self): self._cr(self.td); b=_art.stage_bundle(self.td,self.td/"out"); self.assertTrue((b/"container"/"_bundle"/"plugins"/"cache").is_dir())
+    def test_marketplace_metadata_preserved(self): self._cr(self.td); b=_art.stage_bundle(self.td,self.td/"out"); self.assertTrue((b/"container"/"_bundle"/"plugins"/"marketplaces"/"tp"/".github"/"ci.yml").is_file())
     def test_pycache_excluded(self):
         self._cr(self.td); (self.td/"apps"/"ai-brief"/"__pycache__").mkdir(parents=True); (self.td/"apps"/"ai-brief"/"__pycache__"/"x.pyc").write_bytes(b"x"); b=_art.stage_bundle(self.td,self.td/"out")
         for _,dns,fns in os.walk(str(b)): self.assertNotIn("__pycache__",dns)
@@ -433,23 +434,13 @@ class TestStaging(unittest.TestCase):
         for fb in (".git",".github","src","tests","docs","packaging","tools","scripts","cli"):
             self.assertFalse((b/fb).exists(), f"Forbidden: {fb}")
 
-    def test_config_providers_json_staged_when_present(self):
-        """config/providers.json is included in staged bundle when present at build time."""
-        self._cr(self.td)
-        providers_content = '{"schema_version":1,"providers":{}}'
-        (self.td / "config" / "providers.json").write_text(providers_content)
-        b = _art.stage_bundle(self.td, self.td / "out")
-        target = b / "config" / "providers.json"
-        self.assertTrue(target.is_file(), f"config/providers.json missing from bundle at {target}")
-        self.assertEqual(target.read_text(), providers_content)
-
 class TestManifestValidation(unittest.TestCase):
     def setUp(self): self.td = Path(tempfile.mkdtemp(prefix="mv-"))
     def tearDown(self): shutil.rmtree(self.td, ignore_errors=True)
     def _mb(self):
         b=self.td/"aisc-bundle"; b.mkdir()
         for x in ["VERSION","README.md","LICENSE",".dockerignore"]: (b/x).write_text("2.0.0-dev\n" if x=="VERSION" else "#T\n")
-        cfg=b/"config"; cfg.mkdir(); (cfg/"versions.env").write_text("AISC_VERSION=2.0.0-dev\n")
+        cfg=b/"config"; cfg.mkdir(); (cfg/"versions.env").write_text("NODE_IMAGE=node:20-slim\n")
         c=b/"container"; c.mkdir(); (c/"Dockerfile").write_text("FROM node\n"); (c/"_bundle"/"plugins"/"d").mkdir(parents=True); (c/"_bundle"/"plugins"/"d"/"x.txt").write_text("x\n"); (c/"downloads").mkdir(); (c/"downloads"/"x.dat").write_text("x\n")
         ab=b/"apps"/"ai-brief"; ab.mkdir(parents=True); (ab/"brief.py").write_text("ok\n")
         v=b/"vendor"; v.mkdir(); (v/"manifest.json").write_text("{}"); (v/"checksums.txt").write_text("#e\n"); vl=v/"licenses"; vl.mkdir(); (vl/"README.md").write_text("#lic\n")
@@ -470,7 +461,7 @@ class TestTarArchive(unittest.TestCase):
         d.mkdir(parents=True,exist_ok=True); b=d/"aisc-bundle"; b.mkdir()
         for x in ["VERSION","README.md","LICENSE",".dockerignore"]: (b/x).write_text("2.0.0-dev\n" if x=="VERSION" else "#T\n")
         cfg=b/"config"; cfg.mkdir(); (cfg/"versions.env").write_text("V=1\n")
-        c=b/"container"; c.mkdir(); (c/"Dockerfile").write_text("FROM node\n"); (c/"entrypoint.sh").write_text("#!/bin/bash\necho ok\n"); (c/"claude-switch").write_text("#!/bin/bash\nswitch\n"); (c/"regular.txt").write_text("plain\n"); (c/"lib").mkdir(); (c/"lib"/"path-resolve.sh").write_text("#!/bin/bash\nresolve\n")
+        c=b/"container"; c.mkdir(); (c/"Dockerfile").write_text("FROM node\n"); (c/"entrypoint.sh").write_text("#!/bin/bash\necho ok\n"); (c/"claude-wrapper").write_text("#!/bin/bash\nexec claude-real\n"); (c/"regular.txt").write_text("plain\n"); (c/"lib").mkdir(); (c/"lib"/"writable.sh").write_text("#!/bin/bash\nensure_writable() { :; }\n")
         (c/"downloads").mkdir(); (c/"downloads"/"x.dat").write_text("d\n"); (c/"_bundle"/"plugins"/"d").mkdir(parents=True); (c/"_bundle"/"plugins"/"d"/"x.txt").write_text("x\n")
         ab=b/"apps"/"ai-brief"; ab.mkdir(parents=True); (ab/"brief.py").write_text("ok\n")
         v=b/"vendor"; v.mkdir(); (v/"manifest.json").write_text("{}"); (v/"checksums.txt").write_text("#e\n"); vl=v/"licenses"; vl.mkdir(); (vl/"README.md").write_text("#lic\n")
@@ -499,7 +490,7 @@ class TestTarArchive(unittest.TestCase):
         self._ms(self.td); o=self.td/"out"; o.mkdir(); a,_=_art.create_tar_archive(self.td,"2.0.0-dev","linux","x86_64",o)
         with tarfile.open(a,"r:gz") as t:
             for m in t.getmembers():
-                if m.name.endswith("/entrypoint.sh") or m.name.endswith("/claude-switch"): self.assertEqual(m.mode,0o755,f"{m.name}: {oct(m.mode)}")
+                if m.name.endswith("/entrypoint.sh") or m.name.endswith("/claude-wrapper"): self.assertEqual(m.mode,0o755,f"{m.name}: {oct(m.mode)}")
                 elif m.name.endswith("/regular.txt"): self.assertEqual(m.mode,0o644,f"{m.name}: {oct(m.mode)}")
     def test_layout(self):
         self._ms(self.td); o=self.td/"out"; o.mkdir(); a,_=_art.create_tar_archive(self.td,"2.0.0-dev","linux","x86_64",o)

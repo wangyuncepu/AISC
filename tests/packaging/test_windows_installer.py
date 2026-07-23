@@ -264,7 +264,7 @@ class TestInstallerSmokeInvariants(unittest.TestCase):
 
 
 class TestSmokeDiagnostics(unittest.TestCase):
-    """Validate that smoke_installer.ps1 preserves raw output on provider failures."""
+    """Validate that smoke_installer.ps1 preserves raw output on config failures."""
 
     @classmethod
     def setUpClass(cls):
@@ -272,22 +272,21 @@ class TestSmokeDiagnostics(unittest.TestCase):
             encoding="utf-8"
         )
 
-    def test_provider_exit_code_captured_before_out_string(self):
+    def test_config_exit_code_captured_before_out_string(self):
         """``$LASTEXITCODE`` must be captured *before* Out-String to avoid loss."""
-        # Pattern: $provLines = & ... ; $provExit = $LASTEXITCODE ; $provJson = $provLines | Out-String
-        self.assertIn("$provExit = $LASTEXITCODE", self.text,
+        self.assertIn("$configExit = $LASTEXITCODE", self.text,
                       "Must capture LASTEXITCODE before Out-String consumes it")
-        self.assertIn("$provJson = $provLines | Out-String", self.text,
+        self.assertIn("$configJson = $configLines | Out-String", self.text,
                       "Must use Out-String on captured variable, not inline")
 
-    def test_provider_nonzero_shows_raw_output(self):
+    def test_config_nonzero_shows_raw_output(self):
         """On non-zero exit, smoke must print raw captured output for diagnosis."""
         self.assertIn("[raw output captured on non-zero exit]", self.text,
                       "Missing raw output dump on non-zero exit")
         self.assertIn("ForEach-Object { Write-Host", self.text,
                       "Must iterate raw lines on non-zero exit")
 
-    def test_provider_json_parse_failure_shows_raw_context(self):
+    def test_config_json_parse_failure_shows_raw_context(self):
         """On JSON parse failure, smoke must print raw content preview."""
         self.assertIn("[raw JSON content, first 2000 chars]", self.text,
                       "Missing raw content preview on JSON parse failure")

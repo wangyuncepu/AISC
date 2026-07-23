@@ -37,7 +37,6 @@ function Invoke-InstallerProcess {
 $appDir = "$env:LOCALAPPDATA\Programs\AISC"
 $regPath = "HKCU:\Environment"
 $sentinelConfig = "$env:USERPROFILE\.aisc\smoke-marker.txt"
-$sentinelCC = "$env:USERPROFILE\.cc-config\smoke-marker.txt"
 $sentinelPathEntry = "C:\aisc-smoke-sentinel-path"
 $setupFile = Get-Item $SetupPath -ErrorAction Stop
 $cleanupMarkers = $false
@@ -49,15 +48,10 @@ function Invoke-Cleanup {
     # Remove markers we created
     if ($cleanupMarkers) {
         Remove-Item $sentinelConfig -Force -ErrorAction SilentlyContinue
-        Remove-Item $sentinelCC -Force -ErrorAction SilentlyContinue
         # Remove empty dirs if we created them (only if they existed before we ran)
         $configDir = Split-Path $sentinelConfig
         if ((Test-Path $configDir) -and -not (Get-ChildItem $configDir -ErrorAction SilentlyContinue)) {
             Remove-Item $configDir -Force -ErrorAction SilentlyContinue
-        }
-        $ccDir = Split-Path $sentinelCC
-        if ((Test-Path $ccDir) -and -not (Get-ChildItem $ccDir -ErrorAction SilentlyContinue)) {
-            Remove-Item $ccDir -Force -ErrorAction SilentlyContinue
         }
     }
     # Remove sentinel PATH entry
@@ -114,22 +108,22 @@ try {
     & $aisc version 2>&1 | Write-Host
     if ($LASTEXITCODE -ne 0) { Fail "aisc version failed" }
 
-    Write-Host "--- aisc provider list --format json ---"
-    $provLines = & $aisc provider list --format json 2>&1
-    $provExit = $LASTEXITCODE
-    $provJson = $provLines | Out-String
-    if ($provExit -ne 0) {
+    Write-Host "--- aisc config effective --format json ---"
+    $configLines = & $aisc config effective --format json 2>&1
+    $configExit = $LASTEXITCODE
+    $configJson = $configLines | Out-String
+    if ($configExit -ne 0) {
         Write-Host "  [raw output captured on non-zero exit]:" -ForegroundColor Yellow
-        $provLines | ForEach-Object { Write-Host "    $_" }
+        $configLines | ForEach-Object { Write-Host "    $_" }
         Write-Host "  [end raw output]" -ForegroundColor Yellow
-        Fail "aisc provider list failed (exit $provExit)"
+        Fail "aisc config effective failed (exit $configExit)"
     }
-    try { $provObj = $provJson | ConvertFrom-Json; Pass "provider JSON valid ($($provObj.data.providers.Count) providers)" }
+    try { $configObj = $configJson | ConvertFrom-Json; Pass "config JSON valid (schema $($configObj.data.effective.schema_version))" }
     catch {
         Write-Host "  [raw JSON content, first 2000 chars]:" -ForegroundColor Yellow
-        $preview = if ($provJson.Length -gt 2000) { $provJson.Substring(0, 2000) + "..." } else { $provJson }
+        $preview = if ($configJson.Length -gt 2000) { $configJson.Substring(0, 2000) + "..." } else { $configJson }
         Write-Host "  $preview"
-        Fail "provider JSON parse failed: $_"
+        Fail "config JSON parse failed: $_"
     }
 
     Write-Host "--- aisc build --dry-run ---"
@@ -174,9 +168,7 @@ try {
     # ---------------------------------------------------------------
     Write-Host "=== 3. Setup uninstall preconditions ==="
     New-Item -ItemType Directory -Force -Path (Split-Path $sentinelConfig) | Out-Null
-    New-Item -ItemType Directory -Force -Path (Split-Path $sentinelCC) | Out-Null
     "keep" | Out-File $sentinelConfig -Encoding ascii
-    "keep" | Out-File $sentinelCC -Encoding ascii
     $cleanupMarkers = $true
 
     $cp = (Get-ItemProperty -Path $regPath -Name "PATH" -EA SilentlyContinue).PATH
@@ -208,7 +200,6 @@ try {
 
     # Verify config preserved
     if (Test-Path $sentinelConfig) { Pass "~\.aisc preserved" } else { Fail "~\.aisc removed" }
-    if (Test-Path $sentinelCC) { Pass "~\.cc-config preserved" } else { Fail "~\.cc-config removed" }
 
 } finally {
     Invoke-Cleanup

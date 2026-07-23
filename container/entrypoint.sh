@@ -15,19 +15,17 @@ export TERM="${TERM:-xterm-256color}"
 # 共享库：env 注入 + 路径/权限辅助（消除 entrypoint/claude-wrapper 重复代码）
 # ==========================================
 source /usr/local/bin/lib/env-inject.sh
-source /usr/local/bin/lib/path-resolve.sh
+source /usr/local/bin/lib/writable.sh
 
 # ==========================================
-# 路径模型（全程以 root 运行，宿主工作区挂载为 /root）
+# 路径模型（全程以 root 运行，宿主工作区挂载为 /root/app）
 #   .claude = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
 #             出厂模板在 /opt/aisc/factory；项目模式复制到 /root/app/.claude
 #             临时模式复制到 /tmp/aisc-home/.claude
 #   .codex  = Codex CLI 配置目录（类似 .claude 结构）
 #             项目模式使用 /root/app/.codex；临时模式使用 /tmp/aisc-home/.codex
-#   .aisc   = AISC 配置目录（config/profiles + secrets/api-keys）
-#             固定放当前项目 /root/app/.aisc（临时与项目模式都用它）
-#   .cc-switch = cc-switch 运行时目录（数据库、设置、备份等）
-#             固定放 .aisc/.cc-switch，providers.json 也以此为唯一项目路径
+#   .cc-switch = cc-switch 运行时目录（数据库、设置、备份及 skills SSOT）
+#             项目模式放 /root/app/.cc-switch；临时模式放 /tmp/aisc-home/.cc-switch
 # ==========================================
 FACTORY_HOME="/opt/aisc/factory"
 FACTORY_CLAUDE_DIR="$FACTORY_HOME/.claude"
@@ -37,17 +35,6 @@ TEMP_CLAUDE_DIR="$TEMP_HOME/.claude"
 TEMP_CODEX_DIR="$TEMP_HOME/.codex"
 PROJECT_CLAUDE_DIR="/root/app/.claude"
 PROJECT_CODEX_DIR="/root/app/.codex"
-AISC_DIR="/root/app/.aisc"
-
-# Windows bind mount occasionally exposes a host-side `.aisc` file as a file
-# rather than a directory.  Never try to remove or overwrite user data; use an
-# ephemeral container-local config root so startup can continue safely.
-if [ -e "$AISC_DIR" ] && [ ! -d "$AISC_DIR" ]; then
-    echo "⚠️  /root/app/.aisc 不是目录（检测到普通文件），改用临时配置目录: $TEMP_HOME/.aisc" >&2
-    AISC_DIR="$TEMP_HOME/.aisc"
-fi
-CC_SWITCH_CONFIG_DIR="$AISC_DIR/.cc-switch"
-PROVIDERS_JSON="$CC_SWITCH_CONFIG_DIR/providers.json"
 
 echo -e "\n🚀 [AISC] AI 工作站初始化中..."
 
@@ -85,6 +72,7 @@ fi
 if [ "$SCOPE" = "global" ] || [ "$SCOPE" = "temp" ] || [ "$SCOPE" = "temporary" ]; then
     CLAUDE_CONFIG_DIR="$TEMP_CLAUDE_DIR"
     CODEX_CONFIG_DIR="$TEMP_CODEX_DIR"
+    CC_SWITCH_CONFIG_DIR="$TEMP_HOME/.cc-switch"
     mkdir -p "$CLAUDE_CONFIG_DIR" "$CODEX_CONFIG_DIR"
     cp -rL "$FACTORY_CLAUDE_DIR/." "$CLAUDE_CONFIG_DIR/"
     cp -rL "$FACTORY_CODEX_DIR/." "$CODEX_CONFIG_DIR/"
@@ -92,6 +80,7 @@ if [ "$SCOPE" = "global" ] || [ "$SCOPE" = "temp" ] || [ "$SCOPE" = "temporary" 
 else
     CLAUDE_CONFIG_DIR="$PROJECT_CLAUDE_DIR"
     CODEX_CONFIG_DIR="$PROJECT_CODEX_DIR"
+    CC_SWITCH_CONFIG_DIR="/root/app/.cc-switch"
     echo "📁 作用域: 项目 (project) → Claude: $CLAUDE_CONFIG_DIR, Codex: $CODEX_CONFIG_DIR"
 
     # 项目 .claude 初始化（保持原有逻辑）
@@ -137,7 +126,7 @@ else
     FV_PRJ="$PROJECT_CLAUDE_DIR/.factory-version"
     if [ -f "$FV_IMG" ] && [ "$(cat "$FV_IMG" 2>/dev/null)" != "$(cat "$FV_PRJ" 2>/dev/null)" ]; then
         echo "⚠️  镜像出厂配置已更新（skills/插件/命令等）。"
-        echo "    运行  cs upgrade  升级当前项目 .claude（保留你的后端配置与历史）。"
+        echo "    可删除旧出厂副本后重启容器，或使用 cc-switch skills sync 同步 skills。"
     fi
 
     # 项目 .codex 初始化：从镜像内置完整出厂目录复制（类似 .claude 逻辑）
@@ -178,13 +167,9 @@ done
 export CLAUDE_CONFIG_DIR
 export CODEX_CONFIG_DIR
 export CODEX_HOME="$CODEX_CONFIG_DIR"
-export AISC_DIR
 export CC_SWITCH_CONFIG_DIR
-export PROVIDERS_JSON
 
-# .aisc（配置）目录确保存在
-ensure_writable "$AISC_DIR"
-ensure_writable "$AISC_DIR/secrets"
+# cc-switch 与 CLI 配置目录确保可写。
 ensure_writable "$CC_SWITCH_CONFIG_DIR"
 
 # CLI 配置目录同理：确认实际可写。
@@ -210,7 +195,7 @@ fi
 # If the underlying fs rejects chmod (bind/CIFS/NFS) but the dir remains writable,
 # emit a security warning and continue — do NOT fail startup over a chmod.
 # Also detects CIFS "fake success": chmod returns 0 but mode unchanged.
-for _d in "$AISC_DIR" "$AISC_DIR/secrets" "$CC_SWITCH_CONFIG_DIR"; do
+for _d in "$CC_SWITCH_CONFIG_DIR"; do
   if chmod 700 -- "$_d" 2>/dev/null; then
     # chmod reported success — verify it actually took effect (CIFS may silently ignore)
     if command -v stat >/dev/null 2>&1; then
@@ -228,54 +213,11 @@ done
 
 # 后续 exec 的 bash/CLI 会继承以上导出变量；不改写宿主工作区中的 /root/.bashrc。
 
-# 初始化 providers.json：cc-switch 配置根是唯一项目路径。
-# 兼容旧项目：若旧版 .aisc/providers.json 存在，首次启动迁移后删除旧文件。
-PROVIDERS_TEMPLATE="/opt/aisc/bundle/config/providers.json"
-LEGACY_PROVIDERS_JSON="$AISC_DIR/providers.json"
-if [ -L "$PROVIDERS_JSON" ]; then
-    rm -f "$PROVIDERS_JSON"
-fi
-if [ ! -f "$PROVIDERS_JSON" ]; then
-    if [ -f "$LEGACY_PROVIDERS_JSON" ]; then
-        echo "📦 迁移 providers.json 到 .cc-switch..."
-        cp "$LEGACY_PROVIDERS_JSON" "$PROVIDERS_JSON"
-    elif [ -f "$PROVIDERS_TEMPLATE" ]; then
-        echo "📋 初始化 .cc-switch/providers.json..."
-        cp "$PROVIDERS_TEMPLATE" "$PROVIDERS_JSON"
-    fi
-fi
-if [ -f "$PROVIDERS_JSON" ]; then
-    chmod 600 "$PROVIDERS_JSON"
-    if [ -f "$LEGACY_PROVIDERS_JSON" ]; then
-        rm -f "$LEGACY_PROVIDERS_JSON"
-    fi
-fi
-
-# 初始化 config.json：首次启动时从 aisc-bundle/config/config.json 复制
-CONFIG_JSON="$AISC_DIR/config.json"
-CONFIG_TEMPLATE="/opt/aisc/bundle/config/config.json"
-if [ ! -f "$CONFIG_JSON" ] && [ -f "$CONFIG_TEMPLATE" ]; then
-    echo "📋 初始化 config.json..."
-    cp "$CONFIG_TEMPLATE" "$CONFIG_JSON"
-    chmod 600 "$CONFIG_JSON"
-fi
-
-# 初始化 profiles.json：首次启动时从 aisc-bundle/config/profiles.json 复制
-PROFILES_JSON="$AISC_DIR/profiles.json"
-PROFILES_TEMPLATE="/opt/aisc/bundle/config/profiles.json"
-if [ ! -f "$PROFILES_JSON" ] && [ -f "$PROFILES_TEMPLATE" ]; then
-    echo "📋 初始化 profiles.json..."
-    cp "$PROFILES_TEMPLATE" "$PROFILES_JSON"
-    chmod 600 "$PROFILES_JSON"
-fi
-
 # ==========================================
 # 3. 环境变量与网络状态展示
-#    env 块读 CLAUDE_CONFIG_DIR/settings.json（Claude CLI 原生文件，cs 写此处）
-#    api-keys 密钥位于 .aisc/secrets/api-keys
+#    env 块读 CLAUDE_CONFIG_DIR/settings.json（Claude CLI 原生文件）
 # ==========================================
 SETTINGS_FILE="$CLAUDE_CONFIG_DIR/settings.json"
-AISC_KEY_STORE="$AISC_DIR/secrets/api-keys"
 
 if [ -f "$SETTINGS_FILE" ]; then
     MODEL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_MODEL||'')}catch(e){}" 2>/dev/null)
@@ -344,47 +286,65 @@ if command -v cc-switch >/dev/null 2>&1; then
         else
             CC_SWITCH_SKILLS_HOME="/root/app"
         fi
-        CC_SWITCH_SKILLS_SSOT="$CC_SWITCH_CONFIG_DIR/skills/gstack"
+        # 离线登记四个镜像内置 skill，以 cc-switch 作为唯一 SSOT，
+        # 再用 copy 模式同步到 Claude 与 Codex。
+        for skill_name in caveman document-skills grill-me superpowers; do
+            mkdir -p "$CC_SWITCH_CONFIG_DIR/skills/$skill_name"
+            cp -a "/opt/aisc/skills/$skill_name/." \
+                "$CC_SWITCH_CONFIG_DIR/skills/$skill_name/"
+        done
 
-        # 离线登记镜像内置 gstack 为 cc-switch 的相对 SSOT skill。
-        # 相对 directory=gstack 是 cc-switch 原生 install 使用的形式，
-        # 可正常执行 enable/disable/sync，且不依赖首次启动网络。
-        if ! HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills info gstack >/dev/null 2>&1; then
-            mkdir -p "$CC_SWITCH_SKILLS_SSOT"
-            cp -a "$FACTORY_CLAUDE_DIR/skills/gstack/." "$CC_SWITCH_SKILLS_SSOT/"
-            HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills list \
-                >>"$CC_SWITCH_SKILLS_LOG" 2>&1 || true
-            CC_SWITCH_SKILL_DB="$CC_SWITCH_CONFIG_DIR/cc-switch.db" python3 - <<'PY' \
-                >>"$CC_SWITCH_SKILLS_LOG" 2>&1
+        # 先让 cc-switch 创建/迁移数据库，再幂等启用四个 skill。
+        HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills list \
+            >>"$CC_SWITCH_SKILLS_LOG" 2>&1 || true
+        CC_SWITCH_SKILL_DB="$CC_SWITCH_CONFIG_DIR/cc-switch.db" python3 - <<'PY' \
+            >>"$CC_SWITCH_SKILLS_LOG" 2>&1 || \
+            echo "⚠️  cc-switch skills 登记失败；日志: $CC_SWITCH_SKILLS_LOG" >&2
 import os
 import sqlite3
 import time
 
 db = sqlite3.connect(os.environ["CC_SWITCH_SKILL_DB"], timeout=10)
 now = int(time.time())
-db.execute(
-    """
-    INSERT OR IGNORE INTO skills (
-        id, name, description, directory,
-        repo_owner, repo_name, repo_branch,
-        enabled_claude, enabled_codex, installed_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """,
-    (
-        "aisc:gstack", "gstack", "AISC bundled gstack skills", "gstack",
-        "garrytan", "gstack", "main", 1, 1, now, now,
-    ),
+skills = (
+    ("caveman", "Ultra-compressed agent communication", "JuliusBrussee", "caveman"),
+    ("document-skills", "Bundled document creation and editing skills", "anthropics", "skills"),
+    ("grill-me", "Relentless plan and design interview", "mattpocock", "skills"),
+    ("superpowers", "Structured software engineering workflows", "obra", "superpowers"),
 )
+for name, description, owner, repo in skills:
+    db.execute(
+        """
+        INSERT OR IGNORE INTO skills (
+            id, name, description, directory,
+            repo_owner, repo_name, repo_branch,
+            enabled_claude, enabled_codex, installed_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            f"aisc:{name}", name, description, name,
+            owner, repo, "main", 1, 1, now, now,
+        ),
+    )
+    db.execute(
+        """
+        UPDATE skills
+        SET description = ?, directory = ?, repo_owner = ?, repo_name = ?,
+            repo_branch = ?, enabled_claude = 1, enabled_codex = 1,
+            updated_at = ?
+        WHERE name = ?
+        """,
+        (description, name, owner, repo, "main", now, name),
+    )
 db.commit()
 PY
-            if HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills sync-method copy \
-                    >>"$CC_SWITCH_SKILLS_LOG" 2>&1 && \
-                HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills sync \
-                    >>"$CC_SWITCH_SKILLS_LOG" 2>&1; then
-                echo "✅ cc-switch 已离线接管 gstack skills（Claude + Codex）"
-            else
-                echo "⚠️  cc-switch skills 离线接管失败，继续使用镜像出厂副本；日志: $CC_SWITCH_SKILLS_LOG" >&2
-            fi
+        if HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills sync-method copy \
+                >>"$CC_SWITCH_SKILLS_LOG" 2>&1 && \
+            HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills sync \
+                >>"$CC_SWITCH_SKILLS_LOG" 2>&1; then
+            echo "✅ cc-switch 已安装 caveman、document-skills、grill-me、superpowers（Claude + Codex）"
+        else
+            echo "⚠️  cc-switch skills 离线安装失败；日志: $CC_SWITCH_SKILLS_LOG" >&2
         fi
 
         cc-switch proxy -a claude enable >/dev/null 2>&1 || true
@@ -462,7 +422,7 @@ case "${AI_BRIEF_ON_START,,}" in
                     printf '--- DONE (%s) ---\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> /tmp/ai-brief.log
                 ) &
             else
-                echo "📰 简讯跳过（当前无 cs 后端配置，--ai 不可用）"
+                echo "📰 简讯跳过（当前 cc-switch provider 未配置 API 凭据）"
             fi
         fi
         ;;
@@ -484,7 +444,7 @@ case "${AI_BRIEF_ON_START,,}" in
                     echo "----------------------------------------"
                 fi
             else
-                echo "📰 简讯跳过（当前无 cs 后端配置，--ai 不可用）"
+                echo "📰 简讯跳过（当前 cc-switch provider 未配置 API 凭据）"
             fi
         fi
         ;;
@@ -494,14 +454,8 @@ case "${AI_BRIEF_ON_START,,}" in
 esac
 
 # ==========================================
-# 4. 智能引导：支持 cs 直连切换和 CLI 选择
+# 4. 智能引导：CLI 选择
 # ==========================================
-# 如果用户用 Docker 命令行传入 cs，表示切换后自动重启 Claude
-if [ "$1" = "cs" ]; then
-    shift
-    SC_RESTART=1 exec /usr/local/bin/cs "$@"
-fi
-
 # 支持直接启动 codex
 if [ "$1" = "codex" ]; then
     exec codex "$@"
@@ -510,11 +464,11 @@ fi
 # ==========================================
 # 5. 启动方式菜单：bash / claude / codex（默认）
 #    仅在交互终端、且以默认 claude 启动时弹出
-#    无任何 cs 配置时不再拦截 —— 空配置即走 cc 官方默认端点
+#    无 provider 配置时不拦截 —— CLI 使用各自官方默认端点
 # ==========================================
 if [ "$1" = "claude" ] && [ -t 0 ]; then
     if [ "$AUTH" = "no" ] && [ -z "$MODEL" ]; then
-        echo "ℹ️  当前无 cs 配置，将以 cc 官方默认启动（可在 bash 内用 cs 切换后端）。"
+        echo "ℹ️  当前未配置自定义 provider，将使用 CLI 官方默认端点（可运行 cc-switch 配置）。"
     fi
     echo ""
     echo "请选择启动方式："

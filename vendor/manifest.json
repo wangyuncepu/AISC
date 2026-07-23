@@ -66,6 +66,15 @@
       "files": [
         "container/_bundle/skills/gstack/"
       ]
+    },
+    {
+      "name": "grill-me",
+      "version": "embedded-2026-07-24",
+      "source": "https://github.com/mattpocock/skills/tree/main/skills/productivity/grill-me",
+      "license": "MIT",
+      "files": [
+        "container/cc-switch-skills/grill-me/"
+      ]
     }
   ]
 }

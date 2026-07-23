@@ -380,7 +380,7 @@ def cmd_shell(
 #      done < "$1"
 #      shift; shift   # past source, past --
 #      [ -n "${CLAUDE_CONFIG_DIR:-}" ] && [ -n "${CC_SWITCH_CONFIG_DIR:-}" ] || exit 101
-#      export CLAUDE_CONFIG_DIR CC_SWITCH_CONFIG_DIR AISC_DIR PROVIDERS_JSON CODEX_CONFIG_DIR CODEX_HOME
+#      export CLAUDE_CONFIG_DIR CC_SWITCH_CONFIG_DIR CODEX_CONFIG_DIR CODEX_HOME
 #      exec "$@"
 #    ' aisc-scope /proc/1/environ -- cc-switch
 _SCOPE_WRAPPER = "\n".join([
@@ -388,25 +388,22 @@ _SCOPE_WRAPPER = "\n".join([
     "  echo 'Error: Cannot read scope environment from PID 1' >&2",
     '  exit 101',
     'fi',
-    'unset CLAUDE_CONFIG_DIR CC_SWITCH_CONFIG_DIR AISC_DIR PROVIDERS_JSON CODEX_CONFIG_DIR CODEX_HOME',
+    'unset CLAUDE_CONFIG_DIR CC_SWITCH_CONFIG_DIR CODEX_CONFIG_DIR CODEX_HOME',
     "while IFS= read -r -d '' entry; do",
     '  case "$entry" in',
     '    CLAUDE_CONFIG_DIR=*) CLAUDE_CONFIG_DIR=${entry#*=} ;;',
     '    CC_SWITCH_CONFIG_DIR=*) CC_SWITCH_CONFIG_DIR=${entry#*=} ;;',
-    '    AISC_DIR=*)             AISC_DIR=${entry#*=}             ;;',
-    '    PROVIDERS_JSON=*)       PROVIDERS_JSON=${entry#*=}       ;;',
     '    CODEX_CONFIG_DIR=*)     CODEX_CONFIG_DIR=${entry#*=}     ;;',
     '    CODEX_HOME=*)           CODEX_HOME=${entry#*=}           ;;',
     '  esac',
     'done < "$1"',
     'shift',
     'shift',
-    'if [ -z "${CLAUDE_CONFIG_DIR:-}" ] || [ -z "${CC_SWITCH_CONFIG_DIR:-}" ] || '
-    '[ -z "${AISC_DIR:-}" ] || [ -z "${PROVIDERS_JSON:-}" ]; then',
+    'if [ -z "${CLAUDE_CONFIG_DIR:-}" ] || [ -z "${CC_SWITCH_CONFIG_DIR:-}" ]; then',
     "  echo 'Error: Cannot read scope environment from PID 1' >&2",
     '  exit 101',
     'fi',
-    'export CLAUDE_CONFIG_DIR CC_SWITCH_CONFIG_DIR AISC_DIR PROVIDERS_JSON CODEX_CONFIG_DIR CODEX_HOME',
+    'export CLAUDE_CONFIG_DIR CC_SWITCH_CONFIG_DIR CODEX_CONFIG_DIR CODEX_HOME',
     'exec "$@"',
     '',  # trailing newline
 ])
@@ -430,39 +427,20 @@ def _build_switch_argv(name: str, quick: Optional[str]) -> list:
     """
     if quick:
         return ["exec", "-it", name, "bash", "-c", _SCOPE_WRAPPER,
-                "aisc-scope", _SCOPE_ENV_SOURCE, "--", "cs", quick]
+                "aisc-scope", _SCOPE_ENV_SOURCE, "--",
+                "cc-switch", "-a", "claude", "provider", "switch", quick]
     else:
         return ["exec", "-it", name, "bash", "-c", _SCOPE_WRAPPER,
                 "aisc-scope", _SCOPE_ENV_SOURCE, "--", "cc-switch"]
 
 
-def _validate_provider_id(provider: str, explicit_root: Optional[str] = None) -> None:
-    """Validate that *provider* is a non-empty token and optionally exists in catalog.
-
-    Catalog lookup is best-effort; if the catalog is unavailable, validation
-    is deferred to the container's ``cs`` command.
-    """
+def _validate_provider_id(provider: str) -> None:
+    """Validate that *provider* is a non-empty positional token."""
     if not provider or not provider.strip():
         raise CliError(
             message="Provider name required for --quick switch",
             exit_code=2, error_code="AISC_ERR_USAGE",
         )
-
-    # Try to validate against catalog (best-effort)
-    try:
-        from aisc.application.provider_service import run_provider_show
-        result = run_provider_show(provider, explicit_root=explicit_root)
-        if result.exit_code != 0 and result.error_message:
-            if "not found" in result.error_message.lower():
-                raise CliError(
-                    message=f"Unknown provider: {provider}",
-                    exit_code=2, error_code="AISC_ERR_USAGE",
-                )
-    except CliError:
-        raise
-    except Exception:
-        # Catalog not available — defer to container's cs command
-        pass
 
 
 def cmd_switch(
@@ -475,7 +453,7 @@ def cmd_switch(
     """Switch AI provider inside the container.
 
     Default (no --quick): ``docker exec -it NAME cc-switch`` (full TUI).
-    Quick mode: ``docker exec -it NAME cs PROVIDER``.
+    Quick mode uses ``cc-switch -a claude provider switch PROVIDER``.
 
     Uses streaming executor for interactive terminal.  Text-only.
     Returns ProcessResult so caller can inspect exit_code / errors.
@@ -484,7 +462,7 @@ def cmd_switch(
 
     # Validate --quick provider early (before any Docker interaction)
     if quick is not None:
-        _validate_provider_id(quick, explicit_root=explicit_root)
+        _validate_provider_id(quick)
         if not quick:
             raise CliError(
                 message="Provider name required for --quick switch",

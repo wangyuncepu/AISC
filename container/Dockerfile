@@ -21,7 +21,7 @@ ARG USE_CN_MIRROR=1
 ARG MIHOMO_VERSION=v1.19.27
 ARG GH_PROXY=
 
-# cc-switch-cli 版本（跨平台 AI CLI 管理工具，Rust 二进制，与内置 cs 共存）
+# cc-switch-cli 版本（Claude/Codex provider 与 skills 的统一管理工具）
 ARG CC_SWITCH_VERSION=v5.9.0
 
 # Claude Code npm 版本（@anthropic-ai/claude-code）
@@ -209,7 +209,7 @@ RUN CLAUDE_CONFIG_DIR=/opt/aisc/factory/.claude claude plugin install skill-crea
 # 7. 默认 settings.local.json 放入 CLI 原生目录（随 .claude 一并复制到项目）
 RUN echo '{ "enableAllProjectMcpServers": true }' > /opt/aisc/factory/.claude/settings.local.json
 
-# 8. 出厂版本戳（内容哈希）：项目模式据此检测镜像是否更新，提示 cs upgrade
+# 8. 出厂版本戳（内容哈希）：项目模式据此检测镜像是否更新
 #    仅哈希出厂内容（skills/plugins/commands/CLAUDE.md/settings*），排除 .claude.json
 #    （含每次构建随机的 machineID，会无谓变动）
 RUN find /opt/aisc/factory/.claude/skills /opt/aisc/factory/.claude/plugins /opt/aisc/factory/.claude/commands \
@@ -226,21 +226,9 @@ RUN chmod +x /usr/local/bin/lib/*.sh
 COPY container/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 复制配置文件模板到 aisc-bundle（供 entrypoint.sh 初始化 .aisc/ 配置）
-# 放在 /opt/aisc/bundle/ 避免被项目目录挂载覆盖
-RUN mkdir -p /opt/aisc/bundle/config
-COPY config/providers.json /opt/aisc/bundle/config/providers.json
-COPY config/config.json /opt/aisc/bundle/config/config.json
-COPY config/profiles.json /opt/aisc/bundle/config/profiles.json
-
 # Mihomo 配置构建器：原始订阅 → mihomo 配置（格式自动转换 yaml/base64订阅/URI直链/JSON
 #   + 强制注入 TUN/DNS）。entrypoint 调用，Node 运行，无外部依赖。
 COPY container/mihomo-build-config.js /usr/local/bin/mihomo-build-config.js
-
-# 注入模型切换 CLI 工具：使用根目录脚本作为 cs/claude-switch
-COPY container/claude-switch /usr/local/bin/cs
-RUN chmod +x /usr/local/bin/cs \
-    && ln -sf /usr/local/bin/cs /usr/local/bin/claude-switch
 
 # Claude 包装器：每次启动前从 settings.json 注入 env，并默认追加
 # --dangerously-skip-permissions（跳过权限确认，容器内自动流）。
@@ -260,12 +248,11 @@ RUN chmod +x /usr/local/bin/codex
 # sed -i 会破坏其结构导致运行时 segfault。
 RUN sed -i 's/\r$//' \
         /usr/local/bin/entrypoint.sh \
-        /usr/local/bin/cs \
         /usr/local/bin/claude \
         /usr/local/bin/codex \
         /usr/local/bin/mihomo-build-config.js \
         /usr/local/bin/lib/env-inject.sh \
-        /usr/local/bin/lib/path-resolve.sh \
+        /usr/local/bin/lib/writable.sh \
         /usr/local/bin/cc-switch 2>/dev/null || true
 
 # ==========================================
@@ -293,7 +280,7 @@ RUN python3 -m venv /opt/aisc/venv \
 ENV PATH="/opt/aisc/venv/bin:${PATH}"
 
 # ==========================================
-# cc-switch-cli（Rust 二进制）：跨平台 AI CLI 管理工具，与内置 cs 共存（命令名 cc-switch）
+# cc-switch-cli（Rust 二进制）：Claude/Codex provider 与 skills 的唯一管理工具
 #   以 root 写入 /usr/local/bin。
 #   复用 mihomo 的 GH_PROXY 多镜像 fallback；musl 静态版兼容 glibc/musl。
 # ==========================================
@@ -320,6 +307,20 @@ RUN set -eux; \
 COPY container/cc-switch-wrapper /usr/local/bin/cc-switch
 RUN sed -i 's/\r$//' /usr/local/bin/cc-switch \
     && chmod +x /usr/local/bin/cc-switch
+
+# cc-switch 离线 skills：元技能说明 + 已暂存插件中的实际 skill 内容。
+COPY container/cc-switch-skills/ /opt/aisc/skills/
+RUN set -eux; \
+    caveman_src="$(find /opt/aisc/factory/.claude/plugins/cache/caveman -type d -path '*/skills/caveman' | head -1)"; \
+    document_src="$(find /opt/aisc/factory/.claude/plugins/cache/anthropic-agent-skills/document-skills -mindepth 1 -maxdepth 1 -type d | head -1)"; \
+    superpowers_src="$(find /opt/aisc/factory/.claude/plugins/cache/claude-plugins-official/superpowers -mindepth 1 -maxdepth 1 -type d | head -1)"; \
+    test -f "$caveman_src/SKILL.md"; \
+    test -d "$document_src/skills"; \
+    test -d "$superpowers_src/skills"; \
+    mkdir -p /opt/aisc/skills/caveman /opt/aisc/skills/document-skills/skills /opt/aisc/skills/superpowers/skills; \
+    cp -a "$caveman_src/." /opt/aisc/skills/caveman/; \
+    cp -a "$document_src/skills/." /opt/aisc/skills/document-skills/skills/; \
+    cp -a "$superpowers_src/skills/." /opt/aisc/skills/superpowers/skills/
 # 设置入口点
 ENTRYPOINT ["entrypoint.sh"]
 

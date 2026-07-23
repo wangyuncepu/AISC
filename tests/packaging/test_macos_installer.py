@@ -122,11 +122,9 @@ class TestMacOSUninstallScript(unittest.TestCase):
                       "Uninstall must compare against expected symlink target")
 
     def test_uninstall_preserves_home(self):
-        """Uninstall must NOT delete ~/.aisc or ~/.cc-config."""
+        """Uninstall must NOT delete ~/.aisc."""
         self.assertNotIn("rm -rf ~/.aisc", self.text,
                          "Uninstall must NOT delete ~/.aisc")
-        self.assertNotIn("rm -rf ~/.cc-config", self.text,
-                         "Uninstall must NOT delete ~/.cc-config")
 
     def test_uninstall_forgets_receipt(self):
         """Uninstall should call pkgutil --forget."""

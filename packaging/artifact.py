@@ -42,18 +42,9 @@ def get_version(root: Path) -> str:
     if not vf.is_file(): sys.exit(f"ERROR: VERSION not found at {vf}")
     return vf.read_text(encoding="utf-8").strip().split("\n")[0].strip()
 
-def get_package_version(root: Path) -> str:
-    init = root / "src" / "aisc" / "__init__.py"
-    if not init.is_file(): sys.exit("ERROR: src/aisc/__init__.py not found")
-    for line in init.read_text(encoding="utf-8").splitlines():
-        s = line.strip()
-        if s.startswith("__version__"): return s.split("=", 1)[1].strip().strip('"').strip("'")
-    sys.exit("ERROR: __version__ not found in src/aisc/__init__.py")
-
 def _assert_version_guard(root: Path) -> str:
-    fv, pv = get_version(root), get_package_version(root)
-    if fv != pv: sys.exit(f"ERROR: Version mismatch: VERSION={fv}, aisc.__version__={pv}")
-    return fv
+    """Return the sole project version source after validating it exists."""
+    return get_version(root)
 
 
 # ===========================================================================
@@ -64,17 +55,20 @@ BUNDLE_REQUIRED = ["VERSION", "README.md", "LICENSE", ".dockerignore", "config/v
 BUNDLE_EXCLUDE_PATTERNS = [
     "__pycache__", "*.pyc", "*.pyo", ".pytest_cache", ".mypy_cache", ".ruff_cache",
     ".coverage", "coverage", "htmlcov", ".tox", ".git", ".github", ".gitignore",
-    ".gitattributes", ".DS_Store", "Thumbs.db", "*.egg-info", ".aisc", ".cc-config",
+    ".gitattributes", ".DS_Store", "Thumbs.db", "*.egg-info", ".aisc",
     ".deploy", "node_modules", ".env", ".env.*", "api-keys", ".git-credentials",
     ".claude", ".claude_keys", "secrets", "cache",
 ]
-BUNDLE_ALLOWLIST_PREFIXES = ["container/_bundle/plugins/cache/"]
-BUNDLE_FORBIDDEN_TOP = [
-    "src","tests","docs","packaging","tools","scripts","cli","start.sh","start.bat","start.command",
-    ".git",".github",".gitleaks.toml","tasks","pyproject.toml","skills-lock.json",".project",
-    ".env","api-keys",".git-credentials",".claude",".claude_keys",".aisc",".cc-config",".deploy","secrets",
+BUNDLE_ALLOWLIST_PREFIXES = [
+    "container/_bundle/plugins/cache/",
+    "container/_bundle/plugins/marketplaces/",
 ]
-_EXEC_SOURCE_NAMES = {"claude-switch", "claude-wrapper", "entrypoint.sh", "cs"}
+BUNDLE_FORBIDDEN_TOP = [
+    "src","tests","docs","packaging","tools","scripts","cli",
+    ".git",".github",".gitleaks.toml","tasks","pyproject.toml","skills-lock.json",".project",
+    ".env","api-keys",".git-credentials",".claude",".claude_keys",".aisc",".deploy",
+]
+_EXEC_SOURCE_NAMES = {"claude-wrapper", "entrypoint.sh"}
 
 def _should_exclude(rel_path: str) -> bool:
     clean = rel_path.replace("\\", "/")
@@ -109,9 +103,7 @@ def stage_bundle(root: Path, output_dir: Path, *, verify_version: bool = True) -
         if not (root / fn).is_file(): sys.exit(f"ERROR: required file missing: {fn}")
         _stage_file(root / fn, br, fn)
     _stage_file(root / "config" / "versions.env", br, "config/versions.env")
-    # providers.json, config.json, profiles.json are optional (tests may not have them)
-    if (root / "config" / "providers.json").is_file():
-        _stage_file(root / "config" / "providers.json", br, "config/providers.json")
+    # config.json and profiles.json are optional (tests may not have them)
     if (root / "config" / "config.json").is_file():
         _stage_file(root / "config" / "config.json", br, "config/config.json")
     if (root / "config" / "profiles.json").is_file():
@@ -358,7 +350,20 @@ def build_onefile(root: Path, output_dir: Path) -> Tuple[Path, str]:
         dd = wd / "dist"
         try: subprocess.run([sys.executable,"-m","PyInstaller","--version"], check=True, capture_output=True, cwd=str(root))
         except (subprocess.CalledProcessError, FileNotFoundError): sys.exit("ERROR: PyInstaller not found. Install: pip install PyInstaller==6.21.0")
-        subprocess.run([sys.executable,"-m","PyInstaller","--onefile","--name","aisc","--paths",str(root/"src"),"--distpath",str(dd),"--workpath",str(wd/"build"),"--specpath",str(wd),str(ep)], check=True, cwd=str(root))
+        subprocess.run(
+            [
+                sys.executable, "-m", "PyInstaller", "--onefile",
+                "--name", "aisc",
+                "--paths", str(root / "src"),
+                "--add-data", f"{root / 'VERSION'}:.",
+                "--distpath", str(dd),
+                "--workpath", str(wd / "build"),
+                "--specpath", str(wd),
+                str(ep),
+            ],
+            check=True,
+            cwd=str(root),
+        )
         en = "aisc.exe" if sys.platform=="win32" else "aisc"
         epath = dd / en
         if not epath.is_file():
@@ -590,7 +595,7 @@ def verify_archive(archive_path: Path) -> List[str]:
         if extra: errors.append(f"Extra top-level entries in archive: {extra}")
         if bp.is_dir(): errors.extend(verify_staged_bundle(bp))
         for d in td.rglob("*"):
-            if d.name in (".env","api-keys",".git-credentials",".claude",".aisc",".cc-config"):
+            if d.name in (".env","api-keys",".git-credentials",".claude",".aisc"):
                 errors.append(f"Forbidden inside archive: {d.relative_to(td)}")
     finally:
         shutil.rmtree(ed, ignore_errors=True)

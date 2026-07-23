@@ -10,16 +10,16 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class CcSwitchRuntimeTests(unittest.TestCase):
-    def test_entrypoint_uses_project_local_cc_switch_config_and_catalog(self):
+    def test_entrypoint_uses_scope_local_cc_switch_config_without_legacy_catalog(self):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
 
-        self.assertIn('CC_SWITCH_CONFIG_DIR="$AISC_DIR/.cc-switch"', entrypoint)
-        self.assertIn('PROVIDERS_JSON="$CC_SWITCH_CONFIG_DIR/providers.json"', entrypoint)
-        self.assertNotIn('AISC_PROVIDERS_JSON="$AISC_DIR/providers.json"', entrypoint)
-        self.assertIn('LEGACY_PROVIDERS_JSON="$AISC_DIR/providers.json"', entrypoint)
-        self.assertIn('rm -f "$LEGACY_PROVIDERS_JSON"', entrypoint)
+        self.assertIn('CC_SWITCH_CONFIG_DIR="$TEMP_HOME/.cc-switch"', entrypoint)
+        self.assertIn('CC_SWITCH_CONFIG_DIR="/root/app/.cc-switch"', entrypoint)
         self.assertIn("export CC_SWITCH_CONFIG_DIR", entrypoint)
-        self.assertIn("export PROVIDERS_JSON", entrypoint)
+        self.assertNotIn("PROVIDERS_JSON", entrypoint)
+        self.assertNotIn("providers.json", entrypoint)
+        self.assertNotIn("AISC_DIR", entrypoint)
+        self.assertNotIn(".aisc/secrets", entrypoint)
 
     def test_entrypoint_starts_default_daemon_before_handoff(self):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
@@ -66,15 +66,30 @@ class CcSwitchRuntimeTests(unittest.TestCase):
 
     def test_entrypoint_registers_factory_skills_for_claude_and_codex(self):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
+        dockerfile = (ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
 
         self.assertIn("cc-switch skills sync-method copy", entrypoint)
         self.assertIn('CC_SWITCH_SKILLS_HOME="/root/app"', entrypoint)
-        self.assertIn('CC_SWITCH_SKILLS_SSOT="$CC_SWITCH_CONFIG_DIR/skills/gstack"', entrypoint)
+        self.assertIn(
+            "for skill_name in caveman document-skills grill-me superpowers",
+            entrypoint,
+        )
+        self.assertIn('"/opt/aisc/skills/$skill_name/."', entrypoint)
         self.assertIn("INSERT OR IGNORE INTO skills", entrypoint)
-        self.assertIn('"aisc:gstack"', entrypoint)
+        self.assertIn('f"aisc:{name}"', entrypoint)
+        self.assertIn("enabled_claude = 1", entrypoint)
+        self.assertIn("enabled_codex = 1", entrypoint)
+        self.assertIn("cc-switch skills 登记失败", entrypoint)
         self.assertIn("cc-switch skills sync", entrypoint)
-        self.assertNotIn("cc-switch skills repos add garrytan/gstack", entrypoint)
         self.assertNotIn("cc-switch skills import-from-apps", entrypoint)
+        self.assertIn(
+            "COPY container/cc-switch-skills/ /opt/aisc/skills/",
+            dockerfile,
+        )
+        for skill_name in ("caveman", "document-skills", "grill-me", "superpowers"):
+            self.assertTrue(
+                (ROOT / "container" / "cc-switch-skills" / skill_name / "SKILL.md").is_file()
+            )
 
     def test_codex_wrapper_defaults_to_full_container_permissions(self):
         wrapper = (ROOT / "container" / "codex-wrapper").read_text(encoding="utf-8")
@@ -102,7 +117,7 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
 
         self.assertIn('export IS_SANDBOX="${IS_SANDBOX:-1}"', entrypoint)
-        self.assertIn('AISC_DIR="/root/app/.aisc"', entrypoint)
+        self.assertIn('CC_SWITCH_CONFIG_DIR="/root/app/.cc-switch"', entrypoint)
         self.assertNotIn("chown -R", entrypoint)
         self.assertNotIn("cleanup_permissions", entrypoint)
 
@@ -128,22 +143,53 @@ class CcSwitchRuntimeTests(unittest.TestCase):
 
         argv = RunPlan(
             workspace="/tmp/workspace",
-            provider_config_dir="/tmp/workspace/.aisc",
             name="aisc-test",
         ).docker_argv
 
         self.assertNotIn("--user", argv)
         self.assertIn("/tmp/workspace:/root/app", argv)
-        self.assertIn("/tmp/workspace/.aisc:/root/app/.aisc", argv)
+        self.assertNotIn("/tmp/workspace/.aisc:/root/app/.aisc", argv)
 
-    def test_cs_prefers_shared_catalog_and_syncs_live_provider(self):
-        cs = (ROOT / "container" / "claude-switch").read_text(encoding="utf-8")
+    def test_legacy_cs_provider_catalog_and_secret_store_are_removed(self):
+        removed = (
+            "container/claude-switch",
+            "config/providers.json",
+            "src/aisc/adapters/config_source.py",
+            "src/aisc/adapters/secret_store.py",
+            "src/aisc/application/provider_service.py",
+            "src/aisc/cli/commands/provider.py",
+        )
+        for relative_path in removed:
+            self.assertFalse((ROOT / relative_path).exists(), relative_path)
 
-        provider_resolution = cs.index("# Resolve providers.json")
-        explicit = cs.index('[ -n "${PROVIDERS_JSON:-}" ]', provider_resolution)
-        aisc_fallback = cs.index('[ -n "${AISC_DIR:-}" ]', provider_resolution)
-        self.assertLess(explicit, aisc_fallback)
-        self.assertIn("cc-switch --app claude provider import-live", cs)
+        dockerfile = (ROOT / "container" / "Dockerfile").read_text(encoding="utf-8")
+        self.assertNotIn("/usr/local/bin/cs", dockerfile)
+        self.assertNotIn("container/claude-switch", dockerfile)
+
+    def test_quick_switch_delegates_directly_to_cc_switch(self):
+        from aisc.cli.commands.container import _build_switch_argv
+
+        argv = _build_switch_argv("aisc-test", "deepseek")
+        self.assertEqual(
+            argv[-7:],
+            ["--", "cc-switch", "-a", "claude", "provider", "switch", "deepseek"],
+        )
+        self.assertNotIn("cs", argv)
+
+    def test_aisc_config_schema_no_longer_owns_provider_or_auth(self):
+        from aisc.schemas.config_schema import validate_config
+
+        issues = validate_config(
+            {
+                "schema_version": 1,
+                "provider": {
+                    "id": "legacy",
+                    "auth": {"secret_ref": "provider:legacy"},
+                },
+            }
+        )
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].reason_code, "unknown_key")
 
     def test_docker_exec_wrapper_preserves_cc_switch_runtime_paths(self):
         from aisc.cli.commands.container import _SCOPE_WRAPPER
@@ -151,13 +197,13 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         for name in (
             "CLAUDE_CONFIG_DIR",
             "CC_SWITCH_CONFIG_DIR",
-            "AISC_DIR",
-            "PROVIDERS_JSON",
             "CODEX_CONFIG_DIR",
             "CODEX_HOME",
         ):
             self.assertIn(f"{name}=*", _SCOPE_WRAPPER)
             self.assertIn(name, _SCOPE_WRAPPER.rsplit("export ", 1)[1])
+        self.assertNotIn("AISC_DIR", _SCOPE_WRAPPER)
+        self.assertNotIn("PROVIDERS_JSON", _SCOPE_WRAPPER)
 
     def test_docker_exec_wrapper_restores_literal_values(self):
         from aisc.cli.commands.container import _SCOPE_WRAPPER
@@ -165,8 +211,6 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         values = {
             "CLAUDE_CONFIG_DIR": "/tmp/claude config",
             "CC_SWITCH_CONFIG_DIR": "/tmp/.aisc/.cc-switch",
-            "AISC_DIR": "/tmp/project $literal/.aisc",
-            "PROVIDERS_JSON": "/tmp/project $literal/.aisc/.cc-switch/providers.json",
             "CODEX_CONFIG_DIR": "/tmp/codex config",
             "CODEX_HOME": "/tmp/codex config",
         }
@@ -180,7 +224,7 @@ class CcSwitchRuntimeTests(unittest.TestCase):
                 [
                     "bash", "-c", _SCOPE_WRAPPER, "aisc-scope",
                     source.name, "--", "bash", "-c",
-                    'printf "%s\\n" "$CC_SWITCH_CONFIG_DIR" "$AISC_DIR" "$PROVIDERS_JSON"',
+                    'printf "%s\\n" "$CC_SWITCH_CONFIG_DIR" "$CODEX_CONFIG_DIR"',
                 ],
                 check=False,
                 capture_output=True,
@@ -191,7 +235,6 @@ class CcSwitchRuntimeTests(unittest.TestCase):
             proc.stdout.splitlines(),
             [
                 values["CC_SWITCH_CONFIG_DIR"],
-                values["AISC_DIR"],
-                values["PROVIDERS_JSON"],
+                values["CODEX_CONFIG_DIR"],
             ],
         )

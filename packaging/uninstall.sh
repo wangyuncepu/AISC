@@ -106,7 +106,7 @@ if [ "$removed_any" = true ]; then
     info "AISC has been uninstalled."
     info ""
     info "The following were NOT removed (preserve these manually if desired):"
-    info "  - User configuration: ~/.aisc, ~/.cc-config"
+    info "  - User configuration: ~/.aisc"
     info "  - Docker images and containers (use 'docker' commands)"
     info "  - Workspace directories"
     info ""

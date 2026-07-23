@@ -11,7 +11,7 @@
 ;     never uses uninsdeletevalue (would wipe entire PATH).
 ;   - Upgrade replaces aisc.exe and aisc-bundle\ cleanly (deletes old
 ;     bundle before installing new one).
-;   - Uninstall leaves %USERPROFILE%\.aisc and .cc-config untouched.
+;   - Uninstall leaves %USERPROFILE%\.aisc untouched.
 ;   - No desktop shortcut; Start Menu has uninstall entry only.
 
 #define MyAppName      "AISC"
