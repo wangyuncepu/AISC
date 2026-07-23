@@ -2,10 +2,20 @@
 
 AISC 是一个在 Docker 容器中运行 Claude Code 和 OpenAI Codex 的个人开发工具。提供 `aisc` 命令行，可在宿主机上构建镜像、管理容器、切换 AI 模型服务。
 
-> **状态：Alpha / 开发中。** 当前版本以仓库根目录 [`VERSION`](VERSION) 为准。
+> **状态：Alpha / 开发中。** 当前稳定版本为 **v2.1.3**；项目版本以仓库根目录 [`VERSION`](VERSION) 为唯一事实源。
+
+## v2.1.3 版本要点
+
+- 容器统一以 `root` 运行，宿主工作区固定挂载到 `/root/app`，并设置 `IS_SANDBOX=1`。
+- Claude 与 Codex 的 Provider、代理路由和 skills 统一交给 cc-switch 管理，不再维护第二套 AISC Provider、密钥或 `cs` 快捷命令。
+- 项目作用域把 `.claude`、`.codex` 和 `.cc-switch` 保存在宿主工作区；临时作用域使用 `/tmp/aisc-home`，容器退出后重置。
+- cc-switch 离线登记并以 copy 模式同步 caveman、document-skills、grill-me、superpowers，Claude 与 Codex 共用同一组启用状态。
+- `VERSION` 同时驱动 CLI、wheel、PyInstaller、bundle、安装包和 Git 标签；Windows checkout 的 vendored 文件行尾也已固定，避免跨平台 SHA256 漂移。
+- 推送 `v*` 标签后，GitHub Actions 自动构建 Linux x86_64、Windows x86_64 和 macOS arm64 产物并发布 Release；带 `-dev` 的标签发布为 Pre-release。
 
 ## 目录
 
+- [v2.1.3 版本要点](#v213-版本要点)
 - [安装](#安装)
   - [前置条件](#前置条件)
   - [方式一：GitHub Release 安装包（推荐）](#方式一github-release-安装包推荐)
@@ -56,7 +66,7 @@ docker version
 
 从 [GitHub Releases](https://github.com/wangyuncepu/AISC/releases) 下载目标版本对应平台的安装包。发布标签使用 `v<VERSION>`，安装包文件名使用 `VERSION` 中的值（不带前导 `v`）。
 
-当前版本已作为 GitHub **Pre-release** 发布；普通用户直接从上面的 Release 页面下载即可，无需进入 Actions 页面。
+`v2.1.3` 是稳定 Release；带 `-dev` 后缀的历史版本显示为 Pre-release。普通用户直接从上面的 Release 页面下载即可，无需进入 Actions 页面。
 
 #### Windows
 
@@ -216,13 +226,15 @@ aisc switch        # 打开服务切换界面
 容器启动时会提示选择要使用的 AI CLI：
 
 1. **bash** - 进入命令行，可手动配置后启动任意 CLI
-2. **claude** - 直接启动 Claude Code（默认）
+2. **claude** - 直接启动 Claude Code
 3. **codex** - 直接启动 OpenAI Codex
+
+默认选择为 **bash**。
 
 你也可以直接指定启动方式：
 
 ```bash
-# 启动 Claude Code
+# 启动容器，在菜单中选择 2
 aisc run
 
 # 启动 Codex
@@ -236,14 +248,20 @@ claude  # 启动 Claude
 
 **Codex 配置说明：**
 
-Codex CLI 使用 `OPENAI_API_KEY` 环境变量进行身份验证。你可以：
+Codex Provider 与认证信息由 cc-switch 管理。进入容器后先检查或选择 Provider：
 
-1. 在容器内通过 `codex` 命令首次运行时进行登录配置
-2. 或预先设置环境变量（在 `~/.codex/settings.json` 中配置）
+```bash
+cc-switch -a codex provider list
+cc-switch -a codex provider current
+cc-switch -a codex provider switch <provider>
+cc-switch proxy -a codex enable
+```
+
+镜像会在全新 cc-switch 数据库中尝试选择 `codex-official`，但内置条目不包含你的真实凭据。使用官方登录或自定义 API 时，仍需在 cc-switch 中完成 Provider 配置。
 
 Codex 配置目录与 Claude 类似，支持临时模式和项目模式：
 - **临时模式**：使用 `/tmp/aisc-home/.codex`，容器退出后重置
-- **项目模式**：使用 `/root/app/.codex`，持久化到宿主机工作区
+- **项目模式**：使用 `/root/app/.codex`，持久化到宿主机工作区；Codex 原生配置文件为 `config.toml`
 
 ## 配置位置
 
@@ -394,9 +412,9 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 **效果：**
 - 生成唯一容器名（`<name>-<8 位 hex>`）。
 - 实际启动容器前写入 `<aisc-root>/.aisc/state.env` 中的 `CONTAINER_NAME` 和 `IMAGE`，供其他终端通过 `status`/`shell` 等自动发现。容器退出并由 `--rm` 删除后，该文件可能保留最近一次容器名。
-- 将宿主机 `<workspace>/` 挂载到容器 `/root/app`；项目文件及 `.aisc`、`.claude`、`.codex` 配置都随工作区持久化。
+- 将宿主机 `<workspace>/` 挂载到容器 `/root/app`；项目文件及 `.cc-switch`、`.claude`、`.codex` 配置都随工作区持久化。
 - 首次启动时将 cc-switch 配置根初始化为 `<workspace>/.cc-switch/`；Provider 只由 cc-switch 的 SQLite 状态管理。
-- entrypoint 会先运行 `cc-switch daemon start`，确保 Codex 有当前 Provider 后启用 Claude/Codex 路由。
+- entrypoint 会以 detach 模式启动 cc-switch daemon，等待其可达，尝试初始化 Codex 当前 Provider，再以 best-effort 方式启用 Claude/Codex 路由。Provider 缺少真实凭据时，路由“已启用”不等于上游模型可用。
 - entrypoint 将 caveman、document-skills、grill-me、superpowers 登记到 cc-switch，并以 copy 模式同步给 Claude 和 Codex。
 - `--dry-run` 只输出 `docker run ...` 命令行，不创建或修改项目配置目录，也不校验本地 proxy 配置文件。
 - 非 `--dry-run` 时：
@@ -568,6 +586,8 @@ cc-switch skills sync
 
 Provider、认证信息和路由状态都由 cc-switch 管理。请用 cc-switch TUI 或其 provider 命令新增、编辑和切换 Provider；不要在工作区维护第二份 AISC Provider 配置。
 
+启用或停用 caveman 等 skill 只会改变 agent 的指令/工作流，不会修改 Provider、代理端口或 API 凭据。如果启用 skill 后无法连接模型，应先检查 cc-switch daemon、当前 Provider 和路由，而不是删除 skill。
+
 ### profile — Profile 管理
 
 ```bash
@@ -642,6 +662,22 @@ uv tool upgrade aisc  # 如有新增依赖
 | `permission denied` | Linux：将用户加入 `docker` 组 |
 | `Cannot connect to the Docker daemon` | 启动 Docker Desktop/Engine |
 | `Image not found` | 先运行 `aisc build` |
+
+### cc-switch daemon 或模型路由不可用
+
+在容器内依次检查：
+
+```bash
+cc-switch daemon status
+cc-switch proxy show
+cc-switch -a claude provider current
+cc-switch -a codex provider current
+```
+
+- `daemon not reachable`：查看 `/tmp/cc-switch-daemon.log`，并运行 `cc-switch daemon logs` 获取详细日志。
+- `Running: no`：daemon 可达后，按需执行 `cc-switch proxy -a claude enable` 或 `cc-switch proxy -a codex enable`。
+- Provider 为空或只有无凭据的默认项：先在 cc-switch TUI 或 provider 命令中配置真实上游地址和凭据，再启用路由。
+- `cc-switch` 报 `cannot execute: required file not found`：通常是旧镜像或 Windows checkout 的 CRLF shebang；拉取当前版本并重新执行 `aisc build --no-cache`。
 
 ### 其他问题
 

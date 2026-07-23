@@ -1,915 +1,198 @@
 # AISC — 开发日志
 
-## v2.0.0-dev (2026-07-16 ~ 2026-07-17) — 多阶段可用性 / 可靠性 / 可维护性重构
+> 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-开发计划见 `docs/plans/PLAN-v2-usability-refactor.md`。以下按里程碑记录已完成工作，**不包含计划中尚未实现的条目**。除两轮权限修复跨午夜（最终 commit `4dff7ae` 2026-07-17 00:22），其余全部在 2026-07-16 完成。
-
----
-
-### v1.5.2 — AI 简讯性能/可靠性重构
-
-Commit `e9945e4`（2026-07-16 21:50）。注意：当时目录名仍为 `image/` 和 `ai_brief/`，以下路径用当时实际名称（当前对应 `container/` 和 `apps/ai-brief/`）。
-
-**变更**：
-- **5 源并发抓取**（`concurrent.futures.ThreadPoolExecutor, max_workers=5`）：单个源网络故障不阻塞其他四源。新增 `FETCH_DEADLINE=14s` 全局截止，超时未完成的源直接丢弃。此前串行抓取全源约 26.6s，并发后全源抓取约 8.7–12s。
-- **HTTP 稳健性**：`HTTP_TIMEOUT` 从 12s 降至 6s（快失败）；`is_transient_error()` 按错误类型判断是否重试（瞬时抖动→重试，4xx/证书错误/网络不可达→放弃）；支持 gzip/deflate Content-Encoding 解压。
-- **双层缓存**：raw 缓存 `~/.cache/ai-brief/raw/`（1h TTL）+ rendered 缓存 `~/.cache/ai-brief/rendered/`（同日复用）。`http_get_cached()` 先拉网络，失败时读 raw 缓存（stale-while-revalidate）；rendered 缓存同日命中即复用。
-- **LLM thinking-only / timeout / max_tokens 处理**：`--ai` 模式检测 reasoning 模型（thinking-only 输出结构），`max_tokens=4096` 耗尽时自动降素材+加 tokens 重试；`LLM_TIMEOUT=30s` 独立超时。
-- **`--debug` 诊断**：`stderr` 逐源计时 + LLM 阶段耗时（容器内重定向至 `/tmp/ai-brief.log`）。
-- **入口重命名**：`一键启动_AI工作站.bat` → `start.bat`、`启动_AI工作站.sh` → `start.sh`、`启动_AI工作站.command` → `start.command`。
-- **Dockerfile**（仍为 `image/Dockerfile`，上下文 `image/`）：替换 LiteLLM demo 层为 ai_brief COPY（`COPY --chown=AISC:AISC ai_brief/ /home/AISC/ai_brief/`，stdlib-only）+ cc-switch-cli 下载安装层（`ARG CC_SWITCH_VERSION=v5.9.0`）。构建脚本需临时复制 `ai_brief/` 到 `image/ai_brief/`（因上下文仍为 `image/`），构建后清理。
-- **README** 同步更新入口文件名与构建命令。
-
-**取舍**：
-- **并发 5 源而非顺序**：串行全源约 26.6s，并发降至约 8.7–12s（单源瓶颈决定总耗时），网络抖动影响面从全失败降到 1/5。
-- **raw/rendered 双层缓存**：raw 缓存 1h TTL 解决短期断网自动兜底；rendered 缓存跨 `docker run` 复用需 volume 挂载 `~/.cache/ai-brief/`（否则 `--rm` 容器销毁后缓存清空）。
-- **reasoning 模型自动降素材**：thinking 输出占据大量 tokens，第一次 LLM 请求可能因 `max_tokens` 不足而返回空 content；降为 3 条+加 tokens 重试后成功率明显提升。
-
-**验证**：
-- 宿主 `brief.py` 全 flag 通过；Python 语法 `ast.parse` 通过；`bash -n` 全 .sh 通过。
-- 端到端实测（Docker 容器内）：fetch 8.86s + AI 精选 27.84s = 总计 36.7s 成功输出中文简讯。
-
----
-
-### P0 — 可用性重构：启动入口、构建上下文、AI 简讯解耦
-
-Commit `370fb65`（2026-07-16 21:56）。注意：当时目录名仍为 `image/` 和 `ai_brief/`，目录迁移到 `container/` 和 `apps/ai-brief/` 在 P1.1（commit `5c3a52c`）。以下用当时实际路径记录。
-
-**变更**：
-- **根 Docker build context**：构建上下文从 `image/` 改为 `.`（项目根）。Dockerfile 仍为 `image/Dockerfile`。Dockerfile 内 COPY 路径加 `image/` 前缀（如 `COPY image/entrypoint.sh`）；构建脚本不再对 `ai_brief` 做临时 staging；入口构建命令从 `docker build -f image/Dockerfile image/` 变为 `docker build -f image/Dockerfile .`（当时路径；当前为 `container/Dockerfile`）。
-- **`.dockerignore` 新建**（32 条规则）：排除 `.git/`、`scripts/`、`tools/`、`docs/`、`api_route_demo/`、`start.*`、`README.md` 等。`image/` 内的 `_bundle/` 与 `downloads/` 未排除（构建所需）。
-- **移除 LiteLLM demo（`api_route_demo/` 整目录）**：v1.5.2 已在 Dockerfile 层面将 LiteLLM 层替换为 ai_brief + cc-switch-cli；P0 从仓库删除 `api_route_demo/` 的 5 个文件。README 删除「OpenAI 协议转换」亮点。
-- **AI 简讯退出默认同步启动路径**：entrypoint 改由 `AI_BRIEF_ON_START` 控制——默认关闭（零阻塞），`background` 后台异步并写日志，`foreground` 保留同步调试模式（外层 timeout 50s）。
-- **`.gitignore` 同步**：增补 `__pycache__/`、`*.pyc`。
-- **README / PLAN** 路径引用同步更新。
-
-**取舍**：
-- **根 build context 而非 `image/`**：根 context 下 COPY 的 `image/` 前缀更清晰、无需构建脚本临时复制。后续 P1.1 重命名 `image/` → `container/` 后前缀自然变为 `container/`。
-- **移除 LiteLLM demo**：协议转换概念可行但稳定运行依赖上游兼容（uvloop/3.14、orjson wheel），作为 demo 增加维护负担。
-
-**Commit**：`370fb65`（2026-07-16 21:56）
-
----
-
-### P0.1 — 闭合 P0 可用性缺口
-
-Commit `c651ea3`（2026-07-16 22:08）。
-
-**变更**：
-- **PowerShell 5.1 兼容**：`scripts/03_build_image.ps1` 移除 `-SkipHttpErrorCheck`（PS 5.1 无此参数），改为 `try/catch` + `$_.Exception.Response.StatusCode` 判断 401。
-- **`tools/stage-*.sh` 构建上下文提示修复**：保留当时正确的 `image/_bundle`/`image/downloads` staging 目标，仅把输出的构建命令从 `docker build ... image/` 改为根上下文 `docker build ... .`；目录重命名在后续 P1.1 完成。
-- **新增 `cli/commands/doctor.sh`**：11 项环境诊断（Docker CLI/daemon/权限/Compose/Git/项目目录/Dockerfile 存在/Python 语法/macOS start.command/start.sh），彩色 PASS/FAIL/WARN 输出。用法仅 `bash cli/commands/doctor.sh`（`start.sh` 不含 doctor 子命令）。
-- **新增 `tests/smoke/check-syntax.sh`**：遍历 `cli/`、`image/`、`scripts/`、`tools/` 及根入口的 `.sh`/`.py`/`.js`/`.json` 文件做语法校验。初始 66 文件全通过（后续扩展至 69）。
-- **`.gitignore` + `.dockerignore` 增补 `.aisc/` 排除**。
-
-**验证**：
-- PS 代码仅做静态/manual review（本机 Linux 无 PowerShell 环境，未跑 `[Parser]::ParseFile`）。
-- `tests/smoke/check-syntax.sh`：66/66 通过。
-- doctor 在本机 WSL/Linux 宿主自检：8 passed, 2 warnings, 0 failures（Docker Compose 不可用 + macOS check 不适用）。
-
-**Commit**：`c651ea3`（2026-07-16 22:08）
-
----
-
-### P1 — 架构收敛
-
-#### P1.1：目录机械迁移 `image→container`、`ai_brief→apps/ai-brief`
-
-Commit `5c3a52c`（2026-07-16 22:14）。
-
-- `image/` → `container/`（Dockerfile、entrypoint.sh、claude-switch、claude-wrapper、claude-settings.json、global-claude.md、mihomo-build-config.js、commands/、_bundle/、downloads/）。
-- `ai_brief/` → `apps/ai-brief/`（brief.py、run.sh、README.md、.gitignore）。
-- 所有引用同步更新：`scripts/03_build_image.{sh,ps1}`、README、PLAN、`.dockerignore`、`tools/stage-*.sh`、`tests/smoke/check-syntax.sh`。
-- `container/Dockerfile`：COPY 路径从 `image/...` → `container/...`；`COPY ai_brief/` → `COPY apps/ai-brief/`；构建命令从 `image/Dockerfile` → `container/Dockerfile`。Dockerfile 中 `COPY apps/ai-brief/ /home/AISC/ai_brief/` 持续有效（v1.5.2 引入的 COPY 在 P0/P1.1 始终保留，从未移除）。
-
-**Commit**：`5c3a52c`（2026-07-16 22:14）
-
-#### P1.2：Provider 元数据数据化
-
-Commit `66b8a50`（2026-07-16 22:21）。
-
-- 新建 `container/providers.json`（schema v1，7 个 provider：cc/deepseek/ark/duo-cc/1y/xf/orange），每个含 `id/name/aliases/models/auth_type/auth_key_name/auth_prompt/key_display/base_url/model/default_opus/default_sonnet/default_haiku/subagent/effort/compact/clear_all/url_fragment/help_desc/switch_msg` 等字段。
-- `container/claude-switch` 重构：原 7 个硬编码 provider 改为 `_node_resolve_provider()` / `_match_provider()` 数据驱动函数，每次调用启动 Node.js 子进程（`node -e`）读 providers.json，输出 shell 变量。provider 增删改只需改 JSON。
-- Dockerfile 新增 `COPY container/providers.json /home/AISC/providers.json`。
-- 密钥存储（`.cc-config/api-keys`）与 `write_settings` 行为完全不变。
-
-**验证**：providers.json JSON 语法验证通过（`python3 -m json.tool`）；`bash -n` 通过；冒烟测试通过。注：本阶段仅为语法/file 层面验证。
-
-**Commit**：`66b8a50`（2026-07-16 22:21）
-
-#### P1.3：`--workspace` 支持 + 状态迁移到 `.aisc/`
-
-Commit `e1bddb0`（2026-07-16 22:26）。
-
-- 新增 `--workspace PATH` 参数（`start.sh`、`start.bat`）：默认当前目录，`04_launcher` 用 `AISC_WORKSPACE` 决定 bind mount 源。
-- macOS `start.command` 修复 PWD 丢失：保存 `ORIGINAL_PWD` 并在 `start.sh` 中使用（设计用于兼容双击场景，未在真实 macOS 上验证）。
-- 状态双写：`_state.sh` / `_state.ps1` 同时写入 `.aisc/state.env` + `.deploy/state.env`，读取优先 `.aisc/`、fallback `.deploy/`。
-
-**验证**：脚本语法通过（`bash -n`）；`--workspace` 参数正确传递到 `04_launcher`。
-
-**Commit**：`e1bddb0`（2026-07-16 22:26）
-
-#### P1.4：密钥迁移到 `.aisc/secrets/`（保守复制）
-
-Commit `33901a2`（2026-07-16 22:30）。
-
-- `claude-switch` 新增 `migrate_keys()` 幂等函数：若 `.aisc/` 存在且旧 `.cc-config/api-keys` 有内容而 `.aisc/secrets/` 空，则 `cp`（复制，非 `mv`）。
-- `get_key()` 优先读 `.aisc/secrets/api-keys`，fallback `.cc-config/api-keys`；交互输入新 key 后双写两处。
-- entrypoint.sh：确保 `.aisc/secrets/` 目录存在 + `sudo chown -R AISC:AISC` + 权限 700。
-- `.cc-config/api-keys` **永不删除**。
-
-**已知边界**：当前 `claude-switch` 仍将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 注入 `.claude/settings.json`（env 块），意味着密钥并非仅存于 secrets 文件——settings.json 中也有一份明文副本。这是 P3 待处理的安全边界，如实记录。
-
-**Commit**：`33901a2`（2026-07-16 22:30）
-
-#### P1.5：entrypoint 纯内部重构——消除重复代码
-
-Commit `ffb970c`（2026-07-16 22:34）。
-
-- 抽取共享库 `container/lib/env-inject.sh`（Node.js env 注入）+ `container/lib/path-resolve.sh`（路径/权限辅助）。
-- entrypoint.sh 减少 ~10 行，claude-wrapper 减少 ~12 行。
-- Dockerfile 新增 `COPY container/lib/ /usr/local/bin/lib/`。行为完全不变。
-
-**Commit**：`ffb970c`（2026-07-16 22:34）
-
----
-
-### P2 — 版本锁定、vendor 清单与 CI
-
-Commit `ff240ae`（2026-07-16 22:40）。
-
-#### P2.1：VERSION + config/versions.env
-- `VERSION`：`2.0.0-dev`。
-- `config/versions.env`：`AISC_VERSION`、`NODE_IMAGE=node:20-slim`、`NODE_IMAGE_DIGEST`（空 TODO）、`CLAUDE_CODE_VERSION=latest`、`MIHOMO_VERSION=v1.19.27`、`GEODATA_VERSION=latest`、`CC_SWITCH_VERSION=v5.9.0`、`USE_CN_MIRROR=1`、`GH_PROXY`（空）。Dockerfile ARG 与 versions.env 存在重复默认值（如 `USE_CN_MIRROR=1` 在两处各写一次），是已知技术债。
-
-#### P2.2：vendor/manifest.json + checksums.txt + licenses
-- `vendor/manifest.json`：7 组件——mihomo、geodata、caveman、claude-hud、claude-plugins-official、anthropic-agent-skills、gstack-skills，含版本/来源 URL/许可/文件列表。
-- `vendor/checksums.txt`：34 个 SHA256，全部验证通过。
-- `vendor/licenses/README.md`：第三方许可归档。
-
-#### P2.3：GitHub Actions CI
-- `checks.yml`（push + PR）：bash `-n`、Python `py_compile`、Node `--check`、JSON 校验、冒烟测试、gitleaks（**`continue-on-error: true`**，因此当时尚不是阻断门禁；`docs/` 整体 allowlist）。
-- `docker-smoke.yml`（PR + workflow_dispatch）：dry-run 构建，`timeout-minutes: 20`。
-- `.gitleaks.toml`：白名单 `container/_bundle/`、`docs/`、`vendor/`。
-
-#### 已知未固定项
-- `NODE_IMAGE_DIGEST` 空、`CLAUDE_CODE_VERSION=latest`、`GEODATA_VERSION=latest`——可复现构建尚不完全。
-
-**Commit**：`ff240ae`（2026-07-16 22:40）
-
----
-
-### P2.4 — vendor 刷新/校验工具 + 文档一致性检查
-
-Commit `a8ce21d`（2026-07-16 22:49）；漂移修复 `4820ec2`（2026-07-16 22:50）。
-
-- `tools/vendor-refresh.sh`：4 步——①检查 manifest 源目录是否存在 ②报告 `container/_bundle/`（手动维护）③验证 `container/downloads/` 与 manifest 一致 ④通过 `find + sha256sum` 重生成 `vendor/checksums.txt`。支持 `--dry-run`。
-- `tools/vendor-verify.sh`：SHA256 完整性校验，34/34 通过。
-- `tools/check-docs.sh`：324 行文档一致性检查。**首次运行 42 passed, 1 warning, 2 failures**（README provider 数 5→7、xf/orange 缺失），立即修复（`4820ec2`）。修复后 45/45；README 全重写后最终 **54/54**。
-
----
-
-### README 全面重写（commit `a87e5d9`，2026-07-16 23:00）
-
-修正 15 处事实错误：版本号 v1.5.1→2.0.0-dev、密钥路径 `.cc-config/`→`.aisc/secrets/`、provider 5→7、doctor 调用 `bash cli/commands/doctor.sh`（非 `start.sh doctor`）、构建命令（根 context + `container/Dockerfile`）、删除夸大陈述。
-
-新增：AI 简讯（`AI_BRIEF_ON_START`）、诊断工具、完整 Provider 表、Dockerfile ARG 表、版本固定状态、安全说明。
-
-372→342 行（-30 行）。验证：`check-docs.sh` 54/54/0；`check-syntax.sh` 69/69。
-
----
-
-### 两轮 Linux bind mount 权限修复
-
-#### 第一轮：mkdir/sudo fallback（commit `2b37133`，2026-07-16 23:12）
-
-**问题**：Linux bind mount 上 `mkdir -p` 可能因父目录属主为 root 而失败。
-
-**修复**：
-- `claude-switch` 新增 `_ensure_dir()`：plain `mkdir` 失败→`sudo mkdir` fallback。
-- `path-resolve.sh` 的 `ensure_writable()`：`mkdir -p` 失败→`sudo mkdir -p` fallback；`sudo chown` 失败从静默忽略改为返回非零；新增 `[ -w ]` 验证。当时仍使用 `sudo chown -R AISC:AISC`（递归）。
-- entrypoint.sh：用 `ensure_writable` 初始化 `.aisc/` + `.aisc/secrets/`。
-- 新增 `tests/shell/test-ensure-writable.sh`：6 个测试场景，8/8 断言全通过。
-
-**Commit**：`2b37133`（2026-07-16 23:12）
-
-#### 第二轮：真实 I/O probe + 禁止递归 chown/chmod + node 基础用户 UID/GID 1000 根因修复（commit `4dff7ae`，2026-07-17 00:22）
-
-**问题（第一轮未解决）**：
-1. `[ -w ]` 在 CIFS/NFS/只读 bind mount 上可能假阳性。
-2. `sudo chown -R` 递归修改挂载卷所有文件，不安全且可能破坏宿主机权限。
-3. **根因**：node:20-slim 基础镜像自带 uid/gid=1000 的 `node` 用户。旧 Dockerfile 的 `useradd -m AISC`（未指定 `-u`）自动分配到 uid=1001，与 bind mount 上 uid=1000 文件不匹配。
-
-**修复**：
-- **容器 UID 对齐**：`groupmod -n AISC node && usermod -l AISC -d /home/AISC -m -g AISC node`——将 base image 自带 node 用户（uid=1000, gid=1000）改名为 AISC，彻底消除 uid 漂移。
-- **真实 I/O probe**：`_probe_writable()` 用 create→write→rename→delete 验证可写性，不依赖 `[ -w ]`。模拟了 CIFS chmod 静默忽略（fake chmod no-op）场景，但未在真实 CIFS 设备上复现。
-- **禁止递归 chown/chmod**：改为非递归 `sudo chown $(id -u):$(id -g)` + `sudo chmod u+rwx`（仅目录自身，不加 `-R`）。
-- **entrypoint chmod 700 收紧** + `stat -c '%a'` 验证（CIFS 静默忽略检测）。
-- 测试更新：`tests/shell/test-ensure-writable.sh` 扩展到 9 个场景共 18 个断言，**18/18 全通过**。
-
-**验证**：
-- `tests/shell/test-ensure-writable.sh`：**18/18**；`tests/smoke/check-syntax.sh`：**69/69**；`tools/check-docs.sh`：**54/54**。
-- Docker build 成功；`id AISC` 确认 uid=1000/gid=1000。
-- 真实 bind mount（`-v /tmp/aisc-test:/home/AISC/app`）：entrypoint 正常（fresh + 重复挂载均通过），`cs show` 正常，项目/临时/全局作用域均正常。
-- 用户随后完成手动启动验证并确认通过。
-
----
-
-### P3.1 S1 — 统一 CLI 协议契约、Python stdlib 运行时决策与特征测试 harness
-
-P3 计划 commit `c706a68`（2026-07-17 01:03）已提交到仓库。本节记录 **P3.1 第一阶段（S1）**，聚焦协议设计、技术决策与测试基础设施搭建。**本阶段不修改业务逻辑、不实现 Python CLI、不切换默认入口。后续 S2–S8 将在此基础上逐步实现 CLI 命令。**
-
-#### RFC：AISC CLI v1 机器消费协议（`docs/rfc/aisc-cli-v1.md`，状态：draft）
-
-新增 `docs/rfc/aisc-cli-v1.md`（366 行），定义 `aisc.cli/v1` 协议 schema 与语义。**当前为 S1 草案（draft），是冻结候选合同而非已实现接口**——协议细节在 S9 稳定化前可能发生兼容性变更。主要约定：
-
-- **输出格式三选一**：`--format text`（默认，人类可读，stdout）、`--format json`（JSON envelope，stdout 单条完整 JSON）、`--events`（JSONL 事件流，stdout 每行一个 JSON）。`--format json` 与 `--events` 互斥。
-- **stdout/stderr 严格隔离**：结构化数据只走 stdout；日志、诊断、错误描述只走 stderr。消费者可独立捕获。
-- **退出码体系**：固定语义退出码 `AISC_EXIT_OK(0)` / `AISC_EXIT_USAGE(1)` / `AISC_EXIT_ERR(2)` / `AISC_EXIT_CANCEL(130)`，禁止 shell 惯用 `1` 的模糊语义。
-- **错误输出规范**：`--format json/jsonl` 下错误对象含 `code`（字符串枚举）和 `message`（单行一句话），面向机器消费。
-- **non-interactive 保证**：`--format json` 或 `--events` 时 CLI 不得启动任何交互式提示、分页器或 TUI。
-- **交互确认/极简 redaction**：定义确认方式（`--yes` flag/`AISC_YES=1` 环境变量）与密钥参数 redaction 约束。
-
-#### ADR：Python stdlib CLI 运行时决策（`docs/adr/001-python-stdlib-cli.md`，状态：已接受）
-
-新增 `docs/adr/001-python-stdlib-cli.md`（192 行），记录 P3 统一 CLI 的技术选型决策：
-
-- **选择 Python 3.11+ stdlib core**（不引入 click/typer/rich 等第三方依赖）：零 `pip install`，跨平台（Linux/macOS/Windows）一致行为。
-- **分发策略**：未来通过 PyInstaller 打包为独立单文件可执行制品（standalone），无需用户安装 Python；同时保持 `python3 -m aisc` 兼容 bundle 模式用于开发/CI/高级用户。
-- **GUI / daemon 明确不在当前范围**：ADR 明确定义 CLI 边界——no GUI endpoint、no background daemon/server process。远程 daemon 在远期规划但非实施目标。
-
-#### stdlib unittest harness（`tests/harness/`）
-
-新增纯 stdlib 测试 harness（零第三方依赖，设计供 S2+ 测试复用）：
-
-- **`tests/harness/test_runner.py`**（460 行）：`RunResult` dataclass（stdout/stderr/exit_code/timed_out）+ `CliRunner`（subprocess 包装，支持 cwd/timeout/env 注入）。内置协议断言函数：
-  - `assert_json_envelope()`：严格校验 `--format json` 的纯 JSON stdout——要求 `meta.protocol=="aisc.cli/v1"`，并检查 `meta.command/exit_code/timestamp/version/run_id`、`data` 与 `errors`；协议退出码必须与进程退出码一致。
-  - `assert_jsonl_protocol()`：严格校验 `--events` JSONL 流——每条 JSON 对象含 7 个必填字段（`protocol`/`command`/`run_id`/`seq`/`type`/`ts`/`data`），`seq` 从 1 起严格单调递增+1，恰好一条终端事件（`.complete`/`.failed`/`.cancelled`）作为最后一行，`data.exit_code` 为 int。
-- **`tests/harness/test_harness_self.py`**（harness 自检）：`assert_json_envelope` 接收非法/缺失字段/output-not-JSON 时正确 `AssertionError`；超时子进程被 `CliRunner` 正确捕获为 `timed_out=True`。
-
-#### legacy characterization tests（`tests/features/`）
-
-为现有 shell 脚本建立静态契约特征测试——**只验证现有行为不修改逻辑，fake Docker 无真实 Docker/网络，不污染真实 `.aisc/`/`.deploy/` 状态**：
-
-- **`tests/features/helpers.py`**：`TempProject` 隔离辅助对象——在临时目录创建 `scripts/` 副本，由测试 teardown 清理；fake Docker 使用可逆的结构化 trace 保留每个 argv 的边界。
-- **`tests/features/test__state.py`**：测试 `scripts/_state.sh` 的 init/set/get、primary-priority（`.aisc/`）与 legacy-fallback（`.deploy/`）路径、双写（`.aisc/state.env` + `.deploy/state.env`）行为。
-- **`tests/features/test_start.py`**：冻结 `start.sh` 的未知参数、缺失 `--workspace` 值和不存在 workspace 等错误路径。
-- **`tests/features/test_03_build_image.py`**：通过 fake Docker 冻结根 build context、`container/Dockerfile`、镜像 tag、关键 build args 与 `DO_RUN=0` 行为，并校验 argv 边界。
-- **`tests/features/test_04_launcher.py`**：通过 fake Docker 冻结 `DO_RUN=0`、workspace 校验、基本/代理模式 run argv、Docker 退出码透传；额外验证含空格 workspace 的 bind mount 仍是单个 argv。
-- **`tests/features/test_contracts.py`**：静态 repo 契约——`container/providers.json` 结构校验（`schema_version`/`providers` 非空/每个 provider 含必填键 `id`/`name`/`auth_type`/`auth_key_name`/`base_url`/`model`）+ `config/versions.env` 键存在性检查。
-
-#### CI 集成
-
-- **`.github/workflows/checks.yml`** 新增 step：`python3 -m unittest discover -s tests -p 'test_*.py' -v`（push + PR），位于 bash `-n` / Python `py_compile` / Node `--check` / JSON 校验之后。
-
-#### 验证状态
-
-- `python3 -m unittest discover -s tests -p 'test_*.py' -v`：**100/100 通过**。
-- `tests/smoke/check-syntax.sh`：**69/69 通过**；`tools/check-docs.sh`：**54/54 通过**；`git diff --check`：通过。
-- 特征测试使用临时目录与 fake Docker，不调用真实 Docker/网络，也不修改真实 `.aisc/` 或 `.deploy/` 状态。
-
----
-
-### P3.1 S2 — 最小 Python CLI 纵向切片（`version` + `doctor`）
-
-本节随 S2 实现于 2026-07-17 一并提交。
-
-S2 在 S1 的协议契约与测试 harness 基础上，实现了最小可运行的 Python CLI，包含 `version` 和 `doctor` 两个只读命令。**当前不切换默认入口——用户仍然通过 `start.sh` / `start.bat` / `start.command` 使用项目。**
-
-#### 新增文件结构
-
-```
-src/aisc/__init__.py          # package, __version__ = "2.0.0-dev"
-src/aisc/__main__.py          # python -m aisc 支持
-src/aisc/domain/models.py     # VersionInfo, CheckResult, DoctorReport, CliError, ProcessResult
-src/aisc/domain/__init__.py
-src/aisc/application/resources.py  # locate_aisc_root (4 级优先级)
-src/aisc/application/version.py    # gather_version_info, VERSION/versions.env 解析
-src/aisc/application/doctor.py     # 8 项 host doctor 检查 + 退出码优先级
-src/aisc/application/__init__.py
-src/aisc/adapters/system.py        # ProcessRunner Protocol + RealProcessRunner
-src/aisc/adapters/__init__.py
-src/aisc/cli/main.py               # argparse, 命令分发, JSON envelope 输出
-src/aisc/cli/output.py             # build_envelope, print_doctor_text
-src/aisc/cli/__init__.py
-pyproject.toml                     # setuptools src-layout, Python >=3.11
-tests/unit/test_resources.py       # locate_aisc_root 优先级/错误处理
-tests/unit/test_version.py         # VERSION 解析, versions.env inline comment
-tests/unit/test_doctor.py          # fake process/discovery 组合测试
-tests/integration/test_cli.py      # subprocess 集成: version/doctor text+json
-```
-
-#### 关键设计决策
-
-- **零运行时依赖**：stdlib-only。dev optional dependencies 声明 pytest/PyInstaller 但不用于运行时。
-- **资源定位 4 级优先级**：explicit `--aisc-root` → env `AISC_ROOT` → frozen `aisc-bundle/` → cwd 向上 repo 发现。每级严格验证（需 VERSION + container/Dockerfile + config/versions.env）。显式/env 无效 → 受控 OSError 不回退。Frozen bundle 缺失可继续，存在但损坏 → 受控报错。开发源码模式不从 `sys.executable` 寻找 bundle。
-- **版本解析**：`VERSION` 读取根文件第一行；`CLAUDE_CODE_VERSION` 从 `config/versions.env` 解析，去除 inline comment 保留 `latest`。无 root 时字段为 `None`。CLI 版本来自 package `__version__` 不依赖文件。`VERSION` 文件内容与 `__version__` 一致（均为 `2.0.0-dev`）。
-- **Doctor 8 项检查**：docker-cli / docker-daemon / docker-permission / docker-buildx / tun-device / aisc-root / root-files / git。Docker CLI 缺失时 daemon/permission/buildx 自动 skip（不产生重复 fail）。Warning 不导致失败。退出码优先级：Docker 不可用 → exit 3 (AISC_ERR_DOCKER_UNAVAILABLE)；仅权限 → exit 9 (AISC_ERR_PERMISSION_DENIED)；显式 root 无效或其他失败 → exit 1 (AISC_ERR_GENERAL)。
-- **JSON envelope**：完全符合 RFC `aisc.cli/v1` §2——meta (protocol/command/exit_code/timestamp/version/run_id) + data + errors。UTC Z 时间，UUID v4，meta.exit_code 与进程退出码一致。`version` data 固定包含 6 个键：cli/bundle/contract/image/claude/python version，未知值为 `null`。`doctor` data：host:{checks:[],summary:{}} + container:null。
-- **`--format json` 下 usage error**：stdout 输出严格 JSON envelope（exit 2, AISC_ERR_USAGE），stderr 保持为空。text 模式保持普通 usage 到 stderr。
-- **`--format` 全局参数**：可放在子命令前或后（如 `aisc --format json version` 和 `aisc version --format json` 均有效）。`--events` 不实现（usage error）。
-
-#### CI 集成
-
-- `.github/workflows/checks.yml` 将 unittest step 更新为 `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v`。
-- CI 在 unittest 后运行 `bash tests/smoke/packaging_smoke.sh`，验证 wheel 构建、临时 venv 安装、console script 与 `python -m aisc` 两种入口。
-
-#### 验证状态
-
-- `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v`：**233/233 通过**（S1 现有 100 + S2 新增 133）。
-- `PYTHONPATH=src python3 -m aisc version` / `version --format json` / `--format json version` / `--format=json version`：通过。
-- `PYTHONPATH=src python3 -m aisc doctor --format json`：合法 envelope（exit 0/3/9 依据环境）。
-- `bash tests/smoke/packaging_smoke.sh`：**通过**（wheel build + temp venv install + 两入口验证 + PEP440 版本规范化）。
-- `bash tests/smoke/check-syntax.sh`：**69/69 通过**。
-- `tools/check-docs.sh`：**54/54 通过**。
-- `git diff --check`：通过。
-
-#### 剩余限制
-
-- `build/run/config/profile/provider` 命令尚未实现（S3–S8）。
-- `--events` JSONL 流尚未实现。
-- 无 PyInstaller 打包（S4）。
-- 不修改 legacy `start.*`、`scripts/**`、`cli/commands/doctor.sh`、container 业务逻辑。
-
-#### Oracle 审查修复（S2 第二轮）
-
-**Build system**：
-- Backend 修正为 `setuptools.build_meta`（修复误用的 `_legacy:_Backend`）。
-- 新增 `tests/smoke/packaging_smoke.sh`：wheel 构建 + 临时 venv 安装 + 不设 PYTHONPATH 验证 `aisc version --format json` 和 `python -m aisc version --format json` + PEP440 规范化检查。
-
-**CLI/argparse**：
-- `allow_abbrev=False` 全局启用，`--form` 被拒绝（exit 2）。
-- `--format=json` 格式（`=` 形式）完全支持，与 `--format json` 等价。
-- 重复 `--format` 采用 last-wins 规则（通过原始 argv 扫描决定）。
-- 畸形子命令参数时 `meta.command` 保留已识别的命令名（如 `version --bogus` → meta.command="version"）。
-- 冲突重复 format 严格 JSON stdout 纯净 + 测试断言。
-
-**资源定位**：
-- `is_frozen` 和 `executable_path` 支持函数参数注入；生产默认值按调用时惰性读取 `sys.frozen` / `sys.executable`，核心 bundle 解析 helper 保持纯参数化。
-- 按 ADR：frozen adjacent bundle 不存在时继续 cwd repo discovery，存在但损坏立即 `_RootSourceError` 失败。
-- 错误来源区分（`_RootSourceError.source`）：`--aisc-root` / `AISC_ROOT` / `frozen-bundle`，消息不再混淆。
-
-**Doctor 命令发现**：
-- `which` 参数注入，解析 docker/git 路径一次然后所有调用复用。
-- 所有 docker 子命令使用相同的解析路径（`docker_path` 参数传递）。
-- Docker/Git 超时常量：`DOCKER_TIMEOUT=8s`，`GIT_TIMEOUT=5s`；timeout → FAIL/WARN。
-- `RealProcessRunner`：`encoding='utf-8'`、`errors='replace'`、通用 `OSError` 捕获。
-- Docker hints 改为跨平台中性措辞。
-- TUN 检查使用 `Path.stat()` + `stat.S_ISCHR` 验证字符设备；`OSError` → WARN。
-
-**Version JSON**：
-- 始终输出 6 个固定键（`cli_version`, `bundle_version`, `contract_version`, `image_version`, `claude_version`, `python_version`），未知为 `null`。
-- `root` 字段从稳定 data 中移除（不输出在 JSON payload 中）。
-- 文本输出不再重复 gather（复用 `VersionInfo` 对象）。
-
-**测试**：
-- 第二轮新增 26 个测试（S2 合计新增 133 个）：覆盖 Docker CLI 缺失时后续 docker 子命令零调用（`which` 返回 `None`）、`--format=json`、重复 format 的 last-wins、缩写拒绝、畸形子命令 command 保留、固定 6 键 JSON，以及 frozen 生产默认值与注入路径。
-- 所有 unit 测试使用注入参数，不依赖全局状态。
-
----
-
-### P3.1 S3 — Docker planner/executor：`aisc build` + `aisc run`（legacy-compatible）
-
-**变更**：
-
-- **`aisc build`**：Docker 镜像构建命令（legacy-compatible）
-  - `--tag/-t`（默认 `super-claude:latest`）、`--no-cache`、`--pull`、`--dry-run`
-  - 从 `config/versions.env` 读取 `NODE_IMAGE` 和 `USE_CN_MIRROR` 作为 `--build-arg`
-  - `NODE_IMAGE` 缺失 → exit 1（`AISC_ERR_GENERAL`）；Dockerfile 缺失 → exit 4
-  - dry-run：本地验证/规划，不调用 docker；输出完整 `docker build` argv
-  - JSON envelope data：`image_tag`, `dry_run`, `executed`, `docker_argv`, `docker_exit_code`(nullable)
-
-- **`aisc run`**：Docker 容器运行命令（legacy-compatible，不加 contract 检查）
-  - `--image/-i`（默认 `super-claude:latest`）、`--workspace`（默认 cwd）、`--name`（默认 `super-claude-station-<短唯一值>`）、`--network direct|proxy`（默认 `direct`）、`--dry-run`
-  - proxy 模式追加 `--cap-add=NET_ADMIN --device /dev/net/tun`
-  - workspace 不存在/不可读 → exit 9（`AISC_EXIT_PERMISSION_DENIED`）
-  - 执行前检查镜像是否存在（`docker image inspect`）；不存在 → exit 5（`AISC_EXIT_IMAGE_NOT_FOUND`）
-  - JSON envelope data：`image`, `container_id`(nullable), `dry_run`, `executed`, `docker_argv`, `container_exit_code`(nullable)
-
-- **Docker preflight**：通过 `shutil.which` 找 docker；CLI/daemon 不可用 → exit 3（`AISC_ERR_DOCKER_UNAVAILABLE`），区分 `cli_not_found`/`daemon_unreachable`；`docker info` permission denied → exit 9（`AISC_ERR_PERMISSION_DENIED`）；dry-run 不做任何 preflight
-
-- **退出码映射**：docker build 非零 → exit 4（`AISC_EXIT_BUILD_FAILED`），data 保留 `docker_exit_code` 原码；docker run 非零 → exit 10（`AISC_EXIT_CONTAINER_FAILED`），data 保留 `container_exit_code` 原码；不透明透传容器原码
-
-- **`--events` JSONL**：完整实现（不再是 S2 stub）
-  - 小中型 `JsonlEmitter`（`output.py`），`seq` 从 1 起严格 +1，唯一 terminal 为最后一行
-  - Build 事件：`build.start`, `build.plan`, `build.complete`/`build.failed`
-  - Run 事件：`run.start`, `run.plan`, `run.container.start`, `run.container.complete`, `run.complete`/`run.failed`
-  - dry-run 不发 container start/complete
-  - terminal `data.exit_code` 与进程退出码一致
-  - Docker 原始日志仅走 stderr（JSON/events 模式 stdout 纯 envelope/JSONL）
-
-- **`--format json` 与 `--events` 互斥** → exit 2（usage error）
-
-- **全局参数支持命令前后**：`--format`、`--no-color`、`--aisc-root`、`--events` 均可放在子命令之前或之后
-
-- **`docker run` argv 以 list 形式构造**（不经 shell），路径含空格/中文保持为单 argv token
-
-- **domain 模型**：新增 `BuildPlan`、`RunPlan`（immutable dataclasses）、`DockerPreflightResult`
-
-- **adapter**：新增 `src/aisc/adapters/docker_.py`（docker CLI wrapper：preflight、image inspect、build/run 执行器、FakeDockerExecutor 供测试注入）
-
-**取舍**：
-- run 命令 `capture_output` 不适合交互使用：text 模式保持 `-it` 自然继承 stdin/stdout/stderr；JSON/events 模式使用 capture_output 转发 Docker stdout/stderr 到 stderr
-- proxy config 缺失验证：在 dry-run 和实际执行前都验证 `.claude/mihomo/config.yaml` 存在性，缺失时报错（非静默挂载目录）
-- 暂不实现 profile/provider/config/non-interactive/contract labels/secret——这些属于 P3.2 范围
-- 不修改 `start.*` 或 `scripts/`；P3.1 默认入口仍是旧 `start.sh`
-
-**验证**：
-- 336 单元+集成测试通过（新增 103 个 S3 测试：unit 覆盖 executor 注入、FakeDockerExecutor 零调用、dry-run 零 Docker、structured failure data、ImageInspectResult 分类、exit 映射、terminal 非命令层；integration 覆盖 CLI subprocess text/json/events）
-- 真实 Docker 验证：preflight（daemon v29.6.1 available）、image inspect（alpine:latest EXISTS / nonexistent MISSING）、structured run alpine:latest（non-interactive, exit 0）、dry-run 零 docker 调用
-- `packaging_smoke.sh` 通过
-- `check-syntax.sh`：69/69 通过
-- `check-docs.sh`：54/54 通过
-- `git diff --check` clean
-
-**Oracle 审查修复（第二轮）**：
-- 所有 Docker 操作统一经 `DockerExecutor` 协议注入（preflight / inspect_image / run_captured / run_streaming）；application/commands 内零 `subprocess.run`
-- terminal 所有权归 main.py（命令层不再发 terminal）；JsonlEmitter.terminated property
-- CliError 扩展 `data` 字段承载完整结构化结果（JSON failure 非 null）
-- ImageInspectResult 结构化分类（exists/missing/docker_unavailable/permission_denied/timeout/error）
-- RunPlan 新增 `interactive`（text → -it/streaming, json/events → 无 -it/captured）和 `proxy_config`（固定 `<root>/.claude/mihomo/config.yaml`）
-- 文本 dry-run 使用 `shlex.join` 跨平台格式化
-- 资源错误（Dockerfile/versions.env/NODE_IMAGE）→ exit 1；仅实际 docker build 非零 → exit 4
-- 测试真实性：FakeDockerExecutor 直接注入全覆盖，dry-run 断言零 Docker 调用
-- `check-syntax.sh`：69/69 通过
-- `check-docs.sh`：54/54 通过
-- `git diff --check` clean
-
-**未覆盖**：真实 large production image build+run（耗时过大，非 P3.1 验收范围）；SIGINT/SIGTERM 130/143 自然处理但无系统的信号框架测试；交互式 tty 测试在 CI 非 tty 环境不可执行
-
----
-
-### P3.1 S4 — Artifact 组装与 smoke（workflow artifact）
-
-**变更**：
-
-- **LICENSE**：新建根 `LICENSE`（标准 MIT 文本），Copyright (c) 2026 AISC contributors。`pyproject.toml` 已声明 MIT。
-- **`packaging/pyinstaller/entrypoint.py`**：PyInstaller 入口，调用 `aisc.cli.main:main`。onefile 的唯一入口。
-- **`packaging/artifact.py`**：跨平台 stdlib-only 打包脚本，支持 `stage`/`archive`/`verify`/`build-onefile`/`aggregate` 子命令。
-  - `stage`：组装干净 `aisc-bundle/`，含 manifest.json、VERSION、README.md、LICENSE、.dockerignore、config/versions.env、完整 `container/**`、受控 `apps/ai-brief/**`（排除 __pycache__/pyc/cache）、`vendor/manifest.json`、`vendor/checksums.txt`、`vendor/licenses/**`。不含 src/tests/docs/packaging/tools/scripts/cli/start.*/.git/.github 或任何 state/secrets/cache。
-  - `verify`：静态完整性校验——检查必需路径、manifest 合规（schema_version=1, compatible_cli_versions allowlist）、解析 container/Dockerfile COPY 源并验证、vendor checksums 验证、拒绝秘密/状态/cache/pyc。manifest missing/malformed/unknown field/type/schema/incompatible → 非零退出。
-  - `archive`：创建确定性 tar.gz（Linux/macOS）或 zip（Windows），单版本化顶层目录 `AISC-<version>-<platform>-<arch>/`，内部 `aisc`(Windows `aisc.exe`) + 同级 `aisc-bundle/`。tar 规范化 uid/gid 0/0、mtime 0；zip 固定合法时间、清除 extra fields。
-  - `build-onefile`：使用 PyInstaller 构建 onefile 可执行文件。onedir 仅 CI smoke，不入 archive。
-  - 稳定文件排序、相对路径、SHA256 sidecar。
-- **archive 命名**：`AISC-<version>-linux-x86_64.tar.gz`, `AISC-<version>-macos-arm64.tar.gz`, `AISC-<version>-windows-x86_64.zip`。
-- **manifest 契约**：`{"schema_version":1,"compatible_cli_versions":["<current __version__>"]}`；UTF-8 LF、2 spaces、末尾换行、allowlist 排序去重。无 timestamps/platform/arch/checksums/重复版本。
-- **版本 guard**：repo VERSION、`aisc.__version__`、staged VERSION、manifest allowlist、final executable `version --format json` 的 `cli_version` 一致性检查。
-- **`.github/workflows/artifact.yml`**：三平台 matrix CI（ubuntu-22.04/linux-x86_64, windows-2022/windows-x86_64, macos-14/macos-arm64），Python 3.12 + PyInstaller 6.21.0。先 onedir 冒烟，再 onefile + stage/archive/verify → 上传 matrix artifact → aggregate job 下载三者生成/验证 SHA256SUMS → 上传完整 workflow artifact。触发 main/develop push、面向 main 的 PR 及手动运行。**不公开发布**。
-- **`tests/packaging/test_*.py`**：stdlib unittest 覆盖 staging 创建、manifest 合规正整数/负例、archive 创建/验证、版本 guard 一致性、vendor checksums 验证、排除 __pycache__ 和 forbidden 内容。
-- **README 更新**：说明内部开发预览 CI workflow artifact，明确无公开下载、未切换入口。
-- **docs/devlog.md 更新**：记录 S4 范围与产出，明确未发布/未切入口。PLAN S4 的 manifest/资源布局矛盾已校正（bundle manifest schema_version=1 而非 2，仅 compatible_cli_versions 字段）。
-
-**取舍**：
-- **onefile 为唯一二进制**：onedir 仅 CI smoke，不入 archive、不上传。
-- **不做 Release/上传外部渠道**：产物仅为 workflow artifact（CI 内部），保留 7 天。
-- **不修改 start.sh/start.bat/start.command**、scripts/、container runtime、secrets/provider/security、runtime resource locator、exit codes、GUI。
-- **gitleaks continue-on-error 不变**：S4 不扩大安全切片范围。
-- **PyInstaller 中间产物在 temp 目录**：不污染 repo。
-- **不需要 PyInstaller hooks/spec**：CLI 参数足够，entrypoint.py 薄封装。
-
-**验证**：
-- `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v`：**462 通过**（S3 350 + S4 包装 112）。
-- `bash tests/smoke/packaging_smoke.sh`：通过。
-- `bash tests/smoke/check-syntax.sh`：69/69 通过。
-- packaging unit tests（112 tests）：覆盖 tar determinism、gzip mtime=0、execute mode、zip POSIX paths/compression/mode、production version guard、cache/secret exclusion、container/_bundle/plugins/cache allowlist、vendor checksums strict、Dockerfile COPY strict、archive verification checkout-independent、安全提取攻击面、aggregate（3-archive verify + SHA256SUMS）、ci_smoke importlib loading、archive-dir validation、expected version mismatch。全部通过。
-- 本地 Linux staging 验证：`python packaging/artifact.py stage --output /tmp/s` → 200+ 文件，manifest conformant，vendor checksums pass，zero forbidden (no src/tests/docs/.git/pyc/pycache/start.*)。
-- 本地 Linux archive 验证：tar.gz with correct layout (`AISC-2.0.0-dev-linux-x86_64/aisc` + `aisc-bundle/`), gzip mtime=0, exe mode 0755, SHA256 sidecar, two consecutive builds produce identical SHA256。
-- `git diff --check` clean。
-- 审计 `start.*`、`scripts/`、container runtime 未修改。
-
-**Oracle 审查修复 (S4 第二轮)**：
-- tar.gz: gzip.GzipFile(mtime=0) 包装 uncompressed tar；exe 0755, .sh/claude-switch/claude-wrapper 0755, regular 0644；连续两次相同输入 SHA256 相同。
-- zip: PosixPath(.as_posix()), create_system=3, 压缩 ZIP_DEFLATED+compresslevel=6, 固定日期、mode, 无反斜杠。
-- 版本 guard: stage 前 assert VERSION == get_package_version(root)，不硬编码版本号。
-- 消除 onefile 双重构建: archive 接受 `--executable PATH` + `--staging DIR`，不再内部 build_onefile。
-- verify: `--bundle PATH` 直接验证 staged bundle；archive verifier checkout-independent，从 archive 顶层名+bundle VERSION/manifest 验证，安全解压拒绝 absolute/`..`。
-- cache/secret 排除：apps/ai-brief/cache, .pytest_cache, .mypy_cache, .ruff_cache, coverage 排除；container/_bundle/plugins/cache allowlist 保留；nested .env/.git-credentials/api-keys 排除。
-- vendor checksums: 每行必须 64hex+SP+相对路径，拒绝 absolute/`..`/escape，malformed 报错不 skip。
-- Docker COPY: 仅 shell form，JSON/`--from` 直接 fail；对真实 Dockerfile 所有 COPY 源建立测试。
-- ARCH_TAG: platform.machine().lower() 映射，未知架构明确失败。
-- build_onefile: try/finally cleanup，不 pip install -e . 修改环境，加 `--paths src`。
-
-**跨平台限制**：
-- **仅 Linux x86_64 通过真实 PyInstaller/archive/smoke 验证**。Windows x86_64 / macOS arm64 CI workflow 已配置，待首次 matrix runner 验证。
-- 代码逻辑跨平台（tarfile/zipfile stdlib, PosixPath），安全提取已统一在 artifact.py 公开 helper（validate_tar_members/validate_zip_members/safe_extract_archive），ci_smoke通过 importlib 调用。
-- 版本 guard 的 PEP440 规范化（`2.0.0-dev` → `2.0.0.dev0`）在 wheel metadata 发生；frozen executable 的 `cli_version` 保持产品字符串 `2.0.0-dev`。CI smoke 验证此一致性。
-- `container/Dockerfile` COPY 源解析为 shell-form 简易扫描（JSON/--from 直接 fail），覆盖当前仓库全部 COPY 语句。
-
----
-
-### P3.2 S5.1 — 配置/密钥发现与 schema（只读模型，ora-6 终审）
-
-**范围**：纯模型、解析器、只读 discovery。无 CLI、secure store、migration、write。
-
-**关闭的阻塞项**：
-
-- **A1 value 原样**：`parse_api_keys` 仅对空行/comment 使用独立 view；value 从首个 `=` 后取原 bytes。
-
-- **A2 auth_type 字段匹配**：`parse_settings` 单字段按 provider auth_type 匹配；错字段→UNMAPPED 零 OK。
-
-- **A3 跨 source 冲突传递**：`classify_credentials` 任一 CONFLICT→全组 CONFLICT；intra-source dup-diff 共享 provider_id。
-
-- **A4 canonical_url**：仅操作 `parsed.path` trailing slash，再 `urlunparse`。
-
-- **A5 state 分模型**：`StateEntry` repr/to_summary 不泄漏 value；`StateIssue` 仅 source/line/reason_code。
-
-- **A6 CredentialCandidate repr 受控**：内部字段 `__post_init__` 设置，asdict 不可见。
-
-- **A7 CredentialValue 收紧**：`_reveal_for_io()`；`same_value()` hmac.compare_digest；`__reduce_ex__`+`__deepcopy__` 拒绝 pickle/允许 deepcopy。
-
-- **B8 PathPolicy 根校验**：构造时拒绝空/相对；root symlink lstat 拒绝。
-
-- **B9 移除 reader callback**：`discover_sources` 固定 `_safe_read`。
-
-- **B10 延期**：parent race / Windows reparse→S5.3。
-
-- **B11 生产 loader**：`load_provider_catalog` 逐字段存在性+类型校验，错误不回显输入值。
-
-- **ora-6 终审 blocker 1**：`merge_state` 同源 duplicate→last-one-wins（`effective[e.key]=e` 替代 `setdefault`）；新增 deploy-only/aisc-only/双源 duplicate+shadowed+input 无副作用测试。
-
-- **ora-6 终审 blocker 2**：`load_provider_catalog` strict required fields（`id`/`name`/`auth_type`/`auth_key_name`/`base_url` 全部显式存在+类型校验）；name 非空；base_url 允许空但字段必须存在；id 必须等于 catalog key。新增缺失字段、类型错误、id/key mismatch、sentinel 扫描测试。
-
-**延期到 S5.3**：逐 component openat、Windows DACL/reparse、平台路径 resolver。
-
-**验证**：579 tests pass (117 config-specific)。
-
----
-
-### P3.2 S5.2 — `aisc config validate` 与 `aisc config effective`（ora-7 最终修复）
-
-- `src/aisc/adapters/windows_config_reader.py`：`import ctypes.wintypes as _wt`（not `_ct.wintypes`）。自定义 `_FILETIME` + `_BY_HANDLE_FILE_INFO`（52 bytes, exact field offsets: dwFileAttributes0, ftCreationTime4, ftLastAccessTime12, ftLastWriteTime20, dwVolumeSerialNumber28, nFileSizeHigh32, nFileSizeLow36, nNumberOfLinks40, nFileIndexHigh44, nFileIndexLow48）。`_raise_win_error` 统一映射（ACCESS_DENIED/SHARING_VIOLATION→PermissionError, missing→FileNotFoundError, other→OSError），覆盖 CreateFileW/ReadFile/GetFileInformationByHandle/GetFileType/CloseHandle；修正 WinAPI `FILE_TYPE_DISK=0x0001`。
-- ABI tests：sizeof 52、field order、exact offsets、FILETIME 8 bytes、AST proof no wintypes.BY_HANDLE_FILE_INFORMATION import，以及独立的 WinAPI file-type literal 与非磁盘拒绝断言。
-- Service mapping tests（2 tests）：`config_service.safe_read_config_bytes` patch → PermissionError→exit9/permission_denied, OSError→exit1/error。
-- 其他：explicit config 在任何 workspace early return 前 lexical `abspath`，确保两条 source 身份固定；`.aisc` missing semantics、EIO/ENAMETOOLONG，以及 7 个 skipUnless(nt) real Windows tests。
-
-**验证**（256 config-specific，718 total，7 skipped，`-W error::ResourceWarning` clean，连续两次通过）。真实 Windows runner 未执行。Parent race / full handle-relative traversal / DACL→S5.3。
-
----
-
-### 用户感知增强：`aisc doctor` 只读检查扩展（2026-07-17）
-
-本节记录在现有 S2 doctor 8 项检查基础上的只读增强，**不包含网络探测、bind mount UID 检测或自动修复**。
-
-**新增检查项**：
-- **Docker Compose**：执行 `docker compose version`，缺失仅 WARN（提示安装），不影响成功退出码。
-- **项目根目录可写性**：`os.access(root, os.W_OK)` 预检——不创建探针文件，不是写入保证，仅通用可写性预判。
-- **Linux/macOS 启动器可执行位**：`os.access(start.sh, os.X_OK)`，macOS 额外检查 `start.command`。不可执行→WARN（提示 `chmod +x`）。
-- **`apps/ai-brief/brief.py` 语法检查**：使用内置 `compile(source, path, "exec")` 仅编译不执行、不生成 `.pyc`。失败→WARN。
-
-**验证**：
-- `PYTHONPATH=src python3 -W error::ResourceWarning -m unittest tests.unit.test_doctor tests.unit.test_secret_store`：**139 OK, skipped=8**。
-- `PYTHONPATH=src python3 -m unittest discover -s tests/unit -p 'test_*.py'`：**515 OK, skipped=15**。
-- `PYTHONPATH=src python3 -m aisc doctor --format json`：exit 0；**11 pass, 3 warn, 0 fail, 0 skip**。warn 为 buildx 缺失、Compose 缺失、start.sh 不可执行，均有提示。
-- `py_compile` 通过；`git diff --check` 通过；`tools/check-docs.sh`：**54/54** 通过。
-
----
-
-### S5.3 状态更新 — 实验性、未提交、核心 Windows 实机硬 gate 已通过
-
-- S5.3 adapter（`src/aisc/adapters/secret_store.py`）、配套测试、`tests/manual/verify_s5_3_windows.py` 及 `docs/testing/S5.3-windows-secure-store.md` 手测指南**仅存在于未提交工作区**。
-- Linux/POSIX mode/owner 真实 `os.stat` 落盘证据通过；Windows ABI 静态测试（struct sizes/field offsets/SID/DACL 常量）通过；fake backend 测试通过；Linux 侧 symlink/reparse/非 regular 拒绝通过。
-- **Windows 核心实机硬 gate 已通过**（2026-07-17，Windows 11 Pro 10.0.26200，Python 3.12.10，commit a43a034）：verifier JSON overall PASS；DACL protected=true；目录与文件 exactly 2 ACE（current user + SYSTEM Full Control 0x001f01ff）；junction 拒绝通过；篡改增加第 3 ACE 后 fail closed；恢复后 PASS。4 个 TestWindowsReal 全部 passed。证据包 `/mnt/windows/Temp/aisc-s5.3-evidence-20260717-215512.zip`。
-- **注意**：证据快照的 focused unittest（Ran 69, FAILED failures=10 errors=14 skipped=1）和 full unittest（Ran 808, FAILED failures=54 errors=36 skipped=17）包含大量非 S5.3 相关失败，主要源于 POSIX-only 测试误在 Windows 执行及仓库跨平台兼容性问题。**不声称“Windows focused/full unittest 全绿”或笼统“PASSED”**。S5.3 核心验证独立于全套 unittest 通过。
-- **仍不接入默认 CLI/迁移流程**；**不宣称生产安全**。所有 7 个 findings 已在当前 Linux 工作区修复（`O_NOFOLLOW` guard、POSIX class skip、SYSTEM SID no padding、posixpath/ntpath、memmove bytes、msvcrt.open_osfhandle、verifier S-1-5-18 匹配），`tests.unit.test_secret_store` Ran 72 OK skipped=8，三个文件 py_compile clean。建议提交前/发布前 Windows 回归。
-- **用户决定**：当前验证阶段暂缓该安全深度工作。
-
----
-
-### PLAN-v2 §5.2 第一切片 — 只读/兼容 UX 前移（2026-07-17）
-
-本节记录从 P3.2 S5–S8 计划中前移的四项只读或兼容别名 UX，**不改变 S5.4/S6/S7/S8 验收边界**。所有实现已独立验证（聚焦 236 tests OK，全量 unit 521 OK/15 skipped，`git diff --check` clean），未 commit。
-
-| 项 | 类型 | 内容 |
-|----|------|------|
-| `aisc config show` | 兼容别名 | `config effective` 严格兼容别名，共用 handler；相同脱敏、text/JSON、错误与退出码；`--events`→exit 2 |
-| `aisc provider list` | 只读前移 | 只读 canonical `<aisc-root>/container/providers.json`，使用现有 root locator + strict catalog loader；text 显示 id/name/auth type；JSON 含真实 schema_version/provider 数组；不读用户配置/secret、不写文件、无硬编码 fallback |
-| `aisc run --non-interactive` | 传输层第一阶段 | host/transport 第一阶段：无 `-it`，传 `AISC_NON_INTERACTIVE=1`、`CLAUDE_SCOPE=project`，真实 Docker stdin=DEVNULL，与 format/events 正交。**明确未完成**：S7/S8 前无 provider/key 缺失快速失败、无 image capability contract、无容器端 E2E 零 stdin 证明——不得宣称完整 non-interactive 达成 |
-| `aisc run --profile proxy` | v2 兼容别名 | 映射 `--network proxy`，不进入 profile domain、不持久化；与显式 `--network direct` 冲突→exit 2；safe/unsafe 未提前实现 |
-
-**边界**：未实现/仍延期——裸 `config` 交互写、`provider use/show`、`run --provider`、`proxy enable/disable`、`profile safe/unsafe`、`brief/logs/clean`。
-
----
-## v2.1.0-dev (2026-07-23) - 集成 OpenAI Codex CLI
-
-### 动机
-
-集成 OpenAI Codex CLI 到 AISC 项目中，与 Claude Code CLI 并行安装，为用户提供多 AI CLI 选择。参考 Claude Code CLI 的安装模式，使用 npm 全局安装，无需 tmux 依赖。
+## v2.1.3 (2026-07-24) — 稳定发布与跨平台制品校验
 
 ### 变更
 
-- **Dockerfile**：
-  - 新增 `CODEX_VERSION` 构建参数（默认 `latest`）
-  - npm 安装层同时安装 `@openai/codex@${CODEX_VERSION}`
-  - 创建 `codex-wrapper` 脚本并集成到镜像
-  - 更新 CRLF 清理逻辑，包含 codex 包装器
-  - 更新注释说明不处理 `codex-real` 二进制（与 `claude-real` 同理）
-
-- **codex-wrapper**（新增）：
-  - 类似 `claude-wrapper` 的结构
-  - 从 `$CODEX_CONFIG_DIR/settings.json` 注入环境变量
-  - 直接执行 `codex-real`，无需 `--dangerously-skip-permissions` flag
-  - 支持 Codex 配置文件的环境变量注入
-
-- **entrypoint.sh**：
-  - 路径模型新增 `GLOBAL_CODEX_DIR`（`/home/AISC/.codex`）和 `PROJECT_CODEX_DIR`（`/home/AISC/app/.codex`）
-  - 作用域选择从 "Claude 作用域" 改为 "AI CLI 作用域"，适用于 Claude + Codex
-  - 支持 `CLI_SCOPE` 环境变量（兼容旧的 `CLAUDE_SCOPE`）
-  - 按作用域初始化 Codex 配置目录（项目模式创建 `.codex` 目录）
-  - 启动菜单新增第三个选项：`3) codex` 直接启动 Codex
-  - 支持 `docker run ... codex` 直接启动 Codex CLI
-  - 导出 `CODEX_CONFIG_DIR` 环境变量到 `~/.bashrc`
-  - 初始化消息从 "Super Claude 工作站" 改为 "AISC AI 工作站"
-
-- **版本更新**：
-  - `VERSION`: `2.0.5` → `2.1.0-dev`
-  - `config/versions.env`: 新增 `CODEX_VERSION=latest`
-  - `AISC_VERSION`: `v2.0.5` → `v2.1.0-dev`
-
-- **README.md**：
-  - 项目描述更新为"运行 Claude Code 和 OpenAI Codex 的个人开发工具"
-  - 所有版本号从 `v2.0.4-dev` 更新到 `v2.1.0-dev`
-  - 新增"使用 Claude Code 或 Codex"章节
-  - 添加 Codex 配置说明和使用示例
-  - 说明两种作用域模式对两个 CLI 的支持
-
-- **CHANGELOG.md**（新增）：
-  - 详细记录 v2.1.0-dev 的所有变更
-  - 包含技术细节和设计决策
-
-- **docs/v2.1.0-dev-testing.md**（新增）：
-  - 完整的测试清单
-  - 覆盖构建、启动、配置、功能和兼容性测试
-
-### 设计决策
-
-- **双 CLI 并行**：Codex 与 Claude Code 同时安装在容器中，互不干扰
-- **独立配置目录**：Codex 使用 `.codex`，Claude 使用 `.claude`，配置隔离
-- **统一作用域管理**：临时/项目两种模式同时适用于两个 CLI
-- **共享 AISC 配置**：providers.json、API keys 等配置在 `.aisc` 目录中共享
-- **无 tmux 依赖**：按要求，容器中不安装 tmux
-
-### 关键特性
-
-1. **双 CLI 支持**：容器内同时提供 Claude Code 和 Codex
-2. **独立配置**：每个 CLI 有独立的配置目录，互不干扰
-3. **统一管理**：共享 AISC 配置目录（providers.json、API keys）
-4. **灵活启动**：支持交互式菜单或直接指定 CLI
-5. **作用域隔离**：临时模式和项目模式对两个 CLI 都生效
-
-### 取舍
-
-- **Codex 配置简化**：Codex 配置目录结构比 Claude 简单，仅创建目录，首次运行时由 Codex 自动生成配置文件
-- **环境变量命名**：新增 `CODEX_CONFIG_DIR`，保持与 `CLAUDE_CONFIG_DIR` 命名一致性
-- **启动菜单扩展**：从 2 个选项（bash/claude）扩展到 3 个（bash/claude/codex）
-- **向后兼容**：保持 `CLAUDE_SCOPE` 环境变量兼容性，新增 `CLI_SCOPE` 作为统一名称
-
-### 验证
-
-- 所有代码文件已提交到本地 main 分支
-- 文件变更统计：+242 行, -48 行
-- 创建 2 个提交：
-  1. `feat: 集成 OpenAI Codex CLI 作为 v2.1.0-dev` (6b4372c)
-  2. `docs: 添加 v2.1.0-dev 变更日志和测试清单` (4914645)
-- 由于当前 WSL 环境无 Docker daemon，未执行构建测试
-
-### 已知限制
-
-- Codex 需要 OpenAI API 认证（ChatGPT Plus/Pro/Enterprise 或 API Key）
-- 两个 CLI 使用不同的配置目录，不共享历史记录
-- 当前环境无法执行 Docker 构建测试，需在有 Docker 的环境中验证
-
-### 测试建议
-
-在有 Docker 的环境中执行以下测试：
-
-```bash
-# 构建镜像
-docker build -t aisc:v2.1.0-dev -f container/Dockerfile .
-
-# 验证两个 CLI 都已安装
-docker run -it --rm aisc:v2.1.0-dev claude --version
-docker run -it --rm aisc:v2.1.0-dev codex --version
-
-# 测试启动菜单
-docker run -it --rm aisc:v2.1.0-dev
-
-# 测试直接启动 Codex
-docker run -it --rm aisc:v2.1.0-dev codex
-```
-
-### v2.1.0-dev 增量 (2026-07-23)
-
-**变更**：
-
-- **默认启动选项改为 bash**（commit `121376d`）：
-  - 启动菜单默认项从 `claude` (2) 改为 `bash` (1)
-  - 空输入或无效输入默认进入 bash
-  - 提示文本更新标注默认选项
-
-- **daemon 启动后自动 enable proxy**（commit `93beecb`）：
-  - `cc-switch daemon start` 后自动执行 `cc-switch proxy -a claude enable` 和 `-a codex enable`
-  - 确保容器启动后 claude/codex 出站请求被 cc-switch 代理层接管
-
-- **启动输出清理**（commit `93beecb`）：
-  - 删除"当前供应商"显示行（`🌐 当前供应商: ...` / `🔗 API 节点: ...`）
-  - `.codex` 跳过复制提示对齐 `.claude` 文案，追加"(保护您的自定义修改)"
-
-- **容器运行身份 root 化**（commit `f8c41ef` + 后续提交）：
-  - 放弃 AISC 用户，全程以 root 运行
-  - 移除 `sudo` 调用、移除 `--user 1000:1000` docker run 参数
-  - 路径模型从 `/home/AISC` → `/root`
-  - `IS_SANDBOX=1` 环境变量告知 AI CLI 当前处于隔离容器
-  - 简化权限修复逻辑（不再需要 chown/sudo fallback）
-  - 统一 installer/mihomo/cc-switch 等所有组件以 root 身份运行
-  - `cs`/`entrypoint`/`launcher`/`path-resolve` 全链路路径更新
-
-- **cc-switch daemon 启动加固**（commit `0511280` + 后续提交）：
-  - daemon 改用 `--detach` 模式，避免 shell 后台任务与 proxy enable 争抢 pidfile/socket
-  - 增加 readiness 轮询（40 次 × 0.25s = 最多 10s），确认 daemon 可达后再操作
-  - 启动前初始化 Codex provider：优先导入用户现有 `config.toml`，fallback 到内置 `codex-official`
-  - Codex 路由仅在 provider 已配置时才启用，缺失时给出明确警告
-  - daemon 启动失败时输出启动日志和 `daemon logs` 路径用于排障
-  - 更新测试覆盖新流程（断言 readiness → provider init → proxy enable 顺序）
-
----
-
-### cc-switch 运行时集成与 Provider 目录共享 (2026-07-23)
-
-将 cc-switch v5.9.2 的运行时（SQLite 数据库、daemon 后台服务、TUI）集成到 AISC 容器中，建立统一的 Provider catalog 共享机制。
-
-**变更**：
-
-- **cc-switch daemon 自动启动**（`container/entrypoint.sh`）：
-  - §3.1 新增：容器启动时执行 `cc-switch daemon start`，日志写 `/tmp/cc-switch-daemon.log`
-  - 仅启动 daemon supervisor，**不自动 `proxy enable`**——不改变默认代理路由
-  - 失败仅 warn，不阻断容器启动
-- **cc-switch 配置根项目化**（`container/entrypoint.sh`）：
-  - 新增 `CC_SWITCH_CONFIG_DIR` 环境变量 → `<workspace>/.aisc/.cc-switch/`
-  - cc-switch 的 SQLite 数据库、设置、备份均存于此，随项目挂载持久化
-  - entrypoint 确保目录可写（`ensure_writable`），收紧权限（`chmod 700` + `stat` 验证）
-  - 导出到 `~/.bashrc` 供后续 shell 会话复用
-- **Provider catalog 共享链路**（`container/entrypoint.sh` + `container/claude-switch`）：
-  - `.aisc/providers.json` 仍为 AISC 主 catalog（首次从内置 bundle 初始化）
-  - `.aisc/.cc-switch/providers.json` → `../providers.json` 相对符号链接
-  - 不支持 symlink 的文件系统退化为启动时 `cp` 刷新副本（含诊断提示）
-  - 若两路径已存在独立文件且内容不同 → 保留 cc-switch 版本并告警
-- **`cs` 切换后同步到 cc-switch SQLite**（`container/claude-switch`）：
-  - `switch()` 末尾新增 `cc-switch --app claude provider import-live`（best-effort）
-  - `cs <provider>` 后 cc-switch TUI/daemon 实时感知同一选中 provider
-- **`cs` provider 解析优先级调整**（`container/claude-switch`）：
-  - 显式 `PROVIDERS_JSON` env → `AISC_DIR` → `~/.aisc` → Docker 内置路径
-  - entrypoint 导出 `PROVIDERS_JSON="$CC_SWITCH_CONFIG_DIR/providers.json"`
-- **scope wrapper 扩展到 6 个运行时变量**（`src/aisc/cli/commands/container.py`）：
-  - `_SCOPE_WRAPPER` 从读取 2 个变量扩展到 6 个：`CLAUDE_CONFIG_DIR`、`CC_SWITCH_CONFIG_DIR`、`AISC_DIR`、`PROVIDERS_JSON`、`CODEX_CONFIG_DIR`、`CODEX_HOME`
-  - fail-closed：任一必需变量缺失 → exit 101，不回退家目录
-  - 仅通过 `/proc/1/environ` 读取，不 eval，特殊字符安全
-- **README 同步**：Provider 路径、`.aisc/.cc-switch/` 目录、`aisc switch --quick` 作用域变量说明同步更新
-
-**设计决策**：
-- **Provider JSON 符号链接而非硬拷贝**：两方始终读同一份文件，避免漂移。不支持 symlink 则退化 cp。
-- **daemon 仅 supervisor，不 proxy enable**：proxy 路由变化涉及端口/路由，留给用户显式控制。
-- **`import-live` 而非直接写 SQLite**：尊重 cc-switch schema 所有权，通过 CLI 导入；best-effort 不阻断 `cs`。
-- **scope wrapper 完整运行时上下文**：`docker exec` 新进程精确复现 PID 1 环境，无需猜测配置路径。
-
-**取舍**：
-- **symlink 依赖文件系统**：ext4/xfs/btrfs/APFS 支持；CIFS/NFS 某些配置不支持。退化路径就绪。
-- **daemon 启动在 entrypoint 而非 Dockerfile**：`CC_SWITCH_CONFIG_DIR` 在 entrypoint 阶段才确定（临时/项目模式），构建期无项目挂载。
-- **`import-live` 日志在 `/tmp`**：仅诊断用途，容器 `--rm` 后清理。
-
-**验证**：
-- `bash -n` 通过（`container/entrypoint.sh`、`container/claude-switch`）
-- Python `py_compile` 通过（`src/aisc/cli/commands/container.py`）
-- `git diff --check` clean
-- 容器内手动验证：`cc-switch daemon start` 成功、symlink 创建正确、`cs deepseek` 后 `cc-switch provider list` 显示一致、`aisc switch --quick ark` scope wrapper 6 变量全通过、`CODEX_HOME` 正确指向 Codex 配置目录
-- 全量 unit test：**521 OK, 15 skipped**（无回归）
-
----
-
-### Codex 项目配置初始化增强 (2026-07-23)
-
-将 Codex 项目 `.codex` 目录的初始化逻辑与 Claude `.claude` 对齐——从镜像内置副本完整复制，而非依赖 Codex 首次运行自动生成。
-
-**变更**：
-
-- **Dockerfile**：新增 `RUN codex --version` 初始化全局 `.codex` 目录，镜像内预置 Codex 出厂配置
-- **entrypoint.sh**：项目模式 Codex 初始化从「仅建空目录」改为「从镜像 `.codex` 复制」（空目录检测 + 已有配置跳过），逻辑与 `.claude` 完全对称
-- **`CODEX_HOME` 导出**：新增 `CODEX_HOME="$CODEX_CONFIG_DIR"`，写入 `~/.bashrc` 和 scope wrapper
-
-**取舍**：预初始化避免 Codex 首次运行需网络拉取 cloud config；与 `.claude` 对称降低维护负担。
-
-**验证**：`bash -n` 通过；容器内项目模式多次启动验证——首次复制、二次跳过、空目录补全，均正确。
-
----
-
-### Provider 路径收敛与 Codex 出厂目录固化 (2026-07-23)
-
-第二轮迭代：简化 Provider 目录结构、固化 Codex 镜像出厂骨架、cc-switch daemon 后台化。
-
-**变更**：
-
-- **Provider 路径收敛**（`container/entrypoint.sh` + `container/claude-switch`）：
-  - 删除 `.aisc/providers.json` 中间路径、删除符号链接策略
-  - `providers.json` 唯一项目路径：`<workspace>/.aisc/.cc-switch/providers.json`
-  - 旧项目兼容：若检测到旧版 `.aisc/providers.json`，首次启动时 `cp` 迁移到 `.cc-switch/` 后 `rm` 旧文件
-  - `cs` fallback 优先级：`PROVIDERS_JSON` env → `.aisc/.cc-switch/providers.json` → `~/.aisc/providers.json` → Docker 内置
-  - 删除 `AISC_PROVIDERS_JSON` 变量，仅保留 `PROVIDERS_JSON`
-- **Codex 出厂目录固化**（`container/Dockerfile`）：
-  - 不再依赖 `codex --version` 自动生成配置（该命令不创建 `CODEX_HOME`）
-  - 显式创建 Codex 目录骨架：`config.toml`（空但合法）、`skills/`、`rules/`、`sessions/`、`shell_snapshots/`、`tmp/`
-  - 从 `_bundle/skills/` 预置 Codex skills（与 Claude 共享 SKILL.md 格式）
-  - `global-claude.md` → `.codex/AGENTS.md`（sed 替换 Claude→Codex），保留 karpathy-flow 编码规范
-  - 生成 `.factory-version` 哈希用于后续项目 `.codex` 升级检测
-  - 镜像内 `.codex` 目录完整性硬 fail：entrypoint 检测不完整则 `exit 1`（不静默降级）
-  - 复制失败也硬 fail（与 `.claude` 的错误处理不一致问题修复）
-- **cc-switch daemon 后台化**（`container/entrypoint.sh`）：
-  - `cc-switch daemon start` 改为后台执行（`&`），不再阻塞 entrypoint 启动流程
-  - 保留日志到 `/tmp/cc-switch-daemon.log`，不阻塞不告警
-- **scope wrapper + 测试同步**（`tests/test_cc_switch_runtime.py`）：
-  - Provider 路径断言更新：`PROVIDERS_JSON` → `.cc-switch/providers.json`
-  - 新增 Dockerfile Codex 出厂目录静态验证
-  - 新增 legacy migration 断言
-  - `cs` fallback 优先级断言更新
-
-**设计决策**：
-- **单一路径而非符号链接**：符号链接在跨文件系统场景（CIFS/NFS/某些容器运行时）不可靠。单一路径 + 旧文件迁移更稳健。
-- **Codex 出厂目录与 Claude 技能共享**：两个 CLI 原生支持同一 SKILL.md 格式，`_bundle/skills/` 重复 COPY 两份而非共享目录——保证项目模式整目录复制时各自独立、互不污染。
-- **daemon `&` 后台化**：`cc-switch daemon start` 是常驻前台进程，不放后台则 entrypoint 永远等不到启动菜单。
-
-**取舍**：
-- **旧 `.aisc/providers.json` 被迁移后删除**：不再保留备份。用户若手动编辑旧路径，数据会在下次启动时丢失——README 已更新文档指向新路径。
-- **Codex skills 从 `_bundle` COPY 而非构建期 install**：与 Claude skills 策略一致（自包含构建、离线可用）。
-
-**验证**：
-- `bash -n` 通过；Python `py_compile` 通过；`git diff --check` clean
-- `PYTHONPATH=src python3 -m unittest tests.test_cc_switch_runtime -v`：全通过
-- 全量 unit test：521 OK, 15 skipped（无回归）
-
----
-
-### 已知未完成 / 技术债（如实记录，不做为已完成）
-
-- **密钥非唯一存储**：`claude-switch` 将 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` 写入 `.claude/settings.json`（env 块），与 `.aisc/secrets/api-keys` + `.cc-config/api-keys` 形成三处密钥副本。settings.json 写入是 Claude Code 运行依赖，但密钥明文落此文件是 P3 待处理的安全边界。
-- **gitleaks 未闭合门禁**：`continue-on-error: true` + `docs/` 整体 allowlist。密扫运行但不阻断合并。
-- **无 GUI / P3 计划**：v2.0.0-dev 不包含 GUI、TUI 重做或 P3 任何条目。
-
----
-
-## v2.1.1-dev (2026-07-23) - root 家目录挂载与运行时资源隔离
-
-### 动机
-
-Windows → WSL2 → Docker bind mount 场景下，容器保持 root 运行身份，同时将宿主机工作区挂载到 `/root/app`，避免覆盖 root 家目录中的容器运行时文件。
-
-### 变更
-
-- **Docker 挂载路径**：宿主工作区挂载到 `/root/app`，容器默认工作目录同步为 `/root/app`。
-- **出厂资源隔离**：Claude/Codex 出厂配置与 skills/plugins 保持在 `/opt/aisc/factory`，Python venv 在 `/opt/aisc/venv`，Mihomo geodata 在 `/opt/aisc/mihomo`。
-- **项目配置路径**：项目作用域使用 `/root/app/.claude`、`/root/app/.codex` 和 `/root/app/.cc-switch`，首次启动从 `/opt/aisc/factory` 复制并持久化到宿主工作区。
-- **临时作用域**：使用 `/tmp/aisc-home`，不把临时 Claude/Codex 配置写入宿主机工作区。
-- **cc-switch 集成**：启动时自动拉起 daemon、初始化 Codex provider、启用 Claude/Codex 路由，并离线登记和同步 caveman、document-skills、grill-me、superpowers。
-- **Codex 权限**：默认启用 bypass approvals/sandbox 与 hook trust，等价于 Claude 容器 bypass 模式。
-- **环境变量**：容器默认设置 `IS_SANDBOX=1`。
-
-### 验证
-
-- Docker 镜像 `aisc:v2.1.1-dev-root-home` 构建成功。
-- 真实宿主目录 bind mount 到 `/root/app` 的项目/临时两种作用域均验证通过。
-- cc-switch daemon、Codex provider、Claude/Codex 路由和四个内置 skills 的运行时接线验证通过。
-- 完整测试：189 项通过，1 项按既有条件跳过。
-
-### v2.1.1-dev 增量：Windows bind mount 与 cc-switch 兼容修复
-
-- 项目工作区挂载路径恢复为 `/root/app`，避免宿主机工作区覆盖容器 root 家目录中的运行时文件。
-- 修复 Windows 构建上下文中的 cc-switch 包装脚本 CRLF shebang，避免 `cannot execute: required file not found`。
-- cc-switch 的项目配置固定使用 `/root/app/.cc-switch`，不再创建或挂载 `/root/app/.aisc` Provider 配置目录。
-
-### v2.1.1-dev 增量：cc-switch 统一 Provider 与 Skills 管理
-
-- 删除容器内旧快捷切换命令及其 Dockerfile 安装、参数分发和包装器引用。
-- 删除 AISC 自有 Provider 目录、宿主 Provider CLI/service，以及旧密钥存储、发现和迁移文件。
-- `aisc switch --quick` 直接委托 `cc-switch -a claude provider switch`；Provider 和认证状态只保存在 cc-switch 管理的数据中。
-- 删除旧 Provider/密钥路径解析库，保留独立的 Windows bind mount 可写性探测库。
-- 镜像离线内置 caveman、document-skills、grill-me、superpowers；entrypoint 幂等登记并启用 Claude/Codex，同步方式固定为 copy。
-- README、开发维基、demo 和文档一致性检查全部改用 cc-switch 契约。
-
----
-
-## v2.1.2-dev (2026-07-24) - 单一版本源与宿主入口收敛
-
-### 变更
-
-- 删除根目录 `CHANGELOG.md`，版本演进统一记录在 `docs/devlog.md`。
-- 删除 `start.sh`、`start.command`、`start.bat`、专属 Shell/PowerShell 流水线和旧 Shell doctor；宿主机只保留 `aisc` Python CLI。
-- 将根目录 `VERSION` 设为项目版本唯一事实源；`src/aisc/__init__.py`、setuptools、PyInstaller、artifact、CI 和安装包命名均从该文件派生。
-- 从 `config/versions.env` 删除重复的 `AISC_VERSION`，该文件只维护外部依赖 pin。
-- Wheel 将根 `VERSION` 原样安装为 data-file，避免包元数据把 `-dev` 规范化为 `.dev0` 后改变 CLI 显示值。
-- PyInstaller onedir/onefile 构建嵌入 `VERSION`，冻结程序从 `_MEIPASS/VERSION` 读取，保证 checkout 外运行仍返回正确版本。
-- README、DEVELOP_WIKI 和文档一致性检查同步为单一 CLI、单一版本源契约。
+- 将项目版本从 `2.1.2-dev` 提升到稳定版 `2.1.3`；根目录 `VERSION` 继续作为 CLI、wheel、PyInstaller、bundle、安装包和标签的唯一版本源。
+- 重写 README 与开发者手册中的当前版本、cc-switch 配置边界、故障排查和自动发布说明。
+- 将本开发日志按版本发布时间重新排序，并依据真实 commit 历史重写 `v2.0.0-dev`。
+- 将已经在 `v2.1.2-dev` 验证的 root/cc-switch/单一版本源运行时提升为首个 `v2.1.x` 稳定发布；本版本除版本与发布文档外不引入新的运行时代码。
 
 ### 发布
 
-- 项目版本：`2.1.2-dev`
+- Git 标签：`v2.1.3`
+- 发布类型：稳定 Release（无 `-dev` 后缀）
+- 标签推送后由 `.github/workflows/artifact.yml` 自动构建 Linux x86_64、Windows x86_64、macOS arm64 产物，聚合 `SHA256SUMS` 并上传 GitHub Release。
+
+---
+
+## v2.1.2-dev (2026-07-24) — 单一版本源、宿主入口与 cc-switch 收敛
+
+### 变更
+
+- commit `0d1059e`：删除 AISC 自有 Provider catalog、旧密钥存储/迁移、`cs` 命令和宿主 Provider CLI；Provider、认证、代理路由与 skills 统一由 cc-switch 管理。
+- 镜像离线内置 caveman、document-skills、grill-me、superpowers，entrypoint 将其幂等登记到 cc-switch SQLite，并以 copy 模式同步给 Claude 与 Codex。
+- commit `0a328ef`：删除 `CHANGELOG.md`、`start.sh`、`start.command`、`start.bat`、Shell/PowerShell 启动流水线和旧 Shell doctor；宿主机只保留 `aisc` Python CLI。
+- commit `3782b93`：将根目录 `VERSION` 设为唯一版本源；setuptools、wheel data-file、PyInstaller `_MEIPASS`、artifact、CI 和安装包命名全部从该文件派生。
+- 从 `config/versions.env` 删除重复的 `AISC_VERSION`；该文件只维护外部依赖 pin。
+- commit `1b58668`：通过 `.gitattributes` 固定 vendored 文件行尾，并增加 artifact 回归测试，避免 Windows runner 对 `container/_bundle/` 计算出与 `vendor/checksums.txt` 不同的 SHA256。
+
+### 发布
+
 - Git 标签：`v2.1.2-dev`
+- 发布类型：Pre-release
+
+---
+
+## v2.1.1-dev (2026-07-23 ~ 2026-07-24) — root 运行时与 `/root/app` 工作区
+
+### 变更
+
+- commit `72d7a8a`：容器运行身份从 AISC 用户切换为 `root`，路径从 `/home/AISC` 收敛到 `/root`，设置 `IS_SANDBOX=1`，并移除 sudo/递归权限修复链路。
+- commit `0511280`、`585c8fc`：cc-switch daemon 使用 detach 模式启动并轮询 readiness；先导入或选择 Codex 当前 Provider，再尝试启用路由；失败日志提供明确路径。
+- commit `bb520fd`：发布 root-home 运行时，项目/临时作用域分别使用工作区和 `/tmp/aisc-home`。
+- commit `9d88133`：删除已经过时的 `docs/v2.1.0-dev-testing.md`。
+- commit `2458f94`：`ensure_writable` 能识别 bind mount 上“路径已存在但不是目录”的情况，并输出真实 mkdir 错误。
+- commit `317e648`：工作区挂载恢复为 `/root/app`，避免宿主目录覆盖 root 家目录运行时文件；修复 cc-switch wrapper 的 CRLF shebang，解决 `cannot execute: required file not found`。
+- Codex wrapper 默认启用 `--dangerously-bypass-approvals-and-sandbox` 与 hook trust bypass，对齐 Claude 的容器 bypass 模式。
+
+### 发布
+
+- Git 标签：`v2.1.1-dev`
+- 发布类型：Pre-release
+
+---
+
+## v2.1.0-dev (2026-07-23) — Claude 与 Codex 双 CLI
+
+### 变更
+
+- commit `6b4372c`：镜像同时安装 Claude Code 与 OpenAI Codex CLI；新增 `codex-wrapper`、`.codex` 配置作用域和启动菜单入口。
+- commit `121376d`：容器交互菜单默认进入 bash，便于先检查 Provider 与环境。
+- commit `c4b06dc`、`f8c41ef`：引入 cc-switch daemon/TUI/SQLite 运行时，建立项目作用域配置目录，并固化 Codex 出厂目录。
+- commit `93beecb`：daemon 就绪后尝试启用 Claude/Codex proxy 路由，清理启动输出。
+- commit `585c8fc`：补充 readiness、Codex Provider 初始化和路由启用顺序，避免全新数据库直接启用 Codex 路由被拒绝。
+
+### 发布
+
+- Git 标签：`v2.1.0-dev`
+- 发布类型：Pre-release
+
+---
+
+## v2.0.5 (2026-07-22) — 配置管理与 Windows bind mount 修复
+
+### 变更
+
+- commit `4975431`：移除容器启动时对整个工作区的自动权限改写，降低 Windows/WSL2 bind mount 上递归 chown 的副作用。
+- commit `502c9fc`：在当时的非 root 运行时中增加 `--user 1000:1000`，缓解 Windows 文件权限问题；该方案随后在 v2.1 的 root 运行时中被替代。
+- commits `7d47b9e`、`77cacf6`、`aa83917`：移除 AI 简讯功能及 Dockerfile/PyInstaller 残留引用。
+- commits `e9bf280`、`c50f232`：后端状态改为显示 Provider 名，并修复 `--keep-alive`。
+- commit `386c1c4`：Docker 构建支持国内镜像源。
+- commit `84800d0`：`VERSION` 去掉前导 `v`，兼容 macOS pkg 及 Python 打包。
+- commits `0185fbb`、`be0ca72`：收敛配置目录，删除旧 skill 模块与 `.cc-config` fallback。
+- commits `d50f2e5`、`a5539ae`：补齐 bundle 配置文件，并把 `aisc-bundle` 移到 `/opt/aisc/bundle/`，避免被工作区挂载覆盖。
+- commits `c4de0ba`、`b1616cc`、`9b2e8d0`：修复 `.claude` 初始化、插件路径和 `settings.json` 检测，避免覆盖已有插件配置。
+
+### 发布
+
+- Git 标签：`v2.0.5`
+- 发布类型：稳定 Release
+
+---
+
+## v2.0.4-dev (2026-07-21 ~ 2026-07-22) — Provider 预览与启动初始化修复
+
+### 变更
+
+- commit `8487c5d`：增加共享自定义 Provider 的预览实现。
+- commits `178be30`、`ee764a6`：README 升级为用户手册，开发资料归档到开发者文档，并增加推荐服务说明。
+- commit `4ee3ecc`：启动时增加工作区权限处理并移除 `cs add`。
+- commit `d8dfa3c`：改进 `settings.json` 初始化与错误输出，保护用户已有配置。
+- commit `a869029`：删除已移除 `cs add` 的相关测试。
+
+### 发布
+
+- Git 标签：`v2.0.4-dev`
+- 发布类型：Pre-release
+
+---
+
+## v2.0.3-dev (2026-07-21) — `.aisc` 配置迁移
+
+### 变更
+
+- commits `d9dd35b`、`66192c1`、`6dac625`、`b09b5d5`、`0fcaf13`：修复 CI、Windows stat mock、VERSION smoke 和 workflow 触发条件。
+- commits `247a67c`、`7e89cd7`：缺少镜像时自动构建，新增 `--keep-alive`、容器/镜像管理命令。
+- commit `d37e8b1`：内部版本推进到 `2.0.2-dev`，同步用户文档。
+- commits `410b98b`、`a871b90`、`b6cdc7b`：修复 Windows `os.getuid/getgid` 兼容性，完善镜像/容器管理和 build wizard。
+- commit `6e8e01b`：Provider 配置迁移到 `.aisc/providers.json`，移除 `.cc-config` 主路径。
+- commits `ba74b24`、`a5e2b34`、`6b3f92c`：修复 Provider fallback、版本 fixture 和剩余 CI 测试。
+
+### 发布
+
+- Git 标签：`v2.0.3-dev`
+- 发布类型：Pre-release
+
+---
+
+## v2.0.1-dev (2026-07-20 ~ 2026-07-21) — 多容器管理与自动 Release
+
+### 变更
+
+- commit `0746127`：以容器注册表替代单一 `CONTAINER_NAME` 指针，支持多容器发现。
+- commits `3216c35`、`3e522ef`：调整旧 `cs` Provider 集合，并精简容器工具链。
+- commit `4a3fd65`：按已实现的安装包和 CLI 行为重写用户安装与命令文档。
+- commits `4740521`、`af02f98`、`7f0c3c1`：推进 `2.0.1-dev`，同步包版本和集成测试。
+- commits `0f5c523`、`a46c3f1`、`ef57532`：为 PyInstaller 构建接入图标并修复跨平台路径。
+- commits `8b6282f`、`cf9edcb`、`d650b69`、`aef3d53`：标签推送后自动创建 GitHub Release，按 `-dev` 后缀区分 Pre-release，并修复权限、资产路径和 draft 状态。
+
+### 发布
+
+- Git 标签：`v2.0.1-dev`
+- 发布类型：Pre-release
+
+---
+
+## v2.0.0-dev (2026-07-16 ~ 2026-07-20) — Python CLI、可验证制品与跨平台安装器
+
+本节按 `v1.2.0..v2.0.0-dev` 的真实 commit 顺序重新整理。旧日志曾把计划、未提交实验和后续版本混入同一节，现只保留已经进入 `v2.0.0-dev` 标签的结果。
+
+### 容器与启动体验
+
+- commit `63ee54e`：增加 Windows SSH 服务配置辅助脚本。
+- commits `26d8015`、`803897c`、`65f29a7`：建立非 root AISC 用户、双作用域配置、容器权限与插件路径修复。
+- commits `271dbcc`、`dd3f655`、`ccd538a`、`8de4326`：加入 Mihomo TUN、多格式订阅转换、模块化宿主启动器、职责目录重组和容器 Python 运行时。
+- commits `a3bd55d`、`dbed7b0`、`ec4a45b`、`e9945e4`：加入 OpenAI 协议转换/cc-switch 预研、修复启动代理与权限问题，并实现并发 AI 简讯。
+
+### v2 可用性与仓库结构
+
+- commits `370fb65`、`c651ea3`：将 Docker build context 收敛到仓库根，移除 LiteLLM demo 的默认接线，新增宿主诊断与语法 smoke。
+- commits `5c3a52c`、`66b8a50`：目录迁移为 `container/` 与 `apps/ai-brief/`，Provider 元数据改为 JSON 数据驱动。
+- commits `e1bddb0`、`33901a2`、`ffb970c`：增加 `--workspace`，状态迁移到 `.aisc/`，密钥采取保守复制迁移，并抽取 entrypoint 公共库。
+- commits `ff240ae`、`a8ce21d`：引入 `VERSION`、外部依赖版本表、vendor manifest/checksums/licenses、CI、`vendor-refresh/verify` 和文档一致性检查。
+- commits `2b37133`、`4dff7ae`：针对 Linux bind mount 增加真实 I/O probe，禁止递归 chown/chmod，并把镜像内 AISC 用户 UID/GID 对齐到基础镜像的 1000。
+
+### Python CLI 与协议
+
+- commits `c706a68`、`c95bd45`：确定 stdlib Python CLI、`aisc.cli/v1` JSON envelope/JSONL 协议，并建立 legacy characterization tests。
+- commit `a8cee46`：实现 `version`、`doctor`、资源定位、结构化输出和 wheel console script。
+- commit `4508248`：实现 `aisc build` / `aisc run` 的 Docker planner、executor、dry-run、事件流和错误码映射。
+- commits `4894ef0`、`1014acb`、`8fdf9e7`：建立安全配置发现模型，增加 `config validate/effective/show`、profile 和容器管理能力。
+- commit `322d5be`：完成技能导入系统与容器生命周期管理 CLI。
+
+### 制品、安装器与验证
+
+- commit `238eed8`：实现 `packaging/artifact.py` 的 stage/archive/verify/build-onefile/aggregate，建立确定性压缩包、版本 guard 和三平台 PyInstaller workflow。
+- commit `a227b12`：增加 Windows Inno Setup、macOS pkg 和 Linux/macOS 安装/卸载脚本。
+- commits `735fc03`、`36804dd`、`e135bbc`、`5ec3e9d`、`a136c38`：修复 Windows packaging tests、Inno Setup define、PATH 移除、安装器进程等待和 UTF-8 输出。
+
+### 发布边界
+
+- Git 标签：`v2.0.0-dev`
+- 发布类型：Pre-release
+- 该标签已经包含 Python CLI、跨平台 artifact workflow 和独立安装器；后续的自动 GitHub Release 发布、`.aisc` Provider 迁移、root 容器运行时和 cc-switch 统一管理分别属于 `v2.0.1-dev` 之后的版本。
+
+---
+
+## v1.5.2 (2026-07-16) — AI 简讯性能与可靠性
+
+- commit `e9945e4`：5 个资讯源并发抓取、全局截止时间、瞬时错误重试、gzip/deflate 解压、raw/rendered 双层缓存和 `--debug` 计时。
+- `--ai` 模式处理 reasoning-only 输出、token 耗尽和独立 LLM timeout；失败时降素材重试。
+- 默认启动路径不再强制同步等待简讯；后续 v2 重构将其进一步解耦。
 
 ---
 

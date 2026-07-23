@@ -1,6 +1,6 @@
 # AISC 开发者手册
 
-> **面向版本**：`main` 分支。本文描述当前仓库实际实现的行为。
+> **面向版本**：`v2.1.3` / `main` 分支。本文描述当前仓库实际实现的行为。
 
 ---
 
@@ -308,11 +308,13 @@ aisc version --format json | python3 -m json.tool
 
 **调用链**:
 ```
-entrypoint → cc-switch daemon → 初始化当前 Provider → 启用 Claude/Codex 路由
+entrypoint → cc-switch daemon readiness → 初始化 Codex 当前 Provider → best-effort 启用 Claude/Codex 路由
 镜像 /opt/aisc/skills → cc-switch SQLite 登记 → copy sync → .claude/.codex
 ```
 
 Provider 和认证信息只由 cc-switch 管理。AISC 不再维护独立 Provider 目录、密钥目录或第二套快捷切换脚本。
+
+注意：cc-switch 的“路由已启用”只表示本地代理接管成功，不证明 Provider 已有可用凭据或上游地址。排障时必须分别检查 `daemon status`、`provider current` 和 `proxy show`。caveman 等 skill 只影响 agent 指令，不参与网络路由。
 
 **最低验证命令**:
 ```bash
@@ -334,7 +336,7 @@ bash tools/check-docs.sh
 ```
 aisc build → plan_build() → RealDockerExecutor.run_streaming(["docker", "build", ...])
 aisc run   → plan_run()   → RealDockerExecutor.run_streaming(["docker", "run", ...])
-容器启动   → entrypoint.sh → 选择作用域 → 配置 TUN/简讯 → exec claude
+容器启动   → entrypoint.sh → 选择作用域 → 配置 TUN/简讯 → 菜单默认进入 bash
 ```
 
 **容易漏改的关联文件**:
@@ -374,6 +376,8 @@ bash tools/vendor-refresh.sh     # 更新校验和
 bash tools/vendor-verify.sh      # 验证
 find container tools -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 ```
+
+`.gitattributes` 对 vendored 文本和脚本规定稳定的 checkout 行尾。不要把整个 `container/` 强制转换成另一种行尾；Windows runner 的 artifact stage 会直接校验 `vendor/checksums.txt`，行尾漂移会表现为大批 hash mismatch。
 
 ---
 
@@ -464,7 +468,7 @@ if __name__ == "__main__":
 
 ### 8.1 CI 流水线
 
-**Artifact** (`.github/workflows/artifact.yml`) — push/PR/手动触发：
+**Artifact** (`.github/workflows/artifact.yml`) — `develop` push、面向 `main` 的 PR、`v*` tag 或手动触发：
 - 跨平台 PyInstaller 构建矩阵：
   - `ubuntu-22.04` → linux x86_64
   - `windows-2022` → windows x86_64（含 Inno Setup 安装器）
@@ -476,9 +480,10 @@ if __name__ == "__main__":
   4. 构建 onefile
   5. `packaging/artifact.py stage` → `verify` → `archive`
   6. 平台特定安装器构建 + 冒烟
-- 聚合 Job：校验所有平台产物、生成 `SHA256SUMS`
+- 标签构建的聚合 Job：校验所有平台产物、生成 `SHA256SUMS`
+- Release Job：将聚合产物上传到对应 GitHub Release；`*-dev` 标签标记为 Pre-release，其余标签发布为稳定 Release
 
-当前仓库只保留这一份 GitHub Actions workflow；本地完整测试、文档检查、vendor 校验和 Docker 构建需要在提交前显式运行。
+当前仓库只保留这一份 GitHub Actions workflow；本地完整测试、文档检查、vendor 校验和 Docker 构建仍需在提交前显式运行。
 
 ### 8.2 打包命令参考（维护者视角）
 
@@ -515,36 +520,30 @@ CI 的 artifact smoke（`ci_smoke.py`）会进一步验证构建产物运行 `ai
 
 ### 8.4 发布步骤与边界
 
-**当前仓库没有自动 Release 工作流**。`.github/workflows/artifact.yml` 不包含 `gh release create`、tag 触发发布或自动上传到 GitHub Release 的逻辑。`upload-artifact` 只是 CI 内部临时产物，不是公开发布。
+`.github/workflows/artifact.yml` 是当前唯一发布入口。推送 `v*` 标签会构建三平台产物、聚合 `SHA256SUMS`，再由 `softprops/action-gh-release` 创建或更新 GitHub Release。版本带 `-dev` 时发布为 Pre-release；例如 `v2.1.3` 是稳定 Release。
 
-维护者发布流程（手动）：
+维护者发布流程：
 
 ```bash
-# 1. 只修改根目录 VERSION
+# 1. 只修改根目录 VERSION，并确保 docs/devlog.md 严格按新到旧排列
 
 # 2. 完整测试、文档与 vendored 资源校验
 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
 bash tools/check-docs.sh
 bash tools/vendor-verify.sh
+python3 packaging/artifact.py stage --output /tmp/aisc-staging
+python3 packaging/artifact.py verify --bundle /tmp/aisc-staging/aisc-bundle
 
-# 3. 等待或手动触发 full CI（artifact.yml 跨平台构建）
-#    确认 linux/windows/macos 三个平台的构建产物均通过 verify + smoke
+# 3. 提交 VERSION 与发布文档
 
-# 4. 从 CI artifacts 下载各平台产物，验证 SHA256SUMS
-#    或本地构建：
-python3 packaging/artifact.py stage
-python3 packaging/artifact.py verify --bundle <staging>/aisc-bundle
+# 4. 创建并推送 tag（VERSION 不含前导 v）
+VERSION_VALUE="$(head -1 VERSION)"
+git tag -a "v${VERSION_VALUE}" -m "Release v${VERSION_VALUE}"
+git push origin main
+git push origin "v${VERSION_VALUE}"
 
-# 5. 创建并推送 tag（VERSION 不含前导 v）
-#    VERSION_VALUE="$(head -1 VERSION)"
-#    git tag -a "v${VERSION_VALUE}" -m "Release v${VERSION_VALUE}"
-#    git push origin "v${VERSION_VALUE}"
-#    注意：push tag 不会自动触发 Release，需手动在 GitHub 创建
-
-# 6. 在 GitHub Releases 页面手动创建 Release：
-#    - 选择上一步推送的 tag
-#    - 上传各平台 .tar.gz / .zip / .pkg / setup.exe 及对应 .sha256
-#    - 附上 SHA256SUMS
+# 5. 在 GitHub Actions 中等待 Artifact workflow 全部通过
+# 6. 核对 Release 的平台产物、安装器、SHA256 sidecar 与 SHA256SUMS
 ```
 
 **故障定位层次**（CI 失败时按此顺序排查）：
@@ -554,8 +553,9 @@ python3 packaging/artifact.py verify --bundle <staging>/aisc-bundle
 4. **跨平台不一致** — 检查平台特定路径处理（`sys.platform` 分支、Windows `\\` vs POSIX `/`）
 
 **边界**：
-- 本文不提供具体的 `git tag` 签名策略或 Release 命名规范——这些是项目治理决策，不在代码范围内
-- 本文不虚构未实现的工作流步骤
+- 自动发布只在 tag workflow 全部成功后发生；只推 `main` 不会创建 Release
+- 不允许覆盖已存在的发布标签，也不使用 force-push
+- 本文不规定 tag 签名策略
 
 ---
 
