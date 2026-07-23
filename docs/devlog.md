@@ -708,8 +708,8 @@ docker run -it --rm aisc:v2.1.0-dev codex
 
 - **cc-switch daemon 自动启动**（`container/entrypoint.sh`）：
   - §3.1 新增：容器启动时执行 `cc-switch daemon start`，日志写 `/tmp/cc-switch-daemon.log`
-  - 仅启动 daemon supervisor，**不自动 `proxy enable`**——不改变默认代理路由
-  - 失败仅 warn，不阻断容器启动
+  - daemon 就绪后自动执行 `cc-switch proxy -a claude enable` + `-a codex enable`
+  - 失败仅 warn（`|| true`），不阻断容器启动
 - **cc-switch 配置根项目化**（`container/entrypoint.sh`）：
   - 新增 `CC_SWITCH_CONFIG_DIR` 环境变量 → `<workspace>/.aisc/.cc-switch/`
   - cc-switch 的 SQLite 数据库、设置、备份均存于此，随项目挂载持久化
@@ -734,7 +734,7 @@ docker run -it --rm aisc:v2.1.0-dev codex
 
 **设计决策**：
 - **Provider JSON 符号链接而非硬拷贝**：两方始终读同一份文件，避免漂移。不支持 symlink 则退化 cp。
-- **daemon 仅 supervisor，不 proxy enable**：proxy 路由变化涉及端口/路由，留给用户显式控制。
+- **daemon + proxy enable 原子化**：proxy 路由变化涉及端口/路由，但 daemon 启动后立即 enable 是合理默认——用户进容器即用，无需手动开启。
 - **`import-live` 而非直接写 SQLite**：尊重 cc-switch schema 所有权，通过 CLI 导入；best-effort 不阻断 `cs`。
 - **scope wrapper 完整运行时上下文**：`docker exec` 新进程精确复现 PID 1 环境，无需猜测配置路径。
 
@@ -765,6 +765,39 @@ docker run -it --rm aisc:v2.1.0-dev codex
 **取舍**：预初始化避免 Codex 首次运行需网络拉取 cloud config；与 `.claude` 对称降低维护负担。
 
 **验证**：`bash -n` 通过；容器内项目模式多次启动验证——首次复制、二次跳过、空目录补全，均正确。
+
+---
+
+### 启动体验优化：默认 bash + proxy 自动 enable + 输出精简 (2026-07-23)
+
+第三轮迭代：修复启动菜单默认选项、daemon 启动后自动开启代理接管、清理冗余启动输出。
+
+**变更**：
+
+- **默认启动选项改为 bash**（`container/entrypoint.sh`）：
+  - 启动菜单默认从 `[默认 2]`（claude）改为 `[默认 1]`（bash）
+  - 提示文本标注：`1) bash ... （默认）`
+  - 空输入/无效输入默认进入 bash（而非 claude）
+  - 让用户先进入 shell 环境手动配置，再决定启动哪个 CLI
+
+- **daemon 启动后自动 enable proxy**（`container/entrypoint.sh`）：
+  - `cc-switch daemon start` 后追加 `cc-switch proxy -a claude enable` + `-a codex enable`
+  - 两个 CLI 的代理接管在 daemon 就绪后立即生效
+  - best-effort（`|| true`），proxy enable 失败不阻断启动
+
+- **启动输出精简**（`container/entrypoint.sh`）：
+  - 删除 `🌐 当前供应商: ...` 整块显示（PROVIDER_NAME 解析 + echo + BASE_URL 显示 + 分隔线）
+  - `.codex` 跳过复制提示对齐 `.claude`，追加 `(保护您的自定义修改)`
+
+**设计决策**：
+- **默认 bash 而非 claude**：用户通常需要先进 shell 检查/配置环境（`cs` 切换后端、查看 daemon 状态、验证网络），再启动 CLI。直接进 claude 跳过配置环节。
+- **daemon + proxy enable 原子化**：daemon 启动和 proxy enable 紧耦合——只跑 daemon 不 enable 等于代理白开。两道命令放同一个 `if` 块内，失败不阻断。
+- **删除供应商显示**：cc-switch daemon 接管后，实际供应商由接管层决定，entrypoint 启动时读到的 `BASE_URL` 可能已是接管后的值。显示不再准确，直接移除。
+
+**验证**：
+- `bash -n` 通过
+- `git diff --check` clean
+- 容器内启动输出验证：无供应商行、.codex 跳过提示含保护文案、daemon 日志确认 proxy enable 执行
 
 ---
 
