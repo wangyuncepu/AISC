@@ -286,63 +286,27 @@ if command -v cc-switch >/dev/null 2>&1; then
         else
             CC_SWITCH_SKILLS_HOME="/root/app"
         fi
-        # 离线登记四个镜像内置 skill，以 cc-switch 作为唯一 SSOT，
-        # 再用 copy 模式同步到 Claude 与 Codex。
-        for skill_name in caveman document-skills grill-me superpowers; do
-            mkdir -p "$CC_SWITCH_CONFIG_DIR/skills/$skill_name"
-            cp -a "/opt/aisc/skills/$skill_name/." \
-                "$CC_SWITCH_CONFIG_DIR/skills/$skill_name/"
-        done
-
-        # 先让 cc-switch 创建/迁移数据库，再幂等启用四个 skill。
-        HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills list \
-            >>"$CC_SWITCH_SKILLS_LOG" 2>&1 || true
-        CC_SWITCH_SKILL_DB="$CC_SWITCH_CONFIG_DIR/cc-switch.db" python3 - <<'PY' \
-            >>"$CC_SWITCH_SKILLS_LOG" 2>&1 || \
-            echo "⚠️  cc-switch skills 登记失败；日志: $CC_SWITCH_SKILLS_LOG" >&2
-import os
-import sqlite3
-import time
-
-db = sqlite3.connect(os.environ["CC_SWITCH_SKILL_DB"], timeout=10)
-now = int(time.time())
-skills = (
-    ("caveman", "Ultra-compressed agent communication", "JuliusBrussee", "caveman"),
-    ("document-skills", "Bundled document creation and editing skills", "anthropics", "skills"),
-    ("grill-me", "Relentless plan and design interview", "mattpocock", "skills"),
-    ("superpowers", "Structured software engineering workflows", "obra", "superpowers"),
-)
-for name, description, owner, repo in skills:
-    db.execute(
-        """
-        INSERT OR IGNORE INTO skills (
-            id, name, description, directory,
-            repo_owner, repo_name, repo_branch,
-            enabled_claude, enabled_codex, installed_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            f"aisc:{name}", name, description, name,
-            owner, repo, "main", 1, 1, now, now,
-        ),
-    )
-    db.execute(
-        """
-        UPDATE skills
-        SET description = ?, directory = ?, repo_owner = ?, repo_name = ?,
-            repo_branch = ?, enabled_claude = 1, enabled_codex = 1,
-            updated_at = ?
-        WHERE name = ?
-        """,
-        (description, name, owner, repo, "main", now, name),
-    )
-db.commit()
-PY
-        if HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills sync-method copy \
-                >>"$CC_SWITCH_SKILLS_LOG" 2>&1 && \
-            HOME="$CC_SWITCH_SKILLS_HOME" cc-switch skills sync \
-                >>"$CC_SWITCH_SKILLS_LOG" 2>&1; then
-            echo "✅ cc-switch 已安装 caveman、document-skills、grill-me、superpowers（Claude + Codex）"
+        # 默认仅在首次安装、内置内容变化或已启用目标缺失时同步。
+        # always 可强制同步，off 可完全跳过；现有启停状态由 cc-switch 管理。
+        if CC_SWITCH_SKILLS_RESULT="$(
+            HOME="$CC_SWITCH_SKILLS_HOME" python3 /usr/local/bin/lib/cc_switch_skills.py \
+                --config-dir "$CC_SWITCH_CONFIG_DIR" \
+                --skills-home "$CC_SWITCH_SKILLS_HOME" \
+                --bundle-dir /opt/aisc/skills \
+                --log "$CC_SWITCH_SKILLS_LOG" \
+                --mode "${AISC_SKILLS_SYNC:-auto}"
+        )"; then
+            case "$CC_SWITCH_SKILLS_RESULT" in
+                synced)
+                    echo "✅ cc-switch 已安装 caveman、document-skills、grill-me、superpowers（Claude + Codex）"
+                    ;;
+                current)
+                    echo "ℹ️  cc-switch 内置 skills 已是最新，跳过同步。"
+                    ;;
+                off)
+                    echo "ℹ️  AISC_SKILLS_SYNC=off，已跳过 cc-switch 内置 skills 同步。"
+                    ;;
+            esac
         else
             echo "⚠️  cc-switch skills 离线安装失败；日志: $CC_SWITCH_SKILLS_LOG" >&2
         fi

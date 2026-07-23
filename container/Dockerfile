@@ -308,6 +308,8 @@ COPY container/cc-switch-wrapper /usr/local/bin/cc-switch
 RUN sed -i 's/\r$//' /usr/local/bin/cc-switch \
     && chmod +x /usr/local/bin/cc-switch
 
+COPY container/cc_switch_skills.py /usr/local/bin/lib/cc_switch_skills.py
+
 # cc-switch 离线 skills：元技能说明 + 已暂存插件中的实际 skill 内容。
 COPY container/cc-switch-skills/ /opt/aisc/skills/
 RUN set -eux; \
@@ -320,7 +322,11 @@ RUN set -eux; \
     mkdir -p /opt/aisc/skills/caveman /opt/aisc/skills/document-skills/skills /opt/aisc/skills/superpowers/skills; \
     cp -a "$caveman_src/." /opt/aisc/skills/caveman/; \
     cp -a "$document_src/skills/." /opt/aisc/skills/document-skills/skills/; \
-    cp -a "$superpowers_src/skills/." /opt/aisc/skills/superpowers/skills/
+    cp -a "$superpowers_src/skills/." /opt/aisc/skills/superpowers/skills/; \
+    (cd /opt/aisc/skills && \
+        find . -type f -print0 | sort -z | xargs -0 sha256sum | \
+        sha256sum | awk '{print $1}') > /tmp/aisc-skills.sha256; \
+    mv /tmp/aisc-skills.sha256 /opt/aisc/skills/.aisc-bundle.sha256
 # 设置入口点
 ENTRYPOINT ["entrypoint.sh"]
 

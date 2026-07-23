@@ -420,7 +420,7 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 - 将宿主机 `<workspace>/` 挂载到容器 `/root/app`；项目文件及 `.cc-switch`、`.claude`、`.codex` 配置都随工作区持久化。
 - 首次启动时将 cc-switch 配置根初始化为 `<workspace>/.cc-switch/`；Provider 只由 cc-switch 的 SQLite 状态管理。
 - entrypoint 会以 detach 模式启动 cc-switch daemon，等待其可达，尝试初始化 Codex 当前 Provider，再以 best-effort 方式启用 Claude/Codex 路由。Provider 缺少真实凭据时，路由“已启用”不等于上游模型可用。
-- entrypoint 将 caveman、document-skills、grill-me、superpowers 登记到 cc-switch，并以 copy 模式同步给 Claude 和 Codex。
+- entrypoint 首次启动时将 caveman、document-skills、grill-me、superpowers 登记到 cc-switch，并以 copy 模式同步给 Claude 和 Codex；后续仅在 bundle 内容变化、登记/源目录缺失或已启用目标缺失时同步。
 - 交互式启动菜单的第 4 项会直接进入 cc-switch TUI；退出 TUI 即结束该前台容器会话。
 - `--dry-run` 只输出 `docker run ...` 命令行，不创建或修改项目配置目录，也不校验本地 proxy 配置文件。
 - 非 `--dry-run` 时：
@@ -593,6 +593,8 @@ cc-switch skills sync
 Provider、认证信息和路由状态都由 cc-switch 管理。请用 cc-switch TUI 或其 provider 命令新增、编辑和切换 Provider；不要在工作区维护第二份 AISC Provider 配置。
 
 启用或停用 caveman 等 skill 只会改变 agent 的指令/工作流，不会修改 Provider、代理端口或 API 凭据。如果启用 skill 后无法连接模型，应先检查 cc-switch daemon、当前 Provider 和路由，而不是删除 skill。
+
+内置 skills 默认使用 `AISC_SKILLS_SYNC=auto`：首次安装或检测到内容/目标变化时才同步，普通重启直接跳过，并保留你在 cc-switch 中设置的 Claude/Codex 启停状态。排障时可用 `AISC_SKILLS_SYNC=always` 强制重建；如需完全禁止 AISC 自动同步，可设为 `off`。
 
 ### profile — Profile 管理
 

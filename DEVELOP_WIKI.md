@@ -302,6 +302,7 @@ aisc version --format json | python3 -m json.tool
 
 **入口文件**:
 - `container/entrypoint.sh` — daemon、Provider 路由初始化及 skills 同步
+- `container/cc_switch_skills.py` — bundle 哈希、目标完整性检查与按需同步
 - `container/cc-switch-wrapper` — 按项目/临时作用域设置 cc-switch HOME
 - `container/cc-switch-skills/` — 镜像离线 skill 元数据
 - `container/Dockerfile` — cc-switch 二进制和 skill 内容装配
@@ -309,11 +310,13 @@ aisc version --format json | python3 -m json.tool
 **调用链**:
 ```
 entrypoint → cc-switch daemon readiness → 初始化 Codex 当前 Provider → best-effort 启用 Claude/Codex 路由
-镜像 /opt/aisc/skills → cc-switch SQLite 登记 → copy sync → .claude/.codex
+镜像 /opt/aisc/skills + bundle 哈希 → auto 判断 → 必要时登记/Copy sync → .claude/.codex
 交互启动菜单 4 → exec cc-switch → 项目作用域管理 TUI
 ```
 
 Provider 和认证信息只由 cc-switch 管理。AISC 不再维护独立 Provider 目录、密钥目录或第二套快捷切换脚本。
+
+`AISC_SKILLS_SYNC` 支持 `auto`（默认）、`always`、`off`。`auto` 通过构建期 bundle 哈希、SQLite 登记状态和已启用目标目录决定是否同步；已有记录只更新元数据，不修改 `enabled_claude` / `enabled_codex`。因此用户在 cc-switch 中停用 skill 后，容器重启不会重新启用。
 
 注意：cc-switch 的“路由已启用”只表示本地代理接管成功，不证明 Provider 已有可用凭据或上游地址。排障时必须分别检查 `daemon status`、`provider current` 和 `proxy show`。caveman 等 skill 只影响 agent 指令，不参与网络路由。
 
@@ -411,6 +414,7 @@ find container tools -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
 ### 6.3 运行时状态契约
 
 - 工作区 `.cc-switch/` 是容器内 Provider、路由和 skills 的唯一管理状态。
+- `.cc-switch/.aisc-bundled-skills.sha256` 记录最近一次成功同步的内置 bundle；同步失败不更新该标记，下次启动会重试。
 - 容器交互启动菜单提供 bash、Claude、Codex、cc-switch 四个入口；第 4 项通过现有 wrapper 打开项目作用域管理 TUI。
 - AISC 根目录 `.aisc/state.env` 只保存容器发现信息，不保存 Provider 或认证数据。
 - `.deploy/state.env` 是历史容器状态路径，只读兼容，不写入新数据。
