@@ -2,20 +2,20 @@
 
 AISC 是一个在 Docker 容器中运行 Claude Code 和 OpenAI Codex 的个人开发工具。提供 `aisc` 命令行，可在宿主机上构建镜像、管理容器、切换 AI 模型服务。
 
-> **状态：Alpha / 开发中。** 当前稳定版本为 **v2.1.3**；项目版本以仓库根目录 [`VERSION`](VERSION) 为唯一事实源。
+> **状态：Alpha / 开发中。** 当前稳定版本为 **v2.1.4**；项目版本以仓库根目录 [`VERSION`](VERSION) 为唯一事实源。
 
-## v2.1.3 版本要点
+## v2.1.4 版本要点
 
-- 容器统一以 `root` 运行，宿主工作区固定挂载到 `/root/app`，并设置 `IS_SANDBOX=1`。
-- Claude 与 Codex 的 Provider、代理路由和 skills 统一交给 cc-switch 管理，不再维护第二套 AISC Provider、密钥或 `cs` 快捷命令。
-- 项目作用域把 `.claude`、`.codex` 和 `.cc-switch` 保存在宿主工作区；临时作用域使用 `/tmp/aisc-home`，容器退出后重置。
-- cc-switch 离线登记并以 copy 模式同步 caveman、document-skills、grill-me、superpowers，Claude 与 Codex 共用同一组启用状态。
-- `VERSION` 同时驱动 CLI、wheel、PyInstaller、bundle、安装包和 Git 标签；Windows checkout 的 vendored 文件行尾也已固定，避免跨平台 SHA256 漂移。
+- Codex 启动时默认不再自动启用 cc-switch 代理，官方网页登录和本地凭据可直接使用；需要托管 Provider 时再手动启用 Codex 路由。
+- 容器启动菜单新增 cc-switch TUI 入口，可直接管理 Provider、代理路由与 Skills。
+- 内置 skills 默认按 bundle 哈希和目标状态增量同步，普通重启直接跳过，并保留用户在 cc-switch 中设置的 Claude/Codex 启停状态。
+- Windows/Docker Desktop 文件锁不可用时启用保护性确认，避免覆盖宿主已有或部分存在的 Skills 目录。
+- `AISC_SKILLS_SYNC=auto|always|off` 可控制内置 skills 同步策略。
 - 推送 `v*` 标签后，GitHub Actions 自动构建 Linux x86_64、Windows x86_64 和 macOS arm64 产物并发布 Release；带 `-dev` 的标签发布为 Pre-release。
 
 ## 目录
 
-- [v2.1.3 版本要点](#v213-版本要点)
+- [v2.1.4 版本要点](#v214-版本要点)
 - [安装](#安装)
   - [前置条件](#前置条件)
   - [方式一：GitHub Release 安装包（推荐）](#方式一github-release-安装包推荐)
@@ -66,7 +66,7 @@ docker version
 
 从 [GitHub Releases](https://github.com/wangyuncepu/AISC/releases) 下载目标版本对应平台的安装包。发布标签使用 `v<VERSION>`，安装包文件名使用 `VERSION` 中的值（不带前导 `v`）。
 
-`v2.1.3` 是稳定 Release；带 `-dev` 后缀的历史版本显示为 Pre-release。普通用户直接从上面的 Release 页面下载即可，无需进入 Actions 页面。
+`v2.1.4` 是当前稳定 Release；带 `-dev` 后缀的历史版本显示为 Pre-release。普通用户直接从上面的 Release 页面下载即可，无需进入 Actions 页面。
 
 #### Windows
 
@@ -419,7 +419,7 @@ aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
 - 实际启动容器前写入 `<aisc-root>/.aisc/state.env` 中的 `CONTAINER_NAME` 和 `IMAGE`，供其他终端通过 `status`/`shell` 等自动发现。容器退出并由 `--rm` 删除后，该文件可能保留最近一次容器名。
 - 将宿主机 `<workspace>/` 挂载到容器 `/root/app`；项目文件及 `.cc-switch`、`.claude`、`.codex` 配置都随工作区持久化。
 - 首次启动时将 cc-switch 配置根初始化为 `<workspace>/.cc-switch/`；Provider 只由 cc-switch 的 SQLite 状态管理。
-- entrypoint 会以 detach 模式启动 cc-switch daemon，等待其可达，尝试初始化 Codex 当前 Provider，再以 best-effort 方式启用 Claude/Codex 路由。Provider 缺少真实凭据时，路由“已启用”不等于上游模型可用。
+- entrypoint 会以 detach 模式启动 cc-switch daemon，等待其可达，尝试初始化 Codex 当前 Provider，并以 best-effort 方式启用 Claude 路由。Codex 默认不启用 cc-switch 代理，需要时可在容器内手动执行 `cc-switch proxy -a codex enable`。
 - entrypoint 首次启动时将 caveman、document-skills、grill-me、superpowers 登记到 cc-switch，并以 copy 模式同步给 Claude 和 Codex；后续仅在 bundle 内容变化、登记/源目录缺失或已启用目标缺失时同步。
 - 交互式启动菜单的第 4 项会直接进入 cc-switch TUI；退出 TUI 即结束该前台容器会话。
 - `--dry-run` 只输出 `docker run ...` 命令行，不创建或修改项目配置目录，也不校验本地 proxy 配置文件。

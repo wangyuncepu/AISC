@@ -1,6 +1,6 @@
 # AISC 开发者手册
 
-> **面向版本**：`v2.1.3` / `main` 分支。本文描述当前仓库实际实现的行为。
+> **面向版本**：`v2.1.4` / `main` 分支。本文描述当前仓库实际实现的行为。
 
 ---
 
@@ -309,7 +309,7 @@ aisc version --format json | python3 -m json.tool
 
 **调用链**:
 ```
-entrypoint → cc-switch daemon readiness → 初始化 Codex 当前 Provider → best-effort 启用 Claude/Codex 路由
+entrypoint → cc-switch daemon readiness → 初始化 Codex 当前 Provider → best-effort 启用 Claude 路由；Codex 代理默认关闭、按需手动启用
 镜像 /opt/aisc/skills + bundle 哈希 → auto 判断 → 必要时登记/Copy sync → .claude/.codex
 交互启动菜单 4 → exec cc-switch → 项目作用域管理 TUI
 ```
@@ -528,12 +528,13 @@ CI 的 artifact smoke（`ci_smoke.py`）会进一步验证构建产物运行 `ai
 
 ### 8.4 发布步骤与边界
 
-`.github/workflows/artifact.yml` 是当前唯一发布入口。推送 `v*` 标签会构建三平台产物、聚合 `SHA256SUMS`，再由 `softprops/action-gh-release` 创建或更新 GitHub Release。版本带 `-dev` 时发布为 Pre-release；例如 `v2.1.3` 是稳定 Release。
+`.github/workflows/artifact.yml` 是当前唯一发布入口。推送 `v*` 标签会构建三平台产物、聚合 `SHA256SUMS`，读取 `docs/releases/<tag>.md` 作为富 Markdown Release Notes，再由 `softprops/action-gh-release` 创建或更新 GitHub Release。版本带 `-dev` 时发布为 Pre-release；例如 `v2.1.4` 是稳定 Release。
 
 维护者发布流程：
 
 ```bash
-# 1. 只修改根目录 VERSION，并确保 docs/devlog.md 严格按新到旧排列
+# 1. 修改根目录 VERSION，确保 docs/devlog.md 严格按新到旧排列，
+#    并新增 docs/releases/v<VERSION>.md
 
 # 2. 完整测试、文档与 vendored 资源校验
 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v

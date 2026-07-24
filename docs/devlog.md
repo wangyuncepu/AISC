@@ -2,18 +2,39 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+## v2.1.4 (2026-07-24) — Codex 官方登录直连与安全的 Skills 同步
+
+### 变更
+
+- Codex 启动时不再自动执行 `cc-switch proxy -a codex enable`。官方网页登录、本地 `auth.json` 和 Codex 自身配置保持直连，不会因 cc-switch 的托管 Provider 状态出现“未真正登录但可进入界面”的混淆；需要托管账号时仍可显式运行 `cc-switch proxy -a codex enable`。
+- 容器交互启动菜单新增第 4 个入口，可直接打开 cc-switch 的 Provider、代理路由与 Skills 管理 TUI。
+- 内置 skills 同步改为默认 `auto`：镜像构建时生成 bundle 哈希，普通重启在内容、登记和已启用目标均完整时直接跳过，避免重复复制、写库和全量 `skills sync`。
+- cc-switch 中已有 skill 仅刷新元数据，不再在容器启动时强制写回 `enabled_claude=1` / `enabled_codex=1`，用户手动停用状态可跨重启保留；另提供 `AISC_SKILLS_SYNC=always|off`。
+- Windows/Docker Desktop 挂载无法取得文件锁时不再静默复制：仅当 `.cc-switch/skills`、`.claude/skills`、`.codex/skills` 全部不存在才直接安装；任一已存在则以 `[y/N]` 请求确认，非交互默认保留宿主内容。
+- 增加 Codex 代理默认关闭、skills 增量判定、启停状态保留、同步失败重试标记和无锁降级行为的回归测试。
+
+### 从上一版 Release 到本版
+
+- 上一版 GitHub Release `v2.1.3` 的已发布提交为 `a455bd1`。
+- 本版包含后续提交 `a7a0824`、`5b00a73`、`85355dd`，以及本次 Codex 默认直连修复和版本发布提交。
+- 完整比较：[`a455bd1...v2.1.4`](https://github.com/wangyuncepu/AISC/compare/a455bd1...v2.1.4)
+
+### 发布
+
+- Git 标签：`v2.1.4`
+- 发布类型：稳定 Release（无 `-dev` 后缀）
+- 标签推送后由 `.github/workflows/artifact.yml` 自动构建 Linux x86_64、Windows x86_64、macOS arm64 产物，聚合 `SHA256SUMS` 并上传 GitHub Release。
+
+---
+
 ## v2.1.3 (2026-07-24) — 稳定发布与跨平台制品校验
 
 ### 变更
 
 - 将项目版本从 `2.1.2-dev` 提升到稳定版 `2.1.3`；根目录 `VERSION` 继续作为 CLI、wheel、PyInstaller、bundle、安装包和标签的唯一版本源。
-- 容器交互启动菜单新增第 4 个入口，可直接打开 cc-switch 的 Provider、代理路由与 Skills 管理 TUI。
-- 内置 skills 同步改为默认 `auto`：镜像构建时生成 bundle 哈希，普通重启在内容、登记和已启用目标均完整时直接跳过，避免重复复制、写库和全量 `skills sync`。
-- cc-switch 中已有 skill 仅刷新元数据，不再在容器启动时强制写回 `enabled_claude=1` / `enabled_codex=1`，用户手动停用状态可跨重启保留；另提供 `AISC_SKILLS_SYNC=always|off`。
-- Windows/Docker Desktop 挂载无法取得文件锁时不再静默复制：仅当 `.cc-switch/skills`、`.claude/skills`、`.codex/skills` 全部不存在才直接安装；任一已存在则以 `[y/N]` 请求确认，非交互默认保留宿主内容。
 - 重写 README 与开发者手册中的当前版本、cc-switch 配置边界、故障排查和自动发布说明。
 - 将本开发日志按版本发布时间重新排序，并依据真实 commit 历史重写 `v2.0.0-dev`。
-- 将已经在 `v2.1.2-dev` 验证的 root/cc-switch/单一版本源运行时提升为首个 `v2.1.x` 稳定发布，并补齐 cc-switch 容器启动入口。
+- 将已经在 `v2.1.2-dev` 验证的 root/cc-switch/单一版本源运行时提升为首个 `v2.1.x` 稳定发布；本版本除版本与发布文档外不引入新的运行时代码。
 
 ### 发布
 
