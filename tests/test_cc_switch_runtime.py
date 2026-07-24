@@ -66,7 +66,7 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         self.assertLess(cc_switch_option, menu_prompt)
         self.assertLess(menu_prompt, cc_switch_handoff)
 
-    def test_entrypoint_initializes_codex_provider_before_enabling_route(self):
+    def test_entrypoint_initializes_codex_provider_without_enabling_route(self):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
 
         daemon_ready = entrypoint.index(
@@ -81,14 +81,20 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         official_fallback = entrypoint.index(
             "cc-switch -a codex provider switch codex-official", import_live
         )
-        route_enable = entrypoint.index(
-            "cc-switch proxy -a codex enable", official_fallback
-        )
 
         self.assertIn('[ -s "$CODEX_CONFIG_DIR/config.toml" ]', entrypoint)
         self.assertLess(current_check, import_live)
         self.assertLess(import_live, official_fallback)
-        self.assertLess(official_fallback, route_enable)
+        codex_proxy_enable_commands = [
+            line
+            for line in entrypoint.splitlines()
+            if line.strip().startswith("cc-switch proxy -a codex enable")
+        ]
+        self.assertEqual([], codex_proxy_enable_commands)
+        self.assertIn(
+            "Codex 未自动启用 cc-switch 代理",
+            entrypoint,
+        )
 
     def test_entrypoint_registers_factory_skills_for_claude_and_codex(self):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
