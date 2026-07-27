@@ -1,701 +1,501 @@
 # AISC 用户手册
 
-AISC 是一个在 Docker 容器中运行 Claude Code 和 OpenAI Codex 的个人开发工具。提供 `aisc` 命令行，可在宿主机上构建镜像、管理容器、切换 AI 模型服务。
+AISC 是一个在 Docker 容器中运行 Claude Code、OpenAI Codex 和 cc-switch 的个人开发工作站。宿主机只提供一个受支持的入口：`aisc`。它负责诊断环境、构建镜像、启动和管理一个或多个容器；AI CLI、Provider、凭据、路由和 Skills 管理在容器内完成。
 
-> **状态：Alpha / 开发中。** 当前稳定版本为 **v2.1.4**；项目版本以仓库根目录 [`VERSION`](VERSION) 为唯一事实源。
+> **状态：Alpha。** 当前版本为 **v2.1.4**，版本号以仓库根目录 [`VERSION`](VERSION) 为准。Alpha 版本的命令、配置和持久化契约仍可能变化，升级前请阅读 Release Notes 并备份重要工作区。
 
-## v2.1.4 版本要点
+## 安全边界
 
-- Codex 启动时默认不再自动启用 cc-switch 代理，官方网页登录和本地凭据可直接使用；需要托管 Provider 时再手动启用 Codex 路由。
-- 容器启动菜单新增 cc-switch TUI 入口，可直接管理 Provider、代理路由与 Skills。
-- 内置 skills 默认按 bundle 哈希和目标状态增量同步，普通重启直接跳过，并保留用户在 cc-switch 中设置的 Claude/Codex 启停状态。
-- Windows/Docker Desktop 文件锁不可用时启用保护性确认，避免覆盖宿主已有或部分存在的 Skills 目录。
-- `AISC_SKILLS_SYNC=auto|always|off` 可控制内置 skills 同步策略。
-- 推送 `v*` 标签后，GitHub Actions 自动构建 Linux x86_64、Windows x86_64 和 macOS arm64 产物并发布 Release；带 `-dev` 的标签发布为 Pre-release。
+AISC 以开发便利为优先，不是生产级安全沙箱：
 
-## 目录
+- 容器以 `root` 运行，挂载的工作区对容器内进程可读写。
+- Claude 包装器默认追加 `--dangerously-skip-permissions`；Codex 包装器默认追加 `--dangerously-bypass-approvals-and-sandbox` 和 `--dangerously-bypass-hook-trust`。这会绕过工具自身的危险操作确认。
+- `IS_SANDBOX=1` 只是运行环境标记，不会建立额外隔离。Docker daemon 权限本身通常等同宿主机高权限。
+- 代理模式额外授予 `NET_ADMIN` 并挂载 `/dev/net/tun`，扩大了容器网络权限。
+- 只在可信代码和可恢复的工作区中运行。不要挂载密钥目录、生产数据或整段用户主目录；先提交或备份未保存的工作。
+- API Key、登录令牌和 Provider 配置只交给 cc-switch 或对应官方 CLI，不要写入仓库、AISC 配置、Issue 或日志。
 
-- [v2.1.4 版本要点](#v214-版本要点)
-- [安装](#安装)
-  - [前置条件](#前置条件)
-  - [方式一：GitHub Release 安装包（推荐）](#方式一github-release-安装包推荐)
-    - [Windows](#windows)
-    - [macOS](#macos)
-    - [Linux](#linux)
-  - [方式二：从源码安装（开发者 / 高级用户）](#方式二从源码安装开发者--高级用户)
-- [快速开始](#快速开始)
-- [配置位置](#配置位置)
-- [命令手册](#命令手册)
-  - [全局选项](#全局选项)
-  - [version — 版本信息](#version--版本信息)
-  - [doctor — 环境诊断](#doctor--环境诊断)
-  - [build — 构建镜像](#build--构建镜像)
-  - [run — 运行容器](#run--运行容器)
-  - [status — 容器状态](#status--容器状态)
-  - [stop — 停止容器](#stop--停止容器)
-  - [restart — 重启容器](#restart--重启容器)
-  - [shell — 进入容器 Shell](#shell--进入容器-shell)
-  - [switch — 切换 AI 后端](#switch--切换-ai-后端)
-  - [config — 配置管理](#config--配置管理)
-  - [cc-switch — Provider 与 Skill 管理](#cc-switch--provider-与-skill-管理)
-  - [profile — Profile 管理](#profile--profile-管理)
-- [升级](#升级)
-- [卸载](#卸载)
-- [常见故障](#常见故障)
-- [许可](#许可)
+## v2.1.4 要点
 
-## 安装
+- Codex 的 cc-switch 代理默认关闭，可直接使用官方登录或 Codex 原生凭据；需要托管 Provider 时再手动启用。
+- 启动菜单可直接进入 cc-switch TUI，统一管理 Claude/Codex Provider、路由和 Skills。
+- 内置 Skills 按 bundle 哈希和目标状态增量同步，并保留 cc-switch 中已有的 Claude/Codex 启停状态。
+- `AISC_SKILLS_SYNC=auto|always|off` 控制 Skills 同步；文件锁不可用时启用保护性确认，避免覆盖宿主已有目录。
+- 支持多容器登记、`--label` 寻址和 `aisc ps` 列表。
+- `v*` 标签由 CI 构建 Linux x86_64、Windows x86_64、macOS arm64 产物；`-dev` 标签发布为 Pre-release。
 
-### 前置条件
+## 安装前提与支持平台
 
-**必须安装 Docker。** Windows 安装程序、macOS PKG 和各平台便携包运行时无需 Python、uv 或 Git。Linux/macOS 如果选择仓库中的安装脚本，还需要 Git 获取脚本。
+运行 AISC 必须安装并启动 Docker：
 
-| 平台 | Docker | 说明 |
+| 平台 | 官方产物 | Docker |
 | --- | --- | --- |
-| Windows | Docker Desktop | 启动后等待 daemon ready |
-| macOS | Docker Desktop | 启动后等待 daemon ready |
-| Linux | Docker Engine | 当前用户需加入 `docker` 组 |
+| Linux | x86_64 | Docker Engine；当前用户需有 daemon 权限 |
+| Windows | x86_64 | Docker Desktop |
+| macOS | Apple Silicon arm64 | Docker Desktop |
 
-验证：
+官方 Release **不提供** Linux arm64、Windows arm64 或 Intel macOS 产物。Release 安装不需要 Python、uv 或 Git；从源码安装需要 Python 3.11+ 和 Git，推荐使用 uv。
+
+先验证 Docker：
 
 ```bash
 docker version
 ```
 
-### 方式一：GitHub Release 安装包（推荐）
+## 从 GitHub Release 安装
 
-从 [GitHub Releases](https://github.com/wangyuncepu/AISC/releases) 下载目标版本对应平台的安装包。发布标签使用 `v<VERSION>`，安装包文件名使用 `VERSION` 中的值（不带前导 `v`）。
+从 [GitHub Releases](https://github.com/wangyuncepu/AISC/releases) 下载对应平台的 v2.1.4 产物及 `.sha256`，或使用汇总文件 `SHA256SUMS` 校验。发布标签带前导 `v`，产物文件名中的版本不带 `v`。
 
-`v2.1.4` 是当前稳定 Release；带 `-dev` 后缀的历史版本显示为 Pre-release。普通用户直接从上面的 Release 页面下载即可，无需进入 Actions 页面。
+### Linux x86_64
 
-#### Windows
+下载 `AISC-2.1.4-linux-x86_64.tar.gz`：
 
-下载 `AISC-<VERSION>-windows-x86_64-setup.exe`，双击运行。
+```bash
+sha256sum -c AISC-2.1.4-linux-x86_64.tar.gz.sha256
+tar -xzf AISC-2.1.4-linux-x86_64.tar.gz
+cd AISC-2.1.4-linux-x86_64
+./aisc version
+```
 
-- **仅支持 x86_64**；ARM Windows 不支持。
-- 默认安装到 `%LOCALAPPDATA%\Programs\AISC`。
-- 自动将安装目录加入用户 PATH（安装后**重新打开终端**生效）。
-- 通过 **设置 → 应用 → 已安装的应用** 或 **控制面板 → 程序和功能** 卸载。
-- 卸载会移除程序文件和 PATH 条目，**不删除** `%USERPROFILE%\.aisc`、工作区中的 `.cc-switch` 或 Docker 资源。
+便携运行时，`aisc` 与 `aisc-bundle/` 必须保持相邻。也可获取仓库中的安装脚本，安装到用户目录：
 
-> **未签名提示：** AISC 尚未经代码签名。首次运行时 Windows SmartScreen 可能弹出“Windows 保护了你的电脑”，点击 **更多信息 → 仍要运行**。
+```bash
+git clone --depth 1 https://github.com/wangyuncepu/AISC.git
+cd AISC
+bash packaging/install.sh /path/to/AISC-2.1.4-linux-x86_64.tar.gz
+aisc version
+```
 
-备用：ZIP 便携版
+默认程序目录为 `${XDG_DATA_HOME:-$HOME/.local/share}/aisc`，命令链接为 `${XDG_BIN_HOME:-$HOME/.local/bin}/aisc`。若后者不在 `PATH`，脚本会提示需要添加的路径。
+
+### Windows x86_64
+
+推荐下载 `AISC-2.1.4-windows-x86_64-setup.exe` 并运行。安装器默认写入 `%LOCALAPPDATA%\Programs\AISC`，并添加用户 `PATH`；安装后重新打开终端：
 
 ```powershell
-Expand-Archive AISC-*-windows-x86_64.zip -DestinationPath .
-cd AISC-*-windows-x86_64
+aisc version
+```
+
+AISC 尚未代码签名。SmartScreen 提示时，请先确认文件来自项目 Release 且 SHA256 正确，再选择“更多信息 -> 仍要运行”。
+
+便携版为 `AISC-2.1.4-windows-x86_64.zip`：
+
+```powershell
+Expand-Archive .\AISC-2.1.4-windows-x86_64.zip -DestinationPath .
+cd .\AISC-2.1.4-windows-x86_64
 .\aisc.exe version
 ```
 
-`aisc.exe` 与 `aisc-bundle\` 目录必须保持在同一父目录下。
+`aisc.exe` 与 `aisc-bundle\` 必须保持相邻。仓库中的 `packaging/install.ps1` 也可安装便携包到 `%LOCALAPPDATA%\AISC`，该路径与 setup.exe 的默认目录不同。
 
-#### macOS
+### macOS arm64
 
-##### 安装程序（推荐）
-
-下载 `AISC-<VERSION>-macos-arm64.pkg`，双击运行。
-
-- **仅支持 Apple Silicon（arm64）**；Intel Mac 不支持。
-- 需**管理员密码**（安装到 `/usr/local/`）。
-- 安装路径：
-  - 可执行文件：`/usr/local/lib/aisc/aisc`
-  - Bundle：`/usr/local/lib/aisc/aisc-bundle/`
-  - 符号链接：`/usr/local/bin/aisc` → `../lib/aisc/aisc`
-- `/usr/local/bin` 默认在 macOS PATH 中，安装后**新开终端**即可使用。
-- 卸载：`sudo /usr/local/lib/aisc/uninstall.sh`（移除文件、符号链接和 pkg 收据；**不删** `~/.aisc` 或工作区中的 `.cc-switch`）。
-- 升级：双击新版 `.pkg` 覆盖安装。
-
-> **未签名提示：** AISC 尚未经 Apple 开发者签名。首次双击 `.pkg` 时，macOS Gatekeeper 可能阻止运行。前往 **系统设置 → 隐私与安全性**，滚动到底部点击 **“仍要打开”**。不要全局关闭 Gatekeeper（`spctl --master-disable`）。
-
-##### 便携版（备用）
+推荐下载 `AISC-2.1.4-macos-arm64.pkg`。安装需要管理员密码，内容位于 `/usr/local/lib/aisc/`，并创建 `/usr/local/bin/aisc` 链接。安装后新开终端：
 
 ```bash
-tar -xzf AISC-*-macos-arm64.tar.gz
-cd AISC-*-macos-arm64
+aisc version
+```
+
+PKG 尚未签名和公证。若 Gatekeeper 阻止打开，请确认 Release 和 SHA256 后，在“系统设置 -> 隐私与安全性”中选择“仍要打开”；不要全局关闭 Gatekeeper。
+
+便携包为 `AISC-2.1.4-macos-arm64.tar.gz`：
+
+```bash
+tar -xzf AISC-2.1.4-macos-arm64.tar.gz
+cd AISC-2.1.4-macos-arm64
 ./aisc version
 ```
 
-或使用安装脚本安装到 `$HOME/Library/Application Support/AISC`：
+也可使用 `packaging/install.sh` 安装到 `$HOME/Library/Application Support/AISC`，并在 `${XDG_BIN_HOME:-$HOME/.local/bin}` 创建命令链接。
+
+## 从源码安装
+
+适合开发者或需要自行构建当前分支的用户：
 
 ```bash
-# install.sh / uninstall.sh 位于 AISC 源码仓库的 packaging/ 目录
-git clone --depth 1 https://github.com/wangyuncepu/AISC.git
+git clone https://github.com/wangyuncepu/AISC.git
 cd AISC
-bash packaging/install.sh ~/Downloads/AISC-*-macos-arm64.tar.gz
-bash packaging/uninstall.sh   # 卸载
-```
-
-#### Linux
-
-##### tar.gz + 安装脚本
-
-```bash
-# 1. 下载 AISC-<VERSION>-linux-x86_64.tar.gz
-
-# 2. 可选的 SHA256 校验
-sha256sum -c AISC-*-linux-x86_64.tar.gz.sha256
-
-# 3. 获取仓库中的安装脚本并安装
-git clone --depth 1 https://github.com/wangyuncepu/AISC.git
-cd AISC
-bash packaging/install.sh ~/Downloads/AISC-*-linux-x86_64.tar.gz
-```
-
-安装脚本会：
-- 将 `aisc` + `aisc-bundle/` 安装到 `${XDG_DATA_HOME:-$HOME/.local/share}/aisc`
-- 在 `${XDG_BIN_HOME:-$HOME/.local/bin}/aisc` 创建符号链接
-- 支持重复安装；先在临时目录完成 staging，再替换旧安装
-- 若 `${XDG_BIN_HOME}` 不在 PATH，提示手动配置
-
-解压直接运行（无需安装脚本）：
-
-```bash
-tar -xzf AISC-*-linux-x86_64.tar.gz
-cd AISC-*-linux-x86_64
-./aisc version
-```
-
-> **仅支持 x86_64**；arm64/aarch64 不支持。`aisc` 与 `aisc-bundle/` 必须保持在同一父目录。
-
-卸载：
-
-```bash
-bash packaging/uninstall.sh
-# 不删除 Docker 镜像/容器、~/.aisc 配置或工作区
-```
-
-### 方式二：从源码安装（开发者 / 高级用户）
-
-需要 Python ≥3.11 和 uv。适合需要修改源码或参与开发的用户。
-
-```bash
-# 1. 克隆仓库
-git clone https://github.com/wangyuncepu/AISC.git AISC
-cd AISC
-
-# 2. editable 安装
 uv tool install --editable .
-
-# 3. 将 tool bin 加入 PATH
 uv tool update-shell
-# 重新打开终端生效
 ```
 
-更新：
+重新打开终端后验证：
 
 ```bash
-cd /path/to/AISC && git pull
-uv tool upgrade aisc  # 如有新增依赖
+aisc version
 ```
 
-卸载：
-
-```bash
-uv tool uninstall aisc
-```
-
-> 仓库不可删除或移动（editable 安装记录绝对路径）。如需移动，先 `uv tool uninstall aisc`，移动后重新 `uv tool install --editable .`。
+editable 安装记录仓库绝对路径。不要直接移动或删除仓库；需要移动时先运行 `uv tool uninstall aisc`，再在新位置重新安装。
 
 ## 快速开始
 
 ```bash
-# 验证安装
+# 1. 查看版本和宿主环境
 aisc version
-
-# 检查环境（Docker CLI、daemon、权限等）
 aisc doctor
 
-# 构建 Docker 镜像（首次约需数分钟，需网络拉取基础镜像）
+# 2. 构建默认镜像 super-claude:latest
 aisc build
 
-# 前台运行容器（默认挂载当前目录为工作区）
+# 3. 在当前目录启动容器
 aisc run
 ```
 
-`aisc run` 是前台命令。运行后在另一个终端可执行：
+交互式文本终端中，裸 `aisc build` 会打开构建向导；通过 `--tag`、`--no-cache`、`--pull` 或 `--dry-run` 明确给出构建选项时直接执行对应计划。
+
+`aisc run` 默认行为是：
+
+- 镜像为 `super-claude:latest`，工作区为当前目录并挂载到 `/root/app`。
+- 网络为 `direct`。
+- 使用前台交互终端 `-it`，容器退出后由 `--rm` 自动删除。
+- 自动生成 `<name>-<8位十六进制>` 容器名，并登记到 `<aisc-root>/.aisc/containers.json`。
+
+容器初始化时先选择作用域：
+
+1. `temporary`：Claude、Codex 和 cc-switch 状态位于 `/tmp/aisc-home`，容器结束即重置。
+2. `project`：状态写入挂载工作区的 `.claude/`、`.codex/`、`.cc-switch/`，跨容器保留；默认选项。
+
+随后可选择 `bash`、`claude`、`codex` 或 `cc-switch`，默认进入 `bash`。
+
+需要从另一个终端管理当前容器时：
 
 ```bash
-aisc status        # 查看容器状态
-aisc shell         # 进入容器 Bash
-aisc switch        # 打开服务切换界面
-```
-
-### 使用 Claude Code 或 Codex
-
-容器启动时会提示选择要使用的 AI CLI：
-
-1. **bash** - 进入命令行，可手动配置后启动任意 CLI
-2. **claude** - 直接启动 Claude Code
-3. **codex** - 直接启动 OpenAI Codex
-4. **cc-switch** - 打开 Provider、代理路由与 Skills 管理界面
-
-默认选择为 **bash**。
-
-你也可以直接指定启动方式：
-
-```bash
-# 启动容器，在菜单中选择 2
-aisc run
-
-# 启动 Codex
-docker exec -it <container-name> codex
-
-# 打开 cc-switch 管理界面
-docker exec -it <container-name> cc-switch
-
-# 或在容器内切换
+aisc ps
+aisc status
 aisc shell
-codex   # 启动 Codex
-claude  # 启动 Claude
-cc-switch  # 管理 Provider、路由与 Skills
+aisc switch
 ```
 
-**Codex 配置说明：**
-
-Codex Provider 与认证信息由 cc-switch 管理。进入容器后先检查或选择 Provider：
+希望断开终端后仍保留容器：
 
 ```bash
+aisc run --keep-alive --label work
+# docker attach 的 detach 组合键通常为 Ctrl-p Ctrl-q
+aisc shell --label work
+aisc stop --label work
+```
+
+脚本或 CI 中使用非交互模式：
+
+```bash
+aisc run --non-interactive
+```
+
+该模式不分配 `-it`，stdin 使用 DEVNULL，并设置 `AISC_NON_INTERACTIVE=1` 和项目作用域。
+
+## 容器内使用
+
+进入容器后可直接运行：
+
+```bash
+claude
+codex
+cc-switch
+```
+
+### Claude、Codex 与 Provider
+
+Provider、认证信息和路由状态只由 cc-switch 管理。AISC 不维护另一份 Provider 或凭据配置：
+
+```bash
+# 查看和切换 Provider
+cc-switch -a claude provider list
+cc-switch -a claude provider current
+cc-switch -a claude provider switch <provider>
 cc-switch -a codex provider list
 cc-switch -a codex provider current
 cc-switch -a codex provider switch <provider>
+
+# 查看或调整本地路由
+cc-switch proxy show
+cc-switch proxy -a claude enable
 cc-switch proxy -a codex enable
 ```
 
-镜像会在全新 cc-switch 数据库中尝试选择 `codex-official`，但内置条目不包含你的真实凭据。使用官方登录或自定义 API 时，仍需在 cc-switch 中完成 Provider 配置。
+启动时 AISC 会 detach 启动 cc-switch daemon。Claude 路由以 best-effort 方式自动启用；失败不会阻止进入容器。Codex 默认保持官方直连，支持官方网页登录和原生凭据；只有需要 cc-switch 托管的 Codex Provider 时才执行 `cc-switch proxy -a codex enable`。
 
-Codex 配置目录与 Claude 类似，支持临时模式和项目模式：
-- **临时模式**：使用 `/tmp/aisc-home/.codex`，容器退出后重置
-- **项目模式**：使用 `/root/app/.codex`，持久化到宿主机工作区；Codex 原生配置文件为 `config.toml`
+全新数据库会尝试导入 Codex `config.toml`，仍无当前 Provider 时选择内置 `codex-official`。该条目不包含用户凭据，不能替代登录或 API Key 配置。
 
-## 配置位置
+### Skills 同步
 
-| 路径 | 说明 |
-| --- | --- |
-| `<aisc-root>/config/versions.env` | 镜像版本环境变量（`NODE_IMAGE`、`USE_CN_MIRROR`） |
-| `<workspace>/.cc-switch/` | cc-switch 项目配置根（SQLite 数据库、Provider、设置、备份及 skills SSOT） |
-| `<workspace>/.claude/` | 项目作用域的 Claude 配置、插件与同步后的 skills |
-| `<workspace>/.codex/` | 项目作用域的 Codex 配置与同步后的 skills |
-| `<aisc-root>/container/Dockerfile` | 镜像构建文件 |
-| `<aisc-root>/.aisc/state.env` | 容器状态（`CONTAINER_NAME`、`IMAGE`，由 `aisc run` 写入） |
-
-`<aisc-root>` 由 `--aisc-root` 显式指定，或自动定位到可执行文件同目录下的 `aisc-bundle/`。
-
-## 命令手册
-
-### 全局选项
-
-所有命令均支持以下选项：
-
-| 选项 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--format` | `text` / `json` | `text` | 输出格式。`build`/`run` JSON 模式下 stdout 为纯 JSON envelope，Docker 输出转发到 stderr |
-| `--no-color` | flag | `False` | 禁用 ANSI 颜色输出 |
-| `--aisc-root PATH` | string | 自动 | 显式指定有效的 AISC 资源根目录；该目录本身须包含 `VERSION`、`container/Dockerfile`、`config/versions.env` |
-| `--events` | flag | `False` | 启用 JSONL 事件流（仅 `build` 和 `run` 支持） |
-
-- `--format json` 与 `--events` 互斥，同时指定报错退出（exit 2）。
-- `--aisc-root` 支持 “last wins” 语义（无论放在命令前还是命令后，以最后一个为准）。
-- 裸 `aisc`（不带子命令）打印帮助。
-- 裸分组命令（`aisc config`、`aisc profile`）打印该分组的帮助，exit 0。
-
-### version — 版本信息
+镜像内置 `caveman`、`document-skills`、`grill-me`、`superpowers`，由 cc-switch 登记并复制到 Claude/Codex 目标目录：
 
 ```bash
-aisc version [--format json]
-```
-
-**只读**，不依赖 Docker / 网络。
-
-输出内容：
-
-| 字段 | 说明 |
-| --- | --- |
-| `cli_version` | CLI 版本号（源自 `VERSION`；PyInstaller 构建时将该文件嵌入可执行文件） |
-| `python_version` | Python 运行版本 |
-| `bundle_version` | Bundle 中的 VERSION 文件内容 |
-| `image_version` | 镜像版本（`IMAGE_VERSION` 来自 `versions.env`） |
-| `contract_version` | 契约版本（`CONTRACT_VERSION` 来自 `versions.env`） |
-| `claude_version` | 声明的 Claude Code 版本（`CLAUDECODE_VERSION` 来自 `versions.env`） |
-
-退出码：0（成功）或 1（AISC root 未找到等错误）。
-
-### doctor — 环境诊断
-
-```bash
-aisc doctor [--format json] [--no-color]
-```
-
-**只读**，仅诊断宿主机（无 `--container` 选项）。不依赖 Docker daemon 也会检查（部分检查会 SKIP）。
-
-主要检查 Docker CLI/daemon/权限与 buildx、TUN 设备、Git、AISC 资源根及关键文件、目录可写性和 brief 文件。前置检查失败时，依赖它的后续项目会显示为 SKIP。
-
-文本模式下带 ANSI 颜色标记 PASS（绿）、WARN（黄）、FAIL（红）。
-
-退出码：
-
-| 最高严重级别 | 退出码 |
-| --- | --- |
-| 全部 PASS 或 WARN | 0 |
-| Docker CLI 或 daemon 不可用 | 3（`AISC_ERR_DOCKER_UNAVAILABLE`） |
-| Docker 权限不足 | 9（`AISC_ERR_PERMISSION_DENIED`） |
-| AISC root 或其他检查失败 | 1（`AISC_ERR_GENERAL`） |
-
-### build — 构建镜像
-
-```bash
-aisc build [--tag TAG] [--no-cache] [--pull] [--dry-run]
-           [--format json] [--events]
-```
-
-**会调用 Docker**（`docker build`），需要 Docker daemon 和网络（拉取基础镜像）。
-
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--tag, -t` | string | `super-claude:latest` | 镜像标签；若不含 `:` 自动追加 `:latest` |
-| `--no-cache` | flag | `False` | 禁用 Docker 构建缓存 |
-| `--pull` | flag | `False` | 始终拉取基础镜像 |
-| `--dry-run` | flag | `False` | 仅输出构建计划（`docker build` 命令行），不执行 |
-
-**效果：**
-- 读取 `config/versions.env` 中的 `USE_CN_MIRROR`（默认 `1`）和 `NODE_IMAGE` 作为 build-arg。
-- `--dry-run` 模式不调用 Docker，仅输出 `docker build ...` 命令行。
-- 非 `--dry-run` 时：
-  - `--events` 模式：输出 JSONL 事件流（`build.start` → `build.plan` → `build.step.complete` → `build.complete`/`build.failed`）。
-  - 文本模式：Docker 日志实时输出到 stdout。
-  - JSON 模式：Docker 输出转发到 stderr，stdout 仅在结束时输出 JSON envelope。
-
-**退出码：**
-
-| 退出码 | 错误码 | 场景 |
-| --- | --- | --- |
-| 0 | — | 成功 |
-| 1 | `AISC_ERR_GENERAL` | 前置条件缺失（Dockerfile 不存在、`NODE_IMAGE` 未配置等） |
-| 3 | `AISC_ERR_DOCKER_UNAVAILABLE` | Docker CLI 未找到 |
-| 4 | `AISC_ERR_BUILD_FAILED` | Docker 构建失败 |
-
-**示例：**
-
-```bash
-# 默认构建
-aisc build
-
-# 指定标签
-aisc build --tag my-super-claude:v1
-
-# 不缓存、重新拉取基础镜像
-aisc build --no-cache --pull
-
-# 仅预览构建计划
-aisc build --dry-run
-
-# JSONL 事件流
-aisc build --events
-```
-
-### run — 运行容器
-
-```bash
-aisc run [--image IMAGE] [--workspace PATH] [--name NAME]
-         [--network direct|proxy] [--profile proxy] [--non-interactive]
-         [--keep-alive] [--dry-run] [--format json] [--events]
-```
-
-**会调用 Docker**（`docker run`），需要 Docker daemon。默认容器退出后自动删除（`--rm`）；使用 `--keep-alive` 可保持容器运行。
-
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--image, -i` | string | `super-claude:latest` | Docker 镜像名；若不含 `:` 自动追加 `:latest` |
-| `--workspace` | string | 当前目录 | 宿主机工作区路径，bind-mount 进容器 |
-| `--name` | string | `super-claude-station` | 容器名前缀（自动追加 8 位随机后缀确保唯一） |
-| `--network` | `direct` / `proxy` | `direct` | 网络模式；`proxy` 需 `.claude/mihomo/config.yaml` |
-| `--profile` | `proxy` | — | 兼容别名，等价于 `--network proxy`；与 `--network direct` 冲突 |
-| `--non-interactive` | flag | `False` | 非交互模式：无 `-it`，stdin=DEVNULL，设置 `AISC_NON_INTERACTIVE=1`、`CLAUDE_SCOPE=project` |
-| `--keep-alive` | flag | `False` | 保持容器运行：省略 `--rm`，使用后台模式（`-d`）启动并自动 attach；客户端断开后容器继续运行，不会导致 CPU/Memory 状态变为 N/A |
-| `--dry-run` | flag | `False` | 仅输出运行计划，不执行 |
-
-**效果：**
-- 生成唯一容器名（`<name>-<8 位 hex>`）。
-- 实际启动容器前写入 `<aisc-root>/.aisc/state.env` 中的 `CONTAINER_NAME` 和 `IMAGE`，供其他终端通过 `status`/`shell` 等自动发现。容器退出并由 `--rm` 删除后，该文件可能保留最近一次容器名。
-- 将宿主机 `<workspace>/` 挂载到容器 `/root/app`；项目文件及 `.cc-switch`、`.claude`、`.codex` 配置都随工作区持久化。
-- 首次启动时将 cc-switch 配置根初始化为 `<workspace>/.cc-switch/`；Provider 只由 cc-switch 的 SQLite 状态管理。
-- entrypoint 会以 detach 模式启动 cc-switch daemon，等待其可达，尝试初始化 Codex 当前 Provider，并以 best-effort 方式启用 Claude 路由。Codex 默认不启用 cc-switch 代理，需要时可在容器内手动执行 `cc-switch proxy -a codex enable`。
-- entrypoint 首次启动时将 caveman、document-skills、grill-me、superpowers 登记到 cc-switch，并以 copy 模式同步给 Claude 和 Codex；后续仅在 bundle 内容变化、登记/源目录缺失或已启用目标缺失时同步。
-- 交互式启动菜单的第 4 项会直接进入 cc-switch TUI；退出 TUI 即结束该前台容器会话。
-- `--dry-run` 只输出 `docker run ...` 命令行，不创建或修改项目配置目录，也不校验本地 proxy 配置文件。
-- 非 `--dry-run` 时：
-  - 检查 Docker 可用性（preflight）。
-  - 检查镜像是否存在（`docker inspect`），不存在则报错（exit 5）。
-  - 文本交互模式（默认）：`docker run -it --rm`，stdin/stdout 直通。
-  - `--non-interactive` 模式：`docker run --rm`，无 `-it`。
-  - JSON / events 模式：Docker 输出转发到 stderr，stdout 纯净。
-- 退出后容器自动删除（`--rm`）。
-
-**退出码：**
-
-| 退出码 | 错误码 | 场景 |
-| --- | --- | --- |
-| 0 | — | 容器正常退出 |
-| 1 | `AISC_ERR_GENERAL` | proxy 配置缺失等 |
-| 3 | `AISC_ERR_DOCKER_UNAVAILABLE` | Docker CLI 未找到或 daemon 不可达 |
-| 5 | `AISC_ERR_IMAGE_NOT_FOUND` | 镜像不存在（先运行 `aisc build`） |
-| 9 | `AISC_ERR_PERMISSION_DENIED` | 工作区不可访问 |
-| 10 | `AISC_ERR_CONTAINER_FAILED` | 容器以非零退出码退出 |
-
-**示例：**
-
-```bash
-# 前台运行（默认当前目录为工作区）
-aisc run
-
-# 指定镜像和工作区
-aisc run --image my-super-claude:v1 --workspace ~/projects/myapp
-
-# 使用代理网络
-aisc run --network proxy
-
-# 非交互模式（脚本/CI）
-aisc run --non-interactive
-
-# 预览运行计划
-aisc run --dry-run
-```
-
-### status — 容器状态
-
-```bash
-aisc status [--name NAME] [--format json]
-```
-
-**会调用 Docker**（`docker inspect`）。容器不存在返回 `exists=False`（exit 0），daemon 不可达则报错。
-
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--name` | string | 自动发现 | 显式指定容器名；未指定则从 `<aisc-root>/.aisc/state.env` 读取 `CONTAINER_NAME` |
-
-**容器发现优先级：** `--name` 覆盖 → 状态文件（`<aisc-root>/.aisc/state.env`）→ 报错（`AISC_ERR_CONTAINER_NOT_FOUND`）。
-
-文本输出示例：
-
-```
-Container:  super-claude-station-a1b2c3d4
-Exists:     yes
-Running:    running
-Status:     running
-Image:      super-claude:latest
-ID:         a1b2c3d4e5f6
-```
-
-### stop — 停止容器
-
-```bash
-aisc stop [--name NAME] [--format json]
-```
-
-**会调用 Docker**（`docker stop`）。幂等：容器已停止返回成功（`already_stopped: true`）。容器不存在报错。
-
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--name` | string | 自动发现 | 显式指定容器名 |
-
-### restart — 重启容器
-
-```bash
-aisc restart [--name NAME] [--format json]
-```
-
-**会调用 Docker**（`docker restart`）。容器不存在报错。
-
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--name` | string | 自动发现 | 显式指定容器名 |
-
-### shell — 进入容器 Shell
-
-```bash
-aisc shell [--name NAME]
-```
-
-**会调用 Docker**（`docker exec -it <name> bash`）。仅支持文本交互模式，`--format json` 和 `--events` 均不支持（报 usage error，exit 2）。
-
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--name` | string | 自动发现 | 显式指定容器名 |
-
-容器必须存在且正在运行，否则报错。
-
-### switch — 切换 AI 后端
-
-```bash
-aisc switch [--name NAME] [--quick PROVIDER]
-```
-
-**会调用 Docker**（`docker exec`）。仅支持文本交互模式，`--format json` 和 `--events` 均不支持。
-
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--name` | string | 自动发现 | 显式指定容器名 |
-| `--quick` | string | — | Provider id 或别名，快速切换（跳过 TUI） |
-
-**效果：**
-- 默认（无 `--quick`）：运行 `cc-switch`（全功能 TUI 界面）。
-- `--quick` 模式：通过 scope-preserving wrapper 读取 PID 1 的 `CLAUDE_CONFIG_DIR`、`CODEX_CONFIG_DIR` 和 `CC_SWITCH_CONFIG_DIR`，再执行 `cc-switch -a claude provider switch <provider>`。
-- 容器必须存在且正在运行。
-
-**示例：**
-
-```bash
-# 交互式 TUI 切换
-aisc switch
-
-# 快速切换到 DeepSeek
-aisc switch --quick deepseek
-```
-
-### config — 配置管理
-
-```bash
-aisc config validate [--config PATH] [--workspace PATH] [--format json]
-aisc config effective [--config PATH] [--workspace PATH] [--format json]
-aisc config show      [--config PATH] [--workspace PATH] [--format json]
-```
-
-**只读**，不依赖 Docker / 网络。`config show` 是 `config effective` 的别名。
-
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `--config` | string | 自动 | 显式指定用户配置文件路径 |
-| `--workspace` | string | 自动 | 工作区根路径 |
-
-**子命令：**
-
-| 子命令 | 说明 |
-| --- | --- |
-| `validate` | 校验配置文件合法性，输出每项来源的状态（FOUND / MISSING / ERROR）、有效性与问题清单 |
-| `effective` / `show` | 显示合并后的有效配置（JSON），包含来源、有效值、来源追溯（provenance）和问题清单 |
-
-### cc-switch — Provider 与 Skill 管理
-
-旧的宿主机 Provider 目录和容器快捷命令已经移除。可在容器启动菜单选择 **4** 进入 cc-switch TUI，也可进入容器后直接使用命令：
-
-```bash
-# Provider
-cc-switch -a claude provider list
-cc-switch -a claude provider switch <provider>
-cc-switch -a codex provider list
-cc-switch -a codex provider switch <provider>
-
-# Skills
 cc-switch skills list
 cc-switch skills sync
 ```
 
-Provider、认证信息和路由状态都由 cc-switch 管理。请用 cc-switch TUI 或其 provider 命令新增、编辑和切换 Provider；不要在工作区维护第二份 AISC Provider 配置。
+容器入口识别 `AISC_SKILLS_SYNC`：
 
-启用或停用 caveman 等 skill 只会改变 agent 的指令/工作流，不会修改 Provider、代理端口或 API 凭据。如果启用 skill 后无法连接模型，应先检查 cc-switch daemon、当前 Provider 和路由，而不是删除 skill。
+| 值 | 行为 |
+| --- | --- |
+| `auto` | 默认；仅在首次安装、bundle 变化、登记缺失或已启用目标缺失时同步 |
+| `always` | 每次启动都请求同步，但不会绕过文件锁降级时的保护性确认 |
+| `off` | 完全跳过 AISC 的自动同步 |
 
-内置 skills 默认使用 `AISC_SKILLS_SYNC=auto`：首次安装或检测到内容/目标变化时才同步，普通重启直接跳过，并保留你在 cc-switch 中设置的 Claude/Codex 启停状态。排障时可用 `AISC_SKILLS_SYNC=always` 强制重建；如需完全禁止 AISC 自动同步，可设为 `off`。
+同步更新已有记录的元数据，不强制改写 `enabled_claude` 或 `enabled_codex`，因此用户在 cc-switch 中停用的状态可跨重启保留。当前 `aisc run` 没有通用的 `--env` 参数；未通过镜像环境注入该变量时使用 `auto`。
 
-在 Windows/Docker Desktop 绑定挂载不支持文件锁时，AISC 会启用保护性确认：只有宿主项目的 `.cc-switch/skills`、`.claude/skills`、`.codex/skills` 三个目录都不存在时才直接复制；任一目录已存在都会询问是否合并并覆盖同名文件，默认 `[y/N]`。非交互运行默认不复制并保留宿主内容；`always` 在文件锁失效时同样需要确认。
+正常情况下 `.cc-switch/.aisc-bundled-skills.lock` 串行化同步。Windows/Docker Desktop 的绑定挂载不支持文件锁时，如果 `.cc-switch/skills`、`.claude/skills`、`.codex/skills` 任一已存在，会询问是否合并覆盖，默认拒绝；非交互模式也默认跳过，保护宿主内容。
 
-### profile — Profile 管理
+### 代理网络
 
 ```bash
-aisc profile list                 [--format json]
-aisc profile show [NAME]          [--format json]
+aisc run --network proxy
 ```
 
-**只读**，返回内置 profile（safe / unsafe），无用户自定义 profile。
+代理模式要求：
 
-| 子命令 | 说明 |
+- 宿主支持 `/dev/net/tun`，Docker 可授予 `NET_ADMIN` 和 TUN 设备。
+- `<aisc-root>/.claude/mihomo/config.yaml` 存在且可读；运行时只读挂载到 `/etc/mihomo/config.yaml`。
+- 配置或订阅可被 `container/mihomo-build-config.js` 转换，Mihomo 能建立 TUN 和路由。
+
+`aisc run --profile proxy` 只是 `--network proxy` 的兼容网络别名，不是权限 Profile；新命令应使用 `--network proxy`。
+
+## 配置与持久化
+
+### AISC 用户配置
+
+`aisc config` 读取 JSON 配置，用户层路径按平台确定：
+
+| 平台 | 用户配置 |
 | --- | --- |
-| `list` | 列出所有可用 Profile（name、description、dangerously_skip_permissions） |
-| `show [NAME]` | 查看指定 Profile 详情；NAME 默认 `safe`（可选参数） |
+| Linux | `${XDG_CONFIG_HOME:-$HOME/.config}/aisc/config.json` |
+| macOS | `$HOME/Library/Application Support/aisc/config.json` |
+| Windows | `%APPDATA%\aisc\config.json` |
+
+工作区层固定为 `<workspace>/.aisc/config.json`，优先级为内置默认值 < 用户配置 < 工作区配置。也可用 `--config PATH` 指定用户层文件。
+
+最小配置：
+
+```json
+{
+  "schema_version": 1,
+  "defaults": {
+    "profile": "safe",
+    "network": "direct"
+  }
+}
+```
+
+当前配置命令只负责校验和展示合并结果；`defaults.profile`、`defaults.network` **尚未接入** `aisc run` 参数决策。运行行为仍以命令行选项为准。未知键会告警并忽略，Provider 和认证字段不属于 AISC schema。
+
+### 持久化路径
+
+| 路径 | 所有者与用途 |
+| --- | --- |
+| `<workspace>/.cc-switch/` | cc-switch SQLite、Provider、路由、备份及 Skills 源状态 |
+| `<workspace>/.claude/` | 项目作用域 Claude 配置、插件、命令和 Skills |
+| `<workspace>/.codex/` | 项目作用域 Codex `config.toml`、运行状态和 Skills |
+| `<workspace>/.aisc/config.json` | 工作区 AISC 配置层 |
+| `<aisc-root>/.aisc/containers.json` | 多容器 registry；默认目标及每个容器的镜像、工作区、网络、label、创建时间 |
+| `<aisc-root>/.aisc/state.env` | 兼容状态标志；只允许 `DO_RUN`、`PROXY_ENABLED`，不保存容器名、Provider 或凭据 |
+| `<aisc-root>/config/versions.env` | 镜像外部依赖和构建变量 |
+
+`containers.json` 采用临时文件加替换的原子写入；支持 `fcntl` 时还使用文件锁。查询容器时会尽力清理 Docker 中已不存在的登记项。不要在容器运行期间手工编辑 registry。
+
+### AISC root
+
+资源根必须包含 `VERSION`、`container/Dockerfile`、`config/versions.env`。查找顺序是：
+
+1. `--aisc-root PATH`
+2. `AISC_ROOT` 环境变量
+3. 冻结可执行文件旁的 `aisc-bundle/`
+4. 从当前目录向上查找有效 Git 仓库
+5. editable 安装包源码路径的祖先目录
+
+显式来源存在但结构不完整时会报错，不会静默换用其他目录。
+
+## CLI 参考
+
+宿主机唯一入口为 `aisc`。不带子命令会打印帮助并以 usage error 结束；裸 `aisc config`、`aisc profile` 打印分组帮助并成功退出。
+
+### 全局选项
+
+全局选项可放在子命令前或后：
+
+| 选项 | 说明 |
+| --- | --- |
+| `--format text|json` | 默认 `text`；JSON 模式输出统一 envelope |
+| `--no-color` | 禁用 ANSI 颜色 |
+| `--aisc-root PATH` | 指定资源根；重复出现时最后一个值生效 |
+| `--events` | 仅 `build`、`run` 支持的 JSONL 事件流 |
+
+`--format json` 与 `--events` 互斥。机器输出模式下 stdout 只保留 JSON envelope 或 JSONL，Docker 子进程输出转发到 stderr。`shell`、`switch` 只支持文本交互模式。不要依赖未声明命令对 `--events` 的处理。
+
+### 命令总览
+
+| 命令 | 主要参数 | 作用 |
+| --- | --- | --- |
+| `aisc version` | 全局选项 | 显示 CLI、Python、bundle 和声明依赖版本信息 |
+| `aisc doctor` | 全局选项 | 只读检查 Docker、权限、buildx、TUN、Git、资源根和目录可写性 |
+| `aisc build` | `--tag/-t`, `--no-cache`, `--pull`, `--dry-run` | 构建镜像；默认 tag 为 `super-claude:latest` |
+| `aisc run` | `--image/-i`, `--workspace`, `--name`, `--label`, `--network`, `--profile proxy`, `--non-interactive`, `--keep-alive`, `--dry-run` | 启动并登记容器 |
+| `aisc ps` | 全局选项 | 列出 registry 中容器的 label、实时状态、镜像和工作区 |
+| `aisc status` | `--name`, `--label` | 查看目标容器状态 |
+| `aisc stop` | `--name`, `--label` | 停止目标容器；已停止时幂等成功 |
+| `aisc restart` | `--name`, `--label` | 重启目标容器 |
+| `aisc shell` | `--name`, `--label` | 执行 `docker exec -it <name> bash` |
+| `aisc switch` | `--name`, `--label`, `--quick PROVIDER` | 打开 cc-switch TUI，或快速切换 Claude Provider |
+| `aisc config validate` | `--config`, `--workspace` | 只读校验用户层和工作区层配置 |
+| `aisc config effective` | `--config`, `--workspace` | 展示有效配置、来源追踪和问题；`show` 是兼容别名 |
+| `aisc profile list` | 全局选项 | 只读列出 Profile |
+| `aisc profile show [NAME]` | 全局选项 | 只读显示 Profile；默认 `safe` |
+
+### build
+
+```bash
+aisc build [--tag TAG] [--no-cache] [--pull] [--dry-run]
+```
+
+镜像名不含 `:` 时自动追加 `:latest`。构建从 `config/versions.env` 读取 `USE_CN_MIRROR`、`NODE_IMAGE`、`NODE_IMAGE_CN`，生成 `docker build` 计划。`--dry-run` 不调用 Docker；实际构建需要 daemon 和下载基础镜像/依赖所需的网络。
+
+```bash
+aisc build --tag team-image:2.1.4
+aisc build --no-cache --pull
+aisc build --dry-run --format json
+aisc build --events
+```
+
+### run
+
+```bash
+aisc run [--image IMAGE] [--workspace PATH] [--name PREFIX] [--label LABEL]
+         [--network direct|proxy] [--profile proxy]
+         [--non-interactive] [--keep-alive] [--dry-run]
+```
+
+- `--name` 是容器名前缀，不是最终名称；每次追加随机后缀。
+- `--label` 是 registry 寻址标签，不是 Docker label；建议为并行工作区设置唯一值。
+- `--keep-alive` 省略 `--rm`，交互文本模式以 `-d` 启动后自动 attach；客户端 detach 后容器继续运行。
+- `--non-interactive` 取消 TTY 和交互输入；它与机器输出捕获是不同概念。
+- `--dry-run` 仍校验工作区；proxy 模式要求能解析配置路径，但跳过配置文件内容检查，不调用 Docker，也不写 registry。
+
+### 多容器寻址
+
+```bash
+aisc run --keep-alive --label api
+aisc run --keep-alive --label web
+aisc ps
+aisc status --label api
+aisc shell --label web
+aisc restart --label api
+aisc stop --label web
+```
+
+目标解析顺序为：显式 `--name` -> 唯一匹配的 `--label` -> registry 的默认目标（最近一次 `run`）-> 唯一登记容器。多个候选无法消歧时会列出容器并要求指定 `--name` 或 `--label`；同一 label 匹配多个容器时必须用 `--name`。
+
+`stop` 成功后移除活动登记；默认前台容器因 `--rm` 消失后，会在后续发现或 `ps` 时由惰性清理移除。
+
+### switch 与 profile
+
+```bash
+aisc switch --label api
+aisc switch --label api --quick deepseek
+aisc profile list
+aisc profile show safe
+aisc profile show unsafe
+```
+
+`switch --quick` 从容器 PID 1 安全读取当前 Claude/Codex/cc-switch 作用域路径，再执行 Claude Provider 切换。`profile list/show` 当前只是查看接口；内置 `safe`/`unsafe` 的 `dangerously_skip_permissions` 值不控制 `aisc run`，也不能抵消容器包装器的危险权限默认值。
 
 ## 升级
 
-### 安装包版（方式一）
+- Windows setup.exe：运行新版安装器覆盖安装。
+- macOS PKG：运行新版 `.pkg` 覆盖安装。
+- Linux/macOS 便携脚本：重新执行 `bash packaging/install.sh <new-archive>`。
+- 源码 editable：在仓库执行 `git pull`；依赖发生变化时执行 `uv tool upgrade aisc` 或重新安装。
 
-下载新版安装包，覆盖安装即可：
-
-- Windows：双击新版 `.exe`
-- macOS：双击新版 `.pkg`
-- Linux：重新运行 `bash packaging/install.sh <new.tar.gz>`
-
-配置文件、Docker 镜像/容器不受影响。
-
-### 源码版（方式二）
-
-```bash
-cd /path/to/AISC
-git pull
-uv tool upgrade aisc  # 如有新增依赖
-```
+程序升级不会自动删除 Docker 镜像、容器、用户配置和工作区状态。若容器镜像内容有变化，升级宿主 CLI 后还需重新运行 `aisc build`；需要排除缓存时使用 `aisc build --no-cache`。
 
 ## 卸载
 
-| 安装方式 | 卸载方法 |
+| 安装方式 | 卸载方式 |
 | --- | --- |
-| Windows setup.exe | **设置 → 应用 → 已安装的应用** 卸载 |
-| macOS pkg | `sudo /usr/local/lib/aisc/uninstall.sh` |
-| Linux install.sh | `bash packaging/uninstall.sh` |
+| Windows setup.exe | Windows“设置 -> 应用 -> 已安装的应用” |
+| Windows `packaging/install.ps1` | 在仓库运行 `powershell -File packaging/uninstall.ps1` |
+| macOS PKG | `sudo /usr/local/lib/aisc/uninstall.sh` |
+| Linux/macOS `packaging/install.sh` | `bash packaging/uninstall.sh` |
 | uv tool | `uv tool uninstall aisc` |
 
-卸载**不会删除**以下内容（需手动清理）：
-- `~/.aisc/` 配置目录
-- 工作区中的 `.cc-switch/` 配置目录
-- `~/.cache/ai-brief/` 资讯缓存
-- Docker 镜像（`docker rmi`）和容器
+卸载器不会删除工作区、用户配置或 Docker 资源。确认不再需要后可手工处理：
 
-## 常见故障
+```bash
+docker ps -a
+docker images super-claude
+```
 
-### `aisc: command not found`
+谨慎删除 `<workspace>/.cc-switch/`、`.claude/`、`.codex/`、`.aisc/` 以及各平台用户配置；其中可能包含登录状态、Provider 凭据和自定义 Skills。
 
-- 安装包版：安装后需**重新打开终端**。确认安装目录在 PATH 中。
-- Linux 安装脚本：确认 `${XDG_BIN_HOME:-$HOME/.local/bin}` 在 PATH 中。
-- 解压直用：使用 `./aisc` 或 `.\aisc.exe`（当前目录路径），而非裸 `aisc`。
+## 故障排查
 
-### `AISC root not found`
+### 找不到 `aisc`
 
-安装包中的 `aisc` 命令依赖可执行文件旁边的 `aisc-bundle/`：
-- 确认 `aisc` 与 `aisc-bundle/` 在同一父目录。
-- 或用 `--aisc-root` 显式指定资源根目录（通常就是 `aisc-bundle/` 本身）：
-  ```bash
-  aisc --aisc-root /path/to/install/dir/aisc-bundle version
-  ```
+- 安装后重新打开终端。
+- Linux/macOS 确认 `${XDG_BIN_HOME:-$HOME/.local/bin}` 在 `PATH`。
+- 便携包使用 `./aisc` 或 `.\aisc.exe`，并保持 executable 与 `aisc-bundle/` 相邻。
 
-### Docker 相关错误
+### `AISC root not found` 或 bundle 损坏
 
-| 错误 | 解决 |
+```bash
+aisc --aisc-root /path/to/aisc-bundle version
+```
+
+指定目录必须同时包含 `VERSION`、`container/Dockerfile`、`config/versions.env`。冻结产物旁存在 `aisc-bundle/` 但缺少这些文件时会按损坏处理。
+
+### Docker 或镜像错误
+
+| 现象 | 处理 |
 | --- | --- |
-| `docker: command not found` | 安装 Docker CLI |
-| `permission denied` | Linux：将用户加入 `docker` 组 |
-| `Cannot connect to the Docker daemon` | 启动 Docker Desktop/Engine |
-| `Image not found` | 先运行 `aisc build` |
+| Docker CLI 不存在 | 安装 Docker Desktop 或 Docker Engine |
+| daemon 无法连接 | 启动 Docker；Linux 检查 socket 权限和 `docker` 组 |
+| `Image not found` | 先运行 `aisc build`，或用 `--image` 指定已有镜像 |
+| 工作区权限错误 | 确认路径存在、是目录且当前用户和 Docker 均可访问 |
+| 容器立即退出 | 默认容器为前台且 `--rm`；需要保留时使用 `--keep-alive` |
 
-### cc-switch daemon 或模型路由不可用
+先运行：
 
-在容器内依次检查：
+```bash
+aisc doctor
+aisc build --dry-run
+aisc run --dry-run
+```
+
+### 多容器目标不明确
+
+```bash
+aisc ps
+aisc status --name <full-container-name>
+aisc status --label <unique-label>
+```
+
+如果 label 重复，使用 `--name`。registry 损坏时读取会退化为空 registry；先用 `docker ps -a` 核对真实容器，不要盲目删除正在使用的容器。
+
+### cc-switch daemon、Provider 或路由不可用
+
+在容器内检查：
 
 ```bash
 cc-switch daemon status
+cc-switch daemon logs
 cc-switch proxy show
 cc-switch -a claude provider current
 cc-switch -a codex provider current
 ```
 
-- `daemon not reachable`：查看 `/tmp/cc-switch-daemon.log`，并运行 `cc-switch daemon logs` 获取详细日志。
-- `Running: no`：daemon 可达后，按需执行 `cc-switch proxy -a claude enable` 或 `cc-switch proxy -a codex enable`。
-- Provider 为空或只有无凭据的默认项：先在 cc-switch TUI 或 provider 命令中配置真实上游地址和凭据，再启用路由。
-- `cc-switch` 报 `cannot execute: required file not found`：通常是旧镜像或 Windows checkout 的 CRLF shebang；拉取当前版本并重新执行 `aisc build --no-cache`。
+- daemon 启动日志位于 `/tmp/cc-switch-daemon.log`。
+- “路由已启用”只表示本地代理接管成功，不证明上游地址或凭据有效。
+- Codex `Running: no` 在默认官方直连场景是正常的；托管 Provider 才需启用 Codex 路由。
+- `cannot execute: required file not found` 常见于旧镜像或 CRLF shebang，拉取当前源码并运行 `aisc build --no-cache`。
 
-### 其他问题
+### Skills 没有更新
 
-提交 [GitHub Issues](https://github.com/wangyuncepu/AISC/issues)。附上操作系统、Docker 版本、完整报错和复现步骤；**删除 API Key 等敏感信息**。
+检查 `/tmp/cc-switch-skills-init.log`、`.cc-switch/.aisc-bundled-skills.sha256` 和三个 Skills 目录。文件锁不可用且已有目录时，默认拒绝覆盖属于保护行为；不要先删除包含自定义内容的目录。
+
+提交 [GitHub Issues](https://github.com/wangyuncepu/AISC/issues) 时附上操作系统、CPU 架构、Docker 版本、`aisc version`、复现命令和已脱敏日志。不要上传 API Key、Cookie、登录令牌、Provider 数据库或完整配置目录。
 
 ## 许可
 
-MIT License。详见仓库 [LICENSE](LICENSE)。
+MIT License，详见 [LICENSE](LICENSE)。镜像还包含第三方组件，其来源、校验和与许可证记录在 `vendor/` 中。
 
 ## 推荐服务
 

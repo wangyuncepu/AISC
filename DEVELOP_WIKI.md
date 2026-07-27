@@ -1,689 +1,714 @@
 # AISC 开发者手册
 
-> **面向版本**：`v2.1.4` / `main` 分支。本文描述当前仓库实际实现的行为。
+> **开发基线：** `develop` 分支，项目版本 `v2.1.4`，状态 Alpha。本文以当前源码、脚本、测试和 `.github/workflows/artifact.yml` 为准；用户安装与命令教程见 `README.md`。
 
----
+## 1. 分支与发布角色
 
-## 1. 阅读路径与适用范围
+| 引用 | 角色 | 自动化 |
+| --- | --- | --- |
+| `develop` | 当前日常开发和集成基线；功能、修复、文档先在这里验证 | push 触发 Artifact 跨平台构建 |
+| `main` | 面向发布的稳定线；通过 PR 接收已验证变更 | 目标为 `main` 的 PR 触发 Artifact 构建 |
+| `v*` tag | 不可变发布标识，标签内容应与根 `VERSION` 和 Release Notes 一致 | push tag 构建、聚合并发布 GitHub Release |
 
-本手册同时服务两类读者：
+不要把三者混成同一种工作流：开发基于 `develop`，发布候选通过 PR 进入 `main`，发布 tag 指向已审核的发布提交。普通 push 到 `main` 不在当前 workflow 的分支触发列表中，也不会创建 Release；只有 `v*` tag 会进入 aggregate 和 release jobs。
 
-| 读者类型 | 目标 | 推荐路径 |
-|---------|------|---------|
-| **新贡献者** | 约 15 分钟完成环境搭建、跑通测试、完成一次典型修改 | §2 → §4 → §5 中相关任务 → §11 |
-| **核心维护者** | 查找维护流程、CI 与发布步骤、兼容性契约 | §3 → §6 → §7 → §8 → §11 |
-
-每个“常见开发任务”（§5）固定覆盖：**入口文件 → 调用链 → 容易漏改的关联文件 → 最低验证命令**。
-
-本文**不包含**：用户安装教程、完整用户命令参考、用户 FAQ、推荐服务或推广内容。这些内容见 `README.md`。
-
----
-
-## 2. 15 分钟开发环境
-
-### 前提
-
-- Python 3.11+（`python3 --version`）
-- Git
-- Docker（仅 `aisc build`/`aisc run` 和容器相关测试需要；纯 Python 单元测试不需要）
-
-### 搭建步骤
+当前开发环境无需也不应为了日常贡献切换到 `main`。开始工作前确认：
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/wangyuncepu/AISC.git
-cd AISC
+git branch --show-current
+git status --short
+```
 
-# 2. 使用 main 分支
-git checkout main
+## 2. 开发环境
 
-# 3. 创建虚拟环境并安装（editable 模式）
+### 2.1 前提
+
+- Python 3.11 或更高版本；CI 当前使用 Python 3.12。
+- Git。
+- Docker CLI 和 daemon；纯 Python 单元测试不需要 Docker，镜像和容器验证需要。
+- 可选：uv，用于隔离安装或复现用户的源码安装方式。
+- 打包验证需要 PyInstaller 6.21.0；Windows setup 还需要 Inno Setup，macOS PKG 需要系统打包工具。
+
+### 2.2 本地安装
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -e .
-
-# 4. 验证安装（输出应与 VERSION 一致）
-aisc version
-
-# 5. 检查宿主机环境
-aisc doctor
-
-# 6. 运行当前完整 unittest（无需 Docker）
-PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
-
-# 7. 文档与 vendored 资源检查
-bash tools/check-docs.sh
-bash tools/vendor-verify.sh
 ```
 
-> **Windows PowerShell 用户**: 将 `source .venv/bin/activate` 替换为 `.venv\Scripts\Activate.ps1`。
-> 虚拟环境每次新终端都需要重新激活。
+Windows PowerShell：
 
-### 排查：命令指向旧安装时
-
-如果 `aisc version` 的行为与预期不符（例如版本号不对、或 `command not found`），说明可能指向了系统上的另一个 `aisc` 安装。先确认当前调用的路径：
-
-```bash
-command -v aisc                          # 显示实际调用的路径
-python3 -c "import aisc; print(aisc.__file__)"  # 查看 Python 能找到的包位置
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
 ```
 
-重新激活虚拟环境后再试：
+项目声明 `requires-python = ">=3.11"`，console script 只有 `aisc = aisc.cli.main:main`。`python -m aisc` 可用于源码级调试，但面向用户的唯一宿主入口是 `aisc`。
+
+如果命令命中了旧安装：
 
 ```bash
-source .venv/bin/activate
-# 或直接使用虚拟环境内的绝对路径:
+command -v aisc
+python3 -c "import aisc; print(aisc.__file__)"
 .venv/bin/aisc version
 ```
 
-不要用 `pip uninstall aisc` 破坏性卸载——系统中可能存在多个 AISC 安装（PyInstaller 版本、其他虚拟环境等），直接卸载可能影响这些安装。
+不要为了排查路径问题盲目卸载系统中其他 AISC 安装；先明确当前 shell、虚拟环境和 executable 的来源。
 
-### 完整测试
+## 3. 快速验证
 
-以上步骤 6 已运行当前仓库全部 unittest。容器改动还应执行 Docker 镜像构建和 cc-switch 运行时验证。
-
-### 可选：安装 uv（加速依赖管理）
+最小无 Docker 验证：
 
 ```bash
-# CI 使用 uv 管理 editable install 的 smoke test
-uv tool install --editable .
-# 之后可直接运行 aisc（uv 管理的隔离环境）
-```
-
----
-
-## 3. 架构与运行模型
-
-### 3.1 整体架构
-
-```
-┌─────────────────────────────────────────────┐
-│  宿主机 (Host)                               │
-│  ┌───────────────────────────────────────┐    │
-│  │  Python CLI (aisc)                    │    │
-│  │  src/aisc/cli/main.py                 │    │
-│  │  宿主机唯一入口，提供全部管理子命令       │    │
-│  └──────────────────┬────────────────────┘    │
-│                     │ Docker CLI              │
-│                     ▼                         │
-│  ┌─────────────────────────────────────┐      │
-│  │  Docker 容器 (super-claude:latest)   │      │
-│  │  ┌────────────┐ ┌──────────────┐    │      │
-│  │  │ cc-switch  │ │ entrypoint.sh│    │      │
-│  │  │ daemon/TUI │ │ CLI wrappers │    │      │
-│  │  │ SQLite     │ │ skills sync  │    │      │
-│  │  └────────────┘ └──────────────┘    │      │
-│  └─────────────────────────────────────┘      │
-└─────────────────────────────────────────────┘
-```
-
-### 3.2 单一宿主入口
-
-| 入口 | 运行位置 | 目标 | 当前状态 |
-|------|---------|------|---------|
-| `aisc` Python CLI | 宿主机 | 构建镜像、运行和管理容器 | 唯一受支持入口 |
-
-`start.sh`、`start.command`、`start.bat` 及其 Shell/PowerShell 流水线已经移除。所有宿主机能力统一通过 `aisc` 子命令提供，容器状态保存在 `.aisc/state.env`。
-
-### 3.3 Python 包分层
-
-```
-src/aisc/
-├── __init__.py          # 从根目录 VERSION 解析 __version__
-├── cli/                 # 表现层：argparse、输出格式化、命令分发
-│   ├── main.py          # CLI 入口、参数解析、命令路由
-│   ├── output.py        # JSON envelope、JSONL emitter、文本格式化
-│   └── commands/        # 每个子命令的具体实现
-│       ├── build.py
-│       ├── run.py       # --keep-alive: 后台模式 + docker attach
-│       ├── config.py
-│       ├── profile.py
-│       ├── container.py
-├── application/         # 应用服务层：业务逻辑编排
-│   ├── version.py       # 版本信息收集
-│   ├── doctor.py        # 宿主机环境诊断
-│   ├── config_service.py # 配置校验/合并（只读）
-│   ├── profile_service.py
-│   └── resources.py     # AISC 根目录发现
-├── domain/              # 领域模型：纯数据，零 I/O
-│   ├── models.py        # VersionInfo、DoctorReport、BuildPlan、RunPlan
-│   └── config.py        # PathPolicy、SchemaIssue
-├── adapters/            # 适配器：所有 I/O 和外部调用
-│   ├── docker_.py       # DockerExecutor（Real + Fake）
-│   ├── config_reader.py # 安全的配置读取（POSIX/Windows）
-│   ├── state_file.py    # .aisc/state.env 读写
-│   └── system.py        # ProcessRunner
-└── schemas/             # 配置 schema 校验
-    └── config_schema.py
-```
-
-**依赖方向**: `cli → application → domain ← adapters`。`domain` 无任何外部依赖。
-
-### 3.4 测试架构
-
-```
-tests/
-├── test_cc_switch_runtime.py  # cc-switch/容器契约
-├── test_version_source.py     # VERSION 单一事实源
-└── packaging/
-    ├── test_artifact.py
-    ├── test_macos_installer.py
-    └── test_windows_installer.py
-```
-
-### 3.5 容器运行模型
-
-```
-docker run --rm \
-  -v $(pwd):/root/app \          # 工作区挂载
-  -e CLAUDE_SCOPE=project \     # 配置作用域
-  super-claude:latest
-
-容器内：
-  /root/
-  └── app/               # 挂载的工作区
-  │   ├── .claude/       # 项目作用域（持久化）
-  │   ├── .codex/        # Codex 项目配置
-  │   └── .cc-switch/    # Provider/路由/skills 的唯一管理状态
-```
-
----
-
-## 4. 仓库地图
-
-```
-AISC/                          # 仓库根（也是 AISC 安装根目录）
-├── VERSION                    # 项目版本唯一事实源
-├── pyproject.toml             # Python 包元数据
-├── README.md                  # 用户手册
-├── DEVELOP_WIKI.md            # 本文档
-├── LICENSE                    # MIT
-├── .gitignore
-├── .gitleaks.toml             # 密钥扫描配置
-├── .dockerignore
-├── .gitattributes             # 跨平台换行符策略
-│
-├── src/aisc/                  # Python CLI 源码
-│   ├── __init__.py            # VERSION 运行时解析
-│   ├── cli/                   # CLI 入口 + 表现层
-│   ├── application/           # 应用服务
-│   ├── domain/                # 领域模型
-│   ├── adapters/              # I/O 适配器
-│   └── schemas/               # 配置 schema
-│
-├── container/                 # Docker 镜像构建输入
-│   ├── Dockerfile             # 镜像定义
-│   ├── entrypoint.sh          # 容器入口脚本
-│   ├── cc-switch-wrapper      # cc-switch 作用域包装器
-│   ├── cc-switch-skills/      # 离线内置 skills
-│   ├── claude-wrapper         # Claude CLI 包装器
-│   ├── claude-settings.json   # 默认 Claude CLI 设置
-│   ├── global-claude.md       # 全局 CLAUDE.md
-│   ├── commands/              # 斜杠命令（gstack 等）
-│   ├── lib/                   # 共享 bash 库
-│   ├── _bundle/               # 构建期暂存的 skills/plugins（纳入 git）
-│   └── downloads/             # 预下载的 mihomo/geodata（纳入 git）
-│
-├── config/
-│   └── versions.env           # 外部依赖版本 pin（CLAUDE_CODE_VERSION 等）
-│
-├── tools/                     # 维护脚本
-│   ├── stage-skills.sh        # 从宿主机暂存 plugins/skills 到 _bundle
-│   ├── stage-skills-cleanup.sh # _bundle 清理辅助
-│   ├── stage-mihomo.sh        # 预下载 mihomo + geodata
-│   ├── vendor-refresh.sh      # 刷新 vendored artifacts + 重新生成校验和
-│   ├── vendor-verify.sh       # 校验 vendor/checksums.txt
-│   └── check-docs.sh          # 文档一致性检查
-│
-├── scripts/
-│   └── demo/                  # CLI 演示脚本
-│
-├── tests/                     # 测试
-│   ├── test_cc_switch_runtime.py
-│   ├── test_version_source.py
-│   └── packaging/
-│
-├── packaging/                 # 打包与分发
-│   ├── artifact.py            # stage/archive/verify 构建产物
-│   ├── ci_smoke.py            # CI 冒烟验证
-│   ├── pyinstaller/           # PyInstaller 入口
-│   ├── macos/                 # macOS .pkg 构建
-│   ├── windows/               # Windows 安装器 (Inno Setup)
-│   ├── install.sh / install.ps1
-│   └── uninstall.sh / uninstall.ps1
-│
-├── vendor/                    # Vendored 清单
-│   ├── manifest.json          # 组件来源声明
-│   ├── checksums.txt          # 容器文件校验和
-│   └── licenses/              # 第三方许可证
-│
-├── .github/workflows/         # CI 定义
-│   └── artifact.yml           # PyInstaller 跨平台构建
-│
-├── docs/                      # 设计文档
-│   ├── adr/                   # 架构决策记录
-│   ├── rfc/                   # RFC
-│   ├── plans/                 # 开发计划
-│   └── testing/               # 测试文档
-│
-└── .aisc/                     # 运行时状态（gitignored）
-    └── state.env              # 容器名发现（aisc CLI 写入）
-```
-
----
-
-## 5. 常见开发任务
-
-### 5.1 修改 CLI 命令
-
-**入口文件**: `src/aisc/cli/main.py` — 参数解析、命令路由、JSON/text 输出格式化
-**子命令实现**: `src/aisc/cli/commands/<name>.py`
-
-**调什么**:
-- 新增子命令 → 在 `main.py` 的 `_build_parser()` 中添加 subparser，并在 `main()` 函数中添加 `elif args.command == "..."` 分支
-- 修改命令行为 → 找到对应 `_cmd_*` 函数，修改其调用链
-- 修改输出格式 → 修改对应子命令的 `print_*_text()` 函数或 JSON 数据构造
-
-**容易漏改的关联文件**:
-- `src/aisc/cli/output.py` — 如果新增 JSON envelope 字段或修改错误格式
-- `src/aisc/domain/models.py` — 如果涉及新领域数据类型
-- `src/aisc/application/*.py` — 如果涉及新业务逻辑
-
-**最低验证命令**:
-```bash
-# 全部 unittest
+PYTHONPATH=src python3 -m aisc version
+PYTHONPATH=src python3 -m aisc build --dry-run
 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
-
-# 手动快速冒烟
-aisc version --format json | python3 -m json.tool
+git diff --check
 ```
 
-### 5.2 修改 cc-switch Provider / Skills 系统
+资源和文档验证：
 
-**入口文件**:
-- `container/entrypoint.sh` — daemon、Provider 路由初始化及 skills 同步
-- `container/cc_switch_skills.py` — bundle 哈希、目标完整性检查与按需同步
-- `container/cc-switch-wrapper` — 按项目/临时作用域设置 cc-switch HOME
-- `container/cc-switch-skills/` — 镜像离线 skill 元数据
-- `container/Dockerfile` — cc-switch 二进制和 skill 内容装配
-
-**调用链**:
-```
-entrypoint → cc-switch daemon readiness → 初始化 Codex 当前 Provider → best-effort 启用 Claude 路由；Codex 代理默认关闭、按需手动启用
-镜像 /opt/aisc/skills + bundle 哈希 → auto 判断 → 必要时登记/Copy sync → .claude/.codex
-交互启动菜单 4 → exec cc-switch → 项目作用域管理 TUI
+```bash
+bash tools/vendor-verify.sh
+bash tools/check-docs.sh
 ```
 
-Provider 和认证信息只由 cc-switch 管理。AISC 不再维护独立 Provider 目录、密钥目录或第二套快捷切换脚本。
+`tools/check-docs.sh` 的 Markdown 扫描未排除 `.slim/worktrees/`。如果本地存在该目录，历史或临时 worktree 中的文档可能造成误报；应把它与当前工作树的真实文档问题区分，不要为了规避误报修改脚本或扫描到的临时副本。
 
-`AISC_SKILLS_SYNC` 支持 `auto`（默认）、`always`、`off`。`auto` 通过构建期 bundle 哈希、SQLite 登记状态和已启用目标目录决定是否同步；已有记录只更新元数据，不修改 `enabled_claude` / `enabled_codex`。因此用户在 cc-switch 中停用 skill 后，容器重启不会重新启用。
+涉及镜像或 entrypoint 时再执行：
 
-正常情况下同步使用 `.cc-switch/.aisc-bundled-skills.lock` 的 `flock` 串行化。若 Windows/Docker Desktop 绑定挂载不支持该锁，则在确认确实需要同步后进入保护性降级：`.cc-switch/skills` 是 cc-switch Skills 源目录，并同时检查 `.claude/skills`、`.codex/skills` 两个目标目录。三者全不存在时以排他 `mkdir` 认领首次安装；任一存在或仅部分存在时显示 `[y/N]`，非交互和空输入均跳过且不更新 bundle 标记。`always` 不绕过该确认。
+```bash
+aisc build --no-cache
+aisc run
+```
 
-注意：cc-switch 的“路由已启用”只表示本地代理接管成功，不证明 Provider 已有可用凭据或上游地址。排障时必须分别检查 `daemon status`、`provider current` 和 `proxy show`。caveman 等 skill 只影响 agent 指令，不参与网络路由。
+## 4. 架构与调用链
 
-**最低验证命令**:
+### 4.1 总体运行模型
+
+```text
+宿主机
+  aisc (argparse CLI)
+    -> application services / plans
+    -> adapters (filesystem, subprocess, Docker)
+    -> docker build / run / inspect / exec
+         |
+         v
+Docker 容器，以 root 运行
+  entrypoint.sh
+    -> 选择 temporary/project 作用域
+    -> 初始化 Claude/Codex/cc-switch 目录
+    -> 启动 cc-switch daemon
+    -> 初始化 Provider 与同步 Skills
+    -> 可选启动 Mihomo TUN
+    -> exec bash / claude / codex / cc-switch
+```
+
+宿主侧没有第二套受支持启动器。不要恢复或宣传历史 launcher、快捷切换命令或独立 Provider 文件；所有宿主管理由 `aisc` 提供，Provider/凭据由容器内 cc-switch 管理。
+
+### 4.2 Python CLI 分层
+
+```text
+src/aisc/
+  cli/
+    main.py                 argparse、全局协议、命令分发
+    output.py               text、JSON envelope、JSONL emitter
+    commands/
+      build.py              BuildPlan 编排与 Docker 执行
+      run.py                RunPlan、registry 登记与 Docker 执行
+      container.py          ps/status/stop/restart/shell/switch
+      config.py             配置命令表现层
+      profile.py            Profile 命令表现层
+      wizard.py             交互式 build 向导
+  application/
+    resources.py            AISC root 发现
+    version.py              版本信息聚合
+    doctor.py               宿主诊断
+    config_service.py       配置安全读取、合并、来源追踪
+    profile_service.py      只读 Profile 加载
+  domain/
+    models.py               结果、错误、BuildPlan、RunPlan
+    config.py               配置领域类型
+  adapters/
+    docker_.py              Real/Fake DockerExecutor
+    system.py               进程执行
+    config_reader.py        POSIX 安全配置读取
+    windows_config_reader.py Windows 路径读取辅助
+    container_registry.py   多容器 registry
+    state_file.py           有限 state.env 标志
+  schemas/
+    config_schema.py        AISC 配置 schema
+```
+
+主要依赖方向是 `cli -> application/domain -> adapters`。`domain` 中的计划对象负责稳定地产生 Docker argv；外部 I/O 应放在 adapter 或 application orchestration，不要在参数解析中散落 `subprocess` 调用。
+
+### 4.3 命令调用链
+
+```text
+aisc build
+  -> main._cmd_build
+  -> resources.locate_aisc_root
+  -> commands.build.plan_build
+  -> BuildPlan.docker_argv
+  -> DockerExecutor.preflight / inspect_image / run_*
+
+aisc run
+  -> main._cmd_run
+  -> commands.run.plan_run
+  -> RunPlan.docker_argv
+  -> DockerExecutor preflight + image inspect
+  -> container_registry.register
+  -> docker run
+
+aisc ps/status/stop/restart/shell/switch
+  -> commands.container
+  -> container_registry.resolve_target
+  -> DockerExecutor inspect/stop/restart/exec
+```
+
+`build` 和 `run` 在文本模式流式输出 Docker 日志；JSON/events 模式捕获子进程输出并转发到 stderr，保持 stdout 的机器协议纯净。所有 Docker 调用应继续通过 `DockerExecutor`，以便用 Fake 实现测试。
+
+### 4.4 AISC root 发现
+
+`src/aisc/application/resources.py` 要求 root 包含：
+
+```text
+VERSION
+container/Dockerfile
+config/versions.env
+```
+
+发现顺序：显式 `--aisc-root`、`AISC_ROOT`、冻结 executable 旁的 `aisc-bundle/`、从 cwd 向上发现带 `.git` 的仓库、从 installed package 路径向上发现结构标记。显式路径、环境变量或已存在的 frozen bundle 结构错误时 fail closed；editable 安装依赖最后一类回退。
+
+### 4.5 Docker 构建与运行
+
+`aisc build` 从 `config/versions.env` 解析 `USE_CN_MIRROR`、`NODE_IMAGE`、`NODE_IMAGE_CN`，将选定 Node image 和镜像源标志传给：
+
+```text
+docker build -f container/Dockerfile -t <tag> <aisc-root>
+```
+
+其他依赖版本目前由 `container/Dockerfile` 的 ARG 默认值消费，维护者必须保持它们与 `config/versions.env` 同步。默认镜像为 `super-claude:latest`。
+
+`aisc run` 默认生成：
+
+```text
+docker run --rm -it \
+  -e TERM=xterm-256color \
+  --name super-claude-station-<suffix> \
+  -v <workspace>:/root/app \
+  super-claude:latest
+```
+
+`--non-interactive` 去掉 TTY，增加 `AISC_NON_INTERACTIVE=1`、`CLAUDE_SCOPE=project` 并使用 DEVNULL stdin。`--keep-alive` 去掉 `--rm`；交互文本模式使用 `-d` 启动后 `docker attach --sig-proxy=true`。proxy 模式增加 `--cap-add=NET_ADMIN`、`--device /dev/net/tun`，并把 `<aisc-root>/.claude/mihomo/config.yaml` 只读挂载到 `/etc/mihomo/config.yaml`。
+
+### 4.6 容器 entrypoint
+
+`container/Dockerfile` 设置 `ENTRYPOINT ["entrypoint.sh"]` 和 `CMD ["claude"]`。`container/entrypoint.sh` 的关键顺序是：
+
+1. 设置 UTF-8、`IS_SANDBOX=1`、终端能力，加载 `container/lib/` 对应的共享 Bash 库。
+2. 根据 `CLI_SCOPE` 或兼容变量 `CLAUDE_SCOPE` 选择 temporary/project；无交互环境默认 project。
+3. 初始化 `.claude`、`.codex` 和 `.cc-switch`，修正插件 bundle 中的作用域路径并确保可写。
+4. 从 Claude `settings.json` 注入环境变量。
+5. detach 启动 cc-switch daemon，最多等待约 10 秒可达。
+6. 初始化 Codex 当前 Provider、增量同步 Skills，并 best-effort 启用 Claude 路由；Codex 路由保持关闭。
+7. 若存在 `/etc/mihomo/config.yaml`，生成可写配置并以 root 启动 Mihomo TUN。
+8. 可选运行 AI brief，然后将 PID 1 `exec` 给用户选择的进程。
+
+`container/claude-wrapper` 每次启动重新注入 Claude env，并默认绕过权限确认。`container/codex-wrapper` 注入 Codex env，并默认绕过 approvals/sandbox/hook trust。用户显式给出相应权限参数时 wrapper 不重复追加。`container/cc-switch-wrapper` 通过当前作用域设置 `HOME`，使 Skills 目标与 temporary/project 一致。
+
+## 5. 仓库地图
+
+```text
+AISC/
+  VERSION                     项目版本唯一事实源
+  README.md                   用户手册
+  DEVELOP_WIKI.md             本手册
+  pyproject.toml              Python 包和 console script
+  container/
+    Dockerfile                镜像定义
+    entrypoint.sh             容器入口
+    claude-wrapper            Claude 权限与 env 包装
+    codex-wrapper             Codex 权限与 env 包装
+    cc-switch-wrapper         cc-switch 作用域包装
+    cc_switch_skills.py       Skills 增量同步与锁保护
+    cc-switch-skills/         内置 Skills 元数据/内容
+    lib/                      entrypoint 共享 Bash 库
+    _bundle/                  手工维护的 vendored 插件和 Skills
+    downloads/                Mihomo/geodata 本地构建资源
+  config/versions.env         外部依赖与镜像变量
+  src/aisc/                   宿主 Python CLI
+  tests/                      unittest 测试
+  packaging/
+    artifact.py               stage/archive/verify/build/aggregate
+    ci_smoke.py               frozen artifact 版本与布局 smoke
+    pyinstaller/entrypoint.py PyInstaller 入口
+    windows/                  Inno Setup 与 installer smoke
+    macos/                    PKG 构建和手工测试说明
+    install.*                 便携安装脚本
+    uninstall.*               便携卸载脚本
+  tools/
+    check-docs.sh             文档与资源一致性检查
+    stage-mihomo.sh           预下载 Mihomo/geodata
+    vendor-refresh.sh         重建 container 文件校验和
+    vendor-verify.sh          校验 vendor/checksums.txt
+  vendor/                     manifest、checksums、第三方许可证
+  docs/
+    adr/                      架构决策
+    rfc/                      CLI 协议
+    plans/                    历史/实施计划，不替代当前源码
+    releases/                 tag 对应 Release Notes
+    devlog.md                 开发日志
+  .github/workflows/artifact.yml
+```
+
+`container/_bundle/` 当前是手工维护资源。文档和流程只能引用仓库中真实存在的维护脚本；不要假设有额外的 Skills staging/cleanup 工具。
+
+## 6. 常见修改流程
+
+### 6.1 修改或新增宿主命令
+
+1. 在 `src/aisc/cli/main.py` 注册 argparse parser 和 dispatch。
+2. 将命令编排放到 `src/aisc/cli/commands/`，通用业务放到 `application/`，纯数据契约放到 `domain/`。
+3. 外部进程、Docker 和文件系统边界使用现有 adapters；不要直接拼 shell 字符串。
+4. 同步 text、JSON envelope、usage error 和 exit code 行为。
+5. 添加 unittest，并更新 `README.md` 的完整 CLI 表。
+
+最低验证：
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
+PYTHONPATH=src python3 -m aisc <command> --help
+PYTHONPATH=src python3 -m aisc <command> --format json
+```
+
+如果命令是交互式的，不应声称支持 JSON。新增 events 必须遵守 `docs/rfc/aisc-cli-v1.md` 的 JSONL 终止事件约束。
+
+### 6.2 修改 build/run
+
+关键文件：
+
+- `src/aisc/cli/commands/build.py`、`src/aisc/cli/commands/run.py`
+- `src/aisc/domain/models.py`
+- `src/aisc/adapters/docker_.py`
+- `src/aisc/cli/output.py`
+- `container/Dockerfile`、`.dockerignore`、`config/versions.env`
+
+计划阶段应保持无 Docker 副作用；`--dry-run` 可验证本地路径和输出计划，但不能调用 daemon、写 registry 或创建工作区配置。新增参数时同时验证 text/json/events、interactive/non-interactive、direct/proxy、keep-alive 组合。
+
+```bash
+aisc build --dry-run
+aisc build --dry-run --format json
+aisc run --dry-run
+aisc run --dry-run --format json
+```
+
+### 6.3 修改容器生命周期和多容器寻址
+
+从 `src/aisc/cli/commands/container.py` 与 `src/aisc/adapters/container_registry.py` 开始。兼容契约包括：
+
+- `run --label` 写 registry metadata，label 不等于 Docker label。
+- `status/stop/restart/shell/switch` 都接受 `--name` 和 `--label`。
+- 解析优先级为 name、唯一 label、default、唯一容器；歧义必须报错并列候选。
+- registry 惰性 GC 在 daemon 不可达或权限不足时不得误删条目。
+- `stop` 成功后 unregister；`status` 对 Docker 中不存在的容器返回 `exists=False`。
+- registry 写入保持原子；POSIX 上用 lock file + `flock` 串行化。
+
+测试应覆盖重复 label、损坏 JSON、并发/原子写入边界、Docker 不可达和 stale entry。
+
+### 6.4 修改容器内容或 vendored 资源
+
+当前真实工具：
+
+| 命令 | 用途 | 注意 |
+| --- | --- | --- |
+| `bash tools/stage-mihomo.sh` | 把当前架构 Mihomo 和 geodata 下载到 `container/downloads/` | 需要网络，会写 vendored 文件 |
+| `bash tools/vendor-refresh.sh --dry-run` | 预览 container 校验和刷新 | 不写文件 |
+| `bash tools/vendor-refresh.sh` | 重建 `vendor/checksums.txt` | 会修改 checksum 文件，先核对目标资源 |
+| `bash tools/vendor-verify.sh` | 用 SHA256 验证 container 文件 | 提交前运行 |
+| `bash tools/check-docs.sh` | 检查 README 路径、内置 Skills、旧入口和过时术语 | 注意 `.slim/worktrees/` 已知扫描范围问题 |
+
+修改 `container/` 下任何被校验文件后，都需要刷新并验证 checksums。`.gitattributes` 控制跨平台文本行尾；不要批量改变 vendored 文件换行，否则 Windows artifact stage 会出现大量 hash mismatch。
+
+## 7. cc-switch、Provider 与 Skills 契约
+
+### 7.1 Provider 和 daemon
+
+工作区 `.cc-switch/` 是 Provider、凭据、路由、备份和 Skills 源状态的唯一管理根。AISC 不创建、读取或迁移另一套 Provider/密钥目录。
+
+entrypoint 使用 `cc-switch daemon start --detach`，轮询 `daemon status`。daemon 可达后：
+
+1. 若 Codex 没有当前 Provider，优先从 `$CODEX_CONFIG_DIR/config.toml` 执行 `provider import-live`。
+2. 仍没有时 best-effort 切换到无用户凭据的内置 `codex-official`。
+3. best-effort 执行 `cc-switch proxy -a claude enable`。
+4. 明确不自动执行 Codex proxy enable，使 Codex 默认走官方直连和原生认证。
+
+Claude 路由失败不阻断容器启动。路由 enabled 只说明本地代理接管，不证明 Provider 上游、模型和凭据可用。诊断必须分别检查 daemon、current provider 和 proxy。
+
+宿主 `aisc switch` 的普通模式通过 scope-preserving Bash wrapper 打开 cc-switch TUI；quick 模式从 `/proc/1/environ` 逐项读取 `CLAUDE_CONFIG_DIR`、`CC_SWITCH_CONFIG_DIR`、`CODEX_CONFIG_DIR`、`CODEX_HOME`，不使用 `eval`，然后把 Provider 作为独立 argv 传给 Claude provider switch。读取失败时以 101 fail closed。
+
+### 7.2 Skills 增量同步
+
+入口是 `container/cc_switch_skills.py`，bundle 位于 `/opt/aisc/skills`。构建时 Dockerfile生成 `/opt/aisc/skills/.aisc-bundle.sha256`；运行时成功同步后在配置根记录 `.aisc-bundled-skills.sha256`。
+
+`AISC_SKILLS_SYNC` 契约：
+
+- `auto`：默认。bundle 标记匹配、登记和源存在、已启用目标完整时返回 `current`，不做复制或数据库写入。
+- `always`：请求同步，但仍遵守锁降级保护。
+- `off`：返回 `off`，不自动登记或同步。
+
+已有记录仅刷新元数据，不覆盖 `enabled_claude`、`enabled_codex`。同步失败或用户拒绝时不更新成功标记，下一次启动可重试。
+
+正常路径锁定 `.cc-switch/.aisc-bundled-skills.lock`。绑定挂载不支持 `flock` 时：
+
+- `.cc-switch/skills`、`.claude/skills`、`.codex/skills` 全不存在，才以排他目录创建认领首次安装。
+- 任一目录存在或部分存在，交互模式显示 `[y/N]`；空输入和非交互模式拒绝覆盖。
+- `always` 不绕过确认。
+
+修改该区域至少运行：
+
 ```bash
 PYTHONPATH=src python3 -m unittest tests.test_cc_switch_runtime -v
 bash tools/check-docs.sh
 ```
 
-### 5.3 修改 Docker 镜像 / 容器
+## 8. 配置、状态与兼容契约
 
-**入口文件**:
-- `container/Dockerfile` — 镜像定义
-- `container/entrypoint.sh` — 容器启动入口
-- `container/claude-wrapper` — Claude CLI 包装器
-- `container/cc-switch-wrapper` — cc-switch 作用域包装器
-- `src/aisc/adapters/docker_.py` — Docker 操作适配器
-- `src/aisc/cli/commands/build.py`, `run.py` — 构建/运行命令
+### 8.1 配置读取与合并
 
-**调用链**:
-```
-aisc build → plan_build() → RealDockerExecutor.run_streaming(["docker", "build", ...])
-aisc run   → plan_run()   → RealDockerExecutor.run_streaming(["docker", "run", ...])
-容器启动   → entrypoint.sh → 选择作用域 → 配置 TUN/简讯 → 菜单默认进入 bash
-```
+AISC 配置只拥有 `schema_version` 和 `defaults.profile/network`，不拥有 Provider 或凭据。路径为：
 
-**容易漏改的关联文件**:
-- `.dockerignore` — 修改 COPY 源时需要更新
-- `config/versions.env` — 修改外部依赖版本时同步更新
-- `src/aisc/domain/models.py` — BuildPlan / RunPlan 的 `docker_argv` 属性
-- `container/lib/` — 共享 bash 库
-- 测试：当前完整 unittest；容器接线另跑 `tests.test_cc_switch_runtime`
+| 层 | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| 用户 | `${XDG_CONFIG_HOME:-$HOME/.config}/aisc/config.json` | `$HOME/Library/Application Support/aisc/config.json` | `%APPDATA%\aisc\config.json` |
+| 工作区 | `<workspace>/.aisc/config.json` | 同左 | 同左 |
 
-**最低验证命令**:
-```bash
-# dry-run（不需要 Docker daemon）
-aisc build --dry-run
-aisc build --dry-run --format json
+有效值按内置默认 < 用户 < 工作区覆盖，provenance 记录每个字段来源。schema 当前为 1，Profile 允许 `safe|unsafe`，网络允许 `direct|proxy`。解析器要求 UTF-8 JSON object，拒绝 duplicate key，并限制 JSON 深度、节点数和字符串长度；安全读取层防止不可信 symlink/reparse 路径。
 
-# 完整构建（需要 Docker）
-aisc build --no-cache
-```
+`config validate/effective/show` 当前只读。`defaults.profile` 和 `defaults.network` 不驱动 `aisc run`；`profile list/show` 也只读。`run --profile proxy` 只是网络兼容别名，与 `safe/unsafe` Profile 无关。
 
-### 5.4 维护构建资源（tools/stage-\* / tools/vendor-\*）
+### 8.2 多容器 registry
 
-**工具清单及用途**:
+当前容器运行时索引是 `<aisc-root>/.aisc/containers.json`：
 
-| 工具 | 用途 | 何时运行 |
-|------|------|---------|
-| `tools/stage-skills.sh` | 从宿主机 `~/.claude` 暂存 plugins + skills 到 `container/_bundle/` | 更新内置 plugin/skill 版本后 |
-| `tools/stage-skills-cleanup.sh` | `stage-skills.sh` 调用的内部清理脚本 | 仅被 `stage-skills.sh` 调用 |
-| `tools/stage-mihomo.sh` | 预下载 mihomo 二进制 + geodata 到 `container/downloads/` | 更新 mihomo 版本需要离线/弱网构建时 |
-| `tools/vendor-refresh.sh` | 重新生成 `vendor/checksums.txt` 并验证 `container/downloads/` | 修改容器内任何文件后 |
-| `tools/vendor-verify.sh` | 校验 `vendor/checksums.txt` 完整性 | 提交前验证 |
-| `tools/check-docs.sh` | 文档路径与 cc-switch 内置 skills 一致性检查 | 修改 README 或内置 skills 后 |
-
-**工作流示例**（更新内置 plugin 后）:
-```bash
-bash tools/stage-skills.sh       # 重新暂存 plugins/gstack
-bash tools/vendor-refresh.sh     # 更新校验和
-bash tools/vendor-verify.sh      # 验证
-find container tools -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+```json
+{
+  "default": "super-claude-station-1234abcd",
+  "containers": {
+    "super-claude-station-1234abcd": {
+      "image": "super-claude:latest",
+      "workspace": "/work/project",
+      "network": "direct",
+      "label": "api",
+      "created_at": 0
+    }
+  }
+}
 ```
 
-`.gitattributes` 对 vendored 文本和脚本规定稳定的 checkout 行尾。不要把整个 `container/` 强制转换成另一种行尾；Windows runner 的 artifact stage 会直接校验 `vendor/checksums.txt`，行尾漂移会表现为大批 hash mismatch。
+注册发生在 Docker run 之前、preflight 和 image inspect 成功之后，因此 Docker run 自身失败时可能留下条目，后续惰性 GC 会在确认容器不存在时清理。文件损坏时 reader 返回空结构；写入采用临时文件、fsync 和 replace。
 
----
+### 8.3 state.env
 
-## 6. 状态、配置与兼容性契约
+当前状态路径只能写 `<aisc-root>/.aisc/state.env`。adapter 的 allowlist **仅**包含：
 
-### 6.1 版本号单一事实源
-
-项目版本只在仓库根目录 `VERSION` 中声明。修改该文件即可完成版本更新：
-
-- `src/aisc/__init__.py` 在源码运行时读取根目录 `VERSION`。
-- PyInstaller 构建通过 `--add-data VERSION:.` 嵌入同一文件，冻结程序从 `_MEIPASS/VERSION` 读取。
-- setuptools 将根 `VERSION` 作为 data-file 原样装入 wheel，安装后的包从安装前缀下的 `aisc/VERSION` 读取；包元数据仅作最后兜底。
-- `packaging/artifact.py`、CI、安装包命名和 bundle manifest 均直接读取 `VERSION`。
-- `config/versions.env` 只维护外部依赖，不再重复声明 `AISC_VERSION`。
-
-**发版清单**：只修改 `VERSION`，再运行完整测试、artifact stage/verify 和 PyInstaller 版本 smoke。
-
-### 6.2 外部依赖版本 Pin
-
-**事实源**: `config/versions.env`
-
-| 变量 | 当前值 | 说明 |
-|------|-------|------|
-| `MIHOMO_VERSION` | `v1.19.27` | 容器内 TUN 透明代理核心 |
-| `CC_SWITCH_VERSION` | `v5.9.0` | cc-switch-cli Rust 二进制 |
-| `CLAUDE_CODE_VERSION` | `latest` | Claude Code npm 包（**TODO: pin 到具体版本**） |
-| `GEODATA_VERSION` | `latest` | Geo 数据版本（**TODO: pin 到具体日期标签**） |
-| `NODE_IMAGE` | `node:20-slim` | Node.js 基础镜像 |
-
-### 6.3 运行时状态契约
-
-- 工作区 `.cc-switch/` 是容器内 Provider、路由和 skills 的唯一管理状态。
-- `.cc-switch/.aisc-bundled-skills.sha256` 记录最近一次成功同步的内置 bundle；同步失败不更新该标记，下次启动会重试。
-- 容器交互启动菜单提供 bash、Claude、Codex、cc-switch 四个入口；第 4 项通过现有 wrapper 打开项目作用域管理 TUI。
-- AISC 根目录 `.aisc/state.env` 只保存容器发现信息，不保存 Provider 或认证数据。
-- `.deploy/state.env` 是历史容器状态路径，只读兼容，不写入新数据。
-
-### 6.4 Profile 安全控制
-
-- `aisc profile list` / `aisc profile show [safe|unsafe]` 可**只读查看**
-- `safe` / `unsafe` Profile **尚未**接入 `aisc run` 的安全控制
-- `aisc run --profile proxy` 仅是 `--network proxy` 的兼容别名，**不是安全 Profile**
-
----
-
-## 7. 测试策略
-
-### 7.1 测试框架与约定
-
-- **框架**: Python stdlib `unittest`（**不是 pytest**）
-- **运行命令**: `PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v`
-- **CI 执行**: `.github/workflows/artifact.yml` 运行 packaging 测试；提交前本地运行全部测试
-- **不使用** pytest 特性（fixtures、parametrize、conftest 等）
-
-### 7.2 测试类别
-
-| 类别 | 位置 | 运行条件 | 命令 |
-|------|------|---------|------|
-| 运行时契约 | `tests/test_cc_switch_runtime.py` | 静态测试无需 Docker；部分用例在 Docker 可用时运行 | `PYTHONPATH=src python3 -m unittest tests.test_cc_switch_runtime -v` |
-| 版本契约 | `tests/test_version_source.py` | 纯 Python | `PYTHONPATH=src python3 -m unittest tests.test_version_source -v` |
-| 打包与安装器 | `tests/packaging/` | 纯 Python；实际 PyInstaller smoke 另跑 | `PYTHONPATH=src python3 -m unittest discover -s tests/packaging -p 'test_*.py' -v` |
-
-### 7.3 测试工具
-
-- `src/aisc/adapters/docker_.py` 中的 `FakeDockerExecutor` 用于无 Docker 守护进程测试。
-- `packaging/artifact.py` 的测试使用临时目录生成最小 bundle/archive，避免污染仓库。
-
-### 7.4 编写新测试
-
-```python
-# tests/test_my_feature.py
-import unittest
-from pathlib import Path
-
-class MyFeatureTest(unittest.TestCase):
-    def test_something(self):
-        result = my_function()
-        self.assertEqual(result, expected_value)
-
-if __name__ == "__main__":
-    unittest.main()
+```text
+DO_RUN=0|1
+PROXY_ENABLED=0|1
 ```
 
-- 位于 `tests/` 下并匹配 `test_*.py` 的测试文件自动被 discover 发现
-- 不需要 `__init__.py` 中的显式导入
+容器名和镜像已迁移到 `containers.json`，不得再写入 `state.env`。值禁止空白、控制字符和 shell metacharacters；写入原子化并尽量保留注释。不要把历史目录描述成当前运行路径。
 
----
+### 8.4 版本事实源
 
-## 8. 打包、CI 与发布
+项目版本只修改根 `VERSION`：
 
-### 8.1 CI 流水线
+- `src/aisc/__init__.py` 在源码/editable 模式读取它。
+- setuptools 将 `VERSION` 作为 data-file 安装，包元数据仅作兜底。
+- PyInstaller 使用 `--add-data VERSION:.` 嵌入 frozen executable。
+- `packaging/artifact.py` 用它命名产物、生成 bundle manifest 并执行一致性保护。
+- `packaging/ci_smoke.py` 比较 executable 的 `cli_version` 与期望版本。
 
-**Artifact** (`.github/workflows/artifact.yml`) — `develop` push、面向 `main` 的 PR、`v*` tag 或手动触发：
-- 跨平台 PyInstaller 构建矩阵：
-  - `ubuntu-22.04` → linux x86_64
-  - `windows-2022` → windows x86_64（含 Inno Setup 安装器）
-  - `macos-14` → macos arm64（含 .pkg 安装器）
-- 每个平台的构建流程：
-  1. `pip install -e .` → PyInstaller 6.21.0
-  2. 运行打包单元测试
-  3. 构建 onedir → 冒烟验证
-  4. 构建 onefile
-  5. `packaging/artifact.py stage` → `verify` → `archive`
-  6. 平台特定安装器构建 + 冒烟
-- 标签构建的聚合 Job：校验所有平台产物、生成 `SHA256SUMS`
-- Release Job：将聚合产物上传到对应 GitHub Release；`*-dev` 标签标记为 Pre-release，其余标签发布为稳定 Release
+不要在 Python、文档模板或构建脚本再维护第二份版本字面量。发版时版本变更只改 `VERSION`；Release Notes 文件名和 tag 从该值派生。
 
-当前仓库只保留这一份 GitHub Actions workflow；本地完整测试、文档检查、vendor 校验和 Docker 构建仍需在提交前显式运行。
+### 8.5 外部依赖与可复现性
 
-### 8.2 打包命令参考（维护者视角）
+`config/versions.env` 是外部依赖和镜像变量的声明位置：
+
+| 变量 | v2.1.4 当前值 | 消费与风险 |
+| --- | --- | --- |
+| `NODE_IMAGE` | `node:20-slim` | CLI 在非国内镜像模式传给 Docker build |
+| `NODE_IMAGE_CN` | `docker.1ms.run/library/node:20-slim` | `USE_CN_MIRROR=1` 时由 CLI 选择 |
+| `NODE_IMAGE_DIGEST` | 空 | 已声明但 Dockerfile `FROM` 当前不消费；不能提供 digest 固定 |
+| `CLAUDE_CODE_VERSION` | `latest` | Dockerfile 对应 ARG 默认值；未固定 |
+| `CODEX_VERSION` | `latest` | Dockerfile 对应 ARG 默认值；未固定 |
+| `MIHOMO_VERSION` | `v1.19.27` | Dockerfile ARG / 下载资源 |
+| `GEODATA_VERSION` | `latest` | Dockerfile ARG；未固定 |
+| `CC_SWITCH_VERSION` | `v5.9.0` | Dockerfile 下载 cc-switch binary |
+| `USE_CN_MIRROR` | `1` | CLI build arg，选择 apt/npm/下载镜像路径 |
+| `GH_PROXY` | 空 | Dockerfile 支持 build arg，但当前 `aisc build` 不从 env 文件转发它 |
+
+`latest`、无 digest 的基础镜像以及 Dockerfile/config 默认值重复，意味着同一 Git commit 在不同时间构建不保证字节级一致。维护依赖时同时检查 `config/versions.env`、`container/Dockerfile`、`tools/stage-mihomo.sh`、`vendor/manifest.json` 和 checksums；需要可复现发布时应改为具体版本和 digest，并补齐消费链测试。
+
+### 8.6 机器输出兼容
+
+- `--format json` 使用固定 envelope：command、version、success、exit_code、data、errors 等字段由 `src/aisc/cli/output.py` 统一生成。
+- `--events` 只属于 build/run JSONL 流，并与 JSON envelope 互斥。
+- build/run 在机器模式将 Docker stdout/stderr 转发到 stderr。
+- usage error 退出 2；稳定业务错误通过 `CliError` 的 exit code 和 `AISC_ERR_*` code 表达。
+- 改字段、事件名称、终止事件或 stdout 污染都属于兼容性变更，必须更新 RFC 和测试。
+
+## 9. 测试
+
+### 9.1 实际框架和主命令
+
+仓库当前测试使用 Python stdlib `unittest`。实际完整测试命令是：
 
 ```bash
-# 暂存 bundle
-python3 packaging/artifact.py stage
-python3 packaging/artifact.py verify --bundle <staging>/aisc-bundle
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
+```
 
-# 构建 onefile（需要 PyInstaller 6.21.0）
-python3 packaging/artifact.py build-onefile
+不要把 pytest 作为项目测试主命令。`pyproject.toml` 的 dev extra 虽包含 pytest，但当前受维护测试和 CI packaging tests 都通过 unittest 运行，也不应引入依赖 pytest fixture 的必要测试。
 
-# 构建分发档案
+### 9.2 测试范围
+
+| 路径 | 覆盖重点 | 命令 |
+| --- | --- | --- |
+| `tests/test_cc_switch_runtime.py` | entrypoint、wrapper、Provider、Skills 和锁降级契约 | `PYTHONPATH=src python3 -m unittest tests.test_cc_switch_runtime -v` |
+| `tests/test_version_source.py` | VERSION 单一事实源与版本消费 | `PYTHONPATH=src python3 -m unittest tests.test_version_source -v` |
+| `tests/packaging/test_artifact.py` | stage/archive/verify、安全解压、聚合 | `PYTHONPATH=src python3 -m unittest tests.packaging.test_artifact -v` |
+| `tests/packaging/test_release_notes.py` | Release Notes/tag 命名契约 | `PYTHONPATH=src python3 -m unittest tests.packaging.test_release_notes -v` |
+| `tests/packaging/test_windows_installer.py` | Windows installer 定义 | `PYTHONPATH=src python3 -m unittest tests.packaging.test_windows_installer -v` |
+| `tests/packaging/test_macos_installer.py` | macOS PKG 脚本结构 | `PYTHONPATH=src python3 -m unittest tests.packaging.test_macos_installer -v` |
+
+`__pycache__` 中可能残留已删除测试模块的 bytecode，不代表这些源测试仍存在。判断测试范围以实际 `test_*.py` 源文件和 unittest discovery 为准。
+
+### 9.3 测试边界
+
+- `FakeDockerExecutor` 用于不连接 daemon 的计划和命令测试。
+- artifact 测试使用临时目录，不应在仓库中留下 staging/dist。
+- 静态 entrypoint 测试不能替代真实 Docker 启动；修改镜像、权限、TUN、文件系统锁或 Windows bind mount 后需要对应平台 smoke。
+- CI 当前只显式运行 `tests/packaging`，不是完整 unittest；`develop` 合入前仍应本地运行完整命令。
+
+## 10. 打包与产物
+
+### 10.1 packaging/artifact.py
+
+`packaging/artifact.py` 提供五组动作：
+
+```bash
+# 生成并立即验证 aisc-bundle
+python3 packaging/artifact.py stage --output /tmp/aisc-staging
+
+# 单独验证 bundle
+python3 packaging/artifact.py verify \
+  --bundle /tmp/aisc-staging/aisc-bundle
+
+# 使用当前平台 PyInstaller 构建 onefile
+python3 packaging/artifact.py build-onefile --output /tmp/aisc-onefile
+
+# 将 executable + staged bundle 打包；Linux/macOS 为 tar.gz，Windows 为 zip
 python3 packaging/artifact.py archive \
-  --staging <staging-dir> \
-  --executable <onefile-path> \
-  --platform linux --arch x86_64
+  --staging /tmp/aisc-staging \
+  --executable /tmp/aisc-onefile/aisc \
+  --output /tmp/aisc-dist \
+  --platform linux \
+  --arch x86_64
 
-# 验证档案
-python3 packaging/artifact.py verify --archive <archive-path>
-
-# 验证版本一致性
-python3 -c "
-from packaging.artifact import _assert_version_guard
-from pathlib import Path
-_assert_version_guard(Path('.'))
-"
+# 验证 archive 和同名 .sha256 sidecar
+python3 packaging/artifact.py verify \
+  --archive /tmp/aisc-dist/AISC-2.1.4-linux-x86_64.tar.gz
 ```
 
-### 8.3 版本来源检查
+stage allowlist 复制运行所需 bundle，排除源码、测试、CI、密钥、用户配置和运行状态。verify 检查 manifest、必需文件、Dockerfile COPY 来源、vendor checksums 和 forbidden paths。archive 创建确定性元数据，并用安全解压器拒绝绝对路径、`..`、大小写折叠重复、symlink/hardlink/device 等危险成员。
 
-打包脚本 `packaging/artifact.py` 在 `stage` 命令中直接读取 `VERSION`。Python 包在源码模式读取同一文件，PyInstaller 构建则把该文件嵌入可执行程序，不再维护需要手工同步的第二份版本字面量。
+### 10.2 PyInstaller
 
-CI 的 artifact smoke（`ci_smoke.py`）会进一步验证构建产物运行 `aisc version --format json` 输出的 `cli_version` 与 bundle 中的 `VERSION` 一致。
+CI 固定 `PyInstaller==6.21.0`，先构建 onedir 进行 executable smoke，再构建 onefile 分发。两者入口都是 `packaging/pyinstaller/entrypoint.py`，并通过 `--paths src` 和 `--add-data VERSION:.` 注入源码和版本。
 
-### 8.4 发布步骤与边界
+本地 `build-onefile` 要求当前 Python 平台与目标平台一致，不能在 Linux 直接交叉生成 Windows/macOS executable。图标参数由 CI 的直接 PyInstaller 命令提供；`artifact.py build-onefile` 的本地 helper 不传 icon。
 
-`.github/workflows/artifact.yml` 是当前唯一发布入口。推送 `v*` 标签会构建三平台产物、聚合 `SHA256SUMS`，读取 `docs/releases/<tag>.md` 作为富 Markdown Release Notes，再由 `softprops/action-gh-release` 创建或更新 GitHub Release。版本带 `-dev` 时发布为 Pre-release；例如 `v2.1.4` 是稳定 Release。
+### 10.3 官方产物契约
 
-维护者发布流程：
+CI 矩阵及唯一官方平台集合：
+
+- `ubuntu-22.04` -> `AISC-<version>-linux-x86_64.tar.gz`
+- `windows-2022` -> `AISC-<version>-windows-x86_64.zip` 和 setup.exe
+- `macos-14` -> `AISC-<version>-macos-arm64.tar.gz` 和 `.pkg`
+
+每个 archive/installer 带 SHA256 sidecar；tag aggregate 生成 `SHA256SUMS`。bundle 中 executable 与 `aisc-bundle/` 必须相邻，bundle manifest 只允许当前 compatible CLI version。
+
+## 11. CI 与发布
+
+### 11.1 Artifact workflow
+
+`.github/workflows/artifact.yml` 是当前唯一 GitHub Actions workflow：
+
+```text
+触发：push develop | PR -> main | push v* tag | workflow_dispatch
+
+build matrix（三平台）
+  -> Python 3.12 + editable install
+  -> PyInstaller 6.21.0
+  -> unittest discover tests/packaging
+  -> onedir + ci_smoke
+  -> onefile
+  -> artifact.py stage + verify + archive
+  -> checkout-independent archive smoke
+  -> Windows setup + installer smoke / macOS pkg + structural verify
+  -> upload matrix artifacts
+
+tag only aggregate
+  -> 下载三平台 archive
+  -> artifact.py aggregate
+  -> 纳入 Windows setup 和 macOS pkg
+  -> 生成 SHA256SUMS
+
+tag only release
+  -> 读取 docs/releases/<tag>.md
+  -> 上传 archive、installer、sidecar、SHA256SUMS
+```
+
+tag 名包含 `-dev` 时 GitHub Release 标为 Pre-release；其他 `v*` tag 为普通 Release。workflow 没有 Docker image build job，也没有运行完整 unittest、`check-docs.sh` 或 `vendor-verify.sh`，这些仍是本地/合入门禁。
+
+仓库有 `.gitleaks.toml`，但当前 Artifact workflow 没有 gitleaks step；不要把配置文件存在误写成 CI 已强制扫描。
+
+### 11.2 发布步骤
+
+1. 在 `develop` 完成功能和完整验证，通过 PR 将候选变更合入 `main`。
+2. 发布变更只修改根 `VERSION`，并新增 `docs/releases/v<VERSION>.md`；保持 `docs/devlog.md` 新到旧。
+3. 确认发布提交中的 `VERSION`、Release Notes 文件名和计划 tag 完全一致。
+4. 在要发布的已审核提交上创建 annotated `v<VERSION>` tag，并推送该 tag。
+5. 等待 build、aggregate、release 全部通过，核对三平台 archive、Windows setup、macOS PKG、所有 sidecar 和 `SHA256SUMS`。
+
+示例中的版本值必须从 `VERSION` 读取，避免手写漂移：
 
 ```bash
-# 1. 修改根目录 VERSION，确保 docs/devlog.md 严格按新到旧排列，
-#    并新增 docs/releases/v<VERSION>.md
+VERSION_VALUE="$(python3 -c "from pathlib import Path; print(Path('VERSION').read_text().strip())")"
+git tag -a "v${VERSION_VALUE}" -m "Release v${VERSION_VALUE}"
+git push origin "v${VERSION_VALUE}"
+```
 
-# 2. 完整测试、文档与 vendored 资源校验
+创建 tag 前至少运行：
+
+```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
 bash tools/check-docs.sh
 bash tools/vendor-verify.sh
 python3 packaging/artifact.py stage --output /tmp/aisc-staging
 python3 packaging/artifact.py verify --bundle /tmp/aisc-staging/aisc-bundle
-
-# 3. 提交 VERSION 与发布文档
-
-# 4. 创建并推送 tag（VERSION 不含前导 v）
-VERSION_VALUE="$(head -1 VERSION)"
-git tag -a "v${VERSION_VALUE}" -m "Release v${VERSION_VALUE}"
-git push origin main
-git push origin "v${VERSION_VALUE}"
-
-# 5. 在 GitHub Actions 中等待 Artifact workflow 全部通过
-# 6. 核对 Release 的平台产物、安装器、SHA256 sidecar 与 SHA256SUMS
+git diff --check
 ```
 
-**故障定位层次**（CI 失败时按此顺序排查）：
-1. **单元测试失败** — 先在本地用相同测试命令复现
-2. **Artifact 失败** — 检查 PyInstaller 入口、`VERSION` 嵌入和 bundle 路径
-3. **Docker 构建失败** — 检查 `container/Dockerfile`、`.dockerignore` 与 vendored 资源
-4. **跨平台不一致** — 检查平台特定路径处理（`sys.platform` 分支、Windows `\\` vs POSIX `/`）
+不要覆盖已发布 tag，不要 force-push 发布引用。Release Notes 缺失会使 release job 无法读取 `body_path`；平台 job 任一失败会阻止 aggregate/release。
 
-**边界**：
-- 自动发布只在 tag workflow 全部成功后发生；只推 `main` 不会创建 Release
-- 不允许覆盖已存在的发布标签，也不使用 force-push
-- 本文不规定 tag 签名策略
+## 12. 安全边界
 
----
+### 12.1 容器不是强安全沙箱
 
-## 9. 安全与敏感数据
+- 容器固定以 `root` 运行，目的是兼容 Windows/WSL2 bind mount 写权限。
+- Claude 默认跳过 permissions；Codex 默认绕过 approvals 和 sandbox。
+- `/root/app` 是宿主工作区 bind mount，危险命令可直接修改或删除宿主文件。
+- Docker daemon access、root、`NET_ADMIN`、TUN 都是高风险能力，`IS_SANDBOX=1` 不降低权限。
+- `safe/unsafe` Profile 尚未接入 run，不能作为安全保证。
 
-### 9.1 Provider 认证边界
+任何权限默认值变化都必须同时检查 wrappers、README 警告、Profile 误导风险和真实容器 smoke。不要把容器称为可运行不可信代码的隔离边界。
 
-- Provider 认证信息由 cc-switch 管理；AISC 不创建、读取或迁移独立密钥文件。
-- `.gitleaks.toml` 继续用于阻止真实 API Key 被提交到仓库。
+### 12.2 凭据与配置
 
-### 9.2 开发中的安全注意事项
+- Provider 和凭据仅由 cc-switch/官方 CLI 管理；AISC config schema 不接收密钥。
+- `.cc-switch/` 可能包含 SQLite 凭据和备份，`.claude/`、`.codex/` 可能包含登录状态；都不得进入 artifact 或提交。
+- entrypoint 对 `.cc-switch` best-effort `chmod 700`，但 CIFS/bind mount 可能忽略或拒绝 chmod，此时只告警并继续，不能据此声称宿主权限已收紧。
+- 测试只使用明显占位符，不把真实 API Key、Cookie、订阅 URL 或日志提交到 Git。
+- 本地可运行 `gitleaks detect --config .gitleaks.toml --source .`，但它不能替代人工审查 staged diff。
 
-- **绝对不要**在代码、注释、commit message 中包含真实 API Key
-- 测试中使用的密钥必须使用明确的测试占位符（如 `test-key-placeholder`）
-- Gitleaks 扫描在 CI 中运行（continue-on-error，不阻塞），但本地提交前应确保不泄露密钥
+### 12.3 文件与命令注入防护
 
-### 9.3 容器安全边界
+- 配置读取拒绝 symlink/reparse 绕过、重复 JSON key 和超限输入，错误消息不回显原始敏感内容。
+- `state.env` 只允许两个布尔 key，并拒绝 shell metacharacters。
+- `switch --quick` 使用 positional argv 和无 `eval` 的 `/proc/1/environ` 解析。
+- artifact 解压先验证全部成员，再写空目标目录，禁止路径逃逸和特殊文件。
+- 新代码不得把 Provider、路径或用户输入拼进 `shell=True` 字符串。
 
-- 容器默认以 `--dangerously-skip-permissions` 运行（跳过 Claude Code 权限确认）
-- 容器以 `root` 用户运行，并设置 `IS_SANDBOX=1`
-- 代理模式（`--network proxy` / `--profile proxy`）需要 `--cap-add=NET_ADMIN` 和 `/dev/net/tun`
-- 这些是为开发便利做的取舍，**不构成生产安全声明**
+## 13. 文档与设计决策
 
----
+| 位置 | 用途 | 权威性 |
+| --- | --- | --- |
+| `README.md` | 最终用户当前行为、安装、CLI、排障 | 用户文档事实入口 |
+| `DEVELOP_WIKI.md` | 当前开发架构、流程和契约 | 维护者事实入口 |
+| `docs/adr/001-python-stdlib-cli.md` | 使用 Python stdlib CLI 的决策 | 架构决策背景 |
+| `docs/rfc/aisc-cli-v1.md` | JSON envelope / JSONL 协议 | 机器接口契约 |
+| `docs/plans/` | 实施计划与历史设计 | 不能覆盖当前源码事实 |
+| `docs/devlog.md` | 变更历史 | 非命令参考 |
+| `docs/releases/v*.md` | GitHub Release body | tag 发布必需 |
 
-## 10. 文档与设计决策
+文档原则：
 
-### 10.1 设计文档位置
+- 路径、脚本和命令必须在当前仓库可核验。
+- 用户手册不展开内部类级细节；开发手册不复制完整用户 CLI 教程。
+- 删除功能时同时删除主动推荐，但历史 plan/devlog 可保留明确的历史语境。
+- README 末尾从 `## 推荐服务` 开始的审计区有独立保留要求，修改前后必须逐字比较。
+- 修改 README 或内置 Skills 后运行 `tools/check-docs.sh`，并正确识别 `.slim/worktrees/` 误报。
 
-| 目录 | 内容 |
-|------|------|
-| `docs/adr/` | 架构决策记录（当前: `001-python-stdlib-cli.md` — 使用 stdlib 而非 Click/argparse 扩展） |
-| `docs/rfc/` | RFC（当前: `aisc-cli-v1.md` — CLI 的 JSON envelope / JSONL 协议） |
-| `docs/plans/` | 开发计划（启动器重构、Mihomo TUN、统一 CLI 等） |
-| `docs/devlog.md` | 开发日志（历史记录） |
+## 14. 提交前检查
 
-### 10.2 关键设计决策
-
-| 决策 | 位置 | 要点 |
-|------|------|------|
-| Python stdlib CLI | `docs/adr/001-python-stdlib-cli.md` | 不引入 Click/rich/typer，使用 argparse + 自定义输出格式化 |
-| JSON Envelope 协议 | `docs/rfc/aisc-cli-v1.md` | 所有 `--format json` 输出使用固定结构的 JSON envelope |
-| JSONL 事件流 | `docs/rfc/aisc-cli-v1.md` | `build`/`run` 的 `--events` 输出 RFC §3 格式的 JSONL |
-| Skills 单一管理入口 | `container/entrypoint.sh` | cc-switch 登记、同步并管理 Claude/Codex skills |
-| 宿主入口统一 | `docs/plans/PLAN-p3-unified-cli.md` | 历史方案保留；当前仅支持 Python CLI |
-
-### 10.3 文档编写规范
-
-- 在 `README.md` 中引用真实存在的文件路径
-- 修改 `README.md` 或 cc-switch 内置 skills 后运行 `bash tools/check-docs.sh`
-- 设计决策文档放入 `docs/adr/`（使用数字前缀命名）
-
----
-
-## 11. 提交前检查
-
-### 必须通过
+通用检查：
 
 ```bash
-# 1. 语法检查
+# Python 语法和完整 unittest
 python3 -m compileall -q src packaging
-find container tools packaging -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
-
-# 2. Python 单元测试
 PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -v
 
-# 3. git diff 格式检查（无空白错误）
+# 当前真实 Bash 文件语法
+bash -n container/entrypoint.sh
+bash -n container/claude-wrapper
+bash -n container/codex-wrapper
+bash -n container/cc-switch-wrapper
+bash -n tools/check-docs.sh
+bash -n tools/stage-mihomo.sh
+bash -n tools/vendor-refresh.sh
+bash -n tools/vendor-verify.sh
+
+# 内容与 diff
+bash tools/vendor-verify.sh
 git diff --check
-
-# 4. 暂存前确认不包含敏感文件
-git status
+git status --short
 ```
 
-### 修改特定区域后的额外检查
+按修改区域追加：
 
-| 修改区域 | 额外检查 |
-|---------|---------|
-| `VERSION` 或 `src/aisc/__init__.py` | `PYTHONPATH=src python3 -m aisc version`；PyInstaller 版本 smoke |
-| `README.md` | `bash tools/check-docs.sh` |
-| `container/cc-switch-skills/` | `bash tools/check-docs.sh`；运行 cc-switch runtime 测试 |
-| `container/` 下任意文件 | `bash tools/vendor-refresh.sh && bash tools/vendor-verify.sh` |
-| `container/_bundle/` 来源文件 | `bash tools/stage-skills.sh`（从宿主机重新构建） |
-| Dockerfile 或依赖版本 | `config/versions.env` 同步更新 |
-| 新增 `.sh` / `.py` 文件 | 运行对应 `bash -n` / `compileall` |
+| 修改区域 | 追加验证 |
+| --- | --- |
+| CLI parser/output | text + `--format json`；build/run 再测 `--events` |
+| build/run plan | direct/proxy、dry-run、non-interactive、keep-alive 组合 |
+| registry/container commands | `ps` 与 name/label/default/歧义/GC unittest |
+| config | validate/effective、平台路径、symlink/reparse 和 parser limits |
+| cc-switch/Skills/entrypoint | `tests.test_cc_switch_runtime` + Docker 启动 smoke |
+| `container/` | `vendor-refresh.sh` 后 `vendor-verify.sh`；检查只包含预期 checksum 变化 |
+| Dockerfile/外部依赖 | `versions.env`、Dockerfile ARG、manifest、离线资源一致性 + no-cache build |
+| packaging | `tests/packaging` + artifact stage/verify；目标平台 installer smoke |
+| `VERSION`/Release | 只改 `VERSION`，补 Release Notes，运行 ci_smoke/packaging tests |
+| README/Skills 名称 | `tools/check-docs.sh`，并核对推荐服务审计区原样保留 |
 
-### Gitleaks 扫描（可选）
+最后审查 `git diff`，确认没有 `.cc-switch`、`.claude`、`.codex`、`.aisc`、`.env`、凭据、下载临时文件、虚拟环境或 build artifact 被纳入提交。
 
-```bash
-# 本地密钥扫描
-gitleaks detect --config .gitleaks.toml --source .
-```
+## 15. 关键索引
 
----
-
-## 12. 关键文件索引
-
-### A. 按“我要改什么”索引
-
-| 要改什么 | 从哪里开始 | 关联文件 | 最低验证 |
-|---------|----------|---------|---------|
-| 新增 CLI 子命令 | `src/aisc/cli/main.py` | `src/aisc/cli/commands/` 下新文件、`output.py`（如需新格式） | `unittest` + 手动 `aisc <cmd> --format json` |
-| 修改模型切换逻辑 | `container/entrypoint.sh` | `container/cc-switch-wrapper` | 容器内 `cc-switch proxy show` |
-| 新增内置 Skill | `container/cc-switch-skills/` | `container/Dockerfile`、`tools/check-docs.sh` | `cc-switch skills list` |
-| 修改容器入口逻辑 | `container/entrypoint.sh` | `container/claude-wrapper`、`container/lib/` | Docker 构建 + 启动测试 |
-| 修改 PyInstaller 打包 | `packaging/pyinstaller/entrypoint.py` | `packaging/artifact.py`、`.github/workflows/artifact.yml` | `artifact.py build-onefile` |
-| 维护 Vendored 资源 | `tools/vendor-refresh.sh` | `vendor/checksums.txt`、`vendor/manifest.json` | `tools/vendor-verify.sh` |
-
-### B. 按文件类型索引
-
-| 类型 | 关键文件 |
-|------|---------|
-| **版本号** | `VERSION`（唯一事实源）, `src/aisc/__init__.py`（解析器） |
-| **入口点** | `src/aisc/cli/main.py` (宿主 CLI), `container/entrypoint.sh` (容器) |
-| **数据模型** | `src/aisc/domain/models.py`, `src/aisc/domain/config.py` |
-| **I/O 适配器** | `src/aisc/adapters/docker_.py`, `src/aisc/adapters/state_file.py` |
-| **安全** | `src/aisc/adapters/config_reader.py`, `.gitleaks.toml` |
-| **容器定义** | `container/Dockerfile`, `container/entrypoint.sh`, `container/cc-switch-wrapper`, `container/cc-switch-skills/` |
-| **CI** | `.github/workflows/artifact.yml` |
-| **打包** | `packaging/artifact.py`, `packaging/ci_smoke.py`, `packaging/pyinstaller/` |
-| **维护工具** | `tools/stage-skills.sh`, `tools/stage-mihomo.sh`, `tools/vendor-refresh.sh`, `tools/vendor-verify.sh`, `tools/check-docs.sh` |
-| **测试** | `tests/test_cc_switch_runtime.py`, `tests/test_version_source.py`, `tests/packaging/` |
-| **设计文档** | `docs/adr/`, `docs/rfc/`, `docs/plans/` |
+| 需求 | 首要入口 | 关联文件 |
+| --- | --- | --- |
+| 新增宿主命令 | `src/aisc/cli/main.py` | `src/aisc/cli/commands/`、`src/aisc/cli/output.py` |
+| 改 build/run argv | `src/aisc/domain/models.py` | `commands/build.py`、`commands/run.py`、`adapters/docker_.py` |
+| 改多容器管理 | `src/aisc/adapters/container_registry.py` | `src/aisc/cli/commands/container.py` |
+| 改 AISC root | `src/aisc/application/resources.py` | artifact bundle 布局、installer smoke |
+| 改配置 | `src/aisc/application/config_service.py` | `schemas/config_schema.py`、config readers |
+| 改版本 | `VERSION` | `src/aisc/__init__.py`、`packaging/artifact.py`、`ci_smoke.py` |
+| 改容器启动 | `container/entrypoint.sh` | 三个 wrappers、`container/lib/`、Dockerfile |
+| 改 Provider/路由 | `container/entrypoint.sh` | `cc-switch-wrapper`、宿主 `switch` wrapper |
+| 改 Skills | `container/cc_switch_skills.py` | `container/cc-switch-skills/`、Dockerfile bundle hash |
+| 改 TUN | `container/mihomo-build-config.js` | Dockerfile、`tools/stage-mihomo.sh`、RunPlan |
+| 改 artifact | `packaging/artifact.py` | `packaging/ci_smoke.py`、packaging tests、workflow |
+| 改 Windows 安装器 | `packaging/windows/installer.iss` | `smoke_installer.ps1`、workflow |
+| 改 macOS PKG | `packaging/macos/build_pkg.sh` | packaging test、workflow structural verify |
+| 改 CI/发布 | `.github/workflows/artifact.yml` | `docs/releases/`、VERSION、artifact aggregate |
