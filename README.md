@@ -15,15 +15,6 @@ AISC 以开发便利为优先，不是生产级安全沙箱：
 - 只在可信代码和可恢复的工作区中运行。不要挂载密钥目录、生产数据或整段用户主目录；先提交或备份未保存的工作。
 - API Key、登录令牌和 Provider 配置只交给 cc-switch 或对应官方 CLI，不要写入仓库、AISC 配置、Issue 或日志。
 
-## v2.1.4 要点
-
-- Codex 的 cc-switch 代理默认关闭，可直接使用官方登录或 Codex 原生凭据；需要托管 Provider 时再手动启用。
-- 启动菜单可直接进入 cc-switch TUI，统一管理 Claude/Codex Provider、路由和 Skills。
-- 内置 Skills 按 bundle 哈希和目标状态增量同步，并保留 cc-switch 中已有的 Claude/Codex 启停状态。
-- `AISC_SKILLS_SYNC=auto|always|off` 控制 Skills 同步；文件锁不可用时启用保护性确认，避免覆盖宿主已有目录。
-- 支持多容器登记、`--label` 寻址和 `aisc ps` 列表。
-- `v*` 标签由 CI 构建 Linux x86_64、Windows x86_64、macOS arm64 产物；`-dev` 标签发布为 Pre-release。
-
 ## 安装前提与支持平台
 
 运行 AISC 必须安装并启动 Docker：
@@ -137,8 +128,11 @@ aisc doctor
 # 2. 构建默认镜像 super-claude:latest
 aisc build
 
-# 3. 在当前目录启动容器
+# 3. 前台运行容器（默认挂载当前目录为工作区）
 aisc run
+
+# 使用指定目录作为工作区
+aisc run --workspace /path/to/project
 ```
 
 交互式文本终端中，裸 `aisc build` 会打开构建向导；通过 `--tag`、`--no-cache`、`--pull` 或 `--dry-run` 明确给出构建选项时直接执行对应计划。
@@ -503,48 +497,37 @@ MIT License，详见 [LICENSE](LICENSE)。镜像还包含第三方组件，其�
 
 ### Codesome｜Codex 与 Claude Code 二合一服务
 
-Codesome AIO 同时支持 Codex 和 Claude Code。一个 Key 可用于不同客户端和模型场景，例如：
-
-- 在 Claude Code、Claude Desktop 等客户端中配置该 Key，使用 Claude 模型。
-- 在 Codex、Codex Desktop 等客户端中配置该 Key，使用 Codex 模型。
+Codesome 提供 API 调用形式的二合一月卡：一张 `cr-...` API Key 可分别接入 Claude Code 和 Codex。这是 API 服务，不是 Claude 或 Codex 成品账号。
 
 #### 购买与开通
 
-通过以下链接在浏览器中打开 Codesome 下单页面：
+Codesome 调整的是注册和下单入口，并非服务使用地址。请在新入口注册账号后选购产品：
 
-[前往 Codesome 选购](https://fk.codesome.cn?aff=wvoiJ4PY)
+[注册并前往 Codesome 选购](https://meta.codesome.cn/?aff=FAP2ASVX)
 
-通过此链接下单可享 **5% 折扣**。支付后请妥善保存订单详情中的序列号或卡密。根据所购产品，开通方式有所不同：
+支付后请妥善保存订单详情中的序列号或卡密。不同产品的开通方式不同，请勿混用：
 
-- **额度包**：订单中的序列号是兑换码。登录 [Codesome 控制台](https://cc.codesome.ai)，在**兑换区**填写兑换码，兑换成功后美元额度会一次性到账；随后进入**API 密钥**菜单创建专属 API Key。
-- **AIO 产品**：收到的卡密就是 Key，格式类似 `codesome_aio_XX: aaaaaaaa aaaaaa`。请完整、妥善地保存，不要公开分享或提交到 Git 仓库。
+- **二合一产品（V5）**：订单中的 `cr-...` 卡密就是 API Key，可直接用于 Claude Code 和 Codex，不需要前往 V3 兑换。
+- **普通 Claude/GPT 月卡及按量产品（V3）**：需要先在 V3 控制台兑换，再创建 `sk-...` API Key。
 
-#### 配置地址
+#### Claude Code 与 Codex 的区别
 
-Claude Code 与 Codex 使用不同的 API URL，配置时请勿混用：
+二合一 Key 可以同时用于两类客户端，但它们的 API URL 和配置字段不同，不能混用：
 
 | 使用端 | API URL |
 | --- | --- |
 | Claude Code / Claude | `https://v5.codesome.cn/api` |
-| Codex | `https://v5.codesome.cn/openai/` |
+| Codex / OpenAI 格式客户端 | `https://v5.codesome.cn/openai` |
 
-Key 可配置到对应的命令行工具或桌面客户端中。具体字段和配置步骤请以 Codesome 最新教程为准。
+Claude Code 通过 `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_AUTH_TOKEN` 配置；Codex 使用 OpenAI 格式的配置。完整安装和配置步骤请查看 Codesome 文档：
 
-#### 教程、用量查询与技术支持
+- [Claude Code 二合一配置教程](https://doc.codesome.ai/#/01-%E4%BA%8C%E5%90%88%E4%B8%80%E8%AE%A1%E5%88%92-ClaudeCode%E5%AE%89%E8%A3%85%E9%85%8D%E7%BD%AE)
+- [Codex 二合一配置教程](https://doc.codesome.ai/#/01-%E4%BA%8C%E5%90%88%E4%B8%80%E8%AE%A1%E5%88%92-Codex%E5%AE%89%E8%A3%85%E9%85%8D%E7%BD%AE)
+- [Codesome 文档首页](https://doc.codesome.ai/)
 
-可在以下页面查看使用教程，并查询 Key 的用量和当前状态：
 
-[查看教程及 Key 用量状态](https://aio.codesome.ai/admin-next/api-stats)
 
-Codesome 的下单购买、价格、稳定性说明、使用指南、扫码进群和福利领取等信息统一收录在飞书入口：
-
-[打开 Codesome 飞书总入口](https://my.feishu.cn/wiki/Vaifwy0aAisdP8kDLPoc0jV5nCb?from=from_copylink)
-
-详细使用问题请进入 Codesome 飞书群联系工作人员或客服。技术问题统一在飞书群内解答；微信渠道主要用于交友和商务合作。
-
-Codesome 创始人 Mens 专注于 Claude Code 相关产品，并感谢用户对产品的支持。
-
-> API Key 属于敏感凭据。请勿将其粘贴到公开页面、聊天记录或代码仓库中。
+> 注册/下单入口与 Claude Code、Codex 的 API 地址用途不同。API Key 属于敏感凭据，请勿将其粘贴到公开页面、聊天记录或代码仓库中。
 
 ### 赔钱机场｜网络连接服务
 
