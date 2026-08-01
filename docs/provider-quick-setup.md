@@ -1,15 +1,19 @@
 # Provider 一键配置指南
 
-本文档提供常见 AI 供应商的 cc-switch provider 快速配置方法。**AISC v2.1.4+ 已在镜像构建时预配置这些 provider（除 API Key 外的所有参数）**，用户只需设置 API Key 即可使用。
+本文档提供常见 AI 供应商的 cc-switch provider 快速配置方法。**AISC v2.1.4+ 已在镜像构建时为 Claude 和 Codex 两个 agent 预配置这些 provider（除 API Key 外的所有参数）**，用户只需设置 API Key 即可使用。
 
 ## 快速开始
 
 ### 1. 查看预配置的 provider
 
-容器启动后，这些 provider 已自动添加到 cc-switch：
+容器启动后，这些 provider 已自动添加到 cc-switch（Claude 和 Codex 两个 agent）：
 
 ```bash
+# 查看 Claude agent 的 provider
 cc-switch -a claude provider list
+
+# 查看 Codex agent 的 provider
+cc-switch -a codex provider list
 ```
 
 你将看到以下预配置的 provider（标记为 `[no key]` 表示需要设置 API Key）：
@@ -22,18 +26,20 @@ cc-switch -a claude provider list
 
 ### 2. 设置 API Key
 
-选择一个 provider，设置 API Key 后即可使用：
+选择一个 provider，为目标 agent 设置 API Key：
 
 ```bash
-# 在容器内交互式输入 API Key（推荐，不会显示在终端历史）
-cc-switch -a claude provider set-key deepseek
-
-# 在宿主机交互式输入（更方便，v2.1.5+）
+# 为 Claude 设置（在宿主机，v2.1.5+推荐）
 aisc provider set-key deepseek
 
+# 为 Codex 设置
+aisc provider set-key --agent codex deepseek
+
+# 或在容器内设置
+cc-switch -a claude provider set-key deepseek
+cc-switch -a codex provider set-key deepseek
+
 # 或直接在命令中指定（不推荐，会记录在历史中）
-cc-switch -a claude provider set-key deepseek <your-api-key>
-# 或在宿主机
 aisc provider set-key deepseek <your-api-key>
 ```
 

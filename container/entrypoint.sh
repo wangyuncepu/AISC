@@ -315,6 +315,7 @@ if command -v cc-switch >/dev/null 2>&1; then
         fi
 
         # 预配置常见 AI 供应商 provider（不包含 API Key）
+        # Claude agent
         CC_SWITCH_PRESET_LOG="/tmp/cc-switch-preset-providers.log"
         if CC_SWITCH_PRESET_RESULT="$(
             python3 /usr/local/bin/lib/cc_switch_preset_providers.py \
@@ -326,17 +327,42 @@ if command -v cc-switch >/dev/null 2>&1; then
         )"; then
             case "$CC_SWITCH_PRESET_RESULT" in
                 added)
-                    echo "✅ cc-switch 已预配置 DeepSeek、Codex Claude、火山引擎、智谱、Kimi（需设置 API Key）"
+                    echo "✅ cc-switch 已为 Claude 预配置 DeepSeek、Codex Claude、火山引擎、智谱、Kimi"
                     ;;
                 current)
-                    echo "ℹ️  cc-switch 预设 provider 已配置，跳过。"
+                    echo "ℹ️  cc-switch Claude 预设 provider 已配置，跳过。"
                     ;;
                 off)
                     echo "ℹ️  AISC_PRESET_PROVIDERS=off，已跳过 provider 预配置。"
                     ;;
             esac
         else
-            echo "⚠️  cc-switch provider 预配置失败；日志: $CC_SWITCH_PRESET_LOG" >&2
+            echo "⚠️  cc-switch Claude provider 预配置失败；日志: $CC_SWITCH_PRESET_LOG" >&2
+        fi
+
+        # Codex agent
+        CC_SWITCH_PRESET_CODEX_LOG="/tmp/cc-switch-preset-providers-codex.log"
+        if CC_SWITCH_PRESET_CODEX_RESULT="$(
+            python3 /usr/local/bin/lib/cc_switch_preset_providers.py \
+                --config-dir "$CC_SWITCH_CONFIG_DIR" \
+                --agent codex \
+                --revision "$(cat /opt/aisc/skills/.aisc-bundle.sha256 2>/dev/null || echo 'v1')" \
+                --log "$CC_SWITCH_PRESET_CODEX_LOG" \
+                --mode "${AISC_PRESET_PROVIDERS:-auto}"
+        )"; then
+            case "$CC_SWITCH_PRESET_CODEX_RESULT" in
+                added)
+                    echo "✅ cc-switch 已为 Codex 预配置 DeepSeek、Codex Claude、火山引擎、智谱、Kimi"
+                    ;;
+                current)
+                    echo "ℹ️  cc-switch Codex 预设 provider 已配置，跳过。"
+                    ;;
+                off)
+                    # 已在 Claude agent 部分输出
+                    ;;
+            esac
+        else
+            echo "⚠️  cc-switch Codex provider 预配置失败；日志: $CC_SWITCH_PRESET_CODEX_LOG" >&2
         fi
 
         cc-switch proxy -a claude enable >/dev/null 2>&1 || true
