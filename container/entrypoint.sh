@@ -401,6 +401,21 @@ if [ -f /etc/mihomo/config.yaml ]; then
         # 健康探测：经代理能否到达 api.anthropic.com（不带 -f：401/404 等任何 HTTP 响应都算可达，只看连接是否成功）
         if curl -sS --max-time 10 -o /dev/null https://api.anthropic.com 2>/dev/null; then
             echo "✅ Mihomo TUN 已就绪，代理连通: api.anthropic.com 可达"
+
+            # 验证 Codex 官方访问（OpenAI API）
+            if curl -sS --max-time 10 -o /dev/null https://api.openai.com 2>/dev/null; then
+                echo "✅ Codex 官方 API (api.openai.com) 可达"
+            else
+                echo "⚠️  Codex 官方 API 暂不可达；Codex 使用可能受限"
+            fi
+
+            # 检测与 cc-switch proxy 的冲突
+            if command -v cc-switch >/dev/null 2>&1; then
+                if cc-switch proxy show 2>/dev/null | grep -q "claude.*enabled"; then
+                    echo "ℹ️  检测到 Mihomo TUN + cc-switch proxy 同时启用"
+                    echo "   已配置本地回环排除规则，避免代理循环"
+                fi
+            fi
         else
             # curl 失败：区分 mihomo 进程是否存活，给出更准确的排障提示
             if pgrep -f 'mihomo -d' >/dev/null 2>&1; then
