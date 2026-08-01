@@ -44,7 +44,24 @@ AISC 以开发便利为优先，不是生产级安全沙箱：
 
 官方 Release **不提供** Linux arm64、Windows arm64 或 Intel macOS 产物。Release 安装不需要 Python、uv 或 Git；从源码安装需要 Python 3.11+ 和 Git，推荐使用 uv。
 
-先验证 Docker：
+### 自动环境配置
+
+**AISC v2.1.5+ 支持智能环境检测和自动安装 Docker**。运行环境诊断时，如果检测到 Docker 缺失，会自动提示安装：
+
+```bash
+aisc doctor
+```
+
+支持的平台和安装方式：
+- **Linux**：使用官方 `get.docker.com` 脚本（完全自动化）
+- **macOS**：使用 Homebrew 安装 Docker Desktop（半自动化）
+- **Windows**：使用 winget 安装 Docker Desktop（半自动化）
+
+详细说明请参考 [自动环境配置指南](docs/auto-setup.md)。
+
+### 手动验证 Docker
+
+如果选择手动安装 Docker，可以先验证：
 
 ```bash
 docker version
