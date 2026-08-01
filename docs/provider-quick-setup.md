@@ -25,11 +25,16 @@ cc-switch -a claude provider list
 选择一个 provider，设置 API Key 后即可使用：
 
 ```bash
-# 交互式输入 API Key（推荐，不会显示在终端历史）
+# 在容器内交互式输入 API Key（推荐，不会显示在终端历史）
 cc-switch -a claude provider set-key deepseek
 
-# 或直接在命令中指定
+# 在宿主机交互式输入（更方便，v2.1.5+）
+aisc provider set-key deepseek
+
+# 或直接在命令中指定（不推荐，会记录在历史中）
 cc-switch -a claude provider set-key deepseek <your-api-key>
+# 或在宿主机
+aisc provider set-key deepseek <your-api-key>
 ```
 
 ### 3. 切换并使用
@@ -91,7 +96,10 @@ DeepSeek 提供高性价比的 AI 模型服务，支持 Claude-compatible API。
 **✅ 已预配置 - 只需设置 API Key：**
 
 ```bash
-# 设置 API Key
+# 设置 API Key（宿主机，v2.1.5+推荐）
+aisc provider set-key deepseek
+
+# 或在容器内设置
 cc-switch -a claude provider set-key deepseek
 
 # 切换使用
