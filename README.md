@@ -249,16 +249,26 @@ cc-switch -a claude provider list
 
 # 2. 设置 API Key（以 DeepSeek 为例）
 cc-switch -a claude provider set-key deepseek
+# 或在宿主机直接设置
+aisc provider set-key deepseek
 
 # 3. 切换到该 provider
 cc-switch -a claude provider switch deepseek
+# 或在宿主机快速切换
+aisc switch --quick deepseek
 ```
 
 ### 宿主机快速切换
 
-配置完成后，可使用宿主机命令快速切换：
+配置完成后，可使用宿主机命令快速切换和管理：
 
 ```bash
+# 设置 API Key（交互式输入，推荐）
+aisc provider set-key deepseek
+
+# 设置 API Key（命令行参数）
+aisc provider set-key deepseek sk-xxx...
+
 # 快速切换到 DeepSeek
 aisc switch --quick deepseek
 
@@ -395,6 +405,7 @@ aisc run --network proxy
 | `aisc restart` | `--name`, `--label` | 重启目标容器 |
 | `aisc shell` | `--name`, `--label` | 执行 `docker exec -it <name> bash` |
 | `aisc switch` | `--name`, `--label`, `--quick PROVIDER` | 打开 cc-switch TUI，或快速切换 Claude Provider |
+| `aisc provider set-key` | `PROVIDER_ID`, `[API_KEY]`, `--name`, `--label`, `--agent` | 为 provider 设置 API Key（支持交互式输入） |
 | `aisc config validate` | `--config`, `--workspace` | 只读校验用户层和工作区层配置 |
 | `aisc config effective` | `--config`, `--workspace` | 展示有效配置、来源追踪和问题；`show` 是兼容别名 |
 | `aisc profile list` | 全局选项 | 只读列出 Profile |
