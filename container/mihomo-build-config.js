@@ -50,7 +50,11 @@ function buildConfig(proxies) {
   y += names.map(n => '      - ' + scalar(n)).join('\n') + '\n';
   y += '  - name: SELECT\n    type: select\n    proxies:\n';
   y += ['      - PROXY'].concat(names.map(n => '      - ' + scalar(n))).join('\n') + '\n';
-  y += 'rules:\n  - MATCH,PROXY\n';
+  // 添加规则：排除本地回环，避免与 cc-switch proxy 冲突
+  y += 'rules:\n';
+  y += '  - IP-CIDR,127.0.0.0/8,DIRECT\n';
+  y += '  - DOMAIN-KEYWORD,localhost,DIRECT\n';
+  y += '  - MATCH,PROXY\n';
   return y;
 }
 
