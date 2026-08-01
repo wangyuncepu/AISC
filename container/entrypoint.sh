@@ -314,6 +314,31 @@ if command -v cc-switch >/dev/null 2>&1; then
             echo "⚠️  cc-switch skills 离线安装失败；日志: $CC_SWITCH_SKILLS_LOG" >&2
         fi
 
+        # 预配置常见 AI 供应商 provider（不包含 API Key）
+        CC_SWITCH_PRESET_LOG="/tmp/cc-switch-preset-providers.log"
+        if CC_SWITCH_PRESET_RESULT="$(
+            python3 /usr/local/bin/lib/cc_switch_preset_providers.py \
+                --config-dir "$CC_SWITCH_CONFIG_DIR" \
+                --agent claude \
+                --revision "$(cat /opt/aisc/skills/.aisc-bundle.sha256 2>/dev/null || echo 'v1')" \
+                --log "$CC_SWITCH_PRESET_LOG" \
+                --mode "${AISC_PRESET_PROVIDERS:-auto}"
+        )"; then
+            case "$CC_SWITCH_PRESET_RESULT" in
+                added)
+                    echo "✅ cc-switch 已预配置 DeepSeek、Codex Claude、火山引擎、智谱、Kimi（需设置 API Key）"
+                    ;;
+                current)
+                    echo "ℹ️  cc-switch 预设 provider 已配置，跳过。"
+                    ;;
+                off)
+                    echo "ℹ️  AISC_PRESET_PROVIDERS=off，已跳过 provider 预配置。"
+                    ;;
+            esac
+        else
+            echo "⚠️  cc-switch provider 预配置失败；日志: $CC_SWITCH_PRESET_LOG" >&2
+        fi
+
         cc-switch proxy -a claude enable >/dev/null 2>&1 || true
         echo "ℹ️  Codex 未自动启用 cc-switch 代理；需要时可手动运行 cc-switch proxy -a codex enable。"
     else
