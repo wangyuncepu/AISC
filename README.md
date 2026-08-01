@@ -12,6 +12,7 @@ AISC 是一个在 Docker 容器中运行 Claude Code、OpenAI Codex 和 cc-switc
 - [从源码安装](#从源码安装)
 - [快速开始](#快速开始)
 - [容器内使用](#容器内使用)
+- [Provider 快速配置](#provider-快速配置)
 - [配置与持久化](#配置与持久化)
 - [CLI 参考](#cli-参考)
 - [升级](#升级)
@@ -225,6 +226,54 @@ cc-switch proxy -a codex enable
 启动时 AISC 会 detach 启动 cc-switch daemon。Claude 路由以 best-effort 方式自动启用；失败不会阻止进入容器。Codex 默认保持官方直连，支持官方网页登录和原生凭据；只有需要 cc-switch 托管的 Codex Provider 时才执行 `cc-switch proxy -a codex enable`。
 
 全新数据库会尝试导入 Codex `config.toml`，仍无当前 Provider 时选择内置 `codex-official`。该条目不包含用户凭据，不能替代登录或 API Key 配置。
+
+## Provider 快速配置
+
+AISC **v2.1.4+ 已在镜像中预配置常见 AI 供应商**，用户只需设置 API Key 即可使用。支持快速配置和切换多个 AI 供应商。详细的配置指南请参考 [Provider 快速配置文档](docs/provider-quick-setup.md)。
+
+### 预配置的供应商
+
+容器启动后，以下 provider 已自动添加（除 API Key 外的所有参数）：
+
+- **DeepSeek** (`deepseek`)：高性价比对话和代码模型
+- **Claude via Codex 订阅** (`codex-claude`)：通过 Codex 服务访问 Claude 官方模型
+- **火山引擎 Ark** (`volcengine-ark`)：兼容 OpenAI/Anthropic 格式的模型服务
+- **智谱 Z.ai** (`zhipu`)：GLM 系列大语言模型
+- **Kimi** (`kimi`)：月之暗面长文本处理 AI 模型
+
+### 快速开始
+
+```bash
+# 1. 查看预配置的 provider
+cc-switch -a claude provider list
+
+# 2. 设置 API Key（以 DeepSeek 为例）
+cc-switch -a claude provider set-key deepseek
+
+# 3. 切换到该 provider
+cc-switch -a claude provider switch deepseek
+```
+
+### 宿主机快速切换
+
+配置完成后，可使用宿主机命令快速切换：
+
+```bash
+# 快速切换到 DeepSeek
+aisc switch --quick deepseek
+
+# 快速切换到 Codex Claude
+aisc switch --quick codex-claude
+
+# 快速切换到其他已配置的 provider
+aisc switch --quick <provider-id>
+```
+
+或在容器内使用完整 TUI：
+
+```bash
+cc-switch
+```
 
 ### Skills 同步
 
