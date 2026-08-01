@@ -54,7 +54,7 @@
 3. [X] 检查 `aisc switch --quick` 是否可用及其实现逻辑，并为 cc-switch 常见供应商提供除 API Key 外的一键配置：DeepSeek、Claude 使用 Codex 订阅、火山引擎 Ark、智谱 Z.ai、Kimi
 4. [X] 检查容器内代理/翻墙设置，重点排查与 cc-switch 的冲突，并验证 Docker 容器内可通过官方渠道访问 Codex
 5. [X] 移除 README.md 开头的版本要点内容
-6. [ ] 完善 Docker 直接引导安装流程，实现开箱即用
+6. [X] 完善 Docker 直接引导安装流程，实现开箱即用
 7. [ ] 增加 Claude/Codex 基本使用方法与技巧，重点建设可由大家共同更新的协作文档，并参考 Codesome 文档系统
 8. [ ] 更新飞书知识库 ：支持同步在线文档，并结合 Obsidian 管理本地知识库
 9. [ ] 调研适合 AI 稳定访问和读取网页的方案
