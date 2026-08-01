@@ -336,7 +336,30 @@ def _cmd_doctor(args: argparse.Namespace) -> Tuple[Dict[str, Any], DoctorReport]
         root_error = str(exc)
     except Exception as exc:
         root_error = str(exc)
+
     report = run_doctor(root=root, root_error=root_error)
+
+    # Check if Docker is missing and offer to install (interactive mode only)
+    docker_missing = any(
+        c.name == "docker-cli" and c.status.value == "FAIL"
+        for c in report.checks
+    )
+
+    if docker_missing and sys.stdin.isatty():
+        # Interactive mode - offer to install Docker
+        from aisc.application.repair import install_docker_interactive
+
+        print("\n" + "=" * 60)
+        print("Docker is required but not installed.")
+        print("=" * 60)
+
+        success = install_docker_interactive()
+
+        if success:
+            print("\n\nRe-running diagnostics...\n")
+            # Re-run doctor to check if Docker is now available
+            report = run_doctor(root=root, root_error=root_error)
+
     data: Dict[str, Any] = {"host": report.to_dict(), "container": None}
     return data, report
 
