@@ -222,6 +222,25 @@ def _build_parser() -> _AiscArgumentParser:
     swp.add_argument("--quick", type=str, default=None,
                      help="Provider id or alias for quick switch (e.g. deepseek)")
 
+    # --- provider ---
+    prp = sub.add_parser("provider", help="Manage AI provider configuration", allow_abbrev=False)
+    _add_global_args(prp, is_subparser=True)
+    prsub = prp.add_subparsers(dest="provider_command", title="provider commands",
+                                parser_class=_AiscArgumentParser)
+
+    prsk = prsub.add_parser("set-key", help="Set API key for a provider", allow_abbrev=False)
+    _add_global_args(prsk, is_subparser=True)
+    prsk.add_argument("provider_id", type=str,
+                      help="Provider ID (e.g., deepseek, codex-claude)")
+    prsk.add_argument("api_key", type=str, nargs="?", default=None,
+                      help="API key (optional, will prompt if not provided)")
+    prsk.add_argument("--name", type=str, default=None,
+                      help="Container name (overrides registry discovery)")
+    prsk.add_argument("--label", type=str, default=None,
+                      help="Target container by label")
+    prsk.add_argument("--agent", type=str, default="claude",
+                      help="Target agent (default: claude)")
+
     # --- ps ---
     psp = sub.add_parser("ps", help="List all registered containers", allow_abbrev=False)
     _add_global_args(psp, is_subparser=True)
@@ -662,6 +681,73 @@ def _cmd_switch(
     return data, exit_code, errors
 
 
+def _cmd_provider(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc provider``.  Text-only interactive."""
+    from aisc.cli.commands.container import cmd_provider_set_key, discover_container
+
+    if effective_format == "json":
+        emit_json_usage_error(
+            command="provider", version=__version__,
+            message="provider only supports text output, --format json is not supported",
+        )
+        sys.exit(2)
+
+    sub = getattr(args, "provider_command", None)
+    if sub not in ("set-key",):
+        if effective_format == "json":
+            emit_json_usage_error(
+                command="provider", version=__version__,
+                message="Unknown provider subcommand",
+            )
+        else:
+            print("Error: Unknown provider subcommand. Use 'aisc provider set-key'.", file=sys.stderr)
+        sys.exit(2)
+
+    # Discover name once for use in returned data
+    name_override = getattr(args, "name", None)
+    label_override = getattr(args, "label", None)
+    try:
+        discovered_name = name_override or discover_container(
+            name_override=None,
+            explicit_root=getattr(args, "aisc_root", None),
+            label_override=label_override,
+        )
+    except Exception:
+        discovered_name = name_override or ""
+
+    provider_id = getattr(args, "provider_id", None)
+    api_key = getattr(args, "api_key", None)
+    agent = getattr(args, "agent", "claude")
+
+    proc = cmd_provider_set_key(
+        name_override=name_override,
+        explicit_root=getattr(args, "aisc_root", None),
+        provider_id=provider_id,
+        api_key=api_key,
+        agent=agent,
+        label_override=label_override,
+    )
+
+    exit_code = proc.exit_code if proc.exit_code >= 0 else 1
+    errors: List[Dict[str, Any]] = []
+    if exit_code != 0:
+        errors.append(build_error(
+            "AISC_ERR_GENERAL",
+            proc.stderr or f"docker exec exited with code {exit_code}",
+        ))
+
+    data: Dict[str, Any] = {
+        "name": discovered_name,
+        "exit_code": exit_code,
+        "provider_id": provider_id,
+        "agent": agent,
+    }
+    return data, exit_code, errors
+
+
 def _cmd_ps(
     args: argparse.Namespace,
     effective_format: str,
@@ -840,6 +926,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_shell(args, effective_format)
         elif args.command == "switch":
             data, exit_code, errors = _cmd_switch(args, effective_format)
+        elif args.command == "provider":
+            data, exit_code, errors = _cmd_provider(args, effective_format)
         elif args.command == "ps":
             data, exit_code, errors = _cmd_ps(args, effective_format)
         else:
@@ -970,7 +1058,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 image=r.get("image", ""), workspace=r.get("workspace", ""),
             ) for r in (data if isinstance(data, list) else [])]
             print_ps_text(ps_rows)
-        elif args.command in ("shell", "switch"):
+        elif args.command in ("shell", "switch", "provider"):
             # interactive output printed directly by _cmd_*
             pass
 

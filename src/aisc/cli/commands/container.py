@@ -500,6 +500,87 @@ def cmd_switch(
     return proc
 
 
+def cmd_provider_set_key(
+    name_override: Optional[str] = None,
+    explicit_root: Optional[str] = None,
+    provider_id: Optional[str] = None,
+    api_key: Optional[str] = None,
+    agent: str = "claude",
+    executor: Optional[DockerExecutor] = None,
+    label_override: Optional[str] = None,
+) -> ProcessResult:
+    """Set API key for a provider inside the container.
+
+    Uses ``cc-switch -a AGENT provider set-key PROVIDER_ID [API_KEY]``.
+    If api_key is None, cc-switch will prompt interactively.
+
+    Uses streaming executor for interactive terminal.  Text-only.
+    Returns ProcessResult so caller can inspect exit_code / errors.
+    """
+    exec_ = executor or RealDockerExecutor()
+
+    # Validate provider_id
+    if not provider_id or not provider_id.strip():
+        raise CliError(
+            message="Provider ID required",
+            exit_code=2, error_code="AISC_ERR_USAGE",
+        )
+
+    name = discover_container(name_override=name_override,
+                              explicit_root=explicit_root,
+                              label_override=label_override,
+                              executor=exec_)
+
+    # Verify container exists and is running
+    status = cmd_status(name_override=name, explicit_root=explicit_root,
+                         executor=executor)
+
+    if not status.exists:
+        raise CliError(
+            message=f"Container '{name}' not found — cannot set API key.",
+            exit_code=1, error_code="AISC_ERR_CONTAINER_NOT_FOUND",
+        )
+    if not status.running:
+        raise CliError(
+            message=f"Container '{name}' is not running — cannot set API key.",
+            exit_code=1, error_code="AISC_ERR_CONTAINER_NOT_FOUND",
+        )
+
+    # Build argv via the scope-preserving wrapper
+    argv = _build_provider_set_key_argv(name, agent, provider_id, api_key)
+
+    proc = exec_.run_streaming(argv)
+
+    if proc.command_not_found or proc.timed_out:
+        raise _classify_process_error(proc, name, "exec")
+
+    return proc
+
+
+def _build_provider_set_key_argv(
+    name: str,
+    agent: str,
+    provider_id: str,
+    api_key: Optional[str],
+) -> list:
+    """Build the ``docker exec`` argv for provider set-key.
+
+    Wraps the target command in the same scope-preserving Bash wrapper
+    used by switch. The provider ID and optional API key are passed as
+    positional arguments, **never** shell-interpolated.
+
+    Returns a list suitable for ``DockerExecutor.run_streaming``.
+    """
+    if api_key:
+        return ["exec", "-it", name, "bash", "-c", _SCOPE_WRAPPER,
+                "aisc-scope", _SCOPE_ENV_SOURCE, "--",
+                "cc-switch", "-a", agent, "provider", "set-key", provider_id, api_key]
+    else:
+        return ["exec", "-it", name, "bash", "-c", _SCOPE_WRAPPER,
+                "aisc-scope", _SCOPE_ENV_SOURCE, "--",
+                "cc-switch", "-a", agent, "provider", "set-key", provider_id]
+
+
 def print_switch_text(data: Dict[str, Any]) -> None:
     """Print switch result summary."""
     name = data.get("name", "")
