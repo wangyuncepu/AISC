@@ -5,7 +5,7 @@
 * [X] 没有挂VPN的时候node:20-slim无法安装
 * [X] 挂VPN之后可以安装，配置提示`.claude/`缺少报错，不再继续进行
 
-2. [ ] ssh配置，windows端配置，检查是否打开ssh，如果没打开运行配置脚本
+1. [ ] ssh配置，windows端配置，检查是否打开ssh，如果没打开运行配置脚本
 
 * [X] skill增加一个[github.com/multica-ai/andrej-karpathy-skills/blob/main/CLAUDE.md](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/CLAUDE.md)（尽可能模拟/使用**Claude Code Plugin**安装）
 * [X] 模型配置统一交由 cc-switch 管理
@@ -29,33 +29,33 @@
 * [X] 一键启动脚本规范化配置 — v1.3.0(模块化流水线)+ v1.3.1(目录重构)完成：scripts/ 下 4 模块 + 薄入口，跨平台对等，状态解耦
 * [X] claude code CLI外配置 cc-switch-cli：[github.com/saladday/cc-switch-cli](https://github.com/saladday/cc-switch-cli)；v2.1.1-dev 起作为唯一 Provider/skills 管理入口
 * [X] 配置docker容器系统的python — v1.3.2 完成：apt 装 python3/pip/venv + 默认 venv /home/AISC/.venv（挂 PATH 头，绕过 PEP 668，pip install 直达），详见 devlog
-- [ ] 用户自定义模型
-- [ ] 自定义接入服务商
-- [ ] 兼容openai请求格式
+* [ ] 用户自定义模型
+* [ ] 自定义接入服务商
+* [ ] 兼容openai请求格式
 
-
-- [ ] 文件结构
-- [ ] 安装后的文件结构
-- [ ] cc-switch使用
-- [ ] user版本调整
-- [ ] 剪枝
-- [ ] readme_dev调整
-- [ ] 进程保活
-- [ ] docker操作
-- [ ] 使用流程捋清楚、aisc使用引导、tool
-  - [ ] 初次使用cli环境配置
-  - [ ] config环境配置
-  - [ ] docker管理
-  - [ ] claude
+* [ ] 文件结构
+* [ ] 安装后的文件结构
+* [ ] cc-switch使用
+* [ ] user版本调整
+* [ ] 剪枝
+* [ ] readme_dev调整
+* [ ] 进程保活
+* [ ] docker操作
+* [ ] 使用流程捋清楚、aisc使用引导、tool
+  * [ ] 初次使用cli环境配置
+  * [ ] config环境配置
+  * [ ] docker管理
+  * [ ] claude
 
 # 20260730
 
 1. [X] 更新 README.md 的 `aisc run` 前台运行容器说明，补充 `--workspace`（使用指定目录作为工作区）的用法
 2. [X] 更新 README.md 的「Codesome｜Codex 与 Claude Code 二合一服务」部分：说明下单入口变更为 <https://meta.codesome.cn/?aff=FAP2ASVX>、注册后可自助创建 AFF 并查看邀请情况、满 100 可提现，并参考 `doc.codesome.ai` 介绍 Claude、Codex 及二合一服务
-3. [ ] 检查 `aisc switch --quick` 是否可用及其实现逻辑，并为 cc-switch 常见供应商提供除 API Key 外的一键配置：DeepSeek、Claude 使用 Codex 订阅、火山引擎 Ark、智谱 Z.ai、Kimi
+3. [X] 检查 `aisc switch --quick` 是否可用及其实现逻辑，并为 cc-switch 常见供应商提供除 API Key 外的一键配置：DeepSeek、Claude 使用 Codex 订阅、火山引擎 Ark、智谱 Z.ai、Kimi
 4. [ ] 检查容器内代理/翻墙设置，重点排查与 cc-switch 的冲突，并验证 Docker 容器内可通过官方渠道访问 Codex
 5. [X] 移除 README.md 开头的版本要点内容
 6. [ ] 完善 Docker 直接引导安装流程，实现开箱即用
 7. [ ] 增加 Claude/Codex 基本使用方法与技巧，重点建设可由大家共同更新的协作文档，并参考 Codesome 文档系统
 8. [ ] 更新飞书知识库 ：支持同步在线文档，并结合 Obsidian 管理本地知识库
 9. [ ] 调研适合 AI 稳定访问和读取网页的方案
+10. [ ] 准备一套使用演示材料，PPT+解说词+实机演示。
