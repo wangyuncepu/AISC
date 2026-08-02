@@ -504,15 +504,15 @@ def cmd_provider_set_key(
     name_override: Optional[str] = None,
     explicit_root: Optional[str] = None,
     provider_id: Optional[str] = None,
-    api_key: Optional[str] = None,
     agent: str = "claude",
     executor: Optional[DockerExecutor] = None,
     label_override: Optional[str] = None,
 ) -> ProcessResult:
-    """Set API key for a provider inside the container.
+    """Open cc-switch's interactive editor for a provider.
 
-    Uses ``cc-switch -a AGENT provider set-key PROVIDER_ID [API_KEY]``.
-    If api_key is None, cc-switch will prompt interactively.
+    The compatibility-facing command remains ``aisc provider set-key``, but
+    credentials are entered only through ``cc-switch provider edit`` so they
+    never appear in shell history or process arguments.
 
     Uses streaming executor for interactive terminal.  Text-only.
     Returns ProcessResult so caller can inspect exit_code / errors.
@@ -547,7 +547,7 @@ def cmd_provider_set_key(
         )
 
     # Build argv via the scope-preserving wrapper
-    argv = _build_provider_set_key_argv(name, agent, provider_id, api_key)
+    argv = _build_provider_edit_argv(name, agent, provider_id)
 
     proc = exec_.run_streaming(argv)
 
@@ -557,28 +557,21 @@ def cmd_provider_set_key(
     return proc
 
 
-def _build_provider_set_key_argv(
+def _build_provider_edit_argv(
     name: str,
     agent: str,
     provider_id: str,
-    api_key: Optional[str],
 ) -> list:
-    """Build the ``docker exec`` argv for provider set-key.
+    """Build the ``docker exec`` argv for interactive provider editing.
 
     Wraps the target command in the same scope-preserving Bash wrapper
-    used by switch. The provider ID and optional API key are passed as
-    positional arguments, **never** shell-interpolated.
+    used by switch. No credential value is accepted by this function.
 
     Returns a list suitable for ``DockerExecutor.run_streaming``.
     """
-    if api_key:
-        return ["exec", "-it", name, "bash", "-c", _SCOPE_WRAPPER,
-                "aisc-scope", _SCOPE_ENV_SOURCE, "--",
-                "cc-switch", "-a", agent, "provider", "set-key", provider_id, api_key]
-    else:
-        return ["exec", "-it", name, "bash", "-c", _SCOPE_WRAPPER,
-                "aisc-scope", _SCOPE_ENV_SOURCE, "--",
-                "cc-switch", "-a", agent, "provider", "set-key", provider_id]
+    return ["exec", "-it", name, "bash", "-c", _SCOPE_WRAPPER,
+            "aisc-scope", _SCOPE_ENV_SOURCE, "--",
+            "cc-switch", "-a", agent, "provider", "edit", provider_id]
 
 
 def print_switch_text(data: Dict[str, Any]) -> None:

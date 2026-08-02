@@ -6,12 +6,37 @@ aisc doctor detects missing components.
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import sys
+from pathlib import Path
 from typing import Optional, Tuple
 
 from aisc.adapters.system import ProcessRunner, RealProcessRunner
+from aisc.domain.models import ProcessResult
+
+
+def _run_install_command(
+    runner: ProcessRunner,
+    argv: list[str],
+    timeout: float,
+) -> ProcessResult:
+    """Run installers on the terminal when the runner supports streaming."""
+    run_streaming = getattr(runner, "run_streaming", None)
+    if callable(run_streaming):
+        return run_streaming(argv, timeout=timeout)
+    return runner.run(argv, timeout=timeout)
+
+
+def _find_brew_executable() -> Optional[str]:
+    discovered = shutil.which("brew")
+    if discovered:
+        return discovered
+    for candidate in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+        if Path(candidate).is_file():
+            return candidate
+    return None
 
 
 def detect_platform() -> Tuple[str, str]:
@@ -149,9 +174,10 @@ def install_docker_linux(runner: ProcessRunner) -> Tuple[bool, str]:
     print("Downloading Docker installation script...")
 
     # Download and run the official Docker install script
-    result = runner.run(
+    result = _run_install_command(
+        runner,
         ["sh", "-c", "curl -fsSL https://get.docker.com | sudo sh"],
-        timeout=300.0,  # 5 minutes
+        300.0,
     )
 
     if result.exit_code != 0:
@@ -161,7 +187,6 @@ def install_docker_linux(runner: ProcessRunner) -> Tuple[bool, str]:
     print("\nConfiguring user permissions...")
 
     # Add user to docker group
-    import os
     username = os.getenv("USER", os.getenv("USERNAME", ""))
     if username:
         perm_result = runner.run(
@@ -197,23 +222,34 @@ def install_docker_macos(runner: ProcessRunner, install_brew_first: bool) -> Tup
     """
     if install_brew_first:
         print("Installing Homebrew first...")
-        brew_result = runner.run(
+        brew_result = _run_install_command(
+            runner,
             [
                 "/bin/bash", "-c",
-                '$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)'
+                "curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh | /bin/bash",
             ],
-            timeout=300.0,
+            300.0,
         )
         if brew_result.exit_code != 0:
             return False, "Failed to install Homebrew"
         print("Homebrew installed successfully!")
 
+    brew_executable = _find_brew_executable()
+    if not brew_executable:
+        return False, "Homebrew installation completed, but brew was not found"
+
+    brew_dir = str(Path(brew_executable).parent)
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    if brew_dir not in path_entries:
+        os.environ["PATH"] = os.pathsep.join([brew_dir, *path_entries])
+
     print("Installing Docker Desktop via Homebrew...")
     print("This may take several minutes to download (~500MB)...")
 
-    result = runner.run(
-        ["brew", "install", "--cask", "docker"],
-        timeout=600.0,  # 10 minutes for download
+    result = _run_install_command(
+        runner,
+        [brew_executable, "install", "--cask", "docker"],
+        600.0,
     )
 
     if result.exit_code != 0:
@@ -256,14 +292,15 @@ def install_docker_windows(runner: ProcessRunner) -> Tuple[bool, str]:
     print("You will see a UAC (User Account Control) prompt - please accept it.")
     print("This may take several minutes to download (~500MB)...")
 
-    result = runner.run(
+    result = _run_install_command(
+        runner,
         [
             "winget", "install", "Docker.DockerDesktop",
             "--silent",
             "--accept-source-agreements",
             "--accept-package-agreements",
         ],
-        timeout=600.0,  # 10 minutes
+        600.0,
     )
 
     if result.exit_code != 0:

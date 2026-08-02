@@ -193,6 +193,39 @@ function stripTopBlock(lines, key) {
   }
   return out.join('\n');
 }
+const LOOPBACK_RULES = [
+  'IP-CIDR,127.0.0.0/8,DIRECT',
+  'DOMAIN-KEYWORD,localhost,DIRECT',
+];
+function ensureLoopbackRules(text) {
+  const lines = text.split('\n');
+  const missing = LOOPBACK_RULES.filter(rule =>
+    !lines.some(line => line.trim().replace(/^-\s*/, '') === rule)
+  );
+  if (!missing.length) return text;
+
+  const rulesIndex = lines.findIndex(line => /^rules\s*:/.test(line));
+  if (rulesIndex < 0) {
+    const suffix = ['rules:', ...missing.map(rule => `  - ${rule}`), '  - MATCH,DIRECT'];
+    return text.replace(/\s+$/, '') + '\n' + suffix.join('\n') + '\n';
+  }
+
+  const declaration = lines[rulesIndex];
+  const value = declaration.slice(declaration.indexOf(':') + 1).replace(/\s*#.*$/, '').trim();
+  if (value && value !== '[]') {
+    throw new Error('不支持行内 rules 配置，请改用 YAML 列表格式');
+  }
+  if (value === '[]') lines[rulesIndex] = declaration.replace(/:\s*\[\s*\]/, ':');
+
+  let indent = '  ';
+  for (let i = rulesIndex + 1; i < lines.length; i += 1) {
+    if (/^[^\s#]/.test(lines[i])) break;
+    const match = lines[i].match(/^(\s*)-\s+/);
+    if (match) { indent = match[1]; break; }
+  }
+  lines.splice(rulesIndex + 1, 0, ...missing.map(rule => `${indent}- ${rule}`));
+  return lines.join('\n');
+}
 const TUN = ['# === AISC forced TUN (auto-patched) ===','tun:','  enable: true','  stack: system','  dns-hijack:','    - any:53','  auto-route: true','  auto-detect-interface: true'].join('\n');
 const DNS = ['# === AISC fallback DNS (auto-patched, only if absent) ===','dns:','  enable: true','  listen: 0.0.0.0:1053','  enhanced-mode: fake-ip','  nameserver:','    - 223.5.5.5','    - 119.29.29.29','  fallback:','    - 8.8.8.8','    - 1.1.1.1'].join('\n');
 
@@ -219,6 +252,7 @@ if (r.nodes !== null) {
 
 // TUN/DNS 注入（在转换后的文本上）
 let p = stripTopBlock(r.text.split('\n'), 'tun');
+p = ensureLoopbackRules(p);
 p = p.replace(/\s+$/, '\n') + '\n' + TUN + '\n';
 if (!/^dns:/m.test(p)) p += '\n' + DNS + '\n';
 

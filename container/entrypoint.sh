@@ -321,7 +321,6 @@ if command -v cc-switch >/dev/null 2>&1; then
             python3 /usr/local/bin/lib/cc_switch_preset_providers.py \
                 --config-dir "$CC_SWITCH_CONFIG_DIR" \
                 --agent claude \
-                --revision "$(cat /opt/aisc/skills/.aisc-bundle.sha256 2>/dev/null || echo 'v1')" \
                 --log "$CC_SWITCH_PRESET_LOG" \
                 --mode "${AISC_PRESET_PROVIDERS:-auto}"
         )"; then
@@ -346,7 +345,6 @@ if command -v cc-switch >/dev/null 2>&1; then
             python3 /usr/local/bin/lib/cc_switch_preset_providers.py \
                 --config-dir "$CC_SWITCH_CONFIG_DIR" \
                 --agent codex \
-                --revision "$(cat /opt/aisc/skills/.aisc-bundle.sha256 2>/dev/null || echo 'v1')" \
                 --log "$CC_SWITCH_PRESET_CODEX_LOG" \
                 --mode "${AISC_PRESET_PROVIDERS:-auto}"
         )"; then

@@ -26,21 +26,18 @@ cc-switch -a codex provider list
 
 ### 2. 设置 API Key
 
-选择一个 provider，为目标 agent 设置 API Key：
+选择一个 provider，打开 cc-switch 交互编辑器并为目标 agent 填写 API Key：
 
 ```bash
-# 为 Claude 设置（在宿主机，v2.1.5+推荐）
+# 为 Claude 设置（在宿主机，安全交互输入）
 aisc provider set-key deepseek
 
 # 为 Codex 设置
 aisc provider set-key --agent codex deepseek
 
-# 或在容器内设置
-cc-switch -a claude provider set-key deepseek
-cc-switch -a codex provider set-key deepseek
-
-# 或直接在命令中指定（不推荐，会记录在历史中）
-aisc provider set-key deepseek <your-api-key>
+# 或在容器内打开编辑器
+cc-switch -a claude provider edit deepseek
+cc-switch -a codex provider edit deepseek
 ```
 
 ### 3. 切换并使用
@@ -68,14 +65,10 @@ claude "你好"
 
 ```bash
 # 添加 provider（v2.1.4+ 已自动完成）
-cc-switch -a claude provider add <provider-id> \
-  --base-url <api-endpoint> \
-  --model <default-model>
+cc-switch -a claude provider add
 
 # 配置 API Key（必需）
-cc-switch -a claude provider set-key <provider-id>
-# 或直接在命令中指定
-cc-switch -a claude provider set-key <provider-id> <your-api-key>
+cc-switch -a claude provider edit <provider-id>
 
 # 切换到该 provider
 cc-switch -a claude provider switch <provider-id>
@@ -106,7 +99,7 @@ DeepSeek 提供高性价比的 AI 模型服务，支持 Claude-compatible API。
 aisc provider set-key deepseek
 
 # 或在容器内设置
-cc-switch -a claude provider set-key deepseek
+cc-switch -a claude provider edit deepseek
 
 # 切换使用
 cc-switch -a claude provider switch deepseek
@@ -129,11 +122,7 @@ aisc switch --quick deepseek
 **手动配置（可选，已自动完成）：**
 
 ```bash
-cc-switch -a claude provider add deepseek \
-  --base-url https://api.deepseek.com/v1 \
-  --model deepseek-chat
-
-cc-switch -a claude provider set-key deepseek
+cc-switch -a claude provider add
 ```
 
 **快速切换：**
@@ -151,7 +140,7 @@ aisc switch --quick deepseek
 
 ```bash
 # 设置 Codex API Key
-cc-switch -a claude provider set-key codex-claude
+cc-switch -a claude provider edit codex-claude
 
 # 切换使用
 cc-switch -a claude provider switch codex-claude
@@ -175,11 +164,7 @@ aisc switch --quick codex-claude
 **手动配置（可选，已自动完成）：**
 
 ```bash
-cc-switch -a claude provider add codex-claude \
-  --base-url https://api.codex.so/v1 \
-  --model claude-opus-5
-
-cc-switch -a claude provider set-key codex-claude
+cc-switch -a claude provider add
 ```
 
 **快速切换：**
@@ -196,11 +181,10 @@ aisc switch --quick codex-claude
 **✅ 已预配置框架 - 需设置 API Key 和 Endpoint ID：**
 
 ```bash
-# 1. 更新为你的推理接入点 ID
-cc-switch -a claude provider update volcengine-ark --model <your-endpoint-id>
+# 1. 打开编辑器
+cc-switch -a claude provider edit volcengine-ark
 
-# 2. 设置 API Key
-cc-switch -a claude provider set-key volcengine-ark
+# 2. 在同一编辑界面填写 API Key 和 Endpoint ID
 
 # 3. 切换使用
 cc-switch -a claude provider switch volcengine-ark
@@ -223,11 +207,7 @@ aisc switch --quick volcengine-ark
 **手动配置（可选，已自动完成）：**
 
 ```bash
-cc-switch -a claude provider add volcengine-ark \
-  --base-url https://ark.cn-beijing.volces.com/api/v3 \
-  --model <your-endpoint-id>
-
-cc-switch -a claude provider set-key volcengine-ark
+cc-switch -a claude provider add
 ```
 
 **快速切换：**
@@ -245,7 +225,7 @@ aisc switch --quick volcengine-ark
 
 ```bash
 # 设置 API Key
-cc-switch -a claude provider set-key zhipu
+cc-switch -a claude provider edit zhipu
 
 # 切换使用
 cc-switch -a claude provider switch zhipu
@@ -269,11 +249,7 @@ aisc switch --quick zhipu
 **手动配置（可选，已自动完成）：**
 
 ```bash
-cc-switch -a claude provider add zhipu \
-  --base-url https://open.bigmodel.cn/api/paas/v4 \
-  --model glm-4-plus
-
-cc-switch -a claude provider set-key zhipu
+cc-switch -a claude provider add
 ```
 
 **快速切换：**
@@ -291,7 +267,7 @@ Kimi 提供长文本处理能力的 AI 模型服务。
 
 ```bash
 # 设置 API Key
-cc-switch -a claude provider set-key kimi
+cc-switch -a claude provider edit kimi
 
 # 切换使用
 cc-switch -a claude provider switch kimi
@@ -315,11 +291,7 @@ aisc switch --quick kimi
 **手动配置（可选，已自动完成）：**
 
 ```bash
-cc-switch -a claude provider add kimi \
-  --base-url https://api.moonshot.cn/v1 \
-  --model moonshot-v1-128k
-
-cc-switch -a claude provider set-key kimi
+cc-switch -a claude provider add
 ```
 
 **快速切换：**
@@ -346,13 +318,13 @@ cc-switch -a claude provider current
 ### 删除 provider
 
 ```bash
-cc-switch -a claude provider remove <provider-id>
+cc-switch -a claude provider delete <provider-id>
 ```
 
 ### 更新 API Key
 
 ```bash
-cc-switch -a claude provider set-key <provider-id> <new-api-key>
+cc-switch -a claude provider edit <provider-id>
 ```
 
 ### 测试 provider 连接
@@ -395,7 +367,7 @@ cc-switch -a claude provider current
 
 ```bash
 # 重新设置 API Key
-cc-switch -a claude provider set-key <provider-id>
+cc-switch -a claude provider edit <provider-id>
 
 # 测试连接
 claude "hello"

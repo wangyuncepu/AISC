@@ -20,8 +20,9 @@ import json
 import os
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from aisc.domain.models import CliError
 
@@ -76,59 +77,66 @@ def _read_registry(root: Path) -> Dict[str, Any]:
     return data
 
 
-def _write_registry(root: Path, data: Dict[str, Any]) -> None:
-    """Atomically write the registry, holding a flock during the write.
+@contextmanager
+def _registry_lock(root: Path) -> Iterator[None]:
+    """Hold the registry lock across a complete read-modify-write cycle."""
+    state_dir = root / ".aisc"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = state_dir / ".containers.lock"
+    lock_fd = None
+    locked = False
+    try:
+        try:
+            import fcntl
+            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            locked = True
+        except ImportError:
+            pass
+        yield
+    finally:
+        if locked and lock_fd is not None:
+            try:
+                import fcntl
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
 
-    The flock serializes concurrent writers (two terminals running ``aisc run``
-    simultaneously). On non-fcntl platforms the lock is skipped but atomicity
-    still comes from temp-file + rename.
+
+def _write_registry_unlocked(root: Path, data: Dict[str, Any]) -> None:
+    """Atomically replace the registry; caller is responsible for locking.
+
+    Atomicity still prevents readers from observing a partially written JSON
+    document while the separate lock serializes writers.
     """
     state_dir = root / ".aisc"
     state_dir.mkdir(parents=True, exist_ok=True)
     path = _registry_path(root)
 
     fd, tmp_path = tempfile.mkstemp(prefix=".containers_", dir=str(state_dir), text=True)
-    lock_acquired = False
     try:
-        # Try to acquire an exclusive lock on the real registry file.
-        # A separate lock file is used so temp-rename doesn't invalidate it.
-        lock_path = state_dir / ".containers.lock"
-        try:
-            import fcntl
-            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX)
-                lock_acquired = True
-            except OSError:
-                # fcntl unavailable or error — proceed unlocked
-                pass
-        except ImportError:
-            lock_fd = None
-
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, str(path))
-        finally:
-            if lock_acquired and lock_fd is not None:
-                try:
-                    import fcntl
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                except OSError:
-                    pass
-            if lock_fd is not None:
-                try:
-                    os.close(lock_fd)
-                except OSError:
-                    pass
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, str(path))
     except Exception:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
         raise
+
+
+def _write_registry(root: Path, data: Dict[str, Any]) -> None:
+    """Atomically write a complete registry under the registry lock."""
+    with _registry_lock(root):
+        _write_registry_unlocked(root, data)
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +151,6 @@ def register(root: Path, name: str, meta: Dict[str, Any]) -> None:
         name: Container name (unique per run).
         meta: Metadata dict with keys image/workspace/network/label.
     """
-    data = _read_registry(root)
     entry = {
         "image": meta.get("image", ""),
         "workspace": meta.get("workspace", ""),
@@ -151,9 +158,11 @@ def register(root: Path, name: str, meta: Dict[str, Any]) -> None:
         "label": meta.get("label", ""),
         "created_at": meta.get("created_at") or time.time(),
     }
-    data["containers"][name] = entry
-    data["default"] = name
-    _write_registry(root, data)
+    with _registry_lock(root):
+        data = _read_registry(root)
+        data["containers"][name] = entry
+        data["default"] = name
+        _write_registry_unlocked(root, data)
 
 
 def unregister(root: Path, name: str) -> None:
@@ -162,11 +171,12 @@ def unregister(root: Path, name: str) -> None:
     If the removed name was the default, repoint default to the most recently
     created remaining entry (max created_at). Clears default when empty.
     """
-    data = _read_registry(root)
-    data["containers"].pop(name, None)
-    if data["default"] == name:
-        data["default"] = _pick_newest(data["containers"])
-    _write_registry(root, data)
+    with _registry_lock(root):
+        data = _read_registry(root)
+        data["containers"].pop(name, None)
+        if data["default"] == name:
+            data["default"] = _pick_newest(data["containers"])
+        _write_registry_unlocked(root, data)
 
 
 def list_containers(root: Path) -> Dict[str, Dict[str, Any]]:
@@ -220,20 +230,32 @@ def gc(root: Path, executor) -> List[str]:
 
     Best-effort: if docker is unreachable, prunes nothing and returns [].
     """
-    data = _read_registry(root)
-    containers = data.get("containers", {})
+    snapshot = _read_registry(root)
+    containers = snapshot.get("containers", {})
     if not containers:
         return []
-    pruned: List[str] = []
-    for nm in list(containers.keys()):
+    missing: List[str] = []
+    for nm in list(containers):
         exists = _container_exists(executor, nm)
         if exists is False:
-            containers.pop(nm, None)
-            pruned.append(nm)
-    if pruned:
-        if data["default"] in pruned:
-            data["default"] = _pick_newest(containers)
-        _write_registry(root, data)
+            missing.append(nm)
+    if not missing:
+        return []
+
+    pruned: List[str] = []
+    with _registry_lock(root):
+        data = _read_registry(root)
+        current = data.get("containers", {})
+        for nm in missing:
+            # Do not delete a same-name container re-registered while Docker
+            # checks were running.
+            if current.get(nm) == containers.get(nm):
+                current.pop(nm, None)
+                pruned.append(nm)
+        if pruned:
+            if data["default"] in pruned:
+                data["default"] = _pick_newest(current)
+            _write_registry_unlocked(root, data)
     return pruned
 
 

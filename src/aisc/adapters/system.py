@@ -71,3 +71,31 @@ class RealProcessRunner:
                 exit_code=-1,
                 command_not_found=True,
             )
+
+    def run_streaming(
+        self,
+        argv: List[str],
+        timeout: Optional[float] = None,
+    ) -> ProcessResult:
+        """Execute an interactive command with inherited terminal streams."""
+        try:
+            proc = subprocess.run(argv, timeout=timeout)
+            return ProcessResult(exit_code=proc.returncode)
+        except FileNotFoundError:
+            return ProcessResult(
+                stderr=f"command not found: {argv[0] if argv else ''}",
+                exit_code=-1,
+                command_not_found=True,
+            )
+        except subprocess.TimeoutExpired:
+            return ProcessResult(
+                stderr="command timed out",
+                exit_code=-1,
+                timed_out=True,
+            )
+        except OSError as exc:
+            return ProcessResult(
+                stderr=f"command error: {exc}",
+                exit_code=-1,
+                command_not_found=True,
+            )

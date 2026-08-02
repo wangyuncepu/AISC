@@ -33,12 +33,44 @@ class TestContainerCheckoutContract(unittest.TestCase):
             attrs[path] = value
         self.assertEqual(attrs, {path: "lf" for path in paths})
 
-        for path in paths:
-            self.assertNotIn(
-                b"\r\n",
-                (_PROJECT_ROOT / path).read_bytes(),
-                f"{path} was checked out with CRLF",
+        refresh = (_PROJECT_ROOT / "tools" / "vendor-refresh.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('git diff --quiet -- "$tracked_path"', refresh)
+        self.assertIn('git show ":$tracked_path"', refresh)
+        verify = (_PROJECT_ROOT / "tools" / "vendor-verify.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('git diff --quiet -- "$tracked_path"', verify)
+        self.assertIn('git show ":$tracked_path"', verify)
+
+    def test_staging_uses_index_bytes_for_unchanged_tracked_container_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "container").mkdir()
+            (root / ".gitattributes").write_text(
+                "container/** text eol=lf\n", encoding="utf-8"
             )
+            stale = root / "container" / "stale.txt"
+            changed = root / "container" / "changed.txt"
+            stale.write_bytes(b"first\nsecond\n")
+            changed.write_bytes(b"before\n")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+
+            stale.write_bytes(b"first\r\nsecond\r\n")
+            changed.write_bytes(b"after\n")
+            canonical = _art._git_canonical_container_paths(root)
+            bundle = root / "bundle"
+            _art._stage_container_file(
+                root, bundle, "container/stale.txt", canonical
+            )
+
+            staged_bytes = (bundle / "container" / "stale.txt").read_bytes()
+
+        self.assertIn("container/stale.txt", canonical)
+        self.assertNotIn("container/changed.txt", canonical)
+        self.assertEqual(staged_bytes, b"first\nsecond\n")
 
 # ========================================================================
 # Helpers
@@ -577,6 +609,16 @@ class TestChecksumParsing(unittest.TestCase):
     def test_escape(self): self._mk("a"*64+"  container/../../etc/secrets\n",{}); self.assertTrue(any("escapes" in e or "unsafe" in e for e in _art._verify_vendor_checksums(self.td)))
     def test_mismatch(self): d=b"actual"; self._mk("b"*64+"  container/downloads/test.bin\n",{"container/downloads/test.bin":d}); self.assertTrue(any("hash mismatch" in e for e in _art._verify_vendor_checksums(self.td)))
     def test_missing(self): h=hashlib.sha256(b"x").hexdigest(); self._mk(f"{h}  nonexistent/file.txt\n",{}); self.assertTrue(any("file not found" in e for e in _art._verify_vendor_checksums(self.td)))
+
+    def test_refresh_uses_only_git_tracked_container_files(self):
+        script = (_PROJECT_ROOT / "tools" / "vendor-refresh.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("git ls-files -z -- container", script)
+        self.assertNotIn(
+            "find container -type f -print0 2>/dev/null | sort -z | xargs",
+            script,
+        )
 
 class TestDockerCopyParser(unittest.TestCase):
     def setUp(self): self.td = Path(tempfile.mkdtemp(prefix="df-"))

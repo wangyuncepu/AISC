@@ -2,6 +2,8 @@
 
 import io
 import importlib.util
+import json
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -19,6 +21,15 @@ SKILLS_HELPER_SPEC = importlib.util.spec_from_file_location(
 assert SKILLS_HELPER_SPEC and SKILLS_HELPER_SPEC.loader
 SKILLS_HELPER = importlib.util.module_from_spec(SKILLS_HELPER_SPEC)
 SKILLS_HELPER_SPEC.loader.exec_module(SKILLS_HELPER)
+
+PROVIDER_HELPER_PATH = ROOT / "container" / "lib" / "cc_switch_preset_providers.py"
+PROVIDER_HELPER_SPEC = importlib.util.spec_from_file_location(
+    "aisc_cc_switch_preset_providers",
+    PROVIDER_HELPER_PATH,
+)
+assert PROVIDER_HELPER_SPEC and PROVIDER_HELPER_SPEC.loader
+PROVIDER_HELPER = importlib.util.module_from_spec(PROVIDER_HELPER_SPEC)
+PROVIDER_HELPER_SPEC.loader.exec_module(PROVIDER_HELPER)
 
 
 class CcSwitchRuntimeTests(unittest.TestCase):
@@ -214,6 +225,28 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         )
         self.assertNotIn("cs", argv)
 
+    def test_provider_key_command_opens_editor_without_secret_argv(self):
+        from aisc.cli.commands.container import _build_provider_edit_argv
+
+        argv = _build_provider_edit_argv("aisc-test", "codex", "deepseek")
+
+        self.assertEqual(
+            argv[-7:],
+            ["--", "cc-switch", "-a", "codex", "provider", "edit", "deepseek"],
+        )
+        self.assertNotIn("set-key", argv)
+
+    def test_provider_key_command_rejects_positional_secret(self):
+        from aisc.cli.main import _build_parser
+
+        with patch("sys.stderr", io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                _build_parser().parse_args(
+                    ["provider", "set-key", "deepseek", "secret-must-not-be-accepted"]
+                )
+
+        self.assertEqual(raised.exception.code, 2)
+
     def test_aisc_config_schema_no_longer_owns_provider_or_auth(self):
         from aisc.schemas.config_schema import validate_config
 
@@ -276,6 +309,159 @@ class CcSwitchRuntimeTests(unittest.TestCase):
                 values["CODEX_CONFIG_DIR"],
             ],
         )
+
+    @unittest.skipUnless(shutil.which("node"), "node is required")
+    def test_clash_yaml_gets_loopback_rules_before_existing_rules(self):
+        builder = ROOT / "container" / "mihomo-build-config.js"
+        source_text = """mixed-port: 7890
+proxies: []
+proxy-groups: []
+rules:
+  - DOMAIN,example.com,PROXY
+  - MATCH,DIRECT
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "source.yaml"
+            output = Path(temp_dir) / "config.yaml"
+            source.write_text(source_text, encoding="utf-8")
+
+            proc = subprocess.run(
+                ["node", str(builder), str(source), str(output)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            rendered = output.read_text(encoding="utf-8") if output.exists() else ""
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(rendered.count("IP-CIDR,127.0.0.0/8,DIRECT"), 1)
+        self.assertEqual(rendered.count("DOMAIN-KEYWORD,localhost,DIRECT"), 1)
+        self.assertLess(
+            rendered.index("IP-CIDR,127.0.0.0/8,DIRECT"),
+            rendered.index("DOMAIN,example.com,PROXY"),
+        )
+        self.assertIn("tun:\n  enable: true", rendered)
+
+
+class CcSwitchProviderPresetTests(unittest.TestCase):
+    def _create_v5_database(self, config_dir: Path, *, reject_id: str = "") -> None:
+        check = f"CHECK (id != '{reject_id}')" if reject_id else ""
+        db = sqlite3.connect(config_dir / "cc-switch.db")
+        db.execute(
+            f"""
+            CREATE TABLE providers (
+                id TEXT NOT NULL {check},
+                app_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                settings_config TEXT NOT NULL,
+                website_url TEXT,
+                category TEXT,
+                created_at INTEGER NOT NULL,
+                sort_index INTEGER NOT NULL DEFAULT 0,
+                notes TEXT,
+                icon TEXT,
+                icon_color TEXT,
+                meta TEXT,
+                is_current INTEGER NOT NULL DEFAULT 0,
+                in_failover_queue INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (id, app_type)
+            )
+            """
+        )
+        db.commit()
+        db.close()
+
+    def test_presets_use_v5_schema_and_independent_agent_markers(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            self._create_v5_database(config_dir)
+            log = io.StringIO()
+
+            claude_revision = PROVIDER_HELPER.preset_revision("claude")
+            codex_revision = PROVIDER_HELPER.preset_revision("codex")
+            claude_added = PROVIDER_HELPER.add_preset_providers(
+                config_dir, "claude", claude_revision, log
+            )
+            codex_required_before, _ = PROVIDER_HELPER.preset_required(
+                config_dir, "codex", codex_revision
+            )
+            codex_added = PROVIDER_HELPER.add_preset_providers(
+                config_dir, "codex", codex_revision, log
+            )
+
+            db = sqlite3.connect(config_dir / "cc-switch.db")
+            rows = db.execute(
+                """
+                SELECT app_type, settings_config, is_current
+                FROM providers ORDER BY app_type, id
+                """
+            ).fetchall()
+            db.close()
+
+            claude_marker = PROVIDER_HELPER.marker_path(config_dir, "claude")
+            codex_marker = PROVIDER_HELPER.marker_path(config_dir, "codex")
+
+        self.assertEqual(claude_added, len(PROVIDER_HELPER.PRESET_PROVIDERS))
+        self.assertTrue(codex_required_before)
+        self.assertEqual(codex_added, len(PROVIDER_HELPER.PRESET_PROVIDERS))
+        self.assertEqual(len(rows), 2 * len(PROVIDER_HELPER.PRESET_PROVIDERS))
+        self.assertTrue(claude_marker.name.endswith("-claude.sha256"))
+        self.assertTrue(codex_marker.name.endswith("-codex.sha256"))
+        self.assertTrue(all(is_current == 0 for _, _, is_current in rows))
+
+        claude_settings = [json.loads(raw) for app, raw, _ in rows if app == "claude"]
+        codex_settings = [json.loads(raw) for app, raw, _ in rows if app == "codex"]
+        self.assertTrue(all("env" in settings for settings in claude_settings))
+        self.assertTrue(all("auth" not in settings for settings in codex_settings))
+        self.assertTrue(
+            all("wire_api = \"responses\"" in settings["config"]
+                for settings in codex_settings)
+        )
+
+    def test_incompatible_provider_schema_fails_without_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            db = sqlite3.connect(config_dir / "cc-switch.db")
+            db.execute("CREATE TABLE providers (id TEXT, agent TEXT)")
+            db.commit()
+            db.close()
+
+            with self.assertRaisesRegex(RuntimeError, "schema is incompatible"):
+                PROVIDER_HELPER.add_preset_providers(
+                    config_dir,
+                    "claude",
+                    PROVIDER_HELPER.preset_revision("claude"),
+                    io.StringIO(),
+                )
+
+            marker_exists = PROVIDER_HELPER.marker_path(
+                config_dir, "claude"
+            ).exists()
+
+        self.assertFalse(marker_exists)
+
+    def test_failed_insert_rolls_back_all_presets_and_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir)
+            self._create_v5_database(config_dir, reject_id="zhipu")
+
+            with self.assertRaises(sqlite3.IntegrityError):
+                PROVIDER_HELPER.add_preset_providers(
+                    config_dir,
+                    "claude",
+                    PROVIDER_HELPER.preset_revision("claude"),
+                    io.StringIO(),
+                )
+
+            db = sqlite3.connect(config_dir / "cc-switch.db")
+            count = db.execute("SELECT COUNT(*) FROM providers").fetchone()[0]
+            db.close()
+            marker_exists = PROVIDER_HELPER.marker_path(
+                config_dir, "claude"
+            ).exists()
+
+        self.assertEqual(count, 0)
+        self.assertFalse(marker_exists)
 
 
 class CcSwitchSkillSyncTests(unittest.TestCase):

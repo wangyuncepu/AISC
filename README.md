@@ -2,7 +2,7 @@
 
 AISC 是一个在 Docker 容器中运行 Claude Code、OpenAI Codex 和 cc-switch 的个人开发工作站。宿主机只提供一个受支持的入口：`aisc`。它负责诊断环境、构建镜像、启动和管理一个或多个容器；AI CLI、Provider、凭据、路由和 Skills 管理在容器内完成。
 
-> **状态：Alpha。** 当前版本为 **v2.1.4**，版本号以仓库根目录 [`VERSION`](VERSION) 为准。Alpha 版本的命令、配置和持久化契约仍可能变化，升级前请阅读 Release Notes 并备份重要工作区。
+> **状态：Alpha。** 当前预览版本为 **v2.1.5-dev**，最新稳定版本为 **v2.1.4**；版本号以仓库根目录 [`VERSION`](VERSION) 为准。Alpha 版本的命令、配置和持久化契约仍可能变化，升级前请阅读 Release Notes 并备份重要工作区。
 
 ## 目录
 
@@ -264,9 +264,9 @@ AISC **v2.1.4+ 已在镜像中预配置常见 AI 供应商**，用户只需设�
 # 1. 查看预配置的 provider
 cc-switch -a claude provider list
 
-# 2. 设置 API Key（以 DeepSeek 为例）
-cc-switch -a claude provider set-key deepseek
-# 或在宿主机直接设置
+# 2. 打开交互编辑器并填写 API Key（以 DeepSeek 为例）
+cc-switch -a claude provider edit deepseek
+# 或从宿主机打开同一交互编辑器
 aisc provider set-key deepseek
 
 # 3. 切换到该 provider
@@ -280,11 +280,8 @@ aisc switch --quick deepseek
 配置完成后，可使用宿主机命令快速切换和管理：
 
 ```bash
-# 设置 API Key（交互式输入，推荐）
+# 安全打开 provider 交互编辑器并填写 API Key
 aisc provider set-key deepseek
-
-# 设置 API Key（命令行参数）
-aisc provider set-key deepseek sk-xxx...
 
 # 快速切换到 DeepSeek
 aisc switch --quick deepseek
@@ -422,7 +419,7 @@ aisc run --network proxy
 | `aisc restart` | `--name`, `--label` | 重启目标容器 |
 | `aisc shell` | `--name`, `--label` | 执行 `docker exec -it <name> bash` |
 | `aisc switch` | `--name`, `--label`, `--quick PROVIDER` | 打开 cc-switch TUI，或快速切换 Claude Provider |
-| `aisc provider set-key` | `PROVIDER_ID`, `[API_KEY]`, `--name`, `--label`, `--agent` | 为 provider 设置 API Key（支持交互式输入） |
+| `aisc provider set-key` | `PROVIDER_ID`, `--name`, `--label`, `--agent` | 打开 cc-switch provider 安全交互编辑器；凭据不会进入命令行参数 |
 | `aisc config validate` | `--config`, `--workspace` | 只读校验用户层和工作区层配置 |
 | `aisc config effective` | `--config`, `--workspace` | 展示有效配置、来源追踪和问题；`show` 是兼容别名 |
 | `aisc profile list` | 全局选项 | 只读列出 Profile |

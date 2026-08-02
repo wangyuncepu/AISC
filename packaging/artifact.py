@@ -83,6 +83,49 @@ def _stage_file(src: Path, bundle_root: Path, rel_path: str) -> None:
     dest = bundle_root / rel_path; dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest); os.utime(dest, (0, 0))
 
+def _git_canonical_container_paths(root: Path) -> Set[str]:
+    """Return tracked container files whose canonical bytes are in the index."""
+    try:
+        tracked = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z", "--", "container"],
+            check=True,
+            capture_output=True,
+        ).stdout.split(b"\0")
+        modified = subprocess.run(
+            ["git", "-C", str(root), "diff", "--name-only", "-z", "--", "container"],
+            check=True,
+            capture_output=True,
+        ).stdout.split(b"\0")
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return set()
+    tracked_paths = {p.decode("utf-8", "surrogateescape") for p in tracked if p}
+    modified_paths = {p.decode("utf-8", "surrogateescape") for p in modified if p}
+    return tracked_paths - modified_paths
+
+def _stage_container_file(
+    root: Path,
+    bundle_root: Path,
+    rel_path: str,
+    canonical_index_paths: Set[str],
+) -> None:
+    if rel_path not in canonical_index_paths:
+        _stage_file(root / rel_path, bundle_root, rel_path)
+        return
+    proc = subprocess.run(
+        ["git", "-C", str(root), "show", f":{rel_path}"],
+        check=False,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        _stage_file(root / rel_path, bundle_root, rel_path)
+        return
+    src = root / rel_path
+    dest = bundle_root / rel_path
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(proc.stdout)
+    shutil.copymode(src, dest)
+    os.utime(dest, (0, 0))
+
 def _find_files(root: Path, subdir: str) -> List[str]:
     base = root / subdir
     if not base.exists(): return []
@@ -108,7 +151,9 @@ def stage_bundle(root: Path, output_dir: Path, *, verify_version: bool = True) -
         _stage_file(root / "config" / "config.json", br, "config/config.json")
     if (root / "config" / "profiles.json").is_file():
         _stage_file(root / "config" / "profiles.json", br, "config/profiles.json")
-    for rel in _find_files(root, "container"): _stage_file(root / rel, br, rel)
+    canonical_container_paths = _git_canonical_container_paths(root)
+    for rel in _find_files(root, "container"):
+        _stage_container_file(root, br, rel, canonical_container_paths)
     base = root / "apps" / "ai-brief"
     if base.exists():
         for dp, _, fns in os.walk(str(base)):

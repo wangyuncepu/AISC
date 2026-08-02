@@ -224,7 +224,7 @@ cc-switch proxy -a codex disable
 
 # 使用预配置的 provider
 cc-switch -a claude provider list
-cc-switch -a claude provider set-key deepseek
+cc-switch -a claude provider edit deepseek
 cc-switch -a claude provider switch deepseek
 ```
 
@@ -239,7 +239,7 @@ cc-switch -a claude provider add my-proxy \
   --base-url https://my-proxy.example.com/v1 \
   --model claude-opus-5
 
-cc-switch -a claude provider set-key my-proxy
+cc-switch -a claude provider edit my-proxy
 cc-switch proxy -a claude enable
 ```
 
@@ -333,7 +333,7 @@ aisc switch --quick deepseek
 # 直连模式，无需代理
 aisc run
 cc-switch -a claude provider switch codex-claude
-cc-switch -a claude provider set-key codex-claude
+cc-switch -a claude provider edit codex-claude
 ```
 
 **优势：**

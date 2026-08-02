@@ -23,7 +23,7 @@ from aisc.cli.output import (
     emit_json_usage_error,
     print_doctor_text,
 )
-from aisc.domain.models import CliError, DoctorReport, VersionInfo
+from aisc.domain.models import CheckStatus, CliError, DoctorReport, VersionInfo
 
 
 # ---------------------------------------------------------------------------
@@ -228,12 +228,14 @@ def _build_parser() -> _AiscArgumentParser:
     prsub = prp.add_subparsers(dest="provider_command", title="provider commands",
                                 parser_class=_AiscArgumentParser)
 
-    prsk = prsub.add_parser("set-key", help="Set API key for a provider", allow_abbrev=False)
+    prsk = prsub.add_parser(
+        "set-key",
+        help="Open the secure interactive editor for a provider",
+        allow_abbrev=False,
+    )
     _add_global_args(prsk, is_subparser=True)
     prsk.add_argument("provider_id", type=str,
                       help="Provider ID (e.g., deepseek, codex-claude)")
-    prsk.add_argument("api_key", type=str, nargs="?", default=None,
-                      help="API key (optional, will prompt if not provided)")
     prsk.add_argument("--name", type=str, default=None,
                       help="Container name (overrides registry discovery)")
     prsk.add_argument("--label", type=str, default=None,
@@ -267,7 +269,7 @@ def _detect_events(argv: List[str]) -> bool:
 
 def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "profile",
-             "status", "stop", "restart", "shell", "switch"}
+             "status", "stop", "restart", "shell", "switch", "provider", "ps"}
     for arg in argv:
         if arg in known:
             return arg
@@ -325,7 +327,10 @@ def _cmd_version(args: argparse.Namespace) -> VersionInfo:
     return info
 
 
-def _cmd_doctor(args: argparse.Namespace) -> Tuple[Dict[str, Any], DoctorReport]:
+def _cmd_doctor(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], DoctorReport]:
     from aisc.application.doctor import run_doctor
     from aisc.application.resources import locate_aisc_root, _RootSourceError
     root = None
@@ -341,11 +346,18 @@ def _cmd_doctor(args: argparse.Namespace) -> Tuple[Dict[str, Any], DoctorReport]
 
     # Check if Docker is missing and offer to install (interactive mode only)
     docker_missing = any(
-        c.name == "docker-cli" and c.status.value == "FAIL"
+        c.name == "docker-cli"
+        and c.status == CheckStatus.FAIL
+        and c.message == "Docker CLI not found"
         for c in report.checks
     )
 
-    if docker_missing and sys.stdin.isatty():
+    interactive_text = (
+        effective_format == "text"
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    )
+    if docker_missing and interactive_text:
         # Interactive mode - offer to install Docker
         from aisc.application.repair import install_docker_interactive
 
@@ -742,14 +754,12 @@ def _cmd_provider(
         discovered_name = name_override or ""
 
     provider_id = getattr(args, "provider_id", None)
-    api_key = getattr(args, "api_key", None)
     agent = getattr(args, "agent", "claude")
 
     proc = cmd_provider_set_key(
         name_override=name_override,
         explicit_root=getattr(args, "aisc_root", None),
         provider_id=provider_id,
-        api_key=api_key,
         agent=agent,
         label_override=label_override,
     )
@@ -823,6 +833,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         except (AttributeError, IndexError, KeyError):
             pass
 
+    # Propagate JSON format to provider subparser for parse-time errors.
+    if "provider" in args_list:
+        try:
+            provider_parser = [a for a in parser._subparsers._group_actions
+                               if a.dest == "command"][0].choices["provider"]
+            provider_parser._aisc_format = "json" if json_requested else None
+            provider_parser._aisc_command = "provider"
+        except (AttributeError, IndexError, KeyError):
+            pass
+
     try:
         args = parser.parse_args(args_list)
     except SystemExit:
@@ -869,6 +889,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     _grouped_dests: Dict[str, str] = {
         "config": "config_command",
         "profile": "profile_command",
+        "provider": "provider_command",
     }
     if args.command in _grouped_dests:
         if getattr(args, _grouped_dests[args.command], None) is None:
@@ -903,7 +924,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if args_events and args.command in ("build", "run"):
         emitter = JsonlEmitter(command=args.command)
     elif args_events and args.command in ("version", "doctor", "config", "profile",
-                                            "status", "stop", "restart", "shell", "switch"):
+                                            "status", "stop", "restart", "shell", "switch",
+                                            "provider", "ps"):
         if effective_format == "json":
             emit_json_usage_error(
                 command=args.command, version=__version__,
@@ -927,7 +949,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             version_info = _cmd_version(args)
             data = version_info.to_dict()
         elif args.command == "doctor":
-            data, report = _cmd_doctor(args)
+            data, report = _cmd_doctor(args, effective_format)
             exit_code = report.exit_code
             if report.error_code:
                 errors.append(build_error(report.error_code, report.error_message or ""))

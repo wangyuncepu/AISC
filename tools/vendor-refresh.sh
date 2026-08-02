@@ -5,7 +5,7 @@
 #   1. Check that required source directories exist (warn if not)
 #   2. Report on container/_bundle/ (manually managed; suggest tools/stage-skills.sh)
 #   3. Verify container/downloads/ against vendor/manifest.json
-#   4. Regenerate vendor/checksums.txt via find+sha256sum
+#   4. Regenerate vendor/checksums.txt from Git-tracked container files
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -27,7 +27,7 @@ Steps:
   1. Verify source directories referenced in vendor/manifest.json exist
   2. Report on container/_bundle/ contents (manually managed)
   3. Verify container/downloads/ files against vendor/manifest.json
-  4. Regenerate vendor/checksums.txt from all files under container/
+  4. Regenerate vendor/checksums.txt from Git-tracked files under container/
 EOF
   exit 0
 }
@@ -204,16 +204,27 @@ echo "--- Step 4: Regenerate vendor/checksums.txt ---"
 CHECKSUM_FILE="vendor/checksums.txt"
 
 if $DRY_RUN; then
-  file_count=$(find container -type f 2>/dev/null | wc -l)
-  echo "  [DRY RUN] Would compute sha256 for ${file_count} files under container/"
+  file_count=$(git ls-files -- container | wc -l)
+  echo "  [DRY RUN] Would compute sha256 for ${file_count} tracked files under container/"
   echo "  [DRY RUN] Would write to ${CHECKSUM_FILE}"
-  echo "  Pattern: find container -type f -print0 | sort -z | xargs -0 sha256sum > ${CHECKSUM_FILE}"
+  echo "  Ignored and untracked build artifacts are excluded"
 else
   # Ensure vendor directory exists
   mkdir -p vendor
 
-  echo "  Computing sha256 checksums for all files under container/..."
-  find container -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum > "${CHECKSUM_FILE}.tmp"
+  echo "  Computing sha256 checksums for Git-tracked files under container/..."
+  # Use the index bytes for unchanged files. This makes the result independent
+  # of a stale checkout's CRLF/LF representation while still hashing genuine
+  # staged or unstaged content changes.
+  while IFS= read -r -d '' tracked_path; do
+    if git diff --quiet -- "$tracked_path" 2>/dev/null; then
+      digest=$(git show ":$tracked_path" | sha256sum | cut -d ' ' -f 1)
+    else
+      digest=$(sha256sum "$tracked_path" | cut -d ' ' -f 1)
+    fi
+    printf '%s  %s\n' "$digest" "$tracked_path"
+  done < <(git ls-files -z -- container | LC_ALL=C sort -z) \
+    > "${CHECKSUM_FILE}.tmp"
 
   mv "${CHECKSUM_FILE}.tmp" "$CHECKSUM_FILE"
   line_count=$(wc -l < "$CHECKSUM_FILE")
