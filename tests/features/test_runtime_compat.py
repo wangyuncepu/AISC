@@ -5,42 +5,91 @@ ensuring that new runtime/session commands do not break existing workflows.
 """
 
 import json
-import subprocess
+import sys
 import tempfile
+import time
 import unittest
+from io import StringIO
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Import AISC modules
 from aisc.adapters.container_registry import list_containers, register
+from aisc.cli.main import main
 
 
 class RuntimeBackwardCompatibilityTests(unittest.TestCase):
     """Tests ensuring new runtime commands don't break existing `aisc run` behavior."""
 
-    def test_run_non_interactive_mode_exits_without_tty(self):
-        """Verify `aisc run --non-interactive` can run without TTY."""
-        # This is a smoke test - actual Docker execution requires integration test
-        # Here we just verify the CLI accepts the flag
+    def test_run_non_interactive_includes_required_env_and_no_tty(self):
+        """Verify `aisc run --non-interactive` sets AISC_NON_INTERACTIVE and omits -it."""
         with tempfile.TemporaryDirectory() as workspace:
-            result = subprocess.run(
-                ["aisc", "run", "--non-interactive", "--workspace", workspace, "--dry-run"],
-                capture_output=True,
-                text=True,
-            )
-            # Should not fail with "requires TTY" error
-            self.assertNotIn("TTY", result.stderr)
-            self.assertNotIn("tty", result.stderr.lower())
+            # Capture stdout/stderr
+            with patch("sys.stdout", new=StringIO()) as mock_stdout, \
+                 patch("sys.stderr", new=StringIO()) as mock_stderr, \
+                 patch("sys.argv", ["aisc", "run", "--non-interactive",
+                                    "--workspace", workspace, "--dry-run"]):
+                try:
+                    main()
+                except SystemExit as e:
+                    exit_code = e.code
+                else:
+                    exit_code = 0
 
-    def test_run_keep_alive_preserves_container(self):
+            output = mock_stdout.getvalue()
+
+            # Should succeed with exit code 0
+            self.assertEqual(exit_code, 0, f"stderr: {mock_stderr.getvalue()}")
+
+            # Should set AISC_NON_INTERACTIVE=1
+            self.assertIn("AISC_NON_INTERACTIVE=1", output)
+
+            # Should NOT include -it (interactive + TTY)
+            self.assertNotIn("-it", output)
+
+    def test_run_keep_alive_omits_rm_flag(self):
         """Verify `aisc run --keep-alive` does not use --rm flag."""
-        # Verify the flag is recognized and doesn't cause CLI error
-        result = subprocess.run(
-            ["aisc", "run", "--help"],
-            capture_output=True,
-            text=True,
-        )
-        self.assertIn("--keep-alive", result.stdout)
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch("sys.stdout", new=StringIO()) as mock_stdout, \
+                 patch("sys.stderr", new=StringIO()), \
+                 patch("sys.argv", ["aisc", "run", "--keep-alive",
+                                    "--workspace", workspace, "--dry-run"]):
+                try:
+                    main()
+                except SystemExit as e:
+                    exit_code = e.code
+                else:
+                    exit_code = 0
+
+            output = mock_stdout.getvalue()
+
+            self.assertEqual(exit_code, 0)
+
+            # Should NOT include --rm
+            self.assertNotIn("--rm", output)
+
+            # Should include -d for detached mode
+            self.assertIn("-d", output)
+
+    def test_run_interactive_includes_it_flag(self):
+        """Verify default `aisc run` (interactive) includes -it."""
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch("sys.stdout", new=StringIO()) as mock_stdout, \
+                 patch("sys.stderr", new=StringIO()), \
+                 patch("sys.argv", ["aisc", "run", "--workspace", workspace, "--dry-run"]):
+                try:
+                    main()
+                except SystemExit as e:
+                    exit_code = e.code
+                else:
+                    exit_code = 0
+
+            output = mock_stdout.getvalue()
+
+            self.assertEqual(exit_code, 0)
+
+            # Interactive mode should include -it
+            self.assertIn("-it", output)
 
     def test_registry_schema_has_expected_fields(self):
         """Verify registry maintains backward-compatible schema."""
@@ -77,14 +126,14 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
             self.assertEqual(container["network"], "direct")
             self.assertEqual(container["label"], "test")
 
-    def test_registry_can_list_containers_without_new_fields(self):
-        """Verify list_containers works with old registry format."""
+    def test_registry_can_list_containers_with_numeric_created_at(self):
+        """Verify list_containers works with v2.1.4 registry format (numeric timestamps)."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             aisc_dir = root / ".aisc"
             aisc_dir.mkdir()
 
-            # Write old-format registry (without runtime_id, owner, scope)
+            # Write v2.1.4-format registry (numeric timestamp, no runtime_id/owner/scope)
             registry_path = aisc_dir / "containers.json"
             old_registry = {
                 "default": "old-container",
@@ -94,7 +143,7 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
                         "workspace": "/old/workspace",
                         "network": "direct",
                         "label": "old",
-                        "created_at": "2026-08-01T10:00:00Z",
+                        "created_at": time.time(),  # v2.1.4 used numeric timestamps
                     }
                 },
             }
@@ -103,8 +152,11 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
 
             # Should be able to list without error
             containers = list_containers(root)
-            # list_containers returns a dict, not a list
             self.assertIn("old-container", containers)
+
+            # Should be able to read container metadata
+            self.assertEqual(containers["old-container"]["image"], "super-claude:v2.1.4")
+            self.assertEqual(containers["old-container"]["network"], "direct")
 
     def test_scope_environment_variables_are_set(self):
         """Verify scope-related environment variables are properly set in entrypoint."""
@@ -140,16 +192,48 @@ class ScopeWrapperBehaviorTests(unittest.TestCase):
         self.assertIn("2) 项目 project", entrypoint)
         self.assertIn("read -r -p", entrypoint)
 
-    def test_entrypoint_supports_non_interactive_scope(self):
-        """Verify CLI_SCOPE environment variable controls scope."""
+    def test_entrypoint_cli_scope_priority(self):
+        """Verify CLI_SCOPE has priority over CLAUDE_SCOPE."""
         entrypoint_path = Path(__file__).parent.parent.parent / "container" / "entrypoint.sh"
         entrypoint = entrypoint_path.read_text(encoding="utf-8")
 
-        # Should check for CLI_SCOPE env var
-        self.assertIn("CLI_SCOPE", entrypoint)
+        # Find the priority line
+        self.assertIn('SCOPE="${CLI_SCOPE:-${CLAUDE_SCOPE:-}}"', entrypoint)
 
-        # Should have default scope as project
-        self.assertIn('SCOPE="project"', entrypoint)
+        # Verify CLI_SCOPE is checked first (before CLAUDE_SCOPE)
+        cli_scope_pos = entrypoint.find("CLI_SCOPE")
+        claude_scope_pos = entrypoint.find("CLAUDE_SCOPE", cli_scope_pos + 1)
+        self.assertLess(cli_scope_pos, claude_scope_pos)
+
+    def test_entrypoint_scope_branches_set_different_config_dirs(self):
+        """Verify temporary and project scopes set different config directories."""
+        entrypoint_path = Path(__file__).parent.parent.parent / "container" / "entrypoint.sh"
+        entrypoint = entrypoint_path.read_text(encoding="utf-8")
+
+        # Find temporary scope branch
+        temp_section_start = entrypoint.find('if [ "$SCOPE" = "global" ] || [ "$SCOPE" = "temp" ] || [ "$SCOPE" = "temporary" ]')
+        self.assertGreater(temp_section_start, 0)
+
+        # Temporary scope should use $TEMP_CLAUDE_DIR (defined as $TEMP_HOME/.claude)
+        temp_section = entrypoint[temp_section_start:temp_section_start + 2000]
+        self.assertIn('CLAUDE_CONFIG_DIR="$TEMP_CLAUDE_DIR"', temp_section)
+        self.assertIn('CODEX_CONFIG_DIR="$TEMP_CODEX_DIR"', temp_section)
+
+        # Verify TEMP_HOME is defined earlier in the script
+        self.assertIn('TEMP_HOME="/tmp/aisc-home"', entrypoint)
+        self.assertIn('TEMP_CLAUDE_DIR="$TEMP_HOME/.claude"', entrypoint)
+
+        # Find else branch (project scope)
+        else_pos = entrypoint.find("else", temp_section_start)
+        self.assertGreater(else_pos, temp_section_start)
+
+        project_section = entrypoint[else_pos:else_pos + 1000]
+        # Project scope should use $PROJECT_CLAUDE_DIR (defined as /root/app/.claude)
+        self.assertIn('CLAUDE_CONFIG_DIR="$PROJECT_CLAUDE_DIR"', project_section)
+        self.assertIn('CODEX_CONFIG_DIR="$PROJECT_CODEX_DIR"', project_section)
+
+        # Verify PROJECT_CLAUDE_DIR is defined earlier
+        self.assertIn('PROJECT_CLAUDE_DIR="/root/app/.claude"', entrypoint)
 
     def test_cc_switch_config_dir_respects_scope(self):
         """Verify cc-switch uses scope-specific config directory."""
@@ -159,6 +243,55 @@ class ScopeWrapperBehaviorTests(unittest.TestCase):
         # Should set CC_SWITCH_CONFIG_DIR based on scope
         self.assertIn('CC_SWITCH_CONFIG_DIR="$TEMP_HOME/.cc-switch"', entrypoint)
         self.assertIn('CC_SWITCH_CONFIG_DIR="/root/app/.cc-switch"', entrypoint)
+
+
+class LegacyCommandTests(unittest.TestCase):
+    """Tests for legacy commands that must remain functional."""
+
+    def test_shell_command_exists(self):
+        """Verify `aisc shell` command is available."""
+        with patch("sys.stdout", new=StringIO()), \
+             patch("sys.stderr", new=StringIO()), \
+             patch("sys.argv", ["aisc", "shell", "--help"]):
+            try:
+                main()
+            except SystemExit as e:
+                exit_code = e.code
+            else:
+                exit_code = 0
+
+        # Should exit with 0 (help shown)
+        self.assertEqual(exit_code, 0)
+
+    def test_stop_command_exists(self):
+        """Verify `aisc stop` command is available."""
+        with patch("sys.stdout", new=StringIO()), \
+             patch("sys.stderr", new=StringIO()), \
+             patch("sys.argv", ["aisc", "stop", "--help"]):
+            try:
+                main()
+            except SystemExit as e:
+                exit_code = e.code
+            else:
+                exit_code = 0
+
+        # Should exit with 0 (help shown)
+        self.assertEqual(exit_code, 0)
+
+    def test_switch_command_exists(self):
+        """Verify `aisc switch` command is available."""
+        with patch("sys.stdout", new=StringIO()), \
+             patch("sys.stderr", new=StringIO()), \
+             patch("sys.argv", ["aisc", "switch", "--help"]):
+            try:
+                main()
+            except SystemExit as e:
+                exit_code = e.code
+            else:
+                exit_code = 0
+
+        # Should exit with 0 (help shown)
+        self.assertEqual(exit_code, 0)
 
 
 if __name__ == "__main__":
