@@ -24,28 +24,28 @@
 
 # 20260701
 
-* [ ] 每日skill/claude学习模块
+* [x] 每日skill/claude学习模块
 * [X] clash翻墙配置（docker内部翻墙）— v1.2.3 完成：容器内建 Mihomo TUN 透明代理 + 多格式订阅转换（yaml/base64订阅/URI/JSON，ss/vmess/trojan/vless/hysteria2），详见 devlog
 * [X] 一键启动脚本规范化配置 — v1.3.0(模块化流水线)+ v1.3.1(目录重构)完成：scripts/ 下 4 模块 + 薄入口，跨平台对等，状态解耦
 * [X] claude code CLI外配置 cc-switch-cli：[github.com/saladday/cc-switch-cli](https://github.com/saladday/cc-switch-cli)；v2.1.1-dev 起作为唯一 Provider/skills 管理入口
 * [X] 配置docker容器系统的python — v1.3.2 完成：apt 装 python3/pip/venv + 默认 venv /home/AISC/.venv（挂 PATH 头，绕过 PEP 668，pip install 直达），详见 devlog
-* [ ] 用户自定义模型
-* [ ] 自定义接入服务商
-* [ ] 兼容openai请求格式
+* [x] 用户自定义模型
+* [x] 自定义接入服务商
+* [x] 兼容openai请求格式
 
-* [ ] 文件结构
-* [ ] 安装后的文件结构
-* [ ] cc-switch使用
-* [ ] user版本调整
-* [ ] 剪枝
-* [ ] readme_dev调整
-* [ ] 进程保活
-* [ ] docker操作
-* [ ] 使用流程捋清楚、aisc使用引导、tool
-  * [ ] 初次使用cli环境配置
-  * [ ] config环境配置
-  * [ ] docker管理
-  * [ ] claude
+* [x] 文件结构
+* [x] 安装后的文件结构
+* [x] cc-switch使用
+* [x] user版本调整
+* [x] 剪枝
+* [x] readme_dev调整
+* [x] 进程保活
+* [x] docker操作
+* [x] 使用流程捋清楚、aisc使用引导、tool
+  * [x] 初次使用cli环境配置
+  * [x] config环境配置
+  * [x] docker管理
+  * [x] claude
 
 # 20260730
 
@@ -57,5 +57,5 @@
 6. [X] 完善 Docker 直接引导安装流程，实现开箱即用
 7. [ ] 增加 Claude/Codex 基本使用方法与技巧，重点建设可由大家共同更新的协作文档，并参考 Codesome 文档系统
 8. [ ] 更新飞书知识库 ：支持同步在线文档，并结合 Obsidian 管理本地知识库
-9. [ ] 调研适合 AI 稳定访问和读取网页的方案
-10. [ ] 准备一套使用演示材料，PPT+解说词+实机演示。
+9. [x] 调研适合 AI 稳定访问和读取网页的方案
+10. [x] 准备一套使用演示材料，PPT+解说词+实机演示。
