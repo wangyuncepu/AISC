@@ -15,81 +15,76 @@ from unittest.mock import patch
 
 # Import AISC modules
 from aisc.adapters.container_registry import list_containers, register
-from aisc.cli.main import main
+from aisc.cli.commands.run import plan_run
+from aisc.domain.models import RunPlan
 
 
 class RuntimeBackwardCompatibilityTests(unittest.TestCase):
     """Tests ensuring new runtime commands don't break existing `aisc run` behavior."""
 
-    def test_run_non_interactive_includes_required_env_and_no_tty(self):
-        """Verify `aisc run --non-interactive` sets AISC_NON_INTERACTIVE and omits -it."""
+    def test_run_non_interactive_docker_argv_and_env(self):
+        """Verify `aisc run --non-interactive` produces correct Docker argv."""
         with tempfile.TemporaryDirectory() as workspace:
-            # Capture stdout/stderr
-            with patch("sys.stdout", new=StringIO()) as mock_stdout, \
-                 patch("sys.stderr", new=StringIO()) as mock_stderr, \
-                 patch("sys.argv", ["aisc", "run", "--non-interactive",
-                                    "--workspace", workspace, "--dry-run"]):
-                try:
-                    main()
-                except SystemExit as e:
-                    exit_code = e.code
-                else:
-                    exit_code = 0
+            plan = plan_run(
+                image="super-claude:latest",
+                workspace=workspace,
+                non_interactive=True,
+                interactive=False,
+                keep_alive=False,
+            )
 
-            output = mock_stdout.getvalue()
-
-            # Should succeed with exit code 0
-            self.assertEqual(exit_code, 0, f"stderr: {mock_stderr.getvalue()}")
+            argv = plan.docker_argv
 
             # Should set AISC_NON_INTERACTIVE=1
-            self.assertIn("AISC_NON_INTERACTIVE=1", output)
+            self.assertIn("AISC_NON_INTERACTIVE=1", argv)
 
-            # Should NOT include -it (interactive + TTY)
-            self.assertNotIn("-it", output)
+            # Should set CLAUDE_SCOPE=project
+            self.assertIn("CLAUDE_SCOPE=project", argv)
 
-    def test_run_keep_alive_omits_rm_flag(self):
-        """Verify `aisc run --keep-alive` does not use --rm flag."""
+            # Should NOT include -it (no TTY)
+            self.assertNotIn("-it", argv)
+
+            # Should include --rm (default behavior)
+            self.assertIn("--rm", argv)
+
+    def test_run_keep_alive_omits_rm_and_adds_detached(self):
+        """Verify `aisc run --keep-alive` does not use --rm and uses -d."""
         with tempfile.TemporaryDirectory() as workspace:
-            with patch("sys.stdout", new=StringIO()) as mock_stdout, \
-                 patch("sys.stderr", new=StringIO()), \
-                 patch("sys.argv", ["aisc", "run", "--keep-alive",
-                                    "--workspace", workspace, "--dry-run"]):
-                try:
-                    main()
-                except SystemExit as e:
-                    exit_code = e.code
-                else:
-                    exit_code = 0
+            plan = plan_run(
+                image="super-claude:latest",
+                workspace=workspace,
+                keep_alive=True,
+                interactive=True,
+                non_interactive=False,
+            )
 
-            output = mock_stdout.getvalue()
-
-            self.assertEqual(exit_code, 0)
+            argv = plan.docker_argv
 
             # Should NOT include --rm
-            self.assertNotIn("--rm", output)
+            self.assertNotIn("--rm", argv)
 
-            # Should include -d for detached mode
-            self.assertIn("-d", output)
+            # Should include -d for detached mode as a standalone token
+            # (not part of container name or other value)
+            self.assertIn("-d", argv)
 
     def test_run_interactive_includes_it_flag(self):
         """Verify default `aisc run` (interactive) includes -it."""
         with tempfile.TemporaryDirectory() as workspace:
-            with patch("sys.stdout", new=StringIO()) as mock_stdout, \
-                 patch("sys.stderr", new=StringIO()), \
-                 patch("sys.argv", ["aisc", "run", "--workspace", workspace, "--dry-run"]):
-                try:
-                    main()
-                except SystemExit as e:
-                    exit_code = e.code
-                else:
-                    exit_code = 0
+            plan = plan_run(
+                image="super-claude:latest",
+                workspace=workspace,
+                interactive=True,
+                non_interactive=False,
+                keep_alive=False,
+            )
 
-            output = mock_stdout.getvalue()
-
-            self.assertEqual(exit_code, 0)
+            argv = plan.docker_argv
 
             # Interactive mode should include -it
-            self.assertIn("-it", output)
+            self.assertIn("-it", argv)
+
+            # Should include --rm (default)
+            self.assertIn("--rm", argv)
 
     def test_registry_schema_has_expected_fields(self):
         """Verify registry maintains backward-compatible schema."""
@@ -126,8 +121,8 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
             self.assertEqual(container["network"], "direct")
             self.assertEqual(container["label"], "test")
 
-    def test_registry_can_list_containers_with_numeric_created_at(self):
-        """Verify list_containers works with v2.1.4 registry format (numeric timestamps)."""
+    def test_registry_can_list_and_append_with_v2_1_4_format(self):
+        """Verify registry upgrade: read v2.1.4, write new, old preserved."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             aisc_dir = root / ".aisc"
@@ -135,6 +130,7 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
 
             # Write v2.1.4-format registry (numeric timestamp, no runtime_id/owner/scope)
             registry_path = aisc_dir / "containers.json"
+            old_timestamp = time.time()
             old_registry = {
                 "default": "old-container",
                 "containers": {
@@ -143,7 +139,7 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
                         "workspace": "/old/workspace",
                         "network": "direct",
                         "label": "old",
-                        "created_at": time.time(),  # v2.1.4 used numeric timestamps
+                        "created_at": old_timestamp,  # v2.1.4 used numeric timestamps
                     }
                 },
             }
@@ -153,10 +149,35 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
             # Should be able to list without error
             containers = list_containers(root)
             self.assertIn("old-container", containers)
+            self.assertEqual(containers["old-container"]["image"], "super-claude:v2.1.4")
 
-            # Should be able to read container metadata
+            # Register a new container (simulating upgrade write)
+            register(
+                root,
+                "new-container",
+                {
+                    "image": "super-claude:latest",
+                    "workspace": "/new/workspace",
+                    "network": "proxy",
+                    "label": "new",
+                },
+            )
+
+            # Old container should still exist
+            containers = list_containers(root)
+            self.assertIn("old-container", containers)
+            self.assertIn("new-container", containers)
+
+            # Old container metadata should be preserved
             self.assertEqual(containers["old-container"]["image"], "super-claude:v2.1.4")
             self.assertEqual(containers["old-container"]["network"], "direct")
+
+            # Verify both containers coexist in raw JSON
+            with open(registry_path) as f:
+                registry = json.load(f)
+            self.assertEqual(len(registry["containers"]), 2)
+            self.assertIn("old-container", registry["containers"])
+            self.assertIn("new-container", registry["containers"])
 
     def test_scope_environment_variables_are_set(self):
         """Verify scope-related environment variables are properly set in entrypoint."""
@@ -245,11 +266,13 @@ class ScopeWrapperBehaviorTests(unittest.TestCase):
         self.assertIn('CC_SWITCH_CONFIG_DIR="/root/app/.cc-switch"', entrypoint)
 
 
-class LegacyCommandTests(unittest.TestCase):
-    """Tests for legacy commands that must remain functional."""
+class LegacyCommandBehaviorTests(unittest.TestCase):
+    """Tests for legacy commands documenting actual behavior, not just existence."""
 
-    def test_shell_command_exists(self):
-        """Verify `aisc shell` command is available."""
+    def test_shell_command_is_available(self):
+        """Verify `aisc shell` command exists and shows help."""
+        from aisc.cli.main import main
+
         with patch("sys.stdout", new=StringIO()), \
              patch("sys.stderr", new=StringIO()), \
              patch("sys.argv", ["aisc", "shell", "--help"]):
@@ -263,8 +286,10 @@ class LegacyCommandTests(unittest.TestCase):
         # Should exit with 0 (help shown)
         self.assertEqual(exit_code, 0)
 
-    def test_stop_command_exists(self):
-        """Verify `aisc stop` command is available."""
+    def test_stop_command_is_available(self):
+        """Verify `aisc stop` command exists and shows help."""
+        from aisc.cli.main import main
+
         with patch("sys.stdout", new=StringIO()), \
              patch("sys.stderr", new=StringIO()), \
              patch("sys.argv", ["aisc", "stop", "--help"]):
@@ -278,8 +303,10 @@ class LegacyCommandTests(unittest.TestCase):
         # Should exit with 0 (help shown)
         self.assertEqual(exit_code, 0)
 
-    def test_switch_command_exists(self):
-        """Verify `aisc switch` command is available."""
+    def test_switch_command_is_available(self):
+        """Verify `aisc switch` command exists and shows help."""
+        from aisc.cli.main import main
+
         with patch("sys.stdout", new=StringIO()), \
              patch("sys.stderr", new=StringIO()), \
              patch("sys.argv", ["aisc", "switch", "--help"]):
@@ -292,6 +319,11 @@ class LegacyCommandTests(unittest.TestCase):
 
         # Should exit with 0 (help shown)
         self.assertEqual(exit_code, 0)
+
+    # TODO: After S0.2, add behavior characterization tests:
+    # - shell → docker exec -it <name> bash
+    # - stop → name/label resolution, idempotent, stable error codes
+    # - switch → scope wrapper, quick provider argv
 
 
 if __name__ == "__main__":
