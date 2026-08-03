@@ -390,6 +390,25 @@ def _check_runtime_conflict(
         # Check actual Docker container state
         docker_state = _get_container_state(container_name, executor)
 
+        # Legacy record detection: if scope or owner cannot be confirmed,
+        # report as conflict per contract §5.1 line 140
+        if not meta_scope or not meta_owner or not meta_runtime_id:
+            conflicts.append({
+                "runtime_id": meta_runtime_id or "(missing)",
+                "container_name": container_name,
+                "reason": (
+                    "Legacy container record: missing "
+                    + ", ".join(
+                        [f for f, v in [
+                            ("runtime_id", meta_runtime_id),
+                            ("scope", meta_scope),
+                            ("owner", meta_owner),
+                        ] if not v]
+                    )
+                )
+            })
+            continue
+
         # Same runtime ID, same fingerprint -> can reuse or restart
         if meta_runtime_id == runtime_id and meta_fingerprint == fingerprint:
             matching_runtime_id = meta_runtime_id
