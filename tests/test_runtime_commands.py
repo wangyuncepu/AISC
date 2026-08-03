@@ -10,7 +10,13 @@ from unittest.mock import Mock
 import pytest
 
 from aisc.application.runtime import preflight_runtime, validate_uuid_v4
-from aisc.domain.models import RuntimeErrorCode
+from aisc.domain.models import (
+    DockerPreflightResult,
+    ImageInspectResult,
+    ImageInspectStatus,
+    ProcessResult,
+    RuntimeErrorCode,
+)
 
 
 class TestUuidValidation:
@@ -38,7 +44,9 @@ class TestPreflightDockerCheck:
             workspace.mkdir(exist_ok=True)
 
             executor = Mock()
-            executor.run.return_value = Mock(returncode=0)
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=True, reason="ok"
+            )
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -61,7 +69,7 @@ class TestPreflightDockerCheck:
             workspace.mkdir(exist_ok=True)
 
             executor = Mock()
-            executor.run.side_effect = Exception("Docker not found")
+            executor.preflight.side_effect = Exception("Docker not found")
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -85,7 +93,7 @@ class TestPreflightWorkspaceCheck:
     def test_workspace_exists(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             executor = Mock()
-            executor.run.return_value = Mock(returncode=1)  # Docker unavailable
+            executor.preflight.side_effect = Exception("Docker not found")
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -103,7 +111,7 @@ class TestPreflightWorkspaceCheck:
 
     def test_workspace_not_exists(self):
         executor = Mock()
-        executor.run.return_value = Mock(returncode=1)
+        executor.preflight.side_effect = Exception("Docker not found")
 
         result = preflight_runtime(
             runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -130,11 +138,13 @@ class TestPreflightImageCheck:
             workspace.mkdir(exist_ok=True)
 
             executor = Mock()
-            # Docker info succeeds, image inspect succeeds
-            executor.run.side_effect = [
-                Mock(returncode=0),  # docker info
-                Mock(returncode=0),  # docker image inspect
-            ]
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=True, reason="ok"
+            )
+            executor.inspect_image.return_value = ImageInspectResult(
+                status=ImageInspectStatus.EXISTS,
+                image="test:latest",
+            )
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -156,11 +166,13 @@ class TestPreflightImageCheck:
             workspace.mkdir(exist_ok=True)
 
             executor = Mock()
-            # Docker info succeeds, image inspect fails
-            executor.run.side_effect = [
-                Mock(returncode=0),  # docker info
-                Mock(returncode=1),  # docker image inspect
-            ]
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=True, reason="ok"
+            )
+            executor.inspect_image.return_value = ImageInspectResult(
+                status=ImageInspectStatus.MISSING,
+                image="test:latest",
+            )
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -183,8 +195,9 @@ class TestPreflightImageCheck:
             workspace.mkdir(exist_ok=True)
 
             executor = Mock()
-            # Docker info fails
-            executor.run.return_value = Mock(returncode=1)
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=False, reason="daemon_unreachable"
+            )
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -212,7 +225,7 @@ class TestPreflightNetworkCheck:
     def test_network_direct_valid(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             executor = Mock()
-            executor.run.return_value = Mock(returncode=1)
+            executor.preflight.side_effect = Exception("Docker not found")
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -231,7 +244,7 @@ class TestPreflightNetworkCheck:
     def test_network_proxy_valid(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             executor = Mock()
-            executor.run.return_value = Mock(returncode=1)
+            executor.preflight.side_effect = Exception("Docker not found")
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -250,7 +263,7 @@ class TestPreflightNetworkCheck:
     def test_network_invalid(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             executor = Mock()
-            executor.run.return_value = Mock(returncode=1)
+            executor.preflight.side_effect = Exception("Docker not found")
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -282,7 +295,9 @@ class TestPreflightConflictCheck:
             (registry_root / "containers.json").write_text('{"default": "", "containers": {}}')
 
             executor = Mock()
-            executor.run.return_value = Mock(returncode=0)
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=True, reason="ok"
+            )
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -312,7 +327,9 @@ class TestPreflightConflictCheck:
             (registry_root / "containers.json").write_text("not valid json {{{")
 
             executor = Mock()
-            executor.run.return_value = Mock(returncode=0)
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=True, reason="ok"
+            )
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -339,7 +356,9 @@ class TestPreflightConflictCheck:
             # Do NOT create registry - fresh workspace
 
             executor = Mock()
-            executor.run.return_value = Mock(returncode=0)
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=True, reason="ok"
+            )
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -369,10 +388,13 @@ class TestPreflightCanStart:
             (registry_root / "containers.json").write_text('{"default": "", "containers": {}}')
 
             executor = Mock()
-            executor.run.side_effect = [
-                Mock(returncode=0),  # docker info
-                Mock(returncode=0),  # image inspect
-            ]
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=True, reason="ok"
+            )
+            executor.inspect_image.return_value = ImageInspectResult(
+                status=ImageInspectStatus.EXISTS,
+                image="test:latest",
+            )
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",
@@ -391,7 +413,7 @@ class TestPreflightCanStart:
     def test_any_fail_cannot_start(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             executor = Mock()
-            executor.run.return_value = Mock(returncode=1)
+            executor.preflight.side_effect = Exception("Docker not found")
 
             result = preflight_runtime(
                 runtime_id="550e8400-e29b-41d4-a716-446655440000",

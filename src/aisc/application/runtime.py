@@ -227,8 +227,8 @@ def preflight_runtime(
 def _check_docker(executor: Any) -> bool:
     """Check if Docker is available."""
     try:
-        result = executor.run("docker info", check=False, capture_output=True, text=True)
-        return result.returncode == 0
+        result = executor.preflight()
+        return result.available
     except Exception:
         return False
 
@@ -245,13 +245,9 @@ def _check_workspace(workspace: str) -> bool:
 def _check_image(image: str, executor: Any) -> bool:
     """Check if Docker image exists locally."""
     try:
-        result = executor.run(
-            f"docker image inspect {image}",
-            check=False,
-            capture_output=True,
-            text=True
-        )
-        return result.returncode == 0
+        result = executor.inspect_image(image)
+        from aisc.domain.models import ImageInspectStatus
+        return result.status == ImageInspectStatus.EXISTS
     except Exception:
         return False
 
@@ -375,77 +371,19 @@ def _get_container_state(container_name: str, executor: Any) -> Optional[str]:
     Returns "running", "stopped", or None if container doesn't exist or error.
     """
     try:
-        result = executor.run(
-            f"docker inspect --format={{{{.State.Running}}}} {container_name}",
-            check=False,
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0:
-            running = result.stdout.strip().lower()
-            return "running" if running == "true" else "stopped"
+        result = executor.inspect_container(container_name)
+        if result.returncode != 0:
+            return None
+
+        # Parse JSON output to get State.Running
+        import json
+        data = json.loads(result.stdout)
+        if isinstance(data, list) and len(data) > 0:
+            state = data[0].get("State", {})
+            running = state.get("Running", False)
+            return "running" if running else "stopped"
         return None
     except Exception:
         return None
-
-    # Compute config fingerprint for this request
-    fingerprint = compute_config_fingerprint(image, network, scope, workspace)
-
-    matching_runtime_id = None
-    conflicts: List[Dict[str, Any]] = []
-
-    for container_name, meta in containers.items():
-        meta_runtime_id = meta.get("runtime_id", "")
-        meta_workspace = meta.get("workspace", "")
-        meta_scope = meta.get("scope", "")
-        meta_fingerprint = meta.get("config_fingerprint", "")
-
-        # Same runtime ID, same fingerprint -> can reuse
-        if meta_runtime_id == runtime_id and meta_fingerprint == fingerprint:
-            matching_runtime_id = meta_runtime_id
-            continue
-
-        # Same runtime ID, different fingerprint -> conflict
-        if meta_runtime_id == runtime_id and meta_fingerprint != fingerprint:
-            conflicts.append({
-                "runtime_id": meta_runtime_id,
-                "container_name": container_name,
-                "reason": "Runtime ID already in use with different config"
-            })
-            continue
-
-        # Project scope: same workspace -> conflict
-        if scope == "project" and meta_scope == "project":
-            try:
-                canonical_meta_workspace = str(Path(meta_workspace).resolve())
-                canonical_request_workspace = str(Path(workspace).resolve())
-                if canonical_meta_workspace == canonical_request_workspace:
-                    conflicts.append({
-                        "runtime_id": meta_runtime_id,
-                        "container_name": container_name,
-                        "reason": "Project runtime already exists for this workspace"
-                    })
-            except Exception:
-                pass
-
-    if conflicts:
-        return (
-            PreflightCheck(
-                id="runtime_conflict",
-                status="fail",
-                error_code=RuntimeErrorCode.RUNTIME_CONFLICT,
-                detail=f"Found {len(conflicts)} conflicting runtime(s)"
-            ),
-            matching_runtime_id,
-            conflicts,
-            matching_state
-        )
-
-    return (
-        PreflightCheck(id="runtime_conflict", status="pass"),
-        matching_runtime_id,
-        [],
-        matching_state
-    )
 
 
