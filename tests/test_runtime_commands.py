@@ -279,7 +279,7 @@ class TestPreflightConflictCheck:
             registry_root.mkdir(exist_ok=True)
 
             # Create empty registry
-            (registry_root / "registry.json").write_text('{"default": "", "containers": {}}')
+            (registry_root / "containers.json").write_text('{"default": "", "containers": {}}')
 
             executor = Mock()
             executor.run.return_value = Mock(returncode=0)
@@ -301,12 +301,15 @@ class TestPreflightConflictCheck:
             assert result.conflicts == []
 
     def test_registry_unreadable_fails_closed(self):
-        """When registry cannot be read, must fail-closed with conflict error."""
+        """When registry exists but is corrupted/unreadable, must fail-closed."""
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             workspace.mkdir(exist_ok=True)
             registry_root = workspace / ".aisc"
-            # Do NOT create registry - should trigger read error
+            registry_root.mkdir()
+
+            # Create corrupted registry file
+            (registry_root / "containers.json").write_text("not valid json {{{")
 
             executor = Mock()
             executor.run.return_value = Mock(returncode=0)
@@ -323,9 +326,35 @@ class TestPreflightConflictCheck:
             )
 
             conflict_check = next(c for c in result.checks if c.id == "runtime_conflict")
-            # Must fail-closed when registry is unreadable
+            # Must fail-closed when registry is corrupted
             assert conflict_check.status == "fail"
             assert conflict_check.error_code == RuntimeErrorCode.RUNTIME_CONFLICT
+
+    def test_registry_missing_means_empty(self):
+        """When registry doesn't exist, treat as empty (no conflicts)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            workspace.mkdir(exist_ok=True)
+            registry_root = workspace / ".aisc"
+            # Do NOT create registry - fresh workspace
+
+            executor = Mock()
+            executor.run.return_value = Mock(returncode=0)
+
+            result = preflight_runtime(
+                runtime_id="550e8400-e29b-41d4-a716-446655440000",
+                workspace=str(workspace),
+                image="test:latest",
+                network="direct",
+                scope="project",
+                owner="workbench",
+                executor=executor,
+                registry_root=registry_root,
+            )
+
+            conflict_check = next(c for c in result.checks if c.id == "runtime_conflict")
+            # Fresh workspace means no conflicts
+            assert conflict_check.status == "pass"
 
 
 class TestPreflightCanStart:
@@ -337,7 +366,7 @@ class TestPreflightCanStart:
             workspace.mkdir(exist_ok=True)
             registry_root = workspace / ".aisc"
             registry_root.mkdir(exist_ok=True)
-            (registry_root / "registry.json").write_text('{"default": "", "containers": {}}')
+            (registry_root / "containers.json").write_text('{"default": "", "containers": {}}')
 
             executor = Mock()
             executor.run.side_effect = [

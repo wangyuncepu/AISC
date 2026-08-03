@@ -102,12 +102,12 @@ class TestPreflightNoSideEffects:
             assert final_files == initial_files
 
     def test_preflight_does_not_create_registry(self):
-        """Test preflight does not create registry.json."""
+        """Test preflight does not create containers.json."""
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             aisc_dir = workspace / ".aisc"
             aisc_dir.mkdir()
-            registry_file = aisc_dir / "registry.json"
+            registry_file = aisc_dir / "containers.json"
 
             assert not registry_file.exists()
 
@@ -125,7 +125,7 @@ class TestPreflightNoSideEffects:
 
             assert result.returncode == 0
 
-            # registry.json should NOT be created
+            # containers.json should NOT be created
             assert not registry_file.exists()
 
     def test_preflight_does_not_modify_existing_registry(self):
@@ -134,7 +134,7 @@ class TestPreflightNoSideEffects:
             workspace = Path(tmpdir)
             aisc_dir = workspace / ".aisc"
             aisc_dir.mkdir()
-            registry_file = aisc_dir / "registry.json"
+            registry_file = aisc_dir / "containers.json"
 
             # Create initial registry
             initial_content = '{"default": "", "containers": {}}'

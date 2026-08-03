@@ -273,7 +273,7 @@ def _check_runtime_conflict(
     Fail-closed: if registry cannot be read, returns conflict fail.
     Also checks Docker labels to reconcile registry with actual container state.
     """
-    from aisc.adapters.container_registry import list_containers
+    from aisc.adapters.container_registry import list_containers_readonly
 
     if not docker_available or registry_root is None:
         # Cannot verify conflicts without Docker or registry
@@ -284,27 +284,13 @@ def _check_runtime_conflict(
             None
         )
 
-    # Check if registry exists before attempting to read
-    registry_file = registry_root / "registry.json"
-    if not registry_file.exists():
-        # Fail-closed: registry doesn't exist, cannot verify conflicts
-        return (
-            PreflightCheck(
-                id="runtime_conflict",
-                status="fail",
-                error_code=RuntimeErrorCode.RUNTIME_CONFLICT,
-                detail=f"Cannot read registry: {registry_file} does not exist"
-            ),
-            None,
-            [],
-            None
-        )
-
-    # Read registry under lock
+    # Read registry without lock (read-only snapshot)
+    # Returns empty dict if registry doesn't exist (fresh workspace)
+    # Raises exception if registry exists but is corrupted
     try:
-        containers = list_containers(registry_root)
+        containers = list_containers_readonly(registry_root)
     except Exception as e:
-        # Fail-closed: cannot read registry -> report conflict
+        # Fail-closed: registry exists but cannot be read
         return (
             PreflightCheck(
                 id="runtime_conflict",
@@ -451,11 +437,15 @@ def _get_container_state(container_name: str, executor: Any) -> Optional[str]:
                 detail=f"Found {len(conflicts)} conflicting runtime(s)"
             ),
             matching_runtime_id,
-            conflicts
+            conflicts,
+            matching_state
         )
 
     return (
         PreflightCheck(id="runtime_conflict", status="pass"),
         matching_runtime_id,
-        []
+        [],
+        matching_state
     )
+
+

@@ -35,7 +35,17 @@ _REGISTRY_FILE = "containers.json"
 # ---------------------------------------------------------------------------
 
 def _registry_path(root: Path) -> Path:
-    return root / ".aisc" / _REGISTRY_FILE
+    """Return path to containers.json.
+
+    Args:
+        root: Either workspace root or .aisc directory.
+              If root ends with .aisc, use it directly.
+              Otherwise append .aisc.
+    """
+    if root.name == ".aisc":
+        return root / _REGISTRY_FILE
+    else:
+        return root / ".aisc" / _REGISTRY_FILE
 
 
 def _resolve_root(root: Optional[Path], explicit_root: Optional[str] = None) -> Optional[Path]:
@@ -279,6 +289,32 @@ def list_containers(root: Path) -> Dict[str, Dict[str, Any]]:
         return copy.deepcopy(data["containers"])
 
 
+def list_containers_readonly(root: Path) -> Dict[str, Dict[str, Any]]:
+    """Return all registered container entries (name → meta) without side effects.
+
+    Read-only: does not acquire lock or create directories/files.
+    For preflight and other observational operations.
+    Returns empty dict if registry file doesn't exist.
+    Raises exception if registry exists but is corrupted/unreadable.
+    """
+    import copy
+    import json
+
+    registry_file = _registry_path(root)
+    if not registry_file.exists():
+        return {}
+
+    # File exists, so corruption/read errors must be raised
+    with open(registry_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("Registry root is not a dict")
+    containers = data.get("containers", {})
+    if not isinstance(containers, dict):
+        raise ValueError("Registry containers field is not a dict")
+    return copy.deepcopy(containers)
+
+
 def get_default(root: Path) -> str:
     """Return the default container name, or empty string if none."""
     with _registry_lock(root):
@@ -331,32 +367,43 @@ def gc(root: Path, executor) -> List[str]:
     """Prune registry entries whose container is gone. Returns pruned names.
 
     Best-effort: if docker is unreachable, prunes nothing and returns [].
+
+    Pattern: lock→snapshot→unlock→inspect→relock→compare→prune per contract.
     """
+    # Phase 1: lock → snapshot → unlock
     with _registry_lock(root):
         snapshot = _read_registry(root)
         containers = snapshot.get("containers", {})
         if not containers:
             return []
-        missing: List[str] = []
-        for nm in list(containers):
-            exists = _container_exists(executor, nm)
-            if exists is False:
-                missing.append(nm)
-        if not missing:
-            return []
+
+    # Phase 2: Docker inspect outside lock
+    missing: List[str] = []
+    for nm in list(containers):
+        exists = _container_exists(executor, nm)
+        if exists is False:
+            missing.append(nm)
+
+    if not missing:
+        return []
+
+    # Phase 3: relock → compare current entry → conditional prune
+    with _registry_lock(root):
+        current_data = _read_registry(root)
+        current_containers = current_data.get("containers", {})
 
         pruned: List[str] = []
-        current = data.get("containers", {})
         for nm in missing:
             # Do not delete a same-name container re-registered while Docker
             # checks were running.
-            if current.get(nm) == containers.get(nm):
-                current.pop(nm, None)
+            if current_containers.get(nm) == containers.get(nm):
+                current_containers.pop(nm, None)
                 pruned.append(nm)
+
         if pruned:
-            if data["default"] in pruned:
-                data["default"] = _pick_newest(current)
-            _write_registry_unlocked(root, data)
+            if current_data["default"] in pruned:
+                current_data["default"] = _pick_newest(current_containers)
+            _write_registry_unlocked(root, current_data)
         return pruned
 
 
