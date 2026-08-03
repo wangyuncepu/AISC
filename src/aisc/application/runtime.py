@@ -265,6 +265,56 @@ def _check_image(image: str, executor: Any) -> Optional[str]:
         return RuntimeErrorCode.DOCKER_UNAVAILABLE
 
 
+def _query_docker_labels(
+    runtime_id: str,
+    executor: Any,
+) -> List[Dict[str, str]]:
+    """Query Docker for containers with matching io.aisc.runtime-id label.
+
+    Returns list of {container_name, container_id, state, labels...} dicts.
+    Empty list if Docker unavailable or no matches.
+    """
+    try:
+        result = executor.list_containers(all=True)
+        if result.returncode != 0:
+            return []
+        # Parse docker ps --format "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}"
+        # But we need labels — use inspect on each? Better: docker ps with --filter
+        # list_containers uses --format without labels. Use run_captured directly.
+    except Exception:
+        return []
+
+    # Fallback: query containers with io.aisc.runtime-id label via run_captured
+    try:
+        filter_label = f"label=io.aisc.runtime-id={runtime_id}"
+        result = executor.run_captured(
+            ["ps", "-a", "--filter", filter_label, "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}"],
+            timeout=10.0,
+        )
+    except AttributeError:
+        # If executor doesn't have run_captured (e.g., protocol mock), skip
+        return []
+    except Exception:
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    containers = []
+    for line in result.stdout.strip().split("\n"):
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 3:
+            containers.append({
+                "container_id": parts[0].strip(),
+                "container_name": parts[1].strip(),
+                "status": parts[2].strip(),
+            })
+
+    return containers
+
+
 def _check_runtime_conflict(
     runtime_id: str,
     workspace: str,
@@ -297,7 +347,7 @@ def _check_runtime_conflict(
     # Returns empty dict if registry doesn't exist (fresh workspace)
     # Raises exception if registry exists but is corrupted
     try:
-        containers = list_containers_readonly(registry_root)
+        registry_containers = list_containers_readonly(registry_root)
     except Exception as e:
         # Fail-closed: registry exists but cannot be read
         return (
@@ -315,15 +365,27 @@ def _check_runtime_conflict(
     # Compute config fingerprint for this request
     fingerprint = compute_config_fingerprint(image, network, scope, workspace)
 
+    # Query Docker for containers with matching runtime-id label
+    docker_containers = _query_docker_labels(runtime_id, executor)
+    registry_names = set(registry_containers.keys())
+
+    # Track which Docker container names are NOT in registry
+    docker_only_names = set()
+    for dc in docker_containers:
+        if dc["container_name"] not in registry_names:
+            docker_only_names.add(dc["container_name"])
+
     matching_runtime_id = None
     matching_state = None  # "running" or "stopped"
     conflicts: List[Dict[str, Any]] = []
 
-    for container_name, meta in containers.items():
+    # Process registry entries
+    for container_name, meta in registry_containers.items():
         meta_runtime_id = meta.get("runtime_id", "")
         meta_workspace = meta.get("workspace", "")
         meta_scope = meta.get("scope", "")
         meta_fingerprint = meta.get("config_fingerprint", "")
+        meta_owner = meta.get("owner", "")
 
         # Check actual Docker container state
         docker_state = _get_container_state(container_name, executor)
@@ -356,6 +418,16 @@ def _check_runtime_conflict(
                     })
             except Exception:
                 pass
+
+    # Report Docker-only containers as conflicts (label reconciliation)
+    for dc in docker_containers:
+        name = dc["container_name"]
+        if name in docker_only_names and name not in registry_names:
+            conflicts.append({
+                "runtime_id": runtime_id,
+                "container_name": name,
+                "reason": "Container exists in Docker but not in registry (labels only)"
+            })
 
     if conflicts:
         return (
