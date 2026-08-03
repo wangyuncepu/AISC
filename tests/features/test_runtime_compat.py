@@ -122,7 +122,7 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
             self.assertEqual(container["label"], "test")
 
     def test_registry_can_list_and_append_with_v2_1_4_format(self):
-        """Verify registry upgrade: read v2.1.4, write new, old preserved."""
+        """Verify registry upgrade: read v2.1.4, write new, old preserved, default restoration."""
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             aisc_dir = root / ".aisc"
@@ -178,6 +178,20 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
             self.assertEqual(len(registry["containers"]), 2)
             self.assertIn("old-container", registry["containers"])
             self.assertIn("new-container", registry["containers"])
+
+            # Test default restoration: unregister new-container (current default)
+            from aisc.adapters.container_registry import unregister
+            unregister(root, "new-container")
+
+            # Verify new-container is removed
+            containers = list_containers(root)
+            self.assertNotIn("new-container", containers)
+            self.assertIn("old-container", containers)
+
+            # Verify default falls back to remaining old-container
+            with open(registry_path) as f:
+                registry = json.load(f)
+            self.assertEqual(registry["default"], "old-container")
 
     def test_scope_environment_variables_are_set(self):
         """Verify scope-related environment variables are properly set in entrypoint."""
@@ -428,13 +442,14 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
                 timed_out=False,
             )
 
-            # Test 1: --name takes priority
+            # Test 1: --name takes priority over --label
             with patch("aisc.cli.commands.container.cmd_status") as mock_status:
                 mock_status.return_value.exists = True
                 mock_status.return_value.running = False
 
                 result = cmd_stop(
                     name_override="container-a",
+                    label_override="test",  # Points to container-b, but name should win
                     explicit_root=str(root),
                     executor=fake_executor,
                 )
