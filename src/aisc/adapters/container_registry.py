@@ -78,29 +78,101 @@ def _read_registry(root: Path) -> Dict[str, Any]:
 
 
 @contextmanager
-def _registry_lock(root: Path) -> Iterator[None]:
-    """Hold the registry lock across a complete read-modify-write cycle."""
+def _registry_lock(root: Path, timeout: float = 10.0) -> Iterator[None]:
+    """Hold the registry lock across a complete read-modify-write cycle.
+
+    Uses fcntl.flock (POSIX) or msvcrt.locking (Windows).
+    Fail-closed: raises on lock acquisition failure.
+
+    Args:
+        root: AISC root directory
+        timeout: Lock timeout in seconds (default 10.0)
+
+    Raises:
+        TimeoutError: If lock cannot be acquired within timeout
+        OSError: On other lock-related errors
+
+    Yields:
+        None while lock is held
+    """
+    import sys
+    import time as time_module
+
     state_dir = root / ".aisc"
     state_dir.mkdir(parents=True, exist_ok=True)
     lock_path = state_dir / ".containers.lock"
     lock_fd = None
     locked = False
+
     try:
-        try:
+        # Open lock file
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+
+        # Platform-specific locking with timeout
+        if sys.platform == "win32":
+            # Windows: msvcrt.locking with bounded retry
+            import msvcrt
+
+            start_time = time_module.time()
+            while True:
+                try:
+                    # Try to lock 1 byte at offset 0
+                    msvcrt.locking(lock_fd, msvcrt.LK_NBLCK, 1)
+                    locked = True
+                    break
+                except OSError as e:
+                    elapsed = time_module.time() - start_time
+                    if elapsed >= timeout:
+                        raise TimeoutError(
+                            f"Failed to acquire registry lock within {timeout}s"
+                        ) from e
+                    # Retry after short sleep
+                    time_module.sleep(0.1)
+        else:
+            # POSIX: fcntl.flock with alarm-based timeout
             import fcntl
-            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            locked = True
-        except ImportError:
-            pass
+            import signal
+
+            def timeout_handler(signum, frame):
+                raise TimeoutError(
+                    f"Failed to acquire registry lock within {timeout}s"
+                )
+
+            # Only set alarm if we're in the main thread
+            # (signal.alarm only works in main thread)
+            try:
+                old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                # Use ceil to ensure timeout >= 1 second works
+                signal.alarm(int(timeout) + 1)
+                alarm_set = True
+            except ValueError:
+                # Not in main thread, fall back to blocking lock
+                alarm_set = False
+
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                locked = True
+            finally:
+                if alarm_set:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old_handler)
+
         yield
+
     finally:
+        # Release lock
         if locked and lock_fd is not None:
             try:
-                import fcntl
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                if sys.platform == "win32":
+                    import msvcrt
+                    msvcrt.locking(lock_fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
             except OSError:
                 pass
+
+        # Close file descriptor
         if lock_fd is not None:
             try:
                 os.close(lock_fd)
@@ -195,8 +267,16 @@ def unregister(root: Path, name: str) -> None:
 
 
 def list_containers(root: Path) -> Dict[str, Dict[str, Any]]:
-    """Return all registered container entries (name → meta)."""
-    return _read_registry(root)["containers"]
+    """Return all registered container entries (name → meta).
+
+    Reads registry snapshot under lock to ensure consistency.
+    Returns a copy to prevent external mutation.
+    """
+    with _registry_lock(root):
+        data = _read_registry(root)
+        # Return a deep copy to prevent external mutation
+        import copy
+        return copy.deepcopy(data["containers"])
 
 
 def _pick_newest(containers: Dict[str, Any]) -> str:
