@@ -19,6 +19,31 @@ class CheckStatus:
     SKIP = "skip"
 
 
+class RuntimeErrorCode:
+    """Stable error codes for runtime operations."""
+    DOCKER_UNAVAIL = "AISC_ERR_DOCKER_UNAVAIL"
+    RUNTIME_NOT_FOUND = "AISC_ERR_RUNTIME_NOT_FOUND"
+    RUNTIME_CONFLICT = "AISC_ERR_RUNTIME_CONFLICT"
+    LOCK_TIMEOUT = "AISC_ERR_LOCK_TIMEOUT"
+    WORKSPACE_INVALID = "AISC_ERR_WORKSPACE_INVALID"
+    IMAGE_NOT_FOUND = "AISC_ERR_IMAGE_NOT_FOUND"
+    NETWORK_INVALID = "AISC_ERR_NETWORK_INVALID"
+    RUNTIME_UNHEALTHY = "AISC_ERR_RUNTIME_UNHEALTHY"
+    CONTAINER_NOT_FOUND = "AISC_ERR_CONTAINER_NOT_FOUND"
+
+
+class RuntimeExitCode:
+    """Exit codes for runtime operations."""
+    SUCCESS = 0
+    GENERAL_ERROR = 1
+    USAGE_ERROR = 2
+    DOCKER_UNAVAIL = 3
+    NOT_FOUND = 4
+    CONFLICT = 5
+    LOCK_TIMEOUT = 6
+    PERMISSION_DENIED = 9
+
+
 # ---------------------------------------------------------------------------
 # Version info
 # ---------------------------------------------------------------------------
@@ -307,3 +332,53 @@ class RunPlan:
                 ])
         argv.append(self.image)
         return argv
+
+
+# ---------------------------------------------------------------------------
+# Runtime snapshot — structured runtime state
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RuntimeSnapshot:
+    """Structured runtime state returned by runtime commands.
+
+    Combines registry metadata with live Docker state.
+    """
+    runtime_id: str = ""           # rt_<random> - stable across restarts
+    status: str = "unknown"        # running, stopped, removed, error
+    workspace: str = ""            # canonical absolute path
+    image: str = ""                # image:tag
+    network: str = "direct"        # direct, proxy
+    scope: str = "project"         # project, temporary
+    owner: str = ""                # who created this runtime (username)
+    config_fingerprint: str = ""   # hash of (image, network, scope, workspace)
+    container_name: str = ""       # Docker container name (for legacy compat)
+    label: str = ""                # optional user label
+    created_at: str = ""           # ISO timestamp or numeric (backward compat)
+    started_at: str = ""           # ISO timestamp from Docker
+
+    # Error information (when status == "error")
+    error_code: str = ""
+    error_message: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-serializable dict."""
+        result = {
+            "runtime_id": self.runtime_id,
+            "status": self.status,
+            "workspace": self.workspace,
+            "image": self.image,
+            "network": self.network,
+            "scope": self.scope,
+            "owner": self.owner,
+            "config_fingerprint": self.config_fingerprint,
+            "container_name": self.container_name,
+            "label": self.label,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+        }
+        if self.error_code:
+            result["error_code"] = self.error_code
+        if self.error_message:
+            result["error_message"] = self.error_message
+        return result

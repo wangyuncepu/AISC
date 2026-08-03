@@ -149,7 +149,17 @@ def register(root: Path, name: str, meta: Dict[str, Any]) -> None:
     Args:
         root: AISC root directory.
         name: Container name (unique per run).
-        meta: Metadata dict with keys image/workspace/network/label.
+        meta: Metadata dict with keys:
+            - image: Docker image name
+            - workspace: Workspace path
+            - network: Network mode (direct/proxy)
+            - label: Optional user label
+            - runtime_id: Runtime ID (rt_<hex>)
+            - owner: Username who created this runtime
+            - scope: Scope mode (project/temporary)
+            - config_fingerprint: Config hash for idempotent retry
+
+    Backward compatible: if old fields are missing, stores empty strings.
     """
     entry = {
         "image": meta.get("image", ""),
@@ -157,6 +167,11 @@ def register(root: Path, name: str, meta: Dict[str, Any]) -> None:
         "network": meta.get("network", ""),
         "label": meta.get("label", ""),
         "created_at": meta.get("created_at") or time.time(),
+        # New fields (v2.2.0+) - backward compatible
+        "runtime_id": meta.get("runtime_id", ""),
+        "owner": meta.get("owner", ""),
+        "scope": meta.get("scope", ""),
+        "config_fingerprint": meta.get("config_fingerprint", ""),
     }
     with _registry_lock(root):
         data = _read_registry(root)
