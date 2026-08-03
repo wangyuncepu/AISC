@@ -1,11 +1,6 @@
 name: Artifact
 
 on:
-  push:
-    branches: [develop]
-    tags: ['v*']
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
