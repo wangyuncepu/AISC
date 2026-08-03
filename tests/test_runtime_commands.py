@@ -214,9 +214,9 @@ class TestPreflightImageCheck:
             assert docker_check.status == "fail"
 
             image_check = next(c for c in result.checks if c.id == "image")
-            # Image check should still fail (not skip) when Docker is unavailable
+            # Image check should fail with DOCKER_UNAVAILABLE when Docker is down
             assert image_check.status == "fail"
-            assert image_check.error_code == RuntimeErrorCode.IMAGE_NOT_FOUND
+            assert image_check.error_code == RuntimeErrorCode.DOCKER_UNAVAILABLE
 
 
 class TestPreflightNetworkCheck:

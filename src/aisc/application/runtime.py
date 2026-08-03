@@ -148,15 +148,19 @@ def preflight_runtime(
         checks.append(PreflightCheck(id="workspace", status="pass"))
 
     # Check 3: image
-    image_exists = False
+    image_error = None
     if docker_available:
-        image_exists = _check_image(image, executor)
-    if not image_exists:
+        image_error = _check_image(image, executor)
+    else:
+        image_error = RuntimeErrorCode.DOCKER_UNAVAILABLE
+
+    if image_error:
         checks.append(PreflightCheck(
             id="image",
             status="fail",
-            error_code=RuntimeErrorCode.IMAGE_NOT_FOUND,
-            detail=f"Image not found: {image}"
+            error_code=image_error,
+            detail=f"Image not found: {image}" if image_error == RuntimeErrorCode.IMAGE_NOT_FOUND
+            else "Cannot check image availability (Docker unreachable)"
         ))
     else:
         checks.append(PreflightCheck(id="image", status="pass"))
@@ -242,14 +246,23 @@ def _check_workspace(workspace: str) -> bool:
         return False
 
 
-def _check_image(image: str, executor: Any) -> bool:
-    """Check if Docker image exists locally."""
+def _check_image(image: str, executor: Any) -> Optional[str]:
+    """Check if Docker image exists locally.
+
+    Returns None if image exists, error code string otherwise.
+    Distinguishes "image not found" from "cannot observe".
+    """
     try:
         result = executor.inspect_image(image)
         from aisc.domain.models import ImageInspectStatus
-        return result.status == ImageInspectStatus.EXISTS
+        if result.status == ImageInspectStatus.EXISTS:
+            return None
+        if result.status == ImageInspectStatus.MISSING:
+            return RuntimeErrorCode.IMAGE_NOT_FOUND
+        # DOCKER_UNAVAILABLE, PERMISSION_DENIED, TIMEOUT, ERROR
+        return RuntimeErrorCode.DOCKER_UNAVAILABLE
     except Exception:
-        return False
+        return RuntimeErrorCode.DOCKER_UNAVAILABLE
 
 
 def _check_runtime_conflict(
