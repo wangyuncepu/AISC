@@ -2,6 +2,44 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+## v2.2.0-dev (2026-08-03) — Workbench Phase 0 S0.2: Runtime Preflight 垂直切片
+
+### 变更
+
+- 实现 `aisc runtime preflight` 命令：只读，零副作用，执行 Docker/workspace/image/network/runtime_conflict 五项检查后返回 JSON payload（`docs/gui-planning/05-cli-gui-contract.md §5.1`）。
+- Runtime ID 由 Workbench 提供（UUID v4），CLI 严格校验格式；不允许 CLI 自生成 ID。
+- 配置指纹 `sha256:<hex>` 对 image/network/scope/canonical workspace 规范化计算，用于幂等重试和复用检测。
+- Registry 路径修正：`containers.json`（非 `registry.json`），根目录已含 `.aisc` 时不再嵌套。
+- 新增 `list_containers_readonly()`：无锁、无副作用 registry 快照读；文件缺失返回空、损坏则抛异常（fail-closed）。
+- GC 修复：lock→snapshot→unlock→inspect→relock→compare→prune 模式，消除锁内 Docker 调用和 NameError 回归。
+- `_check_image()` 区分 "image not found" 与 "cannot observe"（Docker 不可用时返回 `DOCKER_UNAVAILABLE` 而非 `IMAGE_NOT_FOUND`）。
+- 基于 Docker label `io.aisc.runtime-id` 的容器发现与 reconciliation；Docker 中存在但 registry 中缺失的容器报告为 conflict。
+- 旧 registry 记录检测：缺失 runtime_id/scope/owner 的旧条目自动标记为 conflict（按 contract §5.1 行 140）。
+- CLI 命令层移除内联 PreflightExecutor，改用 `RealDockerExecutor()` 结构化 API（`preflight()`/`inspect_image()`/`inspect_container()`）。
+- 注册 exit codes 14-16（RUNTIME_CONFLICT/INVALID_RUNTIME_ID/RUNTIME_OPERATION_FAILED）到 `docs/rfc/aisc-cli-v1.md`。
+- 全部 runtime 测试从 pytest 迁移到 `unittest.TestCase`，同时兼容 unittest discover 和 pytest 运行器。
+- 新增 25 个 preflight 单元测试、13 个 subprocess 契约测试、8 个零副作用测试。
+
+### 关键提交
+
+- `000a878` 登记 exit codes 14-16
+- `69821aa` preflight 垂直切片（domain/application/CLI/tests）
+- `d2bd4f3` 消除 registry 读竞态条件
+- `59e43c8` 修正 registry 路径和 fail-closed 语义
+- `5a983b3` PreflightExecutor → RealDockerExecutor
+- `86716e7` 区分不可观测与缺失语义
+- `9d1fef9` Docker label reconciliation
+- `ab0493a` 旧记录冲突检测
+- `96260e8` pytest → unittest.TestCase
+
+### 状态
+
+- 分支: `feature/workbench-phase0-s0.2`
+- 283 tests passed, 8 skipped
+- Runtime CRUD 命令（start/list/inspect/stop/restart/remove）尚未实现，待 preflight 验证可靠后开始。
+
+---
+
 ## v2.1.4 (2026-07-24) — Codex 官方登录直连与安全的 Skills 同步
 
 ### 变更
