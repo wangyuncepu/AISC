@@ -8,9 +8,8 @@ import json
 import subprocess
 import sys
 import tempfile
+import unittest
 from pathlib import Path
-
-import pytest
 
 
 def get_aisc_executable():
@@ -18,11 +17,11 @@ def get_aisc_executable():
     venv_bin = Path(sys.executable).parent
     aisc_path = venv_bin / "aisc"
     if not aisc_path.exists():
-        pytest.skip("aisc executable not found in venv")
+        raise unittest.SkipTest("aisc executable not found in venv")
     return str(aisc_path)
 
 
-class TestPreflightNoSideEffects:
+class TestPreflightNoSideEffects(unittest.TestCase):
     """Test preflight is strictly read-only."""
 
     def test_preflight_does_not_create_workspace(self):

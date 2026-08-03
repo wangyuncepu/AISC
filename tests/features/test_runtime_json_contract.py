@@ -8,9 +8,8 @@ import json
 import subprocess
 import sys
 import tempfile
+import unittest
 from pathlib import Path
-
-import pytest
 
 
 def get_aisc_executable():
@@ -18,11 +17,11 @@ def get_aisc_executable():
     venv_bin = Path(sys.executable).parent
     aisc_path = venv_bin / "aisc"
     if not aisc_path.exists():
-        pytest.skip("aisc executable not found in venv")
+        raise unittest.SkipTest("aisc executable not found in venv")
     return str(aisc_path)
 
 
-class TestPreflightJsonContract:
+class TestPreflightJsonContract(unittest.TestCase):
     """Test preflight JSON contract per §5.1."""
 
     def test_preflight_json_envelope_structure(self):
@@ -276,7 +275,7 @@ class TestPreflightJsonContract:
         assert data["data"]["can_start"] is False
 
 
-class TestRuntimeSubcommandErrors:
+class TestRuntimeSubcommandErrors(unittest.TestCase):
     """Test runtime subcommand error handling."""
 
     def test_unknown_runtime_subcommand_json(self):

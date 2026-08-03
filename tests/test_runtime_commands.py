@@ -4,10 +4,9 @@ Tests preflight_runtime() logic with mocked Docker executor.
 """
 
 import tempfile
+import unittest
 from pathlib import Path
 from unittest.mock import Mock
-
-import pytest
 
 from aisc.application.runtime import preflight_runtime, validate_uuid_v4
 from aisc.domain.models import (
@@ -19,7 +18,7 @@ from aisc.domain.models import (
 )
 
 
-class TestUuidValidation:
+class TestUuidValidation(unittest.TestCase):
     """Test UUID v4 validation."""
 
     def test_valid_uuid_v4(self):
@@ -35,7 +34,7 @@ class TestUuidValidation:
         assert validate_uuid_v4("550e8400-E29B-41d4-a716-446655440000")
 
 
-class TestPreflightDockerCheck:
+class TestPreflightDockerCheck(unittest.TestCase):
     """Test Docker availability check."""
 
     def test_docker_available(self):
@@ -87,7 +86,7 @@ class TestPreflightDockerCheck:
             assert docker_check.error_code == RuntimeErrorCode.DOCKER_UNAVAILABLE
 
 
-class TestPreflightWorkspaceCheck:
+class TestPreflightWorkspaceCheck(unittest.TestCase):
     """Test workspace validity check."""
 
     def test_workspace_exists(self):
@@ -129,7 +128,7 @@ class TestPreflightWorkspaceCheck:
         assert workspace_check.error_code == RuntimeErrorCode.WORKSPACE_INVALID
 
 
-class TestPreflightImageCheck:
+class TestPreflightImageCheck(unittest.TestCase):
     """Test image existence check."""
 
     def test_image_exists(self):
@@ -219,7 +218,7 @@ class TestPreflightImageCheck:
             assert image_check.error_code == RuntimeErrorCode.DOCKER_UNAVAILABLE
 
 
-class TestPreflightNetworkCheck:
+class TestPreflightNetworkCheck(unittest.TestCase):
     """Test network mode validation."""
 
     def test_network_direct_valid(self):
@@ -281,7 +280,7 @@ class TestPreflightNetworkCheck:
             assert network_check.error_code == RuntimeErrorCode.NETWORK_INVALID
 
 
-class TestPreflightConflictCheck:
+class TestPreflightConflictCheck(unittest.TestCase):
     """Test runtime conflict detection."""
 
     def test_no_conflict_empty_registry(self):
@@ -376,7 +375,7 @@ class TestPreflightConflictCheck:
             assert conflict_check.status == "pass"
 
 
-class TestPreflightCanStart:
+class TestPreflightCanStart(unittest.TestCase):
     """Test can_start and recommended_action logic."""
 
     def test_all_pass_can_start(self):
