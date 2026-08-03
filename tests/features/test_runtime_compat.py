@@ -395,6 +395,132 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
             self.assertEqual(cm.exception.error_code, "AISC_ERR_CONTAINER_NOT_FOUND")
             self.assertEqual(cm.exception.exit_code, 1)
 
+    def test_stop_target_resolution_name_label_default(self):
+        """Verify stop resolves targets via --name, --label, and default registry."""
+        from aisc.cli.commands.container import cmd_stop
+        from aisc.adapters.container_registry import register, list_containers
+        from aisc.domain.models import ProcessResult
+        from unittest.mock import MagicMock
+
+        with tempfile.TemporaryDirectory() as temp_root:
+            root = Path(temp_root)
+
+            # Setup registry with multiple containers
+            register(root, "container-a", {
+                "image": "super-claude:latest",
+                "workspace": "/workspace-a",
+                "network": "direct",
+                "label": "work",
+            })
+            register(root, "container-b", {
+                "image": "super-claude:latest",
+                "workspace": "/workspace-b",
+                "network": "direct",
+                "label": "test",
+            })
+
+            fake_executor = MagicMock()
+            fake_executor.run_captured.return_value = ProcessResult(
+                exit_code=0,
+                stdout="container-a\n",
+                stderr="",
+                command_not_found=False,
+                timed_out=False,
+            )
+
+            # Test 1: --name takes priority
+            with patch("aisc.cli.commands.container.cmd_status") as mock_status:
+                mock_status.return_value.exists = True
+                mock_status.return_value.running = False
+
+                result = cmd_stop(
+                    name_override="container-a",
+                    explicit_root=str(root),
+                    executor=fake_executor,
+                )
+
+                self.assertEqual(result["name"], "container-a")
+
+            # Test 2: --label resolves to matching container
+            fake_executor.reset_mock()
+            fake_executor.run_captured.return_value = ProcessResult(
+                exit_code=0,
+                stdout="container-b\n",
+                stderr="",
+                command_not_found=False,
+                timed_out=False,
+            )
+
+            with patch("aisc.cli.commands.container.cmd_status") as mock_status:
+                mock_status.return_value.exists = True
+                mock_status.return_value.running = False
+
+                result = cmd_stop(
+                    label_override="test",
+                    explicit_root=str(root),
+                    executor=fake_executor,
+                )
+
+                self.assertEqual(result["name"], "container-b")
+
+            # Test 3: No args uses default from registry
+            fake_executor.reset_mock()
+            fake_executor.run_captured.return_value = ProcessResult(
+                exit_code=0,
+                stdout="container-b\n",  # Current default
+                stderr="",
+                command_not_found=False,
+                timed_out=False,
+            )
+
+            with patch("aisc.cli.commands.container.cmd_status") as mock_status:
+                mock_status.return_value.exists = True
+                mock_status.return_value.running = False
+
+                result = cmd_stop(
+                    explicit_root=str(root),
+                    executor=fake_executor,
+                )
+
+                # Should use default (container-b is last registered)
+                self.assertEqual(result["name"], "container-b")
+
+    def test_stop_calls_unregister_on_success(self):
+        """Verify stop calls unregister when it successfully stops a container."""
+        from aisc.cli.commands.container import cmd_stop
+        from aisc.domain.models import ProcessResult
+        from unittest.mock import MagicMock, patch
+
+        fake_executor = MagicMock()
+        fake_executor.run_captured.return_value = ProcessResult(
+            exit_code=0,
+            stdout="test-container\n",
+            stderr="",
+            command_not_found=False,
+            timed_out=False,
+        )
+
+        # Mock all the dependencies
+        with patch("aisc.cli.commands.container.cmd_status") as mock_status, \
+             patch("aisc.cli.commands.container.discover_container", return_value="test-container"), \
+             patch("aisc.adapters.container_registry.unregister") as mock_unregister, \
+             patch("aisc.application.resources.locate_aisc_root", return_value=Path("/mock/root")):
+
+            mock_status.return_value.exists = True
+            mock_status.return_value.running = True
+
+            result = cmd_stop(
+                name_override="test-container",
+                executor=fake_executor,
+            )
+
+            # Verify unregister was called
+            # Note: This tests the contract that stop should attempt to unregister.
+            # The actual unregister implementation is tested separately.
+            self.assertTrue(mock_unregister.called)
+            call_args = mock_unregister.call_args
+            self.assertEqual(call_args[0][1], "test-container")  # Second arg is container name
+
     def test_switch_command_is_available(self):
         """Verify `aisc switch` command exists (full behavior test requires interactive TTY)."""
         from aisc.cli.main import main
@@ -412,9 +538,86 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
         # Should exit with 0 (help shown)
         self.assertEqual(exit_code, 0)
 
-        # Note: Full characterization of switch requires mocking interactive
-        # input and scope wrapper behavior, which is complex. The critical
-        # contract is that it uses docker exec with scope preservation.
+    def test_switch_produces_scope_wrapper_and_cc_switch(self):
+        """Verify `aisc switch` produces docker exec with scope wrapper."""
+        from aisc.cli.commands.container import cmd_switch, StatusResult
+        from aisc.domain.models import ProcessResult
+        from unittest.mock import MagicMock
+
+        fake_executor = MagicMock()
+
+        # Mock status check
+        with patch("aisc.cli.commands.container.cmd_status") as mock_status, \
+             patch("aisc.cli.commands.container.discover_container", return_value="test-container"):
+
+            mock_status.return_value = StatusResult(
+                exists=True,
+                running=True,
+                name="test-container",
+            )
+
+            fake_executor.run_streaming.return_value = ProcessResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                command_not_found=False,
+                timed_out=False,
+            )
+
+            # Execute switch without --quick (full TUI)
+            result = cmd_switch(name_override="test-container", quick=None, executor=fake_executor)
+
+            # Verify docker exec with scope wrapper was called
+            fake_executor.run_streaming.assert_called_once()
+            call_args = fake_executor.run_streaming.call_args[0][0]
+
+            # Should use exec -it
+            self.assertIn("exec", call_args)
+            self.assertIn("-it", call_args)
+            self.assertIn("test-container", call_args)
+
+            # Should use bash wrapper for scope preservation
+            self.assertIn("bash", call_args)
+            # Should invoke cc-switch
+            self.assertIn("cc-switch", " ".join(call_args))
+
+    def test_switch_quick_mode_produces_provider_switch_argv(self):
+        """Verify `aisc switch --quick <provider>` uses quick-provider argv."""
+        from aisc.cli.commands.container import cmd_switch, StatusResult
+        from aisc.domain.models import ProcessResult
+        from unittest.mock import MagicMock
+
+        fake_executor = MagicMock()
+
+        with patch("aisc.cli.commands.container.cmd_status") as mock_status, \
+             patch("aisc.cli.commands.container.discover_container", return_value="test-container"):
+
+            mock_status.return_value = StatusResult(
+                exists=True,
+                running=True,
+                name="test-container",
+            )
+
+            fake_executor.run_streaming.return_value = ProcessResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                command_not_found=False,
+                timed_out=False,
+            )
+
+            # Execute switch with --quick deepseek
+            result = cmd_switch(name_override="test-container", quick="deepseek", executor=fake_executor)
+
+            fake_executor.run_streaming.assert_called_once()
+            call_args = fake_executor.run_streaming.call_args[0][0]
+
+            # Should include provider switch command
+            call_args_str = " ".join(call_args)
+            self.assertIn("cc-switch", call_args_str)
+            self.assertIn("provider", call_args_str)
+            self.assertIn("switch", call_args_str)
+            self.assertIn("deepseek", call_args_str)
 
 
 class CLIParameterMappingTests(unittest.TestCase):
@@ -467,6 +670,48 @@ class CLIParameterMappingTests(unittest.TestCase):
                 mock_plan.assert_called()
                 call_kwargs = mock_plan.call_args[1]
                 self.assertTrue(call_kwargs.get("keep_alive"))
+
+    def test_non_interactive_uses_run_non_interactive_executor(self):
+        """Verify --non-interactive actually calls run_non_interactive(), not streaming."""
+        from aisc.cli.commands.run import run_container
+        from aisc.domain.models import ProcessResult
+        from unittest.mock import MagicMock, patch
+
+        # Create spy executor
+        spy_executor = MagicMock()
+        spy_executor.run_non_interactive.return_value = ProcessResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
+            command_not_found=False,
+            timed_out=False,
+        )
+
+        with tempfile.TemporaryDirectory() as workspace:
+            # Execute run_container with non-interactive plan (no dry-run)
+            with patch("aisc.cli.commands.run.RealDockerExecutor", return_value=spy_executor):
+                from aisc.cli.commands.run import plan_run
+
+                plan = plan_run(
+                    image="super-claude:test",
+                    workspace=workspace,
+                    non_interactive=True,
+                    interactive=False,
+                    dry_run=False,  # Actually execute
+                )
+
+                result = run_container(plan, executor=spy_executor)
+
+        # Verify run_non_interactive was called (not streaming/captured)
+        spy_executor.run_non_interactive.assert_called_once()
+        spy_executor.run_streaming.assert_not_called()
+        spy_executor.run_captured.assert_not_called()
+
+        # Verify correct argv was passed
+        call_args = spy_executor.run_non_interactive.call_args[0][0]
+        self.assertIn("AISC_NON_INTERACTIVE=1", call_args)
+        self.assertIn("CLAUDE_SCOPE=project", call_args)
+        self.assertNotIn("-it", call_args)
 
 
 if __name__ == "__main__":
