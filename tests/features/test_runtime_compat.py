@@ -267,44 +267,136 @@ class ScopeWrapperBehaviorTests(unittest.TestCase):
 
 
 class LegacyCommandBehaviorTests(unittest.TestCase):
-    """Tests for legacy commands documenting actual behavior, not just existence."""
+    """Tests locking down legacy command behavior BEFORE S0.2 refactoring."""
 
-    def test_shell_command_is_available(self):
-        """Verify `aisc shell` command exists and shows help."""
-        from aisc.cli.main import main
+    def test_shell_produces_docker_exec_it_bash(self):
+        """Verify `aisc shell` produces 'docker exec -it <name> bash'."""
+        from aisc.cli.commands.container import cmd_shell, StatusResult
+        from aisc.domain.models import ProcessResult
+        from unittest.mock import MagicMock
 
-        with patch("sys.stdout", new=StringIO()), \
-             patch("sys.stderr", new=StringIO()), \
-             patch("sys.argv", ["aisc", "shell", "--help"]):
-            try:
-                main()
-            except SystemExit as e:
-                exit_code = e.code
-            else:
-                exit_code = 0
+        # Create a fake executor
+        fake_executor = MagicMock()
 
-        # Should exit with 0 (help shown)
-        self.assertEqual(exit_code, 0)
+        # Mock container discovery and status check
+        fake_executor.run_captured.return_value = ProcessResult(
+            exit_code=0,
+            stdout="test-container\n",
+            stderr="",
+            command_not_found=False,
+            timed_out=False,
+        )
 
-    def test_stop_command_is_available(self):
-        """Verify `aisc stop` command exists and shows help."""
-        from aisc.cli.main import main
+        # Mock status check - container exists and is running
+        with patch("aisc.cli.commands.container.cmd_status") as mock_status:
+            mock_status.return_value = StatusResult(
+                exists=True,
+                running=True,
+                name="test-container",
+            )
 
-        with patch("sys.stdout", new=StringIO()), \
-             patch("sys.stderr", new=StringIO()), \
-             patch("sys.argv", ["aisc", "stop", "--help"]):
-            try:
-                main()
-            except SystemExit as e:
-                exit_code = e.code
-            else:
-                exit_code = 0
+            # Mock streaming execution
+            fake_executor.run_streaming.return_value = ProcessResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                command_not_found=False,
+                timed_out=False,
+            )
 
-        # Should exit with 0 (help shown)
-        self.assertEqual(exit_code, 0)
+            # Execute shell command
+            with patch("aisc.cli.commands.container.discover_container", return_value="test-container"):
+                result = cmd_shell(name_override="test-container", executor=fake_executor)
+
+            # Verify docker exec -it <name> bash was called
+            fake_executor.run_streaming.assert_called_once()
+            call_args = fake_executor.run_streaming.call_args[0][0]
+            self.assertEqual(call_args, ["exec", "-it", "test-container", "bash"])
+
+    def test_stop_produces_docker_stop_and_is_idempotent(self):
+        """Verify `aisc stop` produces 'docker stop <name>' and is idempotent."""
+        from aisc.cli.commands.container import cmd_stop, StatusResult
+        from aisc.domain.models import ProcessResult
+        from unittest.mock import MagicMock
+
+        fake_executor = MagicMock()
+
+        # Test 1: Stop a running container
+        with patch("aisc.cli.commands.container.cmd_status") as mock_status, \
+             patch("aisc.cli.commands.container.discover_container", return_value="test-container"), \
+             patch("aisc.adapters.container_registry.unregister"):
+
+            mock_status.return_value = StatusResult(
+                exists=True,
+                running=True,
+                name="test-container",
+            )
+
+            fake_executor.run_captured.return_value = ProcessResult(
+                exit_code=0,
+                stdout="test-container\n",
+                stderr="",
+                command_not_found=False,
+                timed_out=False,
+            )
+
+            result = cmd_stop(name_override="test-container", executor=fake_executor)
+
+            # Verify docker stop was called
+            fake_executor.run_captured.assert_called()
+            call_args = fake_executor.run_captured.call_args[0][0]
+            self.assertEqual(call_args, ["stop", "test-container"])
+
+            # Verify result indicates stopped
+            self.assertTrue(result["stopped"])
+            self.assertFalse(result["already_stopped"])
+
+        # Test 2: Stop an already-stopped container (idempotent)
+        fake_executor.reset_mock()
+        with patch("aisc.cli.commands.container.cmd_status") as mock_status, \
+             patch("aisc.cli.commands.container.discover_container", return_value="test-container"):
+
+            mock_status.return_value = StatusResult(
+                exists=True,
+                running=False,  # Already stopped
+                name="test-container",
+            )
+
+            result = cmd_stop(name_override="test-container", executor=fake_executor)
+
+            # Should not call docker stop
+            fake_executor.run_captured.assert_not_called()
+
+            # Should return already_stopped=True
+            self.assertFalse(result["stopped"])
+            self.assertTrue(result["already_stopped"])
+
+    def test_stop_raises_container_not_found_error(self):
+        """Verify `aisc stop` raises AISC_ERR_CONTAINER_NOT_FOUND for missing containers."""
+        from aisc.cli.commands.container import cmd_stop, StatusResult
+        from aisc.domain.models import CliError
+        from unittest.mock import MagicMock
+
+        fake_executor = MagicMock()
+
+        with patch("aisc.cli.commands.container.cmd_status") as mock_status, \
+             patch("aisc.cli.commands.container.discover_container", return_value="missing-container"):
+
+            mock_status.return_value = StatusResult(
+                exists=False,
+                running=False,
+                name="missing-container",
+            )
+
+            # Should raise CliError with specific error code
+            with self.assertRaises(CliError) as cm:
+                cmd_stop(name_override="missing-container", executor=fake_executor)
+
+            self.assertEqual(cm.exception.error_code, "AISC_ERR_CONTAINER_NOT_FOUND")
+            self.assertEqual(cm.exception.exit_code, 1)
 
     def test_switch_command_is_available(self):
-        """Verify `aisc switch` command exists and shows help."""
+        """Verify `aisc switch` command exists (full behavior test requires interactive TTY)."""
         from aisc.cli.main import main
 
         with patch("sys.stdout", new=StringIO()), \
@@ -320,10 +412,61 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
         # Should exit with 0 (help shown)
         self.assertEqual(exit_code, 0)
 
-    # TODO: After S0.2, add behavior characterization tests:
-    # - shell → docker exec -it <name> bash
-    # - stop → name/label resolution, idempotent, stable error codes
-    # - switch → scope wrapper, quick provider argv
+        # Note: Full characterization of switch requires mocking interactive
+        # input and scope wrapper behavior, which is complex. The critical
+        # contract is that it uses docker exec with scope preservation.
+
+
+class CLIParameterMappingTests(unittest.TestCase):
+    """Tests ensuring CLI parameters correctly map to internal function calls."""
+
+    def test_cli_non_interactive_flag_maps_to_plan_parameter(self):
+        """Verify --non-interactive CLI flag correctly sets non_interactive=True."""
+        from aisc.cli.commands.run import plan_run
+        from unittest.mock import patch
+
+        # Mock plan_run to capture parameters
+        with patch("aisc.cli.commands.run.plan_run", wraps=plan_run) as mock_plan:
+            from aisc.cli.main import main
+
+            with tempfile.TemporaryDirectory() as workspace:
+                with patch("sys.stdout", new=StringIO()), \
+                     patch("sys.stderr", new=StringIO()), \
+                     patch("sys.argv", ["aisc", "run", "--non-interactive",
+                                        "--workspace", workspace, "--dry-run"]):
+                    try:
+                        main()
+                    except SystemExit:
+                        pass
+
+                # Verify plan_run was called with non_interactive=True
+                mock_plan.assert_called()
+                call_kwargs = mock_plan.call_args[1]
+                self.assertTrue(call_kwargs.get("non_interactive"))
+                self.assertFalse(call_kwargs.get("interactive"))
+
+    def test_cli_keep_alive_flag_maps_to_plan_parameter(self):
+        """Verify --keep-alive CLI flag correctly sets keep_alive=True."""
+        from aisc.cli.commands.run import plan_run
+        from unittest.mock import patch
+
+        with patch("aisc.cli.commands.run.plan_run", wraps=plan_run) as mock_plan:
+            from aisc.cli.main import main
+
+            with tempfile.TemporaryDirectory() as workspace:
+                with patch("sys.stdout", new=StringIO()), \
+                     patch("sys.stderr", new=StringIO()), \
+                     patch("sys.argv", ["aisc", "run", "--keep-alive",
+                                        "--workspace", workspace, "--dry-run"]):
+                    try:
+                        main()
+                    except SystemExit:
+                        pass
+
+                # Verify plan_run was called with keep_alive=True
+                mock_plan.assert_called()
+                call_kwargs = mock_plan.call_args[1]
+                self.assertTrue(call_kwargs.get("keep_alive"))
 
 
 if __name__ == "__main__":
