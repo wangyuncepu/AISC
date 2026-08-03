@@ -69,17 +69,22 @@ def cmd_runtime_preflight(
     # Resolve workspace
     ws_path = Path(workspace).resolve() if workspace else Path.cwd()
 
-    # Use a simple subprocess-based executor for checks
-    class SimpleExecutor:
-        def run(self, cmd, **kwargs):
-            import subprocess
-            if isinstance(cmd, str):
-                cmd = ["docker"] + cmd.split()
-            else:
-                cmd = ["docker"] + list(cmd)
-            return subprocess.run(cmd, **kwargs)
+    # Create a minimal executor for preflight checks
+    if executor is None:
+        class PreflightExecutor:
+            """Minimal executor for preflight Docker checks."""
+            def run(self, cmd, **kwargs):
+                import subprocess
+                # cmd is already a string like "docker info"
+                if isinstance(cmd, str):
+                    cmd_list = cmd.split()
+                else:
+                    cmd_list = list(cmd)
+                return subprocess.run(cmd_list, **kwargs)
 
-    exec_ = executor or SimpleExecutor()
+        exec_ = PreflightExecutor()
+    else:
+        exec_ = executor
 
     # Execute preflight
     registry_root = ws_path / ".aisc"

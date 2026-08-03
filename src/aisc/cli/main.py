@@ -902,6 +902,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                               if a.dest == "command"][0].choices["runtime"]
             runtime_parser._aisc_format = "json" if json_requested else None
             runtime_parser._aisc_command = "runtime"
+
+            # Also propagate to runtime preflight subparser
+            if "preflight" in args_list:
+                try:
+                    preflight_parser = [a for a in runtime_parser._subparsers._group_actions
+                                       if a.dest == "runtime_command"][0].choices["preflight"]
+                    preflight_parser._aisc_format = "json" if json_requested else None
+                    preflight_parser._aisc_command = "runtime preflight"
+                except (AttributeError, IndexError, KeyError):
+                    pass
         except (AttributeError, IndexError, KeyError):
             pass
 

@@ -177,7 +177,7 @@ def preflight_runtime(
     if registry_root is None and workspace_valid:
         registry_root = Path(canonical_workspace) / ".aisc"
 
-    conflict_check, matching_runtime_id, conflicts = _check_runtime_conflict(
+    conflict_check, matching_runtime_id, conflicts, matching_state = _check_runtime_conflict(
         runtime_id=runtime_id,
         workspace=canonical_workspace,
         image=image,
@@ -185,7 +185,9 @@ def preflight_runtime(
         scope=scope,
         registry_root=registry_root,
         docker_available=docker_available,
+        executor=executor,
     )
+
     checks.append(conflict_check)
 
     # Compute can_start and recommended_action
@@ -195,8 +197,15 @@ def preflight_runtime(
     if not all_pass:
         recommended_action = "resolve_conflict"
     elif matching_runtime_id:
-        # Config fingerprint matches existing project runtime
-        recommended_action = "reuse"
+        # Config fingerprint matches existing runtime
+        # Recommend reuse if running, restart if stopped
+        if matching_state == "running":
+            recommended_action = "reuse"
+        elif matching_state == "stopped":
+            recommended_action = "restart"
+        else:
+            # Unknown state, default to reuse
+            recommended_action = "reuse"
     elif conflicts:
         recommended_action = "resolve_conflict"
     else:
@@ -255,11 +264,14 @@ def _check_runtime_conflict(
     scope: str,
     registry_root: Optional[Path],
     docker_available: bool,
-) -> tuple[PreflightCheck, Optional[str], List[Dict[str, Any]]]:
+    executor: Any,
+) -> tuple[PreflightCheck, Optional[str], List[Dict[str, Any]], Optional[str]]:
     """Check for runtime conflicts.
 
-    Returns (check, matching_runtime_id, conflicts).
+    Returns (check, matching_runtime_id, conflicts, matching_state).
+    matching_state is "running", "stopped", or None.
     Fail-closed: if registry cannot be read, returns conflict fail.
+    Also checks Docker labels to reconcile registry with actual container state.
     """
     from aisc.adapters.container_registry import list_containers
 
@@ -268,7 +280,24 @@ def _check_runtime_conflict(
         return (
             PreflightCheck(id="runtime_conflict", status="pass"),
             None,
-            []
+            [],
+            None
+        )
+
+    # Check if registry exists before attempting to read
+    registry_file = registry_root / "registry.json"
+    if not registry_file.exists():
+        # Fail-closed: registry doesn't exist, cannot verify conflicts
+        return (
+            PreflightCheck(
+                id="runtime_conflict",
+                status="fail",
+                error_code=RuntimeErrorCode.RUNTIME_CONFLICT,
+                detail=f"Cannot read registry: {registry_file} does not exist"
+            ),
+            None,
+            [],
+            None
         )
 
     # Read registry under lock
@@ -284,8 +313,94 @@ def _check_runtime_conflict(
                 detail=f"Cannot read registry: {e}"
             ),
             None,
-            []
+            [],
+            None
         )
+
+    # Compute config fingerprint for this request
+    fingerprint = compute_config_fingerprint(image, network, scope, workspace)
+
+    matching_runtime_id = None
+    matching_state = None  # "running" or "stopped"
+    conflicts: List[Dict[str, Any]] = []
+
+    for container_name, meta in containers.items():
+        meta_runtime_id = meta.get("runtime_id", "")
+        meta_workspace = meta.get("workspace", "")
+        meta_scope = meta.get("scope", "")
+        meta_fingerprint = meta.get("config_fingerprint", "")
+
+        # Check actual Docker container state
+        docker_state = _get_container_state(container_name, executor)
+
+        # Same runtime ID, same fingerprint -> can reuse or restart
+        if meta_runtime_id == runtime_id and meta_fingerprint == fingerprint:
+            matching_runtime_id = meta_runtime_id
+            matching_state = docker_state
+            continue
+
+        # Same runtime ID, different fingerprint -> conflict
+        if meta_runtime_id == runtime_id and meta_fingerprint != fingerprint:
+            conflicts.append({
+                "runtime_id": meta_runtime_id,
+                "container_name": container_name,
+                "reason": "Runtime ID already in use with different config"
+            })
+            continue
+
+        # Project scope: same workspace -> conflict
+        if scope == "project" and meta_scope == "project":
+            try:
+                canonical_meta_workspace = str(Path(meta_workspace).resolve())
+                canonical_request_workspace = str(Path(workspace).resolve())
+                if canonical_meta_workspace == canonical_request_workspace:
+                    conflicts.append({
+                        "runtime_id": meta_runtime_id,
+                        "container_name": container_name,
+                        "reason": "Project runtime already exists for this workspace"
+                    })
+            except Exception:
+                pass
+
+    if conflicts:
+        return (
+            PreflightCheck(
+                id="runtime_conflict",
+                status="fail",
+                error_code=RuntimeErrorCode.RUNTIME_CONFLICT,
+                detail=f"Found {len(conflicts)} conflicting runtime(s)"
+            ),
+            matching_runtime_id,
+            conflicts,
+            matching_state
+        )
+
+    return (
+        PreflightCheck(id="runtime_conflict", status="pass"),
+        matching_runtime_id,
+        [],
+        matching_state
+    )
+
+
+def _get_container_state(container_name: str, executor: Any) -> Optional[str]:
+    """Get container state from Docker.
+
+    Returns "running", "stopped", or None if container doesn't exist or error.
+    """
+    try:
+        result = executor.run(
+            f"docker inspect --format={{{{.State.Running}}}} {container_name}",
+            check=False,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            running = result.stdout.strip().lower()
+            return "running" if running == "true" else "stopped"
+        return None
+    except Exception:
+        return None
 
     # Compute config fingerprint for this request
     fingerprint = compute_config_fingerprint(image, network, scope, workspace)
