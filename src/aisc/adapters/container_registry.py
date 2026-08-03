@@ -279,6 +279,13 @@ def list_containers(root: Path) -> Dict[str, Dict[str, Any]]:
         return copy.deepcopy(data["containers"])
 
 
+def get_default(root: Path) -> str:
+    """Return the default container name, or empty string if none."""
+    with _registry_lock(root):
+        data = _read_registry(root)
+        return data.get("default", "")
+
+
 def _pick_newest(containers: Dict[str, Any]) -> str:
     """Return the name of the entry with the greatest created_at, or ''."""
     if not containers:
@@ -325,21 +332,20 @@ def gc(root: Path, executor) -> List[str]:
 
     Best-effort: if docker is unreachable, prunes nothing and returns [].
     """
-    snapshot = _read_registry(root)
-    containers = snapshot.get("containers", {})
-    if not containers:
-        return []
-    missing: List[str] = []
-    for nm in list(containers):
-        exists = _container_exists(executor, nm)
-        if exists is False:
-            missing.append(nm)
-    if not missing:
-        return []
-
-    pruned: List[str] = []
     with _registry_lock(root):
-        data = _read_registry(root)
+        snapshot = _read_registry(root)
+        containers = snapshot.get("containers", {})
+        if not containers:
+            return []
+        missing: List[str] = []
+        for nm in list(containers):
+            exists = _container_exists(executor, nm)
+            if exists is False:
+                missing.append(nm)
+        if not missing:
+            return []
+
+        pruned: List[str] = []
         current = data.get("containers", {})
         for nm in missing:
             # Do not delete a same-name container re-registered while Docker
@@ -351,7 +357,7 @@ def gc(root: Path, executor) -> List[str]:
             if data["default"] in pruned:
                 data["default"] = _pick_newest(current)
             _write_registry_unlocked(root, data)
-    return pruned
+        return pruned
 
 
 # ---------------------------------------------------------------------------
@@ -405,8 +411,7 @@ def resolve_target(
         except Exception:
             pass
 
-    data = _read_registry(resolved_root)
-    containers: Dict[str, Dict[str, Any]] = data.get("containers", {})
+    containers = list_containers(resolved_root)
 
     # 1. explicit name
     if name_override:
@@ -441,7 +446,7 @@ def resolve_target(
         )
 
     # 3. default pointer
-    default = data.get("default", "")
+    default = get_default(resolved_root)
     if default and default in containers:
         return default
 
