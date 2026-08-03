@@ -20,23 +20,30 @@ class CheckStatus:
 
 
 class RuntimeErrorCode:
-    """Stable error codes for runtime operations."""
-    DOCKER_UNAVAILABLE = "AISC_ERR_DOCKER_UNAVAILABLE"  # Fixed from DOCKER_UNAVAIL
-    RUNTIME_NOT_FOUND = "AISC_ERR_RUNTIME_NOT_FOUND"
+    """Stable error codes for runtime operations.
+
+    Aligned with docs/rfc/aisc-cli-v1.md §4.1.
+    """
+    DOCKER_UNAVAILABLE = "AISC_ERR_DOCKER_UNAVAILABLE"
     RUNTIME_CONFLICT = "AISC_ERR_RUNTIME_CONFLICT"
-    STATE_LOCK_TIMEOUT = "AISC_ERR_STATE_LOCK_TIMEOUT"  # Fixed from LOCK_TIMEOUT
+    INVALID_RUNTIME_ID = "AISC_ERR_INVALID_RUNTIME_ID"
+    RUNTIME_OPERATION_FAILED = "AISC_ERR_RUNTIME_OPERATION_FAILED"
     WORKSPACE_INVALID = "AISC_ERR_WORKSPACE_INVALID"
     IMAGE_NOT_FOUND = "AISC_ERR_IMAGE_NOT_FOUND"
     NETWORK_INVALID = "AISC_ERR_NETWORK_INVALID"
+    SCOPE_INVALID = "AISC_ERR_SCOPE_INVALID"
+    # Legacy/extended codes not in RFC §4.1
+    RUNTIME_NOT_FOUND = "AISC_ERR_RUNTIME_NOT_FOUND"
+    STATE_LOCK_TIMEOUT = "AISC_ERR_STATE_LOCK_TIMEOUT"
     RUNTIME_UNHEALTHY = "AISC_ERR_RUNTIME_UNHEALTHY"
     CONTAINER_NOT_FOUND = "AISC_ERR_CONTAINER_NOT_FOUND"
-    SCOPE_INVALID = "AISC_ERR_SCOPE_INVALID"
 
 
 class RuntimeExitCode:
     """Exit codes for runtime operations.
 
     Uses RFC-compliant exit codes. New runtime-specific codes use 14+.
+    Aligned with docs/rfc/aisc-cli-v1.md §4.1.
     """
     SUCCESS = 0
     GENERAL_ERROR = 1
@@ -46,10 +53,10 @@ class RuntimeExitCode:
     # 5 = AISC_EXIT_IMAGE_NOT_FOUND (reserved by RFC)
     # 6 = AISC_EXIT_CONFIG_INVALID (reserved by RFC)
     PERMISSION_DENIED = 9
-    # New runtime-specific exit codes (14+)
-    RUNTIME_NOT_FOUND = 14
-    RUNTIME_CONFLICT = 15
-    STATE_LOCK_TIMEOUT = 16
+    # New runtime-specific exit codes (14+, registered in RFC)
+    RUNTIME_CONFLICT = 14           # AISC_EXIT_RUNTIME_CONFLICT
+    INVALID_RUNTIME_ID = 15         # AISC_EXIT_INVALID_RUNTIME_ID
+    RUNTIME_OPERATION_FAILED = 16   # AISC_EXIT_RUNTIME_OPERATION_FAILED
 
 
 # ---------------------------------------------------------------------------
