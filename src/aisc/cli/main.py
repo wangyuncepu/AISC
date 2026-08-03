@@ -247,6 +247,29 @@ def _build_parser() -> _AiscArgumentParser:
     psp = sub.add_parser("ps", help="List all registered containers", allow_abbrev=False)
     _add_global_args(psp, is_subparser=True)
 
+    # --- runtime ---
+    rtp = sub.add_parser("runtime", help="Runtime control plane (Workbench Phase 0)", allow_abbrev=False)
+    _add_global_args(rtp, is_subparser=True)
+    rtsub = rtp.add_subparsers(dest="runtime_command", title="runtime commands",
+                                parser_class=_AiscArgumentParser)
+
+    rtpf = rtsub.add_parser("preflight", help="Preflight checks for runtime start", allow_abbrev=False)
+    _add_global_args(rtpf, is_subparser=True)
+    rtpf.add_argument("--runtime-id", type=str, required=True,
+                      help="Runtime ID (UUID v4, provided by Workbench)")
+    rtpf.add_argument("--workspace", type=str, default=None,
+                      help="Workspace path (default: current directory)")
+    rtpf.add_argument("--image", type=str, default="super-claude:latest",
+                      help="Docker image (default: super-claude:latest)")
+    rtpf.add_argument("--network", type=str, choices=["direct", "proxy"],
+                      default="direct",
+                      help="Network mode (default: direct)")
+    rtpf.add_argument("--scope", type=str, choices=["project", "temporary"],
+                      default="project",
+                      help="Runtime scope (default: project)")
+    rtpf.add_argument("--owner", type=str, default="workbench",
+                      help="Owner identifier (default: workbench)")
+
     return parser
 
 
@@ -269,7 +292,7 @@ def _detect_events(argv: List[str]) -> bool:
 
 def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "profile",
-             "status", "stop", "restart", "shell", "switch", "provider", "ps"}
+             "status", "stop", "restart", "shell", "switch", "provider", "ps", "runtime"}
     for arg in argv:
         if arg in known:
             return arg
@@ -797,6 +820,35 @@ def _cmd_ps(
     return data, 0, []
 
 
+def _cmd_runtime(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Any, int, List[Dict[str, Any]]]:
+    """Execute ``aisc runtime`` subcommands.  Supports --format json."""
+    from aisc.cli.commands.runtime import cmd_runtime_preflight
+
+    if args.runtime_command == "preflight":
+        result = cmd_runtime_preflight(
+            runtime_id=args.runtime_id,
+            workspace=args.workspace,
+            image=args.image,
+            network=args.network,
+            scope=args.scope,
+            owner=args.owner,
+            format=effective_format,
+        )
+        # Check for error in result
+        if "error" in result:
+            return None, result["exit_code"], [result["error"]]
+        return result, 0, []
+    else:
+        # Unknown runtime subcommand
+        return None, 2, [build_error(
+            "AISC_ERR_USAGE",
+            f"Unknown runtime subcommand: {args.runtime_command}"
+        )]
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -840,6 +892,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                                if a.dest == "command"][0].choices["provider"]
             provider_parser._aisc_format = "json" if json_requested else None
             provider_parser._aisc_command = "provider"
+        except (AttributeError, IndexError, KeyError):
+            pass
+
+    # Propagate JSON format to runtime subparser for parse-time errors.
+    if "runtime" in args_list:
+        try:
+            runtime_parser = [a for a in parser._subparsers._group_actions
+                              if a.dest == "command"][0].choices["runtime"]
+            runtime_parser._aisc_format = "json" if json_requested else None
+            runtime_parser._aisc_command = "runtime"
         except (AttributeError, IndexError, KeyError):
             pass
 
@@ -890,6 +952,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         "config": "config_command",
         "profile": "profile_command",
         "provider": "provider_command",
+        "runtime": "runtime_command",
     }
     if args.command in _grouped_dests:
         if getattr(args, _grouped_dests[args.command], None) is None:
@@ -975,6 +1038,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_provider(args, effective_format)
         elif args.command == "ps":
             data, exit_code, errors = _cmd_ps(args, effective_format)
+        elif args.command == "runtime":
+            data, exit_code, errors = _cmd_runtime(args, effective_format)
         else:
             if effective_format == "json":
                 emit_json_usage_error(
