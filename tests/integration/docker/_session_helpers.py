@@ -44,16 +44,16 @@ def image_present(image):
         return False
 
 
-def wrapper_present():
-    """True if the image ships /usr/local/bin/aisc-session-wrapper (S0.3+).
+def script_present(name):
+    """True if the image ships an executable /usr/local/bin/<name>.
 
-    The image predating S0.3 lacks the wrapper; integration tests must skip
-    against it rather than fail.
+    Used to skip integration tests when the local image predates the wrapper
+    (S0.3) or inspector (S0.4) the test needs.
     """
     try:
         r = subprocess.run(
             ["docker", "run", "--rm", "--entrypoint", "sh", IMAGE,
-             "-c", "test -x /usr/local/bin/aisc-session-wrapper"],
+             "-c", f"test -x /usr/local/bin/{name}"],
             capture_output=True, text=True, timeout=20,
         )
         return r.returncode == 0
@@ -66,7 +66,8 @@ def docker_ready():
 
 
 def integration_ready():
-    return docker_ready() and wrapper_present()
+    """Image has the S0.3 session wrapper (required by session integration tests)."""
+    return docker_ready() and script_present("aisc-session-wrapper")
 
 
 def open_bash_session(aisc, workspace, runtime_id, session_id, *,

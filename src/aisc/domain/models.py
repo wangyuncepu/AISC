@@ -38,6 +38,8 @@ class RuntimeErrorCode:
     RUNTIME_NOT_RUNNING = "AISC_ERR_RUNTIME_NOT_RUNNING"
     INVALID_SESSION_ID = "AISC_ERR_INVALID_SESSION_ID"
     INVALID_AGENT = "AISC_ERR_INVALID_AGENT"
+    # Provider status codes (S0.4)
+    PROVIDER_STATUS_FAILED = "AISC_ERR_PROVIDER_STATUS_FAILED"
     # Legacy/extended codes not in RFC §4.1
     RUNTIME_NOT_FOUND = "AISC_ERR_RUNTIME_NOT_FOUND"
     STATE_LOCK_TIMEOUT = "AISC_ERR_STATE_LOCK_TIMEOUT"
@@ -68,11 +70,25 @@ class RuntimeExitCode:
     SESSION_NOT_FOUND = 18          # AISC_EXIT_SESSION_NOT_FOUND
     SESSION_FAILED = 19             # AISC_EXIT_SESSION_FAILED
     RUNTIME_NOT_RUNNING = 20        # AISC_EXIT_RUNTIME_NOT_RUNNING
+    # Provider status exit code (S0.4)
+    PROVIDER_STATUS_FAILED = 21     # AISC_EXIT_PROVIDER_STATUS_FAILED
 
 
 # ---------------------------------------------------------------------------
 # Version info
 # ---------------------------------------------------------------------------
+
+# Workbench capability negotiation (05-cli-gui-contract.md §四).
+# Advertised by ``aisc version --format json`` so the Workbench gates UI on
+# what this CLI actually implements -- it must not guess from the version
+# string. Add a key here as each capability ships.
+WORKBENCH_CAPABILITIES = {
+    "runtime": "aisc.runtime/v1",               # S0.2
+    "session": "aisc.session/v1",               # S0.3
+    "providerStatus": "aisc.provider-status/v1",  # S0.4
+    # "buildEvents": "aisc.build-events/v1",     # S0.5 (not yet)
+}
+
 
 @dataclass
 class VersionInfo:
@@ -89,7 +105,7 @@ class VersionInfo:
     contract_version: Optional[str] = None
 
     def to_dict(self) -> dict:
-        """Return RFC-compliant dict with 6 fixed keys in order."""
+        """Return RFC-compliant dict with 6 fixed keys + Workbench capabilities."""
         return {
             "cli_version": self.cli_version,
             "bundle_version": self.bundle_version,
@@ -97,6 +113,7 @@ class VersionInfo:
             "image_version": self.image_version,
             "claude_version": self.declared_claude_version,
             "python_version": self.python_version,
+            "capabilities": WORKBENCH_CAPABILITIES,
         }
 
     def to_text(self) -> str:
@@ -116,6 +133,8 @@ class VersionInfo:
             lines.append(f"Claude Code version: {self.declared_claude_version}")
         else:
             lines.append("Claude Code version: (not found)")
+        if WORKBENCH_CAPABILITIES:
+            lines.append("Capabilities       : " + ", ".join(WORKBENCH_CAPABILITIES.keys()))
         return "\n".join(lines)
 
 
@@ -498,4 +517,35 @@ class SessionRecord:
             "finished_at": self.finished_at,
             "exit_code": self.exit_code,
             "reason": self.reason,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Provider status model (S0.4)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ProviderStatus:
+    """Observable provider status for one agent (05-cli-gui-contract.md §七).
+
+    Secret-free: only routing/auth metadata, never keys/tokens/cookies.
+    """
+
+    runtime_id: str
+    agent: str
+    provider_id: str
+    provider_name: str
+    route_mode: str
+    auth_status: str
+    observed_at: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "runtime_id": self.runtime_id,
+            "agent": self.agent,
+            "provider_id": self.provider_id,
+            "provider_name": self.provider_name,
+            "route_mode": self.route_mode,
+            "auth_status": self.auth_status,
+            "observed_at": self.observed_at,
         }

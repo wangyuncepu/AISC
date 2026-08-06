@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+"""AISC provider inspector (container-side, Workbench S0.4).
+
+Reads in-container config only and emits a **secret-free** provider status
+for one agent (claude|codex):
+
+  {"provider_id", "provider_name", "route_mode", "auth_status"}
+
+Per docs/gui-planning/05-cli-gui-contract.md §七. The host CLI calls this via
+``docker exec <runtime> aisc-provider-inspect <agent>`` and adds runtime_id +
+observed_at.
+
+Detection (all paths in-container, resolved from /run/aisc/runtime-context.json):
+  - cc-switch state is a SQLite DB at <cc_switch_config_dir>/cc-switch.db;
+    the current provider is the row with app_type=<agent> AND is_current=1.
+  - Claude: route from the live settings.json env ANTHROPIC_BASE_URL (cc-switch
+    rewrites it to its localhost proxy when the proxy is enabled); auth from a
+    real API key in the DB provider's settings_config.env or settings.json env
+    (the "PROXY_MANAGED" placeholder is NOT a key) or a .credentials.json file.
+  - Codex: route from the DB provider's settings_config.config TOML
+    [model_providers.*].base_url (absent => official-direct); auth from a TOML
+    api_key, an auth.json file (codex login), or OPENAI_API_KEY in the env.
+
+Never emits key/token/cookie values -- only booleans and metadata.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import os
+import sqlite3
+import sys
+import tomllib
+from urllib.parse import urlparse
+from typing import Any, Dict, Optional
+
+CONTEXT_PATH = "/run/aisc/runtime-context.json"
+
+AGENT_CLAUDE = "claude"
+AGENT_CODEX = "codex"
+AGENTS = (AGENT_CLAUDE, AGENT_CODEX)
+
+# Sentinel cc-switch writes when its proxy manages auth upstream; not a real key.
+PLACEHOLDER_TOKENS = {"", "PROXY_MANAGED"}
+
+OFFICIAL_HOSTS = {"api.anthropic.com", "api.openai.com"}
+
+
+def _fail(message: str, exit_code: int = 1) -> None:
+    print(f"aisc-provider-inspect: {message}", file=sys.stderr)
+    sys.exit(exit_code)
+
+
+def _host(url: str) -> str:
+    if not url:
+        return ""
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def _route_from_host(host: str) -> str:
+    if not host or host in OFFICIAL_HOSTS:
+        return "official-direct"
+    return "cc-switch-proxy"
+
+
+def _load_context() -> Dict[str, Any]:
+    try:
+        with open(CONTEXT_PATH, "r", encoding="utf-8") as f:
+            ctx = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+        _fail(f"runtime-context.json unavailable: {exc}")
+    if not isinstance(ctx, dict):
+        _fail("runtime-context.json is not an object")
+    return ctx  # type: ignore[return-value]
+
+
+def _current_provider(db_path: str, agent: str) -> Optional[Dict[str, Any]]:
+    """Return {id, name, settings_config} for the agent's current provider."""
+    if not os.path.exists(db_path):
+        return None
+    con = None
+    try:
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT id, name, settings_config FROM providers "
+            "WHERE app_type=? AND is_current=1 LIMIT 1",
+            (agent,),
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        if con is not None:
+            con.close()
+    if row is None:
+        return None
+    return {"id": row["id"], "name": row["name"],
+            "settings_config": row["settings_config"] or ""}
+
+
+def _parse_json_settings(sc_str: str) -> Dict[str, Any]:
+    if not sc_str:
+        return {}
+    try:
+        data = json.loads(sc_str)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _parse_toml(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    try:
+        data = tomllib.loads(text)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _real_token(value: Optional[str]) -> bool:
+    return bool(value) and value not in PLACEHOLDER_TOKENS
+
+
+def _read_json_file(path: str) -> Dict[str, Any]:
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Claude
+# ---------------------------------------------------------------------------
+
+def _inspect_claude(ctx: Dict[str, Any], cc_dir: str) -> Dict[str, Any]:
+    row = _current_provider(os.path.join(cc_dir, "cc-switch.db"), AGENT_CLAUDE)
+    sc = _parse_json_settings(row["settings_config"]) if row else {}
+    db_env = sc.get("env")
+    db_env = db_env if isinstance(db_env, dict) else {}
+    db_key = db_env.get("ANTHROPIC_API_KEY") or db_env.get("ANTHROPIC_AUTH_TOKEN")
+
+    claude_dir = ctx.get("claude_config_dir", "")
+    live_env = _read_json_file(os.path.join(claude_dir, "settings.json")).get("env")
+    live_env = live_env if isinstance(live_env, dict) else {}
+    live_base = live_env.get("ANTHROPIC_BASE_URL", "")
+    live_key = live_env.get("ANTHROPIC_API_KEY") or live_env.get("ANTHROPIC_AUTH_TOKEN")
+    oauth = os.path.exists(os.path.join(claude_dir, ".credentials.json"))
+
+    # Live base_url reflects actual routing (cc-switch rewrites it to its proxy).
+    host = _host(live_base) or _host(db_env.get("ANTHROPIC_BASE_URL", ""))
+    route = _route_from_host(host)
+
+    real_key = _real_token(db_key) or _real_token(live_key)
+    if real_key or oauth:
+        auth = "configured"
+    elif route == "official-direct":
+        auth = "login_required"
+    else:
+        auth = "not_configured"
+
+    return {
+        "provider_id": row["id"] if row else "anthropic-official",
+        "provider_name": row["name"] if row else "Anthropic Official",
+        "route_mode": route,
+        "auth_status": auth,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Codex
+# ---------------------------------------------------------------------------
+
+def _inspect_codex(ctx: Dict[str, Any], cc_dir: str) -> Dict[str, Any]:
+    row = _current_provider(os.path.join(cc_dir, "cc-switch.db"), AGENT_CODEX)
+    sc = _parse_json_settings(row["settings_config"]) if row else {}
+    toml = _parse_toml(sc.get("config", ""))
+
+    db_base = ""
+    toml_api_key = ""
+    mps = toml.get("model_providers")
+    mps = mps if isinstance(mps, dict) else {}
+    active = toml.get("model_provider")  # the active provider id
+    active_mp = mps.get(active) if active else None
+    if isinstance(active_mp, dict):
+        db_base = active_mp.get("base_url", "")
+        if active_mp.get("api_key"):
+            toml_api_key = active_mp["api_key"]
+    else:
+        # No model_provider selector (or mismatched): fall back to scanning.
+        for _mp in mps.values():
+            if isinstance(_mp, dict):
+                db_base = db_base or _mp.get("base_url", "")
+                if _mp.get("api_key"):
+                    toml_api_key = _mp["api_key"]
+
+    codex_dir = ctx.get("codex_config_dir", "")
+    auth_json = os.path.exists(os.path.join(codex_dir, "auth.json"))
+    openai_env = bool(os.environ.get("OPENAI_API_KEY"))
+    # cc-switch may mirror codex OAuth under settings_config.auth; non-empty => configured.
+    sc_auth = sc.get("auth")
+    # Only a real (truthy) token value counts, not an empty-valued auth dict.
+    sc_auth_present = isinstance(sc_auth, dict) and any(bool(v) for v in sc_auth.values())
+
+    route = _route_from_host(_host(db_base))
+
+    if toml_api_key or auth_json or openai_env or sc_auth_present:
+        auth = "configured"
+    elif route == "official-direct":
+        auth = "login_required"
+    else:
+        auth = "not_configured"
+
+    return {
+        "provider_id": row["id"] if row else "codex-official",
+        "provider_name": row["name"] if row else "Codex Official",
+        "route_mode": route,
+        "auth_status": auth,
+    }
+
+
+# ---------------------------------------------------------------------------
+# entry point
+# ---------------------------------------------------------------------------
+
+def inspect(agent: str, ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Return the secret-free provider status dict for *agent*."""
+    ctx = ctx if ctx is not None else _load_context()
+    cc_dir = ctx.get("cc_switch_config_dir", "")
+    if agent == AGENT_CLAUDE:
+        return _inspect_claude(ctx, cc_dir)
+    if agent == AGENT_CODEX:
+        return _inspect_codex(ctx, cc_dir)
+    _fail(f"invalid agent (must be one of {', '.join(AGENTS)}): {agent}")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aisc-provider-inspect", add_help=True)
+    parser.add_argument("agent", choices=list(AGENTS))
+    return parser
+
+
+def main(argv: Optional[list] = None) -> int:
+    args = _build_parser().parse_args(argv)
+    print(json.dumps(inspect(args.agent), ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -21,7 +21,7 @@ import json
 import re
 from typing import Any, Dict, List, Optional
 
-from aisc.application.runtime import validate_uuid_v4
+from aisc.application.runtime import resolve_running_container, validate_uuid_v4
 from aisc.domain.models import (
     CliError,
     RuntimeErrorCode,
@@ -55,61 +55,12 @@ def validate_agent(agent: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Container resolution (reuses runtime lookup)
+# Container resolution (shared with provider; implementation in application.runtime)
 # ---------------------------------------------------------------------------
 
-def _resolve_running_container(
-    runtime_id: str,
-    executor: Any,
-    registry_root: Any,
-) -> str:
-    """Find the container name for *runtime_id* and verify it is running.
-
-    Raises ``CliError`` with a stable code if the runtime is not found,
-    not running, or Docker is unavailable.
-    """
-    from aisc.application.runtime import (
-        _check_docker,
-        _find_docker_container_by_runtime_id,
-    )
-    from aisc.adapters.container_registry import find_by_runtime_id
-
-    if not _check_docker(executor):
-        raise CliError(
-            message="Docker daemon is not running or CLI is not available",
-            exit_code=RuntimeExitCode.DOCKER_UNAVAILABLE,
-            error_code=RuntimeErrorCode.DOCKER_UNAVAILABLE,
-        )
-
-    # Try registry first, then Docker label discovery.
-    container_name = ""
-    found = find_by_runtime_id(registry_root, runtime_id)
-    if found is not None:
-        container_name = found[0]
-    else:
-        dc = _find_docker_container_by_runtime_id(runtime_id, executor)
-        if dc is not None:
-            container_name = dc["container_name"]
-
-    if not container_name:
-        raise CliError(
-            message=f"Runtime not found: {runtime_id}",
-            exit_code=RuntimeExitCode.GENERAL_ERROR,
-            error_code=RuntimeErrorCode.RUNTIME_NOT_FOUND,
-        )
-
-    # Verify the container is actually running.
-    from aisc.application.runtime import _get_container_state
-    state = _get_container_state(container_name, executor)
-    if state != "running":
-        raise CliError(
-            message=f"Runtime is not running (state: {state or 'not_found'}). "
-                    f"Start it first: aisc runtime start --runtime-id {runtime_id}",
-            exit_code=RuntimeExitCode.RUNTIME_NOT_RUNNING,
-            error_code=RuntimeErrorCode.RUNTIME_NOT_RUNNING,
-        )
-
-    return container_name
+# Kept as a private alias so this module's callers and tests are unaffected by
+# the extraction of ``resolve_running_container`` to application.runtime.
+_resolve_running_container = resolve_running_container
 
 
 # ---------------------------------------------------------------------------

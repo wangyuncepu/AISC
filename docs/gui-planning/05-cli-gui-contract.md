@@ -342,6 +342,7 @@ aisc provider current
 | `AISC_ERR_RUNTIME_NOT_READY` | 容器已创建但初始化未就绪 |
 | `AISC_ERR_SESSION_NOT_FOUND` | session 元数据不存在 |
 | `AISC_ERR_SESSION_FAILED` | exec/session wrapper 启动失败 |
+| `AISC_ERR_PROVIDER_STATUS_FAILED` | provider 状态检查 exec/解析失败（S0.4） |
 | `AISC_ERR_STATE_LOCK_TIMEOUT` | registry/workspace 跨进程锁不可用或超时 |
 
 规则：

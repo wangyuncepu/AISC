@@ -36,5 +36,32 @@ class VersionSourceTests(unittest.TestCase):
         self.assertIn('[tool.setuptools.data-files]\naisc = ["VERSION"]', pyproject)
 
 
+class TestWorkbenchCapabilities(unittest.TestCase):
+    """Workbench capability negotiation (05-cli-gui-contract.md §四)."""
+
+    def test_version_dict_advertises_implemented_capabilities(self):
+        from aisc.domain.models import VersionInfo, WORKBENCH_CAPABILITIES
+        info = VersionInfo(cli_version="x", python_version="y")
+        caps = info.to_dict()["capabilities"]
+        assert caps == WORKBENCH_CAPABILITIES
+        # S0.4 ships runtime + session + providerStatus.
+        assert caps["runtime"] == "aisc.runtime/v1"
+        assert caps["session"] == "aisc.session/v1"
+        assert caps["providerStatus"] == "aisc.provider-status/v1"
+
+    def test_version_json_envelope_carries_capabilities(self):
+        import contextlib
+        import io
+        import json
+        from aisc.cli.main import main
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with self.assertRaises(SystemExit) as cm:
+                main(["version", "--format", "json"])
+        assert cm.exception.code == 0
+        caps = json.loads(buf.getvalue())["data"]["capabilities"]
+        assert {"runtime", "session", "providerStatus"} <= set(caps.keys())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -245,6 +245,21 @@ def _build_parser() -> _AiscArgumentParser:
     prsk.add_argument("--agent", type=str, default="claude",
                       help="Target agent (default: claude)")
 
+    # provider current (Workbench S0.4): non-interactive, --format json
+    prpc = prsub.add_parser(
+        "current",
+        help="Show the current provider status for an agent (Workbench)",
+        allow_abbrev=False,
+    )
+    _add_global_args(prpc, is_subparser=True)
+    prpc.add_argument("--runtime-id", type=str, required=True,
+                      help="Runtime ID (UUID v4)")
+    prpc.add_argument("--agent", type=str, required=True,
+                      choices=["claude", "codex"],
+                      help="Agent (claude|codex)")
+    prpc.add_argument("--workspace", type=str, default=None,
+                      help="Workspace path (default: current directory)")
+
     # --- ps ---
     psp = sub.add_parser("ps", help="List all registered containers", allow_abbrev=False)
     _add_global_args(psp, is_subparser=True)
@@ -390,7 +405,8 @@ def _detect_events(argv: List[str]) -> bool:
 
 def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "profile",
-             "status", "stop", "restart", "shell", "switch", "provider", "ps", "runtime"}
+             "status", "stop", "restart", "shell", "switch", "provider",
+             "ps", "runtime", "session"}
     for arg in argv:
         if arg in known:
             return arg
@@ -841,25 +857,35 @@ def _cmd_provider(
     args: argparse.Namespace,
     effective_format: str,
 ) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
-    """Execute ``aisc provider``.  Text-only interactive."""
-    from aisc.cli.commands.container import cmd_provider_set_key, discover_container
+    """Execute ``aisc provider`` subcommands.
 
+    ``current`` is non-interactive and supports ``--format json`` (S0.4).
+    ``set-key`` is text-only interactive.
+    """
+    sub = getattr(args, "provider_command", None)
+
+    if sub == "current":
+        from aisc.cli.commands.provider import cmd_provider_current
+        data = cmd_provider_current(
+            runtime_id=args.runtime_id,
+            agent=args.agent,
+            workspace=args.workspace,
+        )
+        return data, 0, []
+
+    # All other provider subcommands are text-only interactive.
     if effective_format == "json":
         emit_json_usage_error(
             command="provider", version=__version__,
-            message="provider only supports text output, --format json is not supported",
+            message="provider set-key only supports text output, --format json is not supported",
         )
         sys.exit(2)
 
-    sub = getattr(args, "provider_command", None)
-    if sub not in ("set-key",):
-        if effective_format == "json":
-            emit_json_usage_error(
-                command="provider", version=__version__,
-                message="Unknown provider subcommand",
-            )
-        else:
-            print("Error: Unknown provider subcommand. Use 'aisc provider set-key'.", file=sys.stderr)
+    from aisc.cli.commands.container import cmd_provider_set_key, discover_container
+
+    if sub != "set-key":
+        print("Error: Unknown provider subcommand. Use 'aisc provider set-key' "
+              "or 'aisc provider current'.", file=sys.stderr)
         sys.exit(2)
 
     # Discover name once for use in returned data
@@ -1100,6 +1126,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                                if a.dest == "command"][0].choices["provider"]
             provider_parser._aisc_format = "json" if json_requested else None
             provider_parser._aisc_command = "provider"
+            # Also propagate to provider current subparser (S0.4, supports --format json)
+            if "current" in args_list:
+                try:
+                    current_parser = [a for a in provider_parser._subparsers._group_actions
+                                      if a.dest == "provider_command"][0].choices["current"]
+                    current_parser._aisc_format = "json" if json_requested else None
+                    current_parser._aisc_command = "provider current"
+                except (AttributeError, IndexError, KeyError):
+                    pass
         except (AttributeError, IndexError, KeyError):
             pass
 
@@ -1130,6 +1165,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                               if a.dest == "command"][0].choices["session"]
             session_parser._aisc_format = "json" if json_requested else None
             session_parser._aisc_command = "session"
+            # Also propagate to session sub-subparsers (list/terminate support --format json).
+            for _sub in ("open", "list", "terminate"):
+                if _sub in args_list:
+                    try:
+                        _sp = [a for a in session_parser._subparsers._group_actions
+                               if a.dest == "session_command"][0].choices[_sub]
+                        _sp._aisc_format = "json" if json_requested else None
+                        _sp._aisc_command = f"session {_sub}"
+                    except (AttributeError, IndexError, KeyError):
+                        pass
         except (AttributeError, IndexError, KeyError):
             pass
 
@@ -1399,9 +1444,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 image=r.get("image", ""), workspace=r.get("workspace", ""),
             ) for r in (data if isinstance(data, list) else [])]
             print_ps_text(ps_rows)
-        elif args.command in ("shell", "switch", "provider"):
+        elif args.command in ("shell", "switch"):
             # interactive output printed directly by _cmd_*
             pass
+        elif args.command == "provider":
+            if getattr(args, "provider_command", "") == "current":
+                from aisc.cli.commands.provider import print_provider_current_text
+                print_provider_current_text(data)
+            # set-key: interactive, output already printed by _cmd_*
         elif args.command == "runtime":
             from aisc.cli.commands.runtime import print_runtime_text
             print_runtime_text(getattr(args, "runtime_command", ""), data, errors)

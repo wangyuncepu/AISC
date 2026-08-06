@@ -231,16 +231,22 @@ event stream 中不得出现明文密钥。脱敏规则同 §2.6。
 | `15` | `AISC_EXIT_INVALID_RUNTIME_ID` | `AISC_ERR_INVALID_RUNTIME_ID` | Runtime ID 格式无效（非 UUID v4） |
 | `16` | `AISC_EXIT_RUNTIME_OPERATION_FAILED` | `AISC_ERR_RUNTIME_OPERATION_FAILED` | Runtime 操作失败（启动/停止/移除等） |
 | `17` | `AISC_EXIT_STATE_LOCK_TIMEOUT` | `AISC_ERR_STATE_LOCK_TIMEOUT` | 跨进程 registry/workspace 锁获取超时（并发冲突无法在超时内解决） |
+| `18` | `AISC_EXIT_SESSION_NOT_FOUND` | `AISC_ERR_SESSION_NOT_FOUND` | Session 元数据不存在（S0.3） |
+| `19` | `AISC_EXIT_SESSION_FAILED` | `AISC_ERR_SESSION_FAILED` | session exec/wrapper 启动失败（S0.3） |
+| `20` | `AISC_EXIT_RUNTIME_NOT_RUNNING` | `AISC_ERR_RUNTIME_NOT_RUNNING` | session/provider 要求的 runtime 未运行（S0.3） |
+| `21` | `AISC_EXIT_PROVIDER_STATUS_FAILED` | `AISC_ERR_PROVIDER_STATUS_FAILED` | provider 状态检查 exec/解析失败（S0.4） |
 
 > 注：`AISC_EXIT_NEEDS_CONFIRMATION(11)` 合并了原拟议的 `EX_PROFILE_REQUIRES_CONFIRM(11)` 和 `EX_NEEDS_CONFIRMATION(12)`。S1 草案统一使用表内的 `AISC_ERR_NEEDS_CONFIRMATION`；如未来需要增加更细的原因码，须先在 RFC 中登记后才能视为稳定符号。
 >
 > **退出码 14-16** 为 S0.2 Workbench Phase 0 引入，用于 `aisc runtime` 子命令族。`AISC_EXIT_RUNTIME_CONFLICT(14)` 用于 preflight 检测到配置冲突时的快速失败；`AISC_EXIT_INVALID_RUNTIME_ID(15)` 用于拒绝非 UUID v4 格式的 runtime ID；`AISC_EXIT_RUNTIME_OPERATION_FAILED(16)` 用于 runtime 生命周期操作的一般性失败（不属于其他更具体的错误类别）。**退出码 17** `AISC_EXIT_STATE_LOCK_TIMEOUT` 用于跨进程锁（registry `.containers.lock` 或 workspace lock）超时，映射为 `CliError` 而非原始 `TimeoutError`。
+>
+> **退出码 18-20** 为 S0.3 Workbench Phase 0 引入，用于 `aisc session` 子命令族（`SESSION_NOT_FOUND(18)`/`SESSION_FAILED(19)`），以及 session/provider 共用的 `RUNTIME_NOT_RUNNING(20)`。**退出码 21** `AISC_EXIT_PROVIDER_STATUS_FAILED` 为 S0.4 引入，用于 `aisc provider current` 的 exec/解析失败。
 
 ### 4.2 错误码稳定性
 
-所有 `AISC_ERR_*` 字符串为稳定符号，**不会在 minor/patch 版本中变更或重编号**。新增退出码只在 minor 版本引入且仅分配新数值（≥18），不重用已定义值。
+所有 `AISC_ERR_*` 字符串为稳定符号，**不会在 minor/patch 版本中变更或重编号**。新增退出码只在 minor 版本引入且仅分配新数值（≥22），不重用已定义值。
 
-`AISC_EXIT_*` 数值 0–17 如表中定义；数值 18+ 为预留空间，当前未分配。客户端不得假设 0–17 连续——应仅依赖表中列出的已知值，未识别值视为 `AISC_EXIT_GENERAL`。
+`AISC_EXIT_*` 数值 0–21 如表中定义；数值 22+ 为预留空间，当前未分配。客户端不得假设数值连续——应仅依赖表中列出的已知值，未识别值视为 `AISC_EXIT_GENERAL`。
 
 ---
 
