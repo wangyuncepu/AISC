@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from aisc.adapters.docker_ import DockerExecutor, RealDockerExecutor
 from aisc.domain.models import RuntimeErrorCode, RuntimeSnapshot, RuntimeExitCode
 from aisc.application.runtime import (
+    _iso_now,
     compute_config_fingerprint,
     validate_uuid_v4,
     preflight_runtime,
@@ -129,6 +130,7 @@ def cmd_runtime_start(
     network: str = "direct",
     scope: str = "project",
     owner: str = "workbench",
+    proxy_config: Optional[str] = None,
     executor: Optional[DockerExecutor] = None,
 ) -> Dict[str, Any]:
     """Execute ``aisc runtime start`` per contract §5.2."""
@@ -143,6 +145,7 @@ def cmd_runtime_start(
         owner=owner,
         executor=exec_,
         registry_root=reg_root,
+        proxy_config=proxy_config,
     )
     return result.to_dict()
 
@@ -208,11 +211,6 @@ def cmd_runtime_remove(
         runtime_id=runtime_id, executor=exec_, registry_root=reg_root, force=force
     )
     return snapshot.to_dict()
-
-
-def _iso_now() -> str:
-    import time
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def print_runtime_text(subcommand: str, data: Any, errors: list) -> None:

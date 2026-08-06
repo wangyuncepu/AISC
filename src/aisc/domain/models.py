@@ -50,13 +50,14 @@ class RuntimeExitCode:
     USAGE_ERROR = 2
     DOCKER_UNAVAILABLE = 3  # Reuses existing AISC_EXIT_DOCKER_UNAVAILABLE
     # 4 = AISC_EXIT_BUILD_FAILED (reserved by RFC)
-    # 5 = AISC_EXIT_IMAGE_NOT_FOUND (reserved by RFC)
+    IMAGE_NOT_FOUND = 5  # AISC_EXIT_IMAGE_NOT_FOUND (reserved by RFC)
     # 6 = AISC_EXIT_CONFIG_INVALID (reserved by RFC)
     PERMISSION_DENIED = 9
     # New runtime-specific exit codes (14+, registered in RFC)
     RUNTIME_CONFLICT = 14           # AISC_EXIT_RUNTIME_CONFLICT
     INVALID_RUNTIME_ID = 15         # AISC_EXIT_INVALID_RUNTIME_ID
     RUNTIME_OPERATION_FAILED = 16   # AISC_EXIT_RUNTIME_OPERATION_FAILED
+    STATE_LOCK_TIMEOUT = 17         # AISC_EXIT_STATE_LOCK_TIMEOUT
 
 
 # ---------------------------------------------------------------------------

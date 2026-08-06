@@ -285,6 +285,9 @@ def _build_parser() -> _AiscArgumentParser:
                      default="project", help="Runtime scope (default: project)")
     rts.add_argument("--owner", type=str, default="workbench",
                      help="Owner identifier (default: workbench)")
+    rts.add_argument("--proxy-config", type=str, default=None,
+                     help="Host path to mihomo config.yaml to mount for --network proxy "
+                          "(S0.2: proxy caps/device are set; without this, TUN runs without a config)")
 
     # --- runtime list ---
     rtl = rtsub.add_parser("list", help="List runtimes with Docker reconciliation",
@@ -917,6 +920,7 @@ def _cmd_runtime(
             network=args.network,
             scope=args.scope,
             owner=args.owner,
+            proxy_config=args.proxy_config,
         )
         return data, 0, []
     elif sub == "list":

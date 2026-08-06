@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-from aisc.domain.models import CliError
+from aisc.domain.models import CliError, RuntimeErrorCode, RuntimeExitCode
 
 
 _REGISTRY_FILE = "containers.json"
@@ -111,7 +111,7 @@ def _registry_lock(root: Path, timeout: float = 10.0) -> Iterator[None]:
         timeout: Lock timeout in seconds (default 10.0)
 
     Raises:
-        TimeoutError: If lock cannot be acquired within timeout
+        CliError (STATE_LOCK_TIMEOUT): If lock cannot be acquired within timeout
         OSError: On other lock-related errors
 
     Yields:
@@ -145,8 +145,10 @@ def _registry_lock(root: Path, timeout: float = 10.0) -> Iterator[None]:
                 except OSError as e:
                     elapsed = time_module.time() - start_time
                     if elapsed >= timeout:
-                        raise TimeoutError(
-                            f"Failed to acquire registry lock within {timeout}s"
+                        raise CliError(
+                            message=f"Failed to acquire registry lock within {timeout}s",
+                            exit_code=RuntimeExitCode.STATE_LOCK_TIMEOUT,
+                            error_code=RuntimeErrorCode.STATE_LOCK_TIMEOUT,
                         ) from e
                     # Retry after short sleep
                     time_module.sleep(0.1)
@@ -156,8 +158,10 @@ def _registry_lock(root: Path, timeout: float = 10.0) -> Iterator[None]:
             import signal
 
             def timeout_handler(signum, frame):
-                raise TimeoutError(
-                    f"Failed to acquire registry lock within {timeout}s"
+                raise CliError(
+                    message=f"Failed to acquire registry lock within {timeout}s",
+                    exit_code=RuntimeExitCode.STATE_LOCK_TIMEOUT,
+                    error_code=RuntimeErrorCode.STATE_LOCK_TIMEOUT,
                 )
 
             # Only set alarm if we're in the main thread
@@ -311,7 +315,7 @@ def workspace_lock(root: Path, workspace_key: str, timeout: float = 10.0) -> Ite
         timeout: Lock acquisition timeout in seconds.
 
     Raises:
-        TimeoutError: if the lock cannot be acquired within *timeout*.
+        CliError (STATE_LOCK_TIMEOUT): if the lock cannot be acquired within *timeout*.
     """
     import sys
     import time as time_module
@@ -337,8 +341,10 @@ def workspace_lock(root: Path, workspace_key: str, timeout: float = 10.0) -> Ite
                     break
                 except OSError as e:
                     if time_module.time() - start_time >= timeout:
-                        raise TimeoutError(
-                            f"Failed to acquire workspace lock within {timeout}s"
+                        raise CliError(
+                            message=f"Failed to acquire workspace lock within {timeout}s",
+                            exit_code=RuntimeExitCode.STATE_LOCK_TIMEOUT,
+                            error_code=RuntimeErrorCode.STATE_LOCK_TIMEOUT,
                         ) from e
                     time_module.sleep(0.1)
         else:
@@ -346,8 +352,10 @@ def workspace_lock(root: Path, workspace_key: str, timeout: float = 10.0) -> Ite
             import signal
 
             def timeout_handler(signum, frame):
-                raise TimeoutError(
-                    f"Failed to acquire workspace lock within {timeout}s"
+                raise CliError(
+                    message=f"Failed to acquire workspace lock within {timeout}s",
+                    exit_code=RuntimeExitCode.STATE_LOCK_TIMEOUT,
+                    error_code=RuntimeErrorCode.STATE_LOCK_TIMEOUT,
                 )
 
             alarm_set = False

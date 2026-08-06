@@ -496,24 +496,30 @@ fi
 #    不启动交互菜单 / claude / codex；context 文件不写任何 key/token/cookie。
 # ==========================================
 if [ "${AISC_RUNTIME_MODE:-}" = "idle" ]; then
-    RUNTIME_CTX_DIR="/run/aisc"
-    mkdir -p "$RUNTIME_CTX_DIR"
-    RUNTIME_CTX_TMP="$RUNTIME_CTX_DIR/.runtime-context.tmp.$$"
-    READY_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    cat > "$RUNTIME_CTX_TMP" <<EOF
-{
-  "schema_version": "aisc.runtime-context/v1",
-  "runtime_id": "${AISC_RUNTIME_ID:-}",
-  "scope": "${SCOPE}",
-  "workspace_mount": "/root/app",
-  "claude_config_dir": "${CLAUDE_CONFIG_DIR}",
-  "codex_config_dir": "${CODEX_CONFIG_DIR}",
-  "cc_switch_config_dir": "${CC_SWITCH_CONFIG_DIR}",
-  "ready_time": "${READY_TIME}"
+    mkdir -p /run/aisc
+    export SCOPE
+    # Write runtime-context.json via python3 so interpolated paths (which may
+    # contain " or \) cannot break JSON. Quoted heredoc -> no shell expansion;
+    # values come from env. File is secret-free (no key/token/cookie).
+    python3 - <<'PYEOF'
+import json, os, datetime
+ctx = {
+    "schema_version": "aisc.runtime-context/v1",
+    "runtime_id": os.environ.get("AISC_RUNTIME_ID", ""),
+    "scope": os.environ.get("SCOPE", ""),
+    "workspace_mount": "/root/app",
+    "claude_config_dir": os.environ.get("CLAUDE_CONFIG_DIR", ""),
+    "codex_config_dir": os.environ.get("CODEX_CONFIG_DIR", ""),
+    "cc_switch_config_dir": os.environ.get("CC_SWITCH_CONFIG_DIR", ""),
+    "ready_time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
 }
-EOF
-    chmod 600 "$RUNTIME_CTX_TMP"
-    mv "$RUNTIME_CTX_TMP" "$RUNTIME_CTX_DIR/runtime-context.json"
+tmp = "/run/aisc/.runtime-context.tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(ctx, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+os.chmod(tmp, 0o600)
+os.replace(tmp, "/run/aisc/runtime-context.json")
+PYEOF
     echo "✅ AISC runtime idle 模式就绪 (runtime_id=${AISC_RUNTIME_ID:-}, scope=${SCOPE})"
     exec sleep infinity
 fi

@@ -447,5 +447,97 @@ class TestStopRestartRemove(unittest.TestCase):
         self.assertEqual(cm.exception.exit_code, RuntimeExitCode.GENERAL_ERROR)
 
 
+class TestReviewFixes(unittest.TestCase):
+    """Regression tests for issues raised in the 645170b code review."""
+
+    def test_stop_docker_only_container_marked_missing(self):
+        """Stopping a container that exists in Docker but not the registry
+        reports registry_state='missing', not 'registered' (review medium 2)."""
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        ws_key = workspace_key_for(str(ws))
+        # Inject a Docker-only container (no registry entry).
+        ex.containers["aisc-wb-550e8400"] = {
+            "container_id": "cid000000000001", "state": "running",
+            "runtime_id": RID_A, "workspace_key": ws_key, "owner": "workbench",
+            "image": "super-claude:latest",
+        }
+        snap = stop_runtime(RID_A, ex, ws / ".aisc")
+        self.assertEqual(snap.state, "stopped")
+        self.assertEqual(snap.registry_state, "missing")
+
+    def test_restart_docker_only_container_marked_missing(self):
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        ws_key = workspace_key_for(str(ws))
+        ex.containers["aisc-wb-550e8400"] = {
+            "container_id": "cid000000000001", "state": "stopped",
+            "runtime_id": RID_A, "workspace_key": ws_key, "owner": "workbench",
+            "image": "super-claude:latest",
+        }
+        snap = restart_runtime(RID_A, ex, ws / ".aisc", ready_timeout=2.0)
+        self.assertEqual(snap.state, "running")
+        self.assertEqual(snap.registry_state, "missing")
+
+    def test_wait_ready_continues_past_transient_exception(self):
+        """A single docker exec exception must not abort _wait_ready (review
+        low-med 3); it should keep polling until the context appears."""
+        from aisc.application.runtime import _wait_ready
+
+        class TransientExecutor:
+            def __init__(self):
+                self.calls = 0
+            def run_captured(self, argv, *, timeout=None):
+                if argv[0] == "exec":
+                    self.calls += 1
+                    if self.calls == 1:
+                        raise OSError("container briefly restarting")
+                    return ProcessResult(
+                        stdout=json.dumps({
+                            "schema_version": "aisc.runtime-context/v1",
+                            "runtime_id": RID_A,
+                        }),
+                        stderr="", exit_code=0,
+                    )
+                return ProcessResult(stdout="", stderr="", exit_code=0)
+
+        ex = TransientExecutor()
+        ctx = _wait_ready(ex, "aisc-wb-550e8400", RID_A, timeout=5.0)
+        self.assertIsNotNone(ctx)
+        self.assertEqual(ctx["runtime_id"], RID_A)
+        self.assertGreaterEqual(ex.calls, 2)
+
+    def test_wait_ready_returns_none_on_timeout_only(self):
+        """When the context never appears, _wait_ready polls until the deadline
+        and returns None (not on the first non-zero exec)."""
+        from aisc.application.runtime import _wait_ready
+
+        class NeverReadyExecutor:
+            def run_captured(self, argv, *, timeout=None):
+                return ProcessResult(stdout="", stderr="no such file", exit_code=1)
+
+        ctx = _wait_ready(NeverReadyExecutor(), "aisc-wb-550e8400", RID_A, timeout=1.0)
+        self.assertIsNone(ctx)
+
+    def test_start_reuse_stopped_restarts_to_running(self):
+        """Re-calling start on a stopped matching runtime restarts it instead
+        of returning a reused-but-stopped limbo (review low-med 4)."""
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        start_runtime(RID_A, str(ws), "super-claude:latest", "direct", "project",
+                      "workbench", executor=ex, registry_root=ws / ".aisc",
+                      ready_timeout=2.0)
+        stop_runtime(RID_A, ex, ws / ".aisc")
+        # Re-call start with the same runtime_id + config.
+        result = start_runtime(RID_A, str(ws), "super-claude:latest", "direct",
+                               "project", "workbench", executor=ex,
+                               registry_root=ws / ".aisc", ready_timeout=2.0)
+        self.assertTrue(result.reused)
+        self.assertEqual(result.state, "running")
+        self.assertTrue(result.ready)
+        # No second container was created.
+        self.assertEqual(len(ex.containers), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

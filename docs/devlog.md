@@ -33,6 +33,17 @@
 - 修复 registry 一致性：`_state_dir()` 统一接受 workspace root 或 `.aisc` 路径，`_registry_lock`/`_write_registry_unlocked`/`workspace_lock` 共用；修复 `_query_docker_labels`/`_get_container_state` 误用 `returncode`（应为 `exit_code`）的潜在 bug（Mock 执行器下不显现，RealDockerExecutor 下崩溃）。
 - 旧 `aisc run/shell/switch/stop` 兼容路径不受影响；新语义全在 `runtime` 子命令族内。
 
+#### Code review 修复（645170b review）
+
+- **锁超时映射**：`workspace_lock`/`_registry_lock` 超时改为抛 `CliError(STATE_LOCK_TIMEOUT, exit 17)`，不再裸 `TimeoutError` 堆栈；注册 exit 17 到 RFC §4.1；`start_runtime` 的 workspace lock 超时改为 `ready_timeout + 30s`，避免并发 start 在 winner 持锁期间误超时。
+- **Docker-only registry_state**：`_snapshot_from_registry` 接受 `registry_state` 参数；`_resolve_container_for_lifecycle` 返回 4-tuple 含 registry_state；stop/restart 对 Docker-only 容器正确返回 `missing`（原先误标 `registered`）。
+- **`_wait_ready` 瞬态异常**：单次 `docker exec` 异常不再立即返回 None 触发清理，改为继续轮询到 deadline（仅超时或校验失败才返回 None）。
+- **重用已停止 runtime**：`start` 重用匹配但已停止的 runtime 时自动 `docker start` + ready check，返回 `reused=True, running, ready`（原先返回 stopped limbo）。
+- **proxy_config 接线**：`runtime start` 增加 `--proxy-config` 选项并透传到 `start_runtime`，proxy 模式可挂载 mihomo 配置。
+- **entrypoint 安全 JSON**：idle 分支改用 python3 写 `runtime-context.json`（quoted heredoc + env），避免路径含 `"`/`\` 时 shell 插值破坏 JSON。
+- 小清理：`_iso_now` 去重（CLI 层改 import）、`_require_image` 用 `RuntimeExitCode.IMAGE_NOT_FOUND` 常量、移除未用的 `conflict_check`、`stop_runtime` docstring 明确幂等边界、`container_name_for` 标注 32-bit 熵、`_list_docker_runtime_containers` 标注瞬态假阴性。
+- 新增 7 个回归测试（锁超时映射 ×2、Docker-only stop/restart、_wait_ready 瞬态/超时、重用已停止 runtime）。
+
 ### 关键提交
 
 - `000a878` 登记 exit codes 14-16
