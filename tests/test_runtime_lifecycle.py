@@ -465,12 +465,17 @@ class TestStopRestartRemove(unittest.TestCase):
         self.assertEqual(snap.state, "not_found")
         self.assertEqual(ex.removed, ["aisc-wb-550e8400"])
 
-    def test_remove_not_found(self):
+    def test_remove_not_found_is_idempotent(self):
+        # Contract §十二: remove is idempotent. Removing a runtime that is
+        # already gone returns a not_found snapshot (rc 0), not an error.
         ws = _make_workspace()
         ex = RuntimeFakeExecutor()
-        with self.assertRaises(CliError) as cm:
-            remove_runtime(RID_A, ex, ws / ".aisc")
-        self.assertEqual(cm.exception.exit_code, RuntimeExitCode.GENERAL_ERROR)
+        snap = remove_runtime(RID_A, ex, ws / ".aisc")
+        self.assertEqual(snap.state, "not_found")
+        self.assertEqual(snap.registry_state, "not_found")
+        # A second remove of the same (still-absent) runtime also succeeds.
+        snap2 = remove_runtime(RID_A, ex, ws / ".aisc")
+        self.assertEqual(snap2.state, "not_found")
 
 
 class TestReviewFixes(unittest.TestCase):

@@ -1310,13 +1310,33 @@ def remove_runtime(
 ) -> RuntimeSnapshot:
     """Delete the container and unregister the runtime per §5.5.
 
-    A running runtime is rejected unless ``force`` is set.
+    A running runtime is rejected unless ``force`` is set. Idempotent: removing
+    an already-removed runtime returns a not_found snapshot (rc 0) per §十二.
     """
     from aisc.adapters.container_registry import unregister_by_runtime_id
 
-    name, container_id, meta, _registry_state = _resolve_container_for_lifecycle(
-        runtime_id, executor, registry_root
-    )
+    try:
+        name, container_id, meta, _registry_state = _resolve_container_for_lifecycle(
+            runtime_id, executor, registry_root
+        )
+    except CliError as exc:
+        if exc.error_code == RuntimeErrorCode.RUNTIME_NOT_FOUND:
+            # Idempotent: already removed -> not_found success (contract §十二).
+            return RuntimeSnapshot(
+                runtime_id=runtime_id,
+                state="not_found",
+                workspace="",
+                image="",
+                network="",
+                scope="",
+                owner="",
+                config_fingerprint="",
+                container_name="",
+                container_id="",
+                registry_state="not_found",
+                observed_at=iso_now(),
+            )
+        raise
 
     # Refuse to remove a running runtime without --force.
     state = _get_container_state(name, executor)
