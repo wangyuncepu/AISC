@@ -358,6 +358,10 @@ def workspace_lock(root: Path, workspace_key: str, timeout: float = 10.0) -> Ite
                     error_code=RuntimeErrorCode.STATE_LOCK_TIMEOUT,
                 )
 
+            # SIGALRM-based timeout only works in the main thread; a non-main
+            # caller (signal.signal raises ValueError) falls back to an
+            # unbounded blocking flock. Fine for the single-threaded aisc CLI;
+            # a future threaded caller would need a different timeout strategy.
             alarm_set = False
             try:
                 old_handler = signal.signal(signal.SIGALRM, timeout_handler)

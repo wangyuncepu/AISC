@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 from aisc.adapters.docker_ import DockerExecutor, RealDockerExecutor
 from aisc.domain.models import RuntimeErrorCode, RuntimeSnapshot, RuntimeExitCode
 from aisc.application.runtime import (
-    _iso_now,
+    iso_now,
     compute_config_fingerprint,
     validate_uuid_v4,
     preflight_runtime,
@@ -159,7 +159,7 @@ def cmd_runtime_list(
     exec_ = executor or RealDockerExecutor()
     ws, reg_root = _resolve_workspace_and_registry(workspace)
     snapshots = list_runtimes(executor=exec_, registry_root=reg_root, owner=owner, workspace=ws)
-    return {"runtimes": [s.to_dict() for s in snapshots], "observed_at": _iso_now()}
+    return {"runtimes": [s.to_dict() for s in snapshots], "observed_at": iso_now()}
 
 
 def cmd_runtime_inspect(

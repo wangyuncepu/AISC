@@ -33,6 +33,7 @@ from aisc.domain.models import (
     ImageInspectResult,
     ImageInspectStatus,
     ProcessResult,
+    RuntimeErrorCode,
     RuntimeExitCode,
 )
 
@@ -275,6 +276,31 @@ class TestStartRuntime(unittest.TestCase):
                               registry_root=ws / ".aisc", ready_timeout=2.0)
         self.assertEqual(cm.exception.exit_code, RuntimeExitCode.RUNTIME_OPERATION_FAILED)
         self.assertEqual(ex.removed, ["aisc-wb-550e8400"])
+
+    def test_start_registry_lock_timeout_cleans_up_and_preserves_code(self):
+        """If register raises CliError(STATE_LOCK_TIMEOUT) (registry lock
+        contention), the just-created container is still cleaned up and the
+        original STATE_LOCK_TIMEOUT code is preserved -- not remapped to
+        RUNTIME_OPERATION_FAILED and not orphaned (review regression)."""
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        lock_err = CliError(
+            message="Failed to acquire registry lock within 10s",
+            exit_code=RuntimeExitCode.STATE_LOCK_TIMEOUT,
+            error_code=RuntimeErrorCode.STATE_LOCK_TIMEOUT,
+        )
+        with patch("aisc.adapters.container_registry.register",
+                   side_effect=lock_err):
+            with self.assertRaises(CliError) as cm:
+                start_runtime(RID_A, str(ws), "super-claude:latest", "direct",
+                              "project", "workbench", executor=ex,
+                              registry_root=ws / ".aisc", ready_timeout=2.0)
+        self.assertEqual(cm.exception.exit_code, RuntimeExitCode.STATE_LOCK_TIMEOUT)
+        self.assertEqual(cm.exception.error_code, RuntimeErrorCode.STATE_LOCK_TIMEOUT)
+        # Container cleaned up, no orphan, no registry entry.
+        self.assertEqual(ex.removed, ["aisc-wb-550e8400"])
+        self.assertEqual(ex.containers, {})
+        self.assertEqual(list_containers_readonly(ws / ".aisc"), {})
 
     def test_start_invalid_runtime_id(self):
         ws = _make_workspace()

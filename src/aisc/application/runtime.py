@@ -654,7 +654,7 @@ def _resolve_registry_root(
     return Path(workspace).resolve() / ".aisc"
 
 
-def _iso_now() -> str:
+def iso_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
@@ -741,7 +741,7 @@ def _build_start_payload(
             "scope": scope,
         },
         config_fingerprint=fingerprint,
-        created_at=_iso_now(),
+        created_at=iso_now(),
     )
 
 
@@ -944,6 +944,12 @@ def start_runtime(
                 "container_id": container_id,
                 "workspace_key": ws_key,
             })
+        except CliError:
+            # register raises CliError(STATE_LOCK_TIMEOUT) if the registry lock
+            # times out. Cleanup the just-created container but preserve the
+            # original error code (do not remap to RUNTIME_OPERATION_FAILED).
+            _safe_remove(executor, container_name)
+            raise
         except (ValueError, OSError) as exc:
             # Registry commit failed: remove the new container, report partial.
             cleanup_ok = _safe_remove(executor, container_name)
@@ -1025,7 +1031,7 @@ def list_runtimes(
 
     canonical_workspace = str(Path(workspace).resolve()) if workspace else None
     ws_key = workspace_key_for(canonical_workspace) if canonical_workspace else None
-    observed_at = _iso_now()
+    observed_at = iso_now()
 
     reg_entries = list_containers(registry_root)
 
@@ -1097,7 +1103,7 @@ def inspect_runtime(
             error_code=RuntimeErrorCode.INVALID_RUNTIME_ID,
         )
 
-    observed_at = _iso_now()
+    observed_at = iso_now()
 
     # Docker unavailable -> cannot confirm actual state.
     if not _check_docker(executor):
@@ -1212,7 +1218,7 @@ def stop_runtime(
             error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
         )
     return _snapshot_from_registry(
-        name, meta, "stopped", _iso_now(), registry_state=registry_state
+        name, meta, "stopped", iso_now(), registry_state=registry_state
     )
 
 
@@ -1244,7 +1250,7 @@ def restart_runtime(
             error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
         )
     return _snapshot_from_registry(
-        name, meta, "running", _iso_now(), registry_state=registry_state
+        name, meta, "running", iso_now(), registry_state=registry_state
     )
 
 
@@ -1301,7 +1307,7 @@ def remove_runtime(
         container_name=name,
         container_id=container_id,
         registry_state="not_found",
-        observed_at=_iso_now(),
+        observed_at=iso_now(),
     )
 
 

@@ -43,6 +43,7 @@
 - **entrypoint 安全 JSON**：idle 分支改用 python3 写 `runtime-context.json`（quoted heredoc + env），避免路径含 `"`/`\` 时 shell 插值破坏 JSON。
 - 小清理：`_iso_now` 去重（CLI 层改 import）、`_require_image` 用 `RuntimeExitCode.IMAGE_NOT_FOUND` 常量、移除未用的 `conflict_check`、`stop_runtime` docstring 明确幂等边界、`container_name_for` 标注 32-bit 熵、`_list_docker_runtime_containers` 标注瞬态假阴性。
 - 新增 7 个回归测试（锁超时映射 ×2、Docker-only stop/restart、_wait_ready 瞬态/超时、重用已停止 runtime）。
+- **ac65adb review 回归修复**：锁超时改 `CliError` 后，`start_runtime` 的 register cleanup `except (ValueError, OSError)` 不再捕获它（`TimeoutError` 是 `OSError` 子类，`CliError` 不是），导致 ready 容器成孤儿。新增 `except CliError:` 分支清理容器并 re-raise 保留 `STATE_LOCK_TIMEOUT`。`_iso_now` 改公开名 `iso_now`；workspace_lock 标注 SIGALRM 主线程限制。新增 1 个回归测试。
 
 ### 关键提交
 
