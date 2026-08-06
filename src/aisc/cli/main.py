@@ -24,6 +24,8 @@ from aisc.cli.output import (
     print_doctor_text,
 )
 from aisc.domain.models import CheckStatus, CliError, DoctorReport, VersionInfo
+from aisc.domain.models import SessionAgent
+from aisc.domain.models import RuntimeErrorCode
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +333,40 @@ def _build_parser() -> _AiscArgumentParser:
                       help="Workspace path (default: current directory)")
     rtrm.add_argument("--force", action="store_true", default=False,
                       help="Remove even if the runtime is running")
+
+    # --- session ---
+    ssp = sub.add_parser("session", help="Session data plane (Workbench Phase 0)", allow_abbrev=False)
+    _add_global_args(ssp, is_subparser=True)
+    ssub = ssp.add_subparsers(dest="session_command", title="session commands",
+                              parser_class=_AiscArgumentParser)
+
+    # session open
+    sso = ssub.add_parser("open", help="Open an interactive agent session", allow_abbrev=False)
+    _add_global_args(sso, is_subparser=True)
+    sso.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    sso.add_argument("--session-id", type=str, required=True, help="Session ID (UUID v4)")
+    sso.add_argument("--agent", type=str, required=True,
+                     choices=list(SessionAgent.ALL),
+                     help="Agent type (claude|codex|bash|cc-switch)")
+    sso.add_argument("--workspace", type=str, default=None,
+                     help="Workspace path (default: current directory)")
+
+    # session list
+    ssl = ssub.add_parser("list", help="List sessions in a runtime", allow_abbrev=False)
+    _add_global_args(ssl, is_subparser=True)
+    ssl.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    ssl.add_argument("--workspace", type=str, default=None,
+                     help="Workspace path (default: current directory)")
+
+    # session terminate
+    sst = ssub.add_parser("terminate", help="Terminate a session", allow_abbrev=False)
+    _add_global_args(sst, is_subparser=True)
+    sst.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    sst.add_argument("--session-id", type=str, required=True, help="Session ID (UUID v4)")
+    sst.add_argument("--workspace", type=str, default=None,
+                     help="Workspace path (default: current directory)")
+    sst.add_argument("--grace", type=float, default=5.0,
+                     help="Grace period in seconds before SIGKILL (default: 5.0)")
 
     return parser
 
@@ -962,6 +998,65 @@ def _cmd_runtime(
         )]
 
 
+
+
+def _cmd_session(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Any, int, List[Dict[str, Any]]]:
+    """Execute ``aisc session`` subcommands.  Supports --format json.
+
+    ``session open`` is interactive: it inherits stdio via ``docker exec -it``
+    and returns the agent exit code.  ``session list`` and ``session terminate``
+    are non-interactive and return JSON-serializable data.
+    """
+    from aisc.cli.commands.session import (
+        cmd_session_open,
+        cmd_session_list,
+        cmd_session_terminate,
+    )
+
+    sub = args.session_command
+
+    if sub == "open":
+        if effective_format == "json":
+            emit_json_usage_error(
+                command="session", version=__version__,
+                message="session open only supports text output, --format json is not supported",
+            )
+            sys.exit(2)
+        data, exit_code = cmd_session_open(
+            runtime_id=args.runtime_id,
+            session_id=args.session_id,
+            agent=args.agent,
+            workspace=args.workspace,
+        )
+        errors: List[Dict[str, Any]] = []
+        if exit_code != 0 and data.get("error"):
+            errors.append(build_error(
+                RuntimeErrorCode.SESSION_FAILED,
+                data["error"],
+            ))
+        return data, exit_code, errors
+    elif sub == "list":
+        data = cmd_session_list(
+            runtime_id=args.runtime_id,
+            workspace=args.workspace,
+        )
+        return data, 0, []
+    elif sub == "terminate":
+        data = cmd_session_terminate(
+            runtime_id=args.runtime_id,
+            session_id=args.session_id,
+            workspace=args.workspace,
+            grace_seconds=args.grace,
+        )
+        return data, 0, []
+    else:
+        return None, 2, [build_error(
+            "AISC_ERR_USAGE",
+            f"Unknown session subcommand: {sub}"
+        )]
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -1028,6 +1123,16 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         except (AttributeError, IndexError, KeyError):
             pass
 
+    # Propagate JSON format to session subparser for parse-time errors.
+    if "session" in args_list:
+        try:
+            session_parser = [a for a in parser._subparsers._group_actions
+                              if a.dest == "command"][0].choices["session"]
+            session_parser._aisc_format = "json" if json_requested else None
+            session_parser._aisc_command = "session"
+        except (AttributeError, IndexError, KeyError):
+            pass
+
     try:
         args = parser.parse_args(args_list)
     except SystemExit:
@@ -1076,6 +1181,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         "profile": "profile_command",
         "provider": "provider_command",
         "runtime": "runtime_command",
+        "session": "session_command",
     }
     if args.command in _grouped_dests:
         if getattr(args, _grouped_dests[args.command], None) is None:
@@ -1110,8 +1216,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if args_events and args.command in ("build", "run"):
         emitter = JsonlEmitter(command=args.command)
     elif args_events and args.command in ("version", "doctor", "config", "profile",
-                                            "status", "stop", "restart", "shell", "switch",
-                                            "provider", "ps"):
+                                           "status", "stop", "restart", "shell", "switch",
+                                           "provider", "ps", "session"):
         if effective_format == "json":
             emit_json_usage_error(
                 command=args.command, version=__version__,
@@ -1163,6 +1269,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_ps(args, effective_format)
         elif args.command == "runtime":
             data, exit_code, errors = _cmd_runtime(args, effective_format)
+        elif args.command == "session":
+            data, exit_code, errors = _cmd_session(args, effective_format)
         else:
             if effective_format == "json":
                 emit_json_usage_error(
@@ -1297,6 +1405,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         elif args.command == "runtime":
             from aisc.cli.commands.runtime import print_runtime_text
             print_runtime_text(getattr(args, "runtime_command", ""), data, errors)
+        elif args.command == "session":
+            from aisc.cli.commands.session import print_session_text
+            print_session_text(getattr(args, "session_command", ""), data, errors)
 
     sys.exit(exit_code)
 
