@@ -2,7 +2,7 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.2.0-dev (2026-08-03) — Workbench Phase 0 S0.2: Runtime Preflight 垂直切片
+## v2.2.0-dev (2026-08-03 ~ 2026-08-06) — Workbench Phase 0 S0.2: Runtime 控制面
 
 ### 变更
 
@@ -20,6 +20,19 @@
 - 全部 runtime 测试从 pytest 迁移到 `unittest.TestCase`，同时兼容 unittest discover 和 pytest 运行器。
 - 新增 25 个 preflight 单元测试、13 个 subprocess 契约测试、8 个零副作用测试。
 
+#### Runtime CRUD 命令（§5.2-5.5）
+
+- 实现 `aisc runtime start/list/inspect/stop/restart/remove`，覆盖生命周期状态机（`03-lifecycle-contract.md §四`）。
+- `start`：workspace lock 内复用 preflight 的冲突判定做幂等/冲突重验（不信任客户端 preflight）；`docker run -d` 以 detached idle 模式创建容器，带 5 个 Docker labels（`io.aisc.managed`/`kind`/`runtime-id`/`owner`/`workspace-key`，不写原始宿主路径）；轮询 `docker exec cat /run/aisc/runtime-context.json` 做 ready check（校验 schema/runtime_id）；成功后才在 registry lock 内提交 registry 记录；registry commit 失败时 `docker rm -f` 清理新容器并返回 partial identity。
+- 容器名确定性：`aisc-wb-<runtime_id 前 8 hex>`，支撑幂等重试与定向 `docker rm`。
+- 新增 `workspace_lock()`（`.aisc/workspace-locks/<sha256>.lock`，POSIX `fcntl.flock` / Windows `msvcrt.locking`，fail-closed），锁顺序固定 workspace lock -> registry lock，仅 `start` 获取。
+- `list`：registry 快照 + Docker inspect 对账；Docker-only 容器标记 `registry_state: "missing"` 不自动删除；Docker 不可用返回稳定错误(3)，不伪装缓存为实时。
+- `inspect`：按 runtime_id 在 registry + Docker label 查找，区分 `not_found`/`stopped`/`unknown`。
+- `stop` 幂等；`restart` 原配置重启 + ready check；`remove` 运行中无 `--force` 拒绝(16)，`--force` 或已停止才删除容器并注销 registry。
+- `container/entrypoint.sh` 新增 idle 分支：`AISC_RUNTIME_MODE=idle` 时完成 scope/cc-switch/目录初始化后，原子写不含密钥的 `/run/aisc/runtime-context.json`（schema/runtime_id/scope/config dirs/ready_time），再 `exec sleep infinity` 保活 PID 1 供 `session open` 接入。
+- 修复 registry 一致性：`_state_dir()` 统一接受 workspace root 或 `.aisc` 路径，`_registry_lock`/`_write_registry_unlocked`/`workspace_lock` 共用；修复 `_query_docker_labels`/`_get_container_state` 误用 `returncode`（应为 `exit_code`）的潜在 bug（Mock 执行器下不显现，RealDockerExecutor 下崩溃）。
+- 旧 `aisc run/shell/switch/stop` 兼容路径不受影响；新语义全在 `runtime` 子命令族内。
+
 ### 关键提交
 
 - `000a878` 登记 exit codes 14-16
@@ -31,12 +44,14 @@
 - `9d1fef9` Docker label reconciliation
 - `ab0493a` 旧记录冲突检测
 - `96260e8` pytest → unittest.TestCase
+- (本批) runtime start/list/inspect/stop/restart/remove + entrypoint idle 模式 + workspace lock
 
 ### 状态
 
 - 分支: `feature/workbench-phase0-s0.2`
-- 283 tests passed, 8 skipped
-- Runtime CRUD 命令（start/list/inspect/stop/restart/remove）尚未实现，待 preflight 验证可靠后开始。
+- 315 tests passed, 8 skipped（含 25 个 lifecycle 单元测试、runtime CRUD 契约测试、真 Docker start->remove 集成测试与并发 start 竞态测试）
+- Runtime 控制面（preflight + start/list/inspect/stop/restart/remove）已实现并通过 S0.2 DoD：空 Docker 状态 start->remove 全链路通过，JSON envelope 与退出码一致；同 workspace 并发 project start 只有一个成功，另一个 conflict(14)。
+- 下一步：S0.3 Session 数据面（`aisc session open/list/terminate` + 容器内 `aisc-session-wrapper`）。
 
 ---
 

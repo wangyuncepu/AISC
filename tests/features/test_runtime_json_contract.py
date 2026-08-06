@@ -304,3 +304,90 @@ class TestRuntimeSubcommandErrors(unittest.TestCase):
         assert result.returncode == 0
         assert "usage:" in result.stdout.lower()
         assert "preflight" in result.stdout
+
+
+def _docker_available() -> bool:
+    """Return True if a Docker daemon is reachable."""
+    r = subprocess.run(["docker", "info"], capture_output=True, text=True, timeout=8)
+    return r.returncode == 0
+
+
+VALID_UUID = "550e8400-e29b-41d4-a716-446655440000"
+
+
+class TestRuntimeLifecycleJsonContract(unittest.TestCase):
+    """Contract tests for runtime start/list/inspect/stop/restart/remove §5.2-5.5."""
+
+    def test_invalid_runtime_id_returns_exit_15(self):
+        """Every runtime subcommand rejecting a bad UUID returns exit 15."""
+        for sub in ("inspect", "stop", "restart", "remove"):
+            with self.subTest(sub=sub):
+                result = subprocess.run(
+                    [get_aisc_executable(), "runtime", sub,
+                     "--runtime-id", "not-a-uuid", "--format", "json"],
+                    capture_output=True, text=True,
+                )
+                assert result.returncode == 15, f"{sub}: {result.stderr}"
+                data = json.loads(result.stdout)
+                assert data["meta"]["exit_code"] == 15
+                assert data["errors"][0]["code"] == "AISC_ERR_INVALID_RUNTIME_ID"
+
+    def test_start_invalid_runtime_id_returns_exit_15(self):
+        result = subprocess.run(
+            [get_aisc_executable(), "runtime", "start",
+             "--runtime-id", "nope", "--format", "json"],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 15
+        data = json.loads(result.stdout)
+        assert data["meta"]["exit_code"] == 15
+
+    def test_list_envelope_structure(self):
+        """runtime list returns a JSON envelope with data.runtimes list."""
+        if not _docker_available():
+            self.skipTest("Docker daemon not available")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [get_aisc_executable(), "runtime", "list",
+                 "--workspace", tmpdir, "--format", "json"],
+                capture_output=True, text=True,
+            )
+            assert result.returncode == 0, f"stderr: {result.stderr}"
+            data = json.loads(result.stdout)
+            assert data["meta"]["command"] == "runtime"
+            assert data["meta"]["exit_code"] == 0
+            assert isinstance(data["data"]["runtimes"], list)
+            assert "observed_at" in data["data"]
+
+    def test_inspect_not_found_envelope(self):
+        """runtime inspect of an absent runtime returns not_found, exit 0."""
+        if not _docker_available():
+            self.skipTest("Docker daemon not available")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [get_aisc_executable(), "runtime", "inspect",
+                 "--runtime-id", VALID_UUID, "--workspace", tmpdir,
+                 "--format", "json"],
+                capture_output=True, text=True,
+            )
+            assert result.returncode == 0, f"stderr: {result.stderr}"
+            data = json.loads(result.stdout)
+            assert data["data"]["state"] == "not_found"
+            assert data["data"]["registry_state"] == "not_found"
+            assert data["data"]["runtime_id"] == VALID_UUID
+
+    def test_start_missing_image_returns_error_envelope(self):
+        """runtime start with a missing image returns a non-zero error envelope."""
+        if not _docker_available():
+            self.skipTest("Docker daemon not available")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [get_aisc_executable(), "runtime", "start",
+                 "--runtime-id", VALID_UUID, "--workspace", tmpdir,
+                 "--image", "aisc-nonexistent:latest", "--format", "json"],
+                capture_output=True, text=True,
+            )
+            assert result.returncode != 0
+            data = json.loads(result.stdout)
+            assert data["meta"]["exit_code"] != 0
+            assert len(data["errors"]) >= 1

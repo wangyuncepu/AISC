@@ -489,6 +489,36 @@ if [ "$1" = "codex" ]; then
 fi
 
 # ==========================================
+# 3.8 Idle runtime 模式（Workbench `aisc runtime start` 创建的 detached 容器）
+#    完成作用域/cc-switch/目录初始化后，原子写入不含密钥的
+#    /run/aisc/runtime-context.json，再以 sleep infinity 保活 PID 1，
+#    供 `aisc session open` 通过 docker exec 接入。
+#    不启动交互菜单 / claude / codex；context 文件不写任何 key/token/cookie。
+# ==========================================
+if [ "${AISC_RUNTIME_MODE:-}" = "idle" ]; then
+    RUNTIME_CTX_DIR="/run/aisc"
+    mkdir -p "$RUNTIME_CTX_DIR"
+    RUNTIME_CTX_TMP="$RUNTIME_CTX_DIR/.runtime-context.tmp.$$"
+    READY_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    cat > "$RUNTIME_CTX_TMP" <<EOF
+{
+  "schema_version": "aisc.runtime-context/v1",
+  "runtime_id": "${AISC_RUNTIME_ID:-}",
+  "scope": "${SCOPE}",
+  "workspace_mount": "/root/app",
+  "claude_config_dir": "${CLAUDE_CONFIG_DIR}",
+  "codex_config_dir": "${CODEX_CONFIG_DIR}",
+  "cc_switch_config_dir": "${CC_SWITCH_CONFIG_DIR}",
+  "ready_time": "${READY_TIME}"
+}
+EOF
+    chmod 600 "$RUNTIME_CTX_TMP"
+    mv "$RUNTIME_CTX_TMP" "$RUNTIME_CTX_DIR/runtime-context.json"
+    echo "✅ AISC runtime idle 模式就绪 (runtime_id=${AISC_RUNTIME_ID:-}, scope=${SCOPE})"
+    exec sleep infinity
+fi
+
+# ==========================================
 # 5. 启动方式菜单：bash / claude / codex / cc-switch
 #    仅在交互终端、且以默认 claude 启动时弹出
 #    无 provider 配置时不拦截 —— CLI 使用各自官方默认端点

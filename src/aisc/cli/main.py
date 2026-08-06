@@ -270,6 +270,65 @@ def _build_parser() -> _AiscArgumentParser:
     rtpf.add_argument("--owner", type=str, default="workbench",
                       help="Owner identifier (default: workbench)")
 
+    # --- runtime start ---
+    rts = rtsub.add_parser("start", help="Start a Workbench runtime", allow_abbrev=False)
+    _add_global_args(rts, is_subparser=True)
+    rts.add_argument("--runtime-id", type=str, required=True,
+                     help="Runtime ID (UUID v4, provided by Workbench)")
+    rts.add_argument("--workspace", type=str, default=None,
+                     help="Workspace path (default: current directory)")
+    rts.add_argument("--image", type=str, default="super-claude:latest",
+                     help="Docker image (default: super-claude:latest)")
+    rts.add_argument("--network", type=str, choices=["direct", "proxy"],
+                     default="direct", help="Network mode (default: direct)")
+    rts.add_argument("--scope", type=str, choices=["project", "temporary"],
+                     default="project", help="Runtime scope (default: project)")
+    rts.add_argument("--owner", type=str, default="workbench",
+                     help="Owner identifier (default: workbench)")
+
+    # --- runtime list ---
+    rtl = rtsub.add_parser("list", help="List runtimes with Docker reconciliation",
+                           allow_abbrev=False)
+    _add_global_args(rtl, is_subparser=True)
+    rtl.add_argument("--workspace", type=str, default=None,
+                     help="Workspace path (default: current directory)")
+    rtl.add_argument("--owner", type=str, default=None,
+                     help="Filter by owner (e.g. workbench)")
+
+    # --- runtime inspect ---
+    rti = rtsub.add_parser("inspect", help="Show a single runtime", allow_abbrev=False)
+    _add_global_args(rti, is_subparser=True)
+    rti.add_argument("--runtime-id", type=str, required=True,
+                     help="Runtime ID (UUID v4)")
+    rti.add_argument("--workspace", type=str, default=None,
+                     help="Workspace path (default: current directory)")
+
+    # --- runtime stop ---
+    rtst = rtsub.add_parser("stop", help="Stop a runtime (keep container + metadata)",
+                            allow_abbrev=False)
+    _add_global_args(rtst, is_subparser=True)
+    rtst.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    rtst.add_argument("--workspace", type=str, default=None,
+                      help="Workspace path (default: current directory)")
+
+    # --- runtime restart ---
+    rtr = rtsub.add_parser("restart", help="Restart a runtime with original config",
+                           allow_abbrev=False)
+    _add_global_args(rtr, is_subparser=True)
+    rtr.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    rtr.add_argument("--workspace", type=str, default=None,
+                     help="Workspace path (default: current directory)")
+
+    # --- runtime remove ---
+    rtrm = rtsub.add_parser("remove", help="Remove a runtime (container + registry)",
+                            allow_abbrev=False)
+    _add_global_args(rtrm, is_subparser=True)
+    rtrm.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    rtrm.add_argument("--workspace", type=str, default=None,
+                      help="Workspace path (default: current directory)")
+    rtrm.add_argument("--force", action="store_true", default=False,
+                      help="Remove even if the runtime is running")
+
     return parser
 
 
@@ -825,9 +884,19 @@ def _cmd_runtime(
     effective_format: str,
 ) -> Tuple[Any, int, List[Dict[str, Any]]]:
     """Execute ``aisc runtime`` subcommands.  Supports --format json."""
-    from aisc.cli.commands.runtime import cmd_runtime_preflight
+    from aisc.cli.commands.runtime import (
+        cmd_runtime_preflight,
+        cmd_runtime_start,
+        cmd_runtime_list,
+        cmd_runtime_inspect,
+        cmd_runtime_stop,
+        cmd_runtime_restart,
+        cmd_runtime_remove,
+    )
 
-    if args.runtime_command == "preflight":
+    sub = args.runtime_command
+
+    if sub == "preflight":
         result = cmd_runtime_preflight(
             runtime_id=args.runtime_id,
             workspace=args.workspace,
@@ -837,15 +906,55 @@ def _cmd_runtime(
             owner=args.owner,
             format=effective_format,
         )
-        # Check for error in result
         if "error" in result:
             return None, result["exit_code"], [result["error"]]
         return result, 0, []
+    elif sub == "start":
+        data = cmd_runtime_start(
+            runtime_id=args.runtime_id,
+            workspace=args.workspace,
+            image=args.image,
+            network=args.network,
+            scope=args.scope,
+            owner=args.owner,
+        )
+        return data, 0, []
+    elif sub == "list":
+        data = cmd_runtime_list(
+            workspace=args.workspace,
+            owner=args.owner,
+        )
+        return data, 0, []
+    elif sub == "inspect":
+        data = cmd_runtime_inspect(
+            runtime_id=args.runtime_id,
+            workspace=args.workspace,
+        )
+        return data, 0, []
+    elif sub == "stop":
+        data = cmd_runtime_stop(
+            runtime_id=args.runtime_id,
+            workspace=args.workspace,
+        )
+        return data, 0, []
+    elif sub == "restart":
+        data = cmd_runtime_restart(
+            runtime_id=args.runtime_id,
+            workspace=args.workspace,
+        )
+        return data, 0, []
+    elif sub == "remove":
+        data = cmd_runtime_remove(
+            runtime_id=args.runtime_id,
+            workspace=args.workspace,
+            force=args.force,
+        )
+        return data, 0, []
     else:
         # Unknown runtime subcommand
         return None, 2, [build_error(
             "AISC_ERR_USAGE",
-            f"Unknown runtime subcommand: {args.runtime_command}"
+            f"Unknown runtime subcommand: {sub}"
         )]
 
 
@@ -1181,6 +1290,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         elif args.command in ("shell", "switch", "provider"):
             # interactive output printed directly by _cmd_*
             pass
+        elif args.command == "runtime":
+            from aisc.cli.commands.runtime import print_runtime_text
+            print_runtime_text(getattr(args, "runtime_command", ""), data, errors)
 
     sys.exit(exit_code)
 

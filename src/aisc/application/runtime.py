@@ -3,11 +3,18 @@
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from aisc.domain.models import RuntimeErrorCode, RuntimeExitCode
+from aisc.domain.models import (
+    CliError,
+    ImageInspectStatus,
+    RuntimeErrorCode,
+    RuntimeExitCode,
+    RuntimeSnapshot,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -275,17 +282,6 @@ def _query_docker_labels(
     Empty list if Docker unavailable or no matches.
     """
     try:
-        result = executor.list_containers(all=True)
-        if result.returncode != 0:
-            return []
-        # Parse docker ps --format "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}"
-        # But we need labels — use inspect on each? Better: docker ps with --filter
-        # list_containers uses --format without labels. Use run_captured directly.
-    except Exception:
-        return []
-
-    # Fallback: query containers with io.aisc.runtime-id label via run_captured
-    try:
         filter_label = f"label=io.aisc.runtime-id={runtime_id}"
         result = executor.run_captured(
             ["ps", "-a", "--filter", filter_label, "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}"],
@@ -297,7 +293,7 @@ def _query_docker_labels(
     except Exception:
         return []
 
-    if result.returncode != 0:
+    if result.exit_code != 0:
         return []
 
     containers = []
@@ -476,7 +472,7 @@ def _get_container_state(container_name: str, executor: Any) -> Optional[str]:
     """
     try:
         result = executor.inspect_container(container_name)
-        if result.returncode != 0:
+        if result.exit_code != 0:
             return None
 
         # Parse JSON output to get State.Running
@@ -489,5 +485,767 @@ def _get_container_state(container_name: str, executor: Any) -> Optional[str]:
         return None
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Runtime lifecycle: start / list / inspect / stop / restart / remove
+# (docs/gui-planning/05-cli-gui-contract.md §5.2-5.5)
+# ---------------------------------------------------------------------------
+
+_RUNTIME_CONTEXT_PATH = "/run/aisc/runtime-context.json"
+_RUNTIME_CONTEXT_SCHEMA = "aisc.runtime-context/v1"
+_READY_POLL_INTERVAL = 0.5
+_READY_DEFAULT_TIMEOUT = 60.0
+
+
+def container_name_for(runtime_id: str) -> str:
+    """Deterministic container name: ``aisc-wb-<first 8 hex of runtime_id>``.
+
+    Matches contract §5.2 example ``aisc-wb-0e7b7e3b``. Deterministic name
+    enables idempotent retry and targeted ``docker rm``.
+    """
+    return f"aisc-wb-{runtime_id.split('-', 1)[0]}"
+
+
+def workspace_key_for(workspace: str) -> str:
+    """Return ``sha256`` hex of the canonical workspace path.
+
+    Used as ``io.aisc.workspace-key`` label and the workspace-lock filename.
+    Never the raw host path.
+    """
+    canonical = str(Path(workspace).resolve())
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _docker_status_to_state(status: str) -> str:
+    """Map a ``docker ps`` status string to a runtime state."""
+    if not status:
+        return "unknown"
+    if status.startswith("Up"):
+        return "running"
+    return "stopped"
+
+
+def _find_docker_container_by_runtime_id(
+    runtime_id: str, executor: Any
+) -> Optional[Dict[str, str]]:
+    """Find a Docker container carrying ``io.aisc.runtime-id=<runtime_id>``.
+
+    Returns ``{container_name, container_id, state}`` or ``None``. Uses the
+    same label query as preflight reconciliation.
+    """
+    containers = _query_docker_labels(runtime_id, executor)
+    if not containers:
+        return None
+    c = containers[0]
+    return {
+        "container_name": c.get("container_name", ""),
+        "container_id": c.get("container_id", ""),
+        "state": _docker_status_to_state(c.get("status", "")),
+    }
+
+
+def _list_docker_runtime_containers(
+    executor: Any, workspace_key: Optional[str] = None
+) -> List[Dict[str, str]]:
+    """List Docker containers labeled ``io.aisc.managed=true kind=runtime``.
+
+    Optionally filtered by ``io.aisc.workspace-key``. Returns dicts with
+    ``container_name``, ``container_id``, ``state``, ``runtime_id``,
+    ``workspace_key``, ``owner``, ``image``.
+    """
+    fmt = (
+        "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t"
+        "{{.Label \"io.aisc.runtime-id\"}}\t"
+        "{{.Label \"io.aisc.workspace-key\"}}\t"
+        "{{.Label \"io.aisc.owner\"}}"
+    )
+    argv = [
+        "ps", "-a",
+        "--filter", "label=io.aisc.managed=true",
+        "--filter", "label=io.aisc.kind=runtime",
+        "--format", fmt,
+    ]
+    try:
+        result = executor.run_captured(argv, timeout=10.0)
+    except AttributeError:
+        return []
+    except Exception:
+        return []
+    if result.exit_code != 0:
+        return []
+
+    out: List[Dict[str, str]] = []
+    for line in result.stdout.strip().split("\n"):
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) < 7:
+            continue
+        cid, name, image, status, rid, wskey, owner = parts[:7]
+        if workspace_key is not None and wskey != workspace_key:
+            continue
+        out.append({
+            "container_id": cid.strip(),
+            "container_name": name.strip(),
+            "image": image.strip(),
+            "state": _docker_status_to_state(status.strip()),
+            "runtime_id": rid.strip(),
+            "workspace_key": wskey.strip(),
+            "owner": owner.strip(),
+        })
+    return out
+
+
+def _wait_ready(
+    executor: Any,
+    container_name: str,
+    runtime_id: str,
+    timeout: float = _READY_DEFAULT_TIMEOUT,
+) -> Optional[Dict[str, Any]]:
+    """Poll the container's runtime-context.json until ready or timeout.
+
+    Returns the validated context dict, or ``None`` on timeout/validation
+    failure. Ready means: file exists, parses, ``schema_version`` present and
+    ``runtime_id`` matches.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            result = executor.run_captured(
+                ["exec", container_name, "cat", _RUNTIME_CONTEXT_PATH],
+                timeout=5.0,
+            )
+        except Exception:
+            return None
+        if result.exit_code == 0 and result.stdout.strip():
+            try:
+                ctx = json.loads(result.stdout)
+            except (ValueError, TypeError):
+                ctx = None
+            if isinstance(ctx, dict) and ctx.get("runtime_id") == runtime_id \
+                    and ctx.get("schema_version"):
+                return ctx
+        time.sleep(_READY_POLL_INTERVAL)
+    return None
+
+
+def _resolve_registry_root(
+    workspace: str, registry_root: Optional[Path]
+) -> Path:
+    """Return the ``.aisc`` registry dir for *workspace*."""
+    if registry_root is not None:
+        return registry_root
+    return Path(workspace).resolve() / ".aisc"
+
+
+def _iso_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _require_docker(executor: Any) -> None:
+    """Raise CliError(3) if Docker is unavailable."""
+    if not _check_docker(executor):
+        raise CliError(
+            message="Docker daemon is not running or CLI is not available",
+            exit_code=RuntimeExitCode.DOCKER_UNAVAILABLE,
+            error_code=RuntimeErrorCode.DOCKER_UNAVAILABLE,
+        )
+
+
+def _require_image(image: str, executor: Any) -> None:
+    """Raise CliError if *image* is not locally available."""
+    err = _check_image(image, executor)
+    if err is None:
+        return
+    if err == RuntimeErrorCode.IMAGE_NOT_FOUND:
+        raise CliError(
+            message=f"Image '{image}' not found. Build it first: aisc build --tag {image}",
+            exit_code=5,
+            error_code=RuntimeErrorCode.IMAGE_NOT_FOUND,
+        )
+    # DOCKER_UNAVAILABLE / others
+    raise CliError(
+        message=f"Cannot verify image '{image}': Docker unreachable",
+        exit_code=RuntimeExitCode.DOCKER_UNAVAILABLE,
+        error_code=RuntimeErrorCode.DOCKER_UNAVAILABLE,
+    )
+
+
+@dataclass
+class RuntimeStartResult:
+    """Result of ``aisc runtime start`` per contract §5.2."""
+    runtime_id: str
+    container_name: str
+    container_id: str
+    state: str
+    ready: bool
+    reused: bool
+    config: Dict[str, Any]
+    config_fingerprint: str
+    created_at: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "runtime_id": self.runtime_id,
+            "container_name": self.container_name,
+            "container_id": self.container_id,
+            "state": self.state,
+            "ready": self.ready,
+            "reused": self.reused,
+            "config": self.config,
+            "config_fingerprint": self.config_fingerprint,
+            "created_at": self.created_at,
+        }
+
+
+def _build_start_payload(
+    runtime_id: str,
+    workspace: str,
+    image: str,
+    network: str,
+    scope: str,
+    container_name: str,
+    container_id: str,
+    state: str,
+    ready: bool,
+    reused: bool,
+    fingerprint: str,
+) -> RuntimeStartResult:
+    return RuntimeStartResult(
+        runtime_id=runtime_id,
+        container_name=container_name,
+        container_id=container_id,
+        state=state,
+        ready=ready,
+        reused=reused,
+        config={
+            "workspace": workspace,
+            "image": image,
+            "network": network,
+            "scope": scope,
+        },
+        config_fingerprint=fingerprint,
+        created_at=_iso_now(),
+    )
+
+
+def start_runtime(
+    runtime_id: str,
+    workspace: str,
+    image: str,
+    network: str,
+    scope: str,
+    owner: str,
+    executor: Any,
+    registry_root: Optional[Path] = None,
+    ready_timeout: float = _READY_DEFAULT_TIMEOUT,
+    proxy_config: Optional[str] = None,
+) -> RuntimeStartResult:
+    """Start a Workbench runtime per contract §5.2.
+
+    Acquires the workspace lock, re-validates conflicts (idempotent reuse /
+    conflict), creates a detached idle container, waits for readiness, then
+    commits the registry entry. On registry-commit failure the new container
+    is removed. Returns the §5.2 payload.
+    """
+    from aisc.adapters.container_registry import (
+        list_containers_readonly,
+        register,
+        workspace_lock,
+    )
+
+    # --- validate inputs ---
+    if not validate_uuid_v4(runtime_id):
+        raise CliError(
+            message=f"Invalid runtime ID (must be UUID v4): {runtime_id}",
+            exit_code=RuntimeExitCode.INVALID_RUNTIME_ID,
+            error_code=RuntimeErrorCode.INVALID_RUNTIME_ID,
+        )
+    if scope not in ("project", "temporary"):
+        raise CliError(
+            message=f"Invalid scope (must be project|temporary): {scope}",
+            exit_code=RuntimeExitCode.USAGE_ERROR,
+            error_code=RuntimeErrorCode.SCOPE_INVALID,
+        )
+    if network not in ("direct", "proxy"):
+        raise CliError(
+            message=f"Invalid network (must be direct|proxy): {network}",
+            exit_code=RuntimeExitCode.USAGE_ERROR,
+            error_code=RuntimeErrorCode.NETWORK_INVALID,
+        )
+
+    ws_path = Path(workspace).resolve()
+    if not (ws_path.exists() and ws_path.is_dir()):
+        raise CliError(
+            message=f"Workspace does not exist or is not a directory: {ws_path}",
+            exit_code=RuntimeExitCode.USAGE_ERROR,
+            error_code=RuntimeErrorCode.WORKSPACE_INVALID,
+        )
+
+    canonical_workspace = str(ws_path)
+    fingerprint = compute_config_fingerprint(image, network, scope, canonical_workspace)
+    ws_key = workspace_key_for(canonical_workspace)
+    container_name = container_name_for(runtime_id)
+    reg_root = _resolve_registry_root(canonical_workspace, registry_root)
+
+    _require_docker(executor)
+    _require_image(image, executor)
+
+    # --- workspace lock covers conflict check -> create -> ready -> commit ---
+    with workspace_lock(reg_root, ws_key):
+        # Re-validate inside the lock; do not trust client preflight.
+        conflict_check, matching_runtime_id, conflicts, matching_state = (
+            _check_runtime_conflict(
+                runtime_id=runtime_id,
+                workspace=canonical_workspace,
+                image=image,
+                network=network,
+                scope=scope,
+                registry_root=reg_root,
+                docker_available=True,
+                executor=executor,
+            )
+        )
+
+        # Idempotent reuse: same runtime_id + same fingerprint already registered.
+        if matching_runtime_id == runtime_id:
+            reg_entries = list_containers_readonly(reg_root)
+            reuse_name = ""
+            reuse_meta: Dict[str, Any] = {}
+            for nm, meta in reg_entries.items():
+                if isinstance(meta, dict) and meta.get("runtime_id") == runtime_id \
+                        and meta.get("config_fingerprint") == fingerprint:
+                    reuse_name = nm
+                    reuse_meta = meta
+                    break
+            state = matching_state or "unknown"
+            ready = state == "running"
+            return _build_start_payload(
+                runtime_id, canonical_workspace, image, network, scope,
+                reuse_name, reuse_meta.get("container_id", ""),
+                state, ready, reused=True, fingerprint=fingerprint,
+            )
+
+        # Any conflict blocks creation.
+        if conflicts:
+            detail = "; ".join(
+                f"{c.get('container_name', c.get('runtime_id', '?'))}: {c.get('reason', '')}"
+                for c in conflicts
+            )
+            raise CliError(
+                message=f"Runtime conflict prevents start: {detail}",
+                exit_code=RuntimeExitCode.RUNTIME_CONFLICT,
+                error_code=RuntimeErrorCode.RUNTIME_CONFLICT,
+                data={"conflicts": conflicts, "config_fingerprint": fingerprint},
+            )
+
+        # --- create detached idle container ---
+        argv = [
+            "run", "-d",
+            "--name", container_name,
+            "--label", "io.aisc.managed=true",
+            "--label", "io.aisc.kind=runtime",
+            "--label", f"io.aisc.runtime-id={runtime_id}",
+            "--label", f"io.aisc.owner={owner}",
+            "--label", f"io.aisc.workspace-key={ws_key}",
+            "-e", f"CLI_SCOPE={scope}",
+            "-e", "AISC_RUNTIME_MODE=idle",
+            "-e", f"AISC_RUNTIME_ID={runtime_id}",
+            "-e", "TERM=xterm-256color",
+            "-v", f"{canonical_workspace}:/root/app",
+        ]
+        if network == "proxy":
+            argv.extend(["--cap-add=NET_ADMIN", "--device", "/dev/net/tun"])
+            if proxy_config:
+                argv.extend(["-v", f"{proxy_config}:/etc/mihomo/config.yaml:ro"])
+        argv.append(image)
+
+        proc = executor.run_captured(argv, timeout=60.0)
+        if proc.exit_code != 0 or not (proc.stdout or "").strip():
+            raise CliError(
+                message=f"Failed to create runtime container: {(proc.stderr or '').strip()}",
+                exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+                error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+                data={"container_name": container_name, "config_fingerprint": fingerprint},
+            )
+        container_id = proc.stdout.strip()
+
+        # --- ready check ---
+        ctx = _wait_ready(executor, container_name, runtime_id, ready_timeout)
+        if ctx is None:
+            # Best-effort cleanup; report partial identity.
+            _safe_remove(executor, container_name)
+            raise CliError(
+                message=f"Runtime container did not become ready within {ready_timeout}s",
+                exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+                error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+                data={
+                    "container_name": container_name,
+                    "container_id": container_id,
+                    "config_fingerprint": fingerprint,
+                },
+            )
+
+        # --- commit registry entry (registry lock acquired inside register) ---
+        try:
+            register(reg_root, container_name, {
+                "image": image,
+                "workspace": canonical_workspace,
+                "network": network,
+                "label": "",
+                "runtime_id": runtime_id,
+                "owner": owner,
+                "scope": scope,
+                "config_fingerprint": fingerprint,
+                "container_id": container_id,
+                "workspace_key": ws_key,
+            })
+        except (ValueError, OSError) as exc:
+            # Registry commit failed: remove the new container, report partial.
+            cleanup_ok = _safe_remove(executor, container_name)
+            raise CliError(
+                message=(
+                    f"Failed to commit registry: {exc}. "
+                    f"Container cleanup {'succeeded' if cleanup_ok else 'FAILED - orphaned'}."
+                ),
+                exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+                error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+                data={
+                    "container_name": container_name,
+                    "container_id": container_id,
+                    "config_fingerprint": fingerprint,
+                    "cleanup_ok": cleanup_ok,
+                },
+            ) from exc
+
+        return _build_start_payload(
+            runtime_id, canonical_workspace, image, network, scope,
+            container_name, container_id,
+            state="running", ready=True, reused=False, fingerprint=fingerprint,
+        )
+
+
+def _safe_remove(executor: Any, container_name: str) -> bool:
+    """Best-effort ``docker rm -f``; returns True if it succeeded."""
+    try:
+        result = executor.remove_container(container_name, force=True)
+        return result.exit_code == 0
+    except Exception:
+        return False
+
+
+def _snapshot_from_registry(
+    name: str,
+    meta: Dict[str, Any],
+    docker_state: Optional[str],
+    observed_at: str,
+) -> RuntimeSnapshot:
+    """Build a RuntimeSnapshot from a registry entry + observed Docker state."""
+    state = docker_state or "not_found"
+    return RuntimeSnapshot(
+        runtime_id=meta.get("runtime_id", ""),
+        state=state,
+        workspace=meta.get("workspace", ""),
+        image=meta.get("image", ""),
+        network=meta.get("network", "direct"),
+        scope=meta.get("scope", "project"),
+        owner=meta.get("owner", ""),
+        config_fingerprint=meta.get("config_fingerprint", ""),
+        container_name=name,
+        container_id=meta.get("container_id", ""),
+        registry_state="registered",
+        observed_at=observed_at,
+    )
+
+
+def list_runtimes(
+    executor: Any,
+    registry_root: Path,
+    owner: Optional[str] = None,
+    workspace: Optional[str] = None,
+) -> List[RuntimeSnapshot]:
+    """List runtimes with registry/Docker reconciliation per contract §5.3.
+
+    Docker unavailable -> CliError(3); never disguises cached state as live.
+    Containers present in Docker but absent from registry are marked
+    ``registry_state: "missing"`` and never auto-deleted.
+    """
+    from aisc.adapters.container_registry import list_containers
+
+    _require_docker(executor)
+
+    canonical_workspace = str(Path(workspace).resolve()) if workspace else None
+    ws_key = workspace_key_for(canonical_workspace) if canonical_workspace else None
+    observed_at = _iso_now()
+
+    reg_entries = list_containers(registry_root)
+
+    # Docker-managed runtime containers for this workspace (or all if no ws).
+    docker_containers = _list_docker_runtime_containers(executor, workspace_key=ws_key)
+    docker_by_name = {dc["container_name"]: dc for dc in docker_containers}
+
+    snapshots: List[RuntimeSnapshot] = []
+    seen_names: set = set()
+
+    for name, meta in reg_entries.items():
+        if not isinstance(meta, dict):
+            continue
+        if owner is not None and meta.get("owner", "") != owner:
+            continue
+        if canonical_workspace is not None:
+            try:
+                if str(Path(meta.get("workspace", "")).resolve()) != canonical_workspace:
+                    continue
+            except Exception:
+                continue
+        dc = docker_by_name.get(name)
+        docker_state = dc["state"] if dc else None
+        snapshots.append(_snapshot_from_registry(name, meta, docker_state, observed_at))
+        seen_names.add(name)
+
+    # Docker-only (registry missing) containers for this workspace.
+    for dc in docker_containers:
+        name = dc["container_name"]
+        if name in seen_names:
+            continue
+        if owner is not None and dc.get("owner", "") != owner:
+            continue
+        snapshots.append(RuntimeSnapshot(
+            runtime_id=dc.get("runtime_id", ""),
+            state=dc.get("state", "unknown"),
+            workspace=canonical_workspace or "",
+            image=dc.get("image", ""),
+            network="",
+            scope="",
+            owner=dc.get("owner", ""),
+            config_fingerprint="",
+            container_name=name,
+            container_id=dc.get("container_id", ""),
+            registry_state="missing",
+            observed_at=observed_at,
+        ))
+
+    return snapshots
+
+
+def inspect_runtime(
+    runtime_id: str,
+    executor: Any,
+    registry_root: Path,
+) -> RuntimeSnapshot:
+    """Return a single runtime snapshot per contract §5.4.
+
+    Distinguishes ``not_found`` (Docker & registry both absent), ``stopped``
+    (container exists, not running) and ``unknown`` (Docker daemon/permission
+    unavailable).
+    """
+    from aisc.adapters.container_registry import find_by_runtime_id
+
+    if not validate_uuid_v4(runtime_id):
+        raise CliError(
+            message=f"Invalid runtime ID (must be UUID v4): {runtime_id}",
+            exit_code=RuntimeExitCode.INVALID_RUNTIME_ID,
+            error_code=RuntimeErrorCode.INVALID_RUNTIME_ID,
+        )
+
+    observed_at = _iso_now()
+
+    # Docker unavailable -> cannot confirm actual state.
+    if not _check_docker(executor):
+        return RuntimeSnapshot(
+            runtime_id=runtime_id,
+            state="unknown",
+            registry_state="unknown",
+            observed_at=observed_at,
+            stale=True,
+        )
+
+    found = find_by_runtime_id(registry_root, runtime_id)
+    reg_name, reg_meta = (found if found else (None, None))
+    dc = _find_docker_container_by_runtime_id(runtime_id, executor)
+
+    if reg_name is None and dc is None:
+        return RuntimeSnapshot(
+            runtime_id=runtime_id,
+            state="not_found",
+            registry_state="not_found",
+            observed_at=observed_at,
+        )
+
+    if reg_name is not None and reg_meta is not None:
+        docker_state = dc["state"] if dc else "not_found"
+        return _snapshot_from_registry(reg_name, reg_meta, docker_state, observed_at)
+
+    # Docker-only (registry missing).
+    return RuntimeSnapshot(
+        runtime_id=runtime_id,
+        state=dc["state"] if dc else "not_found",
+        container_name=dc["container_name"] if dc else "",
+        container_id=dc["container_id"] if dc else "",
+        registry_state="missing",
+        observed_at=observed_at,
+    )
+
+
+def _resolve_container_for_lifecycle(
+    runtime_id: str,
+    executor: Any,
+    registry_root: Path,
+) -> Tuple[str, str, Dict[str, Any]]:
+    """Resolve (container_name, container_id, meta) for stop/restart/remove.
+
+    Prefers the registry entry; falls back to Docker label discovery.
+    Raises CliError(RUNTIME_NOT_FOUND) if absent from both.
+    """
+    from aisc.adapters.container_registry import find_by_runtime_id
+
+    if not validate_uuid_v4(runtime_id):
+        raise CliError(
+            message=f"Invalid runtime ID (must be UUID v4): {runtime_id}",
+            exit_code=RuntimeExitCode.INVALID_RUNTIME_ID,
+            error_code=RuntimeErrorCode.INVALID_RUNTIME_ID,
+        )
+    _require_docker(executor)
+
+    found = find_by_runtime_id(registry_root, runtime_id)
+    if found is not None:
+        name, meta = found
+        return name, meta.get("container_id", ""), meta
+
+    dc = _find_docker_container_by_runtime_id(runtime_id, executor)
+    if dc is not None:
+        return dc["container_name"], dc["container_id"], {
+            "runtime_id": runtime_id,
+            "container_id": dc["container_id"],
+            "workspace": "",
+            "image": "",
+            "network": "",
+            "scope": "",
+            "owner": "",
+            "config_fingerprint": "",
+        }
+
+    raise CliError(
+        message=f"Runtime not found: {runtime_id}",
+        exit_code=RuntimeExitCode.GENERAL_ERROR,
+        error_code=RuntimeErrorCode.RUNTIME_NOT_FOUND,
+    )
+
+
+def stop_runtime(
+    runtime_id: str,
+    executor: Any,
+    registry_root: Path,
+) -> RuntimeSnapshot:
+    """Stop a runtime but keep container + registry metadata per §5.5.
+
+    Idempotent: stopping an already-stopped container succeeds.
+    """
+    name, container_id, meta = _resolve_container_for_lifecycle(
+        runtime_id, executor, registry_root
+    )
+    result = executor.stop_container(name)
+    if result.exit_code != 0:
+        stderr = (result.stderr or "").lower()
+        if any(kw in stderr for kw in ("no such", "not found")):
+            raise CliError(
+                message=f"Runtime container not found: {name}",
+                exit_code=RuntimeExitCode.GENERAL_ERROR,
+                error_code=RuntimeErrorCode.RUNTIME_NOT_FOUND,
+            )
+        raise CliError(
+            message=f"Failed to stop runtime: {(result.stderr or '').strip()}",
+            exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+            error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+        )
+    return _snapshot_from_registry(name, meta, "stopped", _iso_now())
+
+
+def restart_runtime(
+    runtime_id: str,
+    executor: Any,
+    registry_root: Path,
+    ready_timeout: float = _READY_DEFAULT_TIMEOUT,
+) -> RuntimeSnapshot:
+    """Restart the same container with its original config per §5.5.
+
+    Waits for readiness before returning.
+    """
+    name, container_id, meta = _resolve_container_for_lifecycle(
+        runtime_id, executor, registry_root
+    )
+    result = executor.run_captured(["start", name], timeout=30.0)
+    if result.exit_code != 0:
+        raise CliError(
+            message=f"Failed to restart runtime: {(result.stderr or '').strip()}",
+            exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+            error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+        )
+    ctx = _wait_ready(executor, name, runtime_id, ready_timeout)
+    if ctx is None:
+        raise CliError(
+            message=f"Restarted runtime did not become ready within {ready_timeout}s",
+            exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+            error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+        )
+    return _snapshot_from_registry(name, meta, "running", _iso_now())
+
+
+def remove_runtime(
+    runtime_id: str,
+    executor: Any,
+    registry_root: Path,
+    force: bool = False,
+) -> RuntimeSnapshot:
+    """Delete the container and unregister the runtime per §5.5.
+
+    A running runtime is rejected unless ``force`` is set.
+    """
+    from aisc.adapters.container_registry import unregister_by_runtime_id
+
+    name, container_id, meta = _resolve_container_for_lifecycle(
+        runtime_id, executor, registry_root
+    )
+
+    # Refuse to remove a running runtime without --force.
+    state = _get_container_state(name, executor)
+    if state == "running" and not force:
+        raise CliError(
+            message=(
+                f"Runtime {runtime_id} is running. "
+                "Stop it first or pass --force to remove a running runtime."
+            ),
+            exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+            error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+            data={"runtime_id": runtime_id, "state": "running"},
+        )
+
+    result = executor.remove_container(name, force=force)
+    if result.exit_code != 0:
+        stderr = (result.stderr or "").lower()
+        if not any(kw in stderr for kw in ("no such", "not found")):
+            raise CliError(
+                message=f"Failed to remove runtime: {(result.stderr or '').strip()}",
+                exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+                error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+            )
+
+    unregister_by_runtime_id(registry_root, runtime_id)
+
+    return RuntimeSnapshot(
+        runtime_id=runtime_id,
+        state="not_found",
+        workspace=meta.get("workspace", ""),
+        image=meta.get("image", ""),
+        network=meta.get("network", ""),
+        scope=meta.get("scope", ""),
+        owner=meta.get("owner", ""),
+        config_fingerprint=meta.get("config_fingerprint", ""),
+        container_name=name,
+        container_id=container_id,
+        registry_state="not_found",
+        observed_at=_iso_now(),
+    )
 
 
