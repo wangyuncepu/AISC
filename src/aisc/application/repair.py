@@ -238,7 +238,7 @@ def install_docker_macos(runner: ProcessRunner, install_brew_first: bool) -> Tup
     if not brew_executable:
         return False, "Homebrew installation completed, but brew was not found"
 
-    brew_dir = str(Path(brew_executable).parent)
+    brew_dir = os.path.dirname(brew_executable)
     path_entries = os.environ.get("PATH", "").split(os.pathsep)
     if brew_dir not in path_entries:
         os.environ["PATH"] = os.pathsep.join([brew_dir, *path_entries])
