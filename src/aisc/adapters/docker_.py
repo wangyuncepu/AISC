@@ -17,7 +17,9 @@ Protocol methods
 from __future__ import annotations
 
 import os
+import select
 import shlex
+import signal
 import shutil
 import subprocess
 import sys
@@ -68,6 +70,14 @@ class DockerExecutor(Protocol):
                             *, timeout: Optional[float] = None) -> ProcessResult:
         """Execute ``docker <argv>`` with DEVNULL stdin, inherited stdout / stderr.
         For ``--non-interactive`` mode."""
+
+    def run_streaming_captured(self, docker_argv: List[str],
+                               on_chunk: "Callable[[str, str], None]",
+                               *, timeout: Optional[float] = None) -> ProcessResult:
+        """Execute ``docker <argv>`` streaming stdout/stderr chunks to
+        *on_chunk(stream, chunk)*. Used by ``build --events`` for real-time
+        ``build.output`` events (not end-of-build replay). The child runs in its
+        own process group so a cancel can kill it without signaling the CLI."""
 
     # Container operations
     def list_containers(self, all: bool = False) -> ProcessResult:
@@ -351,6 +361,59 @@ class RealDockerExecutor:
                 exit_code=-1, command_not_found=True,
             )
 
+    # ------------------------------------------------------------------
+    # run_streaming_captured (build --events: real-time build.output)
+    # ------------------------------------------------------------------
+
+    def run_streaming_captured(self, docker_argv: List[str],
+                               on_chunk: "Callable[[str, str], None]",
+                               *, timeout: Optional[float] = None) -> ProcessResult:
+        """Run ``docker <argv>`` in its own process group, streaming each
+        stdout/stderr chunk to *on_chunk(stream, chunk)*. On any interruption
+        (cancel/error) the child's whole process group is SIGKILLed so Docker
+        build subprocesses do not outlive the CLI."""
+        dp = self._resolve_path() or "docker"
+        try:
+            proc = subprocess.Popen(
+                [dp] + list(docker_argv),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                start_new_session=True,  # own process group -> cancel can killpg
+            )
+        except FileNotFoundError:
+            return ProcessResult(
+                stdout="", stderr="command not found: docker",
+                exit_code=-1, command_not_found=True,
+            )
+        except OSError as exc:
+            return ProcessResult(
+                stdout="", stderr=f"command error: {exc}",
+                exit_code=-1, command_not_found=True,
+            )
+        streams = {proc.stdout: "stdout", proc.stderr: "stderr"}
+        open_fds = list(streams.keys())
+        try:
+            while open_fds:
+                ready, _, _ = select.select(open_fds, [], [], 0.5)
+                for f in ready:
+                    data = f.read1(4096)
+                    if data:
+                        on_chunk(streams[f], data.decode("utf-8", "replace"))
+                    else:
+                        open_fds.remove(f)
+            proc.wait(timeout=timeout)
+            return ProcessResult(stdout="", stderr="", exit_code=proc.returncode)
+        except BaseException:
+            # Cancel or error: kill the Docker child's whole process group.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+            raise
+
     @property
     def docker_path(self) -> str:
         return self._resolve_path() or "docker"
@@ -436,6 +499,7 @@ class FakeDockerExecutor:
             stdout="", stderr="", exit_code=0,
         )
         self._streaming_exit_code: int = 0
+        self._streaming_chunks: List = []  # [(stream, chunk), ...] for run_streaming_captured
 
         # Call tracking
         self.calls: List[List[str]] = []           # run_captured argv
@@ -528,6 +592,28 @@ class FakeDockerExecutor:
 
     def set_streaming_exit(self, code: int) -> None:
         self._streaming_exit_code = code
+
+    # ------------------------------------------------------------------
+    # run_streaming_captured (build --events)
+    # ------------------------------------------------------------------
+
+    def run_streaming_captured(self, docker_argv: List[str],
+                               on_chunk: "Callable[[str, str], None]",
+                               *, timeout: Optional[float] = None) -> ProcessResult:
+        """Replay configured chunks to *on_chunk*, then return the preset exit
+        code. Set chunks via :meth:`set_streaming_chunks`."""
+        self.streaming_calls.append(list(docker_argv))
+        for stream, chunk in self._streaming_chunks:
+            on_chunk(stream, chunk)
+        return ProcessResult(
+            stdout="", stderr="",
+            exit_code=self._streaming_exit_code if self._streaming_exit_code >= 0 else -1,
+            command_not_found=(self._streaming_exit_code < 0),
+        )
+
+    def set_streaming_chunks(self, chunks) -> None:
+        """Configure ``[(stream, chunk), ...]`` replayed by run_streaming_captured."""
+        self._streaming_chunks = list(chunks)
 
     # ------------------------------------------------------------------
     # Zero-call assertion
