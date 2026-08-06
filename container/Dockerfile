@@ -248,6 +248,11 @@ RUN chmod +x /usr/local/bin/codex
 COPY container/aisc-session-wrapper /usr/local/bin/aisc-session-wrapper
 RUN chmod +x /usr/local/bin/aisc-session-wrapper
 
+# AISC provider inspector（Workbench S0.4）：docker exec 读取容器内 provider 配置，
+# 输出 secret-free 的 provider 状态（route_mode/auth_status），供 aisc provider current。
+COPY container/aisc-provider-inspect /usr/local/bin/aisc-provider-inspect
+RUN chmod +x /usr/local/bin/aisc-provider-inspect
+
 # 防御：若构建上下文来自 Windows（CRLF），脚本 shebang 会变成 "#!/bin/bash\r"，
 # 导致 "cannot execute: required file not found"。统一剥离 CR，确保镜像内脚本可执行。
 # 注意：只处理文本脚本，绝不能 sed claude-real/codex-real —— 那些是原生 ELF 二进制，
@@ -257,6 +262,7 @@ RUN sed -i 's/\r$//' \
         /usr/local/bin/claude \
         /usr/local/bin/codex \
         /usr/local/bin/aisc-session-wrapper \
+        /usr/local/bin/aisc-provider-inspect \
         /usr/local/bin/mihomo-build-config.js \
         /usr/local/bin/lib/env-inject.sh \
         /usr/local/bin/lib/writable.sh \

@@ -552,6 +552,54 @@ def _find_docker_container_by_runtime_id(
     }
 
 
+def resolve_running_container(
+    runtime_id: str,
+    executor: Any,
+    registry_root: Any,
+) -> str:
+    """Resolve *runtime_id* to a running container's name.
+
+    Used by data-plane commands (session, provider) that need to ``docker exec``
+    into the runtime. Raises ``CliError`` with a stable code if Docker is
+    unavailable, the runtime is not found, or it is not running.
+    """
+    from aisc.adapters.container_registry import find_by_runtime_id
+
+    if not _check_docker(executor):
+        raise CliError(
+            message="Docker daemon is not running or CLI is not available",
+            exit_code=RuntimeExitCode.DOCKER_UNAVAILABLE,
+            error_code=RuntimeErrorCode.DOCKER_UNAVAILABLE,
+        )
+
+    container_name = ""
+    found = find_by_runtime_id(registry_root, runtime_id)
+    if found is not None:
+        container_name = found[0]
+    else:
+        dc = _find_docker_container_by_runtime_id(runtime_id, executor)
+        if dc is not None:
+            container_name = dc["container_name"]
+
+    if not container_name:
+        raise CliError(
+            message=f"Runtime not found: {runtime_id}",
+            exit_code=RuntimeExitCode.GENERAL_ERROR,
+            error_code=RuntimeErrorCode.RUNTIME_NOT_FOUND,
+        )
+
+    state = _get_container_state(container_name, executor)
+    if state != "running":
+        raise CliError(
+            message=f"Runtime is not running (state: {state or 'not_found'}). "
+                    f"Start it first: aisc runtime start --runtime-id {runtime_id}",
+            exit_code=RuntimeExitCode.RUNTIME_NOT_RUNNING,
+            error_code=RuntimeErrorCode.RUNTIME_NOT_RUNNING,
+        )
+
+    return container_name
+
+
 def _list_docker_runtime_containers(
     executor: Any, workspace_key: Optional[str] = None
 ) -> List[Dict[str, str]]:

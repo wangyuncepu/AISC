@@ -207,7 +207,10 @@ class CcSwitchRuntimeTests(unittest.TestCase):
             "src/aisc/adapters/config_source.py",
             "src/aisc/adapters/secret_store.py",
             "src/aisc/application/provider_service.py",
-            "src/aisc/cli/commands/provider.py",
+            # Note: src/aisc/cli/commands/provider.py is intentionally NOT here --
+            # S0.4 re-adds it for `aisc provider current` (contract §七), a
+            # different, secret-free observability command. The legacy
+            # cs/secret_store infrastructure it guards is still covered below.
         )
         for relative_path in removed:
             self.assertFalse((ROOT / relative_path).exists(), relative_path)
