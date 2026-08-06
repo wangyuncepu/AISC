@@ -189,24 +189,19 @@ def run_build(
     # --- check if image already exists ---
     from aisc.domain.models import ImageInspectStatus
     inspect_result = exec_.inspect_image(plan.tag)
-    if inspect_result.status == ImageInspectStatus.EXISTS:
-        if streaming and emitter is None:
-            # Text mode: warn user about existing image
-            _sys.stderr.write(f"\n⚠️  Image already exists: {plan.tag}\n")
-            _sys.stderr.write("   Building will replace it (may create dangling <none> images).\n")
-            _sys.stderr.write("   Tip: Use 'docker rmi {tag}' before build, or use a different tag.\n\n")
-            _sys.stderr.flush()
-        elif emitter is not None:
-            # Events mode: emit warning event
-            emitter.emit("build.warning", data={
-                "message": f"Image already exists: {plan.tag}",
-                "hint": "Building will replace it (may create dangling <none> images).",
-            })
+    image_exists = inspect_result.status == ImageInspectStatus.EXISTS
+    if image_exists and streaming and emitter is None:
+        # Text mode: warn user about existing image
+        _sys.stderr.write(f"\n⚠️  Image already exists: {plan.tag}\n")
+        _sys.stderr.write("   Building will replace it (may create dangling <none> images).\n")
+        _sys.stderr.write("   Tip: Use 'docker rmi {tag}' before build, or use a different tag.\n\n")
+        _sys.stderr.flush()
 
     # --- plan event (non-dry-run) ---
     if emitter is not None:
         emitter.emit("build.plan", data={
             "docker_argv": result.docker_argv,
+            "image_exists": image_exists,
         })
 
     # --- execute docker build ---
@@ -236,13 +231,49 @@ def run_build(
                 exit_code=4, error_code="AISC_ERR_BUILD_FAILED",
                 data=result.to_dict(),
             )
+    elif emitter is not None:
+        # --events: stream docker output as real-time build.output events.
+        def _on_chunk(stream: str, chunk: str) -> None:
+            emitter.emit("build.output", data={"stream": stream, "chunk": chunk})
+
+        try:
+            proc = exec_.run_streaming_captured(argv, _on_chunk)
+        except KeyboardInterrupt:
+            # Cancel: the executor already killpg'd the docker child. Emit the
+            # terminal build.cancelled with a resource summary and exit 130
+            # (bypasses main.py's generic handler so we control the payload).
+            emitter.emit_terminal("build.cancelled", 130, extra_data={
+                "image_tag": plan.tag,
+                "docker_exit_code": None,
+                "reason": "cancelled",
+            })
+            _sys.exit(130)
+        result.docker_exit_code = proc.exit_code
+        result.executed = True
+        if proc.command_not_found:
+            raise CliError(
+                message="Docker CLI not found",
+                exit_code=3, error_code="AISC_ERR_DOCKER_UNAVAILABLE",
+                data=result.to_dict(),
+            )
+        if proc.timed_out:
+            raise CliError(
+                message="Docker build timed out",
+                exit_code=1, error_code="AISC_ERR_GENERAL",
+                data=result.to_dict(),
+            )
+        if proc.exit_code != 0:
+            raise CliError(
+                message=f"Docker build failed (exit {proc.exit_code})",
+                exit_code=4, error_code="AISC_ERR_BUILD_FAILED",
+                data=result.to_dict(),
+            )
     else:
-        # JSON / events mode: capture, forward to stderr
+        # --format json: capture, forward docker output to stderr (stdout pure).
         proc = exec_.run_captured(argv)
         result.docker_exit_code = proc.exit_code
         result.executed = True
 
-        # Forward docker stdout/stderr to stderr — keep stdout pure
         if proc.stdout:
             _sys.stderr.write(proc.stdout)
         if proc.stderr:
@@ -255,10 +286,5 @@ def run_build(
                 data=result.to_dict(),
             )
 
-    # --- success ---
-    if emitter is not None:
-        emitter.emit("build.step.complete", data={
-            "step": "build_context", "status": "ok",
-        })
-
+    # --- success: main.py emits the build.complete terminal event ---
     return result
