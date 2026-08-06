@@ -489,6 +489,42 @@ if [ "$1" = "codex" ]; then
 fi
 
 # ==========================================
+# 3.8 Idle runtime 模式（Workbench `aisc runtime start` 创建的 detached 容器）
+#    完成作用域/cc-switch/目录初始化后，原子写入不含密钥的
+#    /run/aisc/runtime-context.json，再以 sleep infinity 保活 PID 1，
+#    供 `aisc session open` 通过 docker exec 接入。
+#    不启动交互菜单 / claude / codex；context 文件不写任何 key/token/cookie。
+# ==========================================
+if [ "${AISC_RUNTIME_MODE:-}" = "idle" ]; then
+    mkdir -p /run/aisc
+    export SCOPE
+    # Write runtime-context.json via python3 so interpolated paths (which may
+    # contain " or \) cannot break JSON. Quoted heredoc -> no shell expansion;
+    # values come from env. File is secret-free (no key/token/cookie).
+    python3 - <<'PYEOF'
+import json, os, datetime
+ctx = {
+    "schema_version": "aisc.runtime-context/v1",
+    "runtime_id": os.environ.get("AISC_RUNTIME_ID", ""),
+    "scope": os.environ.get("SCOPE", ""),
+    "workspace_mount": "/root/app",
+    "claude_config_dir": os.environ.get("CLAUDE_CONFIG_DIR", ""),
+    "codex_config_dir": os.environ.get("CODEX_CONFIG_DIR", ""),
+    "cc_switch_config_dir": os.environ.get("CC_SWITCH_CONFIG_DIR", ""),
+    "ready_time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+tmp = "/run/aisc/.runtime-context.tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(ctx, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+os.chmod(tmp, 0o600)
+os.replace(tmp, "/run/aisc/runtime-context.json")
+PYEOF
+    echo "✅ AISC runtime idle 模式就绪 (runtime_id=${AISC_RUNTIME_ID:-}, scope=${SCOPE})"
+    exec sleep infinity
+fi
+
+# ==========================================
 # 5. 启动方式菜单：bash / claude / codex / cc-switch
 #    仅在交互终端、且以默认 claude 启动时弹出
 #    无 provider 配置时不拦截 —— CLI 使用各自官方默认端点

@@ -19,6 +19,47 @@ class CheckStatus:
     SKIP = "skip"
 
 
+class RuntimeErrorCode:
+    """Stable error codes for runtime operations.
+
+    Aligned with docs/rfc/aisc-cli-v1.md §4.1.
+    """
+    DOCKER_UNAVAILABLE = "AISC_ERR_DOCKER_UNAVAILABLE"
+    RUNTIME_CONFLICT = "AISC_ERR_RUNTIME_CONFLICT"
+    INVALID_RUNTIME_ID = "AISC_ERR_INVALID_RUNTIME_ID"
+    RUNTIME_OPERATION_FAILED = "AISC_ERR_RUNTIME_OPERATION_FAILED"
+    WORKSPACE_INVALID = "AISC_ERR_WORKSPACE_INVALID"
+    IMAGE_NOT_FOUND = "AISC_ERR_IMAGE_NOT_FOUND"
+    NETWORK_INVALID = "AISC_ERR_NETWORK_INVALID"
+    SCOPE_INVALID = "AISC_ERR_SCOPE_INVALID"
+    # Legacy/extended codes not in RFC §4.1
+    RUNTIME_NOT_FOUND = "AISC_ERR_RUNTIME_NOT_FOUND"
+    STATE_LOCK_TIMEOUT = "AISC_ERR_STATE_LOCK_TIMEOUT"
+    RUNTIME_UNHEALTHY = "AISC_ERR_RUNTIME_UNHEALTHY"
+    CONTAINER_NOT_FOUND = "AISC_ERR_CONTAINER_NOT_FOUND"
+
+
+class RuntimeExitCode:
+    """Exit codes for runtime operations.
+
+    Uses RFC-compliant exit codes. New runtime-specific codes use 14+.
+    Aligned with docs/rfc/aisc-cli-v1.md §4.1.
+    """
+    SUCCESS = 0
+    GENERAL_ERROR = 1
+    USAGE_ERROR = 2
+    DOCKER_UNAVAILABLE = 3  # Reuses existing AISC_EXIT_DOCKER_UNAVAILABLE
+    # 4 = AISC_EXIT_BUILD_FAILED (reserved by RFC)
+    IMAGE_NOT_FOUND = 5  # AISC_EXIT_IMAGE_NOT_FOUND (reserved by RFC)
+    # 6 = AISC_EXIT_CONFIG_INVALID (reserved by RFC)
+    PERMISSION_DENIED = 9
+    # New runtime-specific exit codes (14+, registered in RFC)
+    RUNTIME_CONFLICT = 14           # AISC_EXIT_RUNTIME_CONFLICT
+    INVALID_RUNTIME_ID = 15         # AISC_EXIT_INVALID_RUNTIME_ID
+    RUNTIME_OPERATION_FAILED = 16   # AISC_EXIT_RUNTIME_OPERATION_FAILED
+    STATE_LOCK_TIMEOUT = 17         # AISC_EXIT_STATE_LOCK_TIMEOUT
+
+
 # ---------------------------------------------------------------------------
 # Version info
 # ---------------------------------------------------------------------------
@@ -307,3 +348,73 @@ class RunPlan:
                 ])
         argv.append(self.image)
         return argv
+
+
+# ---------------------------------------------------------------------------
+# Runtime snapshot — structured runtime state
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RuntimeSnapshot:
+    """Structured runtime state matching lifecycle contract.
+
+    Combines registry metadata with live Docker state.
+    See docs/gui-planning/03-lifecycle-contract.md for state machine.
+    """
+    runtime_id: str = ""           # UUID v4 (provided by Workbench)
+    state: str = "unknown"         # unknown, not_found, starting, running, stopping, stopped, removing
+    workspace: str = ""            # canonical absolute path
+    image: str = ""                # image:tag
+    network: str = "direct"        # direct, proxy
+    scope: str = "project"         # project, temporary
+    owner: str = ""                # who created this runtime (e.g., "workbench")
+    config_fingerprint: str = ""   # sha256:<hash> of canonical config
+    container_name: str = ""       # Docker container name (for legacy compat)
+    container_id: str = ""         # Docker container ID (from inspect)
+    label: str = ""                # optional user label
+
+    # Registry reconciliation
+    registry_state: str = "unknown"  # registered, missing, unknown
+
+    # Timestamps
+    created_at: str = ""           # ISO timestamp or numeric (backward compat)
+    started_at: str = ""           # ISO timestamp from Docker
+    observed_at: str = ""          # ISO timestamp when this snapshot was taken
+
+    # Staleness indicator
+    stale: bool = False            # True if observation is potentially outdated
+
+    # Last operation error (None if last operation succeeded)
+    last_operation_error: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-serializable dict matching CLI contract."""
+        result = {
+            "runtime_id": self.runtime_id,
+            "state": self.state,
+            "config": {
+                "workspace": self.workspace,
+                "image": self.image,
+                "network": self.network,
+                "scope": self.scope,
+            },
+            "owner": self.owner,
+            "config_fingerprint": self.config_fingerprint,
+            "container_name": self.container_name,
+            "container_id": self.container_id,
+            "registry_state": self.registry_state,
+            "observed_at": self.observed_at,
+            "stale": self.stale,
+        }
+
+        # Optional fields
+        if self.label:
+            result["label"] = self.label
+        if self.created_at:
+            result["created_at"] = self.created_at
+        if self.started_at:
+            result["started_at"] = self.started_at
+        if self.last_operation_error:
+            result["last_operation_error"] = self.last_operation_error
+
+        return result

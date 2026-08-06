@@ -116,7 +116,7 @@ class MacosDockerInstallTests(unittest.TestCase):
             runner.streaming_calls[1][0],
             [brew, "install", "--cask", "docker"],
         )
-        self.assertTrue(updated_path.startswith("/opt/homebrew/bin:"))
+        self.assertTrue(updated_path.startswith(f"/opt/homebrew/bin{os.pathsep}"))
         self.assertEqual(runner.calls[0][0], ["open", "-a", "Docker"])
 
 

@@ -227,14 +227,20 @@ event stream 中不得出现明文密钥。脱敏规则同 §2.6。
 | `11` | `AISC_EXIT_NEEDS_CONFIRMATION` | `AISC_ERR_NEEDS_CONFIRMATION` | 需用户确认（unsafe profile 未确认 / 其他需确认的操作） |
 | `12` | `AISC_EXIT_CONTRACT_MISMATCH` | `AISC_ERR_CONTRACT_MISMATCH` | 容器 contract version 或 capability label 不兼容 |
 | `13` | `AISC_EXIT_PROXY_FAILED` | `AISC_ERR_PROXY_FAILED` | `--network proxy` 显式请求但 TUN/preflight 失败 |
+| `14` | `AISC_EXIT_RUNTIME_CONFLICT` | `AISC_ERR_RUNTIME_CONFLICT` | Runtime 配置冲突（preflight 检测到不兼容运行时） |
+| `15` | `AISC_EXIT_INVALID_RUNTIME_ID` | `AISC_ERR_INVALID_RUNTIME_ID` | Runtime ID 格式无效（非 UUID v4） |
+| `16` | `AISC_EXIT_RUNTIME_OPERATION_FAILED` | `AISC_ERR_RUNTIME_OPERATION_FAILED` | Runtime 操作失败（启动/停止/移除等） |
+| `17` | `AISC_EXIT_STATE_LOCK_TIMEOUT` | `AISC_ERR_STATE_LOCK_TIMEOUT` | 跨进程 registry/workspace 锁获取超时（并发冲突无法在超时内解决） |
 
 > 注：`AISC_EXIT_NEEDS_CONFIRMATION(11)` 合并了原拟议的 `EX_PROFILE_REQUIRES_CONFIRM(11)` 和 `EX_NEEDS_CONFIRMATION(12)`。S1 草案统一使用表内的 `AISC_ERR_NEEDS_CONFIRMATION`；如未来需要增加更细的原因码，须先在 RFC 中登记后才能视为稳定符号。
+>
+> **退出码 14-16** 为 S0.2 Workbench Phase 0 引入，用于 `aisc runtime` 子命令族。`AISC_EXIT_RUNTIME_CONFLICT(14)` 用于 preflight 检测到配置冲突时的快速失败；`AISC_EXIT_INVALID_RUNTIME_ID(15)` 用于拒绝非 UUID v4 格式的 runtime ID；`AISC_EXIT_RUNTIME_OPERATION_FAILED(16)` 用于 runtime 生命周期操作的一般性失败（不属于其他更具体的错误类别）。**退出码 17** `AISC_EXIT_STATE_LOCK_TIMEOUT` 用于跨进程锁（registry `.containers.lock` 或 workspace lock）超时，映射为 `CliError` 而非原始 `TimeoutError`。
 
 ### 4.2 错误码稳定性
 
-所有 `AISC_ERR_*` 字符串为稳定符号，**不会在 minor/patch 版本中变更或重编号**。新增退出码只在 minor 版本引入且仅分配新数值（≥14），不重用已定义值。
+所有 `AISC_ERR_*` 字符串为稳定符号，**不会在 minor/patch 版本中变更或重编号**。新增退出码只在 minor 版本引入且仅分配新数值（≥18），不重用已定义值。
 
-`AISC_EXIT_*` 数值 0–13 如表中定义；数值 14+ 为预留空间，当前未分配。客户端不得假设 0–13 连续——应仅依赖表中列出的已知值，未识别值视为 `AISC_EXIT_GENERAL`。
+`AISC_EXIT_*` 数值 0–17 如表中定义；数值 18+ 为预留空间，当前未分配。客户端不得假设 0–17 连续——应仅依赖表中列出的已知值，未识别值视为 `AISC_EXIT_GENERAL`。
 
 ---
 

@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-from aisc.domain.models import CliError
+from aisc.domain.models import CliError, RuntimeErrorCode, RuntimeExitCode
 
 
 _REGISTRY_FILE = "containers.json"
@@ -35,7 +35,29 @@ _REGISTRY_FILE = "containers.json"
 # ---------------------------------------------------------------------------
 
 def _registry_path(root: Path) -> Path:
-    return root / ".aisc" / _REGISTRY_FILE
+    """Return path to containers.json.
+
+    Args:
+        root: Either workspace root or .aisc directory.
+              If root ends with .aisc, use it directly.
+              Otherwise append .aisc.
+    """
+    if root.name == ".aisc":
+        return root / _REGISTRY_FILE
+    else:
+        return root / ".aisc" / _REGISTRY_FILE
+
+
+def _state_dir(root: Path) -> Path:
+    """Return the ``.aisc`` state directory, accepting either a workspace
+    root or an already-``.aisc`` path (mirrors :func:`_registry_path`).
+
+    All lock/temp-file placement goes through here so callers may pass
+    either form consistently.
+    """
+    if root.name == ".aisc":
+        return root
+    return root / ".aisc"
 
 
 def _resolve_root(root: Optional[Path], explicit_root: Optional[str] = None) -> Optional[Path]:
@@ -78,29 +100,105 @@ def _read_registry(root: Path) -> Dict[str, Any]:
 
 
 @contextmanager
-def _registry_lock(root: Path) -> Iterator[None]:
-    """Hold the registry lock across a complete read-modify-write cycle."""
-    state_dir = root / ".aisc"
+def _registry_lock(root: Path, timeout: float = 10.0) -> Iterator[None]:
+    """Hold the registry lock across a complete read-modify-write cycle.
+
+    Uses fcntl.flock (POSIX) or msvcrt.locking (Windows).
+    Fail-closed: raises on lock acquisition failure.
+
+    Args:
+        root: AISC root directory
+        timeout: Lock timeout in seconds (default 10.0)
+
+    Raises:
+        CliError (STATE_LOCK_TIMEOUT): If lock cannot be acquired within timeout
+        OSError: On other lock-related errors
+
+    Yields:
+        None while lock is held
+    """
+    import sys
+    import time as time_module
+
+    state_dir = _state_dir(root)
     state_dir.mkdir(parents=True, exist_ok=True)
     lock_path = state_dir / ".containers.lock"
     lock_fd = None
     locked = False
+
     try:
-        try:
+        # Open lock file
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+
+        # Platform-specific locking with timeout
+        if sys.platform == "win32":
+            # Windows: msvcrt.locking with bounded retry
+            import msvcrt
+
+            start_time = time_module.time()
+            while True:
+                try:
+                    # Try to lock 1 byte at offset 0
+                    msvcrt.locking(lock_fd, msvcrt.LK_NBLCK, 1)
+                    locked = True
+                    break
+                except OSError as e:
+                    elapsed = time_module.time() - start_time
+                    if elapsed >= timeout:
+                        raise CliError(
+                            message=f"Failed to acquire registry lock within {timeout}s",
+                            exit_code=RuntimeExitCode.STATE_LOCK_TIMEOUT,
+                            error_code=RuntimeErrorCode.STATE_LOCK_TIMEOUT,
+                        ) from e
+                    # Retry after short sleep
+                    time_module.sleep(0.1)
+        else:
+            # POSIX: fcntl.flock with alarm-based timeout
             import fcntl
-            lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            locked = True
-        except ImportError:
-            pass
+            import signal
+
+            def timeout_handler(signum, frame):
+                raise CliError(
+                    message=f"Failed to acquire registry lock within {timeout}s",
+                    exit_code=RuntimeExitCode.STATE_LOCK_TIMEOUT,
+                    error_code=RuntimeErrorCode.STATE_LOCK_TIMEOUT,
+                )
+
+            # Only set alarm if we're in the main thread
+            # (signal.alarm only works in main thread)
+            try:
+                old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                # Use ceil to ensure timeout >= 1 second works
+                signal.alarm(int(timeout) + 1)
+                alarm_set = True
+            except ValueError:
+                # Not in main thread, fall back to blocking lock
+                alarm_set = False
+
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                locked = True
+            finally:
+                if alarm_set:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old_handler)
+
         yield
+
     finally:
+        # Release lock
         if locked and lock_fd is not None:
             try:
-                import fcntl
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                if sys.platform == "win32":
+                    import msvcrt
+                    msvcrt.locking(lock_fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
             except OSError:
                 pass
+
+        # Close file descriptor
         if lock_fd is not None:
             try:
                 os.close(lock_fd)
@@ -114,7 +212,7 @@ def _write_registry_unlocked(root: Path, data: Dict[str, Any]) -> None:
     Atomicity still prevents readers from observing a partially written JSON
     document while the separate lock serializes writers.
     """
-    state_dir = root / ".aisc"
+    state_dir = _state_dir(root)
     state_dir.mkdir(parents=True, exist_ok=True)
     path = _registry_path(root)
 
@@ -149,7 +247,19 @@ def register(root: Path, name: str, meta: Dict[str, Any]) -> None:
     Args:
         root: AISC root directory.
         name: Container name (unique per run).
-        meta: Metadata dict with keys image/workspace/network/label.
+        meta: Metadata dict with keys:
+            - image: Docker image name
+            - workspace: Workspace path
+            - network: Network mode (direct/proxy)
+            - label: Optional user label
+            - runtime_id: Runtime ID (UUID v4 for Workbench runtimes)
+            - owner: Username who created this runtime
+            - scope: Scope mode (project/temporary)
+            - config_fingerprint: Config hash for idempotent retry
+            - container_id: Docker container ID (Workbench runtimes)
+            - workspace_key: sha256 of canonical workspace (Workbench runtimes)
+
+    Backward compatible: if old fields are missing, stores empty strings.
     """
     entry = {
         "image": meta.get("image", ""),
@@ -157,6 +267,13 @@ def register(root: Path, name: str, meta: Dict[str, Any]) -> None:
         "network": meta.get("network", ""),
         "label": meta.get("label", ""),
         "created_at": meta.get("created_at") or time.time(),
+        # New fields (v2.2.0+) - backward compatible
+        "runtime_id": meta.get("runtime_id", ""),
+        "owner": meta.get("owner", ""),
+        "scope": meta.get("scope", ""),
+        "config_fingerprint": meta.get("config_fingerprint", ""),
+        "container_id": meta.get("container_id", ""),
+        "workspace_key": meta.get("workspace_key", ""),
     }
     with _registry_lock(root):
         data = _read_registry(root)
@@ -179,9 +296,187 @@ def unregister(root: Path, name: str) -> None:
         _write_registry_unlocked(root, data)
 
 
+@contextmanager
+def workspace_lock(root: Path, workspace_key: str, timeout: float = 10.0) -> Iterator[None]:
+    """Hold a per-workspace lock for project Runtime start.
+
+    Serializes ``registry/labels conflict check -> Docker create/ready ->
+    registry commit`` for one canonical workspace so two concurrent
+    ``project`` starts on the same workspace cannot both succeed.
+
+    Lock file: ``<state_dir>/workspace-locks/<workspace_key>.lock``.
+    Cross-platform and fail-closed, identical semantics to
+    :func:`_registry_lock`. Lock order is ``workspace lock -> registry lock``;
+    callers must not acquire the registry lock first.
+
+    Args:
+        root: Registry root (workspace root or ``.aisc`` dir).
+        workspace_key: ``sha256`` hex of the canonical workspace path.
+        timeout: Lock acquisition timeout in seconds.
+
+    Raises:
+        CliError (STATE_LOCK_TIMEOUT): if the lock cannot be acquired within *timeout*.
+    """
+    import sys
+    import time as time_module
+
+    state_dir = _state_dir(root)
+    locks_dir = state_dir / "workspace-locks"
+    locks_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = locks_dir / f"{workspace_key}.lock"
+    lock_fd = None
+    locked = False
+
+    try:
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+
+        if sys.platform == "win32":
+            import msvcrt
+
+            start_time = time_module.time()
+            while True:
+                try:
+                    msvcrt.locking(lock_fd, msvcrt.LK_NBLCK, 1)
+                    locked = True
+                    break
+                except OSError as e:
+                    if time_module.time() - start_time >= timeout:
+                        raise CliError(
+                            message=f"Failed to acquire workspace lock within {timeout}s",
+                            exit_code=RuntimeExitCode.STATE_LOCK_TIMEOUT,
+                            error_code=RuntimeErrorCode.STATE_LOCK_TIMEOUT,
+                        ) from e
+                    time_module.sleep(0.1)
+        else:
+            import fcntl
+            import signal
+
+            def timeout_handler(signum, frame):
+                raise CliError(
+                    message=f"Failed to acquire workspace lock within {timeout}s",
+                    exit_code=RuntimeExitCode.STATE_LOCK_TIMEOUT,
+                    error_code=RuntimeErrorCode.STATE_LOCK_TIMEOUT,
+                )
+
+            # SIGALRM-based timeout only works in the main thread; a non-main
+            # caller (signal.signal raises ValueError) falls back to an
+            # unbounded blocking flock. Fine for the single-threaded aisc CLI;
+            # a future threaded caller would need a different timeout strategy.
+            alarm_set = False
+            try:
+                old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(int(timeout) + 1)
+                alarm_set = True
+            except ValueError:
+                alarm_set = False
+
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                locked = True
+            finally:
+                if alarm_set:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, old_handler)
+
+        yield
+
+    finally:
+        if locked and lock_fd is not None:
+            try:
+                if sys.platform == "win32":
+                    import msvcrt
+                    msvcrt.locking(lock_fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+
+
+def find_by_runtime_id(root: Path, runtime_id: str) -> Optional[tuple]:
+    """Return ``(container_name, meta)`` for the registry entry matching
+    *runtime_id*, or ``None`` if not found. Reads under the registry lock.
+    """
+    with _registry_lock(root):
+        data = _read_registry(root)
+        for name, meta in data["containers"].items():
+            if isinstance(meta, dict) and meta.get("runtime_id", "") == runtime_id:
+                import copy
+                return name, copy.deepcopy(meta)
+    return None
+
+
+def unregister_by_runtime_id(root: Path, runtime_id: str) -> Optional[str]:
+    """Remove the registry entry matching *runtime_id*.
+
+    Returns the removed container name, or ``None`` if no entry matched.
+    Repoints ``default`` when the removed entry was the default.
+    """
+    with _registry_lock(root):
+        data = _read_registry(root)
+        removed: Optional[str] = None
+        for name, meta in data["containers"].items():
+            if isinstance(meta, dict) and meta.get("runtime_id", "") == runtime_id:
+                removed = name
+                break
+        if removed is None:
+            return None
+        data["containers"].pop(removed, None)
+        if data["default"] == removed:
+            data["default"] = _pick_newest(data["containers"])
+        _write_registry_unlocked(root, data)
+        return removed
+
+
 def list_containers(root: Path) -> Dict[str, Dict[str, Any]]:
-    """Return all registered container entries (name → meta)."""
-    return _read_registry(root)["containers"]
+    """Return all registered container entries (name → meta).
+
+    Reads registry snapshot under lock to ensure consistency.
+    Returns a copy to prevent external mutation.
+    """
+    with _registry_lock(root):
+        data = _read_registry(root)
+        # Return a deep copy to prevent external mutation
+        import copy
+        return copy.deepcopy(data["containers"])
+
+
+def list_containers_readonly(root: Path) -> Dict[str, Dict[str, Any]]:
+    """Return all registered container entries (name → meta) without side effects.
+
+    Read-only: does not acquire lock or create directories/files.
+    For preflight and other observational operations.
+    Returns empty dict if registry file doesn't exist.
+    Raises exception if registry exists but is corrupted/unreadable.
+    """
+    import copy
+    import json
+
+    registry_file = _registry_path(root)
+    if not registry_file.exists():
+        return {}
+
+    # File exists, so corruption/read errors must be raised
+    with open(registry_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("Registry root is not a dict")
+    containers = data.get("containers", {})
+    if not isinstance(containers, dict):
+        raise ValueError("Registry containers field is not a dict")
+    return copy.deepcopy(containers)
+
+
+def get_default(root: Path) -> str:
+    """Return the default container name, or empty string if none."""
+    with _registry_lock(root):
+        data = _read_registry(root)
+        return data.get("default", "")
 
 
 def _pick_newest(containers: Dict[str, Any]) -> str:
@@ -229,34 +524,44 @@ def gc(root: Path, executor) -> List[str]:
     """Prune registry entries whose container is gone. Returns pruned names.
 
     Best-effort: if docker is unreachable, prunes nothing and returns [].
+
+    Pattern: lock→snapshot→unlock→inspect→relock→compare→prune per contract.
     """
-    snapshot = _read_registry(root)
-    containers = snapshot.get("containers", {})
-    if not containers:
-        return []
+    # Phase 1: lock → snapshot → unlock
+    with _registry_lock(root):
+        snapshot = _read_registry(root)
+        containers = snapshot.get("containers", {})
+        if not containers:
+            return []
+
+    # Phase 2: Docker inspect outside lock
     missing: List[str] = []
     for nm in list(containers):
         exists = _container_exists(executor, nm)
         if exists is False:
             missing.append(nm)
+
     if not missing:
         return []
 
-    pruned: List[str] = []
+    # Phase 3: relock → compare current entry → conditional prune
     with _registry_lock(root):
-        data = _read_registry(root)
-        current = data.get("containers", {})
+        current_data = _read_registry(root)
+        current_containers = current_data.get("containers", {})
+
+        pruned: List[str] = []
         for nm in missing:
             # Do not delete a same-name container re-registered while Docker
             # checks were running.
-            if current.get(nm) == containers.get(nm):
-                current.pop(nm, None)
+            if current_containers.get(nm) == containers.get(nm):
+                current_containers.pop(nm, None)
                 pruned.append(nm)
+
         if pruned:
-            if data["default"] in pruned:
-                data["default"] = _pick_newest(current)
-            _write_registry_unlocked(root, data)
-    return pruned
+            if current_data["default"] in pruned:
+                current_data["default"] = _pick_newest(current_containers)
+            _write_registry_unlocked(root, current_data)
+        return pruned
 
 
 # ---------------------------------------------------------------------------
@@ -310,8 +615,7 @@ def resolve_target(
         except Exception:
             pass
 
-    data = _read_registry(resolved_root)
-    containers: Dict[str, Dict[str, Any]] = data.get("containers", {})
+    containers = list_containers(resolved_root)
 
     # 1. explicit name
     if name_override:
@@ -346,7 +650,7 @@ def resolve_target(
         )
 
     # 3. default pointer
-    default = data.get("default", "")
+    default = get_default(resolved_root)
     if default and default in containers:
         return default
 

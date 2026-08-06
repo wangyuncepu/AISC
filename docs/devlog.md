@@ -2,6 +2,71 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+## v2.2.0-dev (2026-08-03 ~ 2026-08-06) — Workbench Phase 0 S0.2: Runtime 控制面
+
+### 变更
+
+- 实现 `aisc runtime preflight` 命令：只读，零副作用，执行 Docker/workspace/image/network/runtime_conflict 五项检查后返回 JSON payload（`docs/gui-planning/05-cli-gui-contract.md §5.1`）。
+- Runtime ID 由 Workbench 提供（UUID v4），CLI 严格校验格式；不允许 CLI 自生成 ID。
+- 配置指纹 `sha256:<hex>` 对 image/network/scope/canonical workspace 规范化计算，用于幂等重试和复用检测。
+- Registry 路径修正：`containers.json`（非 `registry.json`），根目录已含 `.aisc` 时不再嵌套。
+- 新增 `list_containers_readonly()`：无锁、无副作用 registry 快照读；文件缺失返回空、损坏则抛异常（fail-closed）。
+- GC 修复：lock→snapshot→unlock→inspect→relock→compare→prune 模式，消除锁内 Docker 调用和 NameError 回归。
+- `_check_image()` 区分 "image not found" 与 "cannot observe"（Docker 不可用时返回 `DOCKER_UNAVAILABLE` 而非 `IMAGE_NOT_FOUND`）。
+- 基于 Docker label `io.aisc.runtime-id` 的容器发现与 reconciliation；Docker 中存在但 registry 中缺失的容器报告为 conflict。
+- 旧 registry 记录检测：缺失 runtime_id/scope/owner 的旧条目自动标记为 conflict（按 contract §5.1 行 140）。
+- CLI 命令层移除内联 PreflightExecutor，改用 `RealDockerExecutor()` 结构化 API（`preflight()`/`inspect_image()`/`inspect_container()`）。
+- 注册 exit codes 14-16（RUNTIME_CONFLICT/INVALID_RUNTIME_ID/RUNTIME_OPERATION_FAILED）到 `docs/rfc/aisc-cli-v1.md`。
+- 全部 runtime 测试从 pytest 迁移到 `unittest.TestCase`，同时兼容 unittest discover 和 pytest 运行器。
+- 新增 25 个 preflight 单元测试、13 个 subprocess 契约测试、8 个零副作用测试。
+
+#### Runtime CRUD 命令（§5.2-5.5）
+
+- 实现 `aisc runtime start/list/inspect/stop/restart/remove`，覆盖生命周期状态机（`03-lifecycle-contract.md §四`）。
+- `start`：workspace lock 内复用 preflight 的冲突判定做幂等/冲突重验（不信任客户端 preflight）；`docker run -d` 以 detached idle 模式创建容器，带 5 个 Docker labels（`io.aisc.managed`/`kind`/`runtime-id`/`owner`/`workspace-key`，不写原始宿主路径）；轮询 `docker exec cat /run/aisc/runtime-context.json` 做 ready check（校验 schema/runtime_id）；成功后才在 registry lock 内提交 registry 记录；registry commit 失败时 `docker rm -f` 清理新容器并返回 partial identity。
+- 容器名确定性：`aisc-wb-<runtime_id 前 8 hex>`，支撑幂等重试与定向 `docker rm`。
+- 新增 `workspace_lock()`（`.aisc/workspace-locks/<sha256>.lock`，POSIX `fcntl.flock` / Windows `msvcrt.locking`，fail-closed），锁顺序固定 workspace lock -> registry lock，仅 `start` 获取。
+- `list`：registry 快照 + Docker inspect 对账；Docker-only 容器标记 `registry_state: "missing"` 不自动删除；Docker 不可用返回稳定错误(3)，不伪装缓存为实时。
+- `inspect`：按 runtime_id 在 registry + Docker label 查找，区分 `not_found`/`stopped`/`unknown`。
+- `stop` 幂等；`restart` 原配置重启 + ready check；`remove` 运行中无 `--force` 拒绝(16)，`--force` 或已停止才删除容器并注销 registry。
+- `container/entrypoint.sh` 新增 idle 分支：`AISC_RUNTIME_MODE=idle` 时完成 scope/cc-switch/目录初始化后，原子写不含密钥的 `/run/aisc/runtime-context.json`（schema/runtime_id/scope/config dirs/ready_time），再 `exec sleep infinity` 保活 PID 1 供 `session open` 接入。
+- 修复 registry 一致性：`_state_dir()` 统一接受 workspace root 或 `.aisc` 路径，`_registry_lock`/`_write_registry_unlocked`/`workspace_lock` 共用；修复 `_query_docker_labels`/`_get_container_state` 误用 `returncode`（应为 `exit_code`）的潜在 bug（Mock 执行器下不显现，RealDockerExecutor 下崩溃）。
+- 旧 `aisc run/shell/switch/stop` 兼容路径不受影响；新语义全在 `runtime` 子命令族内。
+
+#### Code review 修复（645170b review）
+
+- **锁超时映射**：`workspace_lock`/`_registry_lock` 超时改为抛 `CliError(STATE_LOCK_TIMEOUT, exit 17)`，不再裸 `TimeoutError` 堆栈；注册 exit 17 到 RFC §4.1；`start_runtime` 的 workspace lock 超时改为 `ready_timeout + 30s`，避免并发 start 在 winner 持锁期间误超时。
+- **Docker-only registry_state**：`_snapshot_from_registry` 接受 `registry_state` 参数；`_resolve_container_for_lifecycle` 返回 4-tuple 含 registry_state；stop/restart 对 Docker-only 容器正确返回 `missing`（原先误标 `registered`）。
+- **`_wait_ready` 瞬态异常**：单次 `docker exec` 异常不再立即返回 None 触发清理，改为继续轮询到 deadline（仅超时或校验失败才返回 None）。
+- **重用已停止 runtime**：`start` 重用匹配但已停止的 runtime 时自动 `docker start` + ready check，返回 `reused=True, running, ready`（原先返回 stopped limbo）。
+- **proxy_config 接线**：`runtime start` 增加 `--proxy-config` 选项并透传到 `start_runtime`，proxy 模式可挂载 mihomo 配置。
+- **entrypoint 安全 JSON**：idle 分支改用 python3 写 `runtime-context.json`（quoted heredoc + env），避免路径含 `"`/`\` 时 shell 插值破坏 JSON。
+- 小清理：`_iso_now` 去重（CLI 层改 import）、`_require_image` 用 `RuntimeExitCode.IMAGE_NOT_FOUND` 常量、移除未用的 `conflict_check`、`stop_runtime` docstring 明确幂等边界、`container_name_for` 标注 32-bit 熵、`_list_docker_runtime_containers` 标注瞬态假阴性。
+- 新增 7 个回归测试（锁超时映射 ×2、Docker-only stop/restart、_wait_ready 瞬态/超时、重用已停止 runtime）。
+- **ac65adb review 回归修复**：锁超时改 `CliError` 后，`start_runtime` 的 register cleanup `except (ValueError, OSError)` 不再捕获它（`TimeoutError` 是 `OSError` 子类，`CliError` 不是），导致 ready 容器成孤儿。新增 `except CliError:` 分支清理容器并 re-raise 保留 `STATE_LOCK_TIMEOUT`。`_iso_now` 改公开名 `iso_now`；workspace_lock 标注 SIGALRM 主线程限制。新增 1 个回归测试。
+
+### 关键提交
+
+- `000a878` 登记 exit codes 14-16
+- `69821aa` preflight 垂直切片（domain/application/CLI/tests）
+- `d2bd4f3` 消除 registry 读竞态条件
+- `59e43c8` 修正 registry 路径和 fail-closed 语义
+- `5a983b3` PreflightExecutor → RealDockerExecutor
+- `86716e7` 区分不可观测与缺失语义
+- `9d1fef9` Docker label reconciliation
+- `ab0493a` 旧记录冲突检测
+- `96260e8` pytest → unittest.TestCase
+- (本批) runtime start/list/inspect/stop/restart/remove + entrypoint idle 模式 + workspace lock
+
+### 状态
+
+- 分支: `feature/workbench-phase0-s0.2`
+- 315 tests passed, 8 skipped（含 25 个 lifecycle 单元测试、runtime CRUD 契约测试、真 Docker start->remove 集成测试与并发 start 竞态测试）
+- Runtime 控制面（preflight + start/list/inspect/stop/restart/remove）已实现并通过 S0.2 DoD：空 Docker 状态 start->remove 全链路通过，JSON envelope 与退出码一致；同 workspace 并发 project start 只有一个成功，另一个 conflict(14)。
+- 下一步：S0.3 Session 数据面（`aisc session open/list/terminate` + 容器内 `aisc-session-wrapper`）。
+
+---
+
 ## v2.1.4 (2026-07-24) — Codex 官方登录直连与安全的 Skills 同步
 
 ### 变更

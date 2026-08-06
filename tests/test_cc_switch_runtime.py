@@ -3,6 +3,7 @@
 import io
 import importlib.util
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -276,6 +277,7 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         self.assertNotIn("AISC_DIR", _SCOPE_WRAPPER)
         self.assertNotIn("PROVIDERS_JSON", _SCOPE_WRAPPER)
 
+    @unittest.skipUnless(os.name == "posix", "scope wrapper reads /proc/1/environ (Linux containers)")
     def test_docker_exec_wrapper_restores_literal_values(self):
         from aisc.cli.commands.container import _SCOPE_WRAPPER
 
@@ -735,9 +737,9 @@ class CcSwitchSkillSyncTests(unittest.TestCase):
             )
 
         self.assertTrue(approved)
-        self.assertIn(".cc-switch/skills", prompt.getvalue())
-        self.assertIn(".claude/skills", prompt.getvalue())
-        self.assertIn(".codex/skills", prompt.getvalue())
+        self.assertIn(str(config_dir / "skills"), prompt.getvalue())
+        self.assertIn(str(skills_home / ".claude" / "skills"), prompt.getvalue())
+        self.assertIn(str(skills_home / ".codex" / "skills"), prompt.getvalue())
         self.assertIn("[y/N]", prompt.getvalue())
 
     def test_unlocked_partial_host_skills_still_prompts_and_defaults_no(self):
@@ -763,8 +765,8 @@ class CcSwitchSkillSyncTests(unittest.TestCase):
             )
 
         self.assertFalse(approved)
-        self.assertIn(".claude/skills", prompt.getvalue())
-        self.assertNotIn(".codex/skills", prompt.getvalue())
+        self.assertIn(str(skills_home / ".claude" / "skills"), prompt.getvalue())
+        self.assertNotIn(str(skills_home / ".codex" / "skills"), prompt.getvalue())
         self.assertIn("declined", log.getvalue())
 
     def test_unlocked_noninteractive_existing_skills_declines_without_prompt(self):
