@@ -242,6 +242,12 @@ RUN mv /usr/local/bin/codex /usr/local/bin/codex-real
 COPY container/codex-wrapper /usr/local/bin/codex
 RUN chmod +x /usr/local/bin/codex
 
+# AISC session wrapper（Workbench S0.3）：docker exec 接入的容器内 session 数据面。
+# 从 /run/aisc/runtime-context.json 重建 scope 环境，以独立进程组启动受控 Agent，
+# 原子维护 /run/aisc/sessions/<id>.json (0600)，负责 wait/reap 与 terminate 清理。
+COPY container/aisc-session-wrapper /usr/local/bin/aisc-session-wrapper
+RUN chmod +x /usr/local/bin/aisc-session-wrapper
+
 # 防御：若构建上下文来自 Windows（CRLF），脚本 shebang 会变成 "#!/bin/bash\r"，
 # 导致 "cannot execute: required file not found"。统一剥离 CR，确保镜像内脚本可执行。
 # 注意：只处理文本脚本，绝不能 sed claude-real/codex-real —— 那些是原生 ELF 二进制，
@@ -250,6 +256,7 @@ RUN sed -i 's/\r$//' \
         /usr/local/bin/entrypoint.sh \
         /usr/local/bin/claude \
         /usr/local/bin/codex \
+        /usr/local/bin/aisc-session-wrapper \
         /usr/local/bin/mihomo-build-config.js \
         /usr/local/bin/lib/env-inject.sh \
         /usr/local/bin/lib/writable.sh \

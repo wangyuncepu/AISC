@@ -1,0 +1,479 @@
+#!/usr/bin/env python3
+"""AISC session wrapper (container-side, Workbench Phase 0 S0.3).
+
+Runs inside a runtime container via ``docker exec``. Three modes:
+
+  open       Rebuild scope env from /run/aisc/runtime-context.json, start the
+             controlled agent in its own process group (foreground on the PTY),
+             atomically maintain a 0600 session record at
+             /run/aisc/sessions/<session-id>.json, wait/reap, and propagate
+             the agent exit code.
+
+  list       Print all session records as a JSON array (diagnostics/cleanup).
+
+  terminate  PID/PGID/start-ticks identity check, then TERM -> grace -> KILL
+             on the agent process group. Idempotent.
+
+Per docs/gui-planning/05-cli-gui-contract.md §6 and 03-lifecycle-contract.md §5.
+
+Secret-free: never writes env, argv, key/token/cookie, or PTY bytes to the
+record or stdout. ``list``/``terminate`` emit only non-secret metadata.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import os
+import re
+import shutil
+import signal
+import sys
+import time
+from typing import Any, Dict, Optional
+
+CONTEXT_PATH = "/run/aisc/runtime-context.json"
+SESSIONS_DIR = "/run/aisc/sessions"
+SCHEMA_VERSION = "aisc.session/v1"
+
+# Agent -> controlled argv token (no shell, no user args). Each binary is a
+# wrapper installed by the Dockerfile that handles its own settings env_inject.
+AGENT_BINARIES = {
+    "claude": "claude",
+    "codex": "codex",
+    "bash": "bash",
+    "cc-switch": "cc-switch",
+}
+
+_UUID_V4_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+# Non-terminal states: a record in one of these means the session ID is in use.
+ACTIVE_STATES = ("starting", "running", "closing", "disconnected")
+TERMINAL_STATES = ("exited", "failed")
+
+
+def _now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _is_uuid_v4(value: str) -> bool:
+    return bool(_UUID_V4_RE.match(value))
+
+
+def _fail(message: str, exit_code: int = 1) -> None:
+    print(f"aisc-session-wrapper: {message}", file=sys.stderr)
+    sys.exit(exit_code)
+
+
+def _record_path(session_id: str) -> str:
+    # session_id is validated as UUID v4 before this is called -> safe segment.
+    return os.path.join(SESSIONS_DIR, f"{session_id}.json")
+
+
+def _read_start_ticks(pid: int) -> Optional[int]:
+    """Read process start time (field 22, clock ticks) from /proc/<pid>/stat.
+
+    Returns None if the process is gone or the field cannot be parsed. Used for
+    PID identity checks so a reused PID is never signalled.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as f:
+            data = f.read()
+    except (FileNotFoundError, ProcessLookupError, OSError):
+        return None
+    rparen = data.rfind(")")
+    if rparen == -1:
+        return None
+    rest = data[rparen + 1:].split()
+    # field 22 (starttime) is the 20th token after the comm paren (field 3 == index 0)
+    if len(rest) <= 19:
+        return None
+    try:
+        return int(rest[19])
+    except ValueError:
+        return None
+
+
+def _write_record(record: Dict[str, Any], session_id: str) -> None:
+    """Atomically write a 0600 session record (tmp + fsync + os.replace)."""
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    path = _record_path(session_id)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+
+
+def _read_record(session_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        with open(_record_path(session_id), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _load_context() -> Dict[str, Any]:
+    try:
+        with open(CONTEXT_PATH, "r", encoding="utf-8") as f:
+            ctx = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+        _fail(f"runtime-context.json unavailable: {exc}")
+    if not isinstance(ctx, dict):
+        _fail("runtime-context.json is not an object")
+    return ctx  # type: ignore[return-value]
+
+
+def _rebuild_env(ctx: Dict[str, Any]) -> Dict[str, str]:
+    """Rebuild scope env from context. Does not trust docker exec PID 1 env."""
+    env = os.environ.copy()
+    codex_dir = ctx.get("codex_config_dir", "")
+    env["CLAUDE_CONFIG_DIR"] = ctx.get("claude_config_dir", "")
+    env["CODEX_CONFIG_DIR"] = codex_dir
+    # CODEX_HOME == CODEX_CONFIG_DIR per entrypoint.sh; the context carries no
+    # separate field, so derive it to rebuild the documented config boundary.
+    env["CODEX_HOME"] = codex_dir
+    env["CC_SWITCH_CONFIG_DIR"] = ctx.get("cc_switch_config_dir", "")
+    return env
+
+
+def _new_record(args: argparse.Namespace, state: str) -> Dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "runtime_id": args.runtime_id,
+        "session_id": args.session_id,
+        "agent": args.agent,
+        "state": state,
+        "pid": None,
+        "pgid": None,
+        "sid": None,
+        "start_ticks": None,
+        "started_at": "",
+        "finished_at": "",
+        "exit_code": None,
+        "reason": "",
+    }
+
+
+def _binary_available(binary: str) -> bool:
+    """True if *binary* resolves on PATH (prevents exec-failure ambiguity)."""
+    return shutil.which(binary) is not None
+
+
+def _spawn_agent_foreground(binary: str, env: Dict[str, str]):
+    """Fork+exec the agent in its own process group, foreground on the PTY.
+
+    The child blocks before ``exec`` until the parent has called
+    ``tcsetpgrp`` to make the agent's group the foreground group. This kills
+    the SIGTTOU race where an interactive agent writes its prompt from a
+    background group and gets stopped.
+
+    ``subprocess.Popen`` cannot be used here: its exec-error pipe would
+    deadlock with a blocking preexec. Returns ``(pid, old_fg_or_None)``.
+    """
+    sync_r, sync_w = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            os.setpgid(0, 0)  # new group (pgid == pid), same session
+            os.close(sync_w)
+            os.read(sync_r, 1)  # block until parent made us foreground
+            os.close(sync_r)
+            os.execvpe(binary, [binary], env)
+        except BaseException:
+            os._exit(127)
+    # parent
+    os.close(sync_r)
+    try:
+        os.setpgid(pid, pid)  # race-free: parent also sets the group
+    except (ProcessLookupError, OSError):
+        pass
+    old_fg = None
+    if os.isatty(0):
+        try:
+            old_fg = os.tcgetpgrp(0)
+            os.tcsetpgrp(0, pid)
+        except OSError:
+            old_fg = None
+    try:
+        os.write(sync_w, b"x")  # unblock child -> exec now that it is foreground
+    except OSError:
+        pass
+    os.close(sync_w)
+    return pid, old_fg
+
+
+# ---------------------------------------------------------------------------
+# open
+# ---------------------------------------------------------------------------
+
+def _cmd_open(args: argparse.Namespace) -> int:
+    if not _is_uuid_v4(args.session_id):
+        _fail(f"invalid session-id (must be UUID v4): {args.session_id}")
+    if args.agent not in AGENT_BINARIES:
+        _fail(f"invalid agent: {args.agent}")
+    if not _is_uuid_v4(args.runtime_id):
+        _fail(f"invalid runtime-id (must be UUID v4): {args.runtime_id}")
+
+    # Reject duplicate active session ID (contract §6.1: 同 session ID 冲突必须拒绝).
+    existing = _read_record(args.session_id)
+    if existing and existing.get("state") in ACTIVE_STATES:
+        _fail(f"session already active: {args.session_id}")
+
+    ctx = _load_context()
+    # Defense in depth: the request must match the runtime this container is
+    # actually backing. The CLI resolves the container by runtime_id, so a
+    # mismatch means the wrong container was reached.
+    if ctx.get("runtime_id") and ctx.get("runtime_id") != args.runtime_id:
+        _fail(
+            f"runtime-context runtime_id mismatch: "
+            f"context={ctx.get('runtime_id')} request={args.runtime_id}"
+        )
+    env = _rebuild_env(ctx)
+    binary = AGENT_BINARIES[args.agent]
+
+    if not _binary_available(binary):
+        record = _new_record(args, "failed")
+        record["exit_code"] = 127
+        record["finished_at"] = _now()
+        record["reason"] = "process_exit"
+        _write_record(record, args.session_id)
+        _fail(f"agent binary not found: {binary}", exit_code=127)
+
+    # Ignore SIGTTOU/SIGTTIN so background terminal ops never stop the wrapper
+    # while the agent holds the foreground group.
+    signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+    signal.signal(signal.SIGTTIN, signal.SIG_IGN)
+
+    pid, old_fg = _spawn_agent_foreground(binary, env)
+
+    start_ticks = _read_start_ticks(pid)
+    record = _new_record(args, "running")
+    record["pid"] = pid
+    record["pgid"] = pid  # child setpgid(0,0) -> pgid == pid
+    # The agent shares the wrapper's session (setpgid, not setsid). Recording
+    # the sid lets terminate kill the whole session, including job-control
+    # children that bash runs in sub-groups (else `sleep 300` would orphan).
+    record["sid"] = os.getsid(0)
+    record["start_ticks"] = start_ticks
+    record["started_at"] = _now()
+    _write_record(record, args.session_id)
+
+    try:
+        _, status = os.waitpid(pid, 0)
+        exit_code = os.waitstatus_to_exitcode(status)
+    except (OSError, KeyboardInterrupt, SystemExit):
+        # Interrupted while waiting: kill the group, reap, mark failed.
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            os.waitpid(pid, 0)
+        except OSError:
+            pass
+        record["state"] = "failed"
+        record["finished_at"] = _now()
+        record["reason"] = "process_exit"
+        _write_record(record, args.session_id)
+        raise
+    finally:
+        if old_fg is not None:
+            try:
+                os.tcsetpgrp(0, old_fg)
+            except OSError:
+                pass
+
+    record["state"] = "exited"
+    record["exit_code"] = exit_code
+    record["finished_at"] = _now()
+    record["reason"] = "process_exit"
+    _write_record(record, args.session_id)
+    return exit_code
+
+
+# ---------------------------------------------------------------------------
+# list
+# ---------------------------------------------------------------------------
+
+def _cmd_list(args: argparse.Namespace) -> int:
+    records = []
+    if os.path.isdir(SESSIONS_DIR):
+        for name in sorted(os.listdir(SESSIONS_DIR)):
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(SESSIONS_DIR, name), "r", encoding="utf-8") as f:
+                    rec = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                continue
+            if isinstance(rec, dict):
+                records.append(rec)
+    print(json.dumps(records, ensure_ascii=False))
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# terminate
+# ---------------------------------------------------------------------------
+
+def _identity_matches(pid: int, rec_ticks: Optional[int]) -> bool:
+    """True if *pid* is still the same process we recorded (start ticks match)."""
+    if rec_ticks is None:
+        # No baseline recorded; fall back to existence only.
+        return _read_start_ticks(pid) is not None
+    return _read_start_ticks(pid) == rec_ticks
+
+
+def _pgrps_in_session(sid: int):
+    """Return the set of process-group IDs of all processes in session *sid*."""
+    found = set()
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat", "r", encoding="utf-8") as f:
+                data = f.read()
+        except OSError:
+            continue
+        rparen = data.rfind(")")
+        if rparen == -1:
+            continue
+        rest = data[rparen + 1:].split()
+        # rest[2] = pgrp (field 5), rest[3] = session (field 6)
+        if len(rest) <= 3:
+            continue
+        try:
+            if int(rest[3]) == sid:
+                found.add(int(rest[2]))
+        except ValueError:
+            continue
+    return found
+
+
+def _signal_targets(sid, pgid, sig) -> None:
+    """Send *sig* to every process group in session *sid* except the session
+    leader's own group.
+
+    Interactive agents (e.g. bash with job control) run commands in sub-groups,
+    so killing only the agent's *pgid* orphans them. Signalling the whole
+    session tears down the agent and all its job children. The session leader
+    (the ``open`` wrapper, pgrp == sid under ``docker exec``) is spared so it
+    can reap the agent -- otherwise the agent zombies under PID 1
+    (``sleep infinity``), which never reaps. Falls back to the agent's own
+    *pgid* when no session was recorded.
+    """
+    targeted = False
+    if isinstance(sid, int) and sid > 0:
+        for grp in _pgrps_in_session(sid):
+            if grp == sid:
+                continue  # spare the open wrapper so it reaps the agent
+            try:
+                os.killpg(grp, sig)
+            except (ProcessLookupError, OSError):
+                pass
+            targeted = True
+    if not targeted and isinstance(pgid, int) and pgid > 0 and pgid != sid:
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, OSError):
+            pass
+
+
+def _cmd_terminate(args: argparse.Namespace) -> int:
+    if not _is_uuid_v4(args.session_id):
+        _fail(f"invalid session-id (must be UUID v4): {args.session_id}")
+
+    record = _read_record(args.session_id)
+    if record is None:
+        # Idempotent: target never existed (contract §6.1: 目标不存在时幂等标记 exited).
+        print(json.dumps({
+            "schema_version": SCHEMA_VERSION,
+            "session_id": args.session_id,
+            "state": "exited",
+            "exit_code": None,
+            "reason": "not_found",
+            "finished_at": _now(),
+        }, ensure_ascii=False))
+        return 0
+
+    # Already terminal -> idempotent, return the same terminal fact.
+    if record.get("state") in TERMINAL_STATES:
+        print(json.dumps(record, ensure_ascii=False))
+        return 0
+
+    pid = record.get("pid")
+    pgid = record.get("pgid")
+    rec_ticks = record.get("start_ticks")
+
+    live = isinstance(pid, int) and pid > 0 and _identity_matches(pid, rec_ticks)
+    sid = record.get("sid")
+
+    if live:
+        _signal_targets(sid, pgid, signal.SIGTERM)
+        # Bounded grace poll (we are not the parent -> cannot waitpid).
+        deadline = time.monotonic() + max(0.0, args.grace)
+        while time.monotonic() < deadline:
+            if not _identity_matches(pid, rec_ticks):
+                live = False
+                break
+            time.sleep(0.1)
+        if live:
+            _signal_targets(sid, pgid, signal.SIGKILL)
+            for _ in range(50):  # up to ~5s for the kernel to release the PID
+                if not _identity_matches(pid, rec_ticks):
+                    break
+                time.sleep(0.1)
+
+    record["state"] = "exited"
+    record["finished_at"] = _now()
+    if not record.get("reason"):
+        record["reason"] = "user_close"
+    _write_record(record, args.session_id)
+    print(json.dumps(record, ensure_ascii=False))
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# entry point
+# ---------------------------------------------------------------------------
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aisc-session-wrapper", add_help=True)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_open = sub.add_parser("open")
+    p_open.add_argument("--session-id", required=True)
+    p_open.add_argument("--runtime-id", required=True)
+    p_open.add_argument("--agent", required=True)
+
+    sub.add_parser("list")
+
+    p_term = sub.add_parser("terminate")
+    p_term.add_argument("--session-id", required=True)
+    p_term.add_argument("--runtime-id", required=True)
+    p_term.add_argument("--grace", type=float, default=5.0)
+
+    return parser
+
+
+def main(argv: Optional[list] = None) -> int:
+    args = _build_parser().parse_args(argv)
+    if args.command == "open":
+        return _cmd_open(args)
+    if args.command == "list":
+        return _cmd_list(args)
+    if args.command == "terminate":
+        return _cmd_terminate(args)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -32,6 +32,12 @@ class RuntimeErrorCode:
     IMAGE_NOT_FOUND = "AISC_ERR_IMAGE_NOT_FOUND"
     NETWORK_INVALID = "AISC_ERR_NETWORK_INVALID"
     SCOPE_INVALID = "AISC_ERR_SCOPE_INVALID"
+    # Session-specific codes (S0.3)
+    SESSION_NOT_FOUND = "AISC_ERR_SESSION_NOT_FOUND"
+    SESSION_FAILED = "AISC_ERR_SESSION_FAILED"
+    RUNTIME_NOT_RUNNING = "AISC_ERR_RUNTIME_NOT_RUNNING"
+    INVALID_SESSION_ID = "AISC_ERR_INVALID_SESSION_ID"
+    INVALID_AGENT = "AISC_ERR_INVALID_AGENT"
     # Legacy/extended codes not in RFC §4.1
     RUNTIME_NOT_FOUND = "AISC_ERR_RUNTIME_NOT_FOUND"
     STATE_LOCK_TIMEOUT = "AISC_ERR_STATE_LOCK_TIMEOUT"
@@ -58,6 +64,10 @@ class RuntimeExitCode:
     INVALID_RUNTIME_ID = 15         # AISC_EXIT_INVALID_RUNTIME_ID
     RUNTIME_OPERATION_FAILED = 16   # AISC_EXIT_RUNTIME_OPERATION_FAILED
     STATE_LOCK_TIMEOUT = 17         # AISC_EXIT_STATE_LOCK_TIMEOUT
+    # Session-specific exit codes (S0.3, registered in RFC §4.1)
+    SESSION_NOT_FOUND = 18          # AISC_EXIT_SESSION_NOT_FOUND
+    SESSION_FAILED = 19             # AISC_EXIT_SESSION_FAILED
+    RUNTIME_NOT_RUNNING = 20        # AISC_EXIT_RUNTIME_NOT_RUNNING
 
 
 # ---------------------------------------------------------------------------
@@ -418,3 +428,74 @@ class RuntimeSnapshot:
             result["last_operation_error"] = self.last_operation_error
 
         return result
+
+
+# ---------------------------------------------------------------------------
+# Session constants and models (S0.3)
+# ---------------------------------------------------------------------------
+
+class SessionAgent:
+    """Controlled agent enum for ``aisc session open``."""
+    CLAUDE = "claude"
+    CODEX = "codex"
+    BASH = "bash"
+    CC_SWITCH = "cc-switch"
+
+    ALL = (CLAUDE, CODEX, BASH, CC_SWITCH)
+
+
+class SessionState:
+    """Session lifecycle states per 03-lifecycle-contract.md §5.1."""
+    STARTING = "starting"
+    RUNNING = "running"
+    CLOSING = "closing"
+    EXITED = "exited"
+    FAILED = "failed"
+    DISCONNECTED = "disconnected"
+
+
+class SessionExitReason:
+    """Reasons for session termination per 03-lifecycle-contract.md §5.1."""
+    PROCESS_EXIT = "process_exit"
+    USER_CLOSE = "user_close"
+    RUNTIME_STOP = "runtime_stop"
+    TRANSPORT_ERROR = "transport_error"
+    WORKBENCH_CRASH_CLEANUP = "workbench_crash_cleanup"
+
+
+@dataclass
+class SessionRecord:
+    """Session metadata stored in-container at ``/run/aisc/sessions/<id>.json``.
+
+    Per contract 6.1: 0600, atomic write, no argv/env/output. Used only
+    for diagnostics and crash cleanup; never claims PTY recoverability.
+    """
+
+    schema_version: str = "aisc.session/v1"
+    runtime_id: str = ""
+    session_id: str = ""
+    agent: str = ""
+    state: str = SessionState.STARTING
+    pid: Optional[int] = None
+    pgid: Optional[int] = None
+    start_ticks: Optional[int] = None
+    started_at: str = ""
+    finished_at: str = ""
+    exit_code: Optional[int] = None
+    reason: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "runtime_id": self.runtime_id,
+            "session_id": self.session_id,
+            "agent": self.agent,
+            "state": self.state,
+            "pid": self.pid,
+            "pgid": self.pgid,
+            "start_ticks": self.start_ticks,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "exit_code": self.exit_code,
+            "reason": self.reason,
+        }
