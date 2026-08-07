@@ -6,7 +6,6 @@ otherwise so PRs touching only Python never break on a Docker-less CI.
 """
 
 import os
-import pty
 import shutil
 import subprocess
 import sys
@@ -15,6 +14,11 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+
+try:
+    import pty  # Unix-only; Windows lacks termios (imported by pty)
+except ImportError:  # pragma: no cover - Windows
+    pty = None
 
 IMAGE = "super-claude:latest"
 
@@ -66,8 +70,13 @@ def docker_ready():
 
 
 def integration_ready():
-    """Image has the S0.3 session wrapper (required by session integration tests)."""
-    return docker_ready() and script_present("aisc-session-wrapper")
+    """Image has the S0.3 session wrapper (required by session integration tests).
+
+    Also requires POSIX: the helpers drive ``aisc session open`` through
+    ``pty.openpty()`` (Unix-only), so session integration tests cannot run on
+    Windows even when Docker Desktop is available.
+    """
+    return os.name == "posix" and docker_ready() and script_present("aisc-session-wrapper")
 
 
 def open_bash_session(aisc, workspace, runtime_id, session_id, *,
