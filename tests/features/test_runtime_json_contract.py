@@ -308,7 +308,11 @@ class TestRuntimeSubcommandErrors(unittest.TestCase):
 
 def _docker_available() -> bool:
     """Return True if a Docker daemon is reachable."""
-    r = subprocess.run(["docker", "info"], capture_output=True, text=True, timeout=8)
+    try:
+        r = subprocess.run(["docker", "info"], capture_output=True, text=True, timeout=8)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        # No docker binary (Windows runners) or it hangs without a daemon.
+        return False
     return r.returncode == 0
 
 
