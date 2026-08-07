@@ -1,0 +1,754 @@
+//! Structured AISC CLI runner: discovery/pinning, argv-only process runner,
+//! `aisc.cli/v1` envelope validation, and capability negotiation.
+//!
+//! Spec refs:
+//! - 05-cli-gui-contract.md §四 (capability), §八 (error codes), §九.1 (runner)
+//! - 02-startup-flow.md §四.3 (discovery candidate order + selection rules)
+//! - 03-lifecycle-contract.md §十 (domain API + Workbench error shape)
+
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tauri::{AppHandle, Manager};
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
+
+use crate::error::{redact, WorkbenchError};
+use crate::settings::Settings;
+
+const PROTOCOL: &str = "aisc.cli/v1";
+const MAX_STDOUT: usize = 8 * 1024 * 1024; // 8 MB control-plane cap (05 §九.1)
+const MAX_STDERR: usize = 64 * 1024; // 64 KB summary for redacted technical_detail
+const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
+
+const EXPECTED_RUNTIME: &str = "aisc.runtime/v1";
+const EXPECTED_SESSION: &str = "aisc.session/v1";
+const EXPECTED_PROVIDER: &str = "aisc.provider-status/v1";
+const EXPECTED_BUILD: &str = "aisc.build-events/v1";
+
+// ---------------------------------------------------------------------------
+// Envelope (aisc.cli/v1)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Envelope {
+    pub meta: EnvelopeMeta,
+    #[serde(default)]
+    pub data: Option<Value>,
+    #[serde(default)]
+    pub errors: Vec<CliError>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EnvelopeMeta {
+    pub protocol: String,
+    pub command: String,
+    pub exit_code: i64,
+    #[serde(default)]
+    pub timestamp: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CliError {
+    pub code: String,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub hint: Option<String>,
+}
+
+/// Parse stdout bytes into an envelope and validate protocol + exit-code
+/// consistency. `expected_exit_code` is the OS process exit code (05 §八:
+/// `meta.exit_code` must match the process exit code).
+pub fn parse_and_validate(stdout: &[u8], expected_exit_code: Option<i32>) -> Result<Envelope, WorkbenchError> {
+    let env: Envelope = serde_json::from_slice(stdout)
+        .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("json parse: {e}")))?;
+    if env.meta.protocol != PROTOCOL {
+        return Err(WorkbenchError::cli_protocol()
+            .with_detail(format!("protocol mismatch: {}", env.meta.protocol)));
+    }
+    if let Some(code) = expected_exit_code {
+        if env.meta.exit_code != code as i64 {
+            return Err(WorkbenchError::cli_protocol().with_detail(format!(
+                "exit_code mismatch: meta={} process={code}",
+                env.meta.exit_code
+            )));
+        }
+    }
+    Ok(env)
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, Default, Serialize)]
+pub struct Capabilities {
+    #[serde(default)]
+    pub runtime: Option<String>,
+    #[serde(default)]
+    pub session: Option<String>,
+    #[serde(rename = "providerStatus", default)]
+    pub provider_status: Option<String>,
+    #[serde(rename = "buildEvents", default)]
+    pub build_events: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default, Serialize)]
+pub struct VersionInfo {
+    #[serde(default)]
+    pub cli_version: Option<String>,
+    #[serde(default)]
+    pub bundle_version: Option<String>,
+    #[serde(default)]
+    pub contract_version: Option<String>,
+    #[serde(default)]
+    pub image_version: Option<String>,
+    #[serde(default)]
+    pub claude_version: Option<String>,
+    #[serde(default)]
+    pub python_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CapabilityReport {
+    pub required_ok: bool,
+    pub runtime: bool,
+    pub session: bool,
+    pub provider_status: bool,
+    pub build_events: bool,
+    pub missing_required: Vec<String>,
+    pub missing_optional: Vec<String>,
+    pub version_info: Option<VersionInfo>,
+    pub error: Option<WorkbenchError>,
+}
+
+/// Classify capabilities into (required_ok, missing_required, missing_optional).
+/// Pure unit-testable.
+pub fn classify(caps: &Capabilities) -> (bool, Vec<String>, Vec<String>) {
+    let runtime_ok = caps.runtime.as_deref() == Some(EXPECTED_RUNTIME);
+    let session_ok = caps.session.as_deref() == Some(EXPECTED_SESSION);
+    let provider_ok = caps.provider_status.as_deref() == Some(EXPECTED_PROVIDER);
+    let build_ok = caps.build_events.as_deref() == Some(EXPECTED_BUILD);
+
+    let mut missing_required = Vec::new();
+    if !runtime_ok {
+        missing_required.push("runtime".into());
+    }
+    if !session_ok {
+        missing_required.push("session".into());
+    }
+    let mut missing_optional = Vec::new();
+    if !provider_ok {
+        missing_optional.push("providerStatus".into());
+    }
+    if !build_ok {
+        missing_optional.push("buildEvents".into());
+    }
+    (missing_required.is_empty(), missing_required, missing_optional)
+}
+
+fn report_from_envelope(env: Envelope) -> CapabilityReport {
+    if let Some(err) = env.errors.first() {
+        let e = WorkbenchError::map_aisc(&err.code).with_detail(err.message.clone());
+        return failed_report(Some(e));
+    }
+    let data = env.data.unwrap_or(Value::Null);
+    let caps: Capabilities = serde_json::from_value(data.get("capabilities").cloned().unwrap_or(Value::Null))
+        .unwrap_or_default();
+    let vi: VersionInfo = serde_json::from_value(data).unwrap_or_default();
+    let (required_ok, missing_required, missing_optional) = classify(&caps);
+    let error = if !required_ok {
+        Some(WorkbenchError::capability_unsupported().with_detail(format!("missing: {missing_required:?}")))
+    } else {
+        None
+    };
+    CapabilityReport {
+        required_ok,
+        runtime: caps.runtime.as_deref() == Some(EXPECTED_RUNTIME),
+        session: caps.session.as_deref() == Some(EXPECTED_SESSION),
+        provider_status: caps.provider_status.as_deref() == Some(EXPECTED_PROVIDER),
+        build_events: caps.build_events.as_deref() == Some(EXPECTED_BUILD),
+        missing_required,
+        missing_optional,
+        version_info: Some(vi),
+        error,
+    }
+}
+
+fn failed_report(error: Option<WorkbenchError>) -> CapabilityReport {
+    CapabilityReport {
+        required_ok: false,
+        runtime: false,
+        session: false,
+        provider_status: false,
+        build_events: false,
+        missing_required: vec!["runtime".into(), "session".into()],
+        missing_optional: vec!["providerStatus".into(), "buildEvents".into()],
+        version_info: None,
+        error,
+    }
+}
+
+/// Run `aisc version --format json` and classify capabilities. Any transport
+/// or protocol failure is returned as a structured `CapabilityReport` (never
+/// panics) so the UI can render a blocking page instead of crashing.
+pub async fn negotiate(executable: &Path, cancel: CancellationToken) -> CapabilityReport {
+    let argv = vec!["version".into(), "--format".into(), "json".into()];
+    match run_control(executable, argv, VERSION_TIMEOUT, cancel).await {
+        Ok(env) => report_from_envelope(env),
+        Err(e) => failed_report(Some(e)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Discovery / pinning
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateSource {
+    Explicit,
+    Saved,
+    #[serde(rename = "path")]
+    PathEnv,
+    Platform,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Candidate {
+    pub path: String,
+    pub source: CandidateSource,
+    pub valid: bool,
+    pub version_info: Option<VersionInfo>,
+    pub capabilities: Option<Capabilities>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveryReport {
+    pub candidates: Vec<Candidate>,
+    pub selected: Option<String>,
+    pub needs_confirm: bool,
+    pub error: Option<WorkbenchError>,
+}
+
+/// Enumerate candidate CLI paths in priority order (02 §四.3):
+/// explicit arg > saved pin > process PATH > platform known locations.
+/// Dedups by canonical path. Pure (does not validate executability/version).
+pub fn enumerate_candidates(explicit: Option<&Path>, saved: Option<&Path>) -> Vec<(PathBuf, CandidateSource)> {
+    let mut extra: Vec<(PathBuf, CandidateSource)> = Vec::new();
+    if let Some(p) = path_candidate() {
+        extra.push((p, CandidateSource::PathEnv));
+    }
+    for p in platform_candidates() {
+        extra.push((p, CandidateSource::Platform));
+    }
+    enumerate_with(explicit, saved, &extra)
+}
+
+fn enumerate_with(
+    explicit: Option<&Path>,
+    saved: Option<&Path>,
+    extra: &[(PathBuf, CandidateSource)],
+) -> Vec<(PathBuf, CandidateSource)> {
+    let mut out: Vec<(PathBuf, CandidateSource)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut push = |path: PathBuf, src: CandidateSource| {
+        let key = dedup_key(&path);
+        if seen.insert(key) {
+            out.push((path, src));
+        }
+    };
+    if let Some(p) = explicit {
+        push(p.to_path_buf(), CandidateSource::Explicit);
+    }
+    if let Some(p) = saved {
+        push(p.to_path_buf(), CandidateSource::Saved);
+    }
+    for (p, s) in extra {
+        push(p.clone(), *s);
+    }
+    out
+}
+
+fn dedup_key(path: &Path) -> String {
+    std::fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string_lossy().into_owned())
+}
+
+fn path_candidate() -> Option<PathBuf> {
+    path_candidate_in(std::env::var("PATH").ok().as_deref())
+}
+
+fn path_candidate_in(path_var: Option<&str>) -> Option<PathBuf> {
+    let path = path_var?;
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    let exe = if cfg!(windows) { "aisc.exe" } else { "aisc" };
+    for dir in path.split(sep) {
+        if dir.is_empty() {
+            continue;
+        }
+        let p = Path::new(dir).join(exe);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn platform_candidates() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    if cfg!(target_os = "linux") {
+        let xdg = std::env::var("XDG_BIN_HOME").ok().filter(|s| !s.is_empty());
+        let base = xdg
+            .map(PathBuf::from)
+            .or_else(|| dirs::home_dir().map(|h| h.join(".local/bin")));
+        if let Some(b) = base {
+            out.push(b.join("aisc"));
+        }
+    } else if cfg!(target_os = "macos") {
+        out.push(PathBuf::from("/usr/local/bin/aisc"));
+        if let Some(h) = dirs::home_dir() {
+            out.push(h.join(".local/bin/aisc"));
+        }
+    } else if cfg!(target_os = "windows") {
+        if let Some(la) = std::env::var("LOCALAPPDATA").ok().filter(|s| !s.is_empty()) {
+            let la = PathBuf::from(la);
+            out.push(la.join("Programs/AISC/aisc.exe"));
+            out.push(la.join("AISC/aisc.exe"));
+        }
+    }
+    out.into_iter().filter(|p| p.exists()).collect()
+}
+
+pub fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(path) {
+            Ok(m) => m.is_file() && (m.permissions().mode() & 0o111) != 0,
+            Err(_) => false,
+        }
+    }
+    #[cfg(windows)]
+    {
+        match std::fs::metadata(path) {
+            Ok(m) => m.is_file(),
+            Err(_) => false,
+        }
+    }
+}
+
+/// Validate a candidate: executable check + `version --format json`. IO.
+pub async fn validate_candidate(path: PathBuf, source: CandidateSource) -> Candidate {
+    let path_str = path.to_string_lossy().into_owned();
+    if !is_executable(&path) {
+        return Candidate {
+            path: path_str,
+            source,
+            valid: false,
+            version_info: None,
+            capabilities: None,
+            error: Some("not executable".into()),
+        };
+    }
+    let argv = vec!["version".into(), "--format".into(), "json".into()];
+    let cancel = CancellationToken::new();
+    match run_control(&path, argv, VERSION_TIMEOUT, cancel).await {
+        Ok(env) => {
+            if let Some(err) = env.errors.first() {
+                return Candidate {
+                    path: path_str,
+                    source,
+                    valid: false,
+                    version_info: None,
+                    capabilities: None,
+                    error: Some(err.code.clone()),
+                };
+            }
+            let data = env.data.unwrap_or(Value::Null);
+            let caps: Capabilities = serde_json::from_value(data.get("capabilities").cloned().unwrap_or(Value::Null))
+                .unwrap_or_default();
+            let vi: VersionInfo = serde_json::from_value(data).unwrap_or_default();
+            Candidate {
+                path: path_str,
+                source,
+                valid: true,
+                version_info: Some(vi),
+                capabilities: Some(caps),
+                error: None,
+            }
+        }
+        Err(e) => Candidate {
+            path: path_str,
+            source,
+            valid: false,
+            version_info: None,
+            capabilities: None,
+            error: Some(e.code),
+        },
+    }
+}
+
+fn same_path(a: &str, b: &Path) -> bool {
+    let pa = Path::new(a);
+    let ca = std::fs::canonicalize(pa).ok();
+    let cb = std::fs::canonicalize(b).ok();
+    match (ca, cb) {
+        (Some(x), Some(y)) => x == y,
+        _ => pa == b,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runner (argv-only, timeout, cancellation, stdout cap)
+// ---------------------------------------------------------------------------
+
+/// Run an AISC control command and return its validated envelope.
+///
+/// - argv-only (no shell) per 05 §九.1.
+/// - timeout + cancellation both kill + reap the child (05 §九.1).
+/// - stdout capped at `MAX_STDOUT`; overflow -> protocol error.
+/// - `meta.exit_code` must equal the process exit code (05 §八).
+pub async fn run_control(
+    executable: &Path,
+    argv: Vec<String>,
+    timeout: Duration,
+    cancel: CancellationToken,
+) -> Result<Envelope, WorkbenchError> {
+    let mut child = match Command::new(executable)
+        .args(&argv)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(WorkbenchError::cli_not_found().with_detail(executable.display().to_string()));
+        }
+        Err(e) => {
+            return Err(WorkbenchError::cli_protocol().with_detail(format!("spawn failed: {e}")));
+        }
+    };
+
+    let stdout_handle = tokio::spawn(read_capped(child.stdout.take().expect("piped stdout"), MAX_STDOUT));
+    let stderr_handle = tokio::spawn(read_capped(child.stderr.take().expect("piped stderr"), MAX_STDERR));
+
+    let exit = tokio::select! {
+        r = child.wait() => r,
+        _ = tokio::time::sleep(timeout) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(WorkbenchError::cli_timeout());
+        }
+        _ = cancel.cancelled() => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(WorkbenchError::cli_cancelled());
+        }
+    };
+
+    let (stdout_bytes, stdout_truncated) = stdout_handle.await.unwrap_or((Vec::new(), false));
+    let (stderr_bytes, _) = stderr_handle.await.unwrap_or((Vec::new(), false));
+
+    let exit = exit.map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("wait failed: {e}")))?;
+    let exit_code = exit.code();
+
+    if stdout_truncated {
+        return Err(WorkbenchError::cli_protocol().with_detail(format!(
+            "stdout exceeded {} bytes",
+            MAX_STDOUT
+        )));
+    }
+
+    let stderr_summary = redact(&String::from_utf8_lossy(&stderr_bytes));
+    parse_and_validate(&stdout_bytes, exit_code).map_err(|mut e| {
+        let detail = if e.technical_detail.is_some() {
+            format!("{} | stderr: {}", e.technical_detail.as_ref().unwrap(), stderr_summary)
+        } else {
+            format!("stderr: {stderr_summary}")
+        };
+        e.technical_detail = Some(detail);
+        e
+    })
+}
+
+/// Read up to `cap` bytes; if exceeded, keep draining to EOF (so the child can
+/// exit) and return `(capped_buf, true)`.
+async fn read_capped<R: AsyncRead + Unpin>(mut r: R, cap: usize) -> (Vec<u8>, bool) {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 8192];
+    let mut truncated = false;
+    loop {
+        match r.read(&mut tmp).await {
+            Ok(0) => break,
+            Ok(n) => {
+                if !truncated {
+                    if buf.len() + n <= cap {
+                        buf.extend_from_slice(&tmp[..n]);
+                    } else {
+                        let room = cap - buf.len();
+                        buf.extend_from_slice(&tmp[..room]);
+                        truncated = true;
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    (buf, truncated)
+}
+
+// ---------------------------------------------------------------------------
+// Tauri commands
+// ---------------------------------------------------------------------------
+
+fn config_dir(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
+    app.path()
+        .app_config_dir()
+        .map_err(|e| WorkbenchError::settings_error().with_detail(format!("config dir: {e}")))
+}
+
+#[tauri::command]
+pub async fn cli_discover(
+    app: AppHandle,
+    explicit_path: Option<String>,
+) -> Result<DiscoveryReport, WorkbenchError> {
+    let dir = config_dir(&app)?;
+    let settings = Settings::load(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
+    let saved = settings.aisc_cli_path().map(PathBuf::from);
+    let explicit = explicit_path.map(PathBuf::from);
+
+    let raw = enumerate_candidates(explicit.as_deref(), saved.as_deref());
+    let mut candidates = Vec::with_capacity(raw.len());
+    for (p, s) in raw {
+        candidates.push(validate_candidate(p, s).await);
+    }
+
+    let valid_count = candidates.iter().filter(|c| c.valid).count();
+    let (selected, needs_confirm, error) = match (&saved, valid_count) {
+        (Some(pin), _) => {
+            let pin_valid = candidates
+                .iter()
+                .any(|c| c.valid && same_path(&c.path, pin));
+            if pin_valid {
+                (Some(pin.to_string_lossy().into_owned()), false, None)
+            } else {
+                (
+                    None,
+                    false,
+                    Some(
+                        WorkbenchError::cli_not_found()
+                            .with_detail(format!("pinned CLI invalid: {}", pin.display())),
+                    ),
+                )
+            }
+        }
+        (None, 1) => (
+            candidates.iter().find(|c| c.valid).map(|c| c.path.clone()),
+            false,
+            None,
+        ),
+        (None, 0) => (None, false, Some(WorkbenchError::cli_not_found())),
+        (None, _) => (None, true, None), // >1 valid, no pin -> user must confirm
+    };
+
+    Ok(DiscoveryReport {
+        candidates,
+        selected,
+        needs_confirm,
+        error,
+    })
+}
+
+#[tauri::command]
+pub async fn cli_pin(app: AppHandle, path: String) -> Result<CapabilityReport, WorkbenchError> {
+    let raw = PathBuf::from(&path);
+    let canon = std::fs::canonicalize(&raw)
+        .map_err(|e| WorkbenchError::cli_not_found().with_detail(format!("canonicalize: {e}")))?;
+    if !is_executable(&canon) {
+        return Err(WorkbenchError::cli_not_found().with_detail("not executable"));
+    }
+    let report = negotiate(&canon, CancellationToken::new()).await;
+    if !report.required_ok {
+        return Ok(report); // surface the unsupported report, do not pin
+    }
+    let dir = config_dir(&app)?;
+    let mut settings = Settings::load(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
+    settings.set_aisc_cli_path(Some(&canon.to_string_lossy()));
+    settings.save(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
+    Ok(report)
+}
+
+#[tauri::command]
+pub async fn cli_clear_pin(app: AppHandle) -> Result<(), WorkbenchError> {
+    let dir = config_dir(&app)?;
+    let mut settings = Settings::load(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
+    settings.set_aisc_cli_path(None);
+    settings.save(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, WorkbenchError> {
+    let dir = config_dir(&app)?;
+    let settings = Settings::load(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
+    let cancel = CancellationToken::new();
+    if let Some(pin) = settings.aisc_cli_path() {
+        return Ok(negotiate(Path::new(pin), cancel).await);
+    }
+    // No pin: auto-select if exactly one valid candidate.
+    let raw = enumerate_candidates(None, None);
+    let mut valid: Vec<PathBuf> = Vec::new();
+    for (p, _) in raw {
+        if validate_candidate(p.clone(), CandidateSource::PathEnv).await.valid {
+            valid.push(p);
+        }
+    }
+    match valid.len() {
+        1 => Ok(negotiate(&valid[0], cancel).await),
+        _ => Ok(failed_report(Some(WorkbenchError::cli_not_found()))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn caps(runtime: Option<&str>, session: Option<&str>, provider: Option<&str>, build: Option<&str>) -> Capabilities {
+        Capabilities {
+            runtime: runtime.map(str::to_string),
+            session: session.map(str::to_string),
+            provider_status: provider.map(str::to_string),
+            build_events: build.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn classify_all_present() {
+        let (ok, mr, mo) = classify(&caps(
+            Some(EXPECTED_RUNTIME),
+            Some(EXPECTED_SESSION),
+            Some(EXPECTED_PROVIDER),
+            Some(EXPECTED_BUILD),
+        ));
+        assert!(ok);
+        assert!(mr.is_empty());
+        assert!(mo.is_empty());
+    }
+
+    #[test]
+    fn classify_missing_required_blocks() {
+        let (ok, mr, mo) = classify(&caps(None, Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD)));
+        assert!(!ok);
+        assert_eq!(mr, vec!["runtime"]);
+        assert!(mo.is_empty());
+    }
+
+    #[test]
+    fn classify_missing_optional_does_not_block() {
+        let (ok, mr, mo) = classify(&caps(Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), None, None));
+        assert!(ok);
+        assert!(mr.is_empty());
+        assert_eq!(mo, vec!["providerStatus", "buildEvents"]);
+    }
+
+    #[test]
+    fn classify_wrong_version_is_missing() {
+        let (ok, _, _) = classify(&caps(Some("aisc.runtime/v2"), Some(EXPECTED_SESSION), None, None));
+        assert!(!ok);
+    }
+
+    #[test]
+    fn parse_valid_envelope() {
+        let body = json!({
+            "meta": {"protocol": "aisc.cli/v1", "command": "version", "exit_code": 0,
+                     "timestamp": "t", "version": "1.0", "run_id": "r"},
+            "data": {"cli_version": "1.0", "capabilities": {
+                "runtime": "aisc.runtime/v1", "session": "aisc.session/v1",
+                "providerStatus": "aisc.provider-status/v1", "buildEvents": "aisc.build-events/v1"}},
+            "errors": []
+        });
+        let bytes = serde_json::to_vec(&body).unwrap();
+        let env = parse_and_validate(&bytes, Some(0)).expect("valid");
+        assert_eq!(env.meta.command, "version");
+    }
+
+    #[test]
+    fn parse_bad_json_is_protocol_error() {
+        let err = parse_and_validate(b"not json", Some(0)).unwrap_err();
+        assert_eq!(err.code, "WB_ERR_CLI_PROTOCOL");
+    }
+
+    #[test]
+    fn parse_wrong_protocol_is_protocol_error() {
+        let body = json!({"meta": {"protocol": "other", "command": "x", "exit_code": 0}, "data": null, "errors": []});
+        let err = parse_and_validate(&serde_json::to_vec(&body).unwrap(), Some(0)).unwrap_err();
+        assert_eq!(err.code, "WB_ERR_CLI_PROTOCOL");
+    }
+
+    #[test]
+    fn parse_exit_code_mismatch_is_protocol_error() {
+        let body = json!({"meta": {"protocol": "aisc.cli/v1", "command": "x", "exit_code": 0}, "data": null, "errors": []});
+        let err = parse_and_validate(&serde_json::to_vec(&body).unwrap(), Some(2)).unwrap_err();
+        assert_eq!(err.code, "WB_ERR_CLI_PROTOCOL");
+    }
+
+    #[test]
+    fn enumerate_priority_and_dedup() {
+        let a = PathBuf::from("/x/aisc");
+        let b = PathBuf::from("/y/aisc");
+        let extra = vec![(PathBuf::from("/z/aisc"), CandidateSource::PathEnv)];
+
+        let r = enumerate_with(Some(&a), Some(&b), &extra);
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0].1, CandidateSource::Explicit);
+        assert_eq!(r[1].1, CandidateSource::Saved);
+        assert_eq!(r[2].1, CandidateSource::PathEnv);
+    }
+
+    #[test]
+    fn enumerate_dedups_same_path() {
+        let a = PathBuf::from("/x/aisc");
+        let r = enumerate_with(Some(&a), Some(&a), &[]);
+        assert_eq!(r.len(), 1);
+    }
+
+    #[test]
+    fn path_lookup_finds_first_match() {
+        let dir = std::env::temp_dir();
+        let exe = if cfg!(windows) { "aisc.exe" } else { "aisc" };
+        let fake = dir.join(exe);
+        std::fs::write(&fake, b"#!/bin/sh\n").ok();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755));
+        }
+
+        let path_var = dir.to_string_lossy().to_string();
+        let found = path_candidate_in(Some(&path_var));
+        assert_eq!(found, Some(fake.clone()));
+
+        let _ = std::fs::remove_file(&fake);
+    }
+
+    #[test]
+    fn path_lookup_empty_returns_none() {
+        assert_eq!(path_candidate_in(Some("")), None);
+        assert_eq!(path_candidate_in(None), None);
+    }
+}

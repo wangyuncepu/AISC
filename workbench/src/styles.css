@@ -1,0 +1,23 @@
+/* Minimal global styles for the Workbench scaffold (S1.1).
+ * No theme system yet (per plan §四 S1.1); just enough for a usable terminal
+ * area. Theming arrives in a later phase. */
+
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  color: #e6e6e6;
+  background-color: #1e1e1e;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
