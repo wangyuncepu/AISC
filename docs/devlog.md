@@ -2,9 +2,24 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 0 S0.3-S0.5 + 验收门
+## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 0 完结 + Phase 1 S1.1-S1.2
 
 ### 变更
+
+#### S1.1 工程脚手架（06-implementation-plan.md §四）
+
+- 新建 `workbench/` Tauri 2 + Vue 3 + TypeScript 工程；引入 xterm.js + FitAddon；Tauri capabilities 仅允许 Workbench 命名 command；后端仅 `greet` 占位（lib.rs/main.rs）。
+
+#### S1.2 结构化 CLI runner（05-cli-gui-contract.md §九.1 / 02 §四.3 / 03 §十）
+
+- `workbench/src-tauri/src/cli.rs` argv-only runner（禁 shell，05 §九.1）：`tokio::process::Command` + `tokio::select!` 三路（`child.wait` / `tokio::time::sleep` / `CancellationToken`），超时与取消均 `kill`+`wait` 回收子进程；stdout 8MB 上限，超限后 drain-to-EOF 再返回 `WB_ERR_CLI_PROTOCOL`（不阻塞子进程退出）；`aisc.cli/v1` envelope 校验（`meta.protocol` 一致 + `meta.exit_code`==进程退出码，05 §八）。
+- discovery/pinning（02 §四.3）：按优先级枚举去重（explicit arg > `settings.json` pin > 进程 PATH `aisc`/`aisc.exe` > 平台已知位置 Linux `${XDG_BIN_HOME:-$HOME/.local/bin}`、macOS `/usr/local/bin`+`~/.local/bin`、Windows `%LOCALAPPDATA%\Programs\AISC`+`%LOCALAPPDATA%\AISC`）；`is_executable` 跨平台（Unix `mode&0o111` / Windows `.exe` 存在）；多安装冲突 `needs_confirm=true`，pinned 失效走 hard gate 不静默换；只保存 canonical 绝对路径，原子写（temp+fsync+rename）。
+- capability 协商：`negotiate` 跑 `version --format json` 取 `data.capabilities`，required={runtime,session} 缺失 -> `CapabilityReport(required_ok=false)` 携带 `WB_ERR_CAPABILITY_UNSUPPORTED`（不 panic，前端可显阻塞页而非崩溃）；optional={providerStatus,buildEvents}。值需精确匹配 `aisc.* /v1`（不按版本号猜）。
+- `error.rs`：`WorkbenchError{code,message,technical_detail,retryable,action}` + `map_aisc`（§八 全量 `AISC_ERR_*` -> action 路由，不靠 message 字符串匹配，02 §十）+ `redact`（env-var `KEY=VALUE` 与 `sk-` token 脱敏，4KB 上限，UTF-8 安全）；WB_ERR_* 传输/协议码（CLI_NOT_FOUND/TIMEOUT/CANCELLED/PROTOCOL/CAPABILITY_UNSUPPORTED/SETTINGS），action 枚举在 03 §十 基线上加 `choose_cli`。
+- `settings.rs`：`settings.json` 读写，保留未知字段（后续切片可扩展），`schema_version` 不支持时保留原文件返回可恢复错误（02 §九）；跨进程锁 deferral 到 S2.4（`history.rs` 切片负责跨平台锁），S1.2 仅原子写。
+- Tauri commands：`cli_discover` / `cli_pin` / `cli_clear_pin` / `negotiate_capabilities`；移除 `greet` 占位。
+- 测试：25 单测（envelope 校验 / capability classify / error map / discovery 优先级去重 / PATH 查找 / redact / settings 往返与 schema 守卫）+ 7 集成（`python3 -c` 发射 envelope 验 parse/timeout/cancel/stdout-cap/exit-code-mismatch；real `aisc` gated on `AISC_TEST_CLI` -> `required_ok=true`）。`cargo build` 零 warning，`cargo test` 32 全绿。
+- gap（明确 deferral）：settings 跨进程锁 -> S2.4；`--aisc-cli` 启动 arg 接线到 `cli_discover.explicit_path` -> S2.1；capability 不支持的阻塞页 UI -> S2.1。
 
 #### S0.3 Session 数据面（05-cli-gui-contract.md §6）
 
