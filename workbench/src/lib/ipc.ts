@@ -3,7 +3,9 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   CapabilityReport,
   DiscoveryReport,
+  PreflightReport,
   PtyEvent,
+  RuntimeSnapshot,
   RuntimeStartResult,
   SessionExit,
   SessionSnapshot,
@@ -41,3 +43,28 @@ export const startRuntime = (workspace: string, runtimeId: string) =>
   invoke<RuntimeStartResult>("start_runtime", { workspace, runtimeId });
 
 export const stopRuntime = (runtimeId: string) => invoke<void>("stop_runtime", { runtimeId });
+
+// --- S2.1.a: preflight / inspect / restart / cancel ---
+
+export const runtimePreflight = (
+  workspace: string,
+  runtimeId: string,
+  image: string | null = null,
+  network: string | null = null,
+  scope: string | null = null
+) =>
+  invoke<PreflightReport>("runtime_preflight", {
+    workspace,
+    runtimeId,
+    image,
+    network,
+    scope,
+  });
+
+export const runtimeInspect = (runtimeId: string) =>
+  invoke<RuntimeSnapshot>("runtime_inspect", { runtimeId });
+
+export const runtimeRestart = (runtimeId: string) =>
+  invoke<void>("runtime_restart", { runtimeId });
+
+export const cancelRuntimeStart = () => invoke<void>("cancel_runtime_start");

@@ -27,8 +27,6 @@ let resizeTimer: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let closed = false;
 
-const AGENT = "bash";
-
 function b64ToUint8(b64: string): Uint8Array {
   const bin = atob(b64);
   const u8 = new Uint8Array(bin.length);
@@ -55,7 +53,7 @@ function openPty(sessionId: string) {
         break;
     }
   };
-  openSession(store.runtimeId, sessionId, AGENT, channel).catch((e) => {
+  openSession(store.runtimeId, sessionId, store.launch.agent, channel).catch((e) => {
     term?.write(`\r\n\x1b[31m[open_session failed: ${e?.code ?? e}]\x1b[0m\r\n`);
     store.onSessionExited();
   });
@@ -100,7 +98,7 @@ onMounted(() => {
   fit = new FitAddon();
   term.loadAddon(fit);
   term.open(container.value!);
-  term.writeln("AISC Workbench — 输入工作区并点击「启动 Bash」。");
+  term.writeln("AISC Workbench 终端就绪。");
   fit.fit();
 
   term.onData((data) => {
@@ -123,7 +121,8 @@ onMounted(() => {
         openPty(sid);
         setTimeout(doResize, 0); // fit after layout settles
       }
-    }
+    },
+    { immediate: true }
   );
 });
 

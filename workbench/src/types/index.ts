@@ -140,3 +140,43 @@ export interface SessionRequest {
   runtimeId: string;
   sessionId: string;
 }
+
+// --- S2.1.a: preflight + inspect ---
+
+export type CheckStatus = "pass" | "warn" | "fail";
+
+export interface PreflightCheck {
+  id: string; // docker | workspace | image | network | runtime_conflict
+  status: CheckStatus;
+  error_code: string | null;
+  detail: string | null;
+}
+
+export type RecommendedAction = "start" | "reuse" | "restart" | "resolve_conflict";
+
+export interface PreflightReport {
+  spec: unknown;
+  checks: PreflightCheck[];
+  can_start: boolean;
+  recommended_action: RecommendedAction;
+  matching_runtime_id: string | null;
+  conflicts: unknown;
+  observed_at: string;
+}
+
+/** Subset of `aisc runtime inspect`. state: not_found | stopped | running | unknown. */
+export interface RuntimeSnapshot {
+  runtime_id: string;
+  container_name: string;
+  state: string;
+  ready: boolean;
+}
+
+export type LaunchAgent = "claude" | "codex" | "bash" | "cc-switch";
+
+export interface LaunchConfig {
+  agent: LaunchAgent;
+  image: string;
+  network: "direct" | "proxy";
+  scope: "project" | "temporary";
+}

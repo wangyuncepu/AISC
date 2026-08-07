@@ -2,9 +2,18 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 S1.1-S1.4
+## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1.a
 
 ### 变更
+
+#### S2.1.a 启动与预检主路径（02-startup-flow.md §三/§四/§七/§八）
+
+- 后端 `runtime.rs` 增极薄命令：`runtime_preflight`（`aisc runtime preflight --format json`，解析 `PreflightReport{checks,can_start,recommended_action,matching_runtime_id,conflicts,observed_at}`）、`runtime_inspect`（取消后对账）、`runtime_restart`（reuse/restart 路径）；`start_runtime` 改为可取消--managed `StartOp(Arc<Mutex<Option<CancellationToken>>>)` 状态 + `cancel_runtime_start` 命令（02 §三 每异步操作带 cancel token）。`lib.rs` 注册 4 新命令 + `.manage(StartOp::default())`。无状态机/对账/list/remove（S2.2）。
+- 前端启动状态机（`stores/runtime.ts`）：idle/negotiating/blocked/picker/preflight/summary/starting/cancelled/ready/error；持 preflight 报告 + `LaunchConfig{agent,image,network,scope}` + runtime_id/matching_runtime_id + start 计时。actions：`runPreflight`、`startFromSummary`（按 recommended_action 走 start/reuse/restart -> 开 session；resolve_conflict 阻塞）、`cancelStart`（cancel_runtime_start -> inspect -> 保留/停止，02 §八）、`stopRuntime`、`backToPicker`。
+- 组件 `src/features/startup/`：`PreflightGate.vue`（逐项 check pass/warn/fail + hard/config 分类，02 §四.2）、`LaunchSummary.vue`（摘要屏 Workspace/Agent dropdown/Runtime reuse|start|restart/Image/Network/Scope + Start/Change settings/Cancel；image 缺失 config gate 禁用 Start，「构建镜像」禁用占位 S2.1.b）、`StartProgress.vue`（经过时间 + Cancel；取消后 inspect -> 保留|停止）。`App.vue` 状态路由壳；`Terminal.vue` agent 改从 `store.launch.agent` 取，sessionId watcher 加 `immediate:true`（修复 Terminal 在 status=ready 后才挂载导致 watcher 漏触发、bash 不出的问题）。
+- 类型 `types/index.ts` 加 PreflightReport/Check/RuntimeSnapshot/CheckStatus/RecommendedAction/LaunchConfig；`lib/ipc.ts` 加 runtimePreflight/runtimeInspect/runtimeRestart/cancelRuntimeStart。
+- 验证：`cargo build`/`cargo test`（47 绿）零 warning；`npm run build`（vue-tsc+vite）零错误；实机手测全链路通过--picker(原生 dialog) -> 预检 -> 摘要(agent=bash) -> Start -> bash 可交互 -> 停止 Runtime。（测试中遇主机内核升级未重启致 Docker veth 缺失，非代码问题，重启后恢复。）
+- gap（明确 deferral）：`build --events` 流式 + 构建进度 UI -> S2.1.b；workspace 最近列表 -> S2.4（history）；runtime 状态机/observed_at/revision/对账/list/remove -> S2.2；多标签 + Claude/Codex/cc-switch 标签 -> S2.2（S2.1.a 单 session + agent 选择）；`--workspace` 启动 arg 接线、resume_prompt -> S2.1.b/S2.4；Provider/auth Warning -> S2.3。
 
 #### S1.1 工程脚手架（06-implementation-plan.md §四）
 
