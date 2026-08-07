@@ -21,7 +21,10 @@ from tests.integration.docker._session_helpers import docker_available, image_pr
 IMAGE = "super-claude:latest"
 
 
-@unittest.skipUnless(docker_available(), "requires Docker daemon")
+@unittest.skipUnless(
+    os.name == "posix" and docker_available(),
+    "requires POSIX (process-group signaling) + Docker daemon",
+)
 class TestBuildCancellationIntegration(unittest.TestCase):
     def test_cancel_killpgs_docker_child(self):
         tmp = tempfile.mkdtemp(prefix="aisc-cancel-")
