@@ -2,9 +2,20 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1/S2.2.a/S2.2.b
+## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1/S2.2.a/S2.2.b/S2.3.a
 
 ### 变更
+
+#### S2.3.a 轮询对账 + P0 可观察性侧栏（04-observability.md §二/§四.1/§五/§六；06 §五）
+
+- 纯前端切片（复用 S2.2.b `runtime_inspect(workspace)`，后端零改）。关 Phase 2 gate「GUI 外 stop/remove 在轮询周期内显示真实状态」。
+- `composables/useRuntimePolling.ts`（新）：可见性感知 inspect 循环--聚焦 5s / 失焦 15s / 最小化隐藏暂停（04 §五）；±10% jitter；`store.inspectInFlight` 去重；resume（hidden->visible 或 focus）先 `markStale` 再立即 tick。`start/stop` 由 App.vue `watch(store.status)` 驱动（ready->start，离开->stop）。
+- store `stores/runtime.ts`：`freshness`（fresh/stale/unknown，04 §六.1）+ `inspectInFlight`；`applyRuntimeSnapshot` 成功 apply 时置 fresh；`markStale()`（失败/resume，保留 last snapshot 标 stale）；`refreshRuntime()`（inspect+apply，dedupe，驱动轮询 + 手动刷新按钮）；`resetWorkspace`/`stopRuntime` 重置 freshness。
+- `features/workspace/RuntimeSidebar.vue`（新）：ready 视图常驻 P0 侧栏--Workspace / Runtime state 徽章 + freshness + observed Xs ago（本地 1s timer）+ runtime_id（短显，**点击复制完整 UUID**）+ container_name（点击复制）/ Config(image/network/scope，来自 snapshot.config) / Active agent / Sessions 列表 / 刷新 + 停止 Runtime。状态用文本+色（不只靠色，04 §九）。
+- `App.vue`：ready 视图改 `[sidebar | (TabBar+terminal)]`，原 toolbar 内容并入侧栏（删孤儿 `.toolbar`/`.meta` 样式）；mount 轮询 composable。
+- `types/index.ts`：`Freshness` 类型。
+- 验证：npm build 零错误（58 模块）；cargo 零改零错；dev 无 panic；实机手测通过--外部 `runtime stop` -> ~5s 内侧栏 Stopped·stale；外部 `runtime remove` -> Not found；手动「刷新」即时 inspect（observed 重置）；点击 id/ctr 行复制完整值。
+- gap（明确 deferral）：provider status（claude/codex 的 provider/route/auth）+ 刷新 -> S2.3.b（P1）；freshness fresh/stale/unknown 全 revision/request_seq 抗乱序硬化 -> S3.1（本切片 observed_at 简单守卫）；runtime_stop session reason 精修 / stopped 状态保留 tabs 供 restart -> S2.4（外部 stop 时 session 经 PTY 自终 disconnected，侧栏显 stopped，不自动 restart）；history / 启动 list 对账 / 孤儿检测 -> S2.4；P2 runtime 详情面板（last_operation_error/启动诊断折叠）/ aria-live 节流播报 -> 后续/S3.3。
 
 #### S2.2.b Runtime 状态机 + 管理 UI + 退出确认（03-lifecycle-contract.md §四/§七.2-3/§十；04 §四.1/§六；02 §七.3）
 

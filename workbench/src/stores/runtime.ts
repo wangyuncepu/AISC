@@ -6,6 +6,7 @@ import type {
   BuildEvent,
   BuildStatus,
   CapabilityReport,
+  Freshness,
   LaunchAgent,
   LaunchConfig,
   PreflightReport,
@@ -72,6 +73,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const runtimeSnapshot = ref<RuntimeSnapshot | null>(null);
   const conflicts = ref<RuntimeSnapshot[]>([]);
   const conflictError = ref<WorkbenchError | null>(null);
+
+  // S2.3.a: freshness + in-flight inspect dedupe (04 §六.1, §五 dedupe).
+  const freshness = ref<Freshness>("unknown");
+  const inspectInFlight = ref(false);
 
   const preflight = ref<PreflightReport | null>(null);
   const launch = ref<LaunchConfig>({ ...DEFAULT_LAUNCH });
@@ -141,6 +146,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     runtimeSnapshot.value = null;
     conflicts.value = [];
     conflictError.value = null;
+    freshness.value = "unknown";
+    inspectInFlight.value = false;
   }
 
   function backToPicker() {
@@ -266,10 +273,33 @@ export const useRuntimeStore = defineStore("runtime", () => {
   function applyRuntimeSnapshot(snap: RuntimeSnapshot) {
     const cur = runtimeSnapshot.value;
     if (cur && cur.observed_at && snap.observed_at && snap.observed_at < cur.observed_at) {
-      return;
+      return; // stale observation - don't overwrite or mark fresh (04 §六.2)
     }
     runtimeSnapshot.value = snap;
     runtimeState.value = snap.state;
+    freshness.value = "fresh";
+  }
+
+  /** Mark the current observation stale (failed request or app resume). Keeps
+   * the last snapshot; P0 shows "Last known · stale" (04 §六.1). */
+  function markStale() {
+    if (runtimeSnapshot.value) freshness.value = "stale";
+  }
+
+  /** Inspect the active runtime now and apply (deduped). Drives the polling
+   * loop and the manual Refresh button. */
+  async function refreshRuntime() {
+    if (!runtimeId.value || !workspace.value.trim()) return;
+    if (inspectInFlight.value) return;
+    inspectInFlight.value = true;
+    try {
+      const snap = await ipc.runtimeInspect(workspace.value.trim(), runtimeId.value);
+      applyRuntimeSnapshot(snap);
+    } catch {
+      markStale();
+    } finally {
+      inspectInFlight.value = false;
+    }
   }
 
   /** List workbench-owned runtimes in the workspace (conflict resolution). */
@@ -530,6 +560,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     runtimeReady.value = false;
     runtimeState.value = "unknown";
     runtimeSnapshot.value = null;
+    freshness.value = "unknown";
+    inspectInFlight.value = false;
     preflight.value = null;
     status.value = "picker";
   }
@@ -556,6 +588,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     runtimeSnapshot,
     conflicts,
     conflictError,
+    freshness,
+    inspectInFlight,
     negotiate,
     pickAndPinCli,
     pickWorkspace,
@@ -579,6 +613,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     onTabOpenFail,
     onTabSessionExit,
     applyRuntimeSnapshot,
+    markStale,
+    refreshRuntime,
     loadConflicts,
     stopConflictRuntime,
     removeConflictRuntime,

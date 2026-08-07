@@ -3,17 +3,20 @@
  * S2.1.a startup shell: routes between startup-state views (02 §三) and the
  * terminal workspace. Capability gate on mount.
  */
-import { computed, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useRuntimeStore } from "./stores/runtime";
+import { useRuntimePolling } from "./composables/useRuntimePolling";
 import Terminal from "./features/terminal/Terminal.vue";
 import TabBar from "./features/workspace/TabBar.vue";
+import RuntimeSidebar from "./features/workspace/RuntimeSidebar.vue";
 import LaunchSummary from "./features/startup/LaunchSummary.vue";
 import StartProgress from "./features/startup/StartProgress.vue";
 import BuildProgress from "./features/startup/BuildProgress.vue";
 import ConflictManager from "./features/startup/ConflictManager.vue";
 
 const store = useRuntimeStore();
+const polling = useRuntimePolling();
 
 onMounted(() => {
   store.negotiate();
@@ -28,6 +31,20 @@ onMounted(() => {
       await getCurrentWindow().destroy();
     }
   });
+});
+
+// S2.3.a: poll runtime state while a runtime is active (ready), so external
+// stop/remove is reflected within one poll cycle (04 §五; Phase 2 gate).
+watch(
+  () => store.status,
+  (s) => {
+    if (s === "ready") polling.start();
+    else polling.stop();
+  }
+);
+
+onBeforeUnmount(() => {
+  polling.stop();
 });
 
 function isStartingView(s: string): boolean {
@@ -102,21 +119,19 @@ const openTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idl
     </div>
 
     <!-- Terminal workspace -->
-    <div v-else-if="store.status === 'ready'" class="main">
-      <div class="toolbar">
-        <span class="meta">{{ store.workspace }}</span>
-        <span class="meta">runtime {{ store.runtimeId.slice(0, 8) }}</span>
-        <button class="danger" @click="store.stopRuntime()">停止 Runtime</button>
+    <div v-else-if="store.status === 'ready'" class="ready">
+      <RuntimeSidebar />
+      <div class="main">
+        <TabBar />
+        <main class="terminal-area">
+          <Terminal
+            v-for="t in openTabs"
+            :key="t.tabId"
+            :tab-id="t.tabId"
+            v-show="t.tabId === store.activeTabId"
+          />
+        </main>
       </div>
-      <TabBar />
-      <main class="terminal-area">
-        <Terminal
-          v-for="t in openTabs"
-          :key="t.tabId"
-          :tab-id="t.tabId"
-          v-show="t.tabId === store.activeTabId"
-        />
-      </main>
     </div>
 
     <!-- Error -->
@@ -171,12 +186,8 @@ const openTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idl
   flex: 1; min-width: 0; background: #252526; color: #ddd;
   border: 1px solid #444; border-radius: 4px; padding: 6px 8px; font-size: 13px;
 }
+.ready { flex: 1; display: flex; min-height: 0; }
 .main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.toolbar {
-  display: flex; gap: 12px; align-items: center;
-  padding: 6px 12px; background: #1e1e1e; border-bottom: 1px solid #333;
-}
-.meta { font-size: 12px; color: #888; }
 button {
   background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;
   padding: 6px 14px; font-size: 13px; cursor: pointer;

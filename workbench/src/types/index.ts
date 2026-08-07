@@ -211,6 +211,11 @@ export interface BuildEvent {
 
 export type BuildStatus = "idle" | "building" | "complete" | "failed" | "cancelled";
 
+// --- S2.3.a: observability (04 §六.1) ---
+
+/** Runtime observation freshness quality (not a Runtime state). */
+export type Freshness = "fresh" | "stale" | "unknown";
+
 // --- S2.2.a: multi-tab (03 §五/§六) ---
 
 /** Per-tab session lifecycle. `idle` = never opened; the rest mirror SessionState. */
