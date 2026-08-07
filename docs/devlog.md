@@ -2,6 +2,38 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 0 S0.3-S0.5 + 验收门
+
+### 变更
+
+#### S0.3 Session 数据面（05-cli-gui-contract.md §6）
+
+- 新增容器内 `aisc-session-wrapper`（Python）：`open` 从 `/run/aisc/runtime-context.json` 重建 scope 环境（CLAUDE/CODEX/CC_SWITCH config dir，CODEX_HOME 派生），`os.fork`+`os.execvpe`+sync pipe 在父进程 `tcsetpgrp` 后才 exec（消除 SIGTTOU 前台竞态），独立进程组启动受控 agent，原子 0600 `/run/aisc/sessions/<uuid>.json` 记录，wait/reap，传递退出码；`list` 输出 JSON 数组；`terminate` PID/PGID/start-ticks 身份校验 + 向整个 session 的进程组发信号（spare session leader 让 open wrapper reap agent，避免 zombie 堆积在 PID 1 sleep infinity 下）。
+- CLI：`aisc session open/list/terminate`，受控 argv（无 shell），runtime_id/session_id UUID v4 + agent enum 校验，稳定错误码；`session open` text-only（拒绝 `--format json`，PTY 数据不混 JSON）；`terminate` 超时跟随 `--grace`（grace+10s）。
+- secret-free：record/stdout 不含 env/argv/key；wrapper 断言 context runtime_id 与请求一致。
+- 集成测试：bash open project+temporary scope、live-session terminate 无残留、PID 复用/unknown 幂等不误杀。
+
+#### S0.4 Provider 状态 + Workbench capabilities（§4/§7）
+
+- `aisc version --format json` 广告 `capabilities` {runtime, session, providerStatus}（buildEvents 留 S0.5）。
+- `aisc provider current --runtime-id --agent claude|codex --format json`：容器内 `aisc-provider-inspect` 读 cc-switch.db(sqlite) + claude settings.json / codex config.toml + OAuth 文件，输出 secret-free `{provider_id, provider_name, route_mode, auth_status}`。`model_provider` 选 active codex entry；`PROXY_MANAGED` 占位符不算 configured；isinstance 守卫防畸形 config。
+- `resolve_running_container` 提到 `application/runtime.py` public（#5 cleanup，session+provider 共用，session 保留 alias，零测试改动）。
+- 错误码 `AISC_ERR_PROVIDER_STATUS_FAILED`（exit 21）登记到契约 §八 + RFC §4.1（同时回填 S0.3 的 18-20）。
+
+#### S0.5 build --events 契约（§4.1）
+
+- `DockerExecutor.run_streaming_captured(argv, on_chunk)`：`Popen` stdout/stderr=PIPE + 独立进程组（`start_new_session`），select 增量读，每 chunk -> `build.output` 事件；中断时 `killpg` docker 子进程组。
+- `run_build --events`：实时 `build.output`（非末尾回放）；KeyboardInterrupt -> `build.cancelled`(130, {image_tag, docker_exit_code, reason}) + exit 130；terminal `build.complete`/`build.failed`(带 error_code) 走 main.py。移除 `build.step.complete`/`build.warning`，image_exists 折进 `build.plan`。
+- `buildEvents: "aisc.build-events/v1"` capability 广告；逐 chunk 流式 = 天然背压，无无界缓冲。
+- 契约测试 8（成功/失败/取消三流、纯 JSONL、seq 单调）+ 取消集成 1（killpg 无 docker-client 残留）。
+
+#### Phase 0 验收门（§十二）
+
+- 全量 422 passed，capability 与 §4 逐项匹配，Linux Docker E2E 通过；代码级 §十二 全过。
+- 修复 `runtime remove` 非幂等：已移除 runtime 的二次 remove 现返回 not_found(rc0)，不再 RUNTIME_NOT_FOUND(rc1)。
+- 登记校验类错误码（SCOPE/NETWORK/WORKSPACE/INVALID_AGENT/INVALID_SESSION_ID）到契约 §八 + RFC §4.1 注明退出码与 code 多对一（JSON `errors[].code` 权威）；修正 INVALID_SESSION_ID 退出码 15->2（不再与 INVALID_RUNTIME_ID 冲突）。
+- 实机 deferral：claude/codex/cc-switch 交互、PTY 信号链路 -> Phase 1 S1.3；Windows/macOS 实机 -> 手测。
+
 ## v2.2.0-dev (2026-08-03 ~ 2026-08-06) — Workbench Phase 0 S0.2: Runtime 控制面
 
 ### 变更

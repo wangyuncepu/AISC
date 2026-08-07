@@ -96,7 +96,7 @@ def open_session(
     if not validate_session_id(session_id):
         raise CliError(
             message=f"Invalid session ID (must be UUID v4): {session_id}",
-            exit_code=RuntimeExitCode.INVALID_RUNTIME_ID,
+            exit_code=RuntimeExitCode.USAGE_ERROR,
             error_code=RuntimeErrorCode.INVALID_SESSION_ID,
         )
 
@@ -212,7 +212,7 @@ def terminate_session(
     if not validate_session_id(session_id):
         raise CliError(
             message=f"Invalid session ID (must be UUID v4): {session_id}",
-            exit_code=RuntimeExitCode.INVALID_RUNTIME_ID,
+            exit_code=RuntimeExitCode.USAGE_ERROR,
             error_code=RuntimeErrorCode.INVALID_SESSION_ID,
         )
 
