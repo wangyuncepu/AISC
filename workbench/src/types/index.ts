@@ -11,11 +11,13 @@ export interface RuntimeConfig {
 }
 
 export type RuntimeState =
+  | "unknown"
+  | "not_found"
   | "starting"
   | "running"
+  | "stopping"
   | "stopped"
-  | "not_found"
-  | "unknown";
+  | "removing";
 
 export interface RuntimeInfo {
   runtime_id: string;
@@ -164,12 +166,26 @@ export interface PreflightReport {
   observed_at: string;
 }
 
-/** Subset of `aisc runtime inspect`. state: not_found | stopped | running | unknown. */
+/** `aisc runtime inspect/list/stop/restart/remove` snapshot (05 §5.3-5.5).
+ * Mirrors the CLI RuntimeSnapshot.to_dict(); no `ready` field (that is on the
+ * start payload only). */
 export interface RuntimeSnapshot {
   runtime_id: string;
+  state: RuntimeState;
+  config: RuntimeConfig;
+  owner: string;
+  config_fingerprint: string;
   container_name: string;
-  state: string;
-  ready: boolean;
+  container_id: string;
+  registry_state: string;
+  observed_at: string;
+  stale: boolean;
+}
+
+/** `aisc runtime list` envelope data (05 §5.3). */
+export interface RuntimeListResult {
+  runtimes: RuntimeSnapshot[];
+  observed_at: string;
 }
 
 export type LaunchAgent = "claude" | "codex" | "bash" | "cc-switch";

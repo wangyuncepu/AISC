@@ -4,17 +4,30 @@
  * terminal workspace. Capability gate on mount.
  */
 import { computed, onMounted } from "vue";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useRuntimeStore } from "./stores/runtime";
 import Terminal from "./features/terminal/Terminal.vue";
 import TabBar from "./features/workspace/TabBar.vue";
 import LaunchSummary from "./features/startup/LaunchSummary.vue";
 import StartProgress from "./features/startup/StartProgress.vue";
 import BuildProgress from "./features/startup/BuildProgress.vue";
+import ConflictManager from "./features/startup/ConflictManager.vue";
 
 const store = useRuntimeStore();
 
 onMounted(() => {
   store.negotiate();
+  // S2.2.b: exit-Workbench gate (02 §七.3). Always prevent the default close
+  // and decide explicitly: confirm + end live sessions if any, then destroy.
+  // The runtime is left running. (preventDefault must precede the async
+  // confirm, otherwise the default close races the awaited dialog.)
+  void getCurrentWindow().onCloseRequested(async (event) => {
+    event.preventDefault();
+    const allow = await store.confirmExit();
+    if (allow) {
+      await getCurrentWindow().destroy();
+    }
+  });
 });
 
 function isStartingView(s: string): boolean {
@@ -81,6 +94,11 @@ const openTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idl
     <!-- Build progress (image missing -> aisc build --events) -->
     <div v-else-if="store.status === 'building'" class="main">
       <BuildProgress />
+    </div>
+
+    <!-- Runtime conflict (resolve_conflict -> list/stop/remove) -->
+    <div v-else-if="store.status === 'conflict'" class="main">
+      <ConflictManager />
     </div>
 
     <!-- Terminal workspace -->

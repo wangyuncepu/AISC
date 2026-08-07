@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import type {
   BuildEvent,
@@ -10,6 +10,7 @@ import type {
   LaunchConfig,
   PreflightReport,
   RuntimeSnapshot,
+  RuntimeState,
   Tab,
   TabExit,
   TabSessionState,
@@ -17,7 +18,7 @@ import type {
 } from "../types";
 import * as ipc from "../lib/ipc";
 
-/** S2.1.a/b startup state machine (02-startup-flow.md §三). */
+/** S2.1.a/b startup state machine (02-startup-flow.md §三). S2.2.b adds `conflict`. */
 export type WorkbenchStatus =
   | "idle"
   | "negotiating"
@@ -29,6 +30,7 @@ export type WorkbenchStatus =
   | "stopping"
   | "building"
   | "cancelled"
+  | "conflict"
   | "ready"
   | "error";
 
@@ -64,6 +66,12 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const workspace = ref("");
   const runtimeId = ref("");
   const runtimeReady = ref(false);
+
+  // S2.2.b: runtime observation (op-driven; polling lands in S2.3). 03 §四.
+  const runtimeState = ref<RuntimeState>("unknown");
+  const runtimeSnapshot = ref<RuntimeSnapshot | null>(null);
+  const conflicts = ref<RuntimeSnapshot[]>([]);
+  const conflictError = ref<WorkbenchError | null>(null);
 
   const preflight = ref<PreflightReport | null>(null);
   const launch = ref<LaunchConfig>({ ...DEFAULT_LAUNCH });
@@ -129,6 +137,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
     activeTabId.value = null;
     preflight.value = null;
     runtimeId.value = "";
+    runtimeState.value = "unknown";
+    runtimeSnapshot.value = null;
+    conflicts.value = [];
+    conflictError.value = null;
   }
 
   function backToPicker() {
@@ -183,6 +195,20 @@ export const useRuntimeStore = defineStore("runtime", () => {
 
   async function runPreflight() {
     if (!workspace.value.trim()) return;
+    if (!runtimeId.value) {
+      // S2.2.b: discover an existing workbench project runtime in this
+      // workspace so preflight can match it (reuse/restart) instead of always
+      // generating a fresh id - a fresh id never matches an existing project
+      // runtime and would spuriously report resolve_conflict. Full history
+      // reconciliation (orphan detection, multi-window) lands in S2.4.
+      try {
+        const res = await ipc.listRuntimes(workspace.value.trim(), "workbench");
+        const existing = res.runtimes.find((r) => r.config.scope === "project");
+        if (existing) runtimeId.value = existing.runtime_id;
+      } catch {
+        /* Docker/CLI unavailable - preflight will report the real error */
+      }
+    }
     if (!runtimeId.value) runtimeId.value = uuid();
     status.value = "preflight";
     error.value = null;
@@ -195,7 +221,14 @@ export const useRuntimeStore = defineStore("runtime", () => {
         launch.value.scope
       );
       preflight.value = report;
-      status.value = "summary";
+      if (report.recommended_action === "resolve_conflict") {
+        // Skip the summary (Start would be disabled by the config gate) and go
+        // straight to conflict resolution (03 §三).
+        status.value = "conflict";
+        void loadConflicts();
+      } else {
+        status.value = "summary";
+      }
     } catch (e) {
       status.value = "error";
       error.value = e as WorkbenchError;
@@ -223,6 +256,79 @@ export const useRuntimeStore = defineStore("runtime", () => {
       window.clearInterval(startTimer);
       startTimer = null;
     }
+  }
+
+  // --- S2.2.b: runtime observation + conflict resolution (03 §四/§十) ---
+
+  /** Apply a fresh runtime observation with a simple stale guard (04 §六.2):
+   * an older observation must not overwrite a newer one. ISO-UTC strings
+   * compare lexicographically = chronologically. */
+  function applyRuntimeSnapshot(snap: RuntimeSnapshot) {
+    const cur = runtimeSnapshot.value;
+    if (cur && cur.observed_at && snap.observed_at && snap.observed_at < cur.observed_at) {
+      return;
+    }
+    runtimeSnapshot.value = snap;
+    runtimeState.value = snap.state;
+  }
+
+  /** List workbench-owned runtimes in the workspace (conflict resolution). */
+  async function loadConflicts() {
+    conflictError.value = null;
+    try {
+      const res = await ipc.listRuntimes(workspace.value.trim(), "workbench");
+      conflicts.value = res.runtimes;
+    } catch (e) {
+      conflictError.value = e as WorkbenchError;
+      conflicts.value = [];
+    }
+  }
+
+  async function stopConflictRuntime(id: string) {
+    try {
+      await ipc.stopRuntime(workspace.value.trim(), id);
+    } catch (e) {
+      conflictError.value = e as WorkbenchError;
+    }
+    await loadConflicts();
+  }
+
+  async function removeConflictRuntime(id: string, force = false) {
+    try {
+      await ipc.removeRuntime(workspace.value.trim(), id, force);
+    } catch (e) {
+      conflictError.value = e as WorkbenchError;
+    }
+    await loadConflicts();
+  }
+
+  function retryFromConflict() {
+    conflicts.value = [];
+    conflictError.value = null;
+    preflight.value = null;
+    runtimeId.value = ""; // re-discover (or fresh id) on the next preflight
+    status.value = "preflight";
+    void runPreflight();
+  }
+
+  /** Exit-Workbench gate (02 §七.3): confirm if any session is live, then end
+   * owned sessions (keep the runtime running). Returns whether the window may
+   * close. */
+  async function confirmExit(): Promise<boolean> {
+    const live = tabs.value.filter(
+      (t) => t.sessionState === "running" || t.sessionState === "starting"
+    );
+    if (live.length === 0) return true;
+    const ok = await confirm(
+      `有 ${live.length} 个活动会话，退出将结束它们（Runtime 保留运行）。继续？`
+    );
+    if (!ok) return false;
+    await Promise.all(
+      live
+        .filter((t) => t.sessionId)
+        .map((t) => ipc.closeSession(t.sessionId!).catch(() => null))
+    );
+    return true;
   }
 
   // --- S2.2.a: multi-tab session lifecycle (03 §五/§六) ---
@@ -330,24 +436,22 @@ export const useRuntimeStore = defineStore("runtime", () => {
           launch.value.network,
           launch.value.scope
         );
+        runtimeState.value = "running";
       } else if (report.recommended_action === "reuse" && report.matching_runtime_id) {
         runtimeId.value = report.matching_runtime_id;
         status.value = "starting";
+        runtimeState.value = "running";
       } else if (report.recommended_action === "restart" && report.matching_runtime_id) {
         runtimeId.value = report.matching_runtime_id;
         status.value = "starting";
-        await ipc.runtimeRestart(runtimeId.value);
+        const snap = await ipc.runtimeRestart(workspace.value.trim(), runtimeId.value);
+        applyRuntimeSnapshot(snap);
       } else {
-        // resolve_conflict or missing matching_runtime_id
+        // resolve_conflict: list workbench runtimes so the user can stop/remove
+        // the incompatible one, then re-preflight (03 §三).
         stopTimer();
-        status.value = "error";
-        error.value = {
-          code: "AISC_ERR_RUNTIME_CONFLICT",
-          message: "工作区已有不兼容 Runtime，需先处理冲突",
-          technical_detail: `recommended_action=${report.recommended_action}`,
-          retryable: false,
-          action: "none",
-        };
+        status.value = "conflict";
+        void loadConflicts();
         return;
       }
       stopTimer();
@@ -368,7 +472,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
   async function handleCancelledStart() {
     // 02 §八: cancel -> inspect -> report real state + keep/stop.
     try {
-      const snap = await ipc.runtimeInspect(runtimeId.value);
+      const snap = await ipc.runtimeInspect(workspace.value.trim(), runtimeId.value);
       cancelInspect.value = snap;
     } catch {
       cancelInspect.value = null;
@@ -395,7 +499,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
   async function stopCancelledRuntime() {
     if (!runtimeId.value) return;
     try {
-      await ipc.stopRuntime(runtimeId.value);
+      await ipc.stopRuntime(workspace.value.trim(), runtimeId.value);
     } catch {
       /* best-effort */
     }
@@ -415,7 +519,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     activeTabId.value = null;
     try {
       if (runtimeId.value) {
-        await ipc.stopRuntime(runtimeId.value);
+        await ipc.stopRuntime(workspace.value.trim(), runtimeId.value);
       }
     } catch (e) {
       status.value = "error";
@@ -424,6 +528,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     }
     runtimeId.value = "";
     runtimeReady.value = false;
+    runtimeState.value = "unknown";
+    runtimeSnapshot.value = null;
     preflight.value = null;
     status.value = "picker";
   }
@@ -446,6 +552,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
     buildError,
     tabs,
     activeTabId,
+    runtimeState,
+    runtimeSnapshot,
+    conflicts,
+    conflictError,
     negotiate,
     pickAndPinCli,
     pickWorkspace,
@@ -468,5 +578,11 @@ export const useRuntimeStore = defineStore("runtime", () => {
     onTabOpenOk,
     onTabOpenFail,
     onTabSessionExit,
+    applyRuntimeSnapshot,
+    loadConflicts,
+    stopConflictRuntime,
+    removeConflictRuntime,
+    retryFromConflict,
+    confirmExit,
   };
 });

@@ -2,9 +2,19 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1/S2.2.a
+## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1/S2.2.a/S2.2.b
 
 ### 变更
+
+#### S2.2.b Runtime 状态机 + 管理 UI + 退出确认（03-lifecycle-contract.md §四/§七.2-3/§十；04 §四.1/§六；02 §七.3）
+
+- 后端 `runtime.rs`：`RuntimeSnapshot` 对齐 CLI `to_dict()`--修 S2.1.a 遗留 bug（struct 有 `ready` 字段但 CLI inspect/list 不发 `ready`，deserialize 必败，被 cancel 路径 try/catch 吞了致 inspect 实际从未成功）；现 drop `ready`，加 `config{workspace,image,network,scope}`/`owner`/`config_fingerprint`/`container_id`/`registry_state`/`observed_at`/`stale`，optional 字段 `#[serde(default)]`；新增 `RuntimeConfig`/`RuntimeListResult`。新增命令 `list_runtimes(workspace, owner)`（`aisc runtime list --workspace --owner --format json`）+ `remove_runtime(workspace, runtime_id, force)`（`--force`）。`runtime_inspect`/`stop_runtime`/`runtime_restart` 全部加 `workspace` 参数透传 `--workspace`（修 registry 定位 + config 回填；之前不带 workspace 致 registry_state=missing + config 空），且 stop/restart/remove 返回 `RuntimeSnapshot`（op 结果即 observation）。argv 抽纯函数 + 8 个单测（inspect/stop/restart/remove/list argv + snapshot 反序列化无 ready + docker-only 最小 + list_result）。`lib.rs` 注册 2 新命令；`capabilities/default.json` 加 `core:window:allow-destroy`。
+- 前端 `types/index.ts`：`RuntimeSnapshot` 扩全字段（drop `ready`）；`RuntimeState` 补 stopping/stopped/removing；`RuntimeListResult`。`lib/ipc.ts`：inspect/stop/restart 加 workspace 参数；`listRuntimes`/`removeRuntime`。
+- store `stores/runtime.ts`：`runtimeState`/`runtimeSnapshot` + `applyRuntimeSnapshot`（observed_at 守卫，旧观察不覆盖新，04 §六.2 简化版；全 revision/request_seq 硬化留 S3.1）；`conflicts`/`conflictError` + `loadConflicts`/`stopConflictRuntime`/`removeConflictRuntime`/`retryFromConflict`；`confirmExit`（02 §七.3：有活动 session 弹 confirm + 结束 owned session + 保留 runtime）。`runPreflight` 加 **discovery**--preflight 前先 `list_runtimes(workspace, workbench)` 找已有 project runtime 复用其 id（修根因：Workbench 每次生成新 runtime_id 不命中 CLI 的 reuse/restart，重进有 project runtime 的工作区必误报 resolve_conflict；现同配置->reuse/restart，异配置->resolve_conflict）。`startFromSummary` restart 路径 apply 返回 snapshot；resolve_conflict 进 `conflict` 状态。`WorkbenchStatus` 加 `conflict`。
+- **测试中修 3 个流程 bug**：(1) preflight `resolve_conflict` 原先进 summary 但 `can_start=false` 致 Start 禁用卡死 -> `runPreflight` 见 resolve_conflict 直接进冲突视图；(2) stop 后重进显冲突而非 restart -> discovery 复用已有 runtime id 修复；(3) 退出确认点确认后窗口不关（async `preventDefault` 时序）-> 始终同步 `preventDefault` + allow 则显式 `destroy()` + 加 `core:window:allow-destroy` 权限。
+- 组件 `features/startup/ConflictManager.vue`（新）：列出工作区 workbench runtime（id 缩写/state/image·scope）+ 停止（running/starting）/强制移除（running，force）/移除（stopped）+ 重新预检/返回。`App.vue`：`conflict` 视图 + onMounted 注册 `onCloseRequested`（始终 preventDefault + confirm + destroy）。
+- 验证：cargo 55 绿（44 lib+7 cli+4 pty，8 新测试零回归）；npm build 零错误；dev 无 panic；实机手测通过--制造 project runtime 冲突 -> 冲突视图列出 -> 强制移除 -> re-preflight -> start -> ready；stop 后重进 -> discovery 复用 -> restart -> ready；有活动 session 关窗弹确认 -> 确认关窗 + runtime 保留运行。
+- gap（明确 deferral）：轮询对账/外部 stop-remove 周期检测 -> S2.3；freshness fresh/stale/unknown + revision/request_seq 抗乱序硬化 -> S3.1；stopped 状态保留 tabs 供 restart 的 richer UX + runtime_stop session reason 精修 -> S2.4；history 持久化/启动 list 对账完整版（孤儿/多窗口）/崩溃恢复 -> S2.4（本切片 discovery 是其轻量子集）；Provider/auth + P0/P1 可观察性侧栏 -> S2.3。
 
 #### S2.2.a 多标签 + Session 状态机（03-lifecycle-contract.md §五/§六/§七.1；06 §五）
 

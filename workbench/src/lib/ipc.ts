@@ -6,6 +6,7 @@ import type {
   DiscoveryReport,
   PreflightReport,
   PtyEvent,
+  RuntimeListResult,
   RuntimeSnapshot,
   RuntimeStartResult,
   SessionExit,
@@ -48,7 +49,8 @@ export const startRuntime = (
   scope: string | null = null
 ) => invoke<RuntimeStartResult>("start_runtime", { workspace, runtimeId, image, network, scope });
 
-export const stopRuntime = (runtimeId: string) => invoke<void>("stop_runtime", { runtimeId });
+export const stopRuntime = (workspace: string, runtimeId: string) =>
+  invoke<RuntimeSnapshot>("stop_runtime", { workspace, runtimeId });
 
 // --- S2.1.a: preflight / inspect / restart / cancel ---
 
@@ -67,11 +69,17 @@ export const runtimePreflight = (
     scope,
   });
 
-export const runtimeInspect = (runtimeId: string) =>
-  invoke<RuntimeSnapshot>("runtime_inspect", { runtimeId });
+export const runtimeInspect = (workspace: string, runtimeId: string) =>
+  invoke<RuntimeSnapshot>("runtime_inspect", { workspace, runtimeId });
 
-export const runtimeRestart = (runtimeId: string) =>
-  invoke<void>("runtime_restart", { runtimeId });
+export const runtimeRestart = (workspace: string, runtimeId: string) =>
+  invoke<RuntimeSnapshot>("runtime_restart", { workspace, runtimeId });
+
+export const listRuntimes = (workspace: string, owner: string | null = null) =>
+  invoke<RuntimeListResult>("list_runtimes", { workspace, owner });
+
+export const removeRuntime = (workspace: string, runtimeId: string, force = false) =>
+  invoke<RuntimeSnapshot>("remove_runtime", { workspace, runtimeId, force });
 
 export const cancelRuntimeStart = () => invoke<void>("cancel_runtime_start");
 
