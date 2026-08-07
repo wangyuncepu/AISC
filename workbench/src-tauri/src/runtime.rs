@@ -138,6 +138,9 @@ pub async fn start_runtime(
     app: AppHandle,
     workspace: String,
     runtime_id: String,
+    image: Option<String>,
+    network: Option<String>,
+    scope: Option<String>,
 ) -> Result<RuntimeStartResult, WorkbenchError> {
     let pin = resolve_pin(&app)?;
     let start_op = app.state::<StartOp>().inner().clone();
@@ -145,6 +148,9 @@ pub async fn start_runtime(
     if let Ok(mut g) = start_op.lock() {
         *g = Some(cancel.clone());
     }
+    let image = image.unwrap_or_else(|| "super-claude:latest".to_string());
+    let network = network.unwrap_or_else(|| "direct".to_string());
+    let scope = scope.unwrap_or_else(|| "project".to_string());
     let argv = vec![
         "runtime".into(),
         "start".into(),
@@ -153,11 +159,11 @@ pub async fn start_runtime(
         "--workspace".into(),
         workspace,
         "--image".into(),
-        "super-claude:latest".into(),
+        image,
         "--network".into(),
-        "direct".into(),
+        network,
         "--scope".into(),
-        "project".into(),
+        scope,
         "--owner".into(),
         "workbench".into(),
         "--format".into(),

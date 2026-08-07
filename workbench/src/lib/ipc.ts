@@ -39,8 +39,13 @@ export const closeSession = (sessionId: string) => invoke<SessionExit>("close_se
 
 // --- S1.4: runtime control ---
 
-export const startRuntime = (workspace: string, runtimeId: string) =>
-  invoke<RuntimeStartResult>("start_runtime", { workspace, runtimeId });
+export const startRuntime = (
+  workspace: string,
+  runtimeId: string,
+  image: string | null = null,
+  network: string | null = null,
+  scope: string | null = null
+) => invoke<RuntimeStartResult>("start_runtime", { workspace, runtimeId, image, network, scope });
 
 export const stopRuntime = (runtimeId: string) => invoke<void>("stop_runtime", { runtimeId });
 

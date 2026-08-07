@@ -35,10 +35,14 @@ function isStartingView(s: string): boolean {
       <button @click="store.pickAndPinCli()">选择 AISC CLI</button>
     </div>
 
-    <!-- Loading -->
-    <div v-else-if="['idle', 'negotiating', 'preflight'].includes(store.status)" class="center">
+    <!-- Loading / stopping -->
+    <div v-else-if="['idle', 'negotiating', 'preflight', 'stopping'].includes(store.status)" class="center">
       <p class="msg">{{
-        store.status === "preflight" ? "正在预检环境…" : "正在协商 AISC CLI 能力…"
+        store.status === "stopping"
+          ? "正在停止 Runtime…"
+          : store.status === "preflight"
+          ? "正在预检环境…"
+          : "正在协商 AISC CLI 能力…"
       }}</p>
     </div>
 

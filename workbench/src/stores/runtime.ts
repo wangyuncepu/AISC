@@ -20,6 +20,7 @@ export type WorkbenchStatus =
   | "preflight"
   | "summary"
   | "starting"
+  | "stopping"
   | "cancelled"
   | "ready"
   | "error";
@@ -160,7 +161,13 @@ export const useRuntimeStore = defineStore("runtime", () => {
     try {
       if (report.recommended_action === "start") {
         status.value = "starting";
-        await ipc.startRuntime(workspace.value.trim(), runtimeId.value);
+        await ipc.startRuntime(
+          workspace.value.trim(),
+          runtimeId.value,
+          launch.value.image,
+          launch.value.network,
+          launch.value.scope
+        );
       } else if (report.recommended_action === "reuse" && report.matching_runtime_id) {
         runtimeId.value = report.matching_runtime_id;
         status.value = "starting";
@@ -241,7 +248,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   async function stopRuntime() {
-    status.value = "starting"; // reuse as a "stopping" indicator visually
+    status.value = "stopping";
     try {
       if (sessionId.value) {
         try {
