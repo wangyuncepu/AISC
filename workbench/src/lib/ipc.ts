@@ -1,6 +1,7 @@
 /** Typed wrappers over the Workbench Tauri commands (S1.2-S1.4). */
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  BuildEvent,
   CapabilityReport,
   DiscoveryReport,
   PreflightReport,
@@ -73,3 +74,10 @@ export const runtimeRestart = (runtimeId: string) =>
   invoke<void>("runtime_restart", { runtimeId });
 
 export const cancelRuntimeStart = () => invoke<void>("cancel_runtime_start");
+
+// --- S2.1.b: build --events streaming ---
+
+export const buildImage = (tag: string, onEvent: Channel<BuildEvent>) =>
+  invoke<void>("build_image", { tag, onEvent });
+
+export const cancelBuild = () => invoke<void>("cancel_build");

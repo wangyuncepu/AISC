@@ -1,7 +1,10 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
+import { Channel } from "@tauri-apps/api/core";
 import type {
+  BuildEvent,
+  BuildStatus,
   CapabilityReport,
   LaunchAgent,
   LaunchConfig,
@@ -11,7 +14,7 @@ import type {
 } from "../types";
 import * as ipc from "../lib/ipc";
 
-/** S2.1.a startup state machine (02-startup-flow.md §三). */
+/** S2.1.a/b startup state machine (02-startup-flow.md §三). */
 export type WorkbenchStatus =
   | "idle"
   | "negotiating"
@@ -21,6 +24,7 @@ export type WorkbenchStatus =
   | "summary"
   | "starting"
   | "stopping"
+  | "building"
   | "cancelled"
   | "ready"
   | "error";
@@ -51,6 +55,12 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const showAdvanced = ref(false);
   const startElapsedMs = ref(0);
   const cancelInspect = ref<RuntimeSnapshot | null>(null);
+
+  // S2.1.b build state (in-memory only, 05 §4.1.5)
+  const buildStatus = ref<BuildStatus>("idle");
+  const buildLog = ref("");
+  const buildTag = ref("");
+  const buildError = ref<WorkbenchError | null>(null);
 
   let startTimer: number | null = null;
 
@@ -99,6 +109,51 @@ export const useRuntimeStore = defineStore("runtime", () => {
     preflight.value = null;
     runtimeId.value = "";
     status.value = "picker";
+  }
+
+  // S2.1.b: build the image with `aisc build --events` (05 §4.1).
+  async function startBuild(tag: string) {
+    buildTag.value = tag;
+    buildLog.value = "";
+    buildError.value = null;
+    buildStatus.value = "building";
+    status.value = "building";
+    // Channel only streams opaque build.output chunks for display. The terminal
+    // outcome (complete/failed/cancelled) is authoritative from the command
+    // return (try/catch below), avoiding any race with callback delivery.
+    const ch = new Channel<BuildEvent>();
+    ch.onmessage = (ev) => {
+      if (ev.type === "build.output") {
+        const chunk = ev.data?.chunk;
+        if (typeof chunk === "string") buildLog.value += chunk;
+      }
+    };
+    try {
+      await ipc.buildImage(tag, ch);
+      // Ok return == build.complete (05 §4.1.2). Stay on BuildProgress so the
+      // user can review the log; "返回摘要" triggers re-preflight.
+      buildStatus.value = "complete";
+    } catch (e) {
+      const err = e as WorkbenchError;
+      buildError.value = err;
+      buildStatus.value = err.code === "WB_ERR_CLI_CANCELLED" ? "cancelled" : "failed";
+    }
+  }
+
+  async function cancelBuild() {
+    try {
+      await ipc.cancelBuild();
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  function backToSummaryFromBuild() {
+    buildStatus.value = "idle";
+    buildLog.value = "";
+    buildError.value = null;
+    status.value = preflight.value ? "summary" : "preflight";
+    if (!preflight.value) void runPreflight();
   }
 
   async function runPreflight() {
@@ -285,10 +340,17 @@ export const useRuntimeStore = defineStore("runtime", () => {
     showAdvanced,
     startElapsedMs,
     cancelInspect,
+    buildStatus,
+    buildLog,
+    buildTag,
+    buildError,
     negotiate,
     pickAndPinCli,
     pickWorkspace,
     backToPicker,
+    startBuild,
+    cancelBuild,
+    backToSummaryFromBuild,
     runPreflight,
     recomputePreflightNeeded,
     startFromSummary,

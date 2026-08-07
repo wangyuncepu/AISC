@@ -8,6 +8,7 @@ import { useRuntimeStore } from "./stores/runtime";
 import Terminal from "./features/terminal/Terminal.vue";
 import LaunchSummary from "./features/startup/LaunchSummary.vue";
 import StartProgress from "./features/startup/StartProgress.vue";
+import BuildProgress from "./features/startup/BuildProgress.vue";
 
 const store = useRuntimeStore();
 
@@ -70,6 +71,11 @@ function isStartingView(s: string): boolean {
     <!-- Start progress / cancel -->
     <div v-else-if="isStartingView(store.status)" class="main">
       <StartProgress />
+    </div>
+
+    <!-- Build progress (image missing -> aisc build --events) -->
+    <div v-else-if="store.status === 'building'" class="main">
+      <BuildProgress />
     </div>
 
     <!-- Terminal workspace -->

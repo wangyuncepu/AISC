@@ -10,10 +10,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{ipc::Channel, AppHandle, Manager};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::cli::run_control;
+use crate::cli::{run_build_stream, run_control, BuildEvent};
 use crate::error::WorkbenchError;
 use crate::session::resolve_pin;
 
@@ -21,11 +22,18 @@ const START_TIMEOUT: Duration = Duration::from_secs(120);
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(120);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(120);
+const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Cancellation token for the in-flight `start_runtime` operation (02 §三:
 /// every async operation has a cancellation token). One at a time - S2.1.a is
-/// single-session.
-pub type StartOp = Arc<Mutex<Option<CancellationToken>>>;
+/// single-session. Newtype wrapper so it is a distinct managed state from
+/// `BuildOp` (Tauri keys state by concrete type).
+#[derive(Default, Clone)]
+pub struct StartOp(pub Arc<Mutex<Option<CancellationToken>>>);
+
+/// Cancellation token for the in-flight `build_image` operation.
+#[derive(Default, Clone)]
+pub struct BuildOp(pub Arc<Mutex<Option<CancellationToken>>>);
 
 /// Subset of the `aisc runtime start` envelope `data` (extra fields ignored).
 #[derive(Debug, Deserialize, Serialize)]
@@ -145,7 +153,7 @@ pub async fn start_runtime(
     let pin = resolve_pin(&app)?;
     let start_op = app.state::<StartOp>().inner().clone();
     let cancel = CancellationToken::new();
-    if let Ok(mut g) = start_op.lock() {
+    if let Ok(mut g) = start_op.0.lock() {
         *g = Some(cancel.clone());
     }
     let image = image.unwrap_or_else(|| "super-claude:latest".to_string());
@@ -171,7 +179,7 @@ pub async fn start_runtime(
     ];
     let env = run_control(&pin, argv, START_TIMEOUT, cancel).await;
     // Clear the in-flight token regardless of outcome.
-    if let Ok(mut g) = start_op.lock() {
+    if let Ok(mut g) = start_op.0.lock() {
         *g = None;
     }
     let env = env?;
@@ -186,7 +194,7 @@ pub async fn start_runtime(
 #[tauri::command]
 pub async fn cancel_runtime_start(app: AppHandle) -> Result<(), WorkbenchError> {
     let start_op = app.state::<StartOp>().inner().clone();
-    if let Ok(g) = start_op.lock() {
+    if let Ok(g) = start_op.0.lock() {
         if let Some(t) = g.as_ref() {
             t.cancel();
         }
@@ -226,6 +234,51 @@ pub async fn stop_runtime(app: AppHandle, runtime_id: String) -> Result<(), Work
     let env = run_control(&pin, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
+    }
+    Ok(())
+}
+
+/// Build an image via `aisc build --events`, streaming JSONL events to the
+/// frontend Channel (05 §4.1). Cancellable via `cancel_build`.
+#[tauri::command]
+pub async fn build_image(
+    app: AppHandle,
+    tag: String,
+    on_event: Channel<BuildEvent>,
+) -> Result<(), WorkbenchError> {
+    let pin = resolve_pin(&app)?;
+    let build_op = app.state::<BuildOp>().inner().clone();
+    let cancel = CancellationToken::new();
+    if let Ok(mut g) = build_op.0.lock() {
+        *g = Some(cancel.clone());
+    }
+
+    let (tx, mut rx) = mpsc::channel::<BuildEvent>(256);
+    // Bridge mpsc -> Tauri Channel.
+    tokio::spawn(async move {
+        while let Some(ev) = rx.recv().await {
+            if on_event.send(ev).is_err() {
+                break;
+            }
+        }
+    });
+
+    let argv = vec!["build".into(), "--tag".into(), tag, "--events".into()];
+    let result = run_build_stream(&pin, argv, BUILD_TIMEOUT, cancel, tx).await;
+
+    if let Ok(mut g) = build_op.0.lock() {
+        *g = None;
+    }
+    result
+}
+
+#[tauri::command]
+pub async fn cancel_build(app: AppHandle) -> Result<(), WorkbenchError> {
+    let build_op = app.state::<BuildOp>().inner().clone();
+    if let Ok(g) = build_op.0.lock() {
+        if let Some(t) = g.as_ref() {
+            t.cancel();
+        }
     }
     Ok(())
 }

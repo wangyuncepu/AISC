@@ -180,3 +180,17 @@ export interface LaunchConfig {
   network: "direct" | "proxy";
   scope: "project" | "temporary";
 }
+
+// --- S2.1.b: build events (05 §4.1) ---
+
+export interface BuildEvent {
+  protocol?: string;
+  command?: string;
+  run_id?: string;
+  seq?: number;
+  type: string; // build.start | build.plan | build.output | build.complete | build.failed | build.cancelled
+  ts?: string;
+  data?: Record<string, unknown>;
+}
+
+export type BuildStatus = "idle" | "building" | "complete" | "failed" | "cancelled";

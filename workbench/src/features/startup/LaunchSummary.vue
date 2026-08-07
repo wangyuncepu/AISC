@@ -73,7 +73,7 @@ function onConfigChanged() {
     </div>
 
     <p v-if="imageMissing" class="gate-msg config">
-      镜像缺失（Config gate）。「构建镜像」将在 S2.1.b 启用；请在外部构建或更换镜像。
+      镜像缺失（Config gate）。可点击「构建镜像」用 `aisc build --events` 构建（可取消）。
     </p>
     <p v-else-if="hardBlocking" class="gate-msg hard">
       Hard gate 未通过，无法启动。请修复 Docker / workspace 权限后重试。
@@ -85,7 +85,7 @@ function onConfigChanged() {
     <div class="actions">
       <button class="primary" :disabled="!startEnabled" @click="store.startFromSummary()">Start</button>
       <button @click="changeSettings">{{ store.showAdvanced ? "收起设置" : "Change settings" }}</button>
-      <button class="danger" :disabled="true" title="S2.1.b">构建镜像</button>
+      <button v-if="imageMissing" class="danger" @click="store.startBuild(store.launch.image)">构建镜像</button>
       <button @click="store.backToPicker()">Cancel</button>
     </div>
   </div>

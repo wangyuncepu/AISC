@@ -2,9 +2,19 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1.a
+## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1
 
 ### 变更
+
+#### S2.1.b 镜像构建流式进度（05-cli-gui-contract.md §4.1）
+
+- `cli.rs` 增 `BuildEvent`（JSONL `{protocol,command,run_id,seq,type,ts,data}`）+ `run_build_stream(executable, argv, timeout, cancel, mpsc)`：`tokio::process` spawn + `BufReader::read_line` 逐行解析 `build.*` 事件 -> bounded mpsc(256) 背压；terminal 事件（complete/failed/cancelled）决定返回（complete->Ok，failed->Err(map_aisc(error_code))，cancelled->Err(cli_cancelled)）；取消/超时 `sigint_or_kill`（Unix `libc::kill(SIGINT)` 让 CLI 发 `build.cancelled` + 清 docker 子进程组；Windows fallback SIGKILL = transport failure，§4.1.4）。build.output 仅内存转发、不解析百分比（§4.1.3/§4.1.5）。
+- `runtime.rs` 增 `build_image(app, tag, on_event: Channel<BuildEvent>)`（mpsc->Channel 桥接，同 open_session 模式）+ `cancel_build`；`BuildOp` managed state（newtype 包 `Arc<Mutex<Option<CancellationToken>>>`，与 `StartOp` 同型但 Tauri 按具体类型管理 state，必须 distinct 类型--type alias 会 panic "already being managed"）。
+- **CLI 修复（S0.5 遗留）**：`output.py` `emit_json` + `JsonlEmitter.emit` 加 `flush=True`--Python stdout 管道下块缓冲，build 事件积压到进程结束才出，违反 §4.1.1「不能等进程结束后一次性返回」；实测 `python -u` 验证，修复后事件即时流出（契约测试 8 个仍过）。
+- 前端：`BuildEvent`/`BuildStatus` 类型；`ipc.buildImage/cancelBuild`；store `startBuild`（Channel 只收 build.output 追加 log；终态由命令返回值判定，避开回调 race + TS narrowing）、`cancelBuild`、`backToSummaryFromBuild`（回摘要并 re-preflight）；`BuildProgress.vue`（滚动 log + 经过时间 + Cancel + complete/failed/cancelled + 返回摘要；complete 后停留可看完整 log，不再自动跳走）；App.vue `building` 视图；LaunchSummary 「构建镜像」按钮在 image 缺失时启用。
+- 验证：cargo build/test 47 绿、npm build 零错误；CLI 时间戳实测事件流式到达（非突发）；实机手测通过（镜像缺失 -> 构建 -> 实时日志 -> complete -> 返回摘要 re-preflight -> image pass -> Start）。
+- 已知观感问题（已记 memory，后续解决）：`aisc build` context = 整个 repo（含 node_modules/target/.venv）-> Docker legacy builder 初始化 ~22s 空档，缓存命中后输出突发；Workbench 侧已加经过时间+占位提示缓解；根治 = `.dockerignore` + 换 buildx。
+- gap（明确 deferral）：runtime 状态机/对账/管理 UI（冲突复用/stop-remove）-> S2.2；workspace 最近列表 -> S2.4；多标签 -> S2.2；Provider/auth Warning -> S2.3。
 
 #### S2.1.a 启动与预检主路径（02-startup-flow.md §三/§四/§七/§八）
 

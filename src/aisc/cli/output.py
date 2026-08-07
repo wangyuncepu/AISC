@@ -71,7 +71,7 @@ def build_error(code: str, message: str, hint: Optional[str] = None) -> Dict[str
 
 def emit_json(envelope: Dict[str, Any]) -> None:
     """Write *envelope* as JSON to stdout."""
-    print(json.dumps(envelope, ensure_ascii=False))
+    print(json.dumps(envelope, ensure_ascii=False), flush=True)
 
 
 def emit_json_usage_error(
@@ -214,7 +214,7 @@ class JsonlEmitter:
         }
         if terminal:
             self._terminated = True
-        print(json.dumps(event, ensure_ascii=False))
+        print(json.dumps(event, ensure_ascii=False), flush=True)
 
     def emit_terminal(self, terminal_type: str, exit_code: int,
                       extra_data: Optional[Dict[str, Any]] = None) -> None:
