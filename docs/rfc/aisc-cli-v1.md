@@ -248,6 +248,8 @@ event stream 中不得出现明文密钥。脱敏规则同 §2.6。
 
 `AISC_EXIT_*` 数值 0–21 如表中定义；数值 22+ 为预留空间，当前未分配。客户端不得假设数值连续——应仅依赖表中列出的已知值，未识别值视为 `AISC_EXIT_GENERAL`。
 
+> **退出码与错误码的多对一关系**：上表为退出码到「主要」`AISC_ERR_*` code 的映射，但一个退出码可承载多个细分 code（例如 exit 2 `USAGE` 也承载 `AISC_ERR_SCOPE_INVALID`/`NETWORK_INVALID`/`WORKSPACE_INVALID`/`INVALID_AGENT`/`INVALID_SESSION_ID` 等校验错误）。机器消费者必须按 JSON envelope 的 `errors[].code` 路由，不依赖退出码到 code 的一一映射，也不对 `message` 做字符串匹配。完整 code 清单见 `docs/gui-planning/05-cli-gui-contract.md` §八。
+
 ---
 
 ## 5. 交互与确认控制

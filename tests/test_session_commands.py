@@ -107,6 +107,7 @@ class TestOpenSession(unittest.TestCase):
         with self.assertRaises(CliError) as cm:
             open_session(RT, "not-a-uuid", "claude", exec_, REG)
         assert cm.exception.error_code == RuntimeErrorCode.INVALID_SESSION_ID
+        assert cm.exception.exit_code == RuntimeExitCode.USAGE_ERROR  # not 15 (INVALID_RUNTIME_ID)
         assert exec_.streaming_calls == []
 
     def test_open_invalid_agent_short_circuits(self):
@@ -205,6 +206,7 @@ class TestTerminateSession(unittest.TestCase):
         with self.assertRaises(CliError) as cm:
             terminate_session(RT, "nope", exec_, REG)
         assert cm.exception.error_code == RuntimeErrorCode.INVALID_SESSION_ID
+        assert cm.exception.exit_code == RuntimeExitCode.USAGE_ERROR  # not 15 (INVALID_RUNTIME_ID)
         assert exec_.calls == []
 
     @patch("aisc.application.session._resolve_running_container", return_value=CONTAINER)

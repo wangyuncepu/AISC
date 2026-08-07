@@ -344,6 +344,13 @@ aisc provider current
 | `AISC_ERR_SESSION_FAILED` | exec/session wrapper 启动失败 |
 | `AISC_ERR_PROVIDER_STATUS_FAILED` | provider 状态检查 exec/解析失败（S0.4） |
 | `AISC_ERR_STATE_LOCK_TIMEOUT` | registry/workspace 跨进程锁不可用或超时 |
+| `AISC_ERR_SCOPE_INVALID` | runtime scope 非 project\|temporary |
+| `AISC_ERR_NETWORK_INVALID` | network 非 direct\|proxy |
+| `AISC_ERR_WORKSPACE_INVALID` | workspace 路径不可读写 |
+| `AISC_ERR_INVALID_AGENT` | session agent 非 claude\|codex\|bash\|cc-switch |
+| `AISC_ERR_INVALID_SESSION_ID` | session ID 非 UUID v4 |
+
+> 上述校验类错误（SCOPE/NETWORK/WORKSPACE/INVALID_AGENT/INVALID_SESSION_ID）均配 exit 2（USAGE）。一个退出码可承载多个 `AISC_ERR_*` code：Workbench 按 JSON `errors[].code` 路由 UI，不依赖退出码到 code 的一一映射，也不对 message 做字符串匹配。
 
 规则：
 
