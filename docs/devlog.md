@@ -2,7 +2,7 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 0 完结 + Phase 1 S1.1-S1.2
+## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 0 完结 + Phase 1 S1.1-S1.3
 
 ### 变更
 
@@ -20,6 +20,18 @@
 - Tauri commands：`cli_discover` / `cli_pin` / `cli_clear_pin` / `negotiate_capabilities`；移除 `greet` 占位。
 - 测试：25 单测（envelope 校验 / capability classify / error map / discovery 优先级去重 / PATH 查找 / redact / settings 往返与 schema 守卫）+ 7 集成（`python3 -c` 发射 envelope 验 parse/timeout/cancel/stdout-cap/exit-code-mismatch；real `aisc` gated on `AISC_TEST_CLI` -> `required_ok=true`）。`cargo build` 零 warning，`cargo test` 32 全绿。
 - gap（明确 deferral）：settings 跨进程锁 -> S2.4；`--aisc-cli` 启动 arg 接线到 `cli_discover.explicit_path` -> S2.1；capability 不支持的阻塞页 UI -> S2.1。
+
+#### S1.3 PTY supervisor（05-cli-gui-contract.md §6.1/§9.2 / 03 §五/§七.1）
+
+- `workbench/src-tauri/src/pty.rs` portable-pty 监督核心（不依赖 Tauri，可本地子进程测）：`native_pty_system().openpty` + `slave.spawn_command` 起 `aisc session open`（text-only TTY，PTY 数据不混 JSON）；三个独立 `spawn_blocking` 任务——write 任务（拥 PTY writer，bounded mpsc 16 = 大段粘贴背压）、reader 任务（阻塞读循环，每 chunk base64 + 单调 seq 经 mpsc 发 `Output`）、wait 任务（拥 child，`child.wait()` 阻塞 -> 定 reason + 发单一 `Exit` + 置 `ExitSignal`）。`child.clone_killer()` 让 close/reader 在 `wait` 阻塞时强杀 child（满足「close 后无孤儿进程」验收门）。
+- Linux PTY 语义：slave 关闭时 master `read` 返回 `EIO`（非 EOF），reader 将 `EIO` 视为正常 EOF（不误判 transport_error），其它 `Err` 才是 transport loss（kill child + 标 `transport_error`）。
+- `ExitSignal`（`Arc<Mutex<Option<SessionExit>>>` + `Notify`）：idempotent `set`（first writer wins），`wait`/`wait_timeout`；wait 任务 set，close 与 observer 都 await 它，多终止信号合并为单一 `SessionExit`（03 §五）。
+- `session.rs`：`SessionRegistry`（`Arc<Mutex<HashMap>>` 作 `tauri::State`）+ 4 个 Tauri command。`open_session` 校验 runtime_id/session_id UUID v4 + agent enum（快失败，映射 `AISC_ERR_INVALID_*`），resolve pin（复用 S1.2 settings，无 pin -> `WB_ERR_CLI_NOT_FOUND`），建 mpsc(256) -> `spawn_pty_session` -> 桥接任务（mpsc -> `tauri::ipc::Channel`，先建 Channel 再起子进程不丢首屏）+ observer 任务（child 自然退出时更新 registry state=Exited/Disconnected + 缓存 exit）。`write_session`（1MB 粘贴上限 -> `WB_ERR_INPUT_TOO_LARGE`，clone writer_sender 跨 await 不持锁）。`resize_session`。`close_session`：移除 entry -> 若已 exited 直接返回缓存 exit -> 否则 `cancel`（user_close reason）+ `run_control` 跑 `session terminate --format json`（幂等，best-effort）+ `signal.wait_timeout(10s)` -> 超时则 `force_kill` + `wait_timeout(2s)` -> 返回 `SessionExit`，scope 结束 drop session 关 PTY（03 §七.1 terminate -> close PTY -> wait/reap）。
+- `PtyEvent`（`{type: output|exit|error}`，camelCase 字段，bytes base64）/ `SessionExit`（exit_code/reason/finishedAtMs）/ `SessionState`（starting/running/closing/exited/failed/disconnected）。
+- error.rs 增补：`input_too_large()` (`WB_ERR_INPUT_TOO_LARGE`) + `map_aisc` 加 `AISC_ERR_INVALID_RUNTIME_ID` arm。
+- deps：`portable-pty 0.9`、`base64 0.22`、`libc 0.2`（EIO 常量）。
+- 测试：36 单测（PtyEvent/SessionState 序列化、ExitSignal idempotent/wait/wait_timeout、UUID v4 校验、agent/argv 校验、snapshot camelCase）+ 4 PTY 集成（本地 `sh` 子进程验 Output 流 + exit_code 传递 + write 回显 + cancel user_close + resize；real `aisc session open --agent bash` gated on `AISC_TEST_CLI`+`AISC_TEST_RUNTIME_ID` -> 写 `echo hi_aisc` 收输出 + `exit` -> process_exit，已实机验证通过）。`cargo build` 零 warning，`cargo test` 47 全绿。
+- gap（明确 deferral）：`ResizeObserver` 节流 / 标签可见 fit / 终端 UI -> S1.4；runtime_stop 触发 session exited 联动 -> S2.2；disconnected->exited 的 terminate 确认重试 UI -> S2.x；session_list Tauri command -> S2.x。
 
 #### S0.3 Session 数据面（05-cli-gui-contract.md §6）
 

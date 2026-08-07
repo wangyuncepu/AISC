@@ -107,6 +107,15 @@ impl WorkbenchError {
         )
     }
 
+    pub fn input_too_large() -> Self {
+        Self::new(
+            "WB_ERR_INPUT_TOO_LARGE",
+            "输入超过大小上限",
+            false,
+            Action::None,
+        )
+    }
+
     // -- AISC error code mapping (AISC_ERR_*) --
 
     /// Map a stable AISC CLI error code (from envelope `errors[].code`) to a
@@ -141,6 +150,9 @@ impl WorkbenchError {
             "AISC_ERR_INVALID_AGENT" => ("agent 类型无效", false, Action::None),
             "AISC_ERR_INVALID_SESSION_ID" => {
                 ("session ID 非 UUID v4", false, Action::None)
+            }
+            "AISC_ERR_INVALID_RUNTIME_ID" => {
+                ("runtime ID 非 UUID v4", false, Action::None)
             }
             "AISC_ERR_DOCKER_UNAVAILABLE" => ("Docker 尚未可用", true, Action::Retry),
             "AISC_ERR_PERMISSION_DENIED" => {
