@@ -188,6 +188,18 @@ export interface RuntimeListResult {
   observed_at: string;
 }
 
+/** `aisc provider current` snapshot (05 §七). Secret-free: routing/auth only.
+ * `agent` is claude | codex (bash/cc-switch are not applicable). */
+export interface ProviderStatus {
+  runtime_id: string;
+  agent: Agent;
+  provider_id: string;
+  provider_name: string;
+  route_mode: string; // official-direct | cc-switch-proxy | unknown
+  auth_status: string; // configured | login_required | not_configured | unknown
+  observed_at: string;
+}
+
 export type LaunchAgent = "claude" | "codex" | "bash" | "cc-switch";
 
 export interface LaunchConfig {

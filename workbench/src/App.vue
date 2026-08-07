@@ -7,6 +7,7 @@ import { computed, onBeforeUnmount, onMounted, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useRuntimeStore } from "./stores/runtime";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
+import { useProviderPolling } from "./composables/useProviderPolling";
 import Terminal from "./features/terminal/Terminal.vue";
 import TabBar from "./features/workspace/TabBar.vue";
 import RuntimeSidebar from "./features/workspace/RuntimeSidebar.vue";
@@ -17,6 +18,7 @@ import ConflictManager from "./features/startup/ConflictManager.vue";
 
 const store = useRuntimeStore();
 const polling = useRuntimePolling();
+const providerPolling = useProviderPolling();
 
 onMounted(() => {
   store.negotiate();
@@ -33,18 +35,24 @@ onMounted(() => {
   });
 });
 
-// S2.3.a: poll runtime state while a runtime is active (ready), so external
-// stop/remove is reflected within one poll cycle (04 §五; Phase 2 gate).
+// S2.3.a/b: poll runtime + provider state while a runtime is active (ready),
+// so external stop/remove is reflected within one poll cycle (04 §五; Phase 2).
 watch(
   () => store.status,
   (s) => {
-    if (s === "ready") polling.start();
-    else polling.stop();
+    if (s === "ready") {
+      polling.start();
+      providerPolling.start();
+    } else {
+      polling.stop();
+      providerPolling.stop();
+    }
   }
 );
 
 onBeforeUnmount(() => {
   polling.stop();
+  providerPolling.stop();
 });
 
 function isStartingView(s: string): boolean {

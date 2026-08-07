@@ -10,6 +10,7 @@ import type {
   LaunchAgent,
   LaunchConfig,
   PreflightReport,
+  ProviderStatus,
   RuntimeSnapshot,
   RuntimeState,
   Tab,
@@ -77,6 +78,15 @@ export const useRuntimeStore = defineStore("runtime", () => {
   // S2.3.a: freshness + in-flight inspect dedupe (04 §六.1, §五 dedupe).
   const freshness = ref<Freshness>("unknown");
   const inspectInFlight = ref(false);
+
+  // S2.3.b: per-agent provider cache (claude/codex only; 04 §四.2 "no global
+  // provider"). bash/cc-switch are not applicable.
+  const providerStatuses = ref<Record<"claude" | "codex", ProviderStatus | null>>({
+    claude: null,
+    codex: null,
+  });
+  const providerError = ref<WorkbenchError | null>(null);
+  const providerInFlight = ref<"claude" | "codex" | null>(null);
 
   const preflight = ref<PreflightReport | null>(null);
   const launch = ref<LaunchConfig>({ ...DEFAULT_LAUNCH });
@@ -148,6 +158,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     conflictError.value = null;
     freshness.value = "unknown";
     inspectInFlight.value = false;
+    clearProviderStatuses();
   }
 
   function backToPicker() {
@@ -300,6 +311,32 @@ export const useRuntimeStore = defineStore("runtime", () => {
     } finally {
       inspectInFlight.value = false;
     }
+  }
+
+  // --- S2.3.b: provider status (per-agent, claude/codex only; 04 §四.2/§五) ---
+
+  /** Query + cache the provider status for one agent. Only when the runtime is
+   * running (04 §五). Per-agent cache, never cross-applied. */
+  async function loadProviderStatus(agent: "claude" | "codex") {
+    if (runtimeState.value !== "running") return;
+    if (!runtimeId.value || !workspace.value.trim()) return;
+    if (providerInFlight.value === agent) return;
+    providerInFlight.value = agent;
+    providerError.value = null;
+    try {
+      const status = await ipc.getProviderStatus(workspace.value.trim(), runtimeId.value, agent);
+      providerStatuses.value = { ...providerStatuses.value, [agent]: status };
+    } catch (e) {
+      providerError.value = e as WorkbenchError;
+    } finally {
+      providerInFlight.value = null;
+    }
+  }
+
+  function clearProviderStatuses() {
+    providerStatuses.value = { claude: null, codex: null };
+    providerError.value = null;
+    providerInFlight.value = null;
   }
 
   /** List workbench-owned runtimes in the workspace (conflict resolution). */
@@ -562,6 +599,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     runtimeSnapshot.value = null;
     freshness.value = "unknown";
     inspectInFlight.value = false;
+    clearProviderStatuses();
     preflight.value = null;
     status.value = "picker";
   }
@@ -590,6 +628,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
     conflictError,
     freshness,
     inspectInFlight,
+    providerStatuses,
+    providerError,
+    providerInFlight,
     negotiate,
     pickAndPinCli,
     pickWorkspace,
@@ -615,6 +656,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     applyRuntimeSnapshot,
     markStale,
     refreshRuntime,
+    loadProviderStatus,
+    clearProviderStatuses,
     loadConflicts,
     stopConflictRuntime,
     removeConflictRuntime,

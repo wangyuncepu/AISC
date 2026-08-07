@@ -79,6 +79,20 @@ const activeTab = computed(
   () => store.tabs.find((t) => t.tabId === store.activeTabId) ?? null
 );
 
+// S2.3.b: P1 provider (claude/codex only; bash/cc-switch n/a).
+const providerSupported = computed(() => store.capability?.provider_status ?? false);
+const activeAgent = computed(() => activeTab.value?.agent ?? null);
+const providerStatus = computed(() => {
+  const a = activeAgent.value;
+  if (a === "claude" || a === "codex") return store.providerStatuses[a];
+  return null;
+});
+const providerInFlightLabel = computed(() => {
+  const a = activeAgent.value;
+  if (a && store.providerInFlight === a) return "加载中…";
+  return "未知";
+});
+
 function short(id: string): string {
   return id.slice(0, 8);
 }
@@ -133,6 +147,21 @@ function short(id: string): string {
       <div class="value">{{ activeTab?.title ?? "No session" }}</div>
     </section>
 
+    <section class="block">
+      <div class="label">Provider</div>
+      <div v-if="!providerSupported" class="muted">Unknown · 需升级 CLI</div>
+      <div v-else-if="activeAgent !== 'claude' && activeAgent !== 'codex'" class="muted">不适用</div>
+      <template v-else>
+        <div v-if="providerStatus" class="p-name">{{ providerStatus.provider_name || "未知" }}</div>
+        <div v-else class="muted">{{ providerInFlightLabel }}</div>
+        <div v-if="providerStatus" class="kv">route <span>{{ providerStatus.route_mode || "-" }}</span></div>
+        <div v-if="providerStatus" class="kv">
+          auth <span :data-auth="providerStatus.auth_status">{{ providerStatus.auth_status || "-" }}</span>
+        </div>
+        <div v-if="store.providerError" class="err">{{ store.providerError.message }}</div>
+      </template>
+    </section>
+
     <section class="block sessions">
       <div class="label">Sessions</div>
       <ul>
@@ -180,6 +209,11 @@ function short(id: string): string {
 .copied { color: #4caf50; margin-left: 4px; }
 .kv { color: #888; }
 .kv span { color: #ccc; }
+.p-name { color: #ddd; font-size: 13px; word-break: break-all; }
+.err { color: #e57373; font-size: 11px; }
+.kv span[data-auth="configured"] { color: #4caf50; }
+.kv span[data-auth="login_required"], .kv span[data-auth="not_configured"] { color: #cca84a; }
+.kv span[data-auth="unknown"] { color: #888; }
 .runtime-row { display: flex; align-items: center; gap: 8px; }
 .state {
   font-weight: 600;

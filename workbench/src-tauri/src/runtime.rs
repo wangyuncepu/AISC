@@ -30,6 +30,7 @@ const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(120);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(120);
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(60);
 const LIST_TIMEOUT: Duration = Duration::from_secs(30);
+const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
 const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Cancellation token for the in-flight `start_runtime` operation (02 §三:
@@ -122,6 +123,24 @@ pub struct RuntimeListResult {
     pub observed_at: String,
 }
 
+/// `aisc provider current` snapshot (05 §七). Secret-free: routing/auth metadata
+/// only, never keys/tokens. `agent` is claude | codex (bash/cc-switch n/a).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProviderStatus {
+    pub runtime_id: String,
+    pub agent: String,
+    #[serde(default)]
+    pub provider_id: String,
+    #[serde(default)]
+    pub provider_name: String,
+    #[serde(default)]
+    pub route_mode: String,
+    #[serde(default)]
+    pub auth_status: String,
+    #[serde(default)]
+    pub observed_at: String,
+}
+
 fn envelope_error(env: &crate::cli::Envelope) -> Option<WorkbenchError> {
     env.errors.first().map(|err| WorkbenchError::map_aisc(&err.code).with_detail(err.message.clone()))
 }
@@ -198,6 +217,21 @@ fn runtime_list_argv(workspace: &str, owner: Option<&str>) -> Vec<String> {
         argv.push(o.into());
     }
     argv
+}
+
+fn provider_current_argv(runtime_id: &str, agent: &str, workspace: &str) -> Vec<String> {
+    vec![
+        "provider".into(),
+        "current".into(),
+        "--runtime-id".into(),
+        runtime_id.into(),
+        "--agent".into(),
+        agent.into(),
+        "--workspace".into(),
+        workspace.into(),
+        "--format".into(),
+        "json".into(),
+    ]
 }
 
 #[tauri::command]
@@ -388,6 +422,30 @@ pub async fn remove_runtime(
         .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("remove parse: {e}")))
 }
 
+/// Query the provider status for one agent (claude | codex) via `aisc provider
+/// current` (05 §七). Secret-free: routing/auth metadata only. bash/cc-switch
+/// are not applicable (rejected client-side).
+#[tauri::command]
+pub async fn get_provider_status(
+    app: AppHandle,
+    workspace: String,
+    runtime_id: String,
+    agent: String,
+) -> Result<ProviderStatus, WorkbenchError> {
+    if agent != "claude" && agent != "codex" {
+        return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_AGENT"));
+    }
+    let pin = resolve_pin(&app)?;
+    let argv = provider_current_argv(&runtime_id, &agent, &workspace);
+    let env = run_control(&pin, argv, PROVIDER_TIMEOUT, CancellationToken::new()).await?;
+    if let Some(e) = envelope_error(&env) {
+        return Err(e);
+    }
+    let data = env.data.unwrap_or(Value::Null);
+    serde_json::from_value::<ProviderStatus>(data)
+        .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("provider parse: {e}")))
+}
+
 /// Build an image via `aisc build --events`, streaming JSONL events to the
 /// frontend Channel (05 §4.1). Cancellable via `cancel_build`.
 #[tauri::command]
@@ -546,5 +604,50 @@ mod tests {
         assert_eq!(res.runtimes[0].state, "running");
         assert_eq!(res.runtimes[1].state, "stopped");
         assert_eq!(res.observed_at, "t1");
+    }
+
+    #[test]
+    fn provider_current_argv_shape() {
+        let argv = provider_current_argv("rid", "claude", "/ws");
+        assert_eq!(argv[0], "provider");
+        assert_eq!(argv[1], "current");
+        assert!(argv.contains(&"--runtime-id".into()));
+        assert!(argv.contains(&"rid".into()));
+        assert!(argv.contains(&"--agent".into()));
+        assert!(argv.contains(&"claude".into()));
+        assert!(argv.contains(&"--workspace".into()));
+        assert!(argv.contains(&"/ws".into()));
+        assert!(argv.contains(&"--format".into()));
+        assert!(argv.contains(&"json".into()));
+    }
+
+    #[test]
+    fn provider_status_parses() {
+        let json = r#"{
+            "runtime_id": "rid", "agent": "claude",
+            "provider_id": "cc-switch", "provider_name": "CC Switch",
+            "route_mode": "cc-switch-proxy", "auth_status": "configured",
+            "observed_at": "2026-08-07T00:00:00Z"
+        }"#;
+        let s: ProviderStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(s.agent, "claude");
+        assert_eq!(s.provider_name, "CC Switch");
+        assert_eq!(s.route_mode, "cc-switch-proxy");
+        assert_eq!(s.auth_status, "configured");
+    }
+
+    #[test]
+    fn provider_status_parses_empty_fields() {
+        // Some fields may come back empty (e.g. no provider configured).
+        let json = r#"{
+            "runtime_id": "rid", "agent": "codex",
+            "provider_id": "", "provider_name": "",
+            "route_mode": "unknown", "auth_status": "not_configured",
+            "observed_at": "t"
+        }"#;
+        let s: ProviderStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(s.agent, "codex");
+        assert_eq!(s.auth_status, "not_configured");
+        assert_eq!(s.provider_name, "");
     }
 }

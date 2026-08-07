@@ -5,6 +5,7 @@ import type {
   CapabilityReport,
   DiscoveryReport,
   PreflightReport,
+  ProviderStatus,
   PtyEvent,
   RuntimeListResult,
   RuntimeSnapshot,
@@ -80,6 +81,9 @@ export const listRuntimes = (workspace: string, owner: string | null = null) =>
 
 export const removeRuntime = (workspace: string, runtimeId: string, force = false) =>
   invoke<RuntimeSnapshot>("remove_runtime", { workspace, runtimeId, force });
+
+export const getProviderStatus = (workspace: string, runtimeId: string, agent: string) =>
+  invoke<ProviderStatus>("get_provider_status", { workspace, runtimeId, agent });
 
 export const cancelRuntimeStart = () => invoke<void>("cancel_runtime_start");
 

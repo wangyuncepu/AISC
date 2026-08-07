@@ -13,9 +13,9 @@ pub mod settings;
 
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities};
 use runtime::{
-    build_image, cancel_build, cancel_runtime_start, list_runtimes, remove_runtime,
-    runtime_inspect, runtime_preflight, runtime_restart, start_runtime, stop_runtime, BuildOp,
-    StartOp,
+    build_image, cancel_build, cancel_runtime_start, get_provider_status, list_runtimes,
+    remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_runtime,
+    stop_runtime, BuildOp, StartOp,
 };
 use session::{close_session, open_session, resize_session, write_session, SessionRegistry};
 
@@ -44,6 +44,7 @@ pub fn run() {
             cancel_runtime_start,
             list_runtimes,
             remove_runtime,
+            get_provider_status,
             build_image,
             cancel_build,
         ])

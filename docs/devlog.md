@@ -2,9 +2,20 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1/S2.2.a/S2.2.b/S2.3.a
+## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b
 
 ### 变更
+
+#### S2.3.b Provider 状态 + P1 可观察性（04-observability.md §二.P1/§四.2/§五；05-cli-gui-contract.md §七）
+
+- 后端 `runtime.rs`：`ProviderStatus{runtime_id, agent, provider_id, provider_name, route_mode, auth_status, observed_at}`（secret-free，仅路由/auth 元数据，永不含密钥）+ `provider_current_argv` 纯函数 + `get_provider_status(app, workspace, runtime_id, agent)` 命令（包 `aisc provider current --runtime-id --agent <claude|codex> --workspace --format json`，run_control + envelope_error + parse；agent 校验 claude|codex，bash/cc-switch 客户端拒；错误码 `AISC_ERR_PROVIDER_STATUS_FAILED` 经 map_aisc 映射）+ 3 单测（argv 形状 + 完整解析 + 空字段解析）。`lib.rs` 注册。PROVIDER_TIMEOUT=30s。
+- 前端 `types/index.ts`：`ProviderStatus`。`lib/ipc.ts`：`getProviderStatus(workspace, runtimeId, agent)`。
+- store `stores/runtime.ts`：`providerStatuses: Record<"claude"|"codex", ProviderStatus|null>` per-agent 缓存（04 §四.2「不存在全局 Provider」，claude/codex 各一份不互相覆盖）+ `providerError` + `providerInFlight`（去重）+ `loadProviderStatus(agent)`（仅 runtime running 时查）+ `clearProviderStatuses`（runtime 切换/停止时清）。
+- `composables/useProviderPolling.ts`（新）：活动 agent 感知的 provider 轮询--活动 tab 为 claude/codex 且 runtime running 时，切换 tab 立即查 + 15s（聚焦）/60s（失焦）/隐藏暂停（04 §五）；bash/cc-switch 或非 running 不查；`watch(activeTabId, runtimeState)` 触发重查/暂停。
+- `RuntimeSidebar.vue`：P1 区--活动 agent 的 provider_name / route_mode / auth_status；bash/cc-switch 显「不适用」；capability 缺失（`!provider_status`）显「Unknown · 需升级 CLI」（04 §八）；加载态「加载中…」；auth_status 着色（configured 绿/login_required·not_configured 黄/unknown 灰，不只靠色）。
+- `App.vue`：mount `useProviderPolling`（与 runtime 轮询同 ready 生命周期）。
+- 验证：cargo 58 绿（47 lib+7 cli+4 pty，3 新 provider 测试零回归）；npm build 零错误（59 模块）；dev 无 panic；实机手测通过--claude tab 显 provider/route/auth；codex tab 独立缓存；bash/cc-switch 显「不适用」；外部 stop 后不再查 provider。
+- gap（明确 deferral）：cc-switch 退出后失效 Claude/Codex provider 缓存并立即刷新活动 Agent（04 §五 末句边缘规则）-> S2.4（tab 生命周期细化时一起）；provider 查询 revision/request_seq 抗乱序硬化 -> S3.1；P2 runtime 详情面板 / aria-live 节流播报 -> S3.3；provider GUI 编辑器 -> 永不（06 §十.6）。
 
 #### S2.3.a 轮询对账 + P0 可观察性侧栏（04-observability.md §二/§四.1/§五/§六；06 §五）
 
