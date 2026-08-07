@@ -2,7 +2,7 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 0 完结 + Phase 1 S1.1-S1.3
+## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 S1.1-S1.4
 
 ### 变更
 
@@ -32,6 +32,17 @@
 - deps：`portable-pty 0.9`、`base64 0.22`、`libc 0.2`（EIO 常量）。
 - 测试：36 单测（PtyEvent/SessionState 序列化、ExitSignal idempotent/wait/wait_timeout、UUID v4 校验、agent/argv 校验、snapshot camelCase）+ 4 PTY 集成（本地 `sh` 子进程验 Output 流 + exit_code 传递 + write 回显 + cancel user_close + resize；real `aisc session open --agent bash` gated on `AISC_TEST_CLI`+`AISC_TEST_RUNTIME_ID` -> 写 `echo hi_aisc` 收输出 + `exit` -> process_exit，已实机验证通过）。`cargo build` 零 warning，`cargo test` 47 全绿。
 - gap（明确 deferral）：`ResizeObserver` 节流 / 标签可见 fit / 终端 UI -> S1.4；runtime_stop 触发 session exited 联动 -> S2.2；disconnected->exited 的 terminate 确认重试 UI -> S2.x；session_list Tauri command -> S2.x。
+
+#### S1.4 最小端到端 UI（06-implementation-plan.md §四 S1.4）
+
+- 极薄 `workbench/src-tauri/src/runtime.rs`：`start_runtime`（`aisc runtime start --runtime-id --workspace --image super-claude:latest --network direct --scope project --owner workbench --format json`，120s 超时，解析 envelope data -> `RuntimeStartResult`）/ `stop_runtime`（`aisc runtime stop`，30s）——直接复用 S1.2 `run_control` + `session::resolve_pin`（后者改 pub），无状态机/对账（S2.2）。`session.rs` `resolve_pin` 改 `pub` 供 runtime.rs 复用。
+- 前端 PTY 接线（`Terminal.vue`）：`Channel<PtyEvent>` 先建再 invoke `open_session`（不丢首屏）；`onmessage` Output -> `atob` -> `Uint8Array` -> `term.write`，Exit/Error -> 终端内显式退出/错误行 + 通知 store；`term.onData` -> `TextEncoder` UTF-8 -> `write_session`（后端 1MB 粘贴上限 + bounded mpsc 背压）；`ResizeObserver`（150ms 节流）+ 窗口 resize 监听 -> `fit.fit()` + `resize_session`；watcher 新旧 sessionId 切换时先关旧 PTY 再开新。
+- `store`：`negotiate()`（mount 时 `negotiate_capabilities`，`required_ok=false` -> `blocked` 态显阻塞文案 +「选择 AISC CLI」文件 dialog -> `cli_pin` 重协商，不做 S2.1 完整启动流程）；`startBash()`（`crypto.randomUUID()` 生成 runtime_id/session_id -> `start_runtime` -> 置 sessionId 触发 Terminal 开 bash）；`stopRuntime()`（先 `close_session` 后 `stop_runtime`，best-effort）；`pickWorkspace()` 原生目录 dialog。
+- `App.vue`：工作区输入（回车也可触发）+「选择」+「启动 Bash」+「停止 Runtime」+ 状态行（status 着色）+ 工具栏错误行（含重试）。
+- deps：`tauri-plugin-dialog`（Cargo + `dialog:default` capability）+ `@tauri-apps/plugin-dialog`（npm）。
+- 类型：`types/index.ts` 加 `CapabilityReport`/`WorkbenchError`/`PtyEvent`/`SessionSnapshot`/`SessionExit`/`RuntimeStartResult` 等；`lib/ipc.ts` 类型化 invoke 封装。
+- 验证：`npm run build`（vue-tsc + vite）零错误；`cargo build` 零 warning；实机手测通过——未 pin 时阻塞页 + 选 CLI、工作区选择、启动 Bash 后终端可交互（`ls`/`echo`/中文/emoji）、resize 跟随、停止 Runtime 确定性关闭，测试后无残留 runtime/容器。
+- gap（明确 deferral）：多标签 + agent 选择（Claude/Codex/cc-switch）-> S2.2；启动摘要 + preflight gate + 镜像构建进度 -> S2.1；runtime 状态机/对账/list/inspect -> S2.2；history 持久化/崩溃对账 -> S2.4；Phase 1 验收门余项（10MB 输出、1MB 粘贴、100 次 resize、50 次开关、Claude/Codex smoke、Windows/macOS 实机）= 实机手测清单。
 
 #### S0.3 Session 数据面（05-cli-gui-contract.md §6）
 

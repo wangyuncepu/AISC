@@ -66,7 +66,7 @@ fn config_dir(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
         .map_err(|e| WorkbenchError::settings_error().with_detail(format!("config dir: {e}")))
 }
 
-fn resolve_pin(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
+pub fn resolve_pin(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
     let dir = config_dir(app)?;
     let settings = Settings::load(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
     settings
