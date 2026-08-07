@@ -194,3 +194,29 @@ export interface BuildEvent {
 }
 
 export type BuildStatus = "idle" | "building" | "complete" | "failed" | "cancelled";
+
+// --- S2.2.a: multi-tab (03 §五/§六) ---
+
+/** Per-tab session lifecycle. `idle` = never opened; the rest mirror SessionState. */
+export type TabSessionState = "idle" | SessionState;
+
+/** Minimal exit info shown on an exited/failed tab (reason + code only). */
+export interface TabExit {
+  reason: string;
+  exitCode: number | null;
+}
+
+/**
+ * A fixed agent tab (03 §六). `sessionId` is null while idle or after exit;
+ * the session state machine drives the binding (idle -> starting -> running ->
+ * exited/disconnected/failed). Tab identity persists for the workspace session;
+ * history persistence lands in S2.4.
+ */
+export interface Tab {
+  tabId: string;
+  agent: LaunchAgent;
+  title: string;
+  sessionId: string | null;
+  sessionState: TabSessionState;
+  exit: TabExit | null;
+}

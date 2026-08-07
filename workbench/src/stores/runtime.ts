@@ -10,6 +10,9 @@ import type {
   LaunchConfig,
   PreflightReport,
   RuntimeSnapshot,
+  Tab,
+  TabExit,
+  TabSessionState,
   WorkbenchError,
 } from "../types";
 import * as ipc from "../lib/ipc";
@@ -36,6 +39,19 @@ const DEFAULT_LAUNCH: LaunchConfig = {
   scope: "project",
 };
 
+/** Fixed 4-agent tab order (03 §六; 06 §五 S2.2). */
+const AGENT_ORDER: LaunchAgent[] = ["claude", "codex", "bash", "cc-switch"];
+
+const AGENT_TITLE: Record<LaunchAgent, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  bash: "Bash",
+  "cc-switch": "cc-switch",
+};
+
+/** Session states that have reached a terminal outcome (no live PTY). */
+const TERMINAL_STATES: TabSessionState[] = ["exited", "failed", "disconnected"];
+
 function uuid(): string {
   return crypto.randomUUID();
 }
@@ -47,7 +63,6 @@ export const useRuntimeStore = defineStore("runtime", () => {
 
   const workspace = ref("");
   const runtimeId = ref("");
-  const sessionId = ref("");
   const runtimeReady = ref(false);
 
   const preflight = ref<PreflightReport | null>(null);
@@ -61,6 +76,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const buildLog = ref("");
   const buildTag = ref("");
   const buildError = ref<WorkbenchError | null>(null);
+
+  // S2.2.a: multi-tab. One tab per agent, sharing the runtime (03 §二.3/§六).
+  const tabs = ref<Tab[]>([]);
+  const activeTabId = ref<string | null>(null);
 
   let startTimer: number | null = null;
 
@@ -105,9 +124,15 @@ export const useRuntimeStore = defineStore("runtime", () => {
     if (typeof picked === "string") workspace.value = picked;
   }
 
-  function backToPicker() {
+  function resetWorkspace() {
+    tabs.value = [];
+    activeTabId.value = null;
     preflight.value = null;
     runtimeId.value = "";
+  }
+
+  function backToPicker() {
+    resetWorkspace();
     status.value = "picker";
   }
 
@@ -200,11 +225,93 @@ export const useRuntimeStore = defineStore("runtime", () => {
     }
   }
 
-  async function openSessionForCurrent(agent: LaunchAgent) {
-    sessionId.value = uuid();
+  // --- S2.2.a: multi-tab session lifecycle (03 §五/§六) ---
+
+  /** Build the 4 fixed tabs and open the initial agent's tab (runtime ready). */
+  function initTabs(initialAgent: LaunchAgent) {
+    tabs.value = AGENT_ORDER.map((agent) => ({
+      tabId: uuid(),
+      agent,
+      title: AGENT_TITLE[agent],
+      sessionId: null,
+      sessionState: "idle" as TabSessionState,
+      exit: null,
+    }));
+    const initial = tabs.value.find((t) => t.agent === initialAgent);
+    if (initial) {
+      activeTabId.value = initial.tabId;
+      void openTab(initial.tabId);
+    }
     status.value = "ready";
-    // Terminal.vue watches sessionId and opens the session with this agent.
-    void agent; // agent consumed by Terminal via store.launch.agent
+  }
+
+  function findTab(tabId: string): Tab | undefined {
+    return tabs.value.find((t) => t.tabId === tabId);
+  }
+
+  /** Open (or reopen) a tab's session: assigns a fresh session_id and enters
+   * `starting`. The mounted Terminal watches the session_id and calls
+   * `open_session`; it reports back via onTabOpenOk/onTabOpenFail. */
+  function openTab(tabId: string) {
+    const tab = findTab(tabId);
+    if (!tab) return;
+    if (tab.sessionState === "starting" || tab.sessionState === "running") return;
+    tab.sessionId = uuid();
+    tab.sessionState = "starting";
+    tab.exit = null;
+    activeTabId.value = tabId;
+  }
+
+  /** Activate a tab; idle tabs are opened on first activation. */
+  function activateTab(tabId: string) {
+    const tab = findTab(tabId);
+    if (!tab) return;
+    activeTabId.value = tabId;
+    if (tab.sessionState === "idle") openTab(tabId);
+  }
+
+  /** Reopen an exited/failed/disconnected tab with a fresh session. */
+  function reopenTab(tabId: string) {
+    openTab(tabId);
+  }
+
+  /** Close a running/starting tab: terminate the session. The PTY Exit event
+   * (single authoritative signal, 03 §五.2) finalizes the state via
+   * onTabSessionExit; close_session guarantees the child is reaped. */
+  async function closeTab(tabId: string) {
+    const tab = findTab(tabId);
+    if (!tab || !tab.sessionId) return;
+    if (TERMINAL_STATES.includes(tab.sessionState) || tab.sessionState === "closing") return;
+    tab.sessionState = "closing";
+    try {
+      await ipc.closeSession(tab.sessionId);
+    } catch {
+      /* best-effort; Exit event still finalizes if the child is reaped */
+    }
+  }
+
+  function onTabOpenOk(tabId: string) {
+    const tab = findTab(tabId);
+    if (!tab) return;
+    if (tab.sessionState === "starting") tab.sessionState = "running";
+  }
+
+  function onTabOpenFail(tabId: string) {
+    const tab = findTab(tabId);
+    if (!tab) return;
+    if (TERMINAL_STATES.includes(tab.sessionState)) return; // already finalized
+    tab.sessionState = "failed";
+    // exit stays null; the Terminal writes the open error inline.
+  }
+
+  /** PTY Exit event (process_exit / user_close / transport_error). Applied
+   * once per tab (idempotent) - duplicate Exit/terminate results merge. */
+  function onTabSessionExit(tabId: string, reason: string, exitCode: number | null) {
+    const tab = findTab(tabId);
+    if (!tab || tab.exit) return; // first writer wins (03 §五.2)
+    const exit: TabExit = { reason, exitCode };
+    tab.exit = exit;
+    tab.sessionState = reason === "transport_error" ? "disconnected" : "exited";
   }
 
   async function startFromSummary() {
@@ -245,7 +352,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       }
       stopTimer();
       runtimeReady.value = true;
-      await openSessionForCurrent(launch.value.agent);
+      initTabs(launch.value.agent);
     } catch (e) {
       stopTimer();
       const err = e as WorkbenchError;
@@ -293,26 +400,20 @@ export const useRuntimeStore = defineStore("runtime", () => {
       /* best-effort */
     }
     cancelInspect.value = null;
-    runtimeId.value = "";
-    preflight.value = null;
+    resetWorkspace();
     status.value = "picker";
-  }
-
-  function onSessionExited() {
-    sessionId.value = "";
   }
 
   async function stopRuntime() {
     status.value = "stopping";
+    // Close every live session best-effort (03 §七.2), then stop the runtime.
+    const live = tabs.value.filter(
+      (t) => t.sessionId && !TERMINAL_STATES.includes(t.sessionState) && t.sessionState !== "closing"
+    );
+    await Promise.all(live.map((t) => ipc.closeSession(t.sessionId!).catch(() => null)));
+    tabs.value = [];
+    activeTabId.value = null;
     try {
-      if (sessionId.value) {
-        try {
-          await ipc.closeSession(sessionId.value);
-        } catch {
-          /* best-effort */
-        }
-      }
-      sessionId.value = "";
       if (runtimeId.value) {
         await ipc.stopRuntime(runtimeId.value);
       }
@@ -333,7 +434,6 @@ export const useRuntimeStore = defineStore("runtime", () => {
     error,
     workspace,
     runtimeId,
-    sessionId,
     runtimeReady,
     preflight,
     launch,
@@ -344,6 +444,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     buildLog,
     buildTag,
     buildError,
+    tabs,
+    activeTabId,
     negotiate,
     pickAndPinCli,
     pickWorkspace,
@@ -357,7 +459,14 @@ export const useRuntimeStore = defineStore("runtime", () => {
     cancelStart,
     keepCancelledRuntime,
     stopCancelledRuntime,
-    onSessionExited,
     stopRuntime,
+    initTabs,
+    openTab,
+    activateTab,
+    closeTab,
+    reopenTab,
+    onTabOpenOk,
+    onTabOpenFail,
+    onTabSessionExit,
   };
 });

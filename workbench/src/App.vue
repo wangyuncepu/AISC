@@ -3,9 +3,10 @@
  * S2.1.a startup shell: routes between startup-state views (02 §三) and the
  * terminal workspace. Capability gate on mount.
  */
-import { onMounted } from "vue";
+import { computed, onMounted } from "vue";
 import { useRuntimeStore } from "./stores/runtime";
 import Terminal from "./features/terminal/Terminal.vue";
+import TabBar from "./features/workspace/TabBar.vue";
 import LaunchSummary from "./features/startup/LaunchSummary.vue";
 import StartProgress from "./features/startup/StartProgress.vue";
 import BuildProgress from "./features/startup/BuildProgress.vue";
@@ -19,6 +20,10 @@ onMounted(() => {
 function isStartingView(s: string): boolean {
   return s === "starting" || s === "cancelled";
 }
+
+// S2.2.a: render a Terminal for every non-idle tab; v-show keeps hidden tabs
+// (and their PTY) alive so switching back preserves scrollback (03 §六.8).
+const openTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idle"));
 </script>
 
 <template>
@@ -82,12 +87,17 @@ function isStartingView(s: string): boolean {
     <div v-else-if="store.status === 'ready'" class="main">
       <div class="toolbar">
         <span class="meta">{{ store.workspace }}</span>
-        <span class="meta">agent={{ store.launch.agent }}</span>
-        <span class="meta">{{ store.runtimeId.slice(0, 8) }}</span>
+        <span class="meta">runtime {{ store.runtimeId.slice(0, 8) }}</span>
         <button class="danger" @click="store.stopRuntime()">停止 Runtime</button>
       </div>
+      <TabBar />
       <main class="terminal-area">
-        <Terminal />
+        <Terminal
+          v-for="t in openTabs"
+          :key="t.tabId"
+          :tab-id="t.tabId"
+          v-show="t.tabId === store.activeTabId"
+        />
       </main>
     </div>
 

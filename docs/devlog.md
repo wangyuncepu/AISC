@@ -2,9 +2,20 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1
+## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1/S2.2.a
 
 ### 变更
+
+#### S2.2.a 多标签 + Session 状态机（03-lifecycle-contract.md §五/§六/§七.1；06 §五）
+
+- 纯前端切片（后端 S1.3 session registry 已是多 session 能力，零改动）。4 固定 agent 标签（Claude/Codex/Bash/cc-switch）共享同一 runtime（03 §二.3/§六），Tab 只是 Session 视图。
+- `types/index.ts` 加 `TabSessionState`（`idle` + SessionState）、`TabExit`、`Tab`（tabId/agent/title/sessionId/sessionState/exit）。
+- `stores/runtime.ts`：替换单一 `sessionId` 为 `tabs: Tab[]` + `activeTabId`；session 状态机 reducer--`initTabs`（runtime ready 后建 4 标签 + 开初始 agent 标签）、`openTab`/`reopenTab`（新 session_id -> `starting`）、`activateTab`（idle 标签首次激活即开）、`closeTab`（-> `closing` + `close_session`，PTY Exit 事件 finalize）、`onTabOpenOk/Fail`、`onTabSessionExit`（idempotent first-writer-wins，03 §五.2 重复终止事件合并为单一 TabExit）；`stopRuntime` 迭代关所有 live session 后 stop + 回 picker。`resetWorkspace` 统一清 tabs/runtimeId/preflight。
+- `Terminal.vue` 重构 tab-scoped：props `tabId`，从 store 读 `tab.sessionId/agent`；每非-idle 标签各一实例，`v-show` 仅活动标签可见（隐藏 PTY 继续跑，切换不丢 scrollback，03 §六.8）；`visible` watch + ResizeObserver 双重 fit（补 display 切换时 ResizeObserver 不触发缺口）；PTY `Exit` 事件为单一终态信号 -> `onTabSessionExit`，`closeTab` 仅触发 closeSession 不自行判定终态。
+- `features/workspace/TabBar.vue`（新）：4 标签 + 状态指示（未打开/启动中/关闭中/退出 code N/失败/已断开）+ × 关闭（running/starting/closing）+ ↻ 重新打开（exited/failed/disconnected，新 session_id）。
+- `App.vue` ready 视图：TabBar + `v-for` 渲染非-idle 标签 Terminal（key=tabId，v-show active）。
+- 验证：`npm run build`（vue-tsc+vite）零错误；`cargo build` 零改动零错误；dev 启动无 panic；实机手测通过--4 标签开/关/重开、切换不丢历史、隐藏标签继续运行、停止 Runtime 关全部回 picker、resize 正常。
+- gap（明确 deferral）：runtime 状态机/observed_at/revision/freshness/轮询对账 -> S2.2.b；list/remove/force-remove 管理 UI + 冲突复用/停止替换 -> S2.2.b；退出 Workbench 确认 + Tauri 关闭拦截 -> S2.2.b；runtime stop 时 session reason 精修为 `runtime_stop`（现为 transport_error/disconnected）-> S2.2.b 状态机关联；history 持久化/恢复布局/崩溃对账 -> S2.4；Provider/auth Warning + P0/P1 可观察性侧栏 -> S2.3。
 
 #### S2.1.b 镜像构建流式进度（05-cli-gui-contract.md §4.1）
 
