@@ -19,13 +19,10 @@ jobs:
         include:
           - os: ubuntu-latest
             triple: x86_64-unknown-linux-gnu
-            shell: bash
           - os: windows-latest
             triple: x86_64-pc-windows-msvc
-            shell: pwsh
           - os: macos-latest
             triple: aarch64-apple-darwin
-            shell: bash
 
     runs-on: ${{ matrix.os }}
 
@@ -44,20 +41,20 @@ jobs:
           pip install -e .
 
       - name: Build CLI sidecar
-        shell: ${{ matrix.shell }}
+        shell: bash
         run: |
           TARGET_TRIPLE=${{ matrix.triple }} scripts/build-cli.sh
-        if: matrix.shell == 'bash'
+        if: matrix.os != 'windows-latest'
 
       - name: Build CLI sidecar (Windows)
         shell: pwsh
         run: |
           $env:TARGET_TRIPLE = "${{ matrix.triple }}"
           scripts/build-cli.ps1
-        if: matrix.shell == 'pwsh'
+        if: matrix.os == 'windows-latest'
 
       - name: Verify artifact
-        shell: ${{ matrix.shell }}
+        shell: bash
         run: |
           ls -la dist/
         if: always()
