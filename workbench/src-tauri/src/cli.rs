@@ -289,18 +289,25 @@ pub fn enumerate_candidates(explicit: Option<&Path>, saved: Option<&Path>) -> Ve
 }
 
 /// Bundled CLI sidecar path (S4.1.a). Tauri `bundle.externalBin` places the
-/// sidecar relative to the app resources; dev builds have no sidecar (None).
+/// sidecar next to the main binary under its **base name** (target triple
+/// stripped, e.g. `aisc.exe` on Windows — tauri-bundler 2.9.x NSIS layout);
+/// dev builds have no sidecar (None).
 fn sidecar_candidate() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     sidecar_candidate_in(exe.parent()?)
 }
 
-/// Pure lookup for tests: sidecar next to *exe_dir* with the target-triple name.
+/// Pure lookup for tests: sidecar next to *exe_dir*. Accepts both the
+/// target-triple name (older layouts / manually staged resources) and the
+/// base name tauri-bundler 2.9.x actually installs.
 fn sidecar_candidate_in(exe_dir: &Path) -> Option<PathBuf> {
     let name = format!("aisc-{}", target_triple());
+    let base = "aisc";
     let candidates = [
         exe_dir.join(&name),
         exe_dir.join(format!("{name}.exe")),
+        exe_dir.join(base),
+        exe_dir.join(format!("{base}.exe")),
     ];
     candidates.into_iter().find(|p| p.is_file())
 }
@@ -969,6 +976,17 @@ mod tests {
         let triple = target_triple();
         let name = format!("aisc-{triple}");
         let file = dir.path().join(if cfg!(windows) { format!("{name}.exe") } else { name.clone() });
+        std::fs::write(&file, b"x").unwrap();
+        let found = sidecar_candidate_in(dir.path());
+        assert_eq!(found.as_deref(), Some(file.as_path()));
+    }
+
+    #[test]
+    fn sidecar_lookup_finds_base_name() {
+        // tauri-bundler 2.9.x installs the externalBin sidecar under its base
+        // name (triple stripped): `aisc` / `aisc.exe` next to the main binary.
+        let dir = tempdir().unwrap();
+        let file = dir.path().join(if cfg!(windows) { "aisc.exe" } else { "aisc" });
         std::fs::write(&file, b"x").unwrap();
         let found = sidecar_candidate_in(dir.path());
         assert_eq!(found.as_deref(), Some(file.as_path()));

@@ -102,8 +102,10 @@ jobs:
 
           $appDir = "$env:LOCALAPPDATA\AISC Workbench"
           if (-not (Test-Path "$appDir\aisc-bundle\VERSION")) { throw "aisc-bundle not installed under $appDir" }
-          $sidecar = Get-ChildItem $appDir -Filter "aisc-x86_64-pc-windows-msvc.exe" | Select-Object -First 1
-          if (-not $sidecar) { throw "sidecar not found under $appDir" }
+          # tauri-bundler 2.9.x installs the externalBin sidecar under its base
+          # name (aisc.exe); accept the triple-suffixed name as a fallback.
+          $sidecar = Get-ChildItem $appDir -Filter "aisc*.exe" | Where-Object { $_.Name -in @("aisc.exe", "aisc-x86_64-pc-windows-msvc.exe") } | Select-Object -First 1
+          if (-not $sidecar) { throw "sidecar not found under $appDir (expected aisc.exe or aisc-x86_64-pc-windows-msvc.exe)" }
           Write-Host "sidecar: $($sidecar.FullName)"
 
           & $sidecar.FullName version --format json
