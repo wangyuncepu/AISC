@@ -508,6 +508,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   async function stopConflictRuntime(id: string) {
+    const ok = await confirm(`停止 Runtime ${id.slice(0, 8)}？容器将停止但保留。`);
+    if (!ok) return;
     try {
       await ipc.stopRuntime(workspace.value.trim(), id);
     } catch (e) {
@@ -517,6 +519,12 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   async function removeConflictRuntime(id: string, force = false) {
+    const ok = await confirm(
+      force
+        ? `强制移除运行中的 Runtime ${id.slice(0, 8)}？容器与元数据将永久删除。`
+        : `移除 Runtime ${id.slice(0, 8)}？容器与元数据将永久删除。`
+    );
+    if (!ok) return;
     try {
       await ipc.removeRuntime(workspace.value.trim(), id, force);
     } catch (e) {
@@ -778,12 +786,21 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   async function stopRuntime() {
+    const live = tabs.value.filter(
+      (t) => t.sessionState === "running" || t.sessionState === "starting"
+    );
+    const ok = await confirm(
+      live.length > 0
+        ? `有 ${live.length} 个活动会话，停止将结束它们并停止 Runtime。继续？`
+        : "停止 Runtime？容器将停止但保留。"
+    );
+    if (!ok) return;
     status.value = "stopping";
     // Close every live session best-effort (03 §七.2), then stop the runtime.
-    const live = tabs.value.filter(
+    const closing = tabs.value.filter(
       (t) => t.sessionId && !TERMINAL_STATES.includes(t.sessionState) && t.sessionState !== "closing"
     );
-    await Promise.all(live.map((t) => ipc.closeSession(t.sessionId!).catch(() => null)));
+    await Promise.all(closing.map((t) => ipc.closeSession(t.sessionId!).catch(() => null)));
     tabs.value = [];
     activeTabId.value = null;
     try {

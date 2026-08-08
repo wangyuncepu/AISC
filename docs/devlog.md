@@ -2,9 +2,18 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3 S3.1
+## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3 S3.1/S3.2
 
 ### 变更
+
+#### S3.2 安全硬化（06-implementation-plan.md §六 S3.2）
+
+- **显式 CSP**：`tauri.conf.json` `app.security.csp` 从 `null`（宽松）改为显式：`default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; script-src 'self'`。`ipc:` + dev 端口给 Tauri IPC/vite HMR，`'unsafe-inline'` style 给 Vue scoped style 运行时注入。dev 实测 HMR/终端/样式不破。
+- **移除未用 opener**：前端零调用 `openUrl`/`openPath`（grep 确认）-> `Cargo.toml`+`Cargo.lock` 移除 `tauri-plugin-opener`、`lib.rs` 移除 plugin init、`capabilities` 移除 `opener:default`、`package.json` 移除 `@tauri-apps/plugin-opener`。最小攻击面（Workbench 不打开外部 URL）。
+- **破坏性操作确认**（`confirm` 原生对话框，取消不执行）：`stopRuntime`（侧栏，有活动 session 时文案含数量「有 N 个活动会话，停止将结束它们并停止 Runtime」）、`stopConflictRuntime`（「停止 Runtime <id 前 8 位>？容器将停止但保留」）、`removeConflictRuntime`（「移除/强制移除运行中 Runtime <id 前 8 位>？容器与元数据将永久删除」，force 文案区分）。
+- **`docs/security-checklist.md`**（新）：安全验证清单--Tauri 配置（CSP/最小权限/opener 移除）、破坏性操作边界（confirm/退出确认/workspace 只读预检）、secret 与敏感数据（history/settings 无 secret、PTY scrollback 不持久化、粘贴 1MB cap S1.3、redact 脱敏）、进程与资源（无孤儿进程、无持久化日志通道）。已知 defer：签名/公证（S4）、Provider 密钥（MVP 从不读）、完整日志通道（无持久化日志）。
+- 验证：cargo 67 绿（opener 移除 + CSP 编译零回归）；npm build 零错误；dev 无 panic/CSP 错误；实机手测通过--CSP 不破 HMR/终端/样式、确认弹窗（取消不执行/确认执行）、常规回归正常、`~/.config/cn.aisc.workbench/` 仅 history.json/history.lock/settings.json（无 scrollback/日志/secret 文件）。
+- gap（明确 deferral）：macOS 签名/公证 + Windows 代码签名 -> S4 发布门；8h/10 session/高输出长测 -> release 实机。
 
 #### S3.1 并发与异常硬化（03-lifecycle-contract.md §九；04-observability.md §六.2）
 
