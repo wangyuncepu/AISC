@@ -71,3 +71,6 @@
 - [ ] agent加上Pi/opencode
 - [ ] aisc cli的更新命令优化
 - [ ] 预配置的deepseek配置项错误，修复
+- [ ] runtime内，cc-switch显示异常
+- [ ] 界面字体太小，增加设置页，可以设置软件各类属性
+- [ ] 通过winget安装docker desktop并启动，从引导界面勾选打开workbench，打开的workbench，无法内启动摘要界面无法正常检测，且点击启动docker也无效。而关闭该workbench，重新打开，就可以成功识别docker。
