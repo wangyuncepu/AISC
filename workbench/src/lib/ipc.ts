@@ -96,6 +96,10 @@ export const buildImage = (tag: string, onEvent: Channel<BuildEvent>) =>
 
 export const cancelBuild = () => invoke<void>("cancel_build");
 
+// --- S4.1.b fix: start the Docker engine (Docker Desktop) ---
+
+export const startDocker = () => invoke<void>("start_docker");
+
 // --- S2.4.a: history persistence (02 §九) ---
 
 export const loadHistory = () => invoke<WorkbenchHistory>("load_history");

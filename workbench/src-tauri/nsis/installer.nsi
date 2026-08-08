@@ -80,6 +80,8 @@ Var DepsDockerInstalled
 Var DepsPythonInstalled
 Var DepsWingetInstalled
 Var DepsSkip
+; set when Docker Desktop was missing at check time and installed by this run
+Var DepsDockerWasMissing
 ; label handles for the dependency page
 Var DepsDockerLabel
 Var DepsPythonLabel
@@ -473,6 +475,12 @@ Function PageDepsCheck
   Call CheckDocker
   Call CheckPython
   Call CheckWinget
+  ; remember that Docker Desktop was missing so the finish page can offer to
+  ; start it (fresh installs must run Docker Desktop once for the engine)
+  StrCpy $DepsDockerWasMissing 0
+  ${If} $DepsDockerInstalled = 0
+    StrCpy $DepsDockerWasMissing 1
+  ${EndIf}
 
   !insertmacro MUI_HEADER_TEXT "Environment Check" "AISC Workbench needs Docker Desktop and Python 3. Missing items are installed automatically on the next page."
   nsDialogs::Create 1018
@@ -586,11 +594,20 @@ FunctionEnd
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateOrUpdateDesktopShortcut
 ; Show run app after installation.
 !define MUI_FINISHPAGE_RUN
-!define MUI_FINISHPAGE_RUN_FUNCTION RunMainBinary
+!define MUI_FINISHPAGE_RUN_TEXT "Start AISC Workbench"
+!define MUI_FINISHPAGE_RUN_FUNCTION RunFinishApp
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
 !insertmacro MUI_PAGE_FINISH
 
-Function RunMainBinary
+Function RunFinishApp
+  ; If Docker Desktop was installed by this run, start it first so the engine
+  ; comes up (first run shows the license agreement for the user to accept);
+  ; then launch the Workbench.
+  ${If} $DepsDockerWasMissing = 1
+    ${If} ${FileExists} "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
+      ExecShell "open" "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
+    ${EndIf}
+  ${EndIf}
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
 FunctionEnd
 

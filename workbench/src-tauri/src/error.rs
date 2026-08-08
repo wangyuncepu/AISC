@@ -176,7 +176,9 @@ impl WorkbenchError {
             "AISC_ERR_INVALID_RUNTIME_ID" => {
                 ("runtime ID 非 UUID v4", false, Action::None)
             }
-            "AISC_ERR_DOCKER_UNAVAILABLE" => ("Docker 尚未可用", true, Action::Retry),
+            "AISC_ERR_DOCKER_UNAVAILABLE" => {
+                ("Docker 尚未可用", true, Action::StartDocker)
+            }
             "AISC_ERR_PERMISSION_DENIED" => {
                 ("AISC 无法访问 Docker 或工作区", false, Action::None)
             }

@@ -6,6 +6,14 @@
 
 ### 变更
 
+#### Windows 实机测试修复（S4.1.b 实测反馈，docs/问题.txt）
+
+- **问题 1（装完 Docker 不引导启动）**：NSIS Finish 页 RUN 改 `RunFinishApp`——`$DepsDockerWasMissing`（Deps 页检测到 Docker 缺失时置 1）时先 `ExecShell` 启动 Docker Desktop（首次运行用户确认 license），再启动 Workbench。
+- **问题 2（Docker 未启动时 preflight 识别不到）**：`start_docker` Tauri 命令（Windows 启动 `%LOCALAPPDATA%\Docker\Docker Desktop\Docker Desktop.exe`，macOS Docker.app；Linux 返回可操作错误）+ 前端「启动 Docker」按钮——summary docker gate fail 时显示，点击后启动 Docker Desktop 并每 2s 轮询 preflight 直到 docker check pass（90s 超时提示手动打开）。`AISC_ERR_DOCKER_UNAVAILABLE` action 从 Retry 改 `StartDocker`。
+- **问题 3（所有操作弹 Windows Terminal 闪现）**：`cli.rs` `run_control`/`run_build_stream` spawn 加 `creation_flags(0x08000000)`（CREATE_NO_WINDOW，`#[cfg(windows)]` 门控——tokio `creation_flags` 仅 Windows 存在）。PTY session 不动（交互终端）。
+- **问题 4（构建镜像直接失败）**：build 失败错误码 `AISC_ERR_DOCKER_UNAVAILABLE` 时 BuildProgress 显示「启动 Docker」按钮 + 明确文案（引擎未运行无法构建），启动后回摘要重试。
+- 验证：cargo 70 绿；npm build 零错误；NSIS 模板改动（`RunFinishApp`）由 CI Windows runner 重新编译验证；实机待复测。
+
 #### S4.1.b Windows NSIS 定制安装器（06-implementation-plan.md §六 S4.1）
 
 - **定制 NSIS 模板**：`workbench/src-tauri/nsis/installer.nsi`（tauri-bundler 2.9.4 默认模板复制 + S4.1.b 扩展；Handlebars 模板由 bundler 渲染）。`tauri.conf.json` 加 `bundle.windows.nsis.template`（installMode currentUser、languages English）+ `webviewInstallMode {type: downloadBootstrapper}`（WebView2 由 Tauri 原生 section 自动处理）。

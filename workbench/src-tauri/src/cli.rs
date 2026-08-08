@@ -494,12 +494,14 @@ pub async fn run_control(
     timeout: Duration,
     cancel: CancellationToken,
 ) -> Result<Envelope, WorkbenchError> {
-    let mut child = match Command::new(executable)
-        .args(&argv)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let mut cmd = Command::new(executable);
+    cmd.args(&argv);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW: no console flash for piped children
+    let mut child = match cmd.spawn()
     {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -609,12 +611,14 @@ pub async fn run_build_stream(
     cancel: CancellationToken,
     event_tx: mpsc::Sender<BuildEvent>,
 ) -> Result<(), WorkbenchError> {
-    let mut child = match Command::new(executable)
-        .args(&argv)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let mut cmd = Command::new(executable);
+    cmd.args(&argv);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW: no console flash for piped children
+    let mut child = match cmd.spawn()
     {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

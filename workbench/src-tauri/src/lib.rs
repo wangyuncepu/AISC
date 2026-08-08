@@ -16,8 +16,8 @@ use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use history::{load_history, save_history};
 use runtime::{
     build_image, cancel_build, cancel_runtime_start, get_provider_status, list_runtimes,
-    remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_runtime,
-    stop_runtime, BuildOp, OpMutexes, StartOp,
+    remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_docker,
+    start_runtime, stop_runtime, BuildOp, OpMutexes, StartOp,
 };
 use session::{close_session, open_session, resize_session, write_session, SessionRegistry};
 
@@ -53,6 +53,7 @@ pub fn run(cli_arg: Option<String>) {
             save_history,
             build_image,
             cancel_build,
+            start_docker,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

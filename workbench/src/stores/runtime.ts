@@ -133,6 +133,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const launch = ref<LaunchConfig>({ ...DEFAULT_LAUNCH });
   const showAdvanced = ref(false);
   const startElapsedMs = ref(0);
+  const dockerStarting = ref(false);
   const cancelInspect = ref<RuntimeSnapshot | null>(null);
 
   // S2.1.b build state (in-memory only, 05 §4.1.5)
@@ -200,6 +201,11 @@ export const useRuntimeStore = defineStore("runtime", () => {
     conflictError.value = null;
     freshness.value = "unknown";
     inspectInFlight.value = false;
+    if (dockerRetryTimer !== null) {
+      window.clearTimeout(dockerRetryTimer);
+      dockerRetryTimer = null;
+    }
+    dockerStarting.value = false;
     requestSeq.value = 0;
     lastAppliedSeq.value = 0;
     revision.value = 0;
@@ -314,6 +320,50 @@ export const useRuntimeStore = defineStore("runtime", () => {
     preflight.value = null;
     status.value = "preflight";
     void runPreflight();
+  }
+
+  /** Start the Docker engine (Docker Desktop) and re-run preflight once the
+   * daemon is reachable. Used from the summary when the docker gate is red. */
+  let dockerRetryTimer: number | null = null;
+  async function startDockerAndRepreflight() {
+    error.value = null;
+    dockerStarting.value = true;
+    try {
+      await ipc.startDocker();
+      // Docker Desktop takes a while to boot the engine; poll preflight every
+      // 2s for up to ~90s instead of one-shot.
+      const deadline = Date.now() + 90_000;
+      const attempt = async (): Promise<void> => {
+        try {
+          await runPreflight();
+          const dockerOk = preflight.value?.checks.some(
+            (c) => c.id === "docker" && c.status === "pass"
+          );
+          if (dockerOk) {
+            dockerStarting.value = false;
+            return;
+          }
+        } catch {
+          /* engine still starting - retry */
+        }
+        if (Date.now() < deadline) {
+          dockerRetryTimer = window.setTimeout(attempt, 2_000);
+        } else {
+          dockerStarting.value = false;
+          error.value = {
+            code: "WB_ERR_DOCKER_START_TIMEOUT",
+            message: "Docker 引擎启动超时，请手动打开 Docker Desktop",
+            technical_detail: null,
+            retryable: true,
+            action: "start_docker",
+          };
+        }
+      };
+      await attempt();
+    } catch (e) {
+      dockerStarting.value = false;
+      error.value = e as WorkbenchError;
+    }
   }
 
   function startTimerTick() {
@@ -866,6 +916,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     backToSummaryFromBuild,
     runPreflight,
     recomputePreflightNeeded,
+    startDockerAndRepreflight,
+    dockerStarting,
     startFromSummary,
     resumeLayout,
     cancelStart,

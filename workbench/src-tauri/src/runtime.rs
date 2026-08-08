@@ -519,6 +519,54 @@ pub async fn cancel_build(app: AppHandle) -> Result<(), WorkbenchError> {
     Ok(())
 }
 
+/// Start the Docker engine (Docker Desktop on Windows, Docker.app on macOS).
+/// Returns Ok(()) if the launch was attempted; the daemon still needs time to
+/// come up, so callers re-run preflight after a short delay. Non-Windows/macOS
+/// returns an actionable error (systemd on Linux is out of scope for the app).
+#[tauri::command]
+pub async fn start_docker() -> Result<(), WorkbenchError> {
+    #[cfg(windows)]
+    {
+        let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| String::new());
+        let mut candidates = Vec::new();
+        if !base.is_empty() {
+            candidates.push(std::path::PathBuf::from(&base).join("Docker\\Docker Desktop\\Docker Desktop.exe"));
+        }
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            candidates.push(std::path::PathBuf::from(pf).join("Docker\\Docker\\Docker Desktop.exe"));
+        }
+        for exe in &candidates {
+            if exe.exists() {
+                std::process::Command::new(exe).spawn().map_err(|e| {
+                    WorkbenchError::cli_protocol()
+                        .with_detail(format!("failed to start Docker Desktop: {e}"))
+                })?;
+                return Ok(());
+            }
+        }
+        Err(WorkbenchError::cli_protocol()
+            .with_detail("Docker Desktop executable not found".into()))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let app = "/Applications/Docker.app/Contents/MacOS/Docker";
+        if std::path::Path::new(app).exists() {
+            std::process::Command::new(app).spawn().map_err(|e| {
+                WorkbenchError::cli_protocol()
+                    .with_detail(format!("failed to start Docker Desktop: {e}"))
+            })?;
+            return Ok(());
+        }
+        Err(WorkbenchError::cli_protocol()
+            .with_detail("Docker Desktop executable not found".into()))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        Err(WorkbenchError::cli_protocol()
+            .with_detail("start Docker manually (e.g. systemctl start docker)".to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
