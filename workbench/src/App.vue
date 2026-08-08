@@ -3,7 +3,7 @@
  * S2.1.a startup shell: routes between startup-state views (02 §三) and the
  * terminal workspace. Capability gate on mount.
  */
-import { computed, onBeforeUnmount, onMounted, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useRuntimeStore } from "./stores/runtime";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
@@ -20,6 +20,82 @@ const store = useRuntimeStore();
 const polling = useRuntimePolling();
 const providerPolling = useProviderPolling();
 
+// S3.3: aria-live regions (04 §九 - announce semantic changes only, never
+// routine polls). Throttled ~1s so a burst of updates coalesces to the latest.
+const livePolite = ref("");
+const liveAlert = ref("");
+let announceTimer: number | null = null;
+let pendingAnnounce = "";
+
+function announce(text: string, alert = false) {
+  pendingAnnounce = text;
+  if (announceTimer !== null) return; // coalesce into the pending tick
+  announceTimer = window.setTimeout(() => {
+    announceTimer = null;
+    const msg = pendingAnnounce;
+    pendingAnnounce = "";
+    if (alert) liveAlert.value = "";
+    liveAlert.value = alert ? msg : liveAlert.value;
+    livePolite.value = alert ? livePolite.value : msg;
+  }, 1000);
+}
+
+const RUNTIME_LABEL: Record<string, string> = {
+  running: "Running",
+  stopped: "Stopped",
+  not_found: "Not found",
+  unknown: "Unknown",
+  starting: "Starting",
+  stopping: "Stopping",
+  removing: "Removing",
+};
+
+// Announce runtime-state transitions (not every poll - only when the state
+// value actually changes).
+let lastAnnouncedState: string | null = null;
+watch(
+  () => store.runtimeState,
+  (s) => {
+    if (s !== lastAnnouncedState && store.status === "ready") {
+      lastAnnouncedState = s;
+      announce(`Runtime ${RUNTIME_LABEL[s] ?? s}`);
+    }
+  }
+);
+
+watch(
+  () => store.error?.message,
+  (m) => {
+    if (m) announce(m, true);
+  }
+);
+
+// S3.3: focus the terminal of a tab (xterm's own focus) so typing works right
+// after switching via Ctrl/Cmd+1..4. nextTick: the target tab becomes visible
+// (v-show) on the next render; focusing synchronously would hit a hidden xterm.
+function focusTabTerminal(tabId: string): void {
+  void nextTick(() => {
+    terminalRefs.value.get(tabId)?.focus();
+  });
+}
+
+function onKeydown(e: KeyboardEvent) {
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod) return;
+  if (e.key >= "1" && e.key <= "4") {
+    if (store.status !== "ready") return;
+    e.preventDefault();
+    const tab = store.tabs[Number(e.key) - 1];
+    if (tab) {
+      store.activateTab(tab.tabId);
+      focusTabTerminal(tab.tabId);
+    }
+  } else if (e.key === "Enter" && store.status === "summary") {
+    e.preventDefault();
+    store.startFromSummary();
+  }
+}
+
 onMounted(() => {
   store.negotiate();
   // S2.2.b: exit-Workbench gate (02 §七.3). Always prevent the default close
@@ -33,6 +109,7 @@ onMounted(() => {
       await getCurrentWindow().destroy();
     }
   });
+  window.addEventListener("keydown", onKeydown, { capture: true });
 });
 
 // S2.3.a/b: poll runtime + provider state while a runtime is active (ready),
@@ -53,6 +130,8 @@ watch(
 onBeforeUnmount(() => {
   polling.stop();
   providerPolling.stop();
+  window.removeEventListener("keydown", onKeydown, { capture: true });
+  if (announceTimer !== null) window.clearTimeout(announceTimer);
 });
 
 function isStartingView(s: string): boolean {
@@ -62,6 +141,16 @@ function isStartingView(s: string): boolean {
 // S2.2.a: render a Terminal for every non-idle tab; v-show keeps hidden tabs
 // (and their PTY) alive so switching back preserves scrollback (03 §六.8).
 const openTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idle"));
+
+// S3.3: expose each Terminal's focus so the tab shortcut can move keyboard
+// focus into the terminal after switching.
+const terminalRefs = ref(new Map<string, InstanceType<typeof Terminal>>());
+function setTerminalRef(tabId: string) {
+  return (el: unknown) => {
+    if (el) terminalRefs.value.set(tabId, el as InstanceType<typeof Terminal>);
+    else terminalRefs.value.delete(tabId);
+  };
+}
 
 // S2.4.a: recent workspaces (from history) in the picker.
 function basename(p: string): string {
@@ -79,6 +168,11 @@ function selectRecent(path: string): void {
       <span class="brand">AISC Workbench</span>
       <span class="status" :data-status="store.status">{{ store.status }}</span>
     </header>
+
+    <!-- S3.3: screen-reader live regions (04 §九). Visually hidden, announced
+         only on semantic changes (throttled). -->
+    <div class="sr-only" role="status" aria-live="polite">{{ livePolite }}</div>
+    <div class="sr-only" role="alert" aria-live="assertive">{{ liveAlert }}</div>
 
     <!-- Capability gate -->
     <div v-if="store.status === 'blocked'" class="gate blocked">
@@ -156,6 +250,7 @@ function selectRecent(path: string): void {
           <Terminal
             v-for="t in openTabs"
             :key="t.tabId"
+            :ref="setTerminalRef(t.tabId)"
             :tab-id="t.tabId"
             v-show="t.tabId === store.activeTabId"
           />
@@ -177,6 +272,18 @@ function selectRecent(path: string): void {
 </template>
 
 <style scoped>
+/* Visually hidden but screen-reader-visible (S3.3). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
 .app {
   display: flex;
   flex-direction: column;

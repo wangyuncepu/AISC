@@ -155,6 +155,14 @@ onBeforeUnmount(() => {
   term = null;
   fit = null;
 });
+
+// S3.3: allow the app-level tab shortcut (Ctrl/Cmd+1..4) to move keyboard focus
+// into this terminal so typing works immediately after switching.
+defineExpose({
+  focus: () => {
+    term?.focus();
+  },
+});
 </script>
 
 <template>

@@ -2,9 +2,18 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3 S3.1/S3.2
+## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）
 
 ### 变更
+
+#### S3.3 可访问性（06-implementation-plan.md §六 S3.3；02 §十二；04 §九）- Phase 3 收尾
+
+- `TabBar.vue`：ARIA tabs 键盘导航--`@keydown` on tablist：ArrowLeft/Up 前一、ArrowRight/Down 后一（wrap-around）、Home/End 首尾，激活 + `tabRefs[i].focus()` 焦点跟随（04 §九）；`aria-controls` 指向终端。
+- `App.vue`：aria-live 区域（`role="status" aria-live="polite"` + `role="alert" aria-live="assertive"`，`.sr-only` 视觉隐藏）；`announce(text, alert)` helper **节流 ~1s**（burst 合并为最近一次，普通 poll 不播报，04 §九）；`watch(store.runtimeState)` 状态变化播报「Runtime Running/Stopped/…」、`watch(store.error)` 失败播报（alert）。平台快捷键（capture-phase window handler）：`Ctrl/Cmd+1..4` 切 tab + **自动聚焦目标终端**（`defineExpose({focus})` + `terminalRefs` Map + `nextTick` 延迟 focus--同步 focus 时 v-show 切换未完成、xterm 不可见导致焦点无效，实测需按两次才聚焦，nextTick 修复）、`Ctrl/Cmd+Enter` 摘要启动；终端聚焦未修饰键归 xterm（路由优先级，06 §六.3.3）；onBeforeUnmount remove listener + clear announceTimer（cleanup 延续 S3.1）。
+- `styles.css`：`:focus-visible` 全局轮廓（键盘导航可见、鼠标点击不显）。
+- 非仅靠色审计：PreflightGate dot+状态文本 ✓、Sidebar state+freshness 文本 ✓、TabBar 状态文本 ✓（文档确认无仅色项）。
+- 验证：npm build 零错误；cargo 零改零错；dev 无 panic；实机手测通过--键盘 Tab 全流程（picker 输入+下一步、summary Ctrl+Enter 启动、ready 后 Ctrl+1..4 切 tab 直接输入（nextTick focus 修复后一次到位）、TabBar 方向键/Home/End 切换焦点跟随、focus-visible 轮廓、终端未修饰键输入正常、常规回归不破）。
+- gap（明确 deferral）：屏幕阅读器完整 smoke test（NVDA/VoiceOver 真机）-> release 实机；OS 级全局快捷键 -> MVP 不做（06 §六.3.3）；焦点陷阱/复杂 roving tabindex -> 简单方向键导航已够。
 
 #### S3.2 安全硬化（06-implementation-plan.md §六 S3.2）
 
