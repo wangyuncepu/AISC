@@ -62,7 +62,7 @@
 
 
 # 20260806
-- [x] Workbench S4.1.b：Windows NSIS 定制安装器（依赖检测 + winget 引导装 Docker/Python/WebView2）— CI 构建验证通过（产物 10.9MB setup.exe），实机手测待做（清单见 docs/platform-windows.md）
+- [x] Workbench S4.1.b：Windows NSIS 定制安装器（依赖检测 + winget 引导装 Docker/Python/WebView2）— CI 构建验证通过（产物 setup.exe），实机手测进行中（docs/问题.txt 4 个问题已修：Docker 引导启动/引擎检测/console 闪现/构建失败，待复测）
 - [ ] 临时模式下，cc-switch不可用
 - [ ] aisc run命令解耦，引导混乱，用户感到费解
 - [ ] agent加上Pi/opencode

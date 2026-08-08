@@ -27,6 +27,14 @@ NSIS 安装器在选完安装目录/开始菜单后显示 **Environment Check** 
 - Skip 路径：Workbench 首启 preflight 报告缺 Docker，不崩溃。
 - 覆盖升级旧版本正常；卸载不删用户数据（`%APPDATA%\cn.aisc.workbench` 保留）。
 
+## 实机修复复测（docs/问题.txt 4 项，2026-08-08）
+
+1. **装完 Docker 引导启动**：全新环境装完 → Finish 页勾选启动 → Docker Desktop 打开（license 确认）→ Workbench 启动。
+2. **Docker 未启动识别**：摘要页 docker gate 红 → 点「启动 Docker」→ Docker Desktop 打开 → 自动轮询重新检测 → 变绿 → Start 可用。
+3. **console 闪现**：启动/打开目录/构建等操作不再弹 Windows Terminal 窗口。
+4. **构建镜像失败**：Docker 未启动时构建 → 报「Docker 引擎未运行」+ 显示「启动 Docker」按钮。
+
+
 ## macOS / Linux
 
 macOS pkg 与 Linux 安装包在 S4.1.c；Linux 另需 WebKitGTK 系统库（发行版包管理安装）。
