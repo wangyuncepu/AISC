@@ -545,7 +545,7 @@ pub async fn start_docker() -> Result<(), WorkbenchError> {
             }
         }
         Err(WorkbenchError::cli_protocol()
-            .with_detail("Docker Desktop executable not found".into()))
+            .with_detail("Docker Desktop executable not found".to_string()))
     }
     #[cfg(target_os = "macos")]
     {
@@ -558,7 +558,7 @@ pub async fn start_docker() -> Result<(), WorkbenchError> {
             return Ok(());
         }
         Err(WorkbenchError::cli_protocol()
-            .with_detail("Docker Desktop executable not found".into()))
+            .with_detail("Docker Desktop executable not found".to_string()))
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
