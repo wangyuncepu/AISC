@@ -114,6 +114,28 @@ class TestBuildOutputStream(unittest.TestCase):
             assert e["seq"] == i  # monotonic from 1
             assert "type" in e and "ts" in e and "data" in e
 
+    def test_emoji_survives_gbk_stdout(self):
+        """Locale-encoded stdout (GBK on zh-CN Windows) must not crash the
+        emitter: buildkit output carries emoji, and UnicodeEncodeError would
+        kill the CLI mid-build with no terminal event (Workbench
+        WB_ERR_CLI_PROTOCOL regression, 2026-08-08). Protocol lines must be
+        pure ASCII (escaped) so any consumer locale/encoding is safe."""
+        raw = io.BytesIO()
+        gbk_out = io.TextIOWrapper(raw, encoding="gbk", errors="strict")
+        em = JsonlEmitter(command="build")
+        with contextlib.redirect_stdout(gbk_out):
+            em.emit("build.output",
+                    data={"stream": "stdout", "chunk": "📦 transferring context\n"})
+            from aisc.cli.output import emit_json, build_envelope
+            emit_json(build_envelope(command="build", exit_code=0, version="t",
+                                     data={"name": "容器"}))
+        gbk_out.flush()
+        lines = raw.getvalue().decode("ascii").splitlines()
+        assert len(lines) == 2  # both protocol lines written, no crash
+        event = json.loads(lines[0])
+        assert event["data"]["chunk"] == "📦 transferring context\n"
+        assert json.loads(lines[1])["data"]["name"] == "容器"
+
     def test_dry_run_emits_start_plan_no_output(self):
         fake = self._fake([], 0)
         em = JsonlEmitter(command="build")
