@@ -33,6 +33,18 @@
     ],
     "externalBin": [
       "binaries/aisc"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "template": "nsis/installer.nsi",
+        "installMode": "currentUser",
+        "languages": [
+          "English"
+        ]
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
   }
 }

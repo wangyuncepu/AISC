@@ -2,9 +2,20 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4 S4.1.a
+## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）
 
 ### 变更
+
+#### S4.1.b Windows NSIS 定制安装器（06-implementation-plan.md §六 S4.1）
+
+- **定制 NSIS 模板**：`workbench/src-tauri/nsis/installer.nsi`（tauri-bundler 2.9.4 默认模板复制 + S4.1.b 扩展；Handlebars 模板由 bundler 渲染）。`tauri.conf.json` 加 `bundle.windows.nsis.template`（installMode currentUser、languages English）+ `webviewInstallMode {type: downloadBootstrapper}`（WebView2 由 Tauri 原生 section 自动处理）。
+- **Environment Check 页**（`PageDepsCheck`，StartMenu 页后 INSTFILES 前）：nsDialogs 检测 Docker Desktop（`%LOCALAPPDATA%\Docker\Docker Desktop\Docker Desktop.exe` + HKLM 注册表兜底）、Python 3（`HKLM/HKCU \SOFTWARE\[WOW6432Node\]Python\PythonCore`）、winget（`where winget`）、WebView2（仅提示，由安装器处理）。按钮：**Install missing dependencies** / **Skip** / **Start Docker Desktop**（Docker 已装时）/ **Open Microsoft Store**（winget 缺失时，App Installer 9NBLGGH4NNS1）。
+- **`Section Dependencies`**（EarlyChecks 后、WebView2 前）：用户选择安装时经 winget 安装 Docker Desktop（`Docker.DockerDesktop`）+ Python 3.12（`Python.Python.3.12`），`--accept-source-agreements --accept-package-agreements`，UAC 提权 = 用户授权环节（非静默）。安装失败不阻断（DetailPrint 提示手动装），Workbench 首启 preflight 兜底报缺。winget 缺失时跳过 + 提示 Store 引导。
+- **`nsis/README.md`**：模板来源（tauri-bundler 2.9.4）+ 升级维护说明（diff 默认模板重放 3 处 S4.1.b 扩展，防模板漂移）。
+- **CI**：`.github/workflows/nsis-installer.yml`（新）--windows-2022 runner：setup-python + PyInstaller 构建 CLI sidecar -> 移入 `workbench/src-tauri/binaries/aisc-x86_64-pc-windows-msvc.exe`（externalBin 命名）-> setup-node + npm ci -> `npm run tauri build -- --bundles nsis`（tauri 自动下载 NSIS 3.11 + nsis_tauri_utils 插件，零手动 NSIS 配置）-> 产物 `*-setup.exe` upload-artifact。触发：workflow_dispatch + push develop/main paths（tauri.conf/nsis/workflow/src.aisc/packaging）。
+- **`docs/platform-windows.md`**（新）：Windows 平台依赖表 + 安装器行为说明 + 实机验证清单（06 §七 S4.1「Windows 检查 WebView2/Docker Desktop」文档要求）。
+- 验证：cargo 70 绿（tauri.conf schema 校验通过，`webviewInstallMode` 是 internally-tagged enum 需 `{type: ...}` 形状）；npm build 零错误；NSIS 模板编译 + winget 检测逻辑由 CI Windows runner 验证（本机 Linux 无 makensis）；实机手测清单见 `docs/platform-windows.md`（用户 Windows 实机）。
+- gap（明确 deferral）：macOS pkg / Linux preinst 安装体验 -> S4.1.c；签名/公证 -> S4.2 发布门；安装器多语言（zh-CN 等，模板已留结构）-> 后续；winget 安装进度显示（当前 DetailPrint 文本）-> 后续。
 
 #### S4.1.a CLI sidecar 打包与分发基础（06-implementation-plan.md §六 S4.1；02 §四.3）
 
