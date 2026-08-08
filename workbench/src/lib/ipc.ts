@@ -4,6 +4,7 @@ import type {
   BuildEvent,
   CapabilityReport,
   DiscoveryReport,
+  HistoryPatch,
   PreflightReport,
   ProviderStatus,
   PtyEvent,
@@ -12,6 +13,7 @@ import type {
   RuntimeStartResult,
   SessionExit,
   SessionSnapshot,
+  WorkbenchHistory,
 } from "../types";
 
 // --- S1.2: CLI discovery / pin / capability ---
@@ -93,3 +95,10 @@ export const buildImage = (tag: string, onEvent: Channel<BuildEvent>) =>
   invoke<void>("build_image", { tag, onEvent });
 
 export const cancelBuild = () => invoke<void>("cancel_build");
+
+// --- S2.4.a: history persistence (02 §九) ---
+
+export const loadHistory = () => invoke<WorkbenchHistory>("load_history");
+
+export const saveHistory = (expectedRevision: number, patch: HistoryPatch) =>
+  invoke<number>("save_history", { expectedRevision, patch });

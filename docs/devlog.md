@@ -2,9 +2,20 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 + Phase 2 S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b
+## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2 S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a
 
 ### 变更
+
+#### S2.4.a history 持久化 + 最近工作区（02-startup-flow.md §九；06 §五 S2.4）
+
+- 后端 `history.rs`（新模块）：schema-versioned `history.json`（02 §九.2 subset：schema_version/revision/workspaces，含 runtime ref + layout tabs）。`load(dir)` 缺失->空、corrupt JSON->隔离 rename `.corrupt`、unsupported schema->error 不覆盖。`save(dir, expected_revision, patch)`：**fs4 跨进程锁**（`history.lock` exclusive，~5s 超时 fail-closed）-> 锁内 reload -> `revision != expected_revision` 返回 `Conflict{current_revision}` -> merge patch（upsert by path，保留其他 workspace，02 §九「多窗口只 patch 自己拥有的」）-> revision+1 -> 原子写（temp+fsync+rename，复用 settings.rs 模式）。命令 `load_history`/`save_history`。`error.rs` 加 `history_conflict()`（WB_ERR_HISTORY_CONFLICT，store 据此重试）/`history_error()` 构造器。`session.rs` `config_dir` 改 pub。`Cargo.toml` 加 `fs4`。7 个单测（round-trip / corrupt 隔离 / revision conflict / merge 保留其他 / unsupported schema 不覆盖 / upsert / load-missing）。
+- 前端 `types/index.ts`：`WorkbenchHistory`/`WorkspaceRecord`/`RuntimeRef`/`Layout`/`TabRecord`/`HistoryPatch`。`lib/ipc.ts`：`loadHistory`/`saveHistory(expectedRevision, patch)`。
+- store `stores/runtime.ts`：`history`/`historyRevision`/`lastRuntimeRef`/`recentWorkspaces`（按 last_used desc）；`loadHistory`（startup negotiate 并行）；`scheduleSave`（debounce 300ms）在 runtime ready / tab open/activate / workspace 选中 时持久化；`doSave(retries)` Conflict -> reload+adopt revision+有界重试 3 次；`selectRecentWorkspace(path)` 从 history 恢复 launch config（image/network/scope/agent）+ lastRuntimeRef（02 §六 优先级），避免 preflight 用默认配置与已有 runtime 冲突 + 防止 null 覆盖 disk runtime ref。
+- `App.vue`：picker 加最近工作区列表（basename + 全路径 + last_agent），点击 `selectRecent` -> `store.selectRecentWorkspace`。
+- **测试中修 2 个遗留 bug**：(1) `runPreflight` 之前把所有 `recommended_action=resolve_conflict`（任意 check 失败都返回）路由到冲突视图，导致 workspace/image 失败时进冲突视图且 `loadConflicts` 空->死锁；改：仅 `runtime_conflict` check 自身 fail 才进冲突视图，其他失败进 summary 显真实 gate。(2) `backToSummaryFromBuild` 之前有 stale preflight 时不 re-preflight，build 完返回摘要仍显旧「缺镜像」-> Start 禁用；改：清 stale preflight + 总是 re-preflight。
+- **`.dockerignore` 修复**（build-context-perf memory，阻塞测试时顺手修）：原 `node_modules/` 只匹配顶层，漏了 `workbench/src-tauri/target`（15G）/`workbench/node_modules`/`.venv`；加 `**/target/`/`**/node_modules/`/`.venv/`/`**/dist/`，build context 15.57GB -> 72MB。（buildx 切换仍 defer，`docker buildx` 未装。）
+- 验证：cargo 65 绿（54 lib+7 history+7 cli+4 pty，7 新 history 测试零回归）；npm build 零错误；dev 无 panic；实机手测通过--选工作区 start+开 tab 关 app 重启 -> picker 最近列表显该工作区 -> 点击恢复配置进 preflight -> start；`history.json` schema/revision/workspaces(runtime ref+4 tabs layout) 正确。
+- gap（明确 deferral）：启动对账（runtime list 合并 history vs 实际）+ 恢复布局提示（恢复布局/空白打开）+ 为 tabs 创建新 session（文案「不续接」）+ 孤儿 session 检测/处理 -> S2.4.b（关「崩溃后发现 runtime」+「恢复布局」gate）；窗口几何 save/restore -> S2.4.b；两窗口同 workspace 细粒度合并（MVP last-write-wins on same path）；history 损坏可恢复错误 UI -> S2.4.b（a 静默隔离）；buildx 切换（CLI adapter）-> 后续。
 
 #### S2.3.b Provider 状态 + P1 可观察性（04-observability.md §二.P1/§四.2/§五；05-cli-gui-contract.md §七）
 

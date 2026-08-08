@@ -62,6 +62,15 @@ function isStartingView(s: string): boolean {
 // S2.2.a: render a Terminal for every non-idle tab; v-show keeps hidden tabs
 // (and their PTY) alive so switching back preserves scrollback (03 §六.8).
 const openTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idle"));
+
+// S2.4.a: recent workspaces (from history) in the picker.
+function basename(p: string): string {
+  const parts = p.replace(/\/+$/, "").split("/");
+  return parts[parts.length - 1] || p;
+}
+function selectRecent(path: string): void {
+  store.selectRecentWorkspace(path);
+}
 </script>
 
 <template>
@@ -104,6 +113,18 @@ const openTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idl
         <button class="primary" :disabled="!store.workspace.trim()" @click="store.runPreflight()">下一步</button>
       </div>
       <p class="hint">Workbench 不会自动创建目录或 runtime；选择后执行只读预检。</p>
+      <div v-if="store.recentWorkspaces.length" class="recents">
+        <div class="recents-label">最近工作区</div>
+        <ul>
+          <li v-for="w in store.recentWorkspaces" :key="w.path">
+            <button class="recent" :title="w.path" @click="selectRecent(w.path)">
+              <span class="r-name">{{ basename(w.path) }}</span>
+              <span class="r-path">{{ w.path }}</span>
+              <span class="r-agent">{{ w.last_agent || "-" }}</span>
+            </button>
+          </li>
+        </ul>
+      </div>
     </div>
 
     <!-- Launch summary (preflight gate + config + Start) -->
@@ -190,6 +211,19 @@ const openTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idl
 .picker { gap: 12px; }
 .picker .row { display: flex; gap: 8px; width: 560px; max-width: 90vw; }
 .picker .hint { font-size: 12px; color: #888; }
+.recents { width: 560px; max-width: 90vw; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
+.recents-label { font-size: 11px; color: #6a6a6a; text-transform: uppercase; letter-spacing: 0.5px; }
+.recents ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.recents li { width: 100%; }
+.recent {
+  width: 100%; display: flex; align-items: center; gap: 8px; text-align: left;
+  background: #252526; color: #ccc; border: 1px solid #333; border-radius: 4px;
+  padding: 6px 10px; font-size: 12px; cursor: pointer;
+}
+.recent:hover { background: #2d2d2d; border-color: #444; }
+.r-name { color: #ddd; font-weight: 500; min-width: 80px; }
+.r-path { flex: 1; color: #777; font-family: monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-agent { color: #9cdcfe; font-size: 11px; }
 .workspace {
   flex: 1; min-width: 0; background: #252526; color: #ddd;
   border: 1px solid #444; border-radius: 4px; padding: 6px 8px; font-size: 13px;

@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import type {
@@ -7,16 +7,20 @@ import type {
   BuildStatus,
   CapabilityReport,
   Freshness,
+  HistoryPatch,
   LaunchAgent,
   LaunchConfig,
   PreflightReport,
   ProviderStatus,
+  RuntimeRef,
   RuntimeSnapshot,
   RuntimeState,
   Tab,
   TabExit,
   TabSessionState,
   WorkbenchError,
+  WorkbenchHistory,
+  WorkspaceRecord,
 } from "../types";
 import * as ipc from "../lib/ipc";
 
@@ -88,6 +92,20 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const providerError = ref<WorkbenchError | null>(null);
   const providerInFlight = ref<"claude" | "codex" | null>(null);
 
+  // S2.4.a: workbench history (02 §九). Persisted workspace/runtime/layout.
+  const history = ref<WorkbenchHistory | null>(null);
+  const historyRevision = ref(0);
+  /** Last runtime started for this workspace; remembered across stops so S2.4.b
+   * resume can find it (not cleared on stop). */
+  const lastRuntimeRef = ref<RuntimeRef | null>(null);
+  const recentWorkspaces = computed<WorkspaceRecord[]>(() => {
+    const ws = history.value?.workspaces ?? [];
+    return [...ws]
+      .filter((w) => w.path)
+      .sort((a, b) => (b.last_used_at || "").localeCompare(a.last_used_at || ""));
+  });
+  let saveTimer: number | null = null;
+
   const preflight = ref<PreflightReport | null>(null);
   const launch = ref<LaunchConfig>({ ...DEFAULT_LAUNCH });
   const showAdvanced = ref(false);
@@ -107,6 +125,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
   let startTimer: number | null = null;
 
   async function negotiate() {
+    void loadHistory(); // parallel, best-effort (02 §九)
     status.value = "negotiating";
     try {
       const report = await ipc.negotiateCapabilities();
@@ -207,12 +226,17 @@ export const useRuntimeStore = defineStore("runtime", () => {
     buildStatus.value = "idle";
     buildLog.value = "";
     buildError.value = null;
-    status.value = preflight.value ? "summary" : "preflight";
-    if (!preflight.value) void runPreflight();
+    // The image was just (re)built; drop the stale preflight and re-run so the
+    // image check picks up the new image (otherwise the old "missing" result
+    // is shown and Start stays disabled).
+    preflight.value = null;
+    status.value = "preflight";
+    void runPreflight();
   }
 
   async function runPreflight() {
     if (!workspace.value.trim()) return;
+    scheduleSave(); // record workspace selection (path/last_used/last_agent)
     if (!runtimeId.value) {
       // S2.2.b: discover an existing workbench project runtime in this
       // workspace so preflight can match it (reuse/restart) instead of always
@@ -239,9 +263,15 @@ export const useRuntimeStore = defineStore("runtime", () => {
         launch.value.scope
       );
       preflight.value = report;
-      if (report.recommended_action === "resolve_conflict") {
-        // Skip the summary (Start would be disabled by the config gate) and go
-        // straight to conflict resolution (03 §三).
+      // Route to conflict resolution only when the runtime_conflict check
+      // itself failed. `recommended_action=resolve_conflict` is returned for
+      // ANY failed check (workspace/image/docker too), so routing on it alone
+      // deadlocks when the failure isn't a runtime conflict (no runtimes to
+      // list). Other failures go to the summary, which shows the real gate.
+      const runtimeConflictFailed = report.checks.some(
+        (c) => c.id === "runtime_conflict" && c.status === "fail"
+      );
+      if (runtimeConflictFailed) {
         status.value = "conflict";
         void loadConflicts();
       } else {
@@ -339,6 +369,96 @@ export const useRuntimeStore = defineStore("runtime", () => {
     providerInFlight.value = null;
   }
 
+  // --- S2.4.a: history persistence (02 §九) ---
+
+  async function loadHistory() {
+    try {
+      const h = await ipc.loadHistory();
+      history.value = h;
+      historyRevision.value = h.revision;
+    } catch {
+      history.value = { schema_version: 1, revision: 0, workspaces: [] };
+      historyRevision.value = 0;
+    }
+  }
+
+  /** Build a patch for the active workspace (runtime ref + tab layout). Other
+   * workspaces on disk are preserved by the backend merge (02 §九). */
+  function buildPatch(): HistoryPatch {
+    const tabsRecord = tabs.value.map((t, i) => ({
+      tab_id: t.tabId,
+      agent: t.agent,
+      title: t.title,
+      position: i,
+    }));
+    const activeAgent =
+      tabs.value.find((t) => t.tabId === activeTabId.value)?.agent ?? launch.value.agent;
+    const rec: WorkspaceRecord = {
+      path: workspace.value.trim(),
+      last_used_at: new Date().toISOString(),
+      pinned: false,
+      last_agent: activeAgent,
+      runtime: lastRuntimeRef.value,
+      layout: { active_tab_id: activeTabId.value, tabs: tabsRecord },
+    };
+    return { workspaces: [rec] };
+  }
+
+  /** Debounce saves so rapid tab/layout changes coalesce. */
+  function scheduleSave() {
+    if (!workspace.value.trim()) return;
+    if (saveTimer !== null) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      saveTimer = null;
+      void doSave(3);
+    }, 300);
+  }
+
+  async function doSave(retries: number) {
+    if (!workspace.value.trim()) return;
+    const patch = buildPatch();
+    try {
+      const newRev = await ipc.saveHistory(historyRevision.value, patch);
+      historyRevision.value = newRev;
+    } catch (e) {
+      const err = e as WorkbenchError;
+      if (err?.code === "WB_ERR_HISTORY_CONFLICT" && retries > 0) {
+        // Another window wrote first: reload, adopt the new revision, retry.
+        try {
+          const fresh = await ipc.loadHistory();
+          history.value = fresh;
+          historyRevision.value = fresh.revision;
+        } catch {
+          return; // reload failed; best-effort, drop this save
+        }
+        void doSave(retries - 1);
+      }
+      // other error: best-effort, give up this save
+    }
+  }
+
+  /** Select a recent workspace from history: restore its last launch config
+   * (image/network/scope/agent) + runtime ref (02 §六 priority: the workspace's
+   * last confirmed config beats the built-in default), then preflight. This
+   * makes preflight match the existing runtime (reuse/restart) instead of
+   * spurious-conflicting with the default image. */
+  function selectRecentWorkspace(path: string) {
+    const rec = (history.value?.workspaces ?? []).find((w) => w.path === path);
+    if (rec) {
+      if (rec.runtime) {
+        launch.value.image = rec.runtime.image;
+        launch.value.network = rec.runtime.network as LaunchConfig["network"];
+        launch.value.scope = rec.runtime.scope as LaunchConfig["scope"];
+        lastRuntimeRef.value = rec.runtime;
+      }
+      if (rec.last_agent) {
+        launch.value.agent = rec.last_agent as LaunchAgent;
+      }
+    }
+    workspace.value = path;
+    void runPreflight();
+  }
+
   /** List workbench-owned runtimes in the workspace (conflict resolution). */
   async function loadConflicts() {
     conflictError.value = null;
@@ -402,6 +522,12 @@ export const useRuntimeStore = defineStore("runtime", () => {
 
   /** Build the 4 fixed tabs and open the initial agent's tab (runtime ready). */
   function initTabs(initialAgent: LaunchAgent) {
+    lastRuntimeRef.value = {
+      runtime_id: runtimeId.value,
+      image: launch.value.image,
+      network: launch.value.network,
+      scope: launch.value.scope,
+    };
     tabs.value = AGENT_ORDER.map((agent) => ({
       tabId: uuid(),
       agent,
@@ -416,6 +542,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       void openTab(initial.tabId);
     }
     status.value = "ready";
+    scheduleSave();
   }
 
   function findTab(tabId: string): Tab | undefined {
@@ -433,6 +560,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     tab.sessionState = "starting";
     tab.exit = null;
     activeTabId.value = tabId;
+    scheduleSave();
   }
 
   /** Activate a tab; idle tabs are opened on first activation. */
@@ -441,6 +569,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     if (!tab) return;
     activeTabId.value = tabId;
     if (tab.sessionState === "idle") openTab(tabId);
+    scheduleSave();
   }
 
   /** Reopen an exited/failed/disconnected tab with a fresh session. */
@@ -631,6 +760,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
     providerStatuses,
     providerError,
     providerInFlight,
+    history,
+    historyRevision,
+    recentWorkspaces,
     negotiate,
     pickAndPinCli,
     pickWorkspace,
@@ -658,6 +790,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     refreshRuntime,
     loadProviderStatus,
     clearProviderStatuses,
+    loadHistory,
+    selectRecentWorkspace,
     loadConflicts,
     stopConflictRuntime,
     removeConflictRuntime,

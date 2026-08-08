@@ -6,12 +6,14 @@
 
 pub mod cli;
 pub mod error;
+pub mod history;
 pub mod pty;
 pub mod runtime;
 pub mod session;
 pub mod settings;
 
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities};
+use history::{load_history, save_history};
 use runtime::{
     build_image, cancel_build, cancel_runtime_start, get_provider_status, list_runtimes,
     remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_runtime,
@@ -45,6 +47,8 @@ pub fn run() {
             list_runtimes,
             remove_runtime,
             get_provider_status,
+            load_history,
+            save_history,
             build_image,
             cancel_build,
         ])

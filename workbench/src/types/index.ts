@@ -200,6 +200,47 @@ export interface ProviderStatus {
   observed_at: string;
 }
 
+// --- S2.4.a: workbench history (02 §九.2 subset) ---
+
+export interface RuntimeRef {
+  runtime_id: string;
+  image: string;
+  network: string;
+  scope: string;
+}
+
+export interface TabRecord {
+  tab_id: string;
+  agent: Agent;
+  title: string;
+  position: number;
+}
+
+export interface Layout {
+  active_tab_id: string | null;
+  tabs: TabRecord[];
+}
+
+export interface WorkspaceRecord {
+  path: string;
+  last_used_at: string;
+  pinned: boolean;
+  last_agent: string;
+  runtime: RuntimeRef | null;
+  layout: Layout | null;
+}
+
+/** Patch a window submits to save_history: workspaces to upsert by path. */
+export interface HistoryPatch {
+  workspaces: WorkspaceRecord[];
+}
+
+export interface WorkbenchHistory {
+  schema_version: number;
+  revision: number;
+  workspaces: WorkspaceRecord[];
+}
+
 export type LaunchAgent = "claude" | "codex" | "bash" | "cc-switch";
 
 export interface LaunchConfig {

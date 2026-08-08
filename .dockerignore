@@ -28,3 +28,11 @@ README.md
 skills-lock.json
 .project
 tasks/
+# Heavy build artifacts not needed in the image (Dockerfile is for the AISC
+# runtime container, not the Workbench GUI). ** matches at any depth.
+**/node_modules/
+**/target/
+**/dist/
+.venv/
+**/.venv/
+workbench/src-tauri/gen/
