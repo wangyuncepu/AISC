@@ -67,3 +67,4 @@ tasks/
 
 # Backup / temp artefact clutter
 *.bak
+workbench/src-tauri/binaries/

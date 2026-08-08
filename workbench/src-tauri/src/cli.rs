@@ -248,6 +248,8 @@ pub enum CandidateSource {
     #[serde(rename = "path")]
     PathEnv,
     Platform,
+    /// Bundled CLI shipped with the Workbench (S4.1.a).
+    Sidecar,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -268,11 +270,15 @@ pub struct DiscoveryReport {
     pub error: Option<WorkbenchError>,
 }
 
-/// Enumerate candidate CLI paths in priority order (02 §四.3):
-/// explicit arg > saved pin > process PATH > platform known locations.
-/// Dedups by canonical path. Pure (does not validate executability/version).
+/// Enumerate candidate CLI paths in priority order (02 §四.3 + S4.1.a):
+/// explicit arg > saved pin > bundled sidecar > process PATH > platform known
+/// locations. Dedups by canonical path. Pure (does not validate
+/// executability/version).
 pub fn enumerate_candidates(explicit: Option<&Path>, saved: Option<&Path>) -> Vec<(PathBuf, CandidateSource)> {
     let mut extra: Vec<(PathBuf, CandidateSource)> = Vec::new();
+    if let Some(p) = sidecar_candidate() {
+        extra.push((p, CandidateSource::Sidecar));
+    }
     if let Some(p) = path_candidate() {
         extra.push((p, CandidateSource::PathEnv));
     }
@@ -280,6 +286,41 @@ pub fn enumerate_candidates(explicit: Option<&Path>, saved: Option<&Path>) -> Ve
         extra.push((p, CandidateSource::Platform));
     }
     enumerate_with(explicit, saved, &extra)
+}
+
+/// Bundled CLI sidecar path (S4.1.a). Tauri `bundle.externalBin` places the
+/// sidecar relative to the app resources; dev builds have no sidecar (None).
+fn sidecar_candidate() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    sidecar_candidate_in(exe.parent()?)
+}
+
+/// Pure lookup for tests: sidecar next to *exe_dir* with the target-triple name.
+fn sidecar_candidate_in(exe_dir: &Path) -> Option<PathBuf> {
+    let name = format!("aisc-{}", target_triple());
+    let candidates = [
+        exe_dir.join(&name),
+        exe_dir.join(format!("{name}.exe")),
+    ];
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Target triple of this Workbench build (matches the sidecar name suffix).
+fn target_triple() -> &'static str {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    { return "x86_64-unknown-linux-gnu"; }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    { return "aarch64-unknown-linux-gnu"; }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    { return "aarch64-apple-darwin"; }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    { return "x86_64-apple-darwin"; }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    { return "x86_64-pc-windows-msvc"; }
+    #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+    { return "aarch64-pc-windows-msvc"; }
+    #[allow(unreachable_code)]
+    "unknown-unknown"
 }
 
 fn enumerate_with(
@@ -674,6 +715,21 @@ fn config_dir(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
         .map_err(|e| WorkbenchError::settings_error().with_detail(format!("config dir: {e}")))
 }
 
+/// Process-arg `--aisc-cli` value (S4.1.a). Managed as Tauri state so
+/// negotiate/discover can outrank the saved pin without re-parsing argv.
+#[derive(Default, Clone)]
+pub struct CliArg(pub std::sync::Arc<std::sync::Mutex<Option<String>>>);
+
+/// Resolve the explicit CLI path: `--aisc-cli` process arg first, else the
+/// per-invocation `explicit_path` command argument.
+pub fn explicit_cli_path(app: &AppHandle, explicit_path: Option<String>) -> Option<PathBuf> {
+    let from_arg = app
+        .try_state::<CliArg>()
+        .and_then(|s| s.0.lock().ok().and_then(|g| g.clone()))
+        .map(PathBuf::from);
+    from_arg.or_else(|| explicit_path.map(PathBuf::from))
+}
+
 #[tauri::command]
 pub async fn cli_discover(
     app: AppHandle,
@@ -682,7 +738,7 @@ pub async fn cli_discover(
     let dir = config_dir(&app)?;
     let settings = Settings::load(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
     let saved = settings.aisc_cli_path().map(PathBuf::from);
-    let explicit = explicit_path.map(PathBuf::from);
+    let explicit = explicit_cli_path(&app, explicit_path);
 
     let raw = enumerate_candidates(explicit.as_deref(), saved.as_deref());
     let mut candidates = Vec::with_capacity(raw.len());
@@ -759,6 +815,10 @@ pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, 
     let dir = config_dir(&app)?;
     let settings = Settings::load(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
     let cancel = CancellationToken::new();
+    // `--aisc-cli` process arg outranks the saved pin (S4.1.a).
+    if let Some(explicit) = explicit_cli_path(&app, None) {
+        return Ok(negotiate(&explicit, cancel).await);
+    }
     if let Some(pin) = settings.aisc_cli_path() {
         return Ok(negotiate(Path::new(pin), cancel).await);
     }
@@ -780,6 +840,7 @@ pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, 
 mod tests {
     use super::*;
     use serde_json::json;
+    use tempfile::tempdir;
 
     fn caps(runtime: Option<&str>, session: Option<&str>, provider: Option<&str>, build: Option<&str>) -> Capabilities {
         Capabilities {
@@ -878,6 +939,41 @@ mod tests {
         let a = PathBuf::from("/x/aisc");
         let r = enumerate_with(Some(&a), Some(&a), &[]);
         assert_eq!(r.len(), 1);
+    }
+
+    #[test]
+    fn sidecar_priority_over_path_env() {
+        // S4.1.a: explicit > saved > sidecar > PATH > platform. enumerate_with
+        // takes the extras in order, so feeding sidecar first proves the order.
+        let explicit = PathBuf::from("/explicit/aisc");
+        let saved = PathBuf::from("/saved/aisc");
+        let extra = vec![
+            (PathBuf::from("/sidecar/aisc"), CandidateSource::Sidecar),
+            (PathBuf::from("/path/aisc"), CandidateSource::PathEnv),
+        ];
+        let r = enumerate_with(Some(&explicit), Some(&saved), &extra);
+        assert_eq!(r.len(), 4);
+        assert_eq!(r[0].1, CandidateSource::Explicit);
+        assert_eq!(r[1].1, CandidateSource::Saved);
+        assert_eq!(r[2].1, CandidateSource::Sidecar);
+        assert_eq!(r[3].1, CandidateSource::PathEnv);
+    }
+
+    #[test]
+    fn sidecar_lookup_finds_file_named_with_triple() {
+        let dir = tempdir().unwrap();
+        let triple = target_triple();
+        let name = format!("aisc-{triple}");
+        let file = dir.path().join(if cfg!(windows) { format!("{name}.exe") } else { name.clone() });
+        std::fs::write(&file, b"x").unwrap();
+        let found = sidecar_candidate_in(dir.path());
+        assert_eq!(found.as_deref(), Some(file.as_path()));
+    }
+
+    #[test]
+    fn sidecar_lookup_none_when_absent() {
+        let dir = tempdir().unwrap();
+        assert!(sidecar_candidate_in(dir.path()).is_none());
     }
 
     #[test]

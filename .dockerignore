@@ -36,3 +36,4 @@ tasks/
 .venv/
 **/.venv/
 workbench/src-tauri/gen/
+workbench/src-tauri/binaries/

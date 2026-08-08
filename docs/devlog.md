@@ -2,9 +2,20 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）
+## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4 S4.1.a
 
 ### 变更
+
+#### S4.1.a CLI sidecar 打包与分发基础（06-implementation-plan.md §六 S4.1；02 §四.3）
+
+- **PyInstaller CLI 独立二进制**：`packaging/aisc.spec`（onefile、console=True--CLI 是控制台工具，`session open` 经 PTY/ConPTY 需 console subsystem；piped spawn 用 CREATE_NO_WINDOW 防窗口闪现）+ `scripts/build-cli.sh`（linux/macos，TARGET_TRIPLE 命名）+ `scripts/build-cli.ps1`（windows）。产物 `aisc-<target-triple>`（Tauri externalBin 约定）。本地产物 10MB 单文件，`version --format json` envelope 正确。
+- **CI 矩阵**：`.github/workflows/cli-sidecar.yml`（workflow_dispatch + push develop/main 触发，paths 过滤 src/aisc/packaging/scripts/VERSION）--ubuntu/windows/macos 三平台 PyInstaller 构建 -> `actions/upload-artifact`（release 时供 Tauri bundle 使用）。
+- **Tauri sidecar 集成**：`tauri.conf.json` `bundle.externalBin: ["binaries/aisc"]`（Tauri 自动追加 target triple，Windows 自动 .exe）；`version` 0.1.0 -> **2.1.5-dev**（对齐 CLI VERSION，capability 协商兜底版本失配）。**手动路径解析**（不引 shell plugin，S3.2 原则）：`sidecar_candidate_in(exe_dir)` 查 exe 同目录 `aisc-<triple>`（含 .exe），`target_triple()` cfg 匹配。
+- **cli.rs discovery 候选序**：`explicit > saved pin > sidecar > PATH > platform`（02 §四.3 + S4.1.a；内置 CLI 优先于 pip/PATH 装的，用户显式 pin 仍可覆盖）；`CandidateSource::Sidecar`（TS CandidateSource 同步加 `"sidecar"`）。3 个新单测（sidecar 优先级于 PATH、查找、缺失）。
+- **`--aisc-cli` 启动 arg 接线**（S2.1 deferred）：main.rs 解析 `--aisc-cli <path>` -> lib.rs `run(cli_arg)` -> `.manage(CliArg)` managed state -> cli.rs `explicit_cli_path()` 在 negotiate/discover 优先（进程 arg > saved pin > sidecar）。
+- `.gitignore`：`workbench/src-tauri/binaries/`（sidecar 二进制 CI 生成，不提交）+ `.dockerignore` 同目录。
+- 验证：cargo 70 绿（59 lib +3 sidecar + 7 cli + 4 pty，零回归）；npm build 零错误；本机 PyInstaller 产物验证；dev 无 pin 启动（唯一候选 sidecar，capability 协商直接验证通过）；`npx tauri dev -- -- --aisc-cli <path>` 透传验证（`Running workbench --aisc-cli ...`，tauri CLI 双层 `--` 才透传 app args）。
+- gap（明确 deferral）：Windows NSIS 定制安装器（winget 引导装 Python/Docker/WebView2）-> S4.1.b；macOS pkg / Linux preinst -> S4.1.c；Docker 安装检测 UI -> S4.1.b；平台依赖文档完整版 -> S4.1.b/c。
 
 #### S3.3 可访问性（06-implementation-plan.md §六 S3.3；02 §十二；04 §九）- Phase 3 收尾
 
