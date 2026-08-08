@@ -34,6 +34,7 @@
 - **vendor/checksums.txt 刷新（前置修复）**：Dockerfile/entrypoint.sh 在 S0.4（f0877a5）修改后未重算哈希、`aisc-provider-inspect`/`aisc-session-wrapper` 从未录入，`artifact.py stage` 校验（release artifact 流程与本 CI staging 均依赖）全平台失败；`bash tools/vendor-refresh.sh` 重生成（DEVELOP_WIKI 维护要求）。
 - 验证：Fix B 单测 6/6 + features 55 绿，`tests.yml` Windows runner（3.11/3.12/3.13）全绿（线程分支）；本机 staging VERIFICATION PASSED（CI 同命令）；`nsis-installer.yml` 全链路绿——staging → `tauri build` → 静默 `/S` 安装 → 冒烟：`aisc.exe` 被发现（基名）→ `version` 返回 `bundle_version: 2.1.5-dev`（随装 bundle root 发现）→ `build --dry-run --events` 发出 build.start/build.plan（bundle 目录为构建上下文）→ SMOKE: PASSED。最终实机全流程（打开目录 → preflight → 构建镜像 → runtime start）待用户 Windows 实机验收（用该 run 的 `aisc-workbench-windows-nsis` artifact）。
 - gap（观察项，不在本次范围）：`runtime start` 卷挂载 `-v C:\...:/root/app` 依赖 Docker Desktop file-sharing（Windows 路径盘符/大小写语义）。
+- **修复（实机验收暴露，2026-08-08）**：安装新版后「选择工作区 → 下一步」报「未找到兼容的 AISC CLI」。根因：`negotiate_capabilities` 自动选中唯一合法候选但**从不写 pin**——`runtime_preflight` 等所有 runtime 命令只经 `session::resolve_pin` 取 CLI，全新安装协商通过后仍无 pin → preflight 直接 `cli_not_found`。叠加 Fix C：sidecar 基名可发现后安装版合法出现 2+ 候选（sidecar + PATH dev CLI），旧「恰好一个」门在 ≥2 时同样报 `cli_not_found`。修复（cli.rs `negotiate_capabilities`）：按优先级（S4.1.a sidecar > PATH > platform）取**第一个**合法候选并协商成功后**持久化为 pin**（镜像 `cli_pin` 语义），0 合法才报 `cli_not_found`。验证：NSIS CI run 31260617514（编译 + 冒烟）→ 实机复测。
 
 #### S4.1.a CLI sidecar 打包与分发基础（06-implementation-plan.md §六 S4.1；02 §四.3）
 
