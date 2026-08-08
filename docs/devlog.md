@@ -2,9 +2,31 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）
+## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）
 
 ### 变更
+
+#### S4.1.b Windows NSIS 定制安装器（06-implementation-plan.md §六 S4.1）
+
+- **定制 NSIS 模板**：`workbench/src-tauri/nsis/installer.nsi`（tauri-bundler 2.9.4 默认模板复制 + S4.1.b 扩展；Handlebars 模板由 bundler 渲染）。`tauri.conf.json` 加 `bundle.windows.nsis.template`（installMode currentUser、languages English）+ `webviewInstallMode {type: downloadBootstrapper}`（WebView2 由 Tauri 原生 section 自动处理）。
+- **Environment Check 页**（`PageDepsCheck`，StartMenu 页后 INSTFILES 前）：nsDialogs 检测 Docker Desktop（`%LOCALAPPDATA%\Docker\Docker Desktop\Docker Desktop.exe` + HKLM 注册表兜底）、Python 3（`HKLM/HKCU \SOFTWARE\[WOW6432Node\]Python\PythonCore`）、winget（`where winget`）、WebView2（仅提示，由安装器处理）。按钮：**Install missing dependencies** / **Skip** / **Start Docker Desktop**（Docker 已装时）/ **Open Microsoft Store**（winget 缺失时，App Installer 9NBLGGH4NNS1）。
+- **`Section Dependencies`**（EarlyChecks 后、WebView2 前）：用户选择安装时经 winget 安装 Docker Desktop（`Docker.DockerDesktop`）+ Python 3.12（`Python.Python.3.12`），`--accept-source-agreements --accept-package-agreements`，UAC 提权 = 用户授权环节（非静默）。安装失败不阻断（DetailPrint 提示手动装），Workbench 首启 preflight 兜底报缺。winget 缺失时跳过 + 提示 Store 引导。
+- **`nsis/README.md`**：模板来源（tauri-bundler 2.9.4）+ 升级维护说明（diff 默认模板重放 3 处 S4.1.b 扩展，防模板漂移）。
+- **CI**：`.github/workflows/nsis-installer.yml`（新）--windows-2022 runner：setup-python + PyInstaller 构建 CLI sidecar -> 移入 `workbench/src-tauri/binaries/aisc-x86_64-pc-windows-msvc.exe`（externalBin 命名）-> setup-node + npm ci -> `npm run tauri build -- --bundles nsis`（tauri 自动下载 NSIS 3.11 + nsis_tauri_utils 插件，零手动 NSIS 配置）-> 产物 `*-setup.exe` upload-artifact。触发：workflow_dispatch + push develop/main paths（tauri.conf/nsis/workflow/src.aisc/packaging）。
+- **`docs/platform-windows.md`**（新）：Windows 平台依赖表 + 安装器行为说明 + 实机验证清单（06 §七 S4.1「Windows 检查 WebView2/Docker Desktop」文档要求）。
+- 验证：cargo 70 绿（tauri.conf schema 校验通过，`webviewInstallMode` 是 internally-tagged enum 需 `{type: ...}` 形状）；npm build 零错误；NSIS 模板编译 + winget 检测逻辑由 CI Windows runner 验证（本机 Linux 无 makensis）；实机手测清单见 `docs/platform-windows.md`（用户 Windows 实机）。
+- gap（明确 deferral）：macOS pkg / Linux preinst 安装体验 -> S4.1.c；签名/公证 -> S4.2 发布门；安装器多语言（zh-CN 等，模板已留结构）-> 后续；winget 安装进度显示（当前 DetailPrint 文本）-> 后续。
+
+#### S4.1.a CLI sidecar 打包与分发基础（06-implementation-plan.md §六 S4.1；02 §四.3）
+
+- **PyInstaller CLI 独立二进制**：`packaging/aisc.spec`（onefile、console=True--CLI 是控制台工具，`session open` 经 PTY/ConPTY 需 console subsystem；piped spawn 用 CREATE_NO_WINDOW 防窗口闪现）+ `scripts/build-cli.sh`（linux/macos，TARGET_TRIPLE 命名）+ `scripts/build-cli.ps1`（windows）。产物 `aisc-<target-triple>`（Tauri externalBin 约定）。本地产物 10MB 单文件，`version --format json` envelope 正确。
+- **CI 矩阵**：`.github/workflows/cli-sidecar.yml`（workflow_dispatch + push develop/main 触发，paths 过滤 src/aisc/packaging/scripts/VERSION）--ubuntu/windows/macos 三平台 PyInstaller 构建 -> `actions/upload-artifact`（release 时供 Tauri bundle 使用）。
+- **Tauri sidecar 集成**：`tauri.conf.json` `bundle.externalBin: ["binaries/aisc"]`（Tauri 自动追加 target triple，Windows 自动 .exe）；`version` 0.1.0 -> **2.1.5-dev**（对齐 CLI VERSION，capability 协商兜底版本失配）。**手动路径解析**（不引 shell plugin，S3.2 原则）：`sidecar_candidate_in(exe_dir)` 查 exe 同目录 `aisc-<triple>`（含 .exe），`target_triple()` cfg 匹配。
+- **cli.rs discovery 候选序**：`explicit > saved pin > sidecar > PATH > platform`（02 §四.3 + S4.1.a；内置 CLI 优先于 pip/PATH 装的，用户显式 pin 仍可覆盖）；`CandidateSource::Sidecar`（TS CandidateSource 同步加 `"sidecar"`）。3 个新单测（sidecar 优先级于 PATH、查找、缺失）。
+- **`--aisc-cli` 启动 arg 接线**（S2.1 deferred）：main.rs 解析 `--aisc-cli <path>` -> lib.rs `run(cli_arg)` -> `.manage(CliArg)` managed state -> cli.rs `explicit_cli_path()` 在 negotiate/discover 优先（进程 arg > saved pin > sidecar）。
+- `.gitignore`：`workbench/src-tauri/binaries/`（sidecar 二进制 CI 生成，不提交）+ `.dockerignore` 同目录。
+- 验证：cargo 70 绿（59 lib +3 sidecar + 7 cli + 4 pty，零回归）；npm build 零错误；本机 PyInstaller 产物验证；dev 无 pin 启动（唯一候选 sidecar，capability 协商直接验证通过）；`npx tauri dev -- -- --aisc-cli <path>` 透传验证（`Running workbench --aisc-cli ...`，tauri CLI 双层 `--` 才透传 app args）。
+- gap（明确 deferral）：Windows NSIS 定制安装器（winget 引导装 Python/Docker/WebView2）-> S4.1.b；macOS pkg / Linux preinst -> S4.1.c；Docker 安装检测 UI -> S4.1.b；平台依赖文档完整版 -> S4.1.b/c。
 
 #### S3.3 可访问性（06-implementation-plan.md §六 S3.3；02 §十二；04 §九）- Phase 3 收尾
 

@@ -90,7 +90,7 @@ export interface CapabilityReport {
   error: WorkbenchError | null;
 }
 
-export type CandidateSource = "explicit" | "saved" | "path" | "platform";
+export type CandidateSource = "explicit" | "saved" | "path" | "platform" | "sidecar";
 
 export interface Candidate {
   path: string;

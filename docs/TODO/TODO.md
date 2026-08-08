@@ -62,7 +62,9 @@
 
 
 # 20260806
+- [x] Workbench S4.1.b：Windows NSIS 定制安装器（依赖检测 + winget 引导装 Docker/Python/WebView2），CI 构建验证 + 实机手测清单见 docs/platform-windows.md
 - [ ] 临时模式下，cc-switch不可用
 - [ ] aisc run命令解耦，引导混乱，用户感到费解
 - [ ] agent加上Pi/opencode
 - [ ] aisc cli的更新命令优化
+- [ ] 预配置的deepseek配置项错误，修复

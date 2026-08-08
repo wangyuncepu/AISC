@@ -12,7 +12,7 @@ pub mod runtime;
 pub mod session;
 pub mod settings;
 
-use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities};
+use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use history::{load_history, save_history};
 use runtime::{
     build_image, cancel_build, cancel_runtime_start, get_provider_status, list_runtimes,
@@ -22,9 +22,11 @@ use runtime::{
 use session::{close_session, open_session, resize_session, write_session, SessionRegistry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run(cli_arg: Option<String>) {
+    let cli_arg_state = CliArg(std::sync::Arc::new(std::sync::Mutex::new(cli_arg)));
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(cli_arg_state)
         .manage(SessionRegistry::default())
         .manage(StartOp::default())
         .manage(BuildOp::default())

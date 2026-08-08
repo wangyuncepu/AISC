@@ -1,0 +1,84 @@
+name: NSIS installer build
+
+# Builds the Windows NSIS installer on a Windows runner. The custom
+# installer.nsi template (dependency check + winget install) is rendered and
+# compiled here - local Linux dev cannot validate it.
+#
+# Prerequisite: the AISC CLI sidecar binary for the Windows target must be
+# present in workbench/src-tauri/binaries/ (it is built by cli-sidecar.yml
+# and dropped in by the release process; this job builds it from source).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop, main]
+    paths:
+      - 'workbench/src-tauri/tauri.conf.json'
+      - 'workbench/src-tauri/nsis/**'
+      - '.github/workflows/nsis-installer.yml'
+      - '.github/workflows/cli-sidecar.yml'
+      - 'src/aisc/**'
+      - 'packaging/**'
+      - 'scripts/build-cli.*'
+      - 'VERSION'
+      - 'pyproject.toml'
+
+jobs:
+  nsis:
+    name: NSIS installer (windows x86_64)
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install CLI build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -e .
+
+      - name: Build CLI sidecar
+        shell: pwsh
+        run: |
+          $env:TARGET_TRIPLE = "x86_64-pc-windows-msvc"
+          scripts/build-cli.ps1
+
+      - name: Drop sidecar into externalBin dir
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path workbench/src-tauri/binaries | Out-Null
+          Copy-Item dist/aisc-x86_64-pc-windows-msvc.exe workbench/src-tauri/binaries/aisc-x86_64-pc-windows-msvc.exe
+          Get-ChildItem workbench/src-tauri/binaries
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: workbench/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: workbench
+        run: npm ci
+
+      - name: Build NSIS installer (tauri downloads NSIS 3.11 automatically)
+        working-directory: workbench
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Verify installer artifact
+        shell: pwsh
+        run: |
+          Get-ChildItem workbench/src-tauri/target/release/bundle/nsis/*-setup.exe | ForEach-Object {
+            Write-Host "artifact: $($_.FullName) ($($_.Length) bytes)"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aisc-workbench-windows-nsis
+          path: workbench/src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
