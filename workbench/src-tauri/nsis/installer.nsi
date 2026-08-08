@@ -748,14 +748,14 @@ LangString DEP_FINISH_RUN ${LANG_ENGLISH} "Start AISC Workbench"
 LangString DEP_FINISH_RUN ${LANG_SIMPCHINESE} "启动 AISC Workbench"
 LangString DEP_DETAIL_NO_WINGET ${LANG_ENGLISH} "winget not found - install Microsoft App Installer from the Microsoft Store and run this installer again, or install Docker Desktop and Python manually."
 LangString DEP_DETAIL_NO_WINGET ${LANG_SIMPCHINESE} "未找到 winget - 请从 Microsoft Store 安装应用安装程序（App Installer）后重新运行本安装程序，或手动安装 Docker Desktop 和 Python。"
-LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_ENGLISH} "Installing Docker Desktop via winget (progress shows in the log below)..."
-LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Docker Desktop（进度见下方日志）……"
+LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_ENGLISH} "Installing Docker Desktop via winget (this may take a few minutes)..."
+LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Docker Desktop（可能需要几分钟）……"
 LangString DEP_DETAIL_DOCKER_OK ${LANG_ENGLISH} "Docker Desktop installed."
 LangString DEP_DETAIL_DOCKER_OK ${LANG_SIMPCHINESE} "Docker Desktop 已安装。"
 LangString DEP_DETAIL_DOCKER_FAIL ${LANG_ENGLISH} "Docker Desktop install failed (exit code $0). You can install it manually from https://www.docker.com/products/docker-desktop/ or start Docker Desktop later from the Start menu."
 LangString DEP_DETAIL_DOCKER_FAIL ${LANG_SIMPCHINESE} "Docker Desktop 安装失败（退出码 $0）。可手动从 https://www.docker.com/products/docker-desktop/ 安装，或稍后从开始菜单启动 Docker Desktop。"
-LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_ENGLISH} "Installing Python 3.12 via winget (progress shows in the log below)..."
-LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Python 3.12（进度见下方日志）……"
+LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_ENGLISH} "Installing Python 3.12 via winget (this may take a few minutes)..."
+LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Python 3.12（可能需要几分钟）……"
 LangString DEP_DETAIL_PYTHON_OK ${LANG_ENGLISH} "Python 3.12 installed."
 LangString DEP_DETAIL_PYTHON_OK ${LANG_SIMPCHINESE} "Python 3.12 已安装。"
 LangString DEP_DETAIL_PYTHON_FAIL ${LANG_ENGLISH} "Python 3.12 install failed (exit code $0). You can install it manually from https://www.python.org/downloads/"
@@ -846,12 +846,15 @@ Section Dependencies
 
   ${If} $DepsDockerInstalled = 0
     DetailPrint "$(DEP_DETAIL_DOCKER_INSTALLING)"
-    ; Hidden console: nsExec runs winget without a window and streams its
-    ; output into the install log (ExecWait would pop up a console window).
-    nsExec::ExecToLog '"winget" install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements'
+    ; Hidden console: nsExec runs winget without a window (ExecWait would
+    ; pop up a console window). winget emits UTF-8 when its stdout is a
+    ; pipe, which nsExec misdecodes as the ANSI codepage in the install log
+    ; (mojibake) - so capture the output silently and rely on our own status
+    ; lines. winget also exits non-zero for "already installed" / "no action
+    ; needed"; re-detect the real state instead of trusting the exit code.
+    nsExec::ExecToStack '"winget" install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements'
     Pop $0 ; winget exit code
-    ; winget exits non-zero for "already installed" / "no action needed";
-    ; re-detect the real state instead of trusting the exit code.
+    Pop $1 ; winget output (UTF-8 piped bytes - not displayable as-is)
     Call CheckDocker
     ${If} $DepsDockerInstalled = 1
       DetailPrint "$(DEP_DETAIL_DOCKER_OK)"
@@ -862,8 +865,9 @@ Section Dependencies
 
   ${If} $DepsPythonInstalled = 0
     DetailPrint "$(DEP_DETAIL_PYTHON_INSTALLING)"
-    nsExec::ExecToLog '"winget" install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements'
+    nsExec::ExecToStack '"winget" install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements'
     Pop $0 ; winget exit code
+    Pop $1 ; winget output (UTF-8 piped bytes - not displayable as-is)
     Call CheckPython
     ${If} $DepsPythonInstalled = 1
       DetailPrint "$(DEP_DETAIL_PYTHON_OK)"

@@ -18,9 +18,11 @@ default template with S4.1.b additions:
   `PythonCore\<version>\InstallPath` subkeys (HKLM 64/32-bit views + HKCU)
   and verifies `python.exe` exists - the old check read the empty default
   value of `PythonCore` itself and never matched. winget runs through
-  `nsExec::ExecToLog` (hidden console, output streams into the install log;
-  `ExecWait` popped a console window), and a non-zero exit is verified by
-  re-running the check because winget exits non-zero for "already installed".
+  `nsExec::ExecToStack` (hidden console - `ExecWait` popped a console
+  window, and `ExecToLog` misdecodes winget's UTF-8 piped output as the ANSI
+  codepage, producing mojibake in the log), so the wizard shows its own
+  localized status lines instead; a non-zero exit is verified by re-running
+  the check because winget exits non-zero for "already installed".
 
 Source: `https://crates.io/crates/tauri-bundler` 2.9.4,
 `src/bundle/windows/nsis/installer.nsi`.
