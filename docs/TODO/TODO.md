@@ -64,3 +64,5 @@
 # 20260806
 - [ ] 临时模式下，cc-switch不可用
 - [ ] aisc run命令解耦，引导混乱，用户感到费解
+- [ ] agent加上Pi/opencode
+- [ ] aisc cli的更新命令优化
