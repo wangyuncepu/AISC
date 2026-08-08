@@ -6,13 +6,19 @@
 
 pub mod cli;
 pub mod error;
+pub mod history;
 pub mod pty;
 pub mod runtime;
 pub mod session;
 pub mod settings;
 
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities};
-use runtime::{start_runtime, stop_runtime};
+use history::{load_history, save_history};
+use runtime::{
+    build_image, cancel_build, cancel_runtime_start, get_provider_status, list_runtimes,
+    remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_runtime,
+    stop_runtime, BuildOp, StartOp,
+};
 use session::{close_session, open_session, resize_session, write_session, SessionRegistry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -21,6 +27,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(SessionRegistry::default())
+        .manage(StartOp::default())
+        .manage(BuildOp::default())
         .invoke_handler(tauri::generate_handler![
             cli_discover,
             cli_pin,
@@ -32,6 +40,17 @@ pub fn run() {
             close_session,
             start_runtime,
             stop_runtime,
+            runtime_preflight,
+            runtime_inspect,
+            runtime_restart,
+            cancel_runtime_start,
+            list_runtimes,
+            remove_runtime,
+            get_provider_status,
+            load_history,
+            save_history,
+            build_image,
+            cancel_build,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

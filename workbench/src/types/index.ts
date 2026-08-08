@@ -11,11 +11,13 @@ export interface RuntimeConfig {
 }
 
 export type RuntimeState =
+  | "unknown"
+  | "not_found"
   | "starting"
   | "running"
+  | "stopping"
   | "stopped"
-  | "not_found"
-  | "unknown";
+  | "removing";
 
 export interface RuntimeInfo {
   runtime_id: string;
@@ -139,4 +141,156 @@ export interface RuntimeStartResult {
 export interface SessionRequest {
   runtimeId: string;
   sessionId: string;
+}
+
+// --- S2.1.a: preflight + inspect ---
+
+export type CheckStatus = "pass" | "warn" | "fail";
+
+export interface PreflightCheck {
+  id: string; // docker | workspace | image | network | runtime_conflict
+  status: CheckStatus;
+  error_code: string | null;
+  detail: string | null;
+}
+
+export type RecommendedAction = "start" | "reuse" | "restart" | "resolve_conflict";
+
+export interface PreflightReport {
+  spec: unknown;
+  checks: PreflightCheck[];
+  can_start: boolean;
+  recommended_action: RecommendedAction;
+  matching_runtime_id: string | null;
+  conflicts: unknown;
+  observed_at: string;
+}
+
+/** `aisc runtime inspect/list/stop/restart/remove` snapshot (05 §5.3-5.5).
+ * Mirrors the CLI RuntimeSnapshot.to_dict(); no `ready` field (that is on the
+ * start payload only). */
+export interface RuntimeSnapshot {
+  runtime_id: string;
+  state: RuntimeState;
+  config: RuntimeConfig;
+  owner: string;
+  config_fingerprint: string;
+  container_name: string;
+  container_id: string;
+  registry_state: string;
+  observed_at: string;
+  stale: boolean;
+}
+
+/** `aisc runtime list` envelope data (05 §5.3). */
+export interface RuntimeListResult {
+  runtimes: RuntimeSnapshot[];
+  observed_at: string;
+}
+
+/** `aisc provider current` snapshot (05 §七). Secret-free: routing/auth only.
+ * `agent` is claude | codex (bash/cc-switch are not applicable). */
+export interface ProviderStatus {
+  runtime_id: string;
+  agent: Agent;
+  provider_id: string;
+  provider_name: string;
+  route_mode: string; // official-direct | cc-switch-proxy | unknown
+  auth_status: string; // configured | login_required | not_configured | unknown
+  observed_at: string;
+}
+
+// --- S2.4.a: workbench history (02 §九.2 subset) ---
+
+export interface RuntimeRef {
+  runtime_id: string;
+  image: string;
+  network: string;
+  scope: string;
+}
+
+export interface TabRecord {
+  tab_id: string;
+  agent: Agent;
+  title: string;
+  position: number;
+}
+
+export interface Layout {
+  active_tab_id: string | null;
+  tabs: TabRecord[];
+}
+
+export interface WorkspaceRecord {
+  path: string;
+  last_used_at: string;
+  pinned: boolean;
+  last_agent: string;
+  runtime: RuntimeRef | null;
+  layout: Layout | null;
+}
+
+/** Patch a window submits to save_history: workspaces to upsert by path. */
+export interface HistoryPatch {
+  workspaces: WorkspaceRecord[];
+}
+
+export interface WorkbenchHistory {
+  schema_version: number;
+  revision: number;
+  workspaces: WorkspaceRecord[];
+}
+
+export type LaunchAgent = "claude" | "codex" | "bash" | "cc-switch";
+
+export interface LaunchConfig {
+  agent: LaunchAgent;
+  image: string;
+  network: "direct" | "proxy";
+  scope: "project" | "temporary";
+}
+
+// --- S2.1.b: build events (05 §4.1) ---
+
+export interface BuildEvent {
+  protocol?: string;
+  command?: string;
+  run_id?: string;
+  seq?: number;
+  type: string; // build.start | build.plan | build.output | build.complete | build.failed | build.cancelled
+  ts?: string;
+  data?: Record<string, unknown>;
+}
+
+export type BuildStatus = "idle" | "building" | "complete" | "failed" | "cancelled";
+
+// --- S2.3.a: observability (04 §六.1) ---
+
+/** Runtime observation freshness quality (not a Runtime state). */
+export type Freshness = "fresh" | "stale" | "unknown";
+
+// --- S2.2.a: multi-tab (03 §五/§六) ---
+
+/** Per-tab session lifecycle. `idle` = never opened; the rest mirror SessionState. */
+export type TabSessionState = "idle" | SessionState;
+
+/** Minimal exit info shown on an exited/failed tab (reason + code only). */
+export interface TabExit {
+  reason: string;
+  exitCode: number | null;
+}
+
+/**
+ * A fixed agent tab (03 §六). `sessionId` is null while idle or after exit;
+ * the session state machine drives the binding (idle -> starting -> running ->
+ * exited/disconnected/failed). Tab identity persists for the workspace session;
+ * history persistence lands in S2.4.
+ */
+export interface Tab {
+  tabId: string;
+  agent: LaunchAgent;
+  title: string;
+  sessionId: string | null;
+  sessionState: TabSessionState;
+  exit: TabExit | null;
 }

@@ -1,14 +1,19 @@
 <script setup lang="ts">
 /**
- * Terminal component (S1.4): wires the S1.3 PTY data plane to xterm.js.
+ * Terminal component (S2.2.a): tab-scoped PTY view.
  *
- * - Opens a session via a Tauri Channel<PtyEvent> (channel created before the
- *   invoke, so no first-screen output is lost).
+ * - Each non-idle tab renders one Terminal instance; only the active tab is
+ *   visible (v-show in App.vue). Hidden tabs keep running (03 §六.8).
+ * - Watches the tab's `sessionId`; on change opens a session via a Tauri
+ *   Channel<PtyEvent> (channel created before the invoke, so no first-screen
+ *   output is lost - S1.3 invariant).
  * - Output events: base64 bytes -> Uint8Array -> term.write.
  * - onData: UTF-8 encode -> write_session (paste capped backend-side).
- * - ResizeObserver throttled -> fit -> resize_session (05 §9.2).
+ * - ResizeObserver throttled + re-fit when the tab becomes visible.
+ * - PTY Exit is the single terminal signal (03 §五.2); reported to the store
+ *   which merges duplicate terminate/exit results into one TabExit.
  */
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Channel } from "@tauri-apps/api/core";
@@ -17,8 +22,13 @@ import { useRuntimeStore } from "../../stores/runtime";
 import { closeSession, openSession, resizeSession, writeSession } from "../../lib/ipc";
 import type { PtyEvent } from "../../types";
 
-const container = ref<HTMLDivElement | null>(null);
+const props = defineProps<{ tabId: string }>();
 const store = useRuntimeStore();
+
+const container = ref<HTMLDivElement | null>(null);
+const tab = computed(() => store.tabs.find((t) => t.tabId === props.tabId));
+const sessionId = computed(() => tab.value?.sessionId ?? null);
+const visible = computed(() => store.activeTabId === props.tabId);
 
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
@@ -27,8 +37,6 @@ let resizeTimer: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let closed = false;
 
-const AGENT = "bash";
-
 function b64ToUint8(b64: string): Uint8Array {
   const bin = atob(b64);
   const u8 = new Uint8Array(bin.length);
@@ -36,7 +44,9 @@ function b64ToUint8(b64: string): Uint8Array {
   return u8;
 }
 
-function openPty(sessionId: string) {
+function openPty(sid: string) {
+  const agent = tab.value?.agent;
+  if (!agent || !store.runtimeId) return;
   channel = new Channel<PtyEvent>();
   channel.onmessage = (ev) => {
     if (!term) return;
@@ -46,23 +56,27 @@ function openPty(sessionId: string) {
         break;
       case "exit":
         closed = true;
-        term.write(`\r\n\x1b[90m[Session exited: ${ev.reason}${ev.exitCode !== null ? `, code ${ev.exitCode}` : ""}]\x1b[0m\r\n`);
-        store.onSessionExited();
+        term.write(
+          `\r\n\x1b[90m[Session exited: ${ev.reason}${ev.exitCode !== null ? `, code ${ev.exitCode}` : ""}]\x1b[0m\r\n`
+        );
+        store.onTabSessionExit(props.tabId, ev.reason, ev.exitCode);
         break;
       case "error":
         term.write(`\r\n\x1b[31m[Session error: ${ev.code} ${ev.message}]\x1b[0m\r\n`);
-        store.onSessionExited();
+        store.onTabOpenFail(props.tabId);
         break;
     }
   };
-  openSession(store.runtimeId, sessionId, AGENT, channel).catch((e) => {
-    term?.write(`\r\n\x1b[31m[open_session failed: ${e?.code ?? e}]\x1b[0m\r\n`);
-    store.onSessionExited();
-  });
+  openSession(store.runtimeId, sid, agent, channel)
+    .then(() => store.onTabOpenOk(props.tabId))
+    .catch((e) => {
+      term?.write(`\r\n\x1b[31m[open_session failed: ${e?.code ?? e}]\x1b[0m\r\n`);
+      store.onTabOpenFail(props.tabId);
+    });
 }
 
 function closePty(sid?: string) {
-  const target = sid ?? store.sessionId;
+  const target = sid ?? sessionId.value;
   if (target && !closed) {
     closed = true;
     closeSession(target).catch(() => {});
@@ -82,9 +96,8 @@ function doResize() {
   if (!term || !fit || closed) return;
   try {
     fit.fit();
-    if (store.sessionId) {
-      resizeSession(store.sessionId, term.cols, term.rows).catch(() => {});
-    }
+    const sid = sessionId.value;
+    if (sid) resizeSession(sid, term.cols, term.rows).catch(() => {});
   } catch {
     /* container not laid out yet */
   }
@@ -100,22 +113,27 @@ onMounted(() => {
   fit = new FitAddon();
   term.loadAddon(fit);
   term.open(container.value!);
-  term.writeln("AISC Workbench — 输入工作区并点击「启动 Bash」。");
+  term.writeln("AISC Workbench 终端就绪。");
   fit.fit();
 
   term.onData((data) => {
-    if (store.sessionId && !closed) {
-      writeSession(store.sessionId, Array.from(new TextEncoder().encode(data))).catch(() => {});
+    const sid = sessionId.value;
+    if (sid && !closed) {
+      writeSession(sid, Array.from(new TextEncoder().encode(data))).catch(() => {});
     }
   });
 
   resizeObserver = new ResizeObserver(scheduleResize);
   if (container.value) resizeObserver.observe(container.value);
-  // Also re-fit when the window resizes (ResizeObserver may not fire for it).
   window.addEventListener("resize", scheduleResize);
 
+  // Re-fit when this tab becomes the active (visible) view.
+  watch(visible, (v) => {
+    if (v) setTimeout(doResize, 0);
+  });
+
   watch(
-    () => store.sessionId,
+    sessionId,
     (sid, oldSid) => {
       if (oldSid && sid !== oldSid) closePty(oldSid);
       if (sid) {
@@ -123,7 +141,8 @@ onMounted(() => {
         openPty(sid);
         setTimeout(doResize, 0); // fit after layout settles
       }
-    }
+    },
+    { immediate: true }
   );
 });
 

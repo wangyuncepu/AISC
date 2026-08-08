@@ -107,6 +107,28 @@ impl WorkbenchError {
         )
     }
 
+    /// history.json read/write failed (non-conflict). History is best-effort:
+    /// the app keeps running with in-memory state.
+    pub fn history_error() -> Self {
+        Self::new(
+            "WB_ERR_HISTORY",
+            "Workbench 历史记录读写失败",
+            false,
+            Action::None,
+        )
+    }
+
+    /// history.json revision conflict: another Workbench window wrote first.
+    /// Retryable - the caller reloads, merges its own workspace, and retries.
+    pub fn history_conflict() -> Self {
+        Self::new(
+            "WB_ERR_HISTORY_CONFLICT",
+            "历史记录已被其他窗口修改",
+            true,
+            Action::Retry,
+        )
+    }
+
     pub fn input_too_large() -> Self {
         Self::new(
             "WB_ERR_INPUT_TOO_LARGE",

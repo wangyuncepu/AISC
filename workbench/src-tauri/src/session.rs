@@ -60,7 +60,7 @@ fn registry(app: &AppHandle) -> Arc<Mutex<HashMap<String, SessionEntry>>> {
     app.state::<SessionRegistry>().inner().clone()
 }
 
-fn config_dir(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
+pub fn config_dir(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
     app.path()
         .app_config_dir()
         .map_err(|e| WorkbenchError::settings_error().with_detail(format!("config dir: {e}")))

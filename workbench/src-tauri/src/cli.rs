@@ -14,8 +14,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::Command;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{redact, WorkbenchError};
@@ -85,6 +86,31 @@ pub fn parse_and_validate(stdout: &[u8], expected_exit_code: Option<i32>) -> Res
         }
     }
     Ok(env)
+}
+
+// ---------------------------------------------------------------------------
+// Build events (aisc.build-events/v1 JSONL, 05 §4.1)
+// ---------------------------------------------------------------------------
+
+/// One JSONL line from `aisc build --events`. Forwarded verbatim to the
+/// frontend via a Tauri Channel; Workbench only inspects `event_type` and the
+/// terminal events' `data.exit_code` / `data.error_code` (05 §4.1.3).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BuildEvent {
+    #[serde(default)]
+    pub protocol: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub run_id: String,
+    #[serde(default)]
+    pub seq: u64,
+    #[serde(rename = "type", default)]
+    pub event_type: String,
+    #[serde(default)]
+    pub ts: String,
+    #[serde(default)]
+    pub data: Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +535,133 @@ async fn read_capped<R: AsyncRead + Unpin>(mut r: R, cap: usize) -> (Vec<u8>, bo
         }
     }
     (buf, truncated)
+}
+
+/// Signal a child to cancel. On Unix send SIGINT so the CLI can emit
+/// `build.cancelled` and clean its Docker child group (S0.5 start_new_session +
+/// killpg). On Windows there is no SIGINT equivalent for a detached process, so
+/// SIGKILL via `start_kill` (no cancelled event -> transport failure, §4.1.4).
+fn sigint_or_kill(child: &tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGINT);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.start_kill();
+    }
+}
+
+/// Run `aisc build --events` (or any JSONL-streaming command): read stdout line
+/// by line, parse each as a `BuildEvent`, and forward via `event_tx`. On cancel
+/// or timeout, SIGINT the child so it emits `build.cancelled` and reaps its
+/// Docker child group, then drain remaining events. Returns Ok on
+/// `build.complete`, Err on failed/cancelled/transport (05 §4.1).
+pub async fn run_build_stream(
+    executable: &Path,
+    argv: Vec<String>,
+    timeout: Duration,
+    cancel: CancellationToken,
+    event_tx: mpsc::Sender<BuildEvent>,
+) -> Result<(), WorkbenchError> {
+    let mut child = match Command::new(executable)
+        .args(&argv)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(WorkbenchError::cli_not_found().with_detail(executable.display().to_string()));
+        }
+        Err(e) => {
+            return Err(WorkbenchError::cli_protocol().with_detail(format!("spawn failed: {e}")));
+        }
+    };
+
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr_handle = tokio::spawn(read_capped(child.stderr.take().expect("piped stderr"), MAX_STDERR));
+
+    // Reader: parse JSONL lines, forward events, capture the terminal event.
+    let tx = event_tx.clone();
+    let reader_handle = tokio::spawn(async move {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        let mut terminal: Option<(String, Option<i32>, Option<String>)> = None;
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    let trimmed = line.trim_end();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let ev = match serde_json::from_str::<BuildEvent>(trimmed) {
+                        Ok(ev) => ev,
+                        Err(_) => continue, // skip non-JSON line (stdout must be pure JSONL, §4.1.1)
+                    };
+                    let is_terminal = matches!(
+                        ev.event_type.as_str(),
+                        "build.complete" | "build.failed" | "build.cancelled"
+                    );
+                    if is_terminal {
+                        let exit_code = ev.data.get("exit_code").and_then(|v| v.as_i64()).map(|c| c as i32);
+                        let error_code = ev.data.get("error_code").and_then(|v| v.as_str()).map(str::to_string);
+                        terminal = Some((ev.event_type.clone(), exit_code, error_code));
+                    }
+                    if tx.send(ev).await.is_err() {
+                        break; // consumer gone
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        terminal
+    });
+
+    let exit = tokio::select! {
+        r = child.wait() => r,
+        _ = tokio::time::sleep(timeout) => {
+            sigint_or_kill(&child);
+            child.wait().await
+        }
+        _ = cancel.cancelled() => {
+            sigint_or_kill(&child);
+            child.wait().await
+        }
+    };
+
+    let terminal = reader_handle.await.unwrap_or(None);
+    let (stderr_bytes, _) = stderr_handle.await.unwrap_or((Vec::new(), false));
+    let stderr_summary = redact(&String::from_utf8_lossy(&stderr_bytes));
+
+    let _exit = exit.map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("wait failed: {e}")))?;
+
+    match terminal {
+        Some((t, _code, err_code)) => match t.as_str() {
+            "build.complete" => Ok(()),
+            "build.cancelled" => Err(WorkbenchError::cli_cancelled().with_detail(stderr_summary)),
+            "build.failed" => {
+                let mut e = match err_code.as_deref() {
+                    Some(c) => WorkbenchError::map_aisc(c),
+                    None => WorkbenchError::cli_protocol(),
+                };
+                if !stderr_summary.is_empty() {
+                    e = e.with_detail(stderr_summary);
+                }
+                Err(e)
+            }
+            _ => Err(WorkbenchError::cli_protocol().with_detail(format!("unknown terminal: {t}"))),
+        },
+        None => Err(WorkbenchError::cli_protocol()
+            .with_detail(format!("no terminal build event | stderr: {stderr_summary}"))),
+    }
 }
 
 // ---------------------------------------------------------------------------

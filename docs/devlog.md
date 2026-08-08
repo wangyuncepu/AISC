@@ -2,9 +2,91 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-07) - Workbench Phase 1 S1.1-S1.4
+## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）
 
 ### 变更
+
+#### S2.4.b 恢复布局（resume layout）（02-startup-flow.md §2.3；03-lifecycle-contract.md §六）- Phase 2 收尾
+
+- 纯前端切片（无后端）。关 Phase 2「恢复布局」gate。「崩溃后发现 runtime」gate 已被 S2.4.a recents + S2.2.b discovery 覆盖（preflight 显 reuse/restart，不自动 stop/remove）。
+- store `stores/runtime.ts`：`buildPatch` 只记 **open（非 idle）tab**（之前记全部 4 个），使 history layout 反映实际开着的 tab；`restorableLayout` computed（preflight reuse/restart + history 该 workspace 有 open tabs 时返回 `{agents, activeAgent}`）；抽 `ensureRuntime()`（start/reuse/restart 共用逻辑）；`initTabs(agentsToOpen[], activeAgent?)` 重构--为指定 agents 各开新 session（新 session_id，**不续接 PTY**，03 §六）；`launchRuntime(agentsToOpen, activeAgent)` 共用「ensureRuntime + initTabs + cancel/error 处理」；`startFromSummary` 改调 `launchRuntime([launch.agent], launch.agent)`；`resumeLayout()` 调 `launchRuntime(historyAgents, historyActive)`。
+- `LaunchSummary.vue`：preflight reuse/restart + history 有 open tabs 时显**「恢复布局」按钮** + 蓝色文案「检测到上次的标签布局。「恢复布局」会为各标签启动新的 Agent 会话，不会续接上次终端内容」（02 §2.3）。`Start`=空白打开（单 tab），`Cancel`=选择其他工作区（等效 contract 的 resume prompt [恢复布局]/[空白打开]/[选择其他工作区]）。
+- 验证：npm build 零错误；cargo 零改零错；dev 无 panic；实机手测通过--开 claude+bash 两 tab 关 app 重启 -> picker 点该工作区 -> summary 显「恢复布局」+ 文案 -> 点恢复布局 -> runtime reuse/restart + 自动开 claude+bash 两新 session（独立可交互）+ active 为上次的；Start 空白打开只开 1 tab；关 app 重启恢复布局仍可用。
+- gap（明确 deferral）：孤儿 session 检测/处理（`session list` 找无 PTY session -> 结束/忽略，03 §8.1）-> S3.1/后续；窗口几何 save/restore（02 §九.2）-> 后续；独立 resume prompt 视图（本切片用 summary 按钮等效）；history 损坏可恢复错误 UI -> 后续。
+- **Phase 2 验收门**：✅ 首次启动/快速启动（S2.1.a）/恢复布局（S2.4.b）三条主路径通过；✅ Docker 未运行/CLI 过旧/镜像缺失/workspace 无权限稳定可操作错误（S2.1.a）；✅ GUI 外 stop/remove 轮询周期内显真实状态（S2.3.a）；✅ 崩溃后重启发现 runtime 不自动 stop/remove（S2.4.a recents + S2.2.b discovery）；✅ 两窗口并发更新 history 不丢 workspace/tab（S2.4.a fs4 锁 + expected_revision 有界重试）。Phase 2 完成。
+
+#### S2.4.a history 持久化 + 最近工作区（02-startup-flow.md §九；06 §五 S2.4）
+
+- 后端 `history.rs`（新模块）：schema-versioned `history.json`（02 §九.2 subset：schema_version/revision/workspaces，含 runtime ref + layout tabs）。`load(dir)` 缺失->空、corrupt JSON->隔离 rename `.corrupt`、unsupported schema->error 不覆盖。`save(dir, expected_revision, patch)`：**fs4 跨进程锁**（`history.lock` exclusive，~5s 超时 fail-closed）-> 锁内 reload -> `revision != expected_revision` 返回 `Conflict{current_revision}` -> merge patch（upsert by path，保留其他 workspace，02 §九「多窗口只 patch 自己拥有的」）-> revision+1 -> 原子写（temp+fsync+rename，复用 settings.rs 模式）。命令 `load_history`/`save_history`。`error.rs` 加 `history_conflict()`（WB_ERR_HISTORY_CONFLICT，store 据此重试）/`history_error()` 构造器。`session.rs` `config_dir` 改 pub。`Cargo.toml` 加 `fs4`。7 个单测（round-trip / corrupt 隔离 / revision conflict / merge 保留其他 / unsupported schema 不覆盖 / upsert / load-missing）。
+- 前端 `types/index.ts`：`WorkbenchHistory`/`WorkspaceRecord`/`RuntimeRef`/`Layout`/`TabRecord`/`HistoryPatch`。`lib/ipc.ts`：`loadHistory`/`saveHistory(expectedRevision, patch)`。
+- store `stores/runtime.ts`：`history`/`historyRevision`/`lastRuntimeRef`/`recentWorkspaces`（按 last_used desc）；`loadHistory`（startup negotiate 并行）；`scheduleSave`（debounce 300ms）在 runtime ready / tab open/activate / workspace 选中 时持久化；`doSave(retries)` Conflict -> reload+adopt revision+有界重试 3 次；`selectRecentWorkspace(path)` 从 history 恢复 launch config（image/network/scope/agent）+ lastRuntimeRef（02 §六 优先级），避免 preflight 用默认配置与已有 runtime 冲突 + 防止 null 覆盖 disk runtime ref。
+- `App.vue`：picker 加最近工作区列表（basename + 全路径 + last_agent），点击 `selectRecent` -> `store.selectRecentWorkspace`。
+- **测试中修 2 个遗留 bug**：(1) `runPreflight` 之前把所有 `recommended_action=resolve_conflict`（任意 check 失败都返回）路由到冲突视图，导致 workspace/image 失败时进冲突视图且 `loadConflicts` 空->死锁；改：仅 `runtime_conflict` check 自身 fail 才进冲突视图，其他失败进 summary 显真实 gate。(2) `backToSummaryFromBuild` 之前有 stale preflight 时不 re-preflight，build 完返回摘要仍显旧「缺镜像」-> Start 禁用；改：清 stale preflight + 总是 re-preflight。
+- **`.dockerignore` 修复**（build-context-perf memory，阻塞测试时顺手修）：原 `node_modules/` 只匹配顶层，漏了 `workbench/src-tauri/target`（15G）/`workbench/node_modules`/`.venv`；加 `**/target/`/`**/node_modules/`/`.venv/`/`**/dist/`，build context 15.57GB -> 72MB。（buildx 切换仍 defer，`docker buildx` 未装。）
+- 验证：cargo 65 绿（54 lib+7 history+7 cli+4 pty，7 新 history 测试零回归）；npm build 零错误；dev 无 panic；实机手测通过--选工作区 start+开 tab 关 app 重启 -> picker 最近列表显该工作区 -> 点击恢复配置进 preflight -> start；`history.json` schema/revision/workspaces(runtime ref+4 tabs layout) 正确。
+- gap（明确 deferral）：启动对账（runtime list 合并 history vs 实际）+ 恢复布局提示（恢复布局/空白打开）+ 为 tabs 创建新 session（文案「不续接」）+ 孤儿 session 检测/处理 -> S2.4.b（关「崩溃后发现 runtime」+「恢复布局」gate）；窗口几何 save/restore -> S2.4.b；两窗口同 workspace 细粒度合并（MVP last-write-wins on same path）；history 损坏可恢复错误 UI -> S2.4.b（a 静默隔离）；buildx 切换（CLI adapter）-> 后续。
+
+#### S2.3.b Provider 状态 + P1 可观察性（04-observability.md §二.P1/§四.2/§五；05-cli-gui-contract.md §七）
+
+- 后端 `runtime.rs`：`ProviderStatus{runtime_id, agent, provider_id, provider_name, route_mode, auth_status, observed_at}`（secret-free，仅路由/auth 元数据，永不含密钥）+ `provider_current_argv` 纯函数 + `get_provider_status(app, workspace, runtime_id, agent)` 命令（包 `aisc provider current --runtime-id --agent <claude|codex> --workspace --format json`，run_control + envelope_error + parse；agent 校验 claude|codex，bash/cc-switch 客户端拒；错误码 `AISC_ERR_PROVIDER_STATUS_FAILED` 经 map_aisc 映射）+ 3 单测（argv 形状 + 完整解析 + 空字段解析）。`lib.rs` 注册。PROVIDER_TIMEOUT=30s。
+- 前端 `types/index.ts`：`ProviderStatus`。`lib/ipc.ts`：`getProviderStatus(workspace, runtimeId, agent)`。
+- store `stores/runtime.ts`：`providerStatuses: Record<"claude"|"codex", ProviderStatus|null>` per-agent 缓存（04 §四.2「不存在全局 Provider」，claude/codex 各一份不互相覆盖）+ `providerError` + `providerInFlight`（去重）+ `loadProviderStatus(agent)`（仅 runtime running 时查）+ `clearProviderStatuses`（runtime 切换/停止时清）。
+- `composables/useProviderPolling.ts`（新）：活动 agent 感知的 provider 轮询--活动 tab 为 claude/codex 且 runtime running 时，切换 tab 立即查 + 15s（聚焦）/60s（失焦）/隐藏暂停（04 §五）；bash/cc-switch 或非 running 不查；`watch(activeTabId, runtimeState)` 触发重查/暂停。
+- `RuntimeSidebar.vue`：P1 区--活动 agent 的 provider_name / route_mode / auth_status；bash/cc-switch 显「不适用」；capability 缺失（`!provider_status`）显「Unknown · 需升级 CLI」（04 §八）；加载态「加载中…」；auth_status 着色（configured 绿/login_required·not_configured 黄/unknown 灰，不只靠色）。
+- `App.vue`：mount `useProviderPolling`（与 runtime 轮询同 ready 生命周期）。
+- 验证：cargo 58 绿（47 lib+7 cli+4 pty，3 新 provider 测试零回归）；npm build 零错误（59 模块）；dev 无 panic；实机手测通过--claude tab 显 provider/route/auth；codex tab 独立缓存；bash/cc-switch 显「不适用」；外部 stop 后不再查 provider。
+- gap（明确 deferral）：cc-switch 退出后失效 Claude/Codex provider 缓存并立即刷新活动 Agent（04 §五 末句边缘规则）-> S2.4（tab 生命周期细化时一起）；provider 查询 revision/request_seq 抗乱序硬化 -> S3.1；P2 runtime 详情面板 / aria-live 节流播报 -> S3.3；provider GUI 编辑器 -> 永不（06 §十.6）。
+
+#### S2.3.a 轮询对账 + P0 可观察性侧栏（04-observability.md §二/§四.1/§五/§六；06 §五）
+
+- 纯前端切片（复用 S2.2.b `runtime_inspect(workspace)`，后端零改）。关 Phase 2 gate「GUI 外 stop/remove 在轮询周期内显示真实状态」。
+- `composables/useRuntimePolling.ts`（新）：可见性感知 inspect 循环--聚焦 5s / 失焦 15s / 最小化隐藏暂停（04 §五）；±10% jitter；`store.inspectInFlight` 去重；resume（hidden->visible 或 focus）先 `markStale` 再立即 tick。`start/stop` 由 App.vue `watch(store.status)` 驱动（ready->start，离开->stop）。
+- store `stores/runtime.ts`：`freshness`（fresh/stale/unknown，04 §六.1）+ `inspectInFlight`；`applyRuntimeSnapshot` 成功 apply 时置 fresh；`markStale()`（失败/resume，保留 last snapshot 标 stale）；`refreshRuntime()`（inspect+apply，dedupe，驱动轮询 + 手动刷新按钮）；`resetWorkspace`/`stopRuntime` 重置 freshness。
+- `features/workspace/RuntimeSidebar.vue`（新）：ready 视图常驻 P0 侧栏--Workspace / Runtime state 徽章 + freshness + observed Xs ago（本地 1s timer）+ runtime_id（短显，**点击复制完整 UUID**）+ container_name（点击复制）/ Config(image/network/scope，来自 snapshot.config) / Active agent / Sessions 列表 / 刷新 + 停止 Runtime。状态用文本+色（不只靠色，04 §九）。
+- `App.vue`：ready 视图改 `[sidebar | (TabBar+terminal)]`，原 toolbar 内容并入侧栏（删孤儿 `.toolbar`/`.meta` 样式）；mount 轮询 composable。
+- `types/index.ts`：`Freshness` 类型。
+- 验证：npm build 零错误（58 模块）；cargo 零改零错；dev 无 panic；实机手测通过--外部 `runtime stop` -> ~5s 内侧栏 Stopped·stale；外部 `runtime remove` -> Not found；手动「刷新」即时 inspect（observed 重置）；点击 id/ctr 行复制完整值。
+- gap（明确 deferral）：provider status（claude/codex 的 provider/route/auth）+ 刷新 -> S2.3.b（P1）；freshness fresh/stale/unknown 全 revision/request_seq 抗乱序硬化 -> S3.1（本切片 observed_at 简单守卫）；runtime_stop session reason 精修 / stopped 状态保留 tabs 供 restart -> S2.4（外部 stop 时 session 经 PTY 自终 disconnected，侧栏显 stopped，不自动 restart）；history / 启动 list 对账 / 孤儿检测 -> S2.4；P2 runtime 详情面板（last_operation_error/启动诊断折叠）/ aria-live 节流播报 -> 后续/S3.3。
+
+#### S2.2.b Runtime 状态机 + 管理 UI + 退出确认（03-lifecycle-contract.md §四/§七.2-3/§十；04 §四.1/§六；02 §七.3）
+
+- 后端 `runtime.rs`：`RuntimeSnapshot` 对齐 CLI `to_dict()`--修 S2.1.a 遗留 bug（struct 有 `ready` 字段但 CLI inspect/list 不发 `ready`，deserialize 必败，被 cancel 路径 try/catch 吞了致 inspect 实际从未成功）；现 drop `ready`，加 `config{workspace,image,network,scope}`/`owner`/`config_fingerprint`/`container_id`/`registry_state`/`observed_at`/`stale`，optional 字段 `#[serde(default)]`；新增 `RuntimeConfig`/`RuntimeListResult`。新增命令 `list_runtimes(workspace, owner)`（`aisc runtime list --workspace --owner --format json`）+ `remove_runtime(workspace, runtime_id, force)`（`--force`）。`runtime_inspect`/`stop_runtime`/`runtime_restart` 全部加 `workspace` 参数透传 `--workspace`（修 registry 定位 + config 回填；之前不带 workspace 致 registry_state=missing + config 空），且 stop/restart/remove 返回 `RuntimeSnapshot`（op 结果即 observation）。argv 抽纯函数 + 8 个单测（inspect/stop/restart/remove/list argv + snapshot 反序列化无 ready + docker-only 最小 + list_result）。`lib.rs` 注册 2 新命令；`capabilities/default.json` 加 `core:window:allow-destroy`。
+- 前端 `types/index.ts`：`RuntimeSnapshot` 扩全字段（drop `ready`）；`RuntimeState` 补 stopping/stopped/removing；`RuntimeListResult`。`lib/ipc.ts`：inspect/stop/restart 加 workspace 参数；`listRuntimes`/`removeRuntime`。
+- store `stores/runtime.ts`：`runtimeState`/`runtimeSnapshot` + `applyRuntimeSnapshot`（observed_at 守卫，旧观察不覆盖新，04 §六.2 简化版；全 revision/request_seq 硬化留 S3.1）；`conflicts`/`conflictError` + `loadConflicts`/`stopConflictRuntime`/`removeConflictRuntime`/`retryFromConflict`；`confirmExit`（02 §七.3：有活动 session 弹 confirm + 结束 owned session + 保留 runtime）。`runPreflight` 加 **discovery**--preflight 前先 `list_runtimes(workspace, workbench)` 找已有 project runtime 复用其 id（修根因：Workbench 每次生成新 runtime_id 不命中 CLI 的 reuse/restart，重进有 project runtime 的工作区必误报 resolve_conflict；现同配置->reuse/restart，异配置->resolve_conflict）。`startFromSummary` restart 路径 apply 返回 snapshot；resolve_conflict 进 `conflict` 状态。`WorkbenchStatus` 加 `conflict`。
+- **测试中修 3 个流程 bug**：(1) preflight `resolve_conflict` 原先进 summary 但 `can_start=false` 致 Start 禁用卡死 -> `runPreflight` 见 resolve_conflict 直接进冲突视图；(2) stop 后重进显冲突而非 restart -> discovery 复用已有 runtime id 修复；(3) 退出确认点确认后窗口不关（async `preventDefault` 时序）-> 始终同步 `preventDefault` + allow 则显式 `destroy()` + 加 `core:window:allow-destroy` 权限。
+- 组件 `features/startup/ConflictManager.vue`（新）：列出工作区 workbench runtime（id 缩写/state/image·scope）+ 停止（running/starting）/强制移除（running，force）/移除（stopped）+ 重新预检/返回。`App.vue`：`conflict` 视图 + onMounted 注册 `onCloseRequested`（始终 preventDefault + confirm + destroy）。
+- 验证：cargo 55 绿（44 lib+7 cli+4 pty，8 新测试零回归）；npm build 零错误；dev 无 panic；实机手测通过--制造 project runtime 冲突 -> 冲突视图列出 -> 强制移除 -> re-preflight -> start -> ready；stop 后重进 -> discovery 复用 -> restart -> ready；有活动 session 关窗弹确认 -> 确认关窗 + runtime 保留运行。
+- gap（明确 deferral）：轮询对账/外部 stop-remove 周期检测 -> S2.3；freshness fresh/stale/unknown + revision/request_seq 抗乱序硬化 -> S3.1；stopped 状态保留 tabs 供 restart 的 richer UX + runtime_stop session reason 精修 -> S2.4；history 持久化/启动 list 对账完整版（孤儿/多窗口）/崩溃恢复 -> S2.4（本切片 discovery 是其轻量子集）；Provider/auth + P0/P1 可观察性侧栏 -> S2.3。
+
+#### S2.2.a 多标签 + Session 状态机（03-lifecycle-contract.md §五/§六/§七.1；06 §五）
+
+- 纯前端切片（后端 S1.3 session registry 已是多 session 能力，零改动）。4 固定 agent 标签（Claude/Codex/Bash/cc-switch）共享同一 runtime（03 §二.3/§六），Tab 只是 Session 视图。
+- `types/index.ts` 加 `TabSessionState`（`idle` + SessionState）、`TabExit`、`Tab`（tabId/agent/title/sessionId/sessionState/exit）。
+- `stores/runtime.ts`：替换单一 `sessionId` 为 `tabs: Tab[]` + `activeTabId`；session 状态机 reducer--`initTabs`（runtime ready 后建 4 标签 + 开初始 agent 标签）、`openTab`/`reopenTab`（新 session_id -> `starting`）、`activateTab`（idle 标签首次激活即开）、`closeTab`（-> `closing` + `close_session`，PTY Exit 事件 finalize）、`onTabOpenOk/Fail`、`onTabSessionExit`（idempotent first-writer-wins，03 §五.2 重复终止事件合并为单一 TabExit）；`stopRuntime` 迭代关所有 live session 后 stop + 回 picker。`resetWorkspace` 统一清 tabs/runtimeId/preflight。
+- `Terminal.vue` 重构 tab-scoped：props `tabId`，从 store 读 `tab.sessionId/agent`；每非-idle 标签各一实例，`v-show` 仅活动标签可见（隐藏 PTY 继续跑，切换不丢 scrollback，03 §六.8）；`visible` watch + ResizeObserver 双重 fit（补 display 切换时 ResizeObserver 不触发缺口）；PTY `Exit` 事件为单一终态信号 -> `onTabSessionExit`，`closeTab` 仅触发 closeSession 不自行判定终态。
+- `features/workspace/TabBar.vue`（新）：4 标签 + 状态指示（未打开/启动中/关闭中/退出 code N/失败/已断开）+ × 关闭（running/starting/closing）+ ↻ 重新打开（exited/failed/disconnected，新 session_id）。
+- `App.vue` ready 视图：TabBar + `v-for` 渲染非-idle 标签 Terminal（key=tabId，v-show active）。
+- 验证：`npm run build`（vue-tsc+vite）零错误；`cargo build` 零改动零错误；dev 启动无 panic；实机手测通过--4 标签开/关/重开、切换不丢历史、隐藏标签继续运行、停止 Runtime 关全部回 picker、resize 正常。
+- gap（明确 deferral）：runtime 状态机/observed_at/revision/freshness/轮询对账 -> S2.2.b；list/remove/force-remove 管理 UI + 冲突复用/停止替换 -> S2.2.b；退出 Workbench 确认 + Tauri 关闭拦截 -> S2.2.b；runtime stop 时 session reason 精修为 `runtime_stop`（现为 transport_error/disconnected）-> S2.2.b 状态机关联；history 持久化/恢复布局/崩溃对账 -> S2.4；Provider/auth Warning + P0/P1 可观察性侧栏 -> S2.3。
+
+#### S2.1.b 镜像构建流式进度（05-cli-gui-contract.md §4.1）
+
+- `cli.rs` 增 `BuildEvent`（JSONL `{protocol,command,run_id,seq,type,ts,data}`）+ `run_build_stream(executable, argv, timeout, cancel, mpsc)`：`tokio::process` spawn + `BufReader::read_line` 逐行解析 `build.*` 事件 -> bounded mpsc(256) 背压；terminal 事件（complete/failed/cancelled）决定返回（complete->Ok，failed->Err(map_aisc(error_code))，cancelled->Err(cli_cancelled)）；取消/超时 `sigint_or_kill`（Unix `libc::kill(SIGINT)` 让 CLI 发 `build.cancelled` + 清 docker 子进程组；Windows fallback SIGKILL = transport failure，§4.1.4）。build.output 仅内存转发、不解析百分比（§4.1.3/§4.1.5）。
+- `runtime.rs` 增 `build_image(app, tag, on_event: Channel<BuildEvent>)`（mpsc->Channel 桥接，同 open_session 模式）+ `cancel_build`；`BuildOp` managed state（newtype 包 `Arc<Mutex<Option<CancellationToken>>>`，与 `StartOp` 同型但 Tauri 按具体类型管理 state，必须 distinct 类型--type alias 会 panic "already being managed"）。
+- **CLI 修复（S0.5 遗留）**：`output.py` `emit_json` + `JsonlEmitter.emit` 加 `flush=True`--Python stdout 管道下块缓冲，build 事件积压到进程结束才出，违反 §4.1.1「不能等进程结束后一次性返回」；实测 `python -u` 验证，修复后事件即时流出（契约测试 8 个仍过）。
+- 前端：`BuildEvent`/`BuildStatus` 类型；`ipc.buildImage/cancelBuild`；store `startBuild`（Channel 只收 build.output 追加 log；终态由命令返回值判定，避开回调 race + TS narrowing）、`cancelBuild`、`backToSummaryFromBuild`（回摘要并 re-preflight）；`BuildProgress.vue`（滚动 log + 经过时间 + Cancel + complete/failed/cancelled + 返回摘要；complete 后停留可看完整 log，不再自动跳走）；App.vue `building` 视图；LaunchSummary 「构建镜像」按钮在 image 缺失时启用。
+- 验证：cargo build/test 47 绿、npm build 零错误；CLI 时间戳实测事件流式到达（非突发）；实机手测通过（镜像缺失 -> 构建 -> 实时日志 -> complete -> 返回摘要 re-preflight -> image pass -> Start）。
+- 已知观感问题（已记 memory，后续解决）：`aisc build` context = 整个 repo（含 node_modules/target/.venv）-> Docker legacy builder 初始化 ~22s 空档，缓存命中后输出突发；Workbench 侧已加经过时间+占位提示缓解；根治 = `.dockerignore` + 换 buildx。
+- gap（明确 deferral）：runtime 状态机/对账/管理 UI（冲突复用/stop-remove）-> S2.2；workspace 最近列表 -> S2.4；多标签 -> S2.2；Provider/auth Warning -> S2.3。
+
+#### S2.1.a 启动与预检主路径（02-startup-flow.md §三/§四/§七/§八）
+
+- 后端 `runtime.rs` 增极薄命令：`runtime_preflight`（`aisc runtime preflight --format json`，解析 `PreflightReport{checks,can_start,recommended_action,matching_runtime_id,conflicts,observed_at}`）、`runtime_inspect`（取消后对账）、`runtime_restart`（reuse/restart 路径）；`start_runtime` 改为可取消--managed `StartOp(Arc<Mutex<Option<CancellationToken>>>)` 状态 + `cancel_runtime_start` 命令（02 §三 每异步操作带 cancel token）。`lib.rs` 注册 4 新命令 + `.manage(StartOp::default())`。无状态机/对账/list/remove（S2.2）。
+- 前端启动状态机（`stores/runtime.ts`）：idle/negotiating/blocked/picker/preflight/summary/starting/cancelled/ready/error；持 preflight 报告 + `LaunchConfig{agent,image,network,scope}` + runtime_id/matching_runtime_id + start 计时。actions：`runPreflight`、`startFromSummary`（按 recommended_action 走 start/reuse/restart -> 开 session；resolve_conflict 阻塞）、`cancelStart`（cancel_runtime_start -> inspect -> 保留/停止，02 §八）、`stopRuntime`、`backToPicker`。
+- 组件 `src/features/startup/`：`PreflightGate.vue`（逐项 check pass/warn/fail + hard/config 分类，02 §四.2）、`LaunchSummary.vue`（摘要屏 Workspace/Agent dropdown/Runtime reuse|start|restart/Image/Network/Scope + Start/Change settings/Cancel；image 缺失 config gate 禁用 Start，「构建镜像」禁用占位 S2.1.b）、`StartProgress.vue`（经过时间 + Cancel；取消后 inspect -> 保留|停止）。`App.vue` 状态路由壳；`Terminal.vue` agent 改从 `store.launch.agent` 取，sessionId watcher 加 `immediate:true`（修复 Terminal 在 status=ready 后才挂载导致 watcher 漏触发、bash 不出的问题）。
+- 类型 `types/index.ts` 加 PreflightReport/Check/RuntimeSnapshot/CheckStatus/RecommendedAction/LaunchConfig；`lib/ipc.ts` 加 runtimePreflight/runtimeInspect/runtimeRestart/cancelRuntimeStart。
+- 验证：`cargo build`/`cargo test`（47 绿）零 warning；`npm run build`（vue-tsc+vite）零错误；实机手测全链路通过--picker(原生 dialog) -> 预检 -> 摘要(agent=bash) -> Start -> bash 可交互 -> 停止 Runtime。（测试中遇主机内核升级未重启致 Docker veth 缺失，非代码问题，重启后恢复。）
+- gap（明确 deferral）：`build --events` 流式 + 构建进度 UI -> S2.1.b；workspace 最近列表 -> S2.4（history）；runtime 状态机/observed_at/revision/对账/list/remove -> S2.2；多标签 + Claude/Codex/cc-switch 标签 -> S2.2（S2.1.a 单 session + agent 选择）；`--workspace` 启动 arg 接线、resume_prompt -> S2.1.b/S2.4；Provider/auth Warning -> S2.3。
 
 #### S1.1 工程脚手架（06-implementation-plan.md §四）
 
