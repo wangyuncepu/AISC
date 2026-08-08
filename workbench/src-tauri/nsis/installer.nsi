@@ -82,6 +82,8 @@ Var DepsWingetInstalled
 Var DepsSkip
 ; set when Docker Desktop was missing at check time and installed by this run
 Var DepsDockerWasMissing
+; detected Docker Desktop exe path (also used by the Start-Docker buttons)
+Var DepsDockerExe
 ; label handles for the dependency page
 Var DepsDockerLabel
 Var DepsPythonLabel
@@ -421,36 +423,75 @@ Var AppStartMenuFolder
 Page custom PageDepsCheck PageDepsLeave
 
 Function CheckDocker
-  ; Docker Desktop (winget user-level default install path)
-  ${If} ${FileExists} "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
+  ; Docker Desktop installs machine-wide to "Program Files\Docker\Docker"
+  ; (MSI) or per-user to %LOCALAPPDATA% (winget). Detect by executable
+  ; presence and remember the path so the Start-Docker buttons can use it.
+  StrCpy $DepsDockerExe ""
+  ${If} ${FileExists} "$PROGRAMFILES64\Docker\Docker\Docker Desktop.exe"
+    StrCpy $DepsDockerExe "$PROGRAMFILES64\Docker\Docker\Docker Desktop.exe"
     StrCpy $DepsDockerInstalled 1
     Return
   ${EndIf}
-  ; Machine-wide install fallback
-  ReadRegStr $0 HKLM "SOFTWARE\Docker Inc.\Docker Desktop" "DefaultPath"
+  ${If} ${FileExists} "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
+    StrCpy $DepsDockerExe "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
+    StrCpy $DepsDockerInstalled 1
+    Return
+  ${EndIf}
+  ; Non-standard install location: read the uninstaller registry entry
+  ; (64-bit view first - Docker Desktop is a 64-bit app - then per-user HKCU).
+  SetRegView 64
+  ReadRegStr $0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
+  ${If} $0 == ""
+    ReadRegStr $0 HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
+  ${EndIf}
+  SetRegView 32
+  ${If} $0 == ""
+    ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
+  ${EndIf}
   ${If} $0 != ""
   ${AndIf} ${FileExists} "$0\Docker Desktop.exe"
+    StrCpy $DepsDockerExe "$0\Docker Desktop.exe"
     StrCpy $DepsDockerInstalled 1
     Return
   ${EndIf}
   StrCpy $DepsDockerInstalled 0
 FunctionEnd
 
+; Enumerate PythonCore version subkeys (e.g. 3.12, 3.14) under REGROOT\KEYPATH
+; and check that the registered InstallPath actually contains python.exe.
+!macro CheckPythonCore REGROOT KEYPATH
+  StrCpy $0 0
+  ${Do}
+    EnumRegKey $1 "${REGROOT}" "${KEYPATH}" $0
+    ${If} $1 != ""
+      ReadRegStr $2 "${REGROOT}" "${KEYPATH}\$1\InstallPath" ""
+      ${If} $2 != ""
+      ${AndIf} ${FileExists} "$2\python.exe"
+        StrCpy $DepsPythonInstalled 1
+      ${EndIf}
+    ${EndIf}
+    IntOp $0 $0 + 1
+  ${LoopUntil} $1 == ""
+!macroend
+
 Function CheckPython
-  ; Python 3 install key (64-bit or 32-bit, HKLM or HKCU)
+  ; Python 3 registers PythonCore\<version>\InstallPath in HKLM (machine-wide,
+  ; 32/64-bit views) or HKCU (per-user, e.g. winget Python.Python.3.12). The
+  ; default value of PythonCore itself is empty, so the version keys must be
+  ; enumerated. Restore the 32-bit view afterwards - the installer process is
+  ; 32-bit and the rest of the template relies on the default (redirected) view.
   StrCpy $DepsPythonInstalled 0
-  ${If} ${RunningX64}
-    ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Python\PythonCore" ""
+  SetRegView 64
+  !insertmacro CheckPythonCore HKLM "SOFTWARE\Python\PythonCore"
+  ${If} $DepsPythonInstalled = 0
+    SetRegView 32
+    !insertmacro CheckPythonCore HKLM "SOFTWARE\WOW6432Node\Python\PythonCore"
   ${EndIf}
-  ${If} $0 == ""
-    ReadRegStr $0 HKLM "SOFTWARE\Python\PythonCore" ""
+  ${If} $DepsPythonInstalled = 0
+    ; HKCU\SOFTWARE is never WOW64-redirected
+    !insertmacro CheckPythonCore HKCU "SOFTWARE\Python\PythonCore"
   ${EndIf}
-  ${If} $0 == ""
-    ReadRegStr $0 HKCU "SOFTWARE\Python\PythonCore" ""
-  ${EndIf}
-  ${If} $0 != ""
-    StrCpy $DepsPythonInstalled 1
-  ${EndIf}
+  SetRegView 32
 FunctionEnd
 
 Function CheckWinget
@@ -554,7 +595,9 @@ Function PageDepsCheck
 FunctionEnd
 
 Function OnDepsStartDocker
-  ExecShell "open" "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
+  ${If} $DepsDockerExe != ""
+    ExecShell "open" "$DepsDockerExe"
+  ${EndIf}
 FunctionEnd
 
 Function OnDepsOpenStore
@@ -604,8 +647,8 @@ Function RunFinishApp
   ; comes up (first run shows the license agreement for the user to accept);
   ; then launch the Workbench.
   ${If} $DepsDockerWasMissing = 1
-    ${If} ${FileExists} "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
-      ExecShell "open" "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
+    ${If} $DepsDockerExe != ""
+      ExecShell "open" "$DepsDockerExe"
     ${EndIf}
   ${EndIf}
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
@@ -705,14 +748,14 @@ LangString DEP_FINISH_RUN ${LANG_ENGLISH} "Start AISC Workbench"
 LangString DEP_FINISH_RUN ${LANG_SIMPCHINESE} "启动 AISC Workbench"
 LangString DEP_DETAIL_NO_WINGET ${LANG_ENGLISH} "winget not found - install Microsoft App Installer from the Microsoft Store and run this installer again, or install Docker Desktop and Python manually."
 LangString DEP_DETAIL_NO_WINGET ${LANG_SIMPCHINESE} "未找到 winget - 请从 Microsoft Store 安装应用安装程序（App Installer）后重新运行本安装程序，或手动安装 Docker Desktop 和 Python。"
-LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_ENGLISH} "Installing Docker Desktop via winget..."
-LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Docker Desktop……"
+LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_ENGLISH} "Installing Docker Desktop via winget (progress shows in the log below)..."
+LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Docker Desktop（进度见下方日志）……"
 LangString DEP_DETAIL_DOCKER_OK ${LANG_ENGLISH} "Docker Desktop installed."
 LangString DEP_DETAIL_DOCKER_OK ${LANG_SIMPCHINESE} "Docker Desktop 已安装。"
 LangString DEP_DETAIL_DOCKER_FAIL ${LANG_ENGLISH} "Docker Desktop install failed (exit code $0). You can install it manually from https://www.docker.com/products/docker-desktop/ or start Docker Desktop later from the Start menu."
 LangString DEP_DETAIL_DOCKER_FAIL ${LANG_SIMPCHINESE} "Docker Desktop 安装失败（退出码 $0）。可手动从 https://www.docker.com/products/docker-desktop/ 安装，或稍后从开始菜单启动 Docker Desktop。"
-LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_ENGLISH} "Installing Python 3.12 via winget..."
-LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Python 3.12……"
+LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_ENGLISH} "Installing Python 3.12 via winget (progress shows in the log below)..."
+LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Python 3.12（进度见下方日志）……"
 LangString DEP_DETAIL_PYTHON_OK ${LANG_ENGLISH} "Python 3.12 installed."
 LangString DEP_DETAIL_PYTHON_OK ${LANG_SIMPCHINESE} "Python 3.12 已安装。"
 LangString DEP_DETAIL_PYTHON_FAIL ${LANG_ENGLISH} "Python 3.12 install failed (exit code $0). You can install it manually from https://www.python.org/downloads/"
@@ -803,8 +846,14 @@ Section Dependencies
 
   ${If} $DepsDockerInstalled = 0
     DetailPrint "$(DEP_DETAIL_DOCKER_INSTALLING)"
-    ExecWait '"winget" install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements' $0
-    ${If} $0 = 0
+    ; Hidden console: nsExec runs winget without a window and streams its
+    ; output into the install log (ExecWait would pop up a console window).
+    nsExec::ExecToLog '"winget" install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements'
+    Pop $0 ; winget exit code
+    ; winget exits non-zero for "already installed" / "no action needed";
+    ; re-detect the real state instead of trusting the exit code.
+    Call CheckDocker
+    ${If} $DepsDockerInstalled = 1
       DetailPrint "$(DEP_DETAIL_DOCKER_OK)"
     ${Else}
       DetailPrint "$(DEP_DETAIL_DOCKER_FAIL)"
@@ -813,8 +862,10 @@ Section Dependencies
 
   ${If} $DepsPythonInstalled = 0
     DetailPrint "$(DEP_DETAIL_PYTHON_INSTALLING)"
-    ExecWait '"winget" install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements' $0
-    ${If} $0 = 0
+    nsExec::ExecToLog '"winget" install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements'
+    Pop $0 ; winget exit code
+    Call CheckPython
+    ${If} $DepsPythonInstalled = 1
       DetailPrint "$(DEP_DETAIL_PYTHON_OK)"
     ${Else}
       DetailPrint "$(DEP_DETAIL_PYTHON_FAIL)"
