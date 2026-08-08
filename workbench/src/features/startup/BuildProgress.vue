@@ -13,6 +13,9 @@ const statusText = computed(
   () => ({ building: "构建中…", complete: "构建完成", failed: "构建失败", cancelled: "已取消", idle: "" }[store.buildStatus] ?? "")
 );
 const elapsedSec = computed(() => (elapsedMs.value / 1000).toFixed(1));
+const dockerError = computed(
+  () => store.buildError?.code === "AISC_ERR_DOCKER_UNAVAILABLE"
+);
 
 onMounted(() => {
   const begun = Date.now();
@@ -44,9 +47,15 @@ watch(
     </div>
     <pre ref="logEl" class="log">{{ store.buildLog || "(等待 Docker 输出… 初始化可能需数十秒)" }}</pre>
     <p v-if="store.buildError" class="err">{{ store.buildError.message }}</p>
+    <p v-if="dockerError" class="err">Docker 引擎未运行，构建无法进行。点击「启动 Docker」打开 Docker Desktop 后再试。</p>
     <div class="actions">
       <button v-if="store.buildStatus === 'building'" class="danger" @click="store.cancelBuild()">Cancel</button>
-      <button v-else class="primary" @click="store.backToSummaryFromBuild()">返回摘要</button>
+      <template v-else>
+        <button v-if="dockerError" class="primary" :disabled="store.dockerStarting" @click="store.startDockerAndRepreflight()">
+          {{ store.dockerStarting ? "正在启动 Docker…" : "启动 Docker" }}
+        </button>
+        <button class="primary" @click="store.backToSummaryFromBuild()">返回摘要</button>
+      </template>
     </div>
   </div>
 </template>

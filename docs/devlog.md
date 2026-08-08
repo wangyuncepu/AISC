@@ -6,6 +6,14 @@
 
 ### 变更
 
+#### Windows 实机测试修复（S4.1.b 实测反馈，docs/问题.txt）
+
+- **问题 1（装完 Docker 不引导启动）**：NSIS Finish 页 RUN 改 `RunFinishApp`——`$DepsDockerWasMissing`（Deps 页检测到 Docker 缺失时置 1）时先 `ExecShell` 启动 Docker Desktop（首次运行用户确认 license），再启动 Workbench。
+- **问题 2（Docker 未启动时 preflight 识别不到）**：`start_docker` Tauri 命令（Windows 启动 `%LOCALAPPDATA%\Docker\Docker Desktop\Docker Desktop.exe`，macOS Docker.app；Linux 返回可操作错误）+ 前端「启动 Docker」按钮——summary docker gate fail 时显示，点击后启动 Docker Desktop 并每 2s 轮询 preflight 直到 docker check pass（90s 超时提示手动打开）。`AISC_ERR_DOCKER_UNAVAILABLE` action 从 Retry 改 `StartDocker`。
+- **问题 3（所有操作弹 Windows Terminal 闪现）**：`cli.rs` `run_control`/`run_build_stream` spawn 加 `creation_flags(0x08000000)`（CREATE_NO_WINDOW，`#[cfg(windows)]` 门控——tokio `creation_flags` 仅 Windows 存在）。PTY session 不动（交互终端）。
+- **问题 4（构建镜像直接失败）**：build 失败错误码 `AISC_ERR_DOCKER_UNAVAILABLE` 时 BuildProgress 显示「启动 Docker」按钮 + 明确文案（引擎未运行无法构建），启动后回摘要重试。
+- 验证：cargo 70 绿；npm build 零错误；NSIS 模板改动（`RunFinishApp`）由 CI Windows runner 重新编译验证通过；复测清单见 `docs/platform-windows.md`「实机修复复测」（待用户 Windows 复测确认）。
+
 #### S4.1.b Windows NSIS 定制安装器（06-implementation-plan.md §六 S4.1）
 
 - **定制 NSIS 模板**：`workbench/src-tauri/nsis/installer.nsi`（tauri-bundler 2.9.4 默认模板复制 + S4.1.b 扩展；Handlebars 模板由 bundler 渲染）。`tauri.conf.json` 加 `bundle.windows.nsis.template`（installMode currentUser、languages English）+ `webviewInstallMode {type: downloadBootstrapper}`（WebView2 由 Tauri 原生 section 自动处理）。
@@ -14,7 +22,7 @@
 - **`nsis/README.md`**：模板来源（tauri-bundler 2.9.4）+ 升级维护说明（diff 默认模板重放 3 处 S4.1.b 扩展，防模板漂移）。
 - **CI**：`.github/workflows/nsis-installer.yml`（新）--windows-2022 runner：setup-python + PyInstaller 构建 CLI sidecar -> 移入 `workbench/src-tauri/binaries/aisc-x86_64-pc-windows-msvc.exe`（externalBin 命名）-> setup-node + npm ci -> `npm run tauri build -- --bundles nsis`（tauri 自动下载 NSIS 3.11 + nsis_tauri_utils 插件，零手动 NSIS 配置）-> 产物 `*-setup.exe` upload-artifact。触发：workflow_dispatch + push develop/main paths（tauri.conf/nsis/workflow/src.aisc/packaging）。
 - **`docs/platform-windows.md`**（新）：Windows 平台依赖表 + 安装器行为说明 + 实机验证清单（06 §七 S4.1「Windows 检查 WebView2/Docker Desktop」文档要求）。
-- 验证：cargo 70 绿（tauri.conf schema 校验通过，`webviewInstallMode` 是 internally-tagged enum 需 `{type: ...}` 形状）；npm build 零错误；NSIS 模板编译 + winget 检测逻辑由 CI Windows runner 验证（本机 Linux 无 makensis）；实机手测清单见 `docs/platform-windows.md`（用户 Windows 实机）。
+- 验证：cargo 70 绿（tauri.conf schema 校验通过，`webviewInstallMode` 是 internally-tagged enum 需 `{type: ...}` 形状）；npm build 零错误；**CI Windows runner 全链路验证通过**（`.github/workflows/nsis-installer.yml` dispatch：PyInstaller sidecar → `tauri build --bundles nsis` → makensis 编译定制模板零错误 → `AISC Workbench_2.1.5-dev_x64-setup.exe` 10.9MB artifact 下载验证）；本机 Linux 无 makensis，NSIS 编译只能 CI 验证。**顺带修 2 个 CI 暴露 bug**：(1) `cli-sidecar.yml` step 层 `${{ matrix.shell }}` 无效表达式（GitHub Actions 2.0 拒绝）→ 改 `if: matrix.os` 条件 + 硬编码 shell；(2) `scripts/build-cli.sh` 缺可执行位（git mode 100644 → 100755，Linux/macOS runner exit 126）；(3) `sigint_or_kill(&Child)` Windows release 编译错误（`start_kill()` 需 `&mut`，Unix 分支掩盖）→ 改 `&mut Child`。实机手测清单见 `docs/platform-windows.md`（用户 Windows 实机，待测）。
 - gap（明确 deferral）：macOS pkg / Linux preinst 安装体验 -> S4.1.c；签名/公证 -> S4.2 发布门；安装器多语言（zh-CN 等，模板已留结构）-> 后续；winget 安装进度显示（当前 DetailPrint 文本）-> 后续。
 
 #### S4.1.b 修复 — 安装版 Workbench「打开目录 → 构建镜像」失败（2026-08-08）

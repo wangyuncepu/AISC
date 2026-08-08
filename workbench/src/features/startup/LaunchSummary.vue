@@ -19,6 +19,7 @@ function checkStatus(id: string): string {
 }
 
 const hardBlocking = computed(() => checkStatus("docker") === "fail" || checkStatus("workspace") === "fail");
+const dockerDown = computed(() => checkStatus("docker") === "fail");
 const imageMissing = computed(() => checkStatus("image") === "fail" && action.value !== "reuse");
 const startEnabled = computed(
   () =>
@@ -75,6 +76,9 @@ function onConfigChanged() {
     <p v-if="imageMissing" class="gate-msg config">
       镜像缺失（Config gate）。可点击「构建镜像」用 `aisc build --events` 构建（可取消）。
     </p>
+    <p v-if="dockerDown" class="gate-msg hard">
+      Docker 引擎未运行。点击「启动 Docker」会打开 Docker Desktop（首次启动需接受协议），启动后自动重新检测。
+    </p>
     <p v-else-if="hardBlocking" class="gate-msg hard">
       Hard gate 未通过，无法启动。请修复 Docker / workspace 权限后重试。
     </p>
@@ -89,6 +93,9 @@ function onConfigChanged() {
     <div class="actions">
       <button class="primary" :disabled="!startEnabled" @click="store.startFromSummary()">Start</button>
       <button v-if="store.restorableLayout" class="primary" :disabled="!startEnabled" @click="store.resumeLayout()">恢复布局</button>
+      <button v-if="dockerDown" class="primary" :disabled="store.dockerStarting" @click="store.startDockerAndRepreflight()">
+        {{ store.dockerStarting ? "正在启动 Docker…" : "启动 Docker" }}
+      </button>
       <button @click="changeSettings">{{ store.showAdvanced ? "收起设置" : "Change settings" }}</button>
       <button v-if="imageMissing" class="danger" @click="store.startBuild(store.launch.image)">构建镜像</button>
       <button @click="store.backToPicker()">Cancel</button>

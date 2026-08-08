@@ -494,12 +494,14 @@ pub async fn run_control(
     timeout: Duration,
     cancel: CancellationToken,
 ) -> Result<Envelope, WorkbenchError> {
-    let mut child = match Command::new(executable)
-        .args(&argv)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let mut cmd = Command::new(executable);
+    cmd.args(&argv);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW: no console flash for piped children
+    let mut child = match cmd.spawn()
     {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -582,7 +584,7 @@ async fn read_capped<R: AsyncRead + Unpin>(mut r: R, cap: usize) -> (Vec<u8>, bo
 /// `build.cancelled` and clean its Docker child group (S0.5 start_new_session +
 /// killpg). On Windows there is no SIGINT equivalent for a detached process, so
 /// SIGKILL via `start_kill` (no cancelled event -> transport failure, §4.1.4).
-fn sigint_or_kill(child: &tokio::process::Child) {
+fn sigint_or_kill(child: &mut tokio::process::Child) {
     #[cfg(unix)]
     {
         if let Some(pid) = child.id() {
@@ -609,12 +611,14 @@ pub async fn run_build_stream(
     cancel: CancellationToken,
     event_tx: mpsc::Sender<BuildEvent>,
 ) -> Result<(), WorkbenchError> {
-    let mut child = match Command::new(executable)
-        .args(&argv)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let mut cmd = Command::new(executable);
+    cmd.args(&argv);
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW: no console flash for piped children
+    let mut child = match cmd.spawn()
     {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -669,11 +673,11 @@ pub async fn run_build_stream(
     let exit = tokio::select! {
         r = child.wait() => r,
         _ = tokio::time::sleep(timeout) => {
-            sigint_or_kill(&child);
+            sigint_or_kill(&mut child);
             child.wait().await
         }
         _ = cancel.cancelled() => {
-            sigint_or_kill(&child);
+            sigint_or_kill(&mut child);
             child.wait().await
         }
     };
