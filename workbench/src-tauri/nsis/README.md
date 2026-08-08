@@ -15,6 +15,13 @@ default template with S4.1.b additions:
 Source: `https://crates.io/crates/tauri-bundler` 2.9.4,
 `src/bundle/windows/nsis/installer.nsi`.
 
+## Bundled AISC CLI bundle (aisc-bundle)
+
+The installer ships the full AISC CLI bundle (`aisc-bundle\`) next to the
+sidecar exe so CLI root discovery works on an installed Workbench without a
+repository checkout (`resources.py` frozen-bundle branch). The bundle is
+**not** committed: CI stages it via `python packaging/artifact.py stage --root . --output workbench/src-tauri/nsis/bundle` before `tauri build` (fails fast on verification), and `tauri.conf.json` maps it into `$INSTDIR` with `bundle.resources` (`nsis/bundle/aisc-bundle` -> `aisc-bundle`, recursive directory copy rendered as one `File /a "/oname=..."` per file by the NSIS template). Locally, `tauri build` requires the staging step to have run first — same friction class as the externalBin sidecar.
+
 ## Maintenance
 
 When upgrading tauri-bundler (via `@tauri-apps/cli`), diff this file against

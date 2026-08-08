@@ -17,6 +17,15 @@
 - 验证：cargo 70 绿（tauri.conf schema 校验通过，`webviewInstallMode` 是 internally-tagged enum 需 `{type: ...}` 形状）；npm build 零错误；NSIS 模板编译 + winget 检测逻辑由 CI Windows runner 验证（本机 Linux 无 makensis）；实机手测清单见 `docs/platform-windows.md`（用户 Windows 实机）。
 - gap（明确 deferral）：macOS pkg / Linux preinst 安装体验 -> S4.1.c；签名/公证 -> S4.2 发布门；安装器多语言（zh-CN 等，模板已留结构）-> 后续；winget 安装进度显示（当前 DetailPrint 文本）-> 后续。
 
+#### S4.1.b 修复 — 安装版 Workbench「打开目录 → 构建镜像」失败（2026-08-08）
+
+- **根因（两个叠加）**：① 安装器只装 sidecar exe 无 `aisc-bundle\`，CLI root 发现（`src/aisc/application/resources.py` 冻结 bundle 分支）无来源 → CliError "AISC root not found"（`AISC_ERR_GENERAL`）→ Workbench 显示通用「AISC CLI 返回错误」；Linux dev 正常纯属 CWD 恰好是仓库。② 修好 ① 后必现：`build --events` 路径 `run_streaming_captured`（`src/aisc/adapters/docker_.py`）POSIX-only——`select.select` 在 Windows 管道 fd 抛 WinError 10038、`os.killpg`/`SIGKILL` 不存在，CLI 带 traceback 崩溃、不发 `build.failed` 终端事件 → Workbench 报 `WB_ERR_CLI_PROTOCOL`。
+- **Fix B（流式捕获跨平台）**：drain 拆为 `_drain_select`（POSIX 原样保留，零回归）+ `_drain_threads`（Windows：daemon reader 线程 + queue，`on_chunk` 仅主线程调用，超时抛 `subprocess.TimeoutExpired` 与 POSIX 契约一致）；杀子进程统一 `_kill_child`（POSIX `os.killpg` + Windows `taskkill /T /F` 兜底 + `proc.kill()`）。preflight `text=True` 补 `encoding="utf-8", errors="replace"`（Windows 非 UTF-8 区域按 ANSI 解码可崩）。新增 `tests/features/test_streaming_captured_cross_platform.py`（6 用例，任意 OS 可跑，Windows CI 覆盖线程分支）。
+- **Fix A（安装器随附 CLI bundle）**：`.github/workflows/nsis-installer.yml` 加 staging 步骤（`packaging/artifact.py stage` → `workbench/src-tauri/nsis/bundle`，复用 stage_bundle + verify_staged_bundle）+ 安装后冒烟（静默 `/S` 安装 → 定位 `$LOCALAPPDATA\AISC Workbench` 下 sidecar → `version --format json` + `build --dry-run --tag smoke:latest --events`，零 docker 调用验证冻结 bundle root 发现）；`tauri.conf.json` `bundle.resources` 映射 `nsis/bundle/aisc-bundle` → `$INSTDIR\aisc-bundle`（目录递归展开，命中 `resources.py` 冻结分支）；staging 产物为 CI 生成构建物，`.gitignore` 排除 `workbench/src-tauri/nsis/bundle/`。Rust 侧不改（安装版 root 发现与 cwd 无关）。
+- **vendor/checksums.txt 刷新（前置修复）**：Dockerfile/entrypoint.sh 在 S0.4（f0877a5）修改后未重算哈希、`aisc-provider-inspect`/`aisc-session-wrapper` 从未录入，`artifact.py stage` 校验（release artifact 流程与本 CI staging 均依赖）全平台失败；`bash tools/vendor-refresh.sh` 重生成（DEVELOP_WIKI 维护要求）。
+- 验证：Fix B 单测 6/6 + features 55 绿；本机 staging VERIFICATION PASSED（CI 同命令）；NSIS 实装冒烟由 CI `nsis-installer.yml` 执行；最终实机全流程（打开目录 → preflight → 构建镜像 → runtime start）待用户 Windows 实机验收。
+- gap（观察项，不在本次范围）：`runtime start` 卷挂载 `-v C:\...:/root/app` 依赖 Docker Desktop file-sharing（Windows 路径盘符/大小写语义）。
+
 #### S4.1.a CLI sidecar 打包与分发基础（06-implementation-plan.md §六 S4.1；02 §四.3）
 
 - **PyInstaller CLI 独立二进制**：`packaging/aisc.spec`（onefile、console=True--CLI 是控制台工具，`session open` 经 PTY/ConPTY 需 console subsystem；piped spawn 用 CREATE_NO_WINDOW 防窗口闪现）+ `scripts/build-cli.sh`（linux/macos，TARGET_TRIPLE 命名）+ `scripts/build-cli.ps1`（windows）。产物 `aisc-<target-triple>`（Tauri externalBin 约定）。本地产物 10MB 单文件，`version --format json` envelope 正确。

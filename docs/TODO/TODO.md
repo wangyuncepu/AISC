@@ -63,6 +63,7 @@
 
 # 20260806
 - [x] Workbench S4.1.b：Windows NSIS 定制安装器（依赖检测 + winget 引导装 Docker/Python/WebView2），CI 构建验证 + 实机手测清单见 docs/platform-windows.md
+- [x] 修复安装版 Workbench「打开目录 → 构建镜像」失败（2026-08-08）：NSIS 安装器随附 aisc-bundle（CI staging + 静默安装冒烟）+ build --events 流式捕获跨平台化（_drain_threads + _kill_child）+ vendor/checksums.txt 刷新，见 devlog S4.1.b 修复
 - [ ] 临时模式下，cc-switch不可用
 - [ ] aisc run命令解耦，引导混乱，用户感到费解
 - [ ] agent加上Pi/opencode
