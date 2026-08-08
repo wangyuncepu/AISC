@@ -2,9 +2,35 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）
+## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）
 
 ### 变更
+
+#### S3.3 可访问性（06-implementation-plan.md §六 S3.3；02 §十二；04 §九）- Phase 3 收尾
+
+- `TabBar.vue`：ARIA tabs 键盘导航--`@keydown` on tablist：ArrowLeft/Up 前一、ArrowRight/Down 后一（wrap-around）、Home/End 首尾，激活 + `tabRefs[i].focus()` 焦点跟随（04 §九）；`aria-controls` 指向终端。
+- `App.vue`：aria-live 区域（`role="status" aria-live="polite"` + `role="alert" aria-live="assertive"`，`.sr-only` 视觉隐藏）；`announce(text, alert)` helper **节流 ~1s**（burst 合并为最近一次，普通 poll 不播报，04 §九）；`watch(store.runtimeState)` 状态变化播报「Runtime Running/Stopped/…」、`watch(store.error)` 失败播报（alert）。平台快捷键（capture-phase window handler）：`Ctrl/Cmd+1..4` 切 tab + **自动聚焦目标终端**（`defineExpose({focus})` + `terminalRefs` Map + `nextTick` 延迟 focus--同步 focus 时 v-show 切换未完成、xterm 不可见导致焦点无效，实测需按两次才聚焦，nextTick 修复）、`Ctrl/Cmd+Enter` 摘要启动；终端聚焦未修饰键归 xterm（路由优先级，06 §六.3.3）；onBeforeUnmount remove listener + clear announceTimer（cleanup 延续 S3.1）。
+- `styles.css`：`:focus-visible` 全局轮廓（键盘导航可见、鼠标点击不显）。
+- 非仅靠色审计：PreflightGate dot+状态文本 ✓、Sidebar state+freshness 文本 ✓、TabBar 状态文本 ✓（文档确认无仅色项）。
+- 验证：npm build 零错误；cargo 零改零错；dev 无 panic；实机手测通过--键盘 Tab 全流程（picker 输入+下一步、summary Ctrl+Enter 启动、ready 后 Ctrl+1..4 切 tab 直接输入（nextTick focus 修复后一次到位）、TabBar 方向键/Home/End 切换焦点跟随、focus-visible 轮廓、终端未修饰键输入正常、常规回归不破）。
+- gap（明确 deferral）：屏幕阅读器完整 smoke test（NVDA/VoiceOver 真机）-> release 实机；OS 级全局快捷键 -> MVP 不做（06 §六.3.3）；焦点陷阱/复杂 roving tabindex -> 简单方向键导航已够。
+
+#### S3.2 安全硬化（06-implementation-plan.md §六 S3.2）
+
+- **显式 CSP**：`tauri.conf.json` `app.security.csp` 从 `null`（宽松）改为显式：`default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; script-src 'self'`。`ipc:` + dev 端口给 Tauri IPC/vite HMR，`'unsafe-inline'` style 给 Vue scoped style 运行时注入。dev 实测 HMR/终端/样式不破。
+- **移除未用 opener**：前端零调用 `openUrl`/`openPath`（grep 确认）-> `Cargo.toml`+`Cargo.lock` 移除 `tauri-plugin-opener`、`lib.rs` 移除 plugin init、`capabilities` 移除 `opener:default`、`package.json` 移除 `@tauri-apps/plugin-opener`。最小攻击面（Workbench 不打开外部 URL）。
+- **破坏性操作确认**（`confirm` 原生对话框，取消不执行）：`stopRuntime`（侧栏，有活动 session 时文案含数量「有 N 个活动会话，停止将结束它们并停止 Runtime」）、`stopConflictRuntime`（「停止 Runtime <id 前 8 位>？容器将停止但保留」）、`removeConflictRuntime`（「移除/强制移除运行中 Runtime <id 前 8 位>？容器与元数据将永久删除」，force 文案区分）。
+- **`docs/security-checklist.md`**（新）：安全验证清单--Tauri 配置（CSP/最小权限/opener 移除）、破坏性操作边界（confirm/退出确认/workspace 只读预检）、secret 与敏感数据（history/settings 无 secret、PTY scrollback 不持久化、粘贴 1MB cap S1.3、redact 脱敏）、进程与资源（无孤儿进程、无持久化日志通道）。已知 defer：签名/公证（S4）、Provider 密钥（MVP 从不读）、完整日志通道（无持久化日志）。
+- 验证：cargo 67 绿（opener 移除 + CSP 编译零回归）；npm build 零错误；dev 无 panic/CSP 错误；实机手测通过--CSP 不破 HMR/终端/样式、确认弹窗（取消不执行/确认执行）、常规回归正常、`~/.config/cn.aisc.workbench/` 仅 history.json/history.lock/settings.json（无 scrollback/日志/secret 文件）。
+- gap（明确 deferral）：macOS 签名/公证 + Windows 代码签名 -> S4 发布门；8h/10 session/高输出长测 -> release 实机。
+
+#### S3.1 并发与异常硬化（03-lifecycle-contract.md §九；04-observability.md §六.2）
+
+- 后端 `runtime.rs`：`OpMutexes` managed state（`HashMap<runtime_id, Arc<tokio::sync::Mutex<()>>>`，std Mutex 护 map、tokio Mutex 跨 await 持锁）+ `acquire_op_lock`（`lock_owned`，guard 命令结束时 drop 释放）。`stop_runtime`/`runtime_restart`/`remove_runtime` 在 run_control 前 acquire 该 runtime_id 的锁：**同 runtime 串行、不同 runtime 并发**（03 §九.1/§九.6；Tauri op mutex 只处理本进程排序，跨进程由 CLI registry/workspace lock 保证）。`start_runtime` 仍用 StartOp 全局单 start token。`lib.rs` `.manage(OpMutexes::default())`。2 个 tokio 单测（同 id 二次 acquire 阻塞、不同 id 并发立即获锁）。
+- store `stores/runtime.ts`：**request_seq/revision reducer**（04 §六.2）替换 S2.2.b 的 observed_at 排序守卫--`requestSeq`/`lastAppliedSeq`/`revision` 计数器；`refreshRuntime`（轮询）每次 `++requestSeq` 赋 seq，`applyRuntimeSnapshot(snap, seq)` 仅当 `seq >= lastAppliedSeq` 才 apply（stale 低 seq 响应丢弃，慢 poll/被控制操作取代的响应不覆盖新状态）+ revision 递增；控制操作（ensureRuntime start/reuse/restart）赋 `++requestSeq`（restart apply snapshot；start/reuse 设代际边界 `lastAppliedSeq = ++requestSeq`，supersede 在途旧 poll）。observed_at 仍用于 freshness 显示（不再用于排序）。`resetWorkspace`/`stopRuntime` 重置 seq/revision。
+- **cleanup 审计**（无缺口需修）：useRuntimePolling/useProviderPolling `stop()` 清 timer + remove 3 listeners（visibility/focus/blur）✓；Terminal `onBeforeUnmount` closePty + clear resize timer + disconnect ResizeObserver + remove window resize listener ✓；store `startTimer`（stopTimer 清）/`saveTimer`（debounce，app 生命周期 OK）✓。useProviderPolling 的 `watch(activeTabId, runtimeState)` 不 unlisten（App 根组件生命周期，可接受，文档注明）。
+- 验证：cargo 67 绿（56 lib+2 op lock+7 cli+4 pty，2 新测试零回归）；npm build 零错误；dev 无 panic；实机手测回归通过--常规流程（picker->summary->Start/恢复布局->多 tab->停止->重进）正常，侧栏 Runtime 项（state+freshness+observed）轮询正常更新，控制台无报错。
+- gap（明确 deferral）：operation_id for control ops（cancel 流程已处理 start 取消；UI 单 op 按钮禁用无并发竞态）-> 后续多 op 并发再加；两窗口 runtime state 细粒度 merge（CLI 跨进程锁 + 轮询已覆盖）-> 后续；Docker daemon 重启/runtime OOM 特殊处理（轮询检测 unknown/stopped，session 经 PTY 自终）-> 无额外代码；8h/10 session/高输出长测 -> S3.2（scrollback 不持久化）+ release 实机。
 
 #### S2.4.b 恢复布局（resume layout）（02-startup-flow.md §2.3；03-lifecycle-contract.md §六）- Phase 2 收尾
 

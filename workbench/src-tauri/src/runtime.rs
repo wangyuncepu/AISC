@@ -11,6 +11,7 @@
 //! (list), §5.4 (inspect), §5.5 (stop/restart/remove), §4.1 (build events);
 //! 03-lifecycle-contract.md §四 (runtime state machine), §十 (domain API).
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{ipc::Channel, AppHandle, Manager};
 use tokio::sync::mpsc;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{run_build_stream, run_control, BuildEvent};
@@ -43,6 +45,29 @@ pub struct StartOp(pub Arc<Mutex<Option<CancellationToken>>>);
 /// Cancellation token for the in-flight `build_image` operation.
 #[derive(Default, Clone)]
 pub struct BuildOp(pub Arc<Mutex<Option<CancellationToken>>>);
+
+/// Per-runtime operation mutexes (03 §九.1: each runtime ID has an independent
+/// operation mutex; different runtimes run concurrently). Keyed by runtime_id.
+/// A `std::sync::Mutex` guards the map (held briefly); a `tokio::sync::Mutex`
+/// per runtime is held across the async op.
+#[derive(Default, Clone)]
+pub struct OpMutexes(pub Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>);
+
+/// Acquire the operation lock for a runtime. Same runtime_id serializes;
+/// different ids run concurrently. The returned guard is held until the op
+/// completes (dropped at the end of the command).
+async fn acquire_op_lock(
+    mutexes: &OpMutexes,
+    runtime_id: &str,
+) -> tokio::sync::OwnedMutexGuard<()> {
+    let arc = {
+        let mut g = mutexes.0.lock().expect("op mutexes map poisoned");
+        g.entry(runtime_id.to_string())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    };
+    arc.lock_owned().await
+}
 
 /// Subset of the `aisc runtime start` envelope `data` (extra fields ignored).
 /// The start payload is a distinct shape from `RuntimeSnapshot`: it carries
@@ -360,6 +385,7 @@ pub async fn runtime_restart(
     workspace: String,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
     let pin = resolve_pin(&app)?;
+    let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_restart_argv(&runtime_id, &workspace);
     let env = run_control(&pin, argv, RESTART_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -377,6 +403,7 @@ pub async fn stop_runtime(
     workspace: String,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
     let pin = resolve_pin(&app)?;
+    let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_stop_argv(&runtime_id, &workspace);
     let env = run_control(&pin, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -412,6 +439,7 @@ pub async fn remove_runtime(
     force: bool,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
     let pin = resolve_pin(&app)?;
+    let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_remove_argv(&runtime_id, &workspace, force);
     let env = run_control(&pin, argv, REMOVE_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -649,5 +677,31 @@ mod tests {
         assert_eq!(s.agent, "codex");
         assert_eq!(s.auth_status, "not_configured");
         assert_eq!(s.provider_name, "");
+    }
+
+    #[tokio::test]
+    async fn op_lock_serializes_same_runtime() {
+        let m = OpMutexes::default();
+        let g1 = acquire_op_lock(&m, "rid-a").await;
+        let m2 = m.clone();
+        let h = tokio::spawn(async move {
+            let _g2 = acquire_op_lock(&m2, "rid-a").await;
+            true
+        });
+        // Second acquire on the same id must block while the first holds it.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(!h.is_finished(), "same-runtime op should block");
+        drop(g1);
+        let done = tokio::time::timeout(std::time::Duration::from_millis(500), h).await;
+        assert!(done.is_ok(), "second op completes after the first releases");
+    }
+
+    #[tokio::test]
+    async fn op_lock_concurrent_different_runtimes() {
+        let m = OpMutexes::default();
+        let _g1 = acquire_op_lock(&m, "rid-a").await;
+        // Different runtime id acquires immediately (no blocking).
+        let g2 = acquire_op_lock(&m, "rid-b").await;
+        drop(g2);
     }
 }

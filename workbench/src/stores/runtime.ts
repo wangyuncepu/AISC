@@ -83,6 +83,13 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const freshness = ref<Freshness>("unknown");
   const inspectInFlight = ref(false);
 
+  // S3.1: request_seq / revision anti-revert (04 §六.2). Each observation
+  // request gets a monotonic seq; stale (low-seq) responses never overwrite
+  // newer state, replacing the S2.2.b observed_at ordering guard.
+  const requestSeq = ref(0);
+  const lastAppliedSeq = ref(0);
+  const revision = ref(0);
+
   // S2.3.b: per-agent provider cache (claude/codex only; 04 §四.2 "no global
   // provider"). bash/cc-switch are not applicable.
   const providerStatuses = ref<Record<"claude" | "codex", ProviderStatus | null>>({
@@ -193,6 +200,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
     conflictError.value = null;
     freshness.value = "unknown";
     inspectInFlight.value = false;
+    requestSeq.value = 0;
+    lastAppliedSeq.value = 0;
+    revision.value = 0;
     clearProviderStatuses();
   }
 
@@ -327,14 +337,16 @@ export const useRuntimeStore = defineStore("runtime", () => {
   /** Apply a fresh runtime observation with a simple stale guard (04 §六.2):
    * an older observation must not overwrite a newer one. ISO-UTC strings
    * compare lexicographically = chronologically. */
-  function applyRuntimeSnapshot(snap: RuntimeSnapshot) {
-    const cur = runtimeSnapshot.value;
-    if (cur && cur.observed_at && snap.observed_at && snap.observed_at < cur.observed_at) {
-      return; // stale observation - don't overwrite or mark fresh (04 §六.2)
-    }
+  /** Apply an observation with its request seq (04 §六.2). A response whose
+   * seq is lower than the last applied one is stale (slow poll or superseded
+   * control op) and is dropped - it must never overwrite newer state. */
+  function applyRuntimeSnapshot(snap: RuntimeSnapshot, seq: number) {
+    if (seq < lastAppliedSeq.value) return; // stale response
     runtimeSnapshot.value = snap;
     runtimeState.value = snap.state;
     freshness.value = "fresh";
+    lastAppliedSeq.value = seq;
+    revision.value += 1;
   }
 
   /** Mark the current observation stale (failed request or app resume). Keeps
@@ -344,14 +356,16 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   /** Inspect the active runtime now and apply (deduped). Drives the polling
-   * loop and the manual Refresh button. */
+   * loop and the manual Refresh button. Assigns a request seq so a stale
+   * response can never overwrite newer state (04 §六.2). */
   async function refreshRuntime() {
     if (!runtimeId.value || !workspace.value.trim()) return;
     if (inspectInFlight.value) return;
     inspectInFlight.value = true;
+    const seq = ++requestSeq.value;
     try {
       const snap = await ipc.runtimeInspect(workspace.value.trim(), runtimeId.value);
-      applyRuntimeSnapshot(snap);
+      applyRuntimeSnapshot(snap, seq);
     } catch {
       markStale();
     } finally {
@@ -494,6 +508,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   async function stopConflictRuntime(id: string) {
+    const ok = await confirm(`停止 Runtime ${id.slice(0, 8)}？容器将停止但保留。`);
+    if (!ok) return;
     try {
       await ipc.stopRuntime(workspace.value.trim(), id);
     } catch (e) {
@@ -503,6 +519,12 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   async function removeConflictRuntime(id: string, force = false) {
+    const ok = await confirm(
+      force
+        ? `强制移除运行中的 Runtime ${id.slice(0, 8)}？容器与元数据将永久删除。`
+        : `移除 Runtime ${id.slice(0, 8)}？容器与元数据将永久删除。`
+    );
+    if (!ok) return;
     try {
       await ipc.removeRuntime(workspace.value.trim(), id, force);
     } catch (e) {
@@ -645,7 +667,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
 
   /** Ensure the runtime is ready per preflight's recommended_action (start /
    * reuse / restart). Returns false for resolve_conflict (Start is disabled by
-   * the config gate; defensive). Shared by startFromSummary + resumeLayout. */
+   * the config gate; defensive). Shared by startFromSummary + resumeLayout.
+   * Control ops bump the request seq so in-flight stale polls are superseded
+   * (04 §六.2). */
   async function ensureRuntime(): Promise<boolean> {
     const report = preflight.value;
     if (!report) return false;
@@ -659,15 +683,21 @@ export const useRuntimeStore = defineStore("runtime", () => {
         launch.value.scope
       );
       runtimeState.value = "running";
+      // Generation boundary: supersede any in-flight poll observations.
+      lastAppliedSeq.value = ++requestSeq.value;
+      revision.value += 1;
     } else if (report.recommended_action === "reuse" && report.matching_runtime_id) {
       runtimeId.value = report.matching_runtime_id;
       status.value = "starting";
       runtimeState.value = "running";
+      lastAppliedSeq.value = ++requestSeq.value;
+      revision.value += 1;
     } else if (report.recommended_action === "restart" && report.matching_runtime_id) {
       runtimeId.value = report.matching_runtime_id;
       status.value = "starting";
+      const seq = ++requestSeq.value;
       const snap = await ipc.runtimeRestart(workspace.value.trim(), runtimeId.value);
-      applyRuntimeSnapshot(snap);
+      applyRuntimeSnapshot(snap, seq);
     } else {
       return false; // resolve_conflict - Start disabled, defensive
     }
@@ -756,12 +786,21 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   async function stopRuntime() {
+    const live = tabs.value.filter(
+      (t) => t.sessionState === "running" || t.sessionState === "starting"
+    );
+    const ok = await confirm(
+      live.length > 0
+        ? `有 ${live.length} 个活动会话，停止将结束它们并停止 Runtime。继续？`
+        : "停止 Runtime？容器将停止但保留。"
+    );
+    if (!ok) return;
     status.value = "stopping";
     // Close every live session best-effort (03 §七.2), then stop the runtime.
-    const live = tabs.value.filter(
+    const closing = tabs.value.filter(
       (t) => t.sessionId && !TERMINAL_STATES.includes(t.sessionState) && t.sessionState !== "closing"
     );
-    await Promise.all(live.map((t) => ipc.closeSession(t.sessionId!).catch(() => null)));
+    await Promise.all(closing.map((t) => ipc.closeSession(t.sessionId!).catch(() => null)));
     tabs.value = [];
     activeTabId.value = null;
     try {
@@ -779,6 +818,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
     runtimeSnapshot.value = null;
     freshness.value = "unknown";
     inspectInFlight.value = false;
+    requestSeq.value = 0;
+    lastAppliedSeq.value = 0;
+    revision.value = 0;
     clearProviderStatuses();
     preflight.value = null;
     status.value = "picker";

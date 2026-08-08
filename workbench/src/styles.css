@@ -22,3 +22,12 @@ body,
 body {
   overflow: hidden;
 }
+
+/* S3.3: keyboard-focus visibility (only for keyboard navigation, never on
+ * mouse clicks). */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #0e639c;
+  outline-offset: 2px;
+}
