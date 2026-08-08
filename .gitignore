@@ -68,3 +68,7 @@ tasks/
 # Backup / temp artefact clutter
 *.bak
 workbench/src-tauri/binaries/
+
+# CI-staged AISC CLI bundle (workbench/src-tauri/nsis/bundle/aisc-bundle)
+# staged by nsis-installer.yml before `tauri build`; generated at build time
+workbench/src-tauri/nsis/bundle/

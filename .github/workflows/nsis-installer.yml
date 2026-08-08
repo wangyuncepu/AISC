@@ -55,6 +55,12 @@ jobs:
           Copy-Item dist/aisc-x86_64-pc-windows-msvc.exe workbench/src-tauri/binaries/aisc-x86_64-pc-windows-msvc.exe
           Get-ChildItem workbench/src-tauri/binaries
 
+      - name: Stage AISC CLI bundle (aisc-bundle for root discovery)
+        shell: pwsh
+        run: |
+          python packaging/artifact.py stage --root . --output workbench/src-tauri/nsis/bundle
+          Get-ChildItem workbench/src-tauri/nsis/bundle/aisc-bundle | Select-Object -First 5 Name
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -82,3 +88,28 @@ jobs:
           name: aisc-workbench-windows-nsis
           path: workbench/src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
+
+      # End-to-end smoke on the *installed* app: silent install, then run the
+      # sidecar's version + `build --dry-run` (zero docker calls) to prove the
+      # bundled aisc-bundle is discovered next to the sidecar exe.
+      - name: Smoke test installed app (silent install + CLI bundle discovery)
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem workbench/src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $setup) { throw "no setup.exe artifact found" }
+          Write-Host "installing: $($setup.FullName)"
+          $proc = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "silent install failed with exit $($proc.ExitCode)" }
+
+          $appDir = "$env:LOCALAPPDATA\AISC Workbench"
+          if (-not (Test-Path "$appDir\aisc-bundle\VERSION")) { throw "aisc-bundle not installed under $appDir" }
+          $sidecar = Get-ChildItem $appDir -Filter "aisc-x86_64-pc-windows-msvc.exe" | Select-Object -First 1
+          if (-not $sidecar) { throw "sidecar not found under $appDir" }
+          Write-Host "sidecar: $($sidecar.FullName)"
+
+          & $sidecar.FullName version --format json
+          if ($LASTEXITCODE -ne 0) { throw "aisc version failed with exit $LASTEXITCODE" }
+
+          & $sidecar.FullName build --dry-run --tag smoke:latest --events
+          if ($LASTEXITCODE -ne 0) { throw "aisc build --dry-run failed with exit $LASTEXITCODE" }
+          Write-Host "SMOKE: PASSED"
