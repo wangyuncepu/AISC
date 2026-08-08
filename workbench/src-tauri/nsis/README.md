@@ -22,6 +22,21 @@ sidecar exe so CLI root discovery works on an installed Workbench without a
 repository checkout (`resources.py` frozen-bundle branch). The bundle is
 **not** committed: CI stages it via `python packaging/artifact.py stage --root . --output workbench/src-tauri/nsis/bundle` before `tauri build` (fails fast on verification), and `tauri.conf.json` maps it into `$INSTDIR` with `bundle.resources` (`nsis/bundle/aisc-bundle` -> `aisc-bundle`, recursive directory copy rendered as one `File /a "/oname=..."` per file by the NSIS template). Locally, `tauri build` requires the staging step to have run first — same friction class as the externalBin sidecar.
 
+## Languages
+
+`bundle.windows.nsis.languages: ["English", "SimpChinese"]` + `displayLanguageSelector:
+true` in `tauri.conf.json`: the rendered installer shows the MUI language picker
+(remembered in `HKCU\Software\cn.aisc.workbench\...\Installer Language`, so it
+appears only on the first install; silent `/S` skips it). The MUI page strings
+come from tauri-bundler's embedded language files; the custom S4.1.b strings are
+`LangString DEP_*` definitions in `installer.nsi` right after the
+`{{#each language_files}}` include block. The file must stay **UTF-8 without
+BOM** - tauri-bundler writes the rendered script with a UTF-8 BOM and compiles
+with `-INPUTCHARSET UTF8`, which is what makes the CJK strings render correctly
+on any locale. `$(DEP_*)` references in code earlier in the file are fine
+(makensis resolves LangStrings at the end of the compile pass, same as the
+template's own `$(older)`/`$(alreadyInstalled)` references).
+
 ## Maintenance
 
 When upgrading tauri-bundler (via `@tauri-apps/cli`), diff this file against
@@ -31,6 +46,9 @@ the new default template and re-apply the S4.1.b additions:
 2. The dependency page + functions between `MUI_PAGE_STARTMENU` and
    `MUI_PAGE_INSTFILES`.
 3. `Section Dependencies` between `Section EarlyChecks` and `Section WebView2`.
+4. The `LangString DEP_*` block after the `{{#each language_files}}` include
+   (keep it in sync with the strings used by 2. and 3.; `${LANG_SIMPCHINESE}`
+   requires `SimpChinese` to stay in the `languages` config array).
 
 Keep all other `{{handlebars}}` placeholders intact - they are required by the
 renderer. Do not delete or renumber the page comments; the template depends on

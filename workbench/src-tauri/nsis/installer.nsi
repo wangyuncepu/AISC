@@ -482,52 +482,52 @@ Function PageDepsCheck
     StrCpy $DepsDockerWasMissing 1
   ${EndIf}
 
-  !insertmacro MUI_HEADER_TEXT "Environment Check" "AISC Workbench needs Docker Desktop and Python 3. Missing items are installed automatically on the next page."
+  !insertmacro MUI_HEADER_TEXT "$(DEP_TITLE)" "$(DEP_SUBTITLE)"
   nsDialogs::Create 1018
   Pop $0
   ${IfThen} $(^RTL) = 1 ${|} nsDialogs::SetRTL $(^RTL) ${|}
 
-  ${NSD_CreateLabel} 0 0 100% 24u "AISC Workbench runs AISC CLI in Docker. The following components are checked:"
+  ${NSD_CreateLabel} 0 0 100% 24u "$(DEP_INTRO)"
   Pop $0
 
-  ${NSD_CreateLabel} 16u 34u 100% 12u "Docker Desktop:"
+  ${NSD_CreateLabel} 16u 34u 100% 12u "$(DEP_DOCKER)"
   Pop $DepsDockerLabel
-  ${NSD_CreateLabel} 16u 52u 100% 12u "Python 3:"
+  ${NSD_CreateLabel} 16u 52u 100% 12u "$(DEP_PYTHON)"
   Pop $DepsPythonLabel
-  ${NSD_CreateLabel} 16u 70u 100% 12u "winget (App Installer):"
+  ${NSD_CreateLabel} 16u 70u 100% 12u "$(DEP_WINGET)"
   Pop $DepsWingetLabel
-  ${NSD_CreateLabel} 16u 88u 100% 12u "WebView2:"
+  ${NSD_CreateLabel} 16u 88u 100% 12u "$(DEP_WEBVIEW2)"
   Pop $DepsWebview2Label
 
   ${NSD_CreateLabel} 0 112u 100% 20u ""
   Pop $DepsStatusLabel
 
-  ${NSD_CreateButton} 0 140u 45% 14u "Install missing dependencies"
+  ${NSD_CreateButton} 0 140u 45% 14u "$(DEP_BTN_INSTALL)"
   Pop $DepsInstallButton
-  ${NSD_CreateButton} 0 160u 45% 14u "Skip"
+  ${NSD_CreateButton} 0 160u 45% 14u "$(DEP_BTN_SKIP)"
   Pop $DepsSkipButton
-  ${NSD_CreateButton} 50% 140u 45% 14u "Start Docker Desktop"
+  ${NSD_CreateButton} 50% 140u 45% 14u "$(DEP_BTN_START_DOCKER)"
   Pop $DepsStartDockerButton
-  ${NSD_CreateButton} 50% 160u 45% 14u "Open Microsoft Store"
+  ${NSD_CreateButton} 50% 160u 45% 14u "$(DEP_BTN_STORE)"
   Pop $DepsStoreButton
 
   ; Update labels from the check results
   ${If} $DepsDockerInstalled = 1
-    ${NSD_SetText} $DepsDockerLabel "Docker Desktop: installed"
+    ${NSD_SetText} $DepsDockerLabel "$(DEP_DOCKER) $(DEP_INSTALLED)"
   ${Else}
-    ${NSD_SetText} $DepsDockerLabel "Docker Desktop: not found"
+    ${NSD_SetText} $DepsDockerLabel "$(DEP_DOCKER) $(DEP_NOT_FOUND)"
   ${EndIf}
   ${If} $DepsPythonInstalled = 1
-    ${NSD_SetText} $DepsPythonLabel "Python 3: installed"
+    ${NSD_SetText} $DepsPythonLabel "$(DEP_PYTHON) $(DEP_INSTALLED)"
   ${Else}
-    ${NSD_SetText} $DepsPythonLabel "Python 3: not found"
+    ${NSD_SetText} $DepsPythonLabel "$(DEP_PYTHON) $(DEP_NOT_FOUND)"
   ${EndIf}
   ${If} $DepsWingetInstalled = 1
-    ${NSD_SetText} $DepsWingetLabel "winget (App Installer): installed"
+    ${NSD_SetText} $DepsWingetLabel "$(DEP_WINGET) $(DEP_INSTALLED)"
   ${Else}
-    ${NSD_SetText} $DepsWingetLabel "winget (App Installer): not found"
+    ${NSD_SetText} $DepsWingetLabel "$(DEP_WINGET) $(DEP_NOT_FOUND)"
   ${EndIf}
-  ${NSD_SetText} $DepsWebview2Label "WebView2: handled by the installer"
+  ${NSD_SetText} $DepsWebview2Label "$(DEP_WEBVIEW2_OK)"
 
   ; Show/hide buttons per state
   ${If} $DepsDockerInstalled = 1
@@ -563,7 +563,7 @@ FunctionEnd
 
 Function OnDepsInstall
   StrCpy $DepsSkip 0
-  ${NSD_SetText} $DepsStatusLabel "Installing missing dependencies, please wait..."
+  ${NSD_SetText} $DepsStatusLabel "$(DEP_STATUS_INSTALLING)"
   ; close the dialog as if the user pressed Next; the install runs on the
   ; INSTFILES page (Section Dependencies)
   SendMessage $HWNDPARENT ${WM_COMMAND} 1 0
@@ -571,7 +571,7 @@ FunctionEnd
 
 Function OnDepsSkip
   StrCpy $DepsSkip 1
-  ${NSD_SetText} $DepsStatusLabel "Skipping dependency installation. Missing dependencies will be reported when you start a runtime."
+  ${NSD_SetText} $DepsStatusLabel "$(DEP_STATUS_SKIPPING)"
   SendMessage $HWNDPARENT ${WM_COMMAND} 1 0
 FunctionEnd
 
@@ -594,7 +594,7 @@ FunctionEnd
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateOrUpdateDesktopShortcut
 ; Show run app after installation.
 !define MUI_FINISHPAGE_RUN
-!define MUI_FINISHPAGE_RUN_TEXT "Start AISC Workbench"
+!define MUI_FINISHPAGE_RUN_TEXT "$(DEP_FINISH_RUN)"
 !define MUI_FINISHPAGE_RUN_FUNCTION RunFinishApp
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
 !insertmacro MUI_PAGE_FINISH
@@ -664,6 +664,59 @@ FunctionEnd
 {{#each language_files}}
   !include "{{this}}"
 {{/each}}
+
+; S4.1.b custom dependency-page strings. MUI page strings come from the
+; tauri-bundler language files included above; these cover the custom page,
+; the finish-page run button, and the Section Dependencies log lines.
+; ${LANG_ENGLISH}/${LANG_SIMPCHINESE} come from the MUI_LANGUAGE macros above.
+LangString DEP_TITLE ${LANG_ENGLISH} "Environment Check"
+LangString DEP_TITLE ${LANG_SIMPCHINESE} "环境检查"
+LangString DEP_SUBTITLE ${LANG_ENGLISH} "AISC Workbench needs Docker Desktop and Python 3. Missing items are installed automatically on the next page."
+LangString DEP_SUBTITLE ${LANG_SIMPCHINESE} "AISC Workbench 需要 Docker Desktop 和 Python 3。缺失的组件将在下一页自动安装。"
+LangString DEP_INTRO ${LANG_ENGLISH} "AISC Workbench runs the AISC CLI in Docker. The following components are checked:"
+LangString DEP_INTRO ${LANG_SIMPCHINESE} "AISC Workbench 在 Docker 中运行 AISC CLI。将检查以下组件："
+LangString DEP_DOCKER ${LANG_ENGLISH} "Docker Desktop:"
+LangString DEP_DOCKER ${LANG_SIMPCHINESE} "Docker Desktop："
+LangString DEP_PYTHON ${LANG_ENGLISH} "Python 3:"
+LangString DEP_PYTHON ${LANG_SIMPCHINESE} "Python 3："
+LangString DEP_WINGET ${LANG_ENGLISH} "winget (App Installer):"
+LangString DEP_WINGET ${LANG_SIMPCHINESE} "winget（应用安装程序）："
+LangString DEP_WEBVIEW2 ${LANG_ENGLISH} "WebView2:"
+LangString DEP_WEBVIEW2 ${LANG_SIMPCHINESE} "WebView2："
+LangString DEP_INSTALLED ${LANG_ENGLISH} "installed"
+LangString DEP_INSTALLED ${LANG_SIMPCHINESE} "已安装"
+LangString DEP_NOT_FOUND ${LANG_ENGLISH} "not found"
+LangString DEP_NOT_FOUND ${LANG_SIMPCHINESE} "未找到"
+LangString DEP_WEBVIEW2_OK ${LANG_ENGLISH} "WebView2: handled by the installer"
+LangString DEP_WEBVIEW2_OK ${LANG_SIMPCHINESE} "WebView2：由安装程序处理"
+LangString DEP_BTN_INSTALL ${LANG_ENGLISH} "Install missing dependencies"
+LangString DEP_BTN_INSTALL ${LANG_SIMPCHINESE} "安装缺失的依赖"
+LangString DEP_BTN_SKIP ${LANG_ENGLISH} "Skip"
+LangString DEP_BTN_SKIP ${LANG_SIMPCHINESE} "跳过"
+LangString DEP_BTN_START_DOCKER ${LANG_ENGLISH} "Start Docker Desktop"
+LangString DEP_BTN_START_DOCKER ${LANG_SIMPCHINESE} "启动 Docker Desktop"
+LangString DEP_BTN_STORE ${LANG_ENGLISH} "Open Microsoft Store"
+LangString DEP_BTN_STORE ${LANG_SIMPCHINESE} "打开 Microsoft Store"
+LangString DEP_STATUS_INSTALLING ${LANG_ENGLISH} "Installing missing dependencies, please wait..."
+LangString DEP_STATUS_INSTALLING ${LANG_SIMPCHINESE} "正在安装缺失的依赖，请稍候……"
+LangString DEP_STATUS_SKIPPING ${LANG_ENGLISH} "Skipping dependency installation. Missing dependencies will be reported when you start a runtime."
+LangString DEP_STATUS_SKIPPING ${LANG_SIMPCHINESE} "已跳过依赖安装。缺少的依赖将在启动运行时提示。"
+LangString DEP_FINISH_RUN ${LANG_ENGLISH} "Start AISC Workbench"
+LangString DEP_FINISH_RUN ${LANG_SIMPCHINESE} "启动 AISC Workbench"
+LangString DEP_DETAIL_NO_WINGET ${LANG_ENGLISH} "winget not found - install Microsoft App Installer from the Microsoft Store and run this installer again, or install Docker Desktop and Python manually."
+LangString DEP_DETAIL_NO_WINGET ${LANG_SIMPCHINESE} "未找到 winget - 请从 Microsoft Store 安装应用安装程序（App Installer）后重新运行本安装程序，或手动安装 Docker Desktop 和 Python。"
+LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_ENGLISH} "Installing Docker Desktop via winget..."
+LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Docker Desktop……"
+LangString DEP_DETAIL_DOCKER_OK ${LANG_ENGLISH} "Docker Desktop installed."
+LangString DEP_DETAIL_DOCKER_OK ${LANG_SIMPCHINESE} "Docker Desktop 已安装。"
+LangString DEP_DETAIL_DOCKER_FAIL ${LANG_ENGLISH} "Docker Desktop install failed (exit code $0). You can install it manually from https://www.docker.com/products/docker-desktop/ or start Docker Desktop later from the Start menu."
+LangString DEP_DETAIL_DOCKER_FAIL ${LANG_SIMPCHINESE} "Docker Desktop 安装失败（退出码 $0）。可手动从 https://www.docker.com/products/docker-desktop/ 安装，或稍后从开始菜单启动 Docker Desktop。"
+LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_ENGLISH} "Installing Python 3.12 via winget..."
+LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Python 3.12……"
+LangString DEP_DETAIL_PYTHON_OK ${LANG_ENGLISH} "Python 3.12 installed."
+LangString DEP_DETAIL_PYTHON_OK ${LANG_SIMPCHINESE} "Python 3.12 已安装。"
+LangString DEP_DETAIL_PYTHON_FAIL ${LANG_ENGLISH} "Python 3.12 install failed (exit code $0). You can install it manually from https://www.python.org/downloads/"
+LangString DEP_DETAIL_PYTHON_FAIL ${LANG_SIMPCHINESE} "Python 3.12 安装失败（退出码 $0）。可手动从 https://www.python.org/downloads/ 安装。"
 
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
@@ -744,27 +797,27 @@ Section Dependencies
   ${EndIf}
 
   ${If} $DepsWingetInstalled = 0
-    DetailPrint "winget not found - install Microsoft App Installer from the Microsoft Store and run this installer again, or install Docker Desktop and Python manually."
+    DetailPrint "$(DEP_DETAIL_NO_WINGET)"
     Goto deps_done
   ${EndIf}
 
   ${If} $DepsDockerInstalled = 0
-    DetailPrint "Installing Docker Desktop via winget..."
+    DetailPrint "$(DEP_DETAIL_DOCKER_INSTALLING)"
     ExecWait '"winget" install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements' $0
     ${If} $0 = 0
-      DetailPrint "Docker Desktop installed."
+      DetailPrint "$(DEP_DETAIL_DOCKER_OK)"
     ${Else}
-      DetailPrint "Docker Desktop install failed (exit code $0). You can install it manually from https://www.docker.com/products/docker-desktop/ or start Docker Desktop later from the Start menu."
+      DetailPrint "$(DEP_DETAIL_DOCKER_FAIL)"
     ${EndIf}
   ${EndIf}
 
   ${If} $DepsPythonInstalled = 0
-    DetailPrint "Installing Python 3.12 via winget..."
+    DetailPrint "$(DEP_DETAIL_PYTHON_INSTALLING)"
     ExecWait '"winget" install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements' $0
     ${If} $0 = 0
-      DetailPrint "Python 3.12 installed."
+      DetailPrint "$(DEP_DETAIL_PYTHON_OK)"
     ${Else}
-      DetailPrint "Python 3.12 install failed (exit code $0). You can install it manually from https://www.python.org/downloads/"
+      DetailPrint "$(DEP_DETAIL_PYTHON_FAIL)"
     ${EndIf}
   ${EndIf}
 

@@ -42,8 +42,10 @@
         "template": "nsis/installer.nsi",
         "installMode": "currentUser",
         "languages": [
-          "English"
-        ]
+          "English",
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": true
       },
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
