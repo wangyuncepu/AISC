@@ -2,9 +2,17 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）
+## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3 S3.1
 
 ### 变更
+
+#### S3.1 并发与异常硬化（03-lifecycle-contract.md §九；04-observability.md §六.2）
+
+- 后端 `runtime.rs`：`OpMutexes` managed state（`HashMap<runtime_id, Arc<tokio::sync::Mutex<()>>>`，std Mutex 护 map、tokio Mutex 跨 await 持锁）+ `acquire_op_lock`（`lock_owned`，guard 命令结束时 drop 释放）。`stop_runtime`/`runtime_restart`/`remove_runtime` 在 run_control 前 acquire 该 runtime_id 的锁：**同 runtime 串行、不同 runtime 并发**（03 §九.1/§九.6；Tauri op mutex 只处理本进程排序，跨进程由 CLI registry/workspace lock 保证）。`start_runtime` 仍用 StartOp 全局单 start token。`lib.rs` `.manage(OpMutexes::default())`。2 个 tokio 单测（同 id 二次 acquire 阻塞、不同 id 并发立即获锁）。
+- store `stores/runtime.ts`：**request_seq/revision reducer**（04 §六.2）替换 S2.2.b 的 observed_at 排序守卫--`requestSeq`/`lastAppliedSeq`/`revision` 计数器；`refreshRuntime`（轮询）每次 `++requestSeq` 赋 seq，`applyRuntimeSnapshot(snap, seq)` 仅当 `seq >= lastAppliedSeq` 才 apply（stale 低 seq 响应丢弃，慢 poll/被控制操作取代的响应不覆盖新状态）+ revision 递增；控制操作（ensureRuntime start/reuse/restart）赋 `++requestSeq`（restart apply snapshot；start/reuse 设代际边界 `lastAppliedSeq = ++requestSeq`，supersede 在途旧 poll）。observed_at 仍用于 freshness 显示（不再用于排序）。`resetWorkspace`/`stopRuntime` 重置 seq/revision。
+- **cleanup 审计**（无缺口需修）：useRuntimePolling/useProviderPolling `stop()` 清 timer + remove 3 listeners（visibility/focus/blur）✓；Terminal `onBeforeUnmount` closePty + clear resize timer + disconnect ResizeObserver + remove window resize listener ✓；store `startTimer`（stopTimer 清）/`saveTimer`（debounce，app 生命周期 OK）✓。useProviderPolling 的 `watch(activeTabId, runtimeState)` 不 unlisten（App 根组件生命周期，可接受，文档注明）。
+- 验证：cargo 67 绿（56 lib+2 op lock+7 cli+4 pty，2 新测试零回归）；npm build 零错误；dev 无 panic；实机手测回归通过--常规流程（picker->summary->Start/恢复布局->多 tab->停止->重进）正常，侧栏 Runtime 项（state+freshness+observed）轮询正常更新，控制台无报错。
+- gap（明确 deferral）：operation_id for control ops（cancel 流程已处理 start 取消；UI 单 op 按钮禁用无并发竞态）-> 后续多 op 并发再加；两窗口 runtime state 细粒度 merge（CLI 跨进程锁 + 轮询已覆盖）-> 后续；Docker daemon 重启/runtime OOM 特殊处理（轮询检测 unknown/stopped，session 经 PTY 自终）-> 无额外代码；8h/10 session/高输出长测 -> S3.2（scrollback 不持久化）+ release 实机。
 
 #### S2.4.b 恢复布局（resume layout）（02-startup-flow.md §2.3；03-lifecycle-contract.md §六）- Phase 2 收尾
 

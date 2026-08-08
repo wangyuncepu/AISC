@@ -17,7 +17,7 @@ use history::{load_history, save_history};
 use runtime::{
     build_image, cancel_build, cancel_runtime_start, get_provider_status, list_runtimes,
     remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_runtime,
-    stop_runtime, BuildOp, StartOp,
+    stop_runtime, BuildOp, OpMutexes, StartOp,
 };
 use session::{close_session, open_session, resize_session, write_session, SessionRegistry};
 
@@ -29,6 +29,7 @@ pub fn run() {
         .manage(SessionRegistry::default())
         .manage(StartOp::default())
         .manage(BuildOp::default())
+        .manage(OpMutexes::default())
         .invoke_handler(tauri::generate_handler![
             cli_discover,
             cli_pin,
