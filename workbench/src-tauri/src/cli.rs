@@ -582,7 +582,7 @@ async fn read_capped<R: AsyncRead + Unpin>(mut r: R, cap: usize) -> (Vec<u8>, bo
 /// `build.cancelled` and clean its Docker child group (S0.5 start_new_session +
 /// killpg). On Windows there is no SIGINT equivalent for a detached process, so
 /// SIGKILL via `start_kill` (no cancelled event -> transport failure, §4.1.4).
-fn sigint_or_kill(child: &tokio::process::Child) {
+fn sigint_or_kill(child: &mut tokio::process::Child) {
     #[cfg(unix)]
     {
         if let Some(pid) = child.id() {
@@ -669,11 +669,11 @@ pub async fn run_build_stream(
     let exit = tokio::select! {
         r = child.wait() => r,
         _ = tokio::time::sleep(timeout) => {
-            sigint_or_kill(&child);
+            sigint_or_kill(&mut child);
             child.wait().await
         }
         _ = cancel.cancelled() => {
-            sigint_or_kill(&child);
+            sigint_or_kill(&mut child);
             child.wait().await
         }
     };
