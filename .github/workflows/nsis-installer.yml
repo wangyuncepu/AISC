@@ -13,8 +13,7 @@ on:
   push:
     branches: [develop, main]
     paths:
-      - 'workbench/src-tauri/tauri.conf.json'
-      - 'workbench/src-tauri/nsis/**'
+      - 'workbench/src-tauri/**'
       - '.github/workflows/nsis-installer.yml'
       - '.github/workflows/cli-sidecar.yml'
       - 'src/aisc/**'
