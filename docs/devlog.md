@@ -2,9 +2,18 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2 S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a
+## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）
 
 ### 变更
+
+#### S2.4.b 恢复布局（resume layout）（02-startup-flow.md §2.3；03-lifecycle-contract.md §六）- Phase 2 收尾
+
+- 纯前端切片（无后端）。关 Phase 2「恢复布局」gate。「崩溃后发现 runtime」gate 已被 S2.4.a recents + S2.2.b discovery 覆盖（preflight 显 reuse/restart，不自动 stop/remove）。
+- store `stores/runtime.ts`：`buildPatch` 只记 **open（非 idle）tab**（之前记全部 4 个），使 history layout 反映实际开着的 tab；`restorableLayout` computed（preflight reuse/restart + history 该 workspace 有 open tabs 时返回 `{agents, activeAgent}`）；抽 `ensureRuntime()`（start/reuse/restart 共用逻辑）；`initTabs(agentsToOpen[], activeAgent?)` 重构--为指定 agents 各开新 session（新 session_id，**不续接 PTY**，03 §六）；`launchRuntime(agentsToOpen, activeAgent)` 共用「ensureRuntime + initTabs + cancel/error 处理」；`startFromSummary` 改调 `launchRuntime([launch.agent], launch.agent)`；`resumeLayout()` 调 `launchRuntime(historyAgents, historyActive)`。
+- `LaunchSummary.vue`：preflight reuse/restart + history 有 open tabs 时显**「恢复布局」按钮** + 蓝色文案「检测到上次的标签布局。「恢复布局」会为各标签启动新的 Agent 会话，不会续接上次终端内容」（02 §2.3）。`Start`=空白打开（单 tab），`Cancel`=选择其他工作区（等效 contract 的 resume prompt [恢复布局]/[空白打开]/[选择其他工作区]）。
+- 验证：npm build 零错误；cargo 零改零错；dev 无 panic；实机手测通过--开 claude+bash 两 tab 关 app 重启 -> picker 点该工作区 -> summary 显「恢复布局」+ 文案 -> 点恢复布局 -> runtime reuse/restart + 自动开 claude+bash 两新 session（独立可交互）+ active 为上次的；Start 空白打开只开 1 tab；关 app 重启恢复布局仍可用。
+- gap（明确 deferral）：孤儿 session 检测/处理（`session list` 找无 PTY session -> 结束/忽略，03 §8.1）-> S3.1/后续；窗口几何 save/restore（02 §九.2）-> 后续；独立 resume prompt 视图（本切片用 summary 按钮等效）；history 损坏可恢复错误 UI -> 后续。
+- **Phase 2 验收门**：✅ 首次启动/快速启动（S2.1.a）/恢复布局（S2.4.b）三条主路径通过；✅ Docker 未运行/CLI 过旧/镜像缺失/workspace 无权限稳定可操作错误（S2.1.a）；✅ GUI 外 stop/remove 轮询周期内显真实状态（S2.3.a）；✅ 崩溃后重启发现 runtime 不自动 stop/remove（S2.4.a recents + S2.2.b discovery）；✅ 两窗口并发更新 history 不丢 workspace/tab（S2.4.a fs4 锁 + expected_revision 有界重试）。Phase 2 完成。
 
 #### S2.4.a history 持久化 + 最近工作区（02-startup-flow.md §九；06 §五 S2.4）
 

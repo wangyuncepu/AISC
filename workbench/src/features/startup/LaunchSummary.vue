@@ -82,8 +82,13 @@ function onConfigChanged() {
       工作区已有不兼容 Runtime，需先停止或复用它。
     </p>
 
+    <p v-if="store.restorableLayout" class="gate-msg resume">
+      检测到上次的标签布局。「恢复布局」会为各标签启动新的 Agent 会话，不会续接上次终端内容。
+    </p>
+
     <div class="actions">
       <button class="primary" :disabled="!startEnabled" @click="store.startFromSummary()">Start</button>
+      <button v-if="store.restorableLayout" class="primary" :disabled="!startEnabled" @click="store.resumeLayout()">恢复布局</button>
       <button @click="changeSettings">{{ store.showAdvanced ? "收起设置" : "Change settings" }}</button>
       <button v-if="imageMissing" class="danger" @click="store.startBuild(store.launch.image)">构建镜像</button>
       <button @click="store.backToPicker()">Cancel</button>
@@ -130,6 +135,7 @@ input, select {
 .gate-msg { font-size: 12px; padding: 6px 8px; border-radius: 4px; margin: 0; }
 .gate-msg.config { background: #3a3220; color: #e0c97a; }
 .gate-msg.hard { background: #4a2626; color: #e0b0b0; }
+.gate-msg.resume { background: #1e2e3a; color: #9cc4e0; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
   background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;

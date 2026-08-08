@@ -104,6 +104,22 @@ export const useRuntimeStore = defineStore("runtime", () => {
       .filter((w) => w.path)
       .sort((a, b) => (b.last_used_at || "").localeCompare(a.last_used_at || ""));
   });
+  /** S2.4.b: a restorable tab layout for the current workspace - non-null only
+   * when preflight says the runtime exists (reuse/restart) and history has open
+   * tabs. Drives the 恢复布局 button in LaunchSummary (02 §2.3). */
+  const restorableLayout = computed<{ agents: LaunchAgent[]; activeAgent?: LaunchAgent } | null>(() => {
+    const report = preflight.value;
+    if (!report || !["reuse", "restart"].includes(report.recommended_action)) return null;
+    const rec = (history.value?.workspaces ?? []).find((w) => w.path === workspace.value.trim());
+    const histTabs = rec?.layout?.tabs ?? [];
+    if (histTabs.length === 0) return null;
+    const agents = histTabs.map((t) => t.agent as LaunchAgent);
+    const activeId = rec?.layout?.active_tab_id;
+    const activeAgent = activeId
+      ? (histTabs.find((t) => t.tab_id === activeId)?.agent as LaunchAgent | undefined)
+      : undefined;
+    return { agents, activeAgent };
+  });
   let saveTimer: number | null = null;
 
   const preflight = ref<PreflightReport | null>(null);
@@ -382,10 +398,13 @@ export const useRuntimeStore = defineStore("runtime", () => {
     }
   }
 
-  /** Build a patch for the active workspace (runtime ref + tab layout). Other
-   * workspaces on disk are preserved by the backend merge (02 §九). */
+  /** Build a patch for the active workspace (runtime ref + open-tab layout).
+   * Only non-idle (open) tabs are recorded so the layout reflects what was
+   * actually open and S2.4.b resume can restore those agents. Other workspaces
+   * on disk are preserved by the backend merge (02 §九). */
   function buildPatch(): HistoryPatch {
-    const tabsRecord = tabs.value.map((t, i) => ({
+    const openTabs = tabs.value.filter((t) => t.sessionState !== "idle");
+    const tabsRecord = openTabs.map((t, i) => ({
       tab_id: t.tabId,
       agent: t.agent,
       title: t.title,
@@ -393,13 +412,16 @@ export const useRuntimeStore = defineStore("runtime", () => {
     }));
     const activeAgent =
       tabs.value.find((t) => t.tabId === activeTabId.value)?.agent ?? launch.value.agent;
+    const activeTabIdRec = openTabs.some((t) => t.tabId === activeTabId.value)
+      ? activeTabId.value
+      : null;
     const rec: WorkspaceRecord = {
       path: workspace.value.trim(),
       last_used_at: new Date().toISOString(),
       pinned: false,
       last_agent: activeAgent,
       runtime: lastRuntimeRef.value,
-      layout: { active_tab_id: activeTabId.value, tabs: tabsRecord },
+      layout: { active_tab_id: activeTabIdRec, tabs: tabsRecord },
     };
     return { workspaces: [rec] };
   }
@@ -521,7 +543,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
   // --- S2.2.a: multi-tab session lifecycle (03 §五/§六) ---
 
   /** Build the 4 fixed tabs and open the initial agent's tab (runtime ready). */
-  function initTabs(initialAgent: LaunchAgent) {
+  /** Build the 4 fixed tabs and open a fresh session (new id, never reattaching
+   * a PTY - 03 §六) for each agent in `agentsToOpen`. Normal start opens one
+   * agent; resume (S2.4.b) opens the history layout's agents. */
+  function initTabs(agentsToOpen: LaunchAgent[], activeAgent?: LaunchAgent) {
     lastRuntimeRef.value = {
       runtime_id: runtimeId.value,
       image: launch.value.image,
@@ -536,11 +561,13 @@ export const useRuntimeStore = defineStore("runtime", () => {
       sessionState: "idle" as TabSessionState,
       exit: null,
     }));
-    const initial = tabs.value.find((t) => t.agent === initialAgent);
-    if (initial) {
-      activeTabId.value = initial.tabId;
-      void openTab(initial.tabId);
+    for (const agent of agentsToOpen) {
+      const tab = tabs.value.find((t) => t.agent === agent);
+      if (tab) void openTab(tab.tabId);
     }
+    const ag = activeAgent ?? agentsToOpen[0];
+    const activeTab = tabs.value.find((t) => t.agent === ag);
+    if (activeTab) activeTabId.value = activeTab.tabId;
     status.value = "ready";
     scheduleSave();
   }
@@ -616,35 +643,46 @@ export const useRuntimeStore = defineStore("runtime", () => {
     tab.sessionState = reason === "transport_error" ? "disconnected" : "exited";
   }
 
-  async function startFromSummary() {
+  /** Ensure the runtime is ready per preflight's recommended_action (start /
+   * reuse / restart). Returns false for resolve_conflict (Start is disabled by
+   * the config gate; defensive). Shared by startFromSummary + resumeLayout. */
+  async function ensureRuntime(): Promise<boolean> {
     const report = preflight.value;
-    if (!report) return;
+    if (!report) return false;
+    if (report.recommended_action === "start") {
+      status.value = "starting";
+      await ipc.startRuntime(
+        workspace.value.trim(),
+        runtimeId.value,
+        launch.value.image,
+        launch.value.network,
+        launch.value.scope
+      );
+      runtimeState.value = "running";
+    } else if (report.recommended_action === "reuse" && report.matching_runtime_id) {
+      runtimeId.value = report.matching_runtime_id;
+      status.value = "starting";
+      runtimeState.value = "running";
+    } else if (report.recommended_action === "restart" && report.matching_runtime_id) {
+      runtimeId.value = report.matching_runtime_id;
+      status.value = "starting";
+      const snap = await ipc.runtimeRestart(workspace.value.trim(), runtimeId.value);
+      applyRuntimeSnapshot(snap);
+    } else {
+      return false; // resolve_conflict - Start disabled, defensive
+    }
+    return true;
+  }
+
+  /** Start/reuse/restart the runtime then open tabs. Shared by the normal
+   * Start (one tab) and 恢复布局 (history tabs, 02 §2.3). */
+  async function launchRuntime(agentsToOpen: LaunchAgent[], activeAgent: LaunchAgent) {
     error.value = null;
     cancelInspect.value = null;
     startTimerTick();
     try {
-      if (report.recommended_action === "start") {
-        status.value = "starting";
-        await ipc.startRuntime(
-          workspace.value.trim(),
-          runtimeId.value,
-          launch.value.image,
-          launch.value.network,
-          launch.value.scope
-        );
-        runtimeState.value = "running";
-      } else if (report.recommended_action === "reuse" && report.matching_runtime_id) {
-        runtimeId.value = report.matching_runtime_id;
-        status.value = "starting";
-        runtimeState.value = "running";
-      } else if (report.recommended_action === "restart" && report.matching_runtime_id) {
-        runtimeId.value = report.matching_runtime_id;
-        status.value = "starting";
-        const snap = await ipc.runtimeRestart(workspace.value.trim(), runtimeId.value);
-        applyRuntimeSnapshot(snap);
-      } else {
-        // resolve_conflict: list workbench runtimes so the user can stop/remove
-        // the incompatible one, then re-preflight (03 §三).
+      const ok = await ensureRuntime();
+      if (!ok) {
         stopTimer();
         status.value = "conflict";
         void loadConflicts();
@@ -652,7 +690,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       }
       stopTimer();
       runtimeReady.value = true;
-      initTabs(launch.value.agent);
+      initTabs(agentsToOpen, activeAgent);
     } catch (e) {
       stopTimer();
       const err = e as WorkbenchError;
@@ -663,6 +701,19 @@ export const useRuntimeStore = defineStore("runtime", () => {
         error.value = err;
       }
     }
+  }
+
+  async function startFromSummary() {
+    if (!preflight.value) return;
+    await launchRuntime([launch.value.agent], launch.value.agent);
+  }
+
+  /** S2.4.b: restore the history layout's open tabs with fresh sessions
+   * (02 §2.3). Each tab gets a new session_id; PTY content is not reattached. */
+  async function resumeLayout() {
+    const layout = restorableLayout.value;
+    if (!layout) return;
+    await launchRuntime(layout.agents, layout.activeAgent ?? layout.agents[0]);
   }
 
   async function handleCancelledStart() {
@@ -763,6 +814,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     history,
     historyRevision,
     recentWorkspaces,
+    restorableLayout,
     negotiate,
     pickAndPinCli,
     pickWorkspace,
@@ -773,6 +825,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     runPreflight,
     recomputePreflightNeeded,
     startFromSummary,
+    resumeLayout,
     cancelStart,
     keepCancelledRuntime,
     stopCancelledRuntime,
