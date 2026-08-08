@@ -17,12 +17,14 @@ Protocol methods
 from __future__ import annotations
 
 import os
+import queue
 import select
 import shlex
 import signal
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Protocol, runtime_checkable
@@ -109,6 +111,40 @@ class DockerExecutor(Protocol):
 # Factory functions are below; Protocol methods don't have bodies.
 
 # ---------------------------------------------------------------------------
+# Process-tree kill helper (cross-platform)
+# ---------------------------------------------------------------------------
+
+def _kill_child(proc: subprocess.Popen) -> None:
+    """Kill *proc* and its whole child tree, never raising.
+
+    POSIX: SIGKILL the child's process group (docker build subprocesses must
+    not outlive the CLI).  Windows: ``taskkill /T /F`` tree kill with
+    ``proc.kill()`` as fallback.  Safe to call from exception handlers —
+    neither ``os.killpg`` nor ``signal.SIGKILL`` exist on Windows, so the
+    fallbacks keep the cleanup path from crashing and masking the original
+    exception.
+    """
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            return
+        except OSError:
+            pass
+    else:
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True, timeout=5,
+            )
+        except Exception:
+            pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Real Docker executor (production)
 # ---------------------------------------------------------------------------
 
@@ -142,6 +178,7 @@ class RealDockerExecutor:
             proc = subprocess.run(
                 [docker_path, "info"],
                 capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
                 timeout=self._PREFLIGHT_TIMEOUT,
             )
         except FileNotFoundError:
@@ -370,14 +407,19 @@ class RealDockerExecutor:
                                *, timeout: Optional[float] = None) -> ProcessResult:
         """Run ``docker <argv>`` in its own process group, streaming each
         stdout/stderr chunk to *on_chunk(stream, chunk)*. On any interruption
-        (cancel/error) the child's whole process group is SIGKILLed so Docker
-        build subprocesses do not outlive the CLI."""
+        (cancel/error) the child's whole process tree is killed so Docker
+        build subprocesses do not outlive the CLI.
+
+        Drain strategy is platform-specific: ``select`` is POSIX-only
+        (Windows supports sockets only), so Windows uses reader threads +
+        a queue instead.  Chunk ordering and the timeout contract
+        (applied at the final ``proc.wait``) are identical on both."""
         dp = self._resolve_path() or "docker"
         try:
             proc = subprocess.Popen(
                 [dp] + list(docker_argv),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                start_new_session=True,  # own process group -> cancel can killpg
+                start_new_session=True,  # own process group -> cancel can kill tree
             )
         except FileNotFoundError:
             return ProcessResult(
@@ -389,30 +431,84 @@ class RealDockerExecutor:
                 stdout="", stderr=f"command error: {exc}",
                 exit_code=-1, command_not_found=True,
             )
-        streams = {proc.stdout: "stdout", proc.stderr: "stderr"}
-        open_fds = list(streams.keys())
         try:
-            while open_fds:
-                ready, _, _ = select.select(open_fds, [], [], 0.5)
-                for f in ready:
-                    data = f.read1(4096)
-                    if data:
-                        on_chunk(streams[f], data.decode("utf-8", "replace"))
-                    else:
-                        open_fds.remove(f)
-            proc.wait(timeout=timeout)
-            return ProcessResult(stdout="", stderr="", exit_code=proc.returncode)
+            if os.name == "posix":
+                result = self._drain_select(proc, on_chunk, timeout=timeout)
+            else:
+                result = self._drain_threads(proc, on_chunk, timeout=timeout)
         except BaseException:
-            # Cancel or error: kill the Docker child's whole process group.
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
+            # Cancel or error: kill the Docker child's whole process tree.
+            _kill_child(proc)
             try:
                 proc.wait(timeout=5)
             except Exception:
                 pass
             raise
+        finally:
+            for stream in (proc.stdout, proc.stderr):
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+        return result
+
+    def _drain_select(self, proc: subprocess.Popen,
+                      on_chunk: "Callable[[str, str], None]",
+                      *, timeout: Optional[float]) -> ProcessResult:
+        """POSIX: incremental read of both pipes via ``select`` (original
+        implementation, kept byte-for-byte equivalent)."""
+        streams = {proc.stdout: "stdout", proc.stderr: "stderr"}
+        open_fds = list(streams.keys())
+        while open_fds:
+            ready, _, _ = select.select(open_fds, [], [], 0.5)
+            for f in ready:
+                data = f.read1(4096)
+                if data:
+                    on_chunk(streams[f], data.decode("utf-8", "replace"))
+                else:
+                    open_fds.remove(f)
+        proc.wait(timeout=timeout)
+        return ProcessResult(stdout="", stderr="", exit_code=proc.returncode)
+
+    def _drain_threads(self, proc: subprocess.Popen,
+                       on_chunk: "Callable[[str, str], None]",
+                       *, timeout: Optional[float]) -> ProcessResult:
+        """Windows: two daemon reader threads feed a queue; the main thread
+        drains it and invokes *on_chunk* so emission stays single-threaded
+        (``JsonlEmitter`` is not lock-protected)."""
+        q: "queue.Queue[Optional[tuple[str, bytes]]]" = queue.Queue()
+
+        def _reader(stream: "object", name: str) -> None:
+            try:
+                while True:
+                    chunk = stream.read1(4096)
+                    if not chunk:
+                        break
+                    q.put((name, chunk))
+            finally:
+                q.put(None)  # EOF sentinel for this stream
+
+        threads = [
+            threading.Thread(target=_reader, args=(proc.stdout, "stdout"), daemon=True),
+            threading.Thread(target=_reader, args=(proc.stderr, "stderr"), daemon=True),
+        ]
+        for t in threads:
+            t.start()
+
+        remaining = 2
+        while remaining:
+            try:
+                item = q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if item is None:
+                remaining -= 1
+                continue
+            stream, chunk = item
+            on_chunk(stream, chunk.decode("utf-8", "replace"))
+
+        proc.wait(timeout=timeout)
+        return ProcessResult(stdout="", stderr="", exit_code=proc.returncode)
 
     @property
     def docker_path(self) -> str:
