@@ -83,6 +83,17 @@
 - [x] **5d-1** 手动测试（2026-08-10）：Start 单 Bash、+ 多开/重复类型、guide 流程、× 移除与邻位、Ctrl+1..9、空态、8 上限、恢复布局（重复类型）、停止/退出无残留，全部通过。
 - **Step 5 结论（2026-08-10）**：vitest 32 绿（9 新增 runtimeTabs）；A-G08-1/2/3/6/7/8 证据齐。
 
+## Step 6 验收清单（G-06 终端渲染升级，分支 step-6-g06-render）
+
+> 规范：06 §七、03 A-G06-1..5。
+
+- [x] **6a-1** WebGL 渲染：`@xterm/addon-webgl`；renderer 枚举（auto|default|webgl）作为 Workbench 加载/释放策略（`resolveRenderer` 纯函数），不写入 term.options；构造 try/catch + context loss dispose 回落 DOM renderer（A-G06-1/2）。
+- [x] **6a-2** 设置驱动：Terminal 创建读 typed settings（字体栈/字号/行高/字距/回滚/平滑滚动，默认值只在 Rust，未加载时用 xterm 原生默认）；即时选项（字号/行高/字距/回滚/平滑滚动）deep-watch 实时生效（对话框编辑即预览、取消即回滚）；renderer/font_family 变化原地重建视图——session_id/PTY/channel 不动，旧实例与 addons dispose 无泄漏（A-G06-3）。
+- [x] **6a-3** 主题 token：暗色 palette（VS Code 默认）集中到 TERMINAL_THEME；正文/selection 对比度 ≥4.5:1（WCAG AA 断言测试，A-G06-5）。
+- [x] **6a-4** 固定输出基准（A-G06-4）：仓库内确定性 10 MiB UTF-8/ANSI 混合 fixture（SHA-256 pin `0d1a8564...`），4 KiB chunks 连续写入；DOM 解析路径 0.01s total / max chunk 0.1ms（jsdom 无法跑 WebGL，WebGL 耗时以实机手测为准，未设虚假 FPS）。
+- [x] **6b-1** 手动测试（2026-08-10）：终端字号 14/行高 1.2/平滑滚动生效；设置字号即时变大、取消回滚；renderer 切 webgl 重建视图会话不重开；配色/字体 fallback 目视正常；WebGL 无黑屏。全部通过。
+- **Step 6 结论（2026-08-10）**：vitest 38 绿（renderer 6 + 基准 1 新增）；A-G06-1..5 证据齐。UI 字体缩放（ui.font_scale）接线归 Step 7（G-01）。
+
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
 ### S4.2 发布门（2026-08-09，06-implementation-plan.md §七 S4.2）
