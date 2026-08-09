@@ -412,6 +412,13 @@ export const useRuntimeStore = defineStore("runtime", () => {
     runtimeSnapshot.value = snap;
     runtimeState.value = snap.state;
     freshness.value = "fresh";
+    // Canonical workspace write-back (05 §4.1 / A-INFRA-3): the CLI returns the
+    // canonicalized config.workspace; store/history key on that value, never
+    // on the raw frontend string.
+    if (snap.config?.workspace) {
+      workspace.value = snap.config.workspace;
+      scheduleSave();
+    }
     lastAppliedSeq.value = seq;
     revision.value += 1;
   }

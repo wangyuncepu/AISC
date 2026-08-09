@@ -8,7 +8,7 @@
 //!   §十 (domain API: open/write/resize/close_session)
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -51,6 +51,10 @@ pub struct SessionEntry {
     pub exit: Option<SessionExit>,
     pub runtime_id: String,
     pub agent: String,
+    /// Canonical workspace (sole producer: Rust backend canonicalize), used as
+    /// the identity key for open/terminate argv (05 §4.1). Never the raw
+    /// frontend string.
+    pub workspace: String,
 }
 
 /// Managed Tauri state: `session_id -> SessionEntry`.
@@ -106,7 +110,12 @@ fn is_uuid_v4(s: &str) -> bool {
     true
 }
 
-fn session_open_argv(runtime_id: &str, session_id: &str, agent: &str) -> Vec<String> {
+fn session_open_argv(
+    runtime_id: &str,
+    session_id: &str,
+    agent: &str,
+    workspace: &str,
+) -> Vec<String> {
     vec![
         "session".into(),
         "open".into(),
@@ -116,10 +125,12 @@ fn session_open_argv(runtime_id: &str, session_id: &str, agent: &str) -> Vec<Str
         session_id.into(),
         "--agent".into(),
         agent.into(),
+        "--workspace".into(),
+        workspace.into(),
     ]
 }
 
-fn session_terminate_argv(runtime_id: &str, session_id: &str) -> Vec<String> {
+fn session_terminate_argv(runtime_id: &str, session_id: &str, workspace: &str) -> Vec<String> {
     vec![
         "session".into(),
         "terminate".into(),
@@ -127,9 +138,22 @@ fn session_terminate_argv(runtime_id: &str, session_id: &str) -> Vec<String> {
         runtime_id.into(),
         "--session-id".into(),
         session_id.into(),
+        "--workspace".into(),
+        workspace.into(),
         "--format".into(),
         "json".into(),
     ]
+}
+
+/// Sole producer of the canonical workspace used as Session identity key
+/// (05 §4.1). Frontend raw strings never become Session identity.
+fn canonical_workspace(raw: &str) -> Result<String, WorkbenchError> {
+    let p = Path::new(raw);
+    let canon = std::fs::canonicalize(p).map_err(|e| {
+        WorkbenchError::map_aisc("AISC_ERR_WORKSPACE_INVALID")
+            .with_detail(format!("canonicalize {raw}: {e}"))
+    })?;
+    Ok(canon.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -138,6 +162,7 @@ pub async fn open_session(
     runtime_id: String,
     session_id: String,
     agent: String,
+    workspace: String,
     on_event: Channel<PtyEvent>,
 ) -> Result<SessionSnapshot, WorkbenchError> {
     if !is_uuid_v4(&runtime_id) {
@@ -149,9 +174,13 @@ pub async fn open_session(
     if !AGENTS.contains(&agent.as_str()) {
         return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_AGENT"));
     }
+    // Canonicalize before any spawn: the frontend raw string never becomes
+    // Session identity (05 §4.1). Missing/unreadable workspace -> stable
+    // workspace error, no child is started.
+    let ws = canonical_workspace(&workspace)?;
 
     let pin = resolve_pin(&app)?;
-    let argv = session_open_argv(&runtime_id, &session_id, &agent);
+    let argv = session_open_argv(&runtime_id, &session_id, &agent, &ws);
 
     let (event_tx, event_rx) = mpsc::channel::<PtyEvent>(EVENT_CHANNEL_CAP);
     let (session, signal) = spawn_pty_session(&pin, argv, DEFAULT_COLS, DEFAULT_ROWS, event_tx)?;
@@ -172,6 +201,7 @@ pub async fn open_session(
                 exit: None,
                 runtime_id: runtime_id.clone(),
                 agent: agent.clone(),
+                workspace: ws,
             },
         );
     }
@@ -279,6 +309,7 @@ pub async fn close_session(
     let session = entry.session;
     let signal = entry.signal;
     let runtime_id = entry.runtime_id;
+    let workspace = entry.workspace;
 
     // §七.1: terminate (kill container agent) -> wait/reap local child.
     // cancel() sets the exit reason to user_close.
@@ -286,7 +317,7 @@ pub async fn close_session(
     let pin = resolve_pin(&app)?;
     let _ = run_control(
         &pin,
-        session_terminate_argv(&runtime_id, &session_id),
+        session_terminate_argv(&runtime_id, &session_id, &workspace),
         TERMINATE_TIMEOUT,
         CancellationToken::new(),
     )
@@ -335,7 +366,7 @@ mod tests {
 
     #[test]
     fn open_argv_is_text_only_no_format() {
-        let argv = session_open_argv("rid", "sid", "bash");
+        let argv = session_open_argv("rid", "sid", "bash", "/ws");
         assert_eq!(argv[0], "session");
         assert_eq!(argv[1], "open");
         assert!(argv.contains(&"--agent".into()));
@@ -343,11 +374,33 @@ mod tests {
     }
 
     #[test]
-    fn terminate_argv_includes_format_json() {
-        let argv = session_terminate_argv("rid", "sid");
+    fn open_argv_includes_canonical_workspace() {
+        let argv = session_open_argv("rid", "sid", "bash", "C:/ws");
+        let i = argv.iter().position(|a| a == "--workspace").unwrap();
+        assert_eq!(argv[i + 1], "C:/ws");
+    }
+
+    #[test]
+    fn terminate_argv_includes_format_json_and_workspace() {
+        let argv = session_terminate_argv("rid", "sid", "/ws");
         assert_eq!(argv[1], "terminate");
         assert!(argv.contains(&"--format".into()));
         assert!(argv.contains(&"json".into()));
+        let i = argv.iter().position(|a| a == "--workspace").unwrap();
+        assert_eq!(argv[i + 1], "/ws");
+    }
+
+    #[test]
+    fn canonical_workspace_resolves_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = canonical_workspace(dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(ws, std::fs::canonicalize(dir.path()).unwrap().to_string_lossy());
+    }
+
+    #[test]
+    fn canonical_workspace_rejects_missing_path() {
+        let err = canonical_workspace("Z:/definitely/not/a/real/workspace-9f3a").unwrap_err();
+        assert_eq!(err.code, "AISC_ERR_WORKSPACE_INVALID");
     }
 
     #[test]

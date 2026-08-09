@@ -67,7 +67,7 @@ function openPty(sid: string) {
         break;
     }
   };
-  openSession(store.runtimeId, sid, agent, channel)
+  openSession(store.runtimeId, sid, agent, store.workspace.trim(), channel)
     .then(() => store.onTabOpenOk(props.tabId))
     .catch((e) => {
       term?.write(`\r\n\x1b[31m[open_session failed: ${e?.code ?? e}]\x1b[0m\r\n`);

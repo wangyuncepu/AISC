@@ -31,8 +31,9 @@ export const openSession = (
   runtimeId: string,
   sessionId: string,
   agent: string,
+  workspace: string,
   onEvent: Channel<PtyEvent>
-) => invoke<SessionSnapshot>("open_session", { runtimeId, sessionId, agent, onEvent });
+) => invoke<SessionSnapshot>("open_session", { runtimeId, sessionId, agent, workspace, onEvent });
 
 export const writeSession = (sessionId: string, bytes: number[]) =>
   invoke<void>("write_session", { sessionId, bytes });
