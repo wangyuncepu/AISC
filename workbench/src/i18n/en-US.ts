@@ -114,14 +114,26 @@ export const enUS: Record<string, string> = {
 
   // --- tab bar (TabBar.vue) ---
   "tabbar.idle": "Idle",
+  "tabbar.guide": "Not configured",
   "tabbar.starting": "Starting",
   "tabbar.closing": "Closing",
   "tabbar.exited": "Exited",
   "tabbar.exitedCode": "Exited {code}",
   "tabbar.failed": "Failed",
   "tabbar.disconnected": "Disconnected",
-  "tabbar.closeTitle": "Close session (Runtime keeps running)",
+  "tabbar.closeTitle": "Close tab (session ends)",
   "tabbar.reopenTitle": "Reopen (new session)",
+  "tabbar.newTab": "New tab",
+  "tabbar.menu.claude": "Claude",
+  "tabbar.menu.codex": "Codex",
+  "tabbar.menu.bash": "Bash",
+  "tabbar.menu.cc-switch": "cc-switch",
+  "tabs.empty": "No open tabs.",
+  "tabs.newTab": "New tab",
+  "guide.title": "{agent} provider not configured",
+  "guide.desc": "The session opens automatically once the provider is configured. You can open cc-switch now.",
+  "guide.retry": "Retry",
+  "guide.openCcSwitch": "Open cc-switch",
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench terminal ready.",

@@ -114,14 +114,26 @@ export const zhCN = {
 
   // --- tab bar (TabBar.vue) ---
   "tabbar.idle": "未启动",
+  "tabbar.guide": "未配置",
   "tabbar.starting": "启动中",
   "tabbar.closing": "关闭中",
   "tabbar.exited": "已退出",
   "tabbar.exitedCode": "退出 {code}",
   "tabbar.failed": "失败",
   "tabbar.disconnected": "已断开",
-  "tabbar.closeTitle": "关闭会话（不停止 Runtime）",
+  "tabbar.closeTitle": "关闭标签（会话将结束）",
   "tabbar.reopenTitle": "重新打开（新会话）",
+  "tabbar.newTab": "新建标签",
+  "tabbar.menu.claude": "Claude",
+  "tabbar.menu.codex": "Codex",
+  "tabbar.menu.bash": "Bash",
+  "tabbar.menu.cc-switch": "cc-switch",
+  "tabs.empty": "没有打开的标签。",
+  "tabs.newTab": "新建标签",
+  "guide.title": "{agent} Provider 未配置",
+  "guide.desc": "配置 Provider 后会自动打开会话。当前可先打开 cc-switch 使用。",
+  "guide.retry": "重试",
+  "guide.openCcSwitch": "打开 cc-switch",
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench 终端就绪。",

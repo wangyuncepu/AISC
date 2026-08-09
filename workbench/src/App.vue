@@ -13,6 +13,7 @@ import { useSettingsStore } from "./stores/settings";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
 import { useProviderPolling } from "./composables/useProviderPolling";
 import Terminal from "./features/terminal/Terminal.vue";
+import GuidePane from "./features/terminal/GuidePane.vue";
 import TabBar from "./features/workspace/TabBar.vue";
 import RuntimeSidebar from "./features/workspace/RuntimeSidebar.vue";
 import LaunchSummary from "./features/startup/LaunchSummary.vue";
@@ -92,7 +93,9 @@ function focusTabTerminal(tabId: string): void {
 function onKeydown(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
-  if (e.key >= "1" && e.key <= "4") {
+  // G-08 (A-G08-6): Ctrl/Cmd+1..9 map the current committed tab order; the
+  // 10th tab and beyond use the tablist arrow/Home/End navigation.
+  if (e.key >= "1" && e.key <= "9") {
     if (store.status !== "ready") return;
     e.preventDefault();
     const tab = store.tabs[Number(e.key) - 1];
@@ -167,9 +170,13 @@ function isStartingView(s: string): boolean {
   return s === "starting" || s === "cancelled";
 }
 
-// S2.2.a: render a Terminal for every non-idle tab; v-show keeps hidden tabs
+// S2.2.a: render a Terminal for every live tab; v-show keeps hidden tabs
 // (and their PTY) alive so switching back preserves scrollback (03 §六.8).
-const openTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idle"));
+// G-08 guide tabs render GuidePane instead (no PTY for them, A-G08-2).
+const openTabs = computed(() =>
+  store.tabs.filter((t) => t.sessionState !== "idle" && t.sessionState !== "guide")
+);
+const guideTabs = computed(() => store.tabs.filter((t) => t.sessionState === "guide"));
 
 // S3.3: expose each Terminal's focus so the tab shortcut can move keyboard
 // focus into the terminal after switching.
@@ -281,6 +288,17 @@ function selectRecent(path: string): void {
       <div class="main">
         <TabBar />
         <main class="terminal-area">
+          <!-- G-08 empty state (A-G08-6): focus target for creating the first tab -->
+          <div v-if="store.tabs.length === 0" class="empty-tabs">
+            <p>{{ t("tabs.empty") }}</p>
+            <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
+          </div>
+          <GuidePane
+            v-for="t in guideTabs"
+            :key="t.tabId"
+            :tab-id="t.tabId"
+            v-show="t.tabId === store.activeTabId"
+          />
           <Terminal
             v-for="t in openTabs"
             :key="t.tabId"
@@ -385,4 +403,8 @@ button.danger { background: #5a2d2d; border-color: #6b3636; }
 button.danger:hover:not(:disabled) { background: #6e3a3a; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: #1e1e1e; }
+.empty-tabs {
+  height: 100%; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 10px; color: #888; font-size: 13px;
+}
 </style>

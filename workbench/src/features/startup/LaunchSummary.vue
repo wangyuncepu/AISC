@@ -4,12 +4,9 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 import PreflightGate from "./PreflightGate.vue";
-import type { LaunchAgent } from "../../types";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
-
-const agents: LaunchAgent[] = ["claude", "codex", "bash", "cc-switch"];
 
 const ACTION_KEY: Record<string, string> = {
   start: "summary.action.start",
@@ -50,12 +47,8 @@ function onConfigChanged() {
     <PreflightGate v-if="store.preflight" :report="store.preflight" />
 
     <div class="row"><span class="k">Workspace</span><span class="v">{{ store.workspace }}</span></div>
-    <div class="row">
-      <span class="k">Agent</span>
-      <select v-model="store.launch.agent" :disabled="store.showAdvanced === false && false">
-        <option v-for="a in agents" :key="a" :value="a">{{ a }}</option>
-      </select>
-    </div>
+    <!-- G-08 (A-G08-1): no initial-agent picker; a fresh Start opens one Bash
+         tab, more tabs are created dynamically via the + menu. -->
     <div class="row"><span class="k">Runtime</span><span class="v">{{ actionText }}</span></div>
 
     <div v-if="store.showAdvanced" class="advanced">

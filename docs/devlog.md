@@ -73,6 +73,16 @@
 - **sidecar staging 二次事故（2026-08-10）**：`--grace 3` 复发。根因：tauri externalBin staging 源 `workbench/src-tauri/binaries/` 是旧 CLI，每次 cargo build 自动覆盖 `target/debug/aisc.exe`（pin 目标）。修复：重建 sidecar 同步 binaries/ + target/debug + 安装目录；同步清单记入 memory。
 - **Step 4 结论（2026-08-10）**：cargo 6 新 + vitest 14 新测试全绿；A-G09-1..4 证据齐。
 
+## Step 5 验收清单（G-08 动态多 tab，分支 step-5-g08-tabs）
+
+> 规范：06 §六、02 §2.3；门禁 A-G08-1/2/3/6/7/8（pane 树相关 A-G08-4/5 属 G-17 分屏）。
+
+- [x] **5a-1** Store 动态化：固定四 tab → `createTab(agent)` 动态数组（重复类型允许，A-INFRA-1）；每 Runtime 8 叶上限（A-G08-8，第 9 拒绝）；`removeTab`（× 移除整个 tab，运行中会话 best-effort 关闭，active 落右邻→左邻→空态，A-G08-6）；Start 仅开 1 Bash（A-G08-1）；LaunchSummary 移除初始 Agent 选择；Ctrl/Cmd+1..9 动态映射（10+ 用 tablist 方向键）；history 保存超 8 截断 + warning（A-G08-3）。
+- [x] **5b-1** TabBar UI：`+` 弹出菜单（4 agent，aria-haspopup/expanded，方向键/Enter/Esc/点击外部关闭，键盘可达）；空态「新建标签」焦点目标；× = removeTab；「重开」保留。
+- [x] **5c-1** Provider guide 最小流程（A-G08-2）：+ 选 claude/codex → 按 type 去重 Provider query → `not_configured` → guide 态（不调 open_session，无 PTY）+ GuidePane（重试：配置后即开会话；「打开 cc-switch」激活或创建）；bash/cc-switch 立即开。login_required（如 codex 默认 OpenAI Official 路由）直接开会话终端内登录 —— 2026-08-10 用户决策保留数据驱动，代码 TODO + todo.md 双记录。
+- [x] **5d-1** 手动测试（2026-08-10）：Start 单 Bash、+ 多开/重复类型、guide 流程、× 移除与邻位、Ctrl+1..9、空态、8 上限、恢复布局（重复类型）、停止/退出无残留，全部通过。
+- **Step 5 结论（2026-08-10）**：vitest 32 绿（9 新增 runtimeTabs）；A-G08-1/2/3/6/7/8 证据齐。
+
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
 ### S4.2 发布门（2026-08-09，06-implementation-plan.md §七 S4.2）
