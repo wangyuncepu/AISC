@@ -50,6 +50,7 @@
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
       }
-    }
+    },
+    "publisher": "aisc"
   }
 }

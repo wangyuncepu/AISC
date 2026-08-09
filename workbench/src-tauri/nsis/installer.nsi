@@ -75,25 +75,6 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
-; S4.1.b: dependency check page state
-Var DepsDockerInstalled
-Var DepsPythonInstalled
-Var DepsWingetInstalled
-Var DepsSkip
-; set when Docker Desktop was missing at check time and installed by this run
-Var DepsDockerWasMissing
-; detected Docker Desktop exe path (also used by the Start-Docker buttons)
-Var DepsDockerExe
-; label handles for the dependency page
-Var DepsDockerLabel
-Var DepsPythonLabel
-Var DepsWingetLabel
-Var DepsWebview2Label
-Var DepsStatusLabel
-Var DepsInstallButton
-Var DepsSkipButton
-Var DepsStartDockerButton
-Var DepsStoreButton
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -417,213 +398,7 @@ Var AppStartMenuFolder
 !endif
 !insertmacro MUI_PAGE_STARTMENU Application $AppStartMenuFolder
 
-; 7. Dependency check page (S4.1.b) - check Docker Desktop / Python 3 / winget / WebView2
-;    and offer to install the missing ones via winget. WebView2 is handled by
-;    the WebView2 section below and is shown for information only.
-Page custom PageDepsCheck PageDepsLeave
-
-Function CheckDocker
-  ; Docker Desktop installs machine-wide to "Program Files\Docker\Docker"
-  ; (MSI) or per-user to %LOCALAPPDATA% (winget). Detect by executable
-  ; presence and remember the path so the Start-Docker buttons can use it.
-  StrCpy $DepsDockerExe ""
-  ${If} ${FileExists} "$PROGRAMFILES64\Docker\Docker\Docker Desktop.exe"
-    StrCpy $DepsDockerExe "$PROGRAMFILES64\Docker\Docker\Docker Desktop.exe"
-    StrCpy $DepsDockerInstalled 1
-    Return
-  ${EndIf}
-  ${If} ${FileExists} "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
-    StrCpy $DepsDockerExe "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
-    StrCpy $DepsDockerInstalled 1
-    Return
-  ${EndIf}
-  ; Non-standard install location: read the uninstaller registry entry
-  ; (64-bit view first - Docker Desktop is a 64-bit app - then per-user HKCU).
-  SetRegView 64
-  ReadRegStr $0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
-  ${If} $0 == ""
-    ReadRegStr $0 HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
-  ${EndIf}
-  SetRegView 32
-  ${If} $0 == ""
-    ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
-  ${EndIf}
-  ${If} $0 != ""
-  ${AndIf} ${FileExists} "$0\Docker Desktop.exe"
-    StrCpy $DepsDockerExe "$0\Docker Desktop.exe"
-    StrCpy $DepsDockerInstalled 1
-    Return
-  ${EndIf}
-  StrCpy $DepsDockerInstalled 0
-FunctionEnd
-
-; Enumerate PythonCore version subkeys (e.g. 3.12, 3.14) under REGROOT\KEYPATH
-; and check that the registered InstallPath actually contains python.exe.
-!macro CheckPythonCore REGROOT KEYPATH
-  StrCpy $0 0
-  ${Do}
-    EnumRegKey $1 "${REGROOT}" "${KEYPATH}" $0
-    ${If} $1 != ""
-      ReadRegStr $2 "${REGROOT}" "${KEYPATH}\$1\InstallPath" ""
-      ${If} $2 != ""
-      ${AndIf} ${FileExists} "$2\python.exe"
-        StrCpy $DepsPythonInstalled 1
-      ${EndIf}
-    ${EndIf}
-    IntOp $0 $0 + 1
-  ${LoopUntil} $1 == ""
-!macroend
-
-Function CheckPython
-  ; Python 3 registers PythonCore\<version>\InstallPath in HKLM (machine-wide,
-  ; 32/64-bit views) or HKCU (per-user, e.g. winget Python.Python.3.12). The
-  ; default value of PythonCore itself is empty, so the version keys must be
-  ; enumerated. Restore the 32-bit view afterwards - the installer process is
-  ; 32-bit and the rest of the template relies on the default (redirected) view.
-  StrCpy $DepsPythonInstalled 0
-  SetRegView 64
-  !insertmacro CheckPythonCore HKLM "SOFTWARE\Python\PythonCore"
-  ${If} $DepsPythonInstalled = 0
-    SetRegView 32
-    !insertmacro CheckPythonCore HKLM "SOFTWARE\WOW6432Node\Python\PythonCore"
-  ${EndIf}
-  ${If} $DepsPythonInstalled = 0
-    ; HKCU\SOFTWARE is never WOW64-redirected
-    !insertmacro CheckPythonCore HKCU "SOFTWARE\Python\PythonCore"
-  ${EndIf}
-  SetRegView 32
-FunctionEnd
-
-Function CheckWinget
-  ; winget (App Installer) is installed if the WindowsApps alias exists on PATH
-  ClearErrors
-  nsExec::ExecToStack '"where" winget'
-  Pop $0
-  ${If} $0 = 0
-    StrCpy $DepsWingetInstalled 1
-  ${Else}
-    StrCpy $DepsWingetInstalled 0
-  ${EndIf}
-FunctionEnd
-
-Function PageDepsCheck
-  ${If} $PassiveMode = 1
-  ${OrIf} ${Silent}
-    StrCpy $DepsSkip 1
-    Abort
-  ${EndIf}
-
-  Call CheckDocker
-  Call CheckPython
-  Call CheckWinget
-  ; remember that Docker Desktop was missing so the finish page can offer to
-  ; start it (fresh installs must run Docker Desktop once for the engine)
-  StrCpy $DepsDockerWasMissing 0
-  ${If} $DepsDockerInstalled = 0
-    StrCpy $DepsDockerWasMissing 1
-  ${EndIf}
-
-  !insertmacro MUI_HEADER_TEXT "$(DEP_TITLE)" "$(DEP_SUBTITLE)"
-  nsDialogs::Create 1018
-  Pop $0
-  ${IfThen} $(^RTL) = 1 ${|} nsDialogs::SetRTL $(^RTL) ${|}
-
-  ${NSD_CreateLabel} 0 0 100% 24u "$(DEP_INTRO)"
-  Pop $0
-
-  ${NSD_CreateLabel} 16u 34u 100% 12u "$(DEP_DOCKER)"
-  Pop $DepsDockerLabel
-  ${NSD_CreateLabel} 16u 52u 100% 12u "$(DEP_PYTHON)"
-  Pop $DepsPythonLabel
-  ${NSD_CreateLabel} 16u 70u 100% 12u "$(DEP_WINGET)"
-  Pop $DepsWingetLabel
-  ${NSD_CreateLabel} 16u 88u 100% 12u "$(DEP_WEBVIEW2)"
-  Pop $DepsWebview2Label
-
-  ${NSD_CreateLabel} 0 112u 100% 20u ""
-  Pop $DepsStatusLabel
-
-  ${NSD_CreateButton} 0 140u 45% 14u "$(DEP_BTN_INSTALL)"
-  Pop $DepsInstallButton
-  ${NSD_CreateButton} 0 160u 45% 14u "$(DEP_BTN_SKIP)"
-  Pop $DepsSkipButton
-  ${NSD_CreateButton} 50% 140u 45% 14u "$(DEP_BTN_START_DOCKER)"
-  Pop $DepsStartDockerButton
-  ${NSD_CreateButton} 50% 160u 45% 14u "$(DEP_BTN_STORE)"
-  Pop $DepsStoreButton
-
-  ; Update labels from the check results
-  ${If} $DepsDockerInstalled = 1
-    ${NSD_SetText} $DepsDockerLabel "$(DEP_DOCKER) $(DEP_INSTALLED)"
-  ${Else}
-    ${NSD_SetText} $DepsDockerLabel "$(DEP_DOCKER) $(DEP_NOT_FOUND)"
-  ${EndIf}
-  ${If} $DepsPythonInstalled = 1
-    ${NSD_SetText} $DepsPythonLabel "$(DEP_PYTHON) $(DEP_INSTALLED)"
-  ${Else}
-    ${NSD_SetText} $DepsPythonLabel "$(DEP_PYTHON) $(DEP_NOT_FOUND)"
-  ${EndIf}
-  ${If} $DepsWingetInstalled = 1
-    ${NSD_SetText} $DepsWingetLabel "$(DEP_WINGET) $(DEP_INSTALLED)"
-  ${Else}
-    ${NSD_SetText} $DepsWingetLabel "$(DEP_WINGET) $(DEP_NOT_FOUND)"
-  ${EndIf}
-  ${NSD_SetText} $DepsWebview2Label "$(DEP_WEBVIEW2_OK)"
-
-  ; Show/hide buttons per state
-  ${If} $DepsDockerInstalled = 1
-    EnableWindow $DepsStartDockerButton 1
-  ${Else}
-    EnableWindow $DepsStartDockerButton 0
-  ${EndIf}
-  ${If} $DepsWingetInstalled = 1
-    EnableWindow $DepsStoreButton 0
-  ${Else}
-    EnableWindow $DepsStoreButton 1
-  ${EndIf}
-  ${If} $DepsDockerInstalled = 1
-  ${AndIf} $DepsPythonInstalled = 1
-    EnableWindow $DepsInstallButton 0
-  ${EndIf}
-
-  ${NSD_OnClick} $DepsStartDockerButton OnDepsStartDocker
-  ${NSD_OnClick} $DepsStoreButton OnDepsOpenStore
-  ${NSD_OnClick} $DepsInstallButton OnDepsInstall
-  ${NSD_OnClick} $DepsSkipButton OnDepsSkip
-
-  nsDialogs::Show
-FunctionEnd
-
-Function OnDepsStartDocker
-  ${If} $DepsDockerExe != ""
-    ExecShell "open" "$DepsDockerExe"
-  ${EndIf}
-FunctionEnd
-
-Function OnDepsOpenStore
-  ExecShell "open" "ms-windows-store://pdp/?ProductId=9NBLGGH4NNS1"
-FunctionEnd
-
-Function OnDepsInstall
-  StrCpy $DepsSkip 0
-  ${NSD_SetText} $DepsStatusLabel "$(DEP_STATUS_INSTALLING)"
-  ; close the dialog as if the user pressed Next; the install runs on the
-  ; INSTFILES page (Section Dependencies)
-  SendMessage $HWNDPARENT ${WM_COMMAND} 1 0
-FunctionEnd
-
-Function OnDepsSkip
-  StrCpy $DepsSkip 1
-  ${NSD_SetText} $DepsStatusLabel "$(DEP_STATUS_SKIPPING)"
-  SendMessage $HWNDPARENT ${WM_COMMAND} 1 0
-FunctionEnd
-
-Function PageDepsLeave
-  ; Leave page runs when the dialog closes (Next / OnDepsInstall / OnDepsSkip);
-  ; the dependency install itself happens in Section Dependencies.
-FunctionEnd
-
-; 8. Installation page
+; 7. Installation page
 !insertmacro MUI_PAGE_INSTFILES
 
 ; 8. Finish page
@@ -643,13 +418,13 @@ FunctionEnd
 !insertmacro MUI_PAGE_FINISH
 
 Function RunFinishApp
-  ; If Docker Desktop was installed by this run, start it first so the engine
-  ; comes up (first run shows the license agreement for the user to accept);
-  ; then launch the Workbench.
-  ${If} $DepsDockerWasMissing = 1
-    ${If} $DepsDockerExe != ""
-      ExecShell "open" "$DepsDockerExe"
-    ${EndIf}
+  ; Host integration (05 §1.2): if Docker Desktop is installed, start it first
+  ; so the engine is up for the first runtime start; then launch the Workbench.
+  ; Docker Desktop is single-instance, so this is a no-op when already running.
+  ${If} ${FileExists} "$PROGRAMFILES64\Docker\Docker\Docker Desktop.exe"
+    ExecShell "open" "$PROGRAMFILES64\Docker\Docker\Docker Desktop.exe"
+  ${ElseIf} ${FileExists} "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
+    ExecShell "open" "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
   ${EndIf}
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
 FunctionEnd
@@ -708,58 +483,8 @@ FunctionEnd
   !include "{{this}}"
 {{/each}}
 
-; S4.1.b custom dependency-page strings. MUI page strings come from the
-; tauri-bundler language files included above; these cover the custom page,
-; the finish-page run button, and the Section Dependencies log lines.
-; ${LANG_ENGLISH}/${LANG_SIMPCHINESE} come from the MUI_LANGUAGE macros above.
-LangString DEP_TITLE ${LANG_ENGLISH} "Environment Check"
-LangString DEP_TITLE ${LANG_SIMPCHINESE} "环境检查"
-LangString DEP_SUBTITLE ${LANG_ENGLISH} "AISC Workbench needs Docker Desktop and Python 3. Missing items are installed automatically on the next page."
-LangString DEP_SUBTITLE ${LANG_SIMPCHINESE} "AISC Workbench 需要 Docker Desktop 和 Python 3。缺失的组件将在下一页自动安装。"
-LangString DEP_INTRO ${LANG_ENGLISH} "AISC Workbench runs the AISC CLI in Docker. The following components are checked:"
-LangString DEP_INTRO ${LANG_SIMPCHINESE} "AISC Workbench 在 Docker 中运行 AISC CLI。将检查以下组件："
-LangString DEP_DOCKER ${LANG_ENGLISH} "Docker Desktop:"
-LangString DEP_DOCKER ${LANG_SIMPCHINESE} "Docker Desktop："
-LangString DEP_PYTHON ${LANG_ENGLISH} "Python 3:"
-LangString DEP_PYTHON ${LANG_SIMPCHINESE} "Python 3："
-LangString DEP_WINGET ${LANG_ENGLISH} "winget (App Installer):"
-LangString DEP_WINGET ${LANG_SIMPCHINESE} "winget（应用安装程序）："
-LangString DEP_WEBVIEW2 ${LANG_ENGLISH} "WebView2:"
-LangString DEP_WEBVIEW2 ${LANG_SIMPCHINESE} "WebView2："
-LangString DEP_INSTALLED ${LANG_ENGLISH} "installed"
-LangString DEP_INSTALLED ${LANG_SIMPCHINESE} "已安装"
-LangString DEP_NOT_FOUND ${LANG_ENGLISH} "not found"
-LangString DEP_NOT_FOUND ${LANG_SIMPCHINESE} "未找到"
-LangString DEP_WEBVIEW2_OK ${LANG_ENGLISH} "WebView2: handled by the installer"
-LangString DEP_WEBVIEW2_OK ${LANG_SIMPCHINESE} "WebView2：由安装程序处理"
-LangString DEP_BTN_INSTALL ${LANG_ENGLISH} "Install missing dependencies"
-LangString DEP_BTN_INSTALL ${LANG_SIMPCHINESE} "安装缺失的依赖"
-LangString DEP_BTN_SKIP ${LANG_ENGLISH} "Skip"
-LangString DEP_BTN_SKIP ${LANG_SIMPCHINESE} "跳过"
-LangString DEP_BTN_START_DOCKER ${LANG_ENGLISH} "Start Docker Desktop"
-LangString DEP_BTN_START_DOCKER ${LANG_SIMPCHINESE} "启动 Docker Desktop"
-LangString DEP_BTN_STORE ${LANG_ENGLISH} "Open Microsoft Store"
-LangString DEP_BTN_STORE ${LANG_SIMPCHINESE} "打开 Microsoft Store"
-LangString DEP_STATUS_INSTALLING ${LANG_ENGLISH} "Installing missing dependencies, please wait..."
-LangString DEP_STATUS_INSTALLING ${LANG_SIMPCHINESE} "正在安装缺失的依赖，请稍候……"
-LangString DEP_STATUS_SKIPPING ${LANG_ENGLISH} "Skipping dependency installation. Missing dependencies will be reported when you start a runtime."
-LangString DEP_STATUS_SKIPPING ${LANG_SIMPCHINESE} "已跳过依赖安装。缺少的依赖将在启动运行时提示。"
 LangString DEP_FINISH_RUN ${LANG_ENGLISH} "Start AISC Workbench"
 LangString DEP_FINISH_RUN ${LANG_SIMPCHINESE} "启动 AISC Workbench"
-LangString DEP_DETAIL_NO_WINGET ${LANG_ENGLISH} "winget not found - install Microsoft App Installer from the Microsoft Store and run this installer again, or install Docker Desktop and Python manually."
-LangString DEP_DETAIL_NO_WINGET ${LANG_SIMPCHINESE} "未找到 winget - 请从 Microsoft Store 安装应用安装程序（App Installer）后重新运行本安装程序，或手动安装 Docker Desktop 和 Python。"
-LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_ENGLISH} "Installing Docker Desktop via winget (this may take a few minutes)..."
-LangString DEP_DETAIL_DOCKER_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Docker Desktop（可能需要几分钟）……"
-LangString DEP_DETAIL_DOCKER_OK ${LANG_ENGLISH} "Docker Desktop installed."
-LangString DEP_DETAIL_DOCKER_OK ${LANG_SIMPCHINESE} "Docker Desktop 已安装。"
-LangString DEP_DETAIL_DOCKER_FAIL ${LANG_ENGLISH} "Docker Desktop install failed (exit code $0). You can install it manually from https://www.docker.com/products/docker-desktop/ or start Docker Desktop later from the Start menu."
-LangString DEP_DETAIL_DOCKER_FAIL ${LANG_SIMPCHINESE} "Docker Desktop 安装失败（退出码 $0）。可手动从 https://www.docker.com/products/docker-desktop/ 安装，或稍后从开始菜单启动 Docker Desktop。"
-LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_ENGLISH} "Installing Python 3.12 via winget (this may take a few minutes)..."
-LangString DEP_DETAIL_PYTHON_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 安装 Python 3.12（可能需要几分钟）……"
-LangString DEP_DETAIL_PYTHON_OK ${LANG_ENGLISH} "Python 3.12 installed."
-LangString DEP_DETAIL_PYTHON_OK ${LANG_SIMPCHINESE} "Python 3.12 已安装。"
-LangString DEP_DETAIL_PYTHON_FAIL ${LANG_ENGLISH} "Python 3.12 install failed (exit code $0). You can install it manually from https://www.python.org/downloads/"
-LangString DEP_DETAIL_PYTHON_FAIL ${LANG_SIMPCHINESE} "Python 3.12 安装失败（退出码 $0）。可手动从 https://www.python.org/downloads/ 安装。"
 
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
@@ -828,55 +553,6 @@ Section EarlyChecks
   ${EndIf}
   !endif
 
-SectionEnd
-
-Section Dependencies
-  ; S4.1.b: install missing Docker Desktop / Python 3 via winget.
-  ; The user opted in on the dependency page ($DepsSkip = 0), skipped the
-  ; page ($DepsSkip = 1), or the installer runs silent/passive (skip).
-  ; winget may prompt for UAC - that is the expected user authorization step.
-  ${If} $DepsSkip = 1
-    Goto deps_done
-  ${EndIf}
-
-  ${If} $DepsWingetInstalled = 0
-    DetailPrint "$(DEP_DETAIL_NO_WINGET)"
-    Goto deps_done
-  ${EndIf}
-
-  ${If} $DepsDockerInstalled = 0
-    DetailPrint "$(DEP_DETAIL_DOCKER_INSTALLING)"
-    ; Hidden console: nsExec runs winget without a window (ExecWait would
-    ; pop up a console window). winget emits UTF-8 when its stdout is a
-    ; pipe, which nsExec misdecodes as the ANSI codepage in the install log
-    ; (mojibake) - so capture the output silently and rely on our own status
-    ; lines. winget also exits non-zero for "already installed" / "no action
-    ; needed"; re-detect the real state instead of trusting the exit code.
-    nsExec::ExecToStack '"winget" install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements'
-    Pop $0 ; winget exit code
-    Pop $1 ; winget output (UTF-8 piped bytes - not displayable as-is)
-    Call CheckDocker
-    ${If} $DepsDockerInstalled = 1
-      DetailPrint "$(DEP_DETAIL_DOCKER_OK)"
-    ${Else}
-      DetailPrint "$(DEP_DETAIL_DOCKER_FAIL)"
-    ${EndIf}
-  ${EndIf}
-
-  ${If} $DepsPythonInstalled = 0
-    DetailPrint "$(DEP_DETAIL_PYTHON_INSTALLING)"
-    nsExec::ExecToStack '"winget" install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements'
-    Pop $0 ; winget exit code
-    Pop $1 ; winget output (UTF-8 piped bytes - not displayable as-is)
-    Call CheckPython
-    ${If} $DepsPythonInstalled = 1
-      DetailPrint "$(DEP_DETAIL_PYTHON_OK)"
-    ${Else}
-      DetailPrint "$(DEP_DETAIL_PYTHON_FAIL)"
-    ${EndIf}
-  ${EndIf}
-
-  deps_done:
 SectionEnd
 
 Section WebView2
@@ -971,6 +647,280 @@ Section WebView2
   ${EndIf}
 SectionEnd
 
+; --- G-18: user PATH management (05 §5.2) ---
+; Only ever touches the single owned directory entry in HKCU\Environment\Path.
+; Never overwrites the whole value, never removes entries it does not own,
+; preserves the registry value type (REG_EXPAND_SZ), and broadcasts
+; WM_SETTINGCHANGE("Environment") after every write so new terminals pick it up.
+LangString PATH_CONFLICT ${LANG_ENGLISH} "PATH already contains another aisc executable ($PathHit). To keep the existing environment intact, AISC Workbench was not added to PATH. The Workbench keeps using its bundled CLI internally."
+LangString PATH_CONFLICT ${LANG_SIMPCHINESE} "PATH 中已存在其他 aisc 可执行文件（$PathHit）。为避免破坏现有环境，未将 AISC Workbench 加入 PATH。Workbench 内部仍使用自带 CLI。"
+
+Var PathType
+Var PathRaw
+Var PathNorm
+Var PathHit
+
+; $0 in/out: normalize a directory entry - trim spaces, strip one matching
+; quote pair, remove trailing backslashes, lowercase (Windows compare).
+!macro G18_PATH_FUNCS UN
+Function ${UN}PathNormalizeDir
+  Push $1
+  Push $2
+  StrCpy $1 $0
+  ${Do}
+    StrCpy $2 $1 1
+    ${If} $2 == " "
+      StrCpy $1 $1 "" 1
+    ${Else}
+      ${Break}
+    ${EndIf}
+  ${Loop}
+  ${Do}
+    StrCpy $2 $1 1 -1
+    ${If} $2 == " "
+      StrCpy $1 $1 -1
+    ${Else}
+      ${Break}
+    ${EndIf}
+  ${Loop}
+  StrCpy $2 $1 1
+  ${If} $2 == `"`
+    StrCpy $2 $1 1 -1
+    ${If} $2 == `"`
+      StrCpy $1 $1 -1 1
+    ${EndIf}
+  ${EndIf}
+  ${Do}
+    StrCpy $2 $1 1 -1
+    ${If} $2 == "\"
+      StrCpy $1 $1 -1
+    ${Else}
+      ${Break}
+    ${EndIf}
+  ${Loop}
+  ; Lowercase (ASCII + locale). ${StrCase} from StrFunc cannot be invoked
+  ; from inside a macro (STRFUNC_CALL limitation), so use CharLowerBuffW.
+  StrCpy $2 $1
+  StrCpy $1 ""
+  ${Do}
+    StrCpy $3 $2 1
+    ${If} $3 == ""
+      ${Break}
+    ${EndIf}
+    System::Call 'user32::CharLowerBuffW(w r3 .r3, i 1) i .r4'
+    StrCpy $1 "$1$3"
+    StrCpy $2 $2 "" 1
+  ${Loop}
+  StrCpy $0 $1
+  Pop $2
+  Pop $1
+FunctionEnd
+
+; Read HKCU\Environment\Path into $PathRaw and its value type into $PathType
+; (2 = REG_EXPAND_SZ, else REG_SZ); missing value -> $PathRaw = "", type SZ.
+Function ${UN}PathRead
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
+  StrCpy $PathType 1
+  System::Call 'advapi32::RegOpenKeyExW(i 0x80000001, w "Environment", i 0, i 0x20019, *i .r1) i .r2'
+  ${If} $2 = 0
+    System::Call 'advapi32::RegQueryValueExW(i r1, w "Path", i 0, *i .r3, i 0, *i .r4) i .r5'
+    ${If} $5 = 0
+      StrCpy $PathType $3
+      ReadRegStr $PathRaw HKCU "Environment" "Path"
+    ${EndIf}
+    System::Call 'advapi32::RegCloseKey(i r1)'
+  ${EndIf}
+  ${If} $PathRaw == ""
+    StrCpy $PathType 1
+  ${EndIf}
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
+FunctionEnd
+
+; Write $PathRaw back preserving $PathType, then broadcast WM_SETTINGCHANGE.
+Function ${UN}PathWrite
+  ${If} $PathType = 2
+    WriteRegExpandStr HKCU "Environment" "Path" $PathRaw
+  ${Else}
+    WriteRegStr HKCU "Environment" "Path" $PathRaw
+  ${EndIf}
+  System::Call 'user32::SendMessageTimeout(i 0xFFFF, i 0x1A, i 0, w "Environment", i 0x2, i 5000, *i .r0)'
+FunctionEnd
+
+; Remove every PATH entry whose normalized form equals $1 (caller passes the
+; normalized directory). Rewrites the value and broadcasts.
+Function ${UN}RemovePathEntryExact
+  Call ${UN}PathRead
+  StrCpy $2 $PathRaw
+  StrCpy $3 ""
+  ${Do}
+    ${If} $2 == ""
+      ${Break}
+    ${EndIf}
+    StrCpy $5 $2 1
+    ${If} $5 == ";"
+      StrCpy $2 $2 "" 1
+      ${Continue}
+    ${EndIf}
+    StrCpy $6 ""
+    ${Do}
+      StrCpy $5 $2 1
+      ${If} $5 == ";"
+      ${OrIf} $5 == ""
+        ${Break}
+      ${EndIf}
+      StrCpy $6 "$6$5"
+      StrCpy $2 $2 "" 1
+    ${Loop}
+    StrCpy $0 $6
+    Call ${UN}PathNormalizeDir
+    ${If} $0 != $1
+      ${If} $3 == ""
+        StrCpy $3 $6
+      ${Else}
+        StrCpy $3 "$3;$6"
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+  StrCpy $PathRaw $3
+  Call ${UN}PathWrite
+FunctionEnd
+
+; Install: ensure $INSTDIR is a PATH entry (05 §5.2 algorithm).
+Function ${UN}AddInstDirToPath
+  ; Install dir moved? Remove the old owned entry first (exact match only).
+  ReadRegDWORD $0 HKCU "${MANUPRODUCTKEY}" "PathEntryOwned"
+  ${If} $0 = 1
+    ReadRegStr $1 HKCU "${MANUPRODUCTKEY}" "PathEntry"
+    ${If} $1 != ""
+      StrCpy $0 $1
+      Call ${UN}PathNormalizeDir
+      StrCpy $1 $0
+      StrCpy $0 $INSTDIR
+      Call ${UN}PathNormalizeDir
+      ${If} $1 != $0
+        Call ${UN}RemovePathEntryExact
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  Call ${UN}PathRead
+  StrCpy $0 $INSTDIR
+  Call ${UN}PathNormalizeDir
+  StrCpy $PathNorm $0
+  StrCpy $6 0                ; $INSTDIR already present?
+  StrCpy $PathHit ""
+  StrCpy $1 $PathRaw
+  ${Do}
+    ${If} $1 == ""
+      ${Break}
+    ${EndIf}
+    StrCpy $5 $1 1
+    ${If} $5 == ";"
+      StrCpy $1 $1 "" 1
+      ${Continue}
+    ${EndIf}
+    StrCpy $3 ""
+    ${Do}
+      StrCpy $5 $1 1
+      ${If} $5 == ";"
+      ${OrIf} $5 == ""
+        ${Break}
+      ${EndIf}
+      StrCpy $3 "$3$5"
+      StrCpy $1 $1 "" 1
+    ${Loop}
+    ${If} $3 != ""
+      StrCpy $0 $3
+      Call ${UN}PathNormalizeDir
+      ${If} $0 == $PathNorm
+        StrCpy $6 1
+        ${Break}
+      ${EndIf}
+      ; conflict probe: expand %VAR% only for the probe; skip UNC/network dirs
+      StrCpy $4 $3 2
+      ${If} $4 != "\\"
+        ExpandEnvStrings $4 $3
+        ${If} ${FileExists} "$4\aisc.exe"
+          ${If} $PathHit == ""
+            StrCpy $PathHit $4
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+
+  ${If} $6 = 1
+    ; Already present: no duplicate append. Keep the marker (or leave a
+    ; manually-added entry untouched - only owned entries are removed later).
+    ReadRegDWORD $0 HKCU "${MANUPRODUCTKEY}" "PathEntryOwned"
+    ${If} $0 = 1
+      WriteRegStr HKCU "${MANUPRODUCTKEY}" "PathEntry" $INSTDIR
+    ${EndIf}
+    Return
+  ${EndIf}
+
+  ${If} $PathHit != ""
+    ; Another aisc shadows us: never overwrite, reorder or append (05 §5.2.5).
+    ${If} $PassiveMode = 1
+    ${OrIf} ${Silent}
+      DetailPrint "PATH conflict: aisc already at $PathHit; $INSTDIR not added"
+    ${Else}
+      MessageBox MB_OK|MB_ICONINFORMATION "$(PATH_CONFLICT)"
+    ${EndIf}
+    Return
+  ${EndIf}
+
+  ; Append once.
+  ${If} $PathRaw == ""
+    StrCpy $PathRaw $INSTDIR
+  ${Else}
+    StrCpy $PathRaw "$PathRaw;$INSTDIR"
+  ${EndIf}
+  Call ${UN}PathWrite
+  WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "PathEntryOwned" 1
+  WriteRegStr HKCU "${MANUPRODUCTKEY}" "PathEntry" $INSTDIR
+FunctionEnd
+
+; Uninstall: remove the owned entry only when the marker path matches $INSTDIR
+; (normalized); never touches other entries or other aisc installs.
+Function ${UN}RemoveInstDirFromPath
+  ReadRegDWORD $0 HKCU "${MANUPRODUCTKEY}" "PathEntryOwned"
+  ${If} $0 <> 1
+    Return
+  ${EndIf}
+  ReadRegStr $1 HKCU "${MANUPRODUCTKEY}" "PathEntry"
+  ${If} $1 == ""
+    Return
+  ${EndIf}
+  StrCpy $0 $1
+  Call ${UN}PathNormalizeDir
+  StrCpy $1 $0
+  StrCpy $0 $INSTDIR
+  Call ${UN}PathNormalizeDir
+  ${If} $1 != $0
+    Return
+  ${EndIf}
+  Call ${UN}RemovePathEntryExact
+  DeleteRegValue HKCU "${MANUPRODUCTKEY}" "PathEntryOwned"
+  DeleteRegValue HKCU "${MANUPRODUCTKEY}" "PathEntry"
+FunctionEnd
+
+!macroend
+
+; installer-scope helpers (called from Section Install)
+!insertmacro G18_PATH_FUNCS ""
+; uninstaller-scope helpers (called from Section Uninstall; NSIS
+; requires un. functions in the uninstall section)
+!insertmacro G18_PATH_FUNCS "un."
+
 Section Install
   SetOutPath $INSTDIR
 
@@ -1016,6 +966,9 @@ Section Install
 
   ; Save $INSTDIR in registry for future installations
   WriteRegStr SHCTX "${MANUPRODUCTKEY}" "" $INSTDIR
+
+  ; G-18: expose the sidecar to user terminals via the user PATH (05 §5.2).
+  Call AddInstDirToPath
 
   !if "${INSTALLMODE}" == "both"
     ; Save install mode to be selected by default for the next installation such as updating
@@ -1110,7 +1063,6 @@ Function un.onInit
 FunctionEnd
 
 Section Uninstall
-
   !ifmacrodef NSIS_HOOK_PREUNINSTALL
     !insertmacro NSIS_HOOK_PREUNINSTALL
   !endif
@@ -1199,6 +1151,12 @@ Section Uninstall
   ; We do this when not updating (to preserve the registry value on updates)
   ${If} $UpdateMode <> 1
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
+  ${EndIf}
+
+  ; G-18: remove the owned PATH entry (exact match only); /UPDATE keeps it so
+  ; a reinstall restores the same entry instead of removing+re-adding (05 §5.2).
+  ${If} $UpdateMode <> 1
+    Call un.RemoveInstDirFromPath
   ${EndIf}
 
   ; Delete app data if the checkbox is selected
