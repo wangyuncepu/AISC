@@ -176,8 +176,8 @@ function copyDone(key: string): boolean {
         <span v-if="store.freshness === 'stale'" class="last-known">{{ t("sidebar.lastKnown") }}</span>
       </div>
       <div class="actions-row">
-        <button :disabled="store.inspectInFlight" @click="store.refreshRuntime()">
-          {{ store.inspectInFlight ? t("sidebar.refreshing") : t("sidebar.refresh") }}
+        <button :disabled="store.inspectInFlight" @click="store.refreshRuntime(true)">
+          {{ store.userRefreshInFlight ? t("sidebar.refreshing") : t("sidebar.refresh") }}
         </button>
         <button class="danger" @click="store.stopRuntime()">{{ t("sidebar.stopRuntime") }}</button>
       </div>

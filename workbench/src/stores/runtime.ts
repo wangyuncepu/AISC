@@ -433,9 +433,15 @@ export const useRuntimeStore = defineStore("runtime", () => {
   /** Inspect the active runtime now and apply (deduped). Drives the polling
    * loop and the manual Refresh button. Assigns a request seq so a stale
    * response can never overwrite newer state (04 §六.2). */
-  async function refreshRuntime() {
+  /** G-05 (Step 8): only user-initiated refreshes surface the 刷新中 label -
+   * background poll cycles must not flip the button every 5s (user report
+   * 2026-08-10). */
+  const userRefreshInFlight = ref(false);
+
+  async function refreshRuntime(userInitiated = false) {
     if (!runtimeId.value || !workspace.value.trim()) return;
     if (inspectInFlight.value) return;
+    if (userInitiated) userRefreshInFlight.value = true;
     inspectInFlight.value = true;
     const seq = ++requestSeq.value;
     try {
@@ -445,6 +451,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       markStale();
     } finally {
       inspectInFlight.value = false;
+      if (userInitiated) userRefreshInFlight.value = false;
     }
   }
 
@@ -1097,6 +1104,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     applyRuntimeSnapshot,
     markStale,
     refreshRuntime,
+    userRefreshInFlight,
     loadProviderStatus,
     clearProviderStatuses,
     loadHistory,
