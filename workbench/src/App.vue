@@ -128,6 +128,24 @@ watch(
   }
 );
 
+// G-12 (2026-08-10): 官方账号登录 / 重试 start the session on the ALREADY
+// active guide tab - activeTabId does not change, so focus the terminal once
+// it mounts after the guide -> starting transition.
+watch(
+  () => {
+    const t = store.tabs.find((x) => x.tabId === store.activeTabId);
+    return t?.sessionState;
+  },
+  (st, prev) => {
+    if (st === "starting" && prev === "guide" && store.activeTabId) {
+      window.setTimeout(() => {
+        const id = store.activeTabId;
+        if (id) focusTabTerminal(id);
+      }, 50);
+    }
+  }
+);
+
 function onKeydown(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
