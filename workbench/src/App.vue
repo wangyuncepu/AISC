@@ -31,6 +31,34 @@ const providerPolling = useProviderPolling();
 // Step 3: settings dialog entry (keyboard-reachable topbar button).
 const settingsOpen = ref(false);
 
+// G-01 (Step 7, A-G01-3): ui.font_scale is immediate-effect. Applied as CSS
+// zoom on the UI chrome (topbar/picker/summary/sidebar/tabbar/dialog); the
+// terminal area is counter-zoomed so xterm stays 1:1 (its own font settings
+// govern terminal text). Backend default 1.0 when settings are not loaded.
+const uiScale = computed(() => settingsStore.doc?.ui.font_scale ?? 1);
+// The effective scale adapts to the window (user request 2026-08-10): the
+// chosen value applies only up to what fits the current window - the design
+// baseline is the 800x600 default window, so a non-maximized window at 1.5
+// never clips (max fit = min(w/800, h/600)). Resizes update the cap live.
+const windowSize = ref({ w: window.innerWidth, h: window.innerHeight });
+function onViewportResize() {
+  windowSize.value = { w: window.innerWidth, h: window.innerHeight };
+}
+onMounted(() => window.addEventListener("resize", onViewportResize));
+const effectiveScale = computed(() =>
+  Math.min(uiScale.value, 1.5, windowSize.value.w / 800, windowSize.value.h / 600)
+);
+// Zoom scales layout too, so the app box must compensate its height/width
+// (calc(100vh/scale) zoomed = 100vh) or the content shrinks away from the
+// window edges at scale < 1 (observed 2026-08-10: sidebar buttons and the
+// terminal area lifted off the bottom edge).
+const uiZoom = computed(() => ({
+  zoom: String(effectiveScale.value),
+  height: `calc(100vh / ${effectiveScale.value})`,
+  width: `calc(100vw / ${effectiveScale.value})`,
+}));
+const terminalZoom = computed(() => ({ zoom: String(1 / effectiveScale.value) }));
+
 // S3.3: aria-live regions (04 §九 - announce semantic changes only, never
 // routine polls). Throttled ~1s so a burst of updates coalesces to the latest.
 const livePolite = ref("");
@@ -162,6 +190,7 @@ watch(
 onBeforeUnmount(() => {
   polling.stop();
   providerPolling.stop();
+  window.removeEventListener("resize", onViewportResize);
   window.removeEventListener("keydown", onKeydown, { capture: true });
   if (announceTimer !== null) window.clearTimeout(announceTimer);
 });
@@ -199,7 +228,7 @@ function selectRecent(path: string): void {
 </script>
 
 <template>
-  <div class="app">
+  <div class="app" :style="uiZoom">
     <header class="topbar">
       <span class="brand">AISC Workbench</span>
       <span class="status" :data-status="store.status">{{ store.status }}</span>
@@ -287,7 +316,7 @@ function selectRecent(path: string): void {
       <RuntimeSidebar />
       <div class="main">
         <TabBar />
-        <main class="terminal-area">
+        <main class="terminal-area" :style="terminalZoom">
           <!-- G-08 empty state (A-G08-6): focus target for creating the first tab -->
           <div v-if="store.tabs.length === 0" class="empty-tabs">
             <p>{{ t("tabs.empty") }}</p>

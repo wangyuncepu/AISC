@@ -94,6 +94,16 @@
 - [x] **6b-1** 手动测试（2026-08-10）：终端字号 14/行高 1.2/平滑滚动生效；设置字号即时变大、取消回滚；renderer 切 webgl 重建视图会话不重开；配色/字体 fallback 目视正常；WebGL 无黑屏。全部通过。
 - **Step 6 结论（2026-08-10）**：vitest 38 绿（renderer 6 + 基准 1 新增）；A-G06-1..5 证据齐。UI 字体缩放（ui.font_scale）接线归 Step 7（G-01）。
 
+## Step 7 验收清单（G-01 设置页交付，分支 step-7-g01-settings）
+
+> 规范：06 §八、02 A-G01-1..5。Step 3 已交付对话框骨架/校验/Reset 隔离/保存失败恢复（A-G01-1/2/4/5）；本步补齐生效边界（A-G01-3）与 UI scale。
+
+- [x] **7a-1** `ui.font_scale` 接线：CSS zoom 作用于 UI chrome（顶栏/picker/摘要/侧栏/tab/对话框），终端区反缩放保持 1:1（终端文字由 terminal.font_size 管辖）；即时生效 + 对话框编辑预览/取消回滚。
+- [x] **7a-2** 手测修复 2 个真实 bug：(1) zoom 影响布局——100vh 根被缩成 80vh，侧栏按钮/终端区脱离底边 → 盒子尺寸补偿 `calc(100vh/scale) × calc(100vw/scale)` + body 背景对齐；(2) 小窗口 1.5 缩放裁剪 → 有效缩放按窗口自适应 `min(用户值, 1.5, w/800, h/600)`（800×600 默认窗口为设计基线），resize 实时更新，设置值保留仅应用值收敛。
+- [x] **7a-3** 生效边界完备性（A-G01-3）：语言/UI scale/字号/行高/字距/回滚/平滑滚动即时；renderer/font_family 仅重建 Terminal 视图不重开 Session（Step 6）；Reset 只恢复 GUI 设置（Step 3）。
+- [x] **7b-1** 手动测试（2026-08-10）：1.25/1.5/0.8 各档布局正常、与终端字号独立并存、保存重启保持、取消回滚、小窗口自适应无裁剪。全部通过。
+- **Step 7 结论（2026-08-10）**：vitest 38 绿 / build 零错；A-G01-1..5 证据齐。
+
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
 ### S4.2 发布门（2026-08-09，06-implementation-plan.md §七 S4.2）
