@@ -12,8 +12,11 @@ import type {
   RuntimeListResult,
   RuntimeSnapshot,
   RuntimeStartResult,
+  SaveOutcome,
   SessionExit,
   SessionSnapshot,
+  SettingsDocument,
+  SettingsPatch,
   ShutdownReport,
   WorkbenchHistory,
 } from "../types";
@@ -52,6 +55,16 @@ export const ackSessionExit = (sessionId: string) =>
 /** Unified exit coordinator: bounded session close + force-reap + flush. */
 export const shutdownWorkbench = (stopRuntime: boolean = false) =>
   invoke<ShutdownReport>("shutdown_workbench", { stopRuntime });
+
+// --- Step 3: typed settings (02 §三.4; conflict replay is Rust-side) ---
+
+export const loadSettings = () => invoke<SettingsDocument>("load_settings");
+
+export const saveSettings = (expectedRevision: number, patch: SettingsPatch) =>
+  invoke<SaveOutcome>("save_settings", { expectedRevision, patch });
+
+export const resetGuiSettings = (expectedRevision: number) =>
+  invoke<SaveOutcome>("reset_gui_settings", { expectedRevision });
 
 // --- S1.4: runtime control ---
 

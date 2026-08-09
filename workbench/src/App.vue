@@ -16,10 +16,14 @@ import LaunchSummary from "./features/startup/LaunchSummary.vue";
 import StartProgress from "./features/startup/StartProgress.vue";
 import BuildProgress from "./features/startup/BuildProgress.vue";
 import ConflictManager from "./features/startup/ConflictManager.vue";
+import SettingsDialog from "./features/settings/SettingsDialog.vue";
 
 const store = useRuntimeStore();
 const polling = useRuntimePolling();
 const providerPolling = useProviderPolling();
+
+// Step 3: settings dialog entry (keyboard-reachable topbar button).
+const settingsOpen = ref(false);
 
 // S3.3: aria-live regions (04 §九 - announce semantic changes only, never
 // routine polls). Throttled ~1s so a burst of updates coalesces to the latest.
@@ -180,7 +184,12 @@ function selectRecent(path: string): void {
     <header class="topbar">
       <span class="brand">AISC Workbench</span>
       <span class="status" :data-status="store.status">{{ store.status }}</span>
+      <span class="spacer" />
+      <button class="settings-btn" @click="settingsOpen = true">设置</button>
     </header>
+
+    <!-- Step 3: typed settings dialog (keyboard-accessible modal, A-G01-1) -->
+    <SettingsDialog v-if="settingsOpen" @close="settingsOpen = false" />
 
     <!-- S3.3: screen-reader live regions (04 §九). Visually hidden, announced
          only on semantic changes (throttled). -->
@@ -313,9 +322,11 @@ function selectRecent(path: string): void {
   border-bottom: 1px solid #333;
 }
 .brand { font-weight: 600; }
+.spacer { flex: 1; }
 .status { font-size: 12px; color: #888; }
 .status[data-status="ready"] { color: #4caf50; }
 .status[data-status="error"], .status[data-status="blocked"] { color: #e57373; }
+.settings-btn { padding: 3px 10px; font-size: 12px; }
 .gate.blocked, .gate.error, .center, .picker {
   flex: 1;
   display: flex;
