@@ -28,10 +28,15 @@ RT = "550e8400-e29b-41d4-a716-446655440000"
 SID = "660e8400-e29b-41d4-a716-446655440000"
 
 # The wrapper runs inside the Linux container; some logic uses /proc start-ticks
-# and POSIX signals (os.killpg) that don't exist on Windows. Skip those on
-# non-POSIX - Linux CI covers them fully.
+# and POSIX signals (os.killpg). Pure POSIX bits (0600 modes, killpg) work on
+# any POSIX host; the /proc start-ticks identity checks only exist on Linux
+# (macOS is POSIX but has no /proc). Skip those on non-Linux - Linux CI covers
+# them fully.
 posix_only = unittest.skipUnless(
-    os.name == "posix", "aisc-session-wrapper uses /proc + POSIX signals (Linux container only)"
+    os.name == "posix", "aisc-session-wrapper uses POSIX semantics (container runtime)"
+)
+linux_only = unittest.skipUnless(
+    os.path.isdir("/proc"), "start-ticks identity check reads /proc (Linux container only)"
 )
 
 
@@ -47,7 +52,7 @@ class TestUuidValidation(unittest.TestCase):
         assert not wrapper._is_uuid_v4("")
 
 
-@posix_only
+@linux_only
 class TestStartTicks(unittest.TestCase):
     def test_self_has_start_ticks(self):
         ticks = wrapper._read_start_ticks(os.getpid())
@@ -58,7 +63,7 @@ class TestStartTicks(unittest.TestCase):
         assert wrapper._read_start_ticks(4_000_000) is None
 
 
-@posix_only
+@linux_only
 class TestIdentityMatch(unittest.TestCase):
     def test_matches_self(self):
         assert wrapper._identity_matches(os.getpid(), wrapper._read_start_ticks(os.getpid()))
@@ -168,7 +173,7 @@ class TestList(unittest.TestCase):
         assert agents == {"claude", "bash"}
 
 
-@posix_only
+@linux_only
 class TestTerminate(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="aisc-wrap-term-")
