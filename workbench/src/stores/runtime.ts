@@ -747,24 +747,29 @@ export const useRuntimeStore = defineStore("runtime", () => {
    * type). Unconfigured providers route the tab to the guide state without
    * calling open_session; bash/cc-switch open immediately.
    *
-   * TODO(2026-08-10, user decision): `login_required` (e.g. codex's default
-   * "OpenAI Official" route) currently OPENS the session so the user logs in
-   * inside the terminal TUI. If a more conservative flow is wanted later
-   * (login_required -> guide state until explicitly configured), extend the
-   * condition to `!st || ["not_configured", "login_required"].includes(...)`.
-   * Kept data-driven per A-G08-2 (only not_configured is gated). */
+   * Step 8 (04 §三 rule table): login_required and unknown ALSO route to the
+   * guide state (supersedes the 2026-08-10 decision that login_required opened
+   * directly - the spec now requires the conservative flow). */
   async function maybeOpenCreated(tabId: string, agent: LaunchAgent) {
     if (agent === "claude" || agent === "codex") {
       await loadProviderStatus(agent);
       const st = providerStatuses.value[agent];
       const tab = findTab(tabId);
       if (!tab || tab.sessionState !== "idle") return;
-      if (!st || st.auth_status === "not_configured") {
+      if (!st || ["not_configured", "login_required", "unknown"].includes(st.auth_status)) {
         tab.sessionState = "guide";
         return;
       }
     }
     openTab(tabId);
+  }
+
+  /** G-12 (Step 8): activate an existing cc-switch tab or create one -
+   * shared by the sidebar auth action and the guide banner. */
+  function openCcSwitch() {
+    const existing = tabs.value.find((t) => t.agent === "cc-switch");
+    if (existing) activateTab(existing.tabId);
+    else createTab("cc-switch");
   }
 
   /** G-08: remove a tab entirely (× button). Live sessions are closed
@@ -1085,6 +1090,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     reopenTab,
     createTab,
     removeTab,
+    openCcSwitch,
     onTabOpenOk,
     onTabOpenFail,
     onTabSessionExit,

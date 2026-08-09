@@ -1,27 +1,132 @@
 <script setup lang="ts">
 /**
- * RuntimeSidebar (S2.3.a): always-visible P0 observability for the ready view
- * (04 §二 P0, §四.1). Shows workspace, runtime state + freshness + observed-ago,
- * config (image/network/scope), active agent, exact IDs and the session list.
- * Network/scope come from the runtime snapshot's config (free); provider/route
- * (P1) land in S2.3.b.
+ * RuntimeSidebar (G-05, Step 8; 04-observability.md §二): two-layer P0
+ * observability for the ready view.
+ *
+ * User layer (always visible, semantic view model - sections are keyed so an
+ * unchanged semantic key leaves the subtree untouched, A-G05-1): workspace,
+ * runtime state (stale -> "last known" styling, never deterministic green),
+ * provider name, auth with an action when unconfigured, session count.
+ *
+ * Developer details (collapsed by default, native <details> - keyboard
+ * reachable): exact IDs/container/owner/fingerprint, freshness, relative +
+ * absolute observed time, image/network/scope, raw route/auth. Nothing is
+ * deleted, only layered (04 §2.2). The 1-second ticker is gone: relative time
+ * is recomputed per snapshot and when the details expand.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
+import { i18n as i18nLocale } from "../../i18n";
 import type { RuntimeState } from "../../types";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
 
-// 1s ticker so "observed Xs ago" stays current without re-polling.
-const nowMs = ref(Date.now());
-let timer: number | null = null;
-onMounted(() => {
-  timer = window.setInterval(() => {
-    nowMs.value = Date.now();
-  }, 1000);
+const snap = computed(() => store.runtimeSnapshot);
+
+// --- observed time: no ticker; cached per snapshot, refreshed on details open
+const agoCache = new Map<string, string>();
+function agoFor(iso: string | undefined): string {
+  if (!iso) return "-";
+  const cached = agoCache.get(iso);
+  if (cached) return cached;
+  const ts = Date.parse(iso);
+  let out = "-";
+  if (!Number.isNaN(ts)) {
+    const sec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    out =
+      sec < 60 ? `${sec}s ago` : sec < 3600 ? `${Math.floor(sec / 60)}m ago` : `${Math.floor(sec / 3600)}h ago`;
+  }
+  agoCache.set(iso, out);
+  return out;
+}
+const observedAgoText = computed(() => agoFor(snap.value?.observed_at));
+
+const detailsOpen = ref(false);
+const observedAbsText = computed(() => {
+  const iso = snap.value?.observed_at;
+  if (!iso) return "-";
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return iso;
+  // Recompute relative time when details expand (04 §4.1).
+  agoCache.delete(iso);
+  return new Date(ts).toLocaleString(i18nLocale.global.locale.value);
 });
+
+const workspaceName = computed(() => {
+  const p = store.workspace;
+  if (!p) return "-";
+  const parts = p.replace(/\/+$/, "").split("/");
+  return parts[parts.length - 1] || p;
+});
+
+const STATE_LABEL_KEY: Record<RuntimeState, string> = {
+  running: "app.running",
+  stopped: "app.stopped",
+  not_found: "app.notFound",
+  unknown: "app.unknown",
+  starting: "app.starting",
+  stopping: "app.stopping",
+  removing: "app.removing",
+};
+
+/** Semantic keys (04 §4.2): stable key -> untouched DOM subtree. */
+const runtimeKey = computed(
+  () => `${snap.value?.state ?? "none"}|${store.freshness}|${store.runtimeState}`
+);
+const sessionsKey = computed(
+  () =>
+    store.tabs.map((x) => `${x.tabId}:${x.sessionState}`).join(",") +
+    "|" +
+    (store.activeTabId ?? "")
+);
+
+// --- provider / auth (user layer)
+const providerSupported = computed(() => store.capability?.provider_status ?? false);
+const activeTab = computed(() => store.tabs.find((x) => x.tabId === store.activeTabId) ?? null);
+const activeAgent = computed(() => activeTab.value?.agent ?? null);
+const providerStatus = computed(() => {
+  const a = activeAgent.value;
+  if (a === "claude" || a === "codex") return store.providerStatuses[a];
+  return null;
+});
+const providerKey = computed(
+  () =>
+    `${snap.value?.runtime_id}|${activeAgent.value ?? "none"}|${providerStatus.value?.provider_name ?? ""}|${providerStatus.value?.route_mode ?? ""}|${providerStatus.value?.auth_status ?? ""}|${store.freshness}`
+);
+const providerInFlightLabel = computed(() => {
+  const a = activeAgent.value;
+  if (a && store.providerInFlight === a) return t("sidebar.loading");
+  return t("sidebar.unknown");
+});
+
+const AUTH_LABEL_KEY: Record<string, string> = {
+  configured: "sidebar.authConfigured",
+  login_required: "sidebar.authLoginRequired",
+  not_configured: "sidebar.authNotConfigured",
+  unknown: "sidebar.authUnknown",
+};
+const authLabel = computed(() => {
+  const st = providerStatus.value?.auth_status;
+  if (!st) return null;
+  return t(AUTH_LABEL_KEY[st] ?? "sidebar.authUnknown");
+});
+/** 04 §三: not_configured/login_required show the cc-switch action. */
+const authAction = computed(() => {
+  const st = providerStatus.value?.auth_status;
+  return st === "not_configured" || st === "login_required";
+});
+
+const sessionsText = computed(() => {
+  const n = store.tabs.length;
+  const active = activeTab.value?.title ?? null;
+  return t("sidebar.sessionsCount", { count: n, type: active ?? "-" });
+});
+
+function short(id: string): string {
+  return id.slice(0, 8);
+}
 
 // Click-to-copy for exact IDs (hover tooltips can't be selected).
 const copiedKey = ref("");
@@ -41,149 +146,101 @@ function copy(key: string, text: string): void {
       /* clipboard unavailable */
     });
 }
-
-onBeforeUnmount(() => {
-  if (timer !== null) window.clearInterval(timer);
-  if (copiedTimer !== null) window.clearTimeout(copiedTimer);
-});
-
-const snap = computed(() => store.runtimeSnapshot);
-
-const workspaceName = computed(() => {
-  const p = store.workspace;
-  if (!p) return "-";
-  const parts = p.replace(/\/+$/, "").split("/");
-  return parts[parts.length - 1] || p;
-});
-
-const STATE_LABEL_KEY: Record<RuntimeState, string> = {
-  running: "app.running",
-  stopped: "app.stopped",
-  not_found: "app.notFound",
-  unknown: "app.unknown",
-  starting: "app.starting",
-  stopping: "app.stopping",
-  removing: "app.removing",
-};
-
-const observedAgoText = computed(() => {
-  const s = snap.value;
-  if (!s || !s.observed_at) return "-";
-  const t = Date.parse(s.observed_at);
-  if (Number.isNaN(t)) return "-";
-  const sec = Math.max(0, Math.floor((nowMs.value - t) / 1000));
-  if (sec < 60) return `${sec}s ago`;
-  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
-  return `${Math.floor(sec / 3600)}h ago`;
-});
-
-const activeTab = computed(
-  () => store.tabs.find((t) => t.tabId === store.activeTabId) ?? null
-);
-
-// S2.3.b: P1 provider (claude/codex only; bash/cc-switch n/a).
-const providerSupported = computed(() => store.capability?.provider_status ?? false);
-const activeAgent = computed(() => activeTab.value?.agent ?? null);
-const providerStatus = computed(() => {
-  const a = activeAgent.value;
-  if (a === "claude" || a === "codex") return store.providerStatuses[a];
-  return null;
-});
-const providerInFlightLabel = computed(() => {
-  const a = activeAgent.value;
-  if (a && store.providerInFlight === a) return t("sidebar.loading");
-  return t("sidebar.unknown");
-});
-
-function short(id: string): string {
-  return id.slice(0, 8);
+function copyDone(key: string): boolean {
+  return copiedKey.value === key;
 }
 </script>
 
 <template>
   <aside class="sidebar" :aria-label="t('sidebar.runtime')">
-    <section class="block">
+    <!-- User layer: semantic-keyed sections (A-G05-1) -->
+
+    <section class="block" :key="`ws|${store.workspace}`">
       <div class="label">{{ t("sidebar.workspace") }}</div>
-      <div class="value" :title="store.workspace">{{ workspaceName }}</div>
+      <div
+        class="value copyable"
+        :title="t('sidebar.copyWorkspace', { path: store.workspace })"
+        @click="copy('ws', store.workspace)"
+      >{{ workspaceName }}<span v-if="copyDone('ws')" class="copied">{{ t("sidebar.copied") }}</span></div>
     </section>
 
-    <section class="block">
+    <section class="block" :key="runtimeKey">
       <div class="label">{{ t("sidebar.runtime") }}</div>
       <div class="runtime-row">
         <span
           class="state"
           :data-state="store.runtimeState"
+          :data-fresh="store.freshness"
           :aria-label="`Runtime ${t(STATE_LABEL_KEY[store.runtimeState])}`"
         >{{ t(STATE_LABEL_KEY[store.runtimeState]) }}</span>
-        <span class="fresh" :data-fresh="store.freshness">{{ store.freshness }}</span>
+        <span v-if="store.freshness === 'stale'" class="last-known">{{ t("sidebar.lastKnown") }}</span>
       </div>
-      <div class="muted">{{ t("sidebar.observed") }} {{ observedAgoText }}</div>
-      <div
-        class="id copyable"
-        :title="store.runtimeId ? t('sidebar.copyRuntime', { id: store.runtimeId }) : ''"
-        @click="copy('rt', store.runtimeId)"
-      >
-        id {{ store.runtimeId ? short(store.runtimeId) : "-" }}
-        <span v-if="copiedKey === 'rt'" class="copied">{{ t("sidebar.copied") }}</span>
-      </div>
-      <div
-        v-if="snap?.container_name"
-        class="id copyable"
-        :title="t('sidebar.copyContainer', { name: snap.container_name })"
-        @click="copy('ctr', snap!.container_name)"
-      >
-        ctr {{ snap.container_name }}
-        <span v-if="copiedKey === 'ctr'" class="copied">{{ t("sidebar.copied") }}</span>
+      <div class="actions-row">
+        <button :disabled="store.inspectInFlight" @click="store.refreshRuntime()">
+          {{ store.inspectInFlight ? t("sidebar.refreshing") : t("sidebar.refresh") }}
+        </button>
+        <button class="danger" @click="store.stopRuntime()">{{ t("sidebar.stopRuntime") }}</button>
       </div>
     </section>
 
-    <section class="block">
-      <div class="label">{{ t("sidebar.config") }}</div>
-      <div class="kv">image <span>{{ snap?.config.image || "-" }}</span></div>
-      <div class="kv">network <span>{{ snap?.config.network || "-" }}</span></div>
-      <div class="kv">scope <span>{{ snap?.config.scope || "-" }}</span></div>
-    </section>
-
-    <section class="block">
-      <div class="label">{{ t("sidebar.activeAgent") }}</div>
-      <div class="value">{{ activeTab?.title ?? t("sidebar.noSession") }}</div>
-    </section>
-
-    <section class="block">
+    <section class="block" :key="providerKey">
       <div class="label">{{ t("sidebar.provider") }}</div>
       <div v-if="!providerSupported" class="muted">{{ t("sidebar.providerUnsupported") }}</div>
       <div v-else-if="activeAgent !== 'claude' && activeAgent !== 'codex'" class="muted">{{ t("sidebar.providerN/a") }}</div>
       <template v-else>
-        <div v-if="providerStatus" class="p-name">{{ providerStatus.provider_name || t("sidebar.unknown") }}</div>
-        <div v-else class="muted">{{ providerInFlightLabel }}</div>
-        <div v-if="providerStatus" class="kv">route <span>{{ providerStatus.route_mode || "-" }}</span></div>
-        <div v-if="providerStatus" class="kv">
-          auth <span :data-auth="providerStatus.auth_status">{{ providerStatus.auth_status || "-" }}</span>
+        <div class="value">{{ providerStatus?.provider_name || providerInFlightLabel }}</div>
+        <div v-if="authLabel" class="auth-row">
+          <span class="auth" :data-auth="providerStatus?.auth_status">{{ authLabel }}</span>
+          <button v-if="authAction" class="link" @click="store.openCcSwitch()">{{ t("guide.openCcSwitch") }}</button>
         </div>
         <div v-if="store.providerError" class="err">{{ store.providerError.message }}</div>
       </template>
     </section>
 
-    <section class="block sessions">
+    <section class="block" :key="sessionsKey">
       <div class="label">{{ t("sidebar.sessions") }}</div>
-      <ul>
+      <button class="value sessions-btn" @click="store.activeTabId && store.activateTab(store.activeTabId)">
+        {{ sessionsText }}
+      </button>
+      <ul class="mini">
         <li
-          v-for="t in store.tabs"
-          :key="t.tabId"
-          :class="{ active: t.tabId === store.activeTabId }"
+          v-for="x in store.tabs"
+          :key="x.tabId"
+          :class="{ active: x.tabId === store.activeTabId }"
+          @click="store.activateTab(x.tabId)"
         >
-          <span class="t-title">{{ t.title }}</span>
-          <span class="t-state" :data-state="t.sessionState">{{ t.sessionState }}</span>
+          <span class="t-title">{{ x.title }}</span>
+          <span class="t-state" :data-state="x.sessionState">{{ x.sessionState }}</span>
         </li>
       </ul>
     </section>
 
-    <section class="actions">
-      <button :disabled="store.inspectInFlight" @click="store.refreshRuntime()">
-        {{ store.inspectInFlight ? t("sidebar.refreshing") : t("sidebar.refresh") }}
-      </button>
-      <button class="danger" @click="store.stopRuntime()">{{ t("sidebar.stopRuntime") }}</button>
-    </section>
+    <!-- Developer details: collapsed by default, native <details> (A-G05-3/4) -->
+    <details class="details" :open="detailsOpen" @toggle="detailsOpen = ($event.target as HTMLDetailsElement).open">
+      <summary class="label">{{ t("sidebar.details") }}</summary>
+      <div class="dev">
+        <div class="kv">runtime_id <span class="mono copyable" :title="t('sidebar.copyRuntime', { id: snap?.runtime_id ?? '' })" @click="copy('rt', snap?.runtime_id ?? '')">{{ snap?.runtime_id ? short(snap.runtime_id) : "-" }}<span v-if="copyDone('rt')" class="copied">{{ t("sidebar.copied") }}</span></span></div>
+        <div class="kv">container_name <span class="mono copyable" :title="t('sidebar.copyContainer', { name: snap?.container_name ?? '' })" @click="copy('ctr', snap?.container_name ?? '')">{{ snap?.container_name ?? "-" }}<span v-if="copyDone('ctr')" class="copied">{{ t("sidebar.copied") }}</span></span></div>
+        <div class="kv">container_id <span class="mono copyable" :title="t('sidebar.copyContainer', { name: snap?.container_id ?? '' })" @click="copy('cid', snap?.container_id ?? '')">{{ snap?.container_id ? short(snap.container_id) : "-" }}</span></div>
+        <div class="kv">owner <span class="mono">{{ snap?.owner ?? "-" }}</span></div>
+        <div class="kv">config_fingerprint <span class="mono copyable" :title="t('sidebar.copyFingerprint', { fp: snap?.config_fingerprint ?? '' })" @click="copy('fp', snap?.config_fingerprint ?? '')">{{ snap?.config_fingerprint ? short(snap.config_fingerprint) : "-" }}</span></div>
+        <div class="kv">registry_state <span class="mono">{{ snap?.registry_state ?? "-" }}</span></div>
+        <div class="kv">freshness <span class="mono">{{ store.freshness }}</span></div>
+        <div class="kv">stale <span class="mono">{{ String(snap?.stale ?? "-") }}</span></div>
+        <div class="kv">observed <span class="mono">{{ observedAgoText }}</span></div>
+        <div class="kv">{{ t("sidebar.observedAbs") }} <span class="mono">{{ observedAbsText }}</span></div>
+        <div class="kv">image <span class="mono">{{ snap?.config.image || "-" }}</span></div>
+        <div class="kv">network <span class="mono">{{ snap?.config.network || "-" }}</span></div>
+        <div class="kv">scope <span class="mono">{{ snap?.config.scope || "-" }}</span></div>
+        <div class="kv">workspace <span class="mono copyable" :title="t('sidebar.copyWorkspace', { path: store.workspace })" @click="copy('ws', store.workspace)">{{ store.workspace || "-" }}</span></div>
+        <template v-if="providerStatus">
+          <div class="kv">provider_id <span class="mono copyable" :title="t('sidebar.copyProvider', { id: providerStatus.provider_id })" @click="copy('pid', providerStatus.provider_id)">{{ providerStatus.provider_id || "-" }}</span></div>
+          <div class="kv">provider_name <span class="mono">{{ providerStatus.provider_name || "-" }}</span></div>
+          <div class="kv">route <span class="mono">{{ providerStatus.route_mode || "-" }}</span></div>
+          <div class="kv">auth <span class="mono" :data-auth="providerStatus.auth_status">{{ providerStatus.auth_status || "-" }}</span></div>
+        </template>
+      </div>
+    </details>
   </aside>
 </template>
 
@@ -193,7 +250,7 @@ function short(id: string): string {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   padding: 12px;
   background: #252526;
   border-right: 1px solid #333;
@@ -205,54 +262,51 @@ function short(id: string): string {
 .label { color: #6a6a6a; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
 .value { color: #ddd; font-size: 13px; word-break: break-all; }
 .muted { color: #777; }
-.id { font-family: monospace; color: #9cdcfe; font-size: 11px; }
 .copyable { cursor: pointer; transition: color 0.1s; }
 .copyable:hover { color: #fff; }
 .copied { color: #4caf50; margin-left: 4px; }
-.kv { color: #888; }
-.kv span { color: #ccc; }
-.p-name { color: #ddd; font-size: 13px; word-break: break-all; }
-.err { color: #e57373; font-size: 11px; }
-.kv span[data-auth="configured"] { color: #4caf50; }
-.kv span[data-auth="login_required"], .kv span[data-auth="not_configured"] { color: #cca84a; }
-.kv span[data-auth="unknown"] { color: #888; }
-.runtime-row { display: flex; align-items: center; gap: 8px; }
-.state {
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 11px;
+.mono { font-family: monospace; color: #9cdcfe; font-size: 11px; }
+.kv { color: #888; display: flex; gap: 6px; flex-wrap: wrap; }
+.kv span { color: #ccc; word-break: break-all; }
+.runtime-row { display: flex; align-items: center; gap: 6px; }
+.state { color: #888; }
+.state[data-state="running"] { color: #4caf50; }
+.state[data-state="stopped"] { color: #e0a868; }
+.state[data-state="starting"], .state[data-state="stopping"] { color: #cca84a; }
+.state[data-state="not_found"], .state[data-state="removing"] { color: #888; }
+/* stale: last-known styling, never deterministic green (04 §2.1) */
+.state[data-fresh="stale"] { color: #e0a868; }
+.last-known { font-size: 10px; color: #e0a868; }
+.actions-row { display: flex; gap: 6px; margin-top: 2px; }
+.auth-row { display: flex; align-items: center; gap: 8px; }
+.auth { font-size: 12px; }
+.auth[data-auth="configured"] { color: #4caf50; }
+.auth[data-auth="login_required"], .auth[data-auth="not_configured"] { color: #e0c97a; }
+.auth[data-auth="unknown"] { color: #888; }
+.link { background: none; border: none; color: #9cdcfe; padding: 0; font-size: 11px; cursor: pointer; text-decoration: underline; }
+.sessions-btn {
+  background: none; border: none; color: #ddd; padding: 0; text-align: left;
+  font-size: 13px; cursor: pointer;
 }
-.state[data-state="running"] { color: #4caf50; background: #1e3a1e; }
-.state[data-state="stopped"] { color: #cca84a; background: #3a331e; }
-.state[data-state="not_found"] { color: #e57373; background: #3a1e1e; }
-.state[data-state="unknown"] { color: #888; background: #333; }
-.state[data-state="starting"], .state[data-state="stopping"], .state[data-state="removing"] {
-  color: #6db4e0; background: #1e2e3a;
-}
-.fresh { font-size: 11px; }
-.fresh[data-fresh="fresh"] { color: #4caf50; }
-.fresh[data-fresh="stale"] { color: #cca84a; }
-.fresh[data-fresh="unknown"] { color: #888; }
-.sessions ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
-.sessions li {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 2px 4px; border-radius: 3px;
-}
-.sessions li.active { background: #2d2d2d; }
-.t-title { color: #ccc; }
-.t-state { font-size: 10px; color: #777; }
+.sessions-btn:hover { color: #fff; }
+.mini { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.mini li { display: flex; gap: 6px; padding: 2px 4px; cursor: pointer; border-radius: 3px; }
+.mini li:hover { background: #2d2d2d; }
+.mini li.active { background: #1e1e1e; }
+.t-title { color: #ddd; }
+.t-state { font-size: 10px; color: #777; margin-left: auto; }
 .t-state[data-state="running"] { color: #4caf50; }
-.t-state[data-state="exited"], .t-state[data-state="disconnected"] { color: #888; }
-.t-state[data-state="failed"] { color: #e57373; }
 .t-state[data-state="starting"], .t-state[data-state="closing"] { color: #cca84a; }
-.actions { margin-top: auto; display: flex; flex-direction: column; gap: 6px; }
+.t-state[data-state="failed"] { color: #e57373; }
+.details { margin-top: auto; }
+.details summary { cursor: pointer; user-select: none; }
+.dev { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
 button {
   background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;
-  padding: 6px 10px; font-size: 12px; cursor: pointer;
+  padding: 4px 10px; font-size: 12px; cursor: pointer;
 }
 button:hover:not(:disabled) { background: #3c3c3c; }
-button:disabled { opacity: 0.5; cursor: default; }
+button:disabled { opacity: 0.45; cursor: default; }
 button.danger { background: #5a2d2d; border-color: #6b3636; }
-button.danger:hover:not(:disabled) { background: #6e3a3a; }
+.err { font-size: 11px; color: #e57373; }
 </style>
