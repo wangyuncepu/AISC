@@ -13,6 +13,7 @@ const mockIpc = vi.hoisted(() => ({
   loadSettings: vi.fn(),
   saveSettings: vi.fn(),
   resetGuiSettings: vi.fn(),
+  resolveLocale: vi.fn().mockResolvedValue("zh-CN"),
 }));
 
 vi.mock("../../lib/ipc", () => mockIpc);
