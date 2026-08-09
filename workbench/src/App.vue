@@ -36,16 +36,28 @@ const settingsOpen = ref(false);
 // terminal area is counter-zoomed so xterm stays 1:1 (its own font settings
 // govern terminal text). Backend default 1.0 when settings are not loaded.
 const uiScale = computed(() => settingsStore.doc?.ui.font_scale ?? 1);
+// The effective scale adapts to the window (user request 2026-08-10): the
+// chosen value applies only up to what fits the current window - the design
+// baseline is the 800x600 default window, so a non-maximized window at 1.5
+// never clips (max fit = min(w/800, h/600)). Resizes update the cap live.
+const windowSize = ref({ w: window.innerWidth, h: window.innerHeight });
+function onViewportResize() {
+  windowSize.value = { w: window.innerWidth, h: window.innerHeight };
+}
+onMounted(() => window.addEventListener("resize", onViewportResize));
+const effectiveScale = computed(() =>
+  Math.min(uiScale.value, 1.5, windowSize.value.w / 800, windowSize.value.h / 600)
+);
 // Zoom scales layout too, so the app box must compensate its height/width
 // (calc(100vh/scale) zoomed = 100vh) or the content shrinks away from the
 // window edges at scale < 1 (observed 2026-08-10: sidebar buttons and the
 // terminal area lifted off the bottom edge).
 const uiZoom = computed(() => ({
-  zoom: String(uiScale.value),
-  height: `calc(100vh / ${uiScale.value})`,
-  width: `calc(100vw / ${uiScale.value})`,
+  zoom: String(effectiveScale.value),
+  height: `calc(100vh / ${effectiveScale.value})`,
+  width: `calc(100vw / ${effectiveScale.value})`,
 }));
-const terminalZoom = computed(() => ({ zoom: String(1 / uiScale.value) }));
+const terminalZoom = computed(() => ({ zoom: String(1 / effectiveScale.value) }));
 
 // S3.3: aria-live regions (04 §九 - announce semantic changes only, never
 // routine polls). Throttled ~1s so a burst of updates coalesces to the latest.
@@ -178,6 +190,7 @@ watch(
 onBeforeUnmount(() => {
   polling.stop();
   providerPolling.stop();
+  window.removeEventListener("resize", onViewportResize);
   window.removeEventListener("keydown", onKeydown, { capture: true });
   if (announceTimer !== null) window.clearTimeout(announceTimer);
 });
