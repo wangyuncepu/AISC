@@ -707,7 +707,7 @@ Function ${UN}PathNormalizeDir
     ${If} $3 == ""
       ${Break}
     ${EndIf}
-    System::Call 'user32::CharLowerBuffW(w .r3, i 1) i .r4'
+    System::Call 'user32::CharLowerBuffW(w r3 .r3, i 1) i .r4'
     StrCpy $1 "$1$3"
     StrCpy $2 $2 "" 1
   ${Loop}
@@ -719,6 +719,11 @@ FunctionEnd
 ; Read HKCU\Environment\Path into $PathRaw and its value type into $PathType
 ; (2 = REG_EXPAND_SZ, else REG_SZ); missing value -> $PathRaw = "", type SZ.
 Function ${UN}PathRead
+  Push $1
+  Push $2
+  Push $3
+  Push $4
+  Push $5
   StrCpy $PathType 1
   System::Call 'advapi32::RegOpenKeyExW(i 0x80000001, w "Environment", i 0, i 0x20019, *i .r1) i .r2'
   ${If} $2 = 0
@@ -732,6 +737,11 @@ Function ${UN}PathRead
   ${If} $PathRaw == ""
     StrCpy $PathType 1
   ${EndIf}
+  Pop $5
+  Pop $4
+  Pop $3
+  Pop $2
+  Pop $1
 FunctionEnd
 
 ; Write $PathRaw back preserving $PathType, then broadcast WM_SETTINGCHANGE.
@@ -1053,7 +1063,6 @@ Function un.onInit
 FunctionEnd
 
 Section Uninstall
-
   !ifmacrodef NSIS_HOOK_PREUNINSTALL
     !insertmacro NSIS_HOOK_PREUNINSTALL
   !endif
