@@ -159,13 +159,31 @@ jobs:
             if ($raw -notlike "*%USERPROFILE%\AppData\Roaming\aisc-smoke-test*") { throw "G-18: %USERPROFILE% entry lost/expanded (raw=$raw)" }
 
             # --- G-18: resolution from a NEW PowerShell process via PATH ---
+            # A runner may already have another aisc in the SYSTEM PATH (e.g.
+            # a pip-installed console script): Windows puts system PATH first,
+            # so in that case `aisc` legitimately resolves to the other one -
+            # the installer must not override it (05 §5.2.5). Assert resolution
+            # to $INSTDIR only when the system PATH has no other aisc.
+            $sysAisc = $null
+            foreach ($e in ([Environment]::GetEnvironmentVariable("Path","Machine") -split ';')) {
+              if ($e -eq '') { continue }
+              $exp = [Environment]::ExpandEnvironmentVariables($e)
+              if ($exp -like "\\*") { continue }
+              if (Test-Path (Join-Path $exp 'aisc.exe')) { $sysAisc = Join-Path $exp 'aisc.exe'; break }
+            }
             $resolved = & powershell -NoProfile -Command "Get-Command aisc -ErrorAction Stop | Select-Object -ExpandProperty Source"
-            if ($LASTEXITCODE -ne 0 -or $resolved -ine "$appDir\aisc.exe") {
-              throw "G-18: PATH resolution failed - got '$resolved', expected '$appDir\aisc.exe'"
+            if ($LASTEXITCODE -ne 0) { throw "G-18: aisc not resolvable via PATH" }
+            if ($null -eq $sysAisc) {
+              if ($resolved -ine "$appDir\aisc.exe") {
+                throw "G-18: PATH resolution failed - got '$resolved', expected '$appDir\aisc.exe'"
+              }
+              Write-Host "G-18 PATH (resolves to INSTDIR): PASSED"
+            } else {
+              if ($resolved -ine $sysAisc) { throw "G-18: system aisc '$sysAisc' not shadowing resolution (got '$resolved')" }
+              Write-Host "G-18 PATH (system aisc shadow, conflict semantics): PASSED - $sysAisc"
             }
             & powershell -NoProfile -Command "aisc version --format json | Out-Null; exit `$LASTEXITCODE"
             if ($LASTEXITCODE -ne 0) { throw "G-18: aisc version via PATH failed with exit $LASTEXITCODE" }
-            Write-Host "G-18 PATH: PASSED"
 
             & $sidecar.FullName build --dry-run --tag smoke:latest --events
             if ($LASTEXITCODE -ne 0) { throw "aisc build --dry-run failed with exit $LASTEXITCODE" }
