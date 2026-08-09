@@ -100,21 +100,26 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(() => {
   store.negotiate();
   // Exit gate (03 §4.3): always prevent the default close. G-07 refinement
-  // (2026-08-09): the window is hidden immediately so the close feels instant;
-  // the Rust shutdown coordinator finishes in the background (bounded ~12s
-  // worst case) and exits the process itself. The runtime container is kept
-  // running by design - an unreaped-session report is logged, not shown.
-  // (preventDefault must precede the async confirm, otherwise the default
-  // close races it.)
+  // (2026-08-09): the close feels instant - the window hides and the Rust
+  // shutdown coordinator runs in the background (bounded ~12s worst case),
+  // then the coordinator exits the process itself. BOTH are fire-and-forget:
+  // awaiting hide() here never settles while the close request is pending on
+  // this Tauri version (observed 2026-08-09 - the window stayed, the
+  // coordinator never ran, no shutdown log). The coordinator exits the app
+  // even if hide failed; on coordinator failure, destroy the window as a
+  // fallback and let the OS tear the process (and PTY children) down - the
+  // runtime container keeps running by design. An unreaped-session report is
+  // logged by Rust, not shown. (preventDefault must precede the async
+  // confirm, otherwise the default close races it.)
   void getCurrentWindow().onCloseRequested(async (event) => {
     event.preventDefault();
     const allow = await store.confirmExit();
     if (!allow) return;
-    await getCurrentWindow().hide();
+    const win = getCurrentWindow();
+    void win.hide().catch(() => undefined);
     void ipc.shutdownWorkbench().catch((e) => {
-      // Window is gone; nothing to render. The coordinator is best-effort and
-      // the container survives either way - log for diagnostics.
-      console.error("shutdown_workbench failed:", e);
+      console.error("shutdown_workbench failed, destroying window:", e);
+      void win.destroy().catch(() => undefined);
     });
   });
   window.addEventListener("keydown", onKeydown, { capture: true });
