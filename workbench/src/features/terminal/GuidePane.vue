@@ -32,12 +32,15 @@ const TITLE_KEY: Record<string, string> = {
   login_required: "guide.title.loginRequired",
   unknown: "guide.title.unknown",
 };
-const title = computed(() =>
-  t(TITLE_KEY[auth.value] ?? "guide.title.unknown", { agent: agent.value ?? "" })
-);
-const desc = computed(() =>
-  auth.value === "unknown" ? t("guide.descUnknown") : t("guide.desc")
-);
+const configured = computed(() => auth.value === "configured");
+const title = computed(() => {
+  if (configured.value) return t("guide.titleConfigured", { agent: agent.value ?? "" });
+  return t(TITLE_KEY[auth.value] ?? "guide.title.unknown", { agent: agent.value ?? "" });
+});
+const desc = computed(() => {
+  if (configured.value) return t("guide.descConfigured");
+  return auth.value === "unknown" ? t("guide.descUnknown") : t("guide.desc");
+});
 
 async function retry() {
   if (!agent.value) return;
@@ -65,9 +68,19 @@ function loginOfficial() {
       <span class="icon" aria-hidden="true">⚠</span>
       <span class="text">{{ title }}</span>
       <div class="actions">
-        <button @click="retry">{{ t("guide.retry") }}</button>
-        <button v-if="auth === 'login_required'" @click="loginOfficial">{{ t("guide.loginOfficial") }}</button>
-        <button class="primary" @click="openCcSwitch">{{ t("guide.openCcSwitch") }}</button>
+        <template v-if="configured">
+          <!-- Provider configured while the tab is in guide state: offer the
+               explicit start (observed 2026-08-10: the stale guide copy kept
+               showing 未配置 with no way forward). -->
+          <button class="primary" @click="store.openTab(props.tabId)">{{ t("guide.startSession") }}</button>
+        </template>
+        <template v-else>
+          <button @click="retry">{{ t("guide.retry") }}</button>
+          <!-- Official TUI login is available for both login_required and
+               not_configured (codex can log in directly regardless of proxy). -->
+          <button v-if="auth === 'login_required' || auth === 'not_configured'" @click="loginOfficial">{{ t("guide.loginOfficial") }}</button>
+          <button class="primary" @click="openCcSwitch">{{ t("guide.openCcSwitch") }}</button>
+        </template>
       </div>
     </div>
     <div class="hint">{{ desc }}</div>

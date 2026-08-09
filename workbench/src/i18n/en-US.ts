@@ -151,6 +151,9 @@ export const enUS: Record<string, string> = {
   "guide.retry": "Retry",
   "guide.openCcSwitch": "Open cc-switch",
   "guide.loginOfficial": "Official login (enter TUI)",
+  "guide.titleConfigured": "{agent} provider configured",
+  "guide.descConfigured": "The provider is configured - the session can start.",
+  "guide.startSession": "Start session",
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench terminal ready.",

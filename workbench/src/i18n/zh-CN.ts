@@ -151,6 +151,9 @@ export const zhCN = {
   "guide.retry": "重试",
   "guide.openCcSwitch": "打开 cc-switch",
   "guide.loginOfficial": "官方账号登录（进入 TUI）",
+  "guide.titleConfigured": "{agent} Provider 已配置",
+  "guide.descConfigured": "Provider 已配置，可启动会话。",
+  "guide.startSession": "启动会话",
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench 终端就绪。",
