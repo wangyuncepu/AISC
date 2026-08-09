@@ -1,12 +1,22 @@
 <script setup lang="ts">
 /** Preflight gate (02 §四): per-check pass/warn/fail + hard/config classification. */
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import type { PreflightReport, PreflightCheck } from "../../types";
 
+const { t } = useI18n();
 const props = defineProps<{ report: PreflightReport }>();
 
 const HARD_GATES = ["docker", "workspace"];
 const CONFIG_GATES = ["image", "network", "runtime_conflict"];
+
+const CHECK_LABEL_KEY: Record<string, string> = {
+  docker: "gate.check.docker",
+  workspace: "gate.check.workspace",
+  image: "gate.check.image",
+  network: "gate.check.network",
+  runtime_conflict: "gate.check.runtimeConflict",
+};
 
 function classify(id: string): string {
   if (HARD_GATES.includes(id)) return "hard";
@@ -15,7 +25,7 @@ function classify(id: string): string {
 }
 
 function label(id: string): string {
-  return { docker: "Docker", workspace: "Workspace", image: "镜像", network: "网络", runtime_conflict: "Runtime 冲突" }[id] ?? id;
+  return t(CHECK_LABEL_KEY[id] ?? id);
 }
 
 const ordered = computed<PreflightCheck[]>(() => {
@@ -26,7 +36,7 @@ const ordered = computed<PreflightCheck[]>(() => {
 });
 
 function statusText(c: PreflightCheck): string {
-  return { pass: "通过", warn: "警告", fail: "失败" }[c.status] ?? c.status;
+  return { pass: t("gate.status.pass"), warn: t("gate.status.warn"), fail: t("gate.status.fail") }[c.status] ?? c.status;
 }
 </script>
 

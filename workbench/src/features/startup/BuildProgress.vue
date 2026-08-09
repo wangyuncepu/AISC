@@ -2,16 +2,23 @@
 /** Build progress (02 §四, 05 §4.1): opaque build.output log + Cancel.
  *  In-memory only, not parsed for percentage (05 §4.1.3/§4.1.5). */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 
+const { t } = useI18n();
 const store = useRuntimeStore();
 const logEl = ref<HTMLPreElement | null>(null);
 const elapsedMs = ref(0);
 let timer: number | null = null;
 
-const statusText = computed(
-  () => ({ building: "构建中…", complete: "构建完成", failed: "构建失败", cancelled: "已取消", idle: "" }[store.buildStatus] ?? "")
-);
+const STATUS_KEY: Record<string, string> = {
+  building: "build.building",
+  complete: "build.complete",
+  failed: "build.failed",
+  cancelled: "build.cancelled",
+  idle: "",
+};
+const statusText = computed(() => (STATUS_KEY[store.buildStatus] ? t(STATUS_KEY[store.buildStatus]) : ""));
 const elapsedSec = computed(() => (elapsedMs.value / 1000).toFixed(1));
 const dockerError = computed(
   () => store.buildError?.code === "AISC_ERR_DOCKER_UNAVAILABLE"
@@ -41,20 +48,20 @@ watch(
 <template>
   <div class="build">
     <div class="head">
-      <span class="title">构建镜像 {{ store.buildTag }}</span>
+      <span class="title">{{ t("build.title", { tag: store.buildTag }) }}</span>
       <span class="state" :data-state="store.buildStatus">{{ statusText }}</span>
       <span v-if="store.buildStatus === 'building'" class="elapsed">{{ elapsedSec }}s</span>
     </div>
-    <pre ref="logEl" class="log">{{ store.buildLog || "(等待 Docker 输出… 初始化可能需数十秒)" }}</pre>
+    <pre ref="logEl" class="log">{{ store.buildLog || t("build.logEmpty") }}</pre>
     <p v-if="store.buildError" class="err">{{ store.buildError.message }}</p>
-    <p v-if="dockerError" class="err">Docker 引擎未运行，构建无法进行。点击「启动 Docker」打开 Docker Desktop 后再试。</p>
+    <p v-if="dockerError" class="err">{{ t("build.dockerError") }}</p>
     <div class="actions">
       <button v-if="store.buildStatus === 'building'" class="danger" @click="store.cancelBuild()">Cancel</button>
       <template v-else>
         <button v-if="dockerError" class="primary" :disabled="store.dockerStarting" @click="store.startDockerAndRepreflight()">
-          {{ store.dockerStarting ? "正在启动 Docker…" : "启动 Docker" }}
+          {{ store.dockerStarting ? t("summary.startingDocker") : t("summary.startDocker") }}
         </button>
-        <button class="primary" @click="store.backToSummaryFromBuild()">返回摘要</button>
+        <button class="primary" @click="store.backToSummaryFromBuild()">{{ t("build.backToSummary") }}</button>
       </template>
     </div>
   </div>
