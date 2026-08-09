@@ -433,9 +433,15 @@ export const useRuntimeStore = defineStore("runtime", () => {
   /** Inspect the active runtime now and apply (deduped). Drives the polling
    * loop and the manual Refresh button. Assigns a request seq so a stale
    * response can never overwrite newer state (04 §六.2). */
-  async function refreshRuntime() {
+  /** G-05 (Step 8): only user-initiated refreshes surface the 刷新中 label -
+   * background poll cycles must not flip the button every 5s (user report
+   * 2026-08-10). */
+  const userRefreshInFlight = ref(false);
+
+  async function refreshRuntime(userInitiated = false) {
     if (!runtimeId.value || !workspace.value.trim()) return;
     if (inspectInFlight.value) return;
+    if (userInitiated) userRefreshInFlight.value = true;
     inspectInFlight.value = true;
     const seq = ++requestSeq.value;
     try {
@@ -445,6 +451,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       markStale();
     } finally {
       inspectInFlight.value = false;
+      if (userInitiated) userRefreshInFlight.value = false;
     }
   }
 
@@ -680,7 +687,17 @@ export const useRuntimeStore = defineStore("runtime", () => {
     const { tabs: created, bySavedId } = tabsFromRecords(records);
     tabs.value = created;
     for (const tab of created) {
-      if (!opts.openAgents || opts.openAgents.includes(tab.agent)) void openTab(tab.tabId);
+      if (!opts.openAgents || opts.openAgents.includes(tab.agent)) {
+        // G-12 (A-G08-3): restored claude/codex tabs go through the same
+        // provider gate as + menu tabs - unconfigured ones restore as guide
+        // without a session (observed 2026-08-10: restore bypassed the gate
+        // and dropped an unconfigured codex straight into its TUI login).
+        if (tab.agent === "claude" || tab.agent === "codex") {
+          void maybeOpenCreated(tab.tabId, tab.agent);
+        } else {
+          void openTab(tab.tabId);
+        }
+      }
     }
     activeTabId.value = resolveActiveTabId(created, bySavedId, {
       activeSavedId: opts.activeSavedId,
@@ -747,24 +764,29 @@ export const useRuntimeStore = defineStore("runtime", () => {
    * type). Unconfigured providers route the tab to the guide state without
    * calling open_session; bash/cc-switch open immediately.
    *
-   * TODO(2026-08-10, user decision): `login_required` (e.g. codex's default
-   * "OpenAI Official" route) currently OPENS the session so the user logs in
-   * inside the terminal TUI. If a more conservative flow is wanted later
-   * (login_required -> guide state until explicitly configured), extend the
-   * condition to `!st || ["not_configured", "login_required"].includes(...)`.
-   * Kept data-driven per A-G08-2 (only not_configured is gated). */
+   * Step 8 (04 §三 rule table): login_required and unknown ALSO route to the
+   * guide state (supersedes the 2026-08-10 decision that login_required opened
+   * directly - the spec now requires the conservative flow). */
   async function maybeOpenCreated(tabId: string, agent: LaunchAgent) {
     if (agent === "claude" || agent === "codex") {
       await loadProviderStatus(agent);
       const st = providerStatuses.value[agent];
       const tab = findTab(tabId);
       if (!tab || tab.sessionState !== "idle") return;
-      if (!st || st.auth_status === "not_configured") {
+      if (!st || ["not_configured", "login_required", "unknown"].includes(st.auth_status)) {
         tab.sessionState = "guide";
         return;
       }
     }
     openTab(tabId);
+  }
+
+  /** G-12 (Step 8): activate an existing cc-switch tab or create one -
+   * shared by the sidebar auth action and the guide banner. */
+  function openCcSwitch() {
+    const existing = tabs.value.find((t) => t.agent === "cc-switch");
+    if (existing) activateTab(existing.tabId);
+    else createTab("cc-switch");
   }
 
   /** G-08: remove a tab entirely (× button). Live sessions are closed
@@ -1085,12 +1107,14 @@ export const useRuntimeStore = defineStore("runtime", () => {
     reopenTab,
     createTab,
     removeTab,
+    openCcSwitch,
     onTabOpenOk,
     onTabOpenFail,
     onTabSessionExit,
     applyRuntimeSnapshot,
     markStale,
     refreshRuntime,
+    userRefreshInFlight,
     loadProviderStatus,
     clearProviderStatuses,
     loadHistory,

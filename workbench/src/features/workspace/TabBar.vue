@@ -128,7 +128,8 @@ function stateLabel(tab: Tab): string {
 }
 
 function canClose(s: TabSessionState): boolean {
-  return s === "starting" || s === "running" || s === "closing";
+  // guide tabs have no session to terminate but must stay removable (×).
+  return s === "starting" || s === "running" || s === "closing" || s === "guide";
 }
 
 function canReopen(s: TabSessionState): boolean {
