@@ -99,27 +99,28 @@ function onKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   store.negotiate();
-  // Exit gate (03 §4.3): always prevent the default close and route through
-  // the Rust shutdown coordinator. The window is destroyed only after
-  // shutdown_workbench returns with no unreaped children; otherwise the app
-  // stays open with the report surfaced as a recoverable error. (preventDefault
-  // must precede the async confirm, otherwise the default close races it.)
+  // Exit gate (03 §4.3): always prevent the default close. G-07 refinement
+  // (2026-08-09): the close feels instant - the window hides and the Rust
+  // shutdown coordinator runs in the background (bounded ~12s worst case),
+  // then the coordinator exits the process itself. BOTH are fire-and-forget:
+  // awaiting hide() here never settles while the close request is pending on
+  // this Tauri version (observed 2026-08-09 - the window stayed, the
+  // coordinator never ran, no shutdown log). The coordinator exits the app
+  // even if hide failed; on coordinator failure, destroy the window as a
+  // fallback and let the OS tear the process (and PTY children) down - the
+  // runtime container keeps running by design. An unreaped-session report is
+  // logged by Rust, not shown. (preventDefault must precede the async
+  // confirm, otherwise the default close races it.)
   void getCurrentWindow().onCloseRequested(async (event) => {
     event.preventDefault();
     const allow = await store.confirmExit();
     if (!allow) return;
-    const report = await ipc.shutdownWorkbench().catch((e) => {
-      store.setExitError(e);
-      return null;
+    const win = getCurrentWindow();
+    void win.hide().catch(() => undefined);
+    void ipc.shutdownWorkbench().catch((e) => {
+      console.error("shutdown_workbench failed, destroying window:", e);
+      void win.destroy().catch(() => undefined);
     });
-    if (!report) return; // keep the window open; error is displayed
-    if (report.unreaped_session_ids.length > 0) {
-      store.setExitError(
-        `仍有 ${report.unreaped_session_ids.length} 个会话未被回收，请重试退出`
-      );
-      return;
-    }
-    await getCurrentWindow().destroy();
   });
   window.addEventListener("keydown", onKeydown, { capture: true });
 });

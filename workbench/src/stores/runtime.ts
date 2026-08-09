@@ -10,6 +10,7 @@ import type {
   HistoryPatch,
   LaunchAgent,
   LaunchConfig,
+  Layout,
   PreflightReport,
   ProviderStatus,
   RuntimeRef,
@@ -24,7 +25,13 @@ import type {
   WorkspaceRecord,
 } from "../types";
 import * as ipc from "../lib/ipc";
-import { AGENT_TITLE, resolveActiveTabId, tabsFromRecords } from "./tabLayout";
+import {
+  AGENT_TITLE,
+  normalizePath,
+  resolveActiveTabId,
+  sameWorkspace,
+  tabsFromRecords,
+} from "./tabLayout";
 
 /** S2.1.a/b startup state machine (02-startup-flow.md §三). S2.2.b adds `conflict`. */
 export type WorkbenchStatus =
@@ -115,7 +122,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const restorableLayout = computed<{ records: TabRecord[]; activeSavedId: string | null } | null>(() => {
     const report = preflight.value;
     if (!report || !["reuse", "restart"].includes(report.recommended_action)) return null;
-    const rec = (history.value?.workspaces ?? []).find((w) => w.path === workspace.value.trim());
+    const rec = (history.value?.workspaces ?? []).find((w) => sameWorkspace(w.path, workspace.value));
     const histTabs = rec?.layout?.tabs ?? [];
     if (histTabs.length === 0) return null;
     const records = [...histTabs].sort((a, b) => a.position - b.position);
@@ -497,13 +504,23 @@ export const useRuntimeStore = defineStore("runtime", () => {
     const activeTabIdRec = openTabs.some((t) => t.tabId === activeTabId.value)
       ? activeTabId.value
       : null;
+    const pathKey = normalizePath(workspace.value);
+    // G-07 refinement: stop/start resets empty `tabs` (as does a fresh app
+    // start), but the last open layout must survive so 恢复布局 can re-open
+    // those sessions. Individual tab closes never empty the array - the only
+    // writers are the resets - so an empty array here means "nothing open
+    // because of a reset", and the previous layout is preserved.
+    const layout: Layout | null =
+      tabsRecord.length > 0
+        ? { active_tab_id: activeTabIdRec, tabs: tabsRecord }
+        : (history.value?.workspaces.find((w) => sameWorkspace(w.path, pathKey))?.layout ?? null);
     const rec: WorkspaceRecord = {
-      path: workspace.value.trim(),
+      path: pathKey,
       last_used_at: new Date().toISOString(),
       pinned: false,
       last_agent: activeAgent,
       runtime: lastRuntimeRef.value,
-      layout: { active_tab_id: activeTabIdRec, tabs: tabsRecord },
+      layout,
     };
     return { workspaces: [rec] };
   }
@@ -895,16 +912,37 @@ export const useRuntimeStore = defineStore("runtime", () => {
     );
     if (!ok) return;
     status.value = "stopping";
-    // Close every live session best-effort (03 §七.2), then stop the runtime.
+    // Staged concurrent stop (03 §4.2): start every session close in
+    // parallel, but do not wait for all of them - wait at most 400ms for the
+    // terminate CLI spawns, then stop the runtime (container-side sessions
+    // are considered terminated once stop confirms; Rust keeps reaping the
+    // local PTY children). Stop is confirmed by a follow-up inspect.
     const closing = tabs.value.filter(
       (t) => t.sessionId && !TERMINAL_STATES.includes(t.sessionState) && t.sessionState !== "closing"
     );
-    await Promise.all(closing.map((t) => ipc.closeSession(t.sessionId!).catch(() => null)));
+    const closePromises = closing.map((t) => ipc.closeSession(t.sessionId!).catch(() => null));
+    await Promise.race([
+      Promise.all(closePromises),
+      new Promise((resolve) => setTimeout(resolve, 400)),
+    ]);
     tabs.value = [];
     activeTabId.value = null;
     try {
       if (runtimeId.value) {
-        await ipc.stopRuntime(workspace.value.trim(), runtimeId.value);
+        const snap = await ipc.stopRuntime(workspace.value.trim(), runtimeId.value);
+        // Only trust an observation: inspect until stopped/not_found.
+        if (["running", "stopping", "unknown"].includes(snap.state)) {
+          const insp = await ipc.runtimeInspect(workspace.value.trim(), runtimeId.value);
+          if (!["stopped", "not_found"].includes(insp.state)) {
+            throw {
+              code: "WB_ERR_RUNTIME_NOT_STOPPED",
+              message: `Runtime 仍处于 ${insp.state}（stop 后 inspect 确认失败）`,
+              technical_detail: null,
+              retryable: true,
+              action: "retry",
+            } as WorkbenchError;
+          }
+        }
       }
     } catch (e) {
       status.value = "error";

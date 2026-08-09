@@ -224,6 +224,24 @@ class TestTerminateSession(unittest.TestCase):
         assert cm.exception.error_code == RuntimeErrorCode.INVALID_RUNTIME_ID
         assert exec_.calls == []
 
+    def test_terminate_rejects_non_finite_or_out_of_range_grace(self):
+        exec_ = FakeDockerExecutor()
+        for bad in (-1, 601, float("nan"), float("inf"), float("-inf")):
+            with self.assertRaises(CliError) as cm:
+                terminate_session(RT, SID, exec_, REG, grace_seconds=bad)
+            assert cm.exception.exit_code == 2
+            assert cm.exception.error_code == "AISC_ERR_USAGE"
+        # validation happens before any Docker call
+        assert exec_.calls == []
+
+    @patch("aisc.application.session._resolve_running_container", return_value=CONTAINER)
+    def test_terminate_accepts_zero_grace(self, _resolve):
+        exec_ = FakeDockerExecutor()
+        exec_.set_captured("terminate", ProcessResult(stdout=json.dumps(
+            {"session_id": SID, "state": "exited"}), exit_code=0))
+        terminate_session(RT, SID, exec_, REG, grace_seconds=0)
+        assert "--grace" in exec_.calls[0] and "0" in exec_.calls[0]
+
     @patch("aisc.application.session._resolve_running_container", return_value=CONTAINER)
     def test_terminate_timeout_follows_grace(self, _resolve):
         exec_ = Mock()
@@ -231,8 +249,8 @@ class TestTerminateSession(unittest.TestCase):
             stdout=json.dumps({"session_id": SID, "state": "exited"}), exit_code=0)
         terminate_session(RT, SID, exec_, REG, grace_seconds=12.0)
         exec_.run_captured.assert_called_once()
-        # docker exec must outlive the wrapper (grace + KILL poll + buffer).
-        assert exec_.run_captured.call_args.kwargs["timeout"] == 22.0
+        # outer transport budget is grace + 1s (05 §4.2)
+        assert exec_.run_captured.call_args.kwargs["timeout"] == 13.0
 
 
 # ---------------------------------------------------------------------------

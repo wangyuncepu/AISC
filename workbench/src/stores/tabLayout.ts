@@ -8,6 +8,39 @@
  */
 import type { LaunchAgent, Tab, TabRecord } from "../types";
 
+/** Platform check evaluated per call so unit tests can stub `navigator`. */
+function isWin(): boolean {
+  return typeof navigator !== "undefined" && /win/i.test(navigator.userAgent ?? "");
+}
+
+/**
+ * Normalize a workspace path for history keying and restore matching (G-07
+ * refinement): on Windows forward slashes become backslashes and trailing
+ * separators are stripped (drive root `C:\` kept); elsewhere only trailing
+ * `/` is stripped. Case is preserved - matching is case-insensitive on
+ * Windows via `sameWorkspace`, never in the stored key.
+ */
+export function normalizePath(p: string): string {
+  const win = isWin();
+  let s = p.trim();
+  if (win) s = s.replace(/\//g, "\\");
+  const sep = win ? "\\" : "/";
+  while (s.length > (win ? 3 : 1) && s.endsWith(sep)) s = s.slice(0, -1);
+  return s;
+}
+
+/**
+ * Whether two workspace paths refer to the same directory. The restore-layout
+ * lookup keys history on the stored record path but the user may type or pick
+ * the workspace in any slash/case form - compare normalized forms
+ * (case-insensitively on Windows, where the filesystem is case-insensitive).
+ */
+export function sameWorkspace(a: string, b: string): boolean {
+  const na = normalizePath(a);
+  const nb = normalizePath(b);
+  return isWin() ? na.toLowerCase() === nb.toLowerCase() : na === nb;
+}
+
 export const AGENT_TITLE: Record<LaunchAgent, string> = {
   claude: "Claude",
   codex: "Codex",

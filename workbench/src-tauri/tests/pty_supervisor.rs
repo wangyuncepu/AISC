@@ -216,3 +216,153 @@ async fn real_aisc_session_open_bash() {
     assert_eq!(exit.reason, "process_exit");
     drop(session);
 }
+#[tokio::test]
+async fn reopen_25_cycles_leaves_no_orphan_sessions() {
+    // A-INFRA-2 (03 §3.3.5): repeated natural-exit + reopen on the same pane
+    // must not leak children or session records. Gated on the real CLI +
+    // runtime like real_aisc_session_open_bash; registry boundedness itself
+    // is covered by the sweep unit tests (TTL 60s, max 32/runtime).
+    let aisc = match std::env::var("AISC_TEST_CLI") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            eprintln!("skip: AISC_TEST_CLI not set");
+            return;
+        }
+    };
+    let rid = match std::env::var("AISC_TEST_RUNTIME_ID") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            eprintln!("skip: AISC_TEST_RUNTIME_ID not set");
+            return;
+        }
+    };
+    let cycles = 25u32;
+    for i in 0..cycles {
+        let sid = format!("{:08x}-0000-4000-8000-{:012x}", 0xA0000000 + i, i);
+        let (tx, mut rx) = mpsc::channel(256);
+        let argv = vec![
+            "session".into(),
+            "open".into(),
+            "--runtime-id".into(),
+            rid.clone(),
+            "--session-id".into(),
+            sid.clone(),
+            "--agent".into(),
+            "bash".into(),
+        ];
+        let (session, signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx).expect("spawn");
+        // Answer the cursor query if the container bash emits one.
+        let writer = session.writer_sender();
+        let answer = tokio::spawn(async move {
+            loop {
+                match tokio::time::timeout(Duration::from_millis(300), rx.recv()).await {
+                    Ok(Some(PtyEvent::Output { bytes, .. })) => {
+                        let raw = decode(&bytes);
+                        let text = String::from_utf8_lossy(&raw);
+                        if let Some(resp) = cursor_query_response(&text) {
+                            let _ = writer.send(resp).await;
+                        }
+                    }
+                    Ok(Some(PtyEvent::Exit { .. })) | Ok(None) => break,
+                    _ => {}
+                }
+            }
+        });
+        session.write(b"exit
+".to_vec()).await.expect("write exit");
+        let exit = signal
+            .wait_timeout(Duration::from_secs(10))
+            .await
+            .unwrap_or_else(|| panic!("cycle {i}: bash did not exit"));
+        assert_eq!(exit.reason, "process_exit", "cycle {i} exit reason");
+        answer.abort();
+        drop(session);
+    }
+    // Final probe: a fresh session still opens and exits cleanly.
+    let sid = format!("{:08x}-0000-4000-8000-{:012x}", 0xA0000000 + cycles, cycles);
+    let (tx, mut rx) = mpsc::channel(256);
+    let argv = vec![
+        "session".into(),
+        "open".into(),
+        "--runtime-id".into(),
+        rid,
+        "--session-id".into(),
+        sid,
+        "--agent".into(),
+        "bash".into(),
+        "--workspace".into(),
+        std::env::temp_dir().to_string_lossy().into_owned(),
+    ];
+    let (session, signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx).expect("final spawn");
+    let writer = session.writer_sender();
+    tokio::spawn(async move {
+        loop {
+            match tokio::time::timeout(Duration::from_millis(300), rx.recv()).await {
+                Ok(Some(PtyEvent::Output { bytes, .. })) => {
+                    let raw = decode(&bytes);
+                        let text = String::from_utf8_lossy(&raw);
+                    if let Some(resp) = cursor_query_response(&text) {
+                        let _ = writer.send(resp).await;
+                    }
+                }
+                _ => break,
+            }
+        }
+    });
+    session.write(b"exit
+".to_vec()).await.expect("final write exit");
+    let exit = signal.wait_timeout(Duration::from_secs(10)).await.expect("final bash exit");
+    assert_eq!(exit.reason, "process_exit");
+    drop(session);
+    eprintln!("reopen {cycles} cycles: PASSED");
+}
+#[tokio::test]
+async fn perf_runtime_stop_with_eight_sessions() {
+    // G-07 perf evidence (03 §4.2): runtime stop with 8 live container
+    // sessions, measured via the real CLI (--grace 3). Gated on the real
+    // CLI + runtime. Prints the stop duration; the P95 gate (7s for 8
+    // sessions) is judged from the recorded samples.
+    let aisc = match std::env::var("AISC_TEST_CLI") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            eprintln!("skip: AISC_TEST_CLI not set");
+            return;
+        }
+    };
+    let rid = match std::env::var("AISC_TEST_RUNTIME_ID") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            eprintln!("skip: AISC_TEST_RUNTIME_ID not set");
+            return;
+        }
+    };
+    let ws = std::env::var("AISC_TEST_WORKSPACE")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let mut sessions = Vec::new();
+    for i in 0..8usize {
+        let sid = format!("{:08x}-0000-4000-8000-{:012x}", 0xB0000000 + i as u32, i);
+        let (tx, _rx) = mpsc::channel(256);
+        let argv = vec![
+            "session".into(),
+            "open".into(),
+            "--runtime-id".into(),
+            rid.clone(),
+            "--session-id".into(),
+            sid,
+            "--agent".into(),
+            "bash".into(),
+        ];
+        let (session, _signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx).expect("spawn");
+        sessions.push(session);
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await; // let execs settle
+    let t0 = std::time::Instant::now();
+    let out = std::process::Command::new(&aisc)
+        .args(["runtime", "stop", "--runtime-id", &rid, "--workspace", &ws, "--grace", "3", "--format", "json"])
+        .output()
+        .expect("runtime stop");
+    let elapsed = t0.elapsed();
+    eprintln!("runtime stop with 8 sessions: {elapsed:?} (exit {})", out.status);
+    drop(sessions); // PTY handles close; children already gone with the container
+    assert!(out.status.success(), "runtime stop failed: {}", String::from_utf8_lossy(&out.stderr));
+}

@@ -477,6 +477,39 @@ class TestStopRestartRemove(unittest.TestCase):
         snap2 = remove_runtime(RID_A, ex, ws / ".aisc")
         self.assertEqual(snap2.state, "not_found")
 
+    # --- G-07 (05 §3.1): --grace plumbing and command-layer validation ---
+
+    def test_stop_default_grace_is_ten(self):
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        self._start(ws, ex)
+        with patch.object(ex, "stop_container", wraps=ex.stop_container) as sp:
+            stop_runtime(RID_A, ex, ws / ".aisc")
+            sp.assert_called_once()
+            self.assertEqual(sp.call_args.kwargs.get("timeout"), 10)
+
+    def test_stop_threads_explicit_grace(self):
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        self._start(ws, ex)
+        with patch.object(ex, "stop_container", wraps=ex.stop_container) as sp:
+            stop_runtime(RID_A, ex, ws / ".aisc", grace_seconds=3)
+            sp.assert_called_once()
+            self.assertEqual(sp.call_args.kwargs.get("timeout"), 3)
+
+    def test_cmd_runtime_stop_rejects_out_of_range_grace(self):
+        from aisc.cli.commands.runtime import cmd_runtime_stop
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        self._start(ws, ex)
+        for bad in (0, -1, 601):
+            with self.assertRaises(CliError) as cm:
+                cmd_runtime_stop(RID_A, str(ws), executor=ex, grace_seconds=bad)
+            self.assertEqual(cm.exception.exit_code, 2)
+            self.assertEqual(cm.exception.error_code, "AISC_ERR_USAGE")
+        # validation happens before any Docker call: container still running
+        self.assertEqual(ex.containers["aisc-wb-550e8400"]["state"], "running")
+
 
 class TestReviewFixes(unittest.TestCase):
     """Regression tests for issues raised in the 645170b code review."""

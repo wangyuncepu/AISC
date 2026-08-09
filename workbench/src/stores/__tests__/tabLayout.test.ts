@@ -6,9 +6,9 @@
  * one. These tests pin the per-record semantics (02 §2.3): duplicates kept,
  * order kept, saved tab_id → new tab_id mapping, agent-free active resolution.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LaunchAgent, TabRecord } from "../../types";
-import { resolveActiveTabId, tabsFromRecords } from "../tabLayout";
+import { normalizePath, resolveActiveTabId, sameWorkspace, tabsFromRecords } from "../tabLayout";
 
 function rec(tab_id: string, agent: LaunchAgent, position: number): TabRecord {
   return { tab_id, agent, title: agent, position };
@@ -44,6 +44,32 @@ describe("tabsFromRecords (A-INFRA-1)", () => {
     expect(bySavedId.get("b")).toBe(tabs[1].tabId);
     expect(bySavedId.get("c")).toBe(tabs[2].tabId);
     expect(tabs.map((t) => t.savedTabId)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("normalizePath / sameWorkspace (G-07 restore matching)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("win: forward slashes, trailing separators, case-insensitive", () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    });
+    expect(normalizePath("C:/Users/VE111/ws/")).toBe("C:\\Users\\VE111\\ws");
+    expect(normalizePath("C:\\Users\\VE111\\ws\\")).toBe("C:\\Users\\VE111\\ws");
+    expect(normalizePath("C:\\")).toBe("C:\\"); // drive root kept
+    expect(sameWorkspace("C:/Users/VE111/ws/", "c:\\users\\ve111\\ws")).toBe(true);
+    expect(sameWorkspace("C:\\a", "C:\\b")).toBe(false);
+  });
+
+  it("posix: trailing slash stripped, case-sensitive", () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64)",
+    });
+    expect(normalizePath("/home/u/ws/")).toBe("/home/u/ws");
+    expect(normalizePath("/home/u/ws//")).toBe("/home/u/ws");
+    expect(normalizePath("/")).toBe("/"); // root kept
+    expect(sameWorkspace("/home/u/ws", "/home/u/ws/")).toBe(true);
+    expect(sameWorkspace("/A", "/a")).toBe(false);
   });
 });
 
