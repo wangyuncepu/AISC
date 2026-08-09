@@ -745,7 +745,14 @@ export const useRuntimeStore = defineStore("runtime", () => {
 
   /** G-08 (A-G08-2): claude/codex tabs first query their provider (deduped by
    * type). Unconfigured providers route the tab to the guide state without
-   * calling open_session; bash/cc-switch open immediately. */
+   * calling open_session; bash/cc-switch open immediately.
+   *
+   * TODO(2026-08-10, user decision): `login_required` (e.g. codex's default
+   * "OpenAI Official" route) currently OPENS the session so the user logs in
+   * inside the terminal TUI. If a more conservative flow is wanted later
+   * (login_required -> guide state until explicitly configured), extend the
+   * condition to `!st || ["not_configured", "login_required"].includes(...)`.
+   * Kept data-driven per A-G08-2 (only not_configured is gated). */
   async function maybeOpenCreated(tabId: string, agent: LaunchAgent) {
     if (agent === "claude" || agent === "codex") {
       await loadProviderStatus(agent);
