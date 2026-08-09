@@ -656,6 +656,14 @@ pub async fn shutdown_workbench(
     let reg = registry(&app);
     reg.reject_new();
 
+    // G-07 (2026-08-09): hide the window first so the close feels instant.
+    // The webview's own hide() IPC does not take effect while a close request
+    // is pending on this Tauri version - hiding here is a direct win32 call
+    // that works regardless; the process exits at the end of this function.
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.hide();
+    }
+
     let ids: Vec<String> = {
         let g = reg.lock()?;
         g.keys().cloned().collect()
