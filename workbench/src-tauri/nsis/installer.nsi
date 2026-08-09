@@ -971,6 +971,249 @@ Section WebView2
   ${EndIf}
 SectionEnd
 
+; --- G-18: user PATH management (05 §5.2) ---
+; Only ever touches the single owned directory entry in HKCU\Environment\Path.
+; Never overwrites the whole value, never removes entries it does not own,
+; preserves the registry value type (REG_EXPAND_SZ), and broadcasts
+; WM_SETTINGCHANGE("Environment") after every write so new terminals pick it up.
+LangString PATH_CONFLICT ${LANG_ENGLISH} "PATH already contains another aisc executable ($PathHit). To keep the existing environment intact, AISC Workbench was not added to PATH. The Workbench keeps using its bundled CLI internally."
+LangString PATH_CONFLICT ${LANG_SIMPCHINESE} "PATH 中已存在其他 aisc 可执行文件（$PathHit）。为避免破坏现有环境，未将 AISC Workbench 加入 PATH。Workbench 内部仍使用自带 CLI。"
+
+Var PathType
+Var PathRaw
+Var PathNorm
+Var PathHit
+
+; $0 in/out: normalize a directory entry - trim spaces, strip one matching
+; quote pair, remove trailing backslashes, lowercase (Windows compare).
+Function PathNormalizeDir
+  Push $1
+  Push $2
+  StrCpy $1 $0
+  ${Do}
+    StrCpy $2 $1 1
+    ${If} $2 == " "
+      StrCpy $1 $1 "" 1
+    ${Else}
+      ${Break}
+    ${EndIf}
+  ${Loop}
+  ${Do}
+    StrCpy $2 $1 1 -1
+    ${If} $2 == " "
+      StrCpy $1 $1 -1
+    ${Else}
+      ${Break}
+    ${EndIf}
+  ${Loop}
+  StrCpy $2 $1 1
+  ${If} $2 == `"`
+    StrCpy $2 $1 1 -1
+    ${If} $2 == `"`
+      StrCpy $1 $1 -1 1
+    ${EndIf}
+  ${EndIf}
+  ${Do}
+    StrCpy $2 $1 1 -1
+    ${If} $2 == "\"
+      StrCpy $1 $1 -1
+    ${Else}
+      ${Break}
+    ${EndIf}
+  ${Loop}
+  ${StrCase} $1 $1 "L"
+  StrCpy $0 $1
+  Pop $2
+  Pop $1
+FunctionEnd
+
+; Read HKCU\Environment\Path into $PathRaw and its value type into $PathType
+; (2 = REG_EXPAND_SZ, else REG_SZ); missing value -> $PathRaw = "", type SZ.
+Function PathRead
+  StrCpy $PathType 1
+  System::Call 'advapi32::RegOpenKeyExW(i 0x80000001, w "Environment", i 0, i 0x20019, *i .r1) i .r2'
+  ${If} $2 = 0
+    System::Call 'advapi32::RegQueryValueExW(i r1, w "Path", i 0, *i .r3, i 0, *i .r4) i .r5'
+    ${If} $5 = 0
+      StrCpy $PathType $3
+      ReadRegStr $PathRaw HKCU "Environment" "Path"
+    ${EndIf}
+    System::Call 'advapi32::RegCloseKey(i r1)'
+  ${EndIf}
+  ${If} $PathRaw == ""
+    StrCpy $PathType 1
+  ${EndIf}
+FunctionEnd
+
+; Write $PathRaw back preserving $PathType, then broadcast WM_SETTINGCHANGE.
+Function PathWrite
+  ${If} $PathType = 2
+    WriteRegExpandStr HKCU "Environment" "Path" $PathRaw
+  ${Else}
+    WriteRegStr HKCU "Environment" "Path" $PathRaw
+  ${EndIf}
+  System::Call 'user32::SendMessageTimeout(i 0xFFFF, i 0x1A, i 0, w "Environment", i 0x2, i 5000, *i .r0)'
+FunctionEnd
+
+; Remove every PATH entry whose normalized form equals $1 (caller passes the
+; normalized directory). Rewrites the value and broadcasts.
+Function RemovePathEntryExact
+  Call PathRead
+  StrCpy $2 $PathRaw
+  StrCpy $3 ""
+  ${Do}
+    ${If} $2 == ""
+      ${Break}
+    ${EndIf}
+    StrCpy $5 $2 1
+    ${If} $5 == ";"
+      StrCpy $2 $2 "" 1
+      ${Continue}
+    ${EndIf}
+    StrCpy $6 ""
+    ${Do}
+      StrCpy $5 $2 1
+      ${If} $5 == ";"
+      ${OrIf} $5 == ""
+        ${Break}
+      ${EndIf}
+      StrCpy $6 "$6$5"
+      StrCpy $2 $2 "" 1
+    ${Loop}
+    StrCpy $0 $6
+    Call PathNormalizeDir
+    ${If} $0 != $1
+      ${If} $3 == ""
+        StrCpy $3 $6
+      ${Else}
+        StrCpy $3 "$3;$6"
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+  StrCpy $PathRaw $3
+  Call PathWrite
+FunctionEnd
+
+; Install: ensure $INSTDIR is a PATH entry (05 §5.2 algorithm).
+Function AddInstDirToPath
+  ; Install dir moved? Remove the old owned entry first (exact match only).
+  ReadRegDWORD $0 HKCU "${MANUPRODUCTKEY}" "PathEntryOwned"
+  ${If} $0 = 1
+    ReadRegStr $1 HKCU "${MANUPRODUCTKEY}" "PathEntry"
+    ${If} $1 != ""
+      StrCpy $0 $1
+      Call PathNormalizeDir
+      StrCpy $1 $0
+      StrCpy $0 $INSTDIR
+      Call PathNormalizeDir
+      ${If} $1 != $0
+        Call RemovePathEntryExact
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
+  Call PathRead
+  StrCpy $0 $INSTDIR
+  Call PathNormalizeDir
+  StrCpy $PathNorm $0
+  StrCpy $6 0                ; $INSTDIR already present?
+  StrCpy $PathHit ""
+  StrCpy $1 $PathRaw
+  ${Do}
+    ${If} $1 == ""
+      ${Break}
+    ${EndIf}
+    StrCpy $5 $1 1
+    ${If} $5 == ";"
+      StrCpy $1 $1 "" 1
+      ${Continue}
+    ${EndIf}
+    StrCpy $3 ""
+    ${Do}
+      StrCpy $5 $1 1
+      ${If} $5 == ";"
+      ${OrIf} $5 == ""
+        ${Break}
+      ${EndIf}
+      StrCpy $3 "$3$5"
+      StrCpy $1 $1 "" 1
+    ${Loop}
+    ${If} $3 != ""
+      StrCpy $0 $3
+      Call PathNormalizeDir
+      ${If} $0 == $PathNorm
+        StrCpy $6 1
+        ${Break}
+      ${EndIf}
+      ; conflict probe: expand %VAR% only for the probe; skip UNC/network dirs
+      StrCpy $4 $3 2
+      ${If} $4 != "\\"
+        ExpandEnvStrings $4 $3
+        ${If} ${FileExists} "$4\aisc.exe"
+          ${If} $PathHit == ""
+            StrCpy $PathHit $4
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+
+  ${If} $6 = 1
+    ; Already present: no duplicate append. Keep the marker (or leave a
+    ; manually-added entry untouched - only owned entries are removed later).
+    ReadRegDWORD $0 HKCU "${MANUPRODUCTKEY}" "PathEntryOwned"
+    ${If} $0 = 1
+      WriteRegStr HKCU "${MANUPRODUCTKEY}" "PathEntry" $INSTDIR
+    ${EndIf}
+    Return
+  ${EndIf}
+
+  ${If} $PathHit != ""
+    ; Another aisc shadows us: never overwrite, reorder or append (05 §5.2.5).
+    ${If} $PassiveMode = 1
+    ${OrIf} ${Silent}
+      DetailPrint "PATH conflict: aisc already at $PathHit; $INSTDIR not added"
+    ${Else}
+      MessageBox MB_OK|MB_ICONINFORMATION "$(PATH_CONFLICT)"
+    ${EndIf}
+    Return
+  ${EndIf}
+
+  ; Append once.
+  ${If} $PathRaw == ""
+    StrCpy $PathRaw $INSTDIR
+  ${Else}
+    StrCpy $PathRaw "$PathRaw;$INSTDIR"
+  ${EndIf}
+  Call PathWrite
+  WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "PathEntryOwned" 1
+  WriteRegStr HKCU "${MANUPRODUCTKEY}" "PathEntry" $INSTDIR
+FunctionEnd
+
+; Uninstall: remove the owned entry only when the marker path matches $INSTDIR
+; (normalized); never touches other entries or other aisc installs.
+Function RemoveInstDirFromPath
+  ReadRegDWORD $0 HKCU "${MANUPRODUCTKEY}" "PathEntryOwned"
+  ${If} $0 <> 1
+    Return
+  ${EndIf}
+  ReadRegStr $1 HKCU "${MANUPRODUCTKEY}" "PathEntry"
+  ${If} $1 == ""
+    Return
+  ${EndIf}
+  StrCpy $0 $1
+  Call PathNormalizeDir
+  StrCpy $1 $0
+  StrCpy $0 $INSTDIR
+  Call PathNormalizeDir
+  ${If} $1 != $0
+    Return
+  ${EndIf}
+  Call RemovePathEntryExact
+  DeleteRegValue HKCU "${MANUPRODUCTKEY}" "PathEntryOwned"
+  DeleteRegValue HKCU "${MANUPRODUCTKEY}" "PathEntry"
+FunctionEnd
+
 Section Install
   SetOutPath $INSTDIR
 
@@ -1016,6 +1259,9 @@ Section Install
 
   ; Save $INSTDIR in registry for future installations
   WriteRegStr SHCTX "${MANUPRODUCTKEY}" "" $INSTDIR
+
+  ; G-18: expose the sidecar to user terminals via the user PATH (05 §5.2).
+  Call AddInstDirToPath
 
   !if "${INSTALLMODE}" == "both"
     ; Save install mode to be selected by default for the next installation such as updating
@@ -1199,6 +1445,12 @@ Section Uninstall
   ; We do this when not updating (to preserve the registry value on updates)
   ${If} $UpdateMode <> 1
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
+  ${EndIf}
+
+  ; G-18: remove the owned PATH entry (exact match only); /UPDATE keeps it so
+  ; a reinstall restores the same entry instead of removing+re-adding (05 §5.2).
+  ${If} $UpdateMode <> 1
+    Call RemoveInstDirFromPath
   ${EndIf}
 
   ; Delete app data if the checkbox is selected
