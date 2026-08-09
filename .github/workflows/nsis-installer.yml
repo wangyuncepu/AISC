@@ -13,6 +13,11 @@ on:
   push:
     branches: [develop, main]
     paths:
+      - 'workbench/src/**'
+      - 'workbench/package.json'
+      - 'workbench/package-lock.json'
+      - 'workbench/vite.config.*'
+      - 'workbench/tsconfig*.json'
       - 'workbench/src-tauri/**'
       - '.github/workflows/nsis-installer.yml'
       - '.github/workflows/cli-sidecar.yml'

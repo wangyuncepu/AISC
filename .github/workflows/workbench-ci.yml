@@ -1,0 +1,91 @@
+name: Workbench CI
+
+# GUI fine-tune Step 0 (06-implementation-plan.md §0.3): every push/PR touching
+# the workbench or CLI must at least run npm ci + build + frontend tests,
+# cargo tests, and (when the CLI is involved) the Python suite. Path filters
+# are asserted statically by tests/test_workflow_contract.py - keep them in
+# sync with that test.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop, main]
+    paths:
+      - 'workbench/src/**'
+      - 'workbench/package.json'
+      - 'workbench/package-lock.json'
+      - 'workbench/vite.config.*'
+      - 'workbench/tsconfig*.json'
+      - 'workbench/src-tauri/**'
+      - 'src/aisc/**'
+      - '.github/workflows/workbench-ci.yml'
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - 'workbench/src/**'
+      - 'workbench/package.json'
+      - 'workbench/package-lock.json'
+      - 'workbench/vite.config.*'
+      - 'workbench/tsconfig*.json'
+      - 'workbench/src-tauri/**'
+      - 'src/aisc/**'
+      - '.github/workflows/workbench-ci.yml'
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: workbench/package-lock.json
+
+      - name: Install deps
+        working-directory: workbench
+        run: npm ci
+
+      - name: Build (vue-tsc + vite)
+        working-directory: workbench
+        run: npm run build
+
+      - name: Frontend tests
+        working-directory: workbench
+        run: npm test -- --run
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: workbench/src-tauri
+
+      - name: Cargo test
+        working-directory: workbench/src-tauri
+        run: cargo test
+
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Python tests
+        run: python -m pytest tests -q

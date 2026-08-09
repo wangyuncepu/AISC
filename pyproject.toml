@@ -24,7 +24,7 @@ classifiers = [
 aisc = "aisc.cli.main:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "PyInstaller>=6"]
+dev = ["pytest>=8", "PyInstaller>=6", "PyYAML>=6"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

@@ -11,6 +11,11 @@ on:
   push:
     branches: [develop, main]
     paths:
+      - 'workbench/src/**'
+      - 'workbench/package.json'
+      - 'workbench/package-lock.json'
+      - 'workbench/vite.config.*'
+      - 'workbench/tsconfig*.json'
       - 'workbench/src-tauri/**'
       - '.github/workflows/bundle-linux-macos.yml'
       - '.github/workflows/cli-sidecar.yml'
@@ -85,6 +90,32 @@ jobs:
       - name: Build ${{ matrix.bundle }} bundle
         working-directory: workbench
         run: npm run tauri build -- --bundles ${{ matrix.bundle }}
+
+      - name: Verify bundle from a non-checkout cwd (A-INFRA-4)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="$GITHUB_WORKSPACE/workbench/src-tauri/target/release/bundle/${{ matrix.bundle }}"
+          TMP="$(mktemp -d)"
+          cd "$TMP"
+          if [ "${{ matrix.bundle }}" = "deb" ]; then
+            dpkg-deb -x "$BUNDLE_DIR"/*.deb "$TMP/unpack"
+            # Sidecar: executable, correct arch, real `aisc version --format json`.
+            SIDECAR="$(find "$TMP/unpack" -type f -name aisc -perm -u+x | head -1)"
+            test -n "$SIDECAR" || { echo "sidecar not found"; exit 1; }
+            file "$SIDECAR" | grep -q "x86-64" || { echo "unexpected arch"; exit 1; }
+            "$SIDECAR" version --format json | grep -q '"protocol": "aisc.cli/v1"'
+            # Bundle resource (aisc-bundle) discovered from the unpacked layout.
+            find "$TMP/unpack" -type d -name "aisc-bundle" | grep -q . || { echo "aisc-bundle resource missing"; exit 1; }
+          else
+            hdiutil attach "$BUNDLE_DIR"/*.dmg -nobrowse -quiet -mountpoint "$TMP/mnt"
+            trap 'hdiutil detach "$TMP/mnt" -quiet || true' EXIT
+            SIDECAR="$(find "$TMP/mnt" -type f -name aisc -perm -u+x | head -1)"
+            test -n "$SIDECAR" || { echo "sidecar not found"; exit 1; }
+            lipo -info "$SIDECAR" | grep -q "arm64" || { echo "unexpected arch"; exit 1; }
+            "$SIDECAR" version --format json | grep -q '"protocol": "aisc.cli/v1"'
+            find "$TMP/mnt" -type d -name "aisc-bundle" | grep -q . || { echo "aisc-bundle resource missing"; exit 1; }
+          fi
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
