@@ -104,6 +104,18 @@
 - [x] **7b-1** 手动测试（2026-08-10）：1.25/1.5/0.8 各档布局正常、与终端字号独立并存、保存重启保持、取消回滚、小窗口自适应无裁剪。全部通过。
 - **Step 7 结论（2026-08-10）**：vitest 38 绿 / build 零错；A-G01-1..5 证据齐。
 
+## Step 8 验收清单（G-05 侧边栏分层 + G-12 Provider 引导，分支 step-8-sidebar-guide）
+
+> 规范：04-observability.md（分层/ticker/引导规则）、06 §九；门禁 A-G05-1..4、A-G12-1/2。
+
+- [x] **8a-1** 去 1 秒 ticker：观察时间按 snapshot 缓存、详情展开/手动刷新才重算；语义视图 key（runtime/provider/sessions）——key 不变 DOM 子树不动（A-G05-1，12s 零突变测试）。
+- [x] **8a-2** 分层 UI：用户层（工作区/运行状态含 stale「上次已知」样式/Provider 名（无伪造 model）/Auth 标签+未配置行动/会话计数可点激活）+ 开发者详情折叠（原生 details：全部原始字段 + 复制，A-G05-3 字段清单测试）；刷新按钮「刷新中」仅手动点击显示（轮询不翻转，用户反馈修复）。
+- [x] **8a-3** G-12 banner 移到 tab 顶部（非侧栏）：not_configured/login_required/unknown 分文案；动作重试/打开 cc-switch/官方账号登录（进 TUI）；provider 配置后 banner 转「已配置 + 启动会话」；unknown 不误报未配置（A-G12-1/2）。
+- [x] **8a-4** 行为变更（04 §三 规则表）：login_required/unknown 也进引导态（取代 2026-08-10 的 login_required 直开决定）；恢复布局路径同样过 provider gate（A-G08-3 修复：未配置 codex 不再直进 TUI）。
+- [x] **8b-1** 手测修复：guide tab 无 ×（canClose 加 guide）；引导文案不随 UI scale（反缩放只包 xterm 本体）；新建 tab 需点击才能输入（activeTabId watcher 统一聚焦 + guide→starting 迁移聚焦）。
+- [x] **8c-1** 手动测试（2026-08-10）：侧栏分层/详情/复制/双语、banner 三动作、cc-switch 配置后启动会话、官方登录进 TUI 可直输、恢复布局 gate、外部 stop stale 样式。全部通过。
+- **Step 8 结论（2026-08-10）**：vitest 44 绿（sidebar 5 + restore-gate 1 新增）；A-G05-1..4、A-G12-1/2 证据齐。
+
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
 ### S4.2 发布门（2026-08-09，06-implementation-plan.md §七 S4.2）
