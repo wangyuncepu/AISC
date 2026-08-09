@@ -201,11 +201,16 @@ def preflight_runtime(
 
     checks.append(conflict_check)
 
-    # Compute can_start and recommended_action
+    # Compute can_start and recommended_action. "resolve_conflict" is reserved
+    # for actual runtime conflicts (runtime_conflict check failed). Other
+    # failed gates (docker down, image missing, bad workspace) keep
+    # action="start" - the UI's per-gate messages/buttons drive recovery, and
+    # a fresh install with a missing image must not be mislabeled as a
+    # runtime conflict (S4.1.b regression).
     all_pass = all(c.status == "pass" for c in checks)
     can_start = all_pass and matching_runtime_id is None
 
-    if not all_pass:
+    if conflict_check.status == "fail":
         recommended_action = "resolve_conflict"
     elif matching_runtime_id:
         # Config fingerprint matches existing runtime
@@ -217,8 +222,6 @@ def preflight_runtime(
         else:
             # Unknown state, default to reuse
             recommended_action = "reuse"
-    elif conflicts:
-        recommended_action = "resolve_conflict"
     else:
         recommended_action = "start"
 

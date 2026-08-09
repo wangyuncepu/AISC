@@ -154,6 +154,15 @@ class RealDockerExecutor:
     _PREFLIGHT_TIMEOUT = 8.0
     _INSPECT_TIMEOUT = 10.0
 
+    # Windows install locations to try when the CLI is not on PATH. A fresh
+    # winget install only lands in the user PATH after Explorer re-reads the
+    # environment, so a Workbench launched straight from the installer inherits
+    # a stale PATH and ``shutil.which`` misses it (TODO 20260806 line 76).
+    _WINDOWS_FALLBACK_PATHS = (
+        r"C:\Program Files\Docker\Docker\resources\bin\docker.exe",
+        r"%LOCALAPPDATA%\Docker\Docker\resources\bin\docker.exe",
+    )
+
     def __init__(self, docker_path: Optional[str] = None):
         self._docker_path: Optional[str] = docker_path
 
@@ -161,7 +170,25 @@ class RealDockerExecutor:
         if self._docker_path is not None:
             return self._docker_path
         self._docker_path = shutil.which("docker")
+        if self._docker_path is None and os.name == "nt":
+            for candidate in self._WINDOWS_FALLBACK_PATHS:
+                expanded = os.path.expandvars(candidate)
+                if os.path.isfile(expanded):
+                    self._docker_path = expanded
+                    break
         return self._docker_path
+
+    def _subprocess_env(self) -> dict:
+        """Env for docker subprocesses: the resolved docker dir prepended to
+        PATH so credential helpers next to the docker CLI (e.g.
+        ``docker-credential-desktop.exe``) resolve even when the parent
+        process inherited a stale PATH (Workbench launched straight from the
+        installer; S4.1.b)."""
+        env = os.environ.copy()
+        dp = self._resolve_path()
+        if dp:
+            env["PATH"] = os.path.dirname(dp) + os.pathsep + env.get("PATH", "")
+        return env
 
     # ------------------------------------------------------------------
     # preflight
@@ -180,6 +207,7 @@ class RealDockerExecutor:
                 capture_output=True, text=True,
                 encoding="utf-8", errors="replace",
                 timeout=self._PREFLIGHT_TIMEOUT,
+                env=self._subprocess_env(),
             )
         except FileNotFoundError:
             return DockerPreflightResult(
@@ -234,6 +262,7 @@ class RealDockerExecutor:
                 capture_output=True, text=True,
                 timeout=self._INSPECT_TIMEOUT,
                 encoding="utf-8", errors="replace",
+                env=self._subprocess_env(),
             )
         except FileNotFoundError:
             return ImageInspectResult(
@@ -315,6 +344,7 @@ class RealDockerExecutor:
                 capture_output=True, text=True,
                 timeout=timeout,
                 encoding="utf-8", errors="replace",
+                env=self._subprocess_env(),
             )
             return ProcessResult(
                 stdout=proc.stdout or "",
@@ -345,7 +375,9 @@ class RealDockerExecutor:
                       *, timeout: Optional[float] = None) -> ProcessResult:
         dp = self._resolve_path() or "docker"
         try:
-            proc = subprocess.run([dp] + list(docker_argv), timeout=timeout)
+            proc = subprocess.run(
+                [dp] + list(docker_argv), timeout=timeout, env=self._subprocess_env(),
+            )
             return ProcessResult(
                 stdout="", stderr="", exit_code=proc.returncode,
             )
@@ -378,6 +410,7 @@ class RealDockerExecutor:
                 [dp] + list(docker_argv),
                 stdin=subprocess.DEVNULL,
                 timeout=timeout,
+                env=self._subprocess_env(),
             )
             return ProcessResult(
                 stdout="", stderr="", exit_code=proc.returncode,
@@ -420,6 +453,7 @@ class RealDockerExecutor:
                 [dp] + list(docker_argv),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 start_new_session=True,  # own process group -> cancel can kill tree
+                env=self._subprocess_env(),
             )
         except FileNotFoundError:
             return ProcessResult(

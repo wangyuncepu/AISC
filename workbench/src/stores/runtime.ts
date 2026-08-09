@@ -308,6 +308,19 @@ export const useRuntimeStore = defineStore("runtime", () => {
         void loadConflicts();
       } else {
         status.value = "summary";
+        // S4.1.b (TODO 20260806 line 76): the installer finish page starts
+        // Docker Desktop then immediately opens Workbench, but the engine
+        // takes ~30-60s to boot. Auto-retry the docker gate on entry so the
+        // finish-page chain resolves without user interaction; the manual
+        // 「启动 Docker」 button stays as a fallback. startDockerAndRepreflight
+        // is reentrancy-guarded (dockerStarting) so the polling loop's own
+        // runPreflight calls never re-trigger it.
+        const dockerFailed = report.checks.some(
+          (c) => c.id === "docker" && c.status === "fail"
+        );
+        if (dockerFailed && !dockerStarting.value) {
+          void startDockerAndRepreflight();
+        }
       }
     } catch (e) {
       status.value = "error";
@@ -323,16 +336,20 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   /** Start the Docker engine (Docker Desktop) and re-run preflight once the
-   * daemon is reachable. Used from the summary when the docker gate is red. */
+   * daemon is reachable. Used from the summary when the docker gate is red
+   * (auto on entry, or via the 「启动 Docker」 button). Reentrant-call guarded
+   * by `dockerStarting`. */
   let dockerRetryTimer: number | null = null;
   async function startDockerAndRepreflight() {
+    if (dockerStarting.value) return; // one polling loop at a time
     error.value = null;
     dockerStarting.value = true;
     try {
       await ipc.startDocker();
-      // Docker Desktop takes a while to boot the engine; poll preflight every
-      // 2s for up to ~90s instead of one-shot.
-      const deadline = Date.now() + 90_000;
+      // Docker Desktop takes a while to boot the engine (first run: license
+      // dialog + WSL init, ~30-60s); poll preflight every 3s for up to ~2 min
+      // instead of one-shot.
+      const deadline = Date.now() + 120_000;
       const attempt = async (): Promise<void> => {
         try {
           await runPreflight();
@@ -347,7 +364,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
           /* engine still starting - retry */
         }
         if (Date.now() < deadline) {
-          dockerRetryTimer = window.setTimeout(attempt, 2_000);
+          dockerRetryTimer = window.setTimeout(attempt, 3_000);
         } else {
           dockerStarting.value = false;
           error.value = {

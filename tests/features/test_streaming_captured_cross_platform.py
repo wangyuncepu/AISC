@@ -19,6 +19,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from aisc.adapters.docker_ import RealDockerExecutor
 
@@ -143,6 +144,47 @@ class TestRunStreamingCapturedCrossPlatform(unittest.TestCase):
                 return
             time.sleep(0.2)
         self.fail(f"child process {pid} still alive after kill")
+
+
+class TestResolvePathWindowsFallback(unittest.TestCase):
+    """S4.1.b (TODO 20260806 line 76): ``_resolve_path`` falls back to known
+    Windows install locations when ``docker`` is not on PATH (stale PATH
+    inherited by a Workbench launched straight from the installer)."""
+
+    def test_windows_fallback_when_which_misses(self):
+        fake = Path(tempfile.gettempdir()) / "aisc-test-docker.exe"
+        fake.write_bytes(b"")
+        self.addCleanup(lambda: fake.unlink(missing_ok=True))
+        with mock.patch("aisc.adapters.docker_.shutil.which", return_value=None), \
+             mock.patch("aisc.adapters.docker_.os.name", "nt"), \
+             mock.patch.object(
+                 RealDockerExecutor, "_WINDOWS_FALLBACK_PATHS", (str(fake),)
+             ):
+            self.assertEqual(RealDockerExecutor()._resolve_path(), str(fake))
+
+    def test_fallback_skipped_when_which_finds_docker(self):
+        with mock.patch("aisc.adapters.docker_.shutil.which", return_value="C:\\docker.exe"), \
+             mock.patch("aisc.adapters.docker_.os.name", "nt"), \
+             mock.patch.object(
+                 RealDockerExecutor, "_WINDOWS_FALLBACK_PATHS", (r"C:\nonexistent\docker.exe",)
+             ):
+            self.assertEqual(RealDockerExecutor()._resolve_path(), "C:\\docker.exe")
+
+    def test_fallback_ignored_on_posix(self):
+        with mock.patch("aisc.adapters.docker_.shutil.which", return_value=None), \
+             mock.patch("aisc.adapters.docker_.os.name", "posix"), \
+             mock.patch.object(
+                 RealDockerExecutor, "_WINDOWS_FALLBACK_PATHS", (r"C:\nonexistent\docker.exe",)
+             ):
+            self.assertIsNone(RealDockerExecutor()._resolve_path())
+
+    def test_no_fallback_hit_returns_none(self):
+        with mock.patch("aisc.adapters.docker_.shutil.which", return_value=None), \
+             mock.patch("aisc.adapters.docker_.os.name", "nt"), \
+             mock.patch.object(
+                 RealDockerExecutor, "_WINDOWS_FALLBACK_PATHS", (r"C:\nonexistent\docker.exe",)
+             ):
+            self.assertIsNone(RealDockerExecutor()._resolve_path())
 
 
 if __name__ == "__main__":

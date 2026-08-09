@@ -192,7 +192,9 @@ class TestPreflightJsonContract(unittest.TestCase):
 
         # can_start should be false
         assert data["data"]["can_start"] is False
-        assert data["data"]["recommended_action"] == "resolve_conflict"
+        # Non-conflict gates keep action="start"; resolve_conflict is
+        # reserved for actual runtime conflicts (S4.1.b regression).
+        assert data["data"]["recommended_action"] == "start"
 
     def test_preflight_recommended_action_values(self):
         """Test recommended_action is one of the allowed values."""
