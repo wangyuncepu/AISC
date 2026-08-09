@@ -316,25 +316,31 @@ function selectRecent(path: string): void {
       <RuntimeSidebar />
       <div class="main">
         <TabBar />
-        <main class="terminal-area" :style="terminalZoom">
+        <main class="terminal-area">
           <!-- G-08 empty state (A-G08-6): focus target for creating the first tab -->
           <div v-if="store.tabs.length === 0" class="empty-tabs">
             <p>{{ t("tabs.empty") }}</p>
             <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
           </div>
-          <GuidePane
+          <!-- The 1:1 counter-zoom wraps ONLY the xterm (GuidePane and the
+               empty state are UI chrome and must follow the UI scale). -->
+          <div
             v-for="t in guideTabs"
             :key="t.tabId"
-            :tab-id="t.tabId"
+            class="term-wrap"
             v-show="t.tabId === store.activeTabId"
-          />
-          <Terminal
+          >
+            <GuidePane :tab-id="t.tabId" />
+          </div>
+          <div
             v-for="t in openTabs"
             :key="t.tabId"
-            :ref="setTerminalRef(t.tabId)"
-            :tab-id="t.tabId"
+            class="term-wrap"
+            :style="terminalZoom"
             v-show="t.tabId === store.activeTabId"
-          />
+          >
+            <Terminal :ref="setTerminalRef(t.tabId)" :tab-id="t.tabId" />
+          </div>
         </main>
       </div>
     </div>
@@ -432,6 +438,7 @@ button.danger { background: #5a2d2d; border-color: #6b3636; }
 button.danger:hover:not(:disabled) { background: #6e3a3a; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: #1e1e1e; }
+.term-wrap { flex: 1; min-height: 0; min-width: 0; }
 .empty-tabs {
   height: 100%; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 10px; color: #888; font-size: 13px;
