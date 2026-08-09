@@ -731,7 +731,7 @@ Function ${UN}PathRead
   StrCpy $PathType 1
   System::Call 'advapi32::RegOpenKeyExW(i 0x80000001, w "Environment", i 0, i 0x20019, *i .r1) i .r2'
   ${If} $2 = 0
-    System::Call 'advapi32::RegQueryValueExW(i r1, w "Path", i 0, *i .r3, i 0, *i .r4) i .r5'
+    System::Call 'advapi32::RegQueryValueExW(i r1, w "Path", i 0, *i .r3, i 0, i 0) i .r5'
     ${If} $5 = 0
       StrCpy $PathType $3
       ReadRegStr $PathRaw HKCU "Environment" "Path"
