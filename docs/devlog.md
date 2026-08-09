@@ -35,6 +35,8 @@
 - [x] **1c-2** 手动测试（Windows 11 实机，2026-08-09）：静默安装 → 新 PowerShell `Get-Command aisc` = `$INSTDIR\aisc.exe` ✅ + `aisc version` exit 0 ✅；重复安装 entry 恰好 1 ✅；类型 ExpandString 保留 ✅；静默卸载 owned entry 精确删除、其它条目不动 ✅。冲突场景（sentinel aisc）由 CI smoke 覆盖。
 - [x] 模板 rebase 记录：模板来源 Tauri 2.11.5（tauri-bundler installer.nsi），结构 diff = 默认模板 + G-18 PATH + S4.2 保留逻辑，无其他偏离。
 - **实机验证发现并修复 3 个真实 bug**（提交 40678d9）：(1) `CharLowerBuffW(w .r3)` 输出-only 导致输入丢失 → normalize 返回空 → 安装误判"已在 PATH"；(2) `PathRead` 用 System::Call `.r1-.r5` 破坏调用方寄存器 → 卸载 RemovePathEntryExact 比较全失败；(3) 测试方法坑：`cmd /c` 对 GUI 卸载器异步返回，需 `Start-Process -Wait`。附带修复：`\a` 序列经 handlebars 渲染变 bell（调试路径避开）。
+- **CI 冒烟抓出并修复 4 个问题**（05ca3b0/983cd6e + smoke 修复 3e37abc/f04164c/056bd2b/988dd4e）：(1) PathNormalizeDir 只保护 $1/$2，CharLowerBuffW 用 $3 破坏扫描循环 → 冲突探测永远不命中（sentinel 场景 INSTDIR 被追加）；(2) smoke 的 `Count-InstDirEntries $x -ne 1` 被 PowerShell 解析为函数参数 → 断言恒真；(3) `RegQueryValueExW` 带大小指针(NULL 数据) 返回 ERROR_MORE_DATA → PathType 恒 1 → WriteRegStr 展开 `%USERPROFILE%`；(4) smoke 用 GetEnvironmentVariable（自动展开 EXPAND_SZ）匹配字面 `%USERPROFILE%` → 恒失败，改 DoNotExpandEnvironmentNames 读原始值；另接受 runner 系统 PATH 已有 pip aisc 的真实遮蔽语义（05 §5.2.5 不覆盖）。
+- **Step 1 结论（2026-08-09）**：NSIS installer / Workbench CI / Bundle Linux-macOS 三 workflow 全绿；本地实机安装/重复安装/卸载/冲突全链 PASS。A-G18-1..4 证据齐。
 
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
