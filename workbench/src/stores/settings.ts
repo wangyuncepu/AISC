@@ -10,6 +10,7 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import * as ipc from "../lib/ipc";
+import { applyLocale } from "../i18n";
 import type { SaveOutcome, SettingsDocument, SettingsPatch } from "../types";
 
 export type SaveState = "idle" | "saving" | "saved" | "error";
@@ -70,6 +71,12 @@ export const useSettingsStore = defineStore("settings", () => {
     error.value = null;
   }
 
+  /** G-09: language is immediate-effect - re-resolve the locale after a
+   * persisted language change (explicit value wins; auto re-runs the chain). */
+  async function applyLanguage(): Promise<void> {
+    applyLocale(await ipc.resolveLocale(doc.value?.ui.language ?? "auto"));
+  }
+
   async function save(): Promise<SaveOutcome | null> {
     if (!doc.value || saveState.value === "saving") return null;
     saveState.value = "saving";
@@ -84,6 +91,7 @@ export const useSettingsStore = defineStore("settings", () => {
       doc.value.issues = outcome.issues;
       lastSaved.value = cloneDoc(doc.value);
       saveState.value = "saved";
+      await applyLanguage();
       return outcome;
     } catch (e) {
       error.value = (e as { message?: string })?.message ?? String(e);
@@ -101,6 +109,7 @@ export const useSettingsStore = defineStore("settings", () => {
     try {
       const outcome = await ipc.resetGuiSettings(doc.value.revision);
       applyDoc(await ipc.loadSettings());
+      await applyLanguage(); // language back to auto -> re-resolve
       return outcome;
     } catch (e) {
       error.value = (e as { message?: string })?.message ?? String(e);

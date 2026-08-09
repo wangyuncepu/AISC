@@ -4,9 +4,12 @@
  * terminal workspace. Capability gate on mount.
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as ipc from "./lib/ipc";
+import { applyLocale } from "./i18n";
 import { useRuntimeStore } from "./stores/runtime";
+import { useSettingsStore } from "./stores/settings";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
 import { useProviderPolling } from "./composables/useProviderPolling";
 import Terminal from "./features/terminal/Terminal.vue";
@@ -18,7 +21,9 @@ import BuildProgress from "./features/startup/BuildProgress.vue";
 import ConflictManager from "./features/startup/ConflictManager.vue";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 
+const { t } = useI18n();
 const store = useRuntimeStore();
+const settingsStore = useSettingsStore();
 const polling = useRuntimePolling();
 const providerPolling = useProviderPolling();
 
@@ -45,14 +50,14 @@ function announce(text: string, alert = false) {
   }, 1000);
 }
 
-const RUNTIME_LABEL: Record<string, string> = {
-  running: "Running",
-  stopped: "Stopped",
-  not_found: "Not found",
-  unknown: "Unknown",
-  starting: "Starting",
-  stopping: "Stopping",
-  removing: "Removing",
+const RUNTIME_LABEL_KEY: Record<string, string> = {
+  running: "app.running",
+  stopped: "app.stopped",
+  not_found: "app.notFound",
+  unknown: "app.unknown",
+  starting: "app.starting",
+  stopping: "app.stopping",
+  removing: "app.removing",
 };
 
 // Announce runtime-state transitions (not every poll - only when the state
@@ -63,7 +68,7 @@ watch(
   (s) => {
     if (s !== lastAnnouncedState && store.status === "ready") {
       lastAnnouncedState = s;
-      announce(`Runtime ${RUNTIME_LABEL[s] ?? s}`);
+      announce(`Runtime ${t(RUNTIME_LABEL_KEY[s] ?? s)}`);
     }
   }
 );
@@ -103,6 +108,13 @@ function onKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   store.negotiate();
+  // G-09 (02 §3.1): resolve + apply the locale in parallel with capability
+  // negotiation - language resolution never blocks it.
+  void (async () => {
+    if (!settingsStore.loaded) await settingsStore.load();
+    const locale = await ipc.resolveLocale(settingsStore.doc?.ui.language ?? "auto");
+    applyLocale(locale);
+  })();
   // Exit gate (03 §4.3): always prevent the default close. G-07 refinement
   // (2026-08-09): the close feels instant - the window hides and the Rust
   // shutdown coordinator runs in the background (bounded ~12s worst case),
@@ -185,7 +197,7 @@ function selectRecent(path: string): void {
       <span class="brand">AISC Workbench</span>
       <span class="status" :data-status="store.status">{{ store.status }}</span>
       <span class="spacer" />
-      <button class="settings-btn" @click="settingsOpen = true">设置</button>
+      <button class="settings-btn" @click="settingsOpen = true">{{ t("app.settings") }}</button>
     </header>
 
     <!-- Step 3: typed settings dialog (keyboard-accessible modal, A-G01-1) -->
@@ -198,39 +210,39 @@ function selectRecent(path: string): void {
 
     <!-- Capability gate -->
     <div v-if="store.status === 'blocked'" class="gate blocked">
-      <h2>无法启动 Workbench 主路径</h2>
-      <p class="err">{{ store.error?.message ?? "AISC CLI 不可用" }}</p>
+      <h2>{{ t("app.blocked.title") }}</h2>
+      <p class="err">{{ store.error?.message ?? t("app.blocked.cli") }}</p>
       <p class="detail">{{ store.error?.technical_detail }}</p>
-      <button @click="store.pickAndPinCli()">选择 AISC CLI</button>
+      <button @click="store.pickAndPinCli()">{{ t("app.blocked.pickCli") }}</button>
     </div>
 
     <!-- Loading / stopping -->
     <div v-else-if="['idle', 'negotiating', 'preflight', 'stopping'].includes(store.status)" class="center">
       <p class="msg">{{
         store.status === "stopping"
-          ? "正在停止 Runtime…"
+          ? t("app.stopping")
           : store.status === "preflight"
-          ? "正在预检环境…"
-          : "正在协商 AISC CLI 能力…"
+          ? t("app.preflight")
+          : t("app.negotiating")
       }}</p>
     </div>
 
     <!-- Workspace picker -->
     <div v-else-if="store.status === 'picker'" class="picker">
-      <h2>选择工作区</h2>
+      <h2>{{ t("picker.title") }}</h2>
       <div class="row">
         <input
           v-model="store.workspace"
           class="workspace"
-          placeholder="工作区路径（如 /home/user/project）"
+          :placeholder="t('picker.placeholder')"
           @keyup.enter="store.runPreflight()"
         />
-        <button @click="store.pickWorkspace()">选择</button>
-        <button class="primary" :disabled="!store.workspace.trim()" @click="store.runPreflight()">下一步</button>
+        <button @click="store.pickWorkspace()">{{ t("picker.browse") }}</button>
+        <button class="primary" :disabled="!store.workspace.trim()" @click="store.runPreflight()">{{ t("picker.next") }}</button>
       </div>
-      <p class="hint">Workbench 不会自动创建目录或 runtime；选择后执行只读预检。</p>
+      <p class="hint">{{ t("picker.hint") }}</p>
       <div v-if="store.recentWorkspaces.length" class="recents">
-        <div class="recents-label">最近工作区</div>
+        <div class="recents-label">{{ t("picker.recents") }}</div>
         <ul>
           <li v-for="w in store.recentWorkspaces" :key="w.path">
             <button class="recent" :title="w.path" @click="selectRecent(w.path)">
@@ -282,12 +294,12 @@ function selectRecent(path: string): void {
 
     <!-- Error -->
     <div v-else-if="store.status === 'error'" class="gate error">
-      <h2>操作失败</h2>
+      <h2>{{ t("app.error.title") }}</h2>
       <p class="err">{{ store.error?.message }}</p>
       <p class="detail">{{ store.error?.technical_detail }}</p>
       <div class="actions">
-        <button @click="store.negotiate()">重试</button>
-        <button @click="store.backToPicker()">返回</button>
+        <button @click="store.negotiate()">{{ t("app.error.retry") }}</button>
+        <button @click="store.backToPicker()">{{ t("app.error.back") }}</button>
       </div>
     </div>
   </div>

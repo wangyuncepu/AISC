@@ -66,6 +66,10 @@ export const saveSettings = (expectedRevision: number, patch: SettingsPatch) =>
 export const resetGuiSettings = (expectedRevision: number) =>
   invoke<SaveOutcome>("reset_gui_settings", { expectedRevision });
 
+/** Resolve the final locale (explicit > installer > system > zh-CN). */
+export const resolveLocale = (language: string | null = null) =>
+  invoke<string>("resolve_locale", { language });
+
 // --- S1.4: runtime control ---
 
 export const startRuntime = (
