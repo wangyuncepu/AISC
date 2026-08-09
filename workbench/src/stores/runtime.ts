@@ -687,7 +687,17 @@ export const useRuntimeStore = defineStore("runtime", () => {
     const { tabs: created, bySavedId } = tabsFromRecords(records);
     tabs.value = created;
     for (const tab of created) {
-      if (!opts.openAgents || opts.openAgents.includes(tab.agent)) void openTab(tab.tabId);
+      if (!opts.openAgents || opts.openAgents.includes(tab.agent)) {
+        // G-12 (A-G08-3): restored claude/codex tabs go through the same
+        // provider gate as + menu tabs - unconfigured ones restore as guide
+        // without a session (observed 2026-08-10: restore bypassed the gate
+        // and dropped an unconfigured codex straight into its TUI login).
+        if (tab.agent === "claude" || tab.agent === "codex") {
+          void maybeOpenCreated(tab.tabId, tab.agent);
+        } else {
+          void openTab(tab.tabId);
+        }
+      }
     }
     activeTabId.value = resolveActiveTabId(created, bySavedId, {
       activeSavedId: opts.activeSavedId,

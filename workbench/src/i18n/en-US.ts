@@ -150,6 +150,7 @@ export const enUS: Record<string, string> = {
   "guide.descUnknown": "Provider status cannot be confirmed (a CLI upgrade may be needed). Retry; an unknown status is never reported as unconfigured.",
   "guide.retry": "Retry",
   "guide.openCcSwitch": "Open cc-switch",
+  "guide.loginOfficial": "Official login (enter TUI)",
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench terminal ready.",

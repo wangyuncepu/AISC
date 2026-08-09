@@ -51,6 +51,12 @@ async function retry() {
 function openCcSwitch() {
   store.openCcSwitch();
 }
+
+/** G-12 (user request 2026-08-10): official-account login goes straight into
+ * the codex TUI - the session opens and the TUI runs its own login flow. */
+function loginOfficial() {
+  store.openTab(props.tabId);
+}
 </script>
 
 <template>
@@ -60,6 +66,7 @@ function openCcSwitch() {
       <span class="text">{{ title }}</span>
       <div class="actions">
         <button @click="retry">{{ t("guide.retry") }}</button>
+        <button v-if="auth === 'login_required'" @click="loginOfficial">{{ t("guide.loginOfficial") }}</button>
         <button class="primary" @click="openCcSwitch">{{ t("guide.openCcSwitch") }}</button>
       </div>
     </div>

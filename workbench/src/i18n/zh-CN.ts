@@ -150,6 +150,7 @@ export const zhCN = {
   "guide.descUnknown": "无法确认 Provider 状态（可能需升级 CLI）。可重试；不会将未知状态误报为未配置。",
   "guide.retry": "重试",
   "guide.openCcSwitch": "打开 cc-switch",
+  "guide.loginOfficial": "官方账号登录（进入 TUI）",
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench 终端就绪。",

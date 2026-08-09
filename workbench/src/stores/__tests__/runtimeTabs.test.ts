@@ -86,6 +86,34 @@ describe("provider gate (A-G08-2)", () => {
     expect(mockIpc.getProviderStatus).toHaveBeenCalledWith("/ws", "rid", "claude");
   });
 
+  it("restore layout gates unconfigured claude/codex to guide (A-G08-3)", async () => {
+    mockIpc.getProviderStatus.mockResolvedValue({
+      provider_name: null,
+      route_mode: "unknown",
+      auth_status: "not_configured",
+      observed_at: "x",
+    });
+    const s = useRuntimeStore();
+    s.runtimeState = "running";
+    s.runtimeId = "rid";
+    s.workspace = "/ws";
+    s.initTabs(
+      [
+        { tab_id: "a", agent: "bash", title: "Bash", position: 0 },
+        { tab_id: "b", agent: "codex", title: "Codex", position: 1 },
+      ],
+      { openAgents: ["bash", "codex"] }
+    );
+    await tick();
+    await tick();
+    const bash = s.tabs.find((t) => t.agent === "bash");
+    const codex = s.tabs.find((t) => t.agent === "codex");
+    expect(bash?.sessionState).toBe("starting"); // bash opens directly
+    expect(bash?.sessionId).not.toBeNull();
+    expect(codex?.sessionState).toBe("guide"); // codex gated, no session
+    expect(codex?.sessionId).toBeNull();
+  });
+
   it("opens the session when the provider is configured", async () => {
     mockIpc.getProviderStatus.mockResolvedValue({
       provider_name: "official",
