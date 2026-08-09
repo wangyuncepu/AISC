@@ -1089,6 +1089,15 @@ def _cmd_session(
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     """Main CLI entry point."""
+    # Never let stdout's locale encoding (GBK on zh-CN Windows, cp1252 on
+    # en-US) crash the CLI with UnicodeEncodeError. Protocol JSON is pure
+    # ASCII by construction (ensure_ascii=True in emit_json/JsonlEmitter);
+    # any other unencodable output (wizard emoji, non-ASCII messages)
+    # degrades to '?' instead of aborting mid-command.
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass  # non-TextIOWrapper (PyInstaller wrapper) - protocol sites are ASCII anyway
     parser = _build_parser()
     args_list = list(argv) if argv is not None else sys.argv[1:]
 

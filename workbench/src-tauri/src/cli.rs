@@ -289,18 +289,25 @@ pub fn enumerate_candidates(explicit: Option<&Path>, saved: Option<&Path>) -> Ve
 }
 
 /// Bundled CLI sidecar path (S4.1.a). Tauri `bundle.externalBin` places the
-/// sidecar relative to the app resources; dev builds have no sidecar (None).
+/// sidecar next to the main binary under its **base name** (target triple
+/// stripped, e.g. `aisc.exe` on Windows — tauri-bundler 2.9.x NSIS layout);
+/// dev builds have no sidecar (None).
 fn sidecar_candidate() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     sidecar_candidate_in(exe.parent()?)
 }
 
-/// Pure lookup for tests: sidecar next to *exe_dir* with the target-triple name.
+/// Pure lookup for tests: sidecar next to *exe_dir*. Accepts both the
+/// target-triple name (older layouts / manually staged resources) and the
+/// base name tauri-bundler 2.9.x actually installs.
 fn sidecar_candidate_in(exe_dir: &Path) -> Option<PathBuf> {
     let name = format!("aisc-{}", target_triple());
+    let base = "aisc";
     let candidates = [
         exe_dir.join(&name),
         exe_dir.join(format!("{name}.exe")),
+        exe_dir.join(base),
+        exe_dir.join(format!("{base}.exe")),
     ];
     candidates.into_iter().find(|p| p.is_file())
 }
@@ -817,7 +824,7 @@ pub async fn cli_clear_pin(app: AppHandle) -> Result<(), WorkbenchError> {
 #[tauri::command]
 pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, WorkbenchError> {
     let dir = config_dir(&app)?;
-    let settings = Settings::load(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
+    let mut settings = Settings::load(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
     let cancel = CancellationToken::new();
     // `--aisc-cli` process arg outranks the saved pin (S4.1.a).
     if let Some(explicit) = explicit_cli_path(&app, None) {
@@ -826,7 +833,15 @@ pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, 
     if let Some(pin) = settings.aisc_cli_path() {
         return Ok(negotiate(Path::new(pin), cancel).await);
     }
-    // No pin: auto-select if exactly one valid candidate.
+    // No pin: auto-select the highest-priority valid candidate (S4.1.a
+    // sidecar > PATH > platform) and persist it as the pin. With the bundled
+    // sidecar discoverable, an installed app legitimately has 2+ valid
+    // candidates (sidecar + a dev-installed CLI on PATH); priority order
+    // decides instead of the old "exactly one" gate. The selection must be
+    // saved, not just reported: every runtime command (preflight included)
+    // resolves the CLI through the pin (session::resolve_pin), so an
+    // unpinned fresh install passes negotiation but fails preflight with
+    // cli_not_found.
     let raw = enumerate_candidates(None, None);
     let mut valid: Vec<PathBuf> = Vec::new();
     for (p, _) in raw {
@@ -834,10 +849,15 @@ pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, 
             valid.push(p);
         }
     }
-    match valid.len() {
-        1 => Ok(negotiate(&valid[0], cancel).await),
-        _ => Ok(failed_report(Some(WorkbenchError::cli_not_found()))),
+    if let Some(first) = valid.first() {
+        let report = negotiate(first, cancel).await;
+        if report.required_ok {
+            settings.set_aisc_cli_path(Some(&first.to_string_lossy()));
+            settings.save(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
+        }
+        return Ok(report);
     }
+    Ok(failed_report(Some(WorkbenchError::cli_not_found())))
 }
 
 #[cfg(test)]
@@ -969,6 +989,17 @@ mod tests {
         let triple = target_triple();
         let name = format!("aisc-{triple}");
         let file = dir.path().join(if cfg!(windows) { format!("{name}.exe") } else { name.clone() });
+        std::fs::write(&file, b"x").unwrap();
+        let found = sidecar_candidate_in(dir.path());
+        assert_eq!(found.as_deref(), Some(file.as_path()));
+    }
+
+    #[test]
+    fn sidecar_lookup_finds_base_name() {
+        // tauri-bundler 2.9.x installs the externalBin sidecar under its base
+        // name (triple stripped): `aisc` / `aisc.exe` next to the main binary.
+        let dir = tempdir().unwrap();
+        let file = dir.path().join(if cfg!(windows) { "aisc.exe" } else { "aisc" });
         std::fs::write(&file, b"x").unwrap();
         let found = sidecar_candidate_in(dir.path());
         assert_eq!(found.as_deref(), Some(file.as_path()));

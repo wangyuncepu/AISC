@@ -34,13 +34,18 @@
     "externalBin": [
       "binaries/aisc"
     ],
+    "resources": {
+      "nsis/bundle/aisc-bundle": "aisc-bundle"
+    },
     "windows": {
       "nsis": {
         "template": "nsis/installer.nsi",
         "installMode": "currentUser",
         "languages": [
-          "English"
-        ]
+          "English",
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": true
       },
       "webviewInstallMode": {
         "type": "downloadBootstrapper"

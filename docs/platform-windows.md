@@ -24,6 +24,7 @@ NSIS 安装器在选完安装目录/开始菜单后显示 **Environment Check** 
 - 全新环境（无 winget/Docker/Python）：检测页全缺失 → 装依赖（UAC 授权）→ 完成后启动 Workbench → CLI discovery 正常。
 - 已有 Docker + Python：检测页全绿 → 直接继续。
 - Docker 已装未运行：「Start Docker Desktop」按钮启动成功。
+- 打开目录 → preflight → 点「构建镜像」：Docker Desktop 运行中应完成镜像构建（安装版 CLI root 发现走随装 `aisc-bundle\`，与 cwd 无关；Linux dev 正常是因为 cwd 恰好是仓库）。安装器侧随装 bundle 由 `nsis-installer.yml` staging + 静默安装冒烟验证。
 - Skip 路径：Workbench 首启 preflight 报告缺 Docker，不崩溃。
 - 覆盖升级旧版本正常；卸载不删用户数据（`%APPDATA%\cn.aisc.workbench` 保留）。
 

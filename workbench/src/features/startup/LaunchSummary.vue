@@ -77,7 +77,9 @@ function onConfigChanged() {
       镜像缺失（Config gate）。可点击「构建镜像」用 `aisc build --events` 构建（可取消）。
     </p>
     <p v-if="dockerDown" class="gate-msg hard">
-      Docker 引擎未运行。点击「启动 Docker」会打开 Docker Desktop（首次启动需接受协议），启动后自动重新检测。
+      {{ store.dockerStarting
+        ? "Docker 引擎启动中，正在自动重试检测（最多 2 分钟）…"
+        : "Docker 引擎未运行。点击「启动 Docker」会打开 Docker Desktop（首次启动需接受协议），启动后自动重新检测。" }}
     </p>
     <p v-else-if="hardBlocking" class="gate-msg hard">
       Hard gate 未通过，无法启动。请修复 Docker / workspace 权限后重试。

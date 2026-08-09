@@ -409,6 +409,90 @@ class TestPreflightCanStart(unittest.TestCase):
             assert result.can_start is True
             assert result.recommended_action == "start"
 
+    def test_image_missing_keeps_start_action(self):
+        """S4.1.b: fresh install on an empty dir - image gate fails but the
+        runtime_conflict check passes, so action stays "start" (not
+        resolve_conflict). This was the mislabel: an empty workspace showed
+        "工作区已有不兼容 Runtime" because any failed gate forced
+        resolve_conflict."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            workspace.mkdir(exist_ok=True)
+            registry_root = workspace / ".aisc"
+            registry_root.mkdir(exist_ok=True)
+            (registry_root / "containers.json").write_text('{"default": "", "containers": {}}')
+
+            executor = Mock()
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=True, reason="ok"
+            )
+            executor.inspect_image.return_value = ImageInspectResult(
+                status=ImageInspectStatus.MISSING,
+                image="test:latest",
+            )
+
+            result = preflight_runtime(
+                runtime_id="550e8400-e29b-41d4-a716-446655440000",
+                workspace=str(workspace),
+                image="test:latest",
+                network="direct",
+                scope="project",
+                owner="workbench",
+                executor=executor,
+                registry_root=registry_root,
+            )
+
+            conflict_check = next(c for c in result.checks if c.id == "runtime_conflict")
+            image_check = next(c for c in result.checks if c.id == "image")
+            assert image_check.status == "fail"
+            assert conflict_check.status == "pass"
+            assert result.can_start is False
+            assert result.recommended_action == "start"
+
+    def test_real_conflict_still_resolve_conflict(self):
+        """A genuine runtime conflict (project runtime already exists for this
+        workspace) must still recommend resolve_conflict."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            workspace.mkdir(exist_ok=True)
+            registry_root = workspace / ".aisc"
+            registry_root.mkdir(exist_ok=True)
+            (registry_root / "containers.json").write_text(
+                '{"default": "", "containers": {"aisc-wb-conflict": {'
+                f'"runtime_id": "22222222-2222-2222-2222-222222222222", '
+                f'"workspace": "{workspace}", '
+                f'"scope": "project", '
+                f'"owner": "workbench", '
+                f'"config_fingerprint": "old-fingerprint"}}}}'
+            )
+
+            executor = Mock()
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=True, reason="ok"
+            )
+            executor.inspect_image.return_value = ImageInspectResult(
+                status=ImageInspectStatus.EXISTS,
+                image="test:latest",
+            )
+            executor.run_captured.return_value = ProcessResult(
+                stdout="", stderr="", exit_code=0,
+            )
+
+            result = preflight_runtime(
+                runtime_id="550e8400-e29b-41d4-a716-446655440000",
+                workspace=str(workspace),
+                image="test:latest",
+                network="direct",
+                scope="project",
+                owner="workbench",
+                executor=executor,
+                registry_root=registry_root,
+            )
+
+            conflict_check = next(c for c in result.checks if c.id == "runtime_conflict")
+            assert conflict_check.status == "fail"
+            assert result.recommended_action == "resolve_conflict"
+
     def test_any_fail_cannot_start(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             executor = Mock()
@@ -426,4 +510,6 @@ class TestPreflightCanStart(unittest.TestCase):
             )
 
             assert result.can_start is False
-            assert result.recommended_action == "resolve_conflict"
+            # Non-conflict gates keep action="start"; resolve_conflict is
+            # reserved for actual runtime conflicts (S4.1.b regression).
+            assert result.recommended_action == "start"
