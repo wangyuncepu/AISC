@@ -38,6 +38,20 @@
 - **CI 冒烟抓出并修复 4 个问题**（05ca3b0/983cd6e + smoke 修复 3e37abc/f04164c/056bd2b/988dd4e）：(1) PathNormalizeDir 只保护 $1/$2，CharLowerBuffW 用 $3 破坏扫描循环 → 冲突探测永远不命中（sentinel 场景 INSTDIR 被追加）；(2) smoke 的 `Count-InstDirEntries $x -ne 1` 被 PowerShell 解析为函数参数 → 断言恒真；(3) `RegQueryValueExW` 带大小指针(NULL 数据) 返回 ERROR_MORE_DATA → PathType 恒 1 → WriteRegStr 展开 `%USERPROFILE%`；(4) smoke 用 GetEnvironmentVariable（自动展开 EXPAND_SZ）匹配字面 `%USERPROFILE%` → 恒失败，改 DoNotExpandEnvironmentNames 读原始值；另接受 runner 系统 PATH 已有 pip aisc 的真实遮蔽语义（05 §5.2.5 不覆盖）。
 - **Step 1 结论（2026-08-09）**：NSIS installer / Workbench CI / Bundle Linux-macOS 三 workflow 全绿；本地实机安装/重复安装/卸载/冲突全链 PASS。A-G18-1..4 证据齐。
 
+## Step 2 验收清单（G-07 停止/关闭/退出性能，分支 step-2-g07-perf）
+
+> 规范：03-lifecycle-contract.md §4.2/§4.3、06-implementation-plan §0.5；门禁 A-G07-1..4。目标：终止 Runtime / 关窗退出 / 会话回收三条路径的感知延迟与预算。
+
+- [x] **2a-1** CLI `runtime stop --grace`（1..600 校验，超时=grace）：`stop_runtime` → `executor.stop_container(timeout=grace)`；`session terminate` grace 校验（有限 0..600），超时 grace+1.0；transport 预算 15s。测试：`test_runtime_lifecycle.py`（grace 传递/非法值）+ `test_session_commands.py`（terminate 超时）。
+- [x] **2b-1** Rust 预算：TERMINATE_TIMEOUT 5s / CLOSE_WAIT 4s / CLOSE_FORCE_WAIT 2s；`session_open_argv` 带 `--workspace` + `--grace 3`；`runtime_stop_argv` 带 `--grace 3`；reopen 25 周期孤儿泄漏测试（A-INFRA-2 补全，`reopen_25_cycles_leaves_no_orphan_sessions`）。
+- [x] **2c-1** `shutdown_workbench` 协调器（03 §4.3）：共享 6s graceful 窗口并发 close → 共享 2s force-reap → flush settings → `ShutdownReport`（graceful/force/timed_out/unreaped/flush_errors）；`stopRuntime` 分段式（400ms race 并发 close → stop → inspect 确认 stopped/not_found）。
+- [x] **2c-2** 性能证据（`perf_runtime_stop_with_eight_sessions`，2026-08-09 实机）：0 会话 stop ~3.47s，8 会话 stop 0.73s（grace 3 快速路径），reopen 25 周期 ~1s/cycle 无孤儿。
+- [x] **2d-1** 手动测试（Windows 11 实机，2026-08-09/10）：终止 Runtime 2-3 会话快速结束 ✅（首次失败 `unrecognized arguments: --grace 3` = 陈旧 sidecar，重建 + 双拷贝后修复，sidecar 同步要求记入 memory）；关窗瞬间隐藏 + 后台清理 + 进程 ~10s 内退出 + 容器保留 ✅；恢复布局回归 ✅。
+- **手测发现并修复 4 个真实 bug**：
+  - (1) 恢复布局消失（路径匹配脆弱 + 空 tabs 覆盖）：`restorableLayout` 精确字符串匹配，重输路径（正斜杠/尾斜杠/大小写）即失配 → 新增 `normalizePath/sameWorkspace`（win: `/`→`\`、去尾分隔符、大小写不敏感；posix: 去尾 `/`、区分大小写），恢复查找与 history key 统一归一化；`buildPatch` 空 tabs 时保留已有布局（stop/start reset 清空数组，单 tab 关闭不清空）——preflight 的 scheduleSave 不再抹掉磁盘布局（f210eca）。
+  - (2) 关窗等待慢（前端 `await hide()` 挂起）：确认后 handler 死在 `await getCurrentWindow().hide()`（close-request 挂起期间该 Tauri 版本 hide IPC 不返回）→ shutdown 从未调用、窗口永不关、无日志（c9033a5：hide 与 shutdown 全部 fire-and-forget + 失败兜底 destroy；82a9bdd：改 Rust 侧 `app.get_webview_window("main").hide()` 直接 win32 隐藏——前端 hide IPC 在 close-request 挂起时不可靠）。stale/fresh 交替为原生确认框 focus/blur 触发轮询 markStale→tick 的正常现象，非 bug。
+- **Step 2 结论（2026-08-10）**：CLI grace 链 + Rust 预算 + 分段 stop + 后台关闭全链 PASS；cargo session 19 绿 / vitest 9 绿（4 新增路径归一化）/ npm build 零错。A-G07-1..4 证据齐。
+
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
 ### S4.2 发布门（2026-08-09，06-implementation-plan.md §七 S4.2）
