@@ -85,7 +85,7 @@ function closePty(sid?: string) {
 }
 
 function scheduleResize() {
-  if (resizeTimer !== null) return;
+  if (!visible.value || resizeTimer !== null) return;
   resizeTimer = window.setTimeout(() => {
     resizeTimer = null;
     doResize();
@@ -93,7 +93,7 @@ function scheduleResize() {
 }
 
 function doResize() {
-  if (!term || !fit || closed) return;
+  if (!visible.value || !term || !fit || closed) return;
   try {
     fit.fit();
     const sid = sessionId.value;
@@ -127,9 +127,17 @@ onMounted(() => {
   if (container.value) resizeObserver.observe(container.value);
   window.addEventListener("resize", scheduleResize);
 
-  // Re-fit when this tab becomes the active (visible) view.
+  // Re-fit when this tab becomes the active (visible) view. v-show toggles
+  // display:none; xterm does not repaint automatically on re-display, which
+  // leaves a blank screen while the buffer/session stay intact. Force a full
+  // viewport repaint after the re-fit.
   watch(visible, (v) => {
-    if (v) setTimeout(doResize, 0);
+    if (v) {
+      setTimeout(() => {
+        doResize();
+        term?.refresh(0, term.rows - 1);
+      }, 0);
+    }
   });
 
   watch(
