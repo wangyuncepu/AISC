@@ -11,6 +11,7 @@
 - **Windows 覆盖升级/卸载安全冒烟**：`nsis-installer.yml` 冒烟扩展——静默装后放置 `%APPDATA%\cn.aisc.workbench\` 与 workspace `.aisc/` 数据标记 → 同版本覆盖重装（silent 走 uninstall+reinstall 维护流程）→ 断言标记存活 + bundle 在 → 静默卸载 → 断言 app 文件与卸载注册表键清除、**数据标记保留**。验证待 CI。
 - **回滚文档**：新增 `docs/releases/rollback.md`——数据保留边界（app_config_dir/工作区不受卸载影响）、降级路径（allow_downgrades=false 需先卸载）、CLI 协商顺序（`--aisc-cli` > pin > sidecar > PATH > 平台已知位置，对应 `cli.rs` `enumerate_candidates`）、pin 清理方法、回滚验证清单。
 - 范围外 blocked：Windows 代码签名（无证书）、macOS 公证（无账号/机），正式 Preview 发布在签名/公证前不进行。计划见 `docs/plans/PLAN-workbench-s4.2-release-gates.md`。
+- **CI 验证（2026-08-09）全绿**：Tests 9/9（3 OS × 3 Python，macOS runner 新接入）；Bundle Linux/macOS 产出 deb + DMG；NSIS 冒烟 SMOKE/UPGRADE/UNINSTALL 三阶段 PASSED（升级重装与卸载均保留 `%APPDATA%\cn.aisc.workbench\` 与 workspace 数据标记）。macOS runner 暴露 2 个平台假设并修复：(1) `test_session_wrapper.py` /proc start-ticks 测试 macOS 无 /proc → 拆 `linux_only` guard（POSIX 部分保留 `posix_only`）；(2) `test_runtime_preflight_no_side_effects.py` 无 docker CLI 时 docker 存在性断言 FileNotFoundError → try/except 容错跳过。
 
 
 
