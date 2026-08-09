@@ -224,7 +224,8 @@ jobs:
             }
             $final = Get-UserPath
             if ((Count-InstDirEntries $final) -ne 0) { throw "G-18: INSTDIR entry not removed on uninstall" }
-            if ($final -notlike "*%USERPROFILE%\AppData\Roaming\aisc-smoke-test*") { throw "G-18: unrelated PATH entry removed on uninstall" }
+            $finalRaw = (Get-Item "HKCU:\Environment").GetValue("Path", $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            if ($finalRaw -notlike "*%USERPROFILE%\AppData\Roaming\aisc-smoke-test*") { throw "G-18: unrelated PATH entry removed on uninstall (raw=$finalRaw)" }
             Write-Host "UNINSTALL: PASSED"
             Write-Host "S4.2 UPGRADE/UNINSTALL SMOKE: PASSED"
           } finally {
