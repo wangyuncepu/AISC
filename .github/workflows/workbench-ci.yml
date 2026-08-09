@@ -40,7 +40,9 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # vitest 4.1's forks worker fails to start on Node 20; local dev is
+          # Node 22 and the suite runs green there - keep CI on the same major.
+          node-version: '22'
           cache: npm
           cache-dependency-path: workbench/package-lock.json
 
@@ -60,6 +62,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
