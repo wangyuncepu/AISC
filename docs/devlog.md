@@ -2,6 +2,23 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+## v2.3.1-dev (2026-08-09 ~) - GUI Fine-Tune Step 0：契约与测试基础设施（A-INFRA-1..5）
+
+> 规范入口：`docs/plans/gui-fine-tune-planning/`（00-06 + decisions）。Step 0 按 06-implementation-plan §0.1-0.4 执行。
+
+### Step 0 实施（2026-08-09，提交 32811b1/c0f6ede/056194a/f020460/efcfc5e/49ddd2a）
+
+- **Canonical workspace 链（A-INFRA-3）**：`open_session` 在 spawn 前 canonicalize（Rust 唯一生产者），`SessionEntry` 保存 canonical 值，open/terminate argv 均带 `--workspace`；失败映射 `AISC_ERR_WORKSPACE_INVALID`；store 从 `config.workspace` 回写 canonical 值并作为 history key。
+- **SessionRegistry 所有权（A-INFRA-2）**：spawn 前 `Reserved` 原子插入、重复 ID 前置拒绝、spawn/注册失败 kill+reap 回滚、并发 close 共享 completion（`plan_close` 单元测试覆盖 Gone/Terminal/Run/Wait）、自然退出幂等 `ack_session_exit`、终端条目 60s TTL + 每 Runtime 32 条上限惰性清扫、`generation` 单调计数。
+- **`shutdown_workbench` 协调器（03 §4.3 骨架）**：拒绝新 Session → 并发 bounded close（Reserved/Running/Closing 全接管）→ force-reap 遗留 → flush settings → `ShutdownReport`；App.vue 仅当 `unreaped_session_ids` 为空才 destroy，否则显示可恢复错误。预算收紧属 Step 2（G-07）。
+- **安全原子替换（A-INFRA-5）**：新 `storage::atomic_replace`（tmp+fsync+`target→backup`→`tmp→target`→失败恢复 backup，禁 delete-first），settings/history 共用；history 四层（root/workspace/layout/tab）serde-flatten unknown fields round-trip，save 合并时深合并 on-disk unknown 字段与省略字段。
+- **前端测试设施（§0.2）**：vitest + @vue/test-utils + jsdom，`npm test`/`test:watch`；新纯模块 `tabLayout.ts`。
+- **逐 TabRecord 恢复（A-INFRA-1）**：`tabsFromRecords` 保留重复 Session type 与顺序 + saved→new tab_id 映射；旧 `.find(agent)` 去重缺陷以 7 条 vitest 固定为回归门。
+- **CI（A-INFRA-4）**：新 `workbench-ci.yml`（push/PR：npm ci/build/test + cargo test + pytest）；bundle-linux-macos/nsis-installer 补前端/package path filters；bundle 产物在非 checkout cwd 验证 sidecar 权限/架构/`version --format json`/aisc-bundle 资源；`tests/test_workflow_contract.py` 静态断言 path filters（PyYAML 加入 dev extras）。
+- **本地验证（Windows 11 + Docker Desktop 29.6.2 + aisc 2.1.5-dev + super-claude:latest runtime）**：Rust 76 单测 + cli_runner 7（含真实 aisc negotiate）+ pty_supervisor 4（含真实容器内 `aisc session open`，3× 稳定）+ vitest 7 + 契约测试 6 全绿；`npm run build` 通过。
+- **测试环境修复**：`pty_supervisor` 模拟终端应答 `ESC[6n` 光标查询（bash/msys sh 启动即查询并阻塞），`SH` 环境变量提供 sh 绝对路径（ConPTY 后端不做 PATH 解析），real-aisc 截止 20s（冷容器 docker exec 延迟）。本地验证需 `PATH` 前置 `/tmp/pyshim`（python3 桩，Store 版 python3 不可用）。
+- **待办**：CI 推送验证（git proxy 127.0.0.1:7890 失效，push 前需处理）；A-INFRA-2 的 100× reopen 集成测试（计划随 Step 2 registry 预算重构补齐）；手动测试清单见阶段汇报。
+
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
 ### S4.2 发布门（2026-08-09，06-implementation-plan.md §七 S4.2）
