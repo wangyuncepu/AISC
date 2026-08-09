@@ -220,15 +220,19 @@ class TestPreflightNoSideEffects(unittest.TestCase):
             # Should succeed
             assert result.returncode == 0
 
-            # Verify no container was created with this runtime ID
-            # This requires Docker to be available
-            docker_result = subprocess.run(
-                ["docker", "ps", "-a", "--filter", "label=io.aisc.runtime-id=550e8400-e29b-41d4-a716-446655440000", "--format", "{{.ID}}"],
-                capture_output=True,
-                text=True,
-            )
+            # Verify no container was created with this runtime ID.
+            # This requires Docker to be available; on runners without a
+            # docker CLI (e.g. macOS CI) the check is skipped, not failed.
+            try:
+                docker_result = subprocess.run(
+                    ["docker", "ps", "-a", "--filter", "label=io.aisc.runtime-id=550e8400-e29b-41d4-a716-446655440000", "--format", "{{.ID}}"],
+                    capture_output=True,
+                    text=True,
+                )
+            except FileNotFoundError:
+                docker_result = None
 
-            if docker_result.returncode == 0:
+            if docker_result is not None and docker_result.returncode == 0:
                 # Docker is available, verify no container exists
                 assert docker_result.stdout.strip() == ""
 
