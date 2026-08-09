@@ -99,27 +99,23 @@ function onKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   store.negotiate();
-  // Exit gate (03 §4.3): always prevent the default close and route through
-  // the Rust shutdown coordinator. The window is destroyed only after
-  // shutdown_workbench returns with no unreaped children; otherwise the app
-  // stays open with the report surfaced as a recoverable error. (preventDefault
-  // must precede the async confirm, otherwise the default close races it.)
+  // Exit gate (03 §4.3): always prevent the default close. G-07 refinement
+  // (2026-08-09): the window is hidden immediately so the close feels instant;
+  // the Rust shutdown coordinator finishes in the background (bounded ~12s
+  // worst case) and exits the process itself. The runtime container is kept
+  // running by design - an unreaped-session report is logged, not shown.
+  // (preventDefault must precede the async confirm, otherwise the default
+  // close races it.)
   void getCurrentWindow().onCloseRequested(async (event) => {
     event.preventDefault();
     const allow = await store.confirmExit();
     if (!allow) return;
-    const report = await ipc.shutdownWorkbench().catch((e) => {
-      store.setExitError(e);
-      return null;
+    await getCurrentWindow().hide();
+    void ipc.shutdownWorkbench().catch((e) => {
+      // Window is gone; nothing to render. The coordinator is best-effort and
+      // the container survives either way - log for diagnostics.
+      console.error("shutdown_workbench failed:", e);
     });
-    if (!report) return; // keep the window open; error is displayed
-    if (report.unreaped_session_ids.length > 0) {
-      store.setExitError(
-        `仍有 ${report.unreaped_session_ids.length} 个会话未被回收，请重试退出`
-      );
-      return;
-    }
-    await getCurrentWindow().destroy();
   });
   window.addEventListener("keydown", onKeydown, { capture: true });
 });

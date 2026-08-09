@@ -753,6 +753,22 @@ pub async fn shutdown_workbench(
     }
 
     let _ = stop_runtime; // runtime stop lands in G-07 (Step 2)
+
+    // G-07 refinement (2026-08-09): the frontend hides the window before
+    // invoking this command, so the user sees an instant close while cleanup
+    // continues here. Once done, exit the process - nothing may linger
+    // invisibly. Sessions that refused to die within the budgets are logged
+    // and dropped; the runtime container keeps running either way (by design).
+    eprintln!(
+        "[shutdown] closed={} force_reaped={} terminate_timed_out={} reap_timed_out={} unreaped={} flush_errors={}",
+        report.graceful_closed,
+        report.force_reaped,
+        report.terminate_timed_out,
+        report.reap_timed_out,
+        report.unreaped_session_ids.len(),
+        report.flush_errors.len()
+    );
+    app.exit(0);
     Ok(report)
 }
 
