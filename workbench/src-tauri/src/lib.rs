@@ -7,6 +7,7 @@
 pub mod cli;
 pub mod error;
 pub mod history;
+pub mod identity;
 pub mod pty;
 pub mod runtime;
 pub mod session;
