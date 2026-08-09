@@ -1,0 +1,50 @@
+/**
+ * G-06 renderer policy tests (A-G06-1/2): the Workbench renderer enum is a
+ * load/dispose policy, not an xterm option; explicit `default` always wins,
+ * `webgl`/`auto` resolve to webgl when available. Theme tokens carry the
+ * documented contrast claims (A-G06-5 spot checks).
+ */
+import { describe, expect, it } from "vitest";
+import { resolveRenderer, TERMINAL_THEME } from "../renderer";
+
+describe("resolveRenderer (A-G06-1/2)", () => {
+  it("explicit default always wins, even when webgl is available", () => {
+    expect(resolveRenderer("default", true)).toBe("default");
+    expect(resolveRenderer("default", false)).toBe("default");
+  });
+
+  it("webgl resolves to webgl when available, falls back otherwise", () => {
+    expect(resolveRenderer("webgl", true)).toBe("webgl");
+    expect(resolveRenderer("webgl", false)).toBe("default");
+  });
+
+  it("auto prefers webgl like an explicit choice", () => {
+    expect(resolveRenderer("auto", true)).toBe("webgl");
+    expect(resolveRenderer("auto", false)).toBe("default");
+  });
+});
+
+describe("TERMINAL_THEME contrast (A-G06-5)", () => {
+  // WCAG relative luminance + contrast ratio (4.5:1 AA for body text).
+  function lum(hex: string): number {
+    const c = hex.slice(1);
+    const ch = [0, 2, 4].map((i) => parseInt(c.slice(i, i + 2), 16) / 255);
+    const lin = ch.map((v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+  }
+  function ratio(a: string, b: string): number {
+    const [l1, l2] = [lum(a), lum(b)].sort((x, y) => y - x);
+    return (l1 + 0.05) / (l2 + 0.05);
+  }
+
+  it("body text and selection meet WCAG AA 4.5:1", () => {
+    expect(ratio(TERMINAL_THEME.foreground!, TERMINAL_THEME.background!)).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(TERMINAL_THEME.selectionForeground!, TERMINAL_THEME.selectionBackground!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("has explicit foreground/background/selection (no silent defaults)", () => {
+    expect(TERMINAL_THEME.background).toBe("#1e1e1e");
+    expect(TERMINAL_THEME.foreground).toBe("#d4d4d4");
+    expect(TERMINAL_THEME.selectionBackground).toBe("#264f78");
+  });
+});

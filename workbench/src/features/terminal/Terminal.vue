@@ -15,17 +15,21 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITerminalOptions } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { Channel } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
 import { useRuntimeStore } from "../../stores/runtime";
+import { useSettingsStore } from "../../stores/settings";
 import { closeSession, openSession, resizeSession, writeSession } from "../../lib/ipc";
+import { resolveRenderer, TERMINAL_THEME } from "./renderer";
 import type { PtyEvent } from "../../types";
 
 const { t } = useI18n();
 const props = defineProps<{ tabId: string }>();
 const store = useRuntimeStore();
+const settingsStore = useSettingsStore();
 
 const container = ref<HTMLDivElement | null>(null);
 const tab = computed(() => store.tabs.find((t) => t.tabId === props.tabId));
@@ -34,10 +38,81 @@ const visible = computed(() => store.activeTabId === props.tabId);
 
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
+let webgl: WebglAddon | null = null;
 let channel: Channel<PtyEvent> | null = null;
 let resizeTimer: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let closed = false;
+
+/** G-06: build the Terminal from the typed settings (02 §三.4 table). Values
+ * come from the backend; when settings are not yet loaded the xterm native
+ * defaults are used (never a second hardcoded default copy). The renderer
+ * enum is consumed by `mountWebgl`, never written into term.options. */
+function terminalOptions(): ITerminalOptions {
+  const s = settingsStore.doc?.terminal;
+  return {
+    fontFamily: s?.font_family || undefined,
+    fontSize: s?.font_size,
+    lineHeight: s?.line_height,
+    letterSpacing: s?.letter_spacing,
+    scrollback: s?.scrollback,
+    smoothScrollDuration: s?.smooth_scroll_duration,
+    convertEol: false,
+    cursorBlink: true,
+    theme: TERMINAL_THEME,
+  };
+}
+
+/** G-06 (A-G06-1/2): load the WebglAddon per the Workbench renderer setting.
+ * Construction failure and context loss both dispose the addon, falling back
+ * to the DOM renderer - the session/PTY are untouched. */
+function mountWebgl() {
+  const choice = resolveRenderer(settingsStore.doc?.terminal.renderer ?? "auto", true);
+  if (choice !== "webgl") return;
+  try {
+    const addon = new WebglAddon();
+    addon.onContextLoss(() => {
+      // Disposal hands rendering back to the DOM renderer automatically.
+      addon.dispose();
+      if (webgl === addon) webgl = null;
+    });
+    term!.loadAddon(addon);
+    webgl = addon;
+  } catch {
+    /* construction failure (A-G06-2): stay on the DOM renderer */
+  }
+}
+
+function onTermData(data: string) {
+  const sid = sessionId.value;
+  if (sid && !closed) {
+    writeSession(sid, Array.from(new TextEncoder().encode(data))).catch(() => {});
+  }
+}
+
+/** G-06 (A-G06-3): rebuild the Terminal view in place for renderer/font-family
+ * changes. The session_id, PTY child and event channel stay untouched (the
+ * channel callbacks close over the module-level `term` binding); the old
+ * instance (and its addons/listeners) is disposed, so nothing accumulates. */
+function rebuildTerminal() {
+  const host = container.value;
+  const sid = sessionId.value;
+  if (!host || !term) return;
+  term.dispose(); // also disposes loaded addons (webgl/fit)
+  webgl = null;
+  term = new Terminal(terminalOptions());
+  fit = new FitAddon();
+  term.loadAddon(fit);
+  term.open(host);
+  term.writeln(t("terminal.welcome"));
+  term.onData(onTermData);
+  mountWebgl();
+  if (sid && !closed) {
+    // Keep the existing channel; the PTY must NOT be reopened.
+    setTimeout(doResize, 0);
+  }
+  if (visible.value) term.refresh(0, term.rows - 1);
+}
 
 function b64ToUint8(b64: string): Uint8Array {
   const bin = atob(b64);
@@ -112,24 +187,14 @@ function doResize() {
 }
 
 onMounted(() => {
-  term = new Terminal({
-    fontFamily: "monospace",
-    fontSize: 13,
-    convertEol: false,
-    cursorBlink: true,
-  });
+  term = new Terminal(terminalOptions());
   fit = new FitAddon();
   term.loadAddon(fit);
   term.open(container.value!);
   term.writeln(t("terminal.welcome"));
+  term.onData(onTermData);
+  mountWebgl();
   fit.fit();
-
-  term.onData((data) => {
-    const sid = sessionId.value;
-    if (sid && !closed) {
-      writeSession(sid, Array.from(new TextEncoder().encode(data))).catch(() => {});
-    }
-  });
 
   resizeObserver = new ResizeObserver(scheduleResize);
   if (container.value) resizeObserver.observe(container.value);
@@ -162,6 +227,26 @@ onMounted(() => {
   );
 });
 
+// G-06 (A-G06-3): settings-driven updates. renderer/font_family rebuild the
+// view in place (session_id/PTY untouched); the other terminal options apply
+// immediately. Deep watch so in-dialog edits preview live and reverts heal.
+watch(
+  () => settingsStore.doc?.terminal,
+  (t, prev) => {
+    if (!term || !t) return;
+    if (t.renderer !== prev?.renderer || t.font_family !== prev?.font_family) {
+      rebuildTerminal();
+      return;
+    }
+    term.options.fontSize = t.font_size;
+    term.options.lineHeight = t.line_height;
+    term.options.letterSpacing = t.letter_spacing;
+    term.options.scrollback = t.scrollback;
+    term.options.smoothScrollDuration = t.smooth_scroll_duration;
+  },
+  { deep: true }
+);
+
 onBeforeUnmount(() => {
   if (resizeObserver) resizeObserver.disconnect();
   if (resizeTimer !== null) window.clearTimeout(resizeTimer);
@@ -170,6 +255,7 @@ onBeforeUnmount(() => {
   term?.dispose();
   term = null;
   fit = null;
+  webgl = null;
 });
 
 // S3.3: allow the app-level tab shortcut (Ctrl/Cmd+1..4) to move keyboard focus
