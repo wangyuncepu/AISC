@@ -121,8 +121,15 @@ export const enUS: Record<string, string> = {
   "tabbar.exitedCode": "Exited {code}",
   "tabbar.failed": "Failed",
   "tabbar.disconnected": "Disconnected",
-  "tabbar.closeTitle": "Close session (Runtime keeps running)",
+  "tabbar.closeTitle": "Close tab (session ends)",
   "tabbar.reopenTitle": "Reopen (new session)",
+  "tabbar.newTab": "New tab",
+  "tabbar.menu.claude": "Claude",
+  "tabbar.menu.codex": "Codex",
+  "tabbar.menu.bash": "Bash",
+  "tabbar.menu.cc-switch": "cc-switch",
+  "tabs.empty": "No open tabs.",
+  "tabs.newTab": "New tab",
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench terminal ready.",

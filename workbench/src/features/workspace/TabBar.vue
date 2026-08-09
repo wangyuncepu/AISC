@@ -1,17 +1,65 @@
 <script setup lang="ts">
 /**
- * TabBar (S2.2.a): the 4 fixed agent tabs (03 §六). Each tab is a Session
- * view over the shared runtime. Click activates (idle tabs open on first
- * activation); running tabs close to exited; exited/failed/disconnected tabs
- * can be reopened with a fresh session id.
+ * TabBar (G-08, Step 5): dynamic tabs over the shared runtime. A + menu
+ * creates any agent tab (duplicates allowed, capped at 8 per runtime); ×
+ * removes a tab entirely (live sessions close best-effort); exited/failed/
+ * disconnected tabs can be reopened with a fresh session id. ARIA tablist
+ * with arrow/Home/End navigation; the + menu is a keyboard-reachable popup.
  */
-import { ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
-import type { Tab, TabSessionState } from "../../types";
+import { AGENTS } from "../../stores/tabLayout";
+import type { LaunchAgent, Tab, TabSessionState } from "../../types";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
+
+// --- G-08 + menu (aria-haspopup; Enter/Space opens, arrows move, Enter picks) ---
+const menuOpen = ref(false);
+const menuRef = ref<HTMLUListElement | null>(null);
+
+function toggleMenu() {
+  menuOpen.value = !menuOpen.value;
+  if (menuOpen.value) {
+    window.setTimeout(() => menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus(), 0);
+  }
+}
+
+function onMenuKeydown(e: KeyboardEvent) {
+  if (!menuOpen.value) return;
+  const items = Array.from(menuRef.value?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? []);
+  const idx = items.findIndex((el) => el === document.activeElement);
+  if (e.key === "Escape" || e.key === "Tab") {
+    menuOpen.value = false;
+    if (e.key === "Escape") e.preventDefault();
+    return;
+  }
+  if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+    e.preventDefault();
+    items[(idx + 1) % items.length]?.focus();
+  } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+    e.preventDefault();
+    items[(idx - 1 + items.length) % items.length]?.focus();
+  } else if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    if (idx >= 0) choose(items[idx].dataset.agent as LaunchAgent);
+  }
+}
+
+function choose(agent: LaunchAgent) {
+  menuOpen.value = false;
+  store.createTab(agent);
+}
+
+function onDocMousedown(e: MouseEvent) {
+  if (menuOpen.value && !(e.target as HTMLElement).closest(".menu-wrap")) {
+    menuOpen.value = false;
+  }
+}
+
+onMounted(() => document.addEventListener("mousedown", onDocMousedown));
+onBeforeUnmount(() => document.removeEventListener("mousedown", onDocMousedown));
 
 // S3.3: ARIA tabs keyboard navigation (Left/Right/Up/Down move + activate,
 // Home/End first/last, wrap-around).
@@ -109,7 +157,7 @@ function canReopen(s: TabSessionState): boolean {
           v-if="canClose(tab.sessionState)"
           class="icon x"
           :title="t('tabbar.closeTitle')"
-          @click.stop="store.closeTab(tab.tabId)"
+          @click.stop="store.removeTab(tab.tabId)"
         >×</button>
         <button
           v-if="canReopen(tab.sessionState)"
@@ -119,6 +167,29 @@ function canReopen(s: TabSessionState): boolean {
         >↻</button>
       </span>
     </button>
+
+    <!-- G-08: + menu (duplicates allowed; cap enforced by the store) -->
+    <div class="menu-wrap">
+      <button
+        class="icon add"
+        :aria-label="t('tabbar.newTab')"
+        :title="t('tabbar.newTab')"
+        aria-haspopup="menu"
+        :aria-expanded="menuOpen"
+        @click="toggleMenu"
+        @keydown="onMenuKeydown"
+      >+</button>
+      <ul v-if="menuOpen" ref="menuRef" class="menu" role="menu" @keydown="onMenuKeydown">
+        <li
+          v-for="a in AGENTS"
+          :key="a"
+          role="menuitem"
+          tabindex="0"
+          :data-agent="a"
+          @click="choose(a)"
+        >{{ t(`tabbar.menu.${a}`) }}</li>
+      </ul>
+    </div>
   </div>
 </template>
 
@@ -167,4 +238,17 @@ function canReopen(s: TabSessionState): boolean {
 }
 .icon:hover { background: #3c3c3c; color: #fff; }
 .icon.reopen { color: #9cce9c; }
+.icon.add { color: #9cdcfe; font-size: 16px; margin-left: 4px; }
+.menu-wrap { position: relative; display: flex; align-items: center; }
+.menu {
+  position: absolute; top: 100%; left: 0; z-index: 30;
+  list-style: none; margin: 2px 0 0; padding: 4px 0;
+  background: #2d2d2d; border: 1px solid #444; border-radius: 4px;
+  min-width: 140px;
+}
+.menu li {
+  padding: 6px 12px; font-size: 13px; color: #ccc; cursor: pointer;
+  outline: none;
+}
+.menu li:hover, .menu li:focus { background: #3c3c3c; color: #fff; }
 </style>

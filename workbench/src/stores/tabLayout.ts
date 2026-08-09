@@ -48,6 +48,9 @@ export const AGENT_TITLE: Record<LaunchAgent, string> = {
   "cc-switch": "cc-switch",
 };
 
+/** All creatable session types (G-08 + menu order). */
+export const AGENTS: LaunchAgent[] = ["claude", "codex", "bash", "cc-switch"];
+
 function newTabId(): string {
   return crypto.randomUUID();
 }

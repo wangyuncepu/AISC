@@ -121,8 +121,15 @@ export const zhCN = {
   "tabbar.exitedCode": "退出 {code}",
   "tabbar.failed": "失败",
   "tabbar.disconnected": "已断开",
-  "tabbar.closeTitle": "关闭会话（不停止 Runtime）",
+  "tabbar.closeTitle": "关闭标签（会话将结束）",
   "tabbar.reopenTitle": "重新打开（新会话）",
+  "tabbar.newTab": "新建标签",
+  "tabbar.menu.claude": "Claude",
+  "tabbar.menu.codex": "Codex",
+  "tabbar.menu.bash": "Bash",
+  "tabbar.menu.cc-switch": "cc-switch",
+  "tabs.empty": "没有打开的标签。",
+  "tabs.newTab": "新建标签",
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench 终端就绪。",

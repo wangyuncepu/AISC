@@ -283,6 +283,11 @@ function selectRecent(path: string): void {
       <div class="main">
         <TabBar />
         <main class="terminal-area">
+          <!-- G-08 empty state (A-G08-6): focus target for creating the first tab -->
+          <div v-if="store.tabs.length === 0" class="empty-tabs">
+            <p>{{ t("tabs.empty") }}</p>
+            <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
+          </div>
           <Terminal
             v-for="t in openTabs"
             :key="t.tabId"
@@ -387,4 +392,8 @@ button.danger { background: #5a2d2d; border-color: #6b3636; }
 button.danger:hover:not(:disabled) { background: #6e3a3a; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: #1e1e1e; }
+.empty-tabs {
+  height: 100%; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 10px; color: #888; font-size: 13px;
+}
 </style>

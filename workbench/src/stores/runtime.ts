@@ -723,8 +723,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   /** G-08 (Step 5): create a dynamic tab (A-G08-1/8). Refused beyond the
-   * per-Runtime leaf cap. The tab starts idle and opens on activation unless
-   * the provider gate routes it to the guide state (Step 5c). */
+   * per-Runtime leaf cap. The tab opens immediately (Step 5c routes
+   * unconfigured claude/codex to the guide state instead). */
   function createTab(agent: LaunchAgent): string | null {
     if (tabs.value.length >= MAX_TABS) return null;
     const tabId = uuid();
@@ -738,6 +738,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       savedTabId: null,
     });
     activeTabId.value = tabId;
+    openTab(tabId);
     scheduleSave();
     return tabId;
   }
