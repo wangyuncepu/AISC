@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from aisc.adapters.docker_ import DockerExecutor, RealDockerExecutor
-from aisc.domain.models import RuntimeErrorCode, RuntimeSnapshot, RuntimeExitCode
+from aisc.domain.models import CliError, RuntimeErrorCode, RuntimeSnapshot, RuntimeExitCode
 from aisc.application.runtime import (
     iso_now,
     compute_config_fingerprint,
@@ -178,11 +178,24 @@ def cmd_runtime_stop(
     runtime_id: str,
     workspace: Optional[str] = None,
     executor: Optional[DockerExecutor] = None,
+    grace_seconds: int = 10,
 ) -> Dict[str, Any]:
-    """Execute ``aisc runtime stop`` per contract §5.5."""
+    """Execute ``aisc runtime stop`` per contract §5.5.
+
+    ``--grace`` is validated here (command layer): out-of-range values are a
+    usage error and must never reach Docker (05 §3.1)."""
+    if not isinstance(grace_seconds, int) or not 1 <= grace_seconds <= 600:
+        raise CliError(
+            message=f"Invalid --grace {grace_seconds!r}: must be an integer in 1..600",
+            exit_code=2,
+            error_code="AISC_ERR_USAGE",
+        )
     exec_ = executor or RealDockerExecutor()
     _ws, reg_root = _resolve_workspace_and_registry(workspace)
-    snapshot = stop_runtime(runtime_id=runtime_id, executor=exec_, registry_root=reg_root)
+    snapshot = stop_runtime(
+        runtime_id=runtime_id, executor=exec_, registry_root=reg_root,
+        grace_seconds=grace_seconds,
+    )
     return snapshot.to_dict()
 
 

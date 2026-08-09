@@ -330,6 +330,8 @@ def _build_parser() -> _AiscArgumentParser:
     rtst.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
     rtst.add_argument("--workspace", type=str, default=None,
                       help="Workspace path (default: current directory)")
+    rtst.add_argument("--grace", type=int, default=10,
+                      help="docker stop grace period in seconds (1..600; default 10)")
 
     # --- runtime restart ---
     rtr = rtsub.add_parser("restart", help="Restart a runtime with original config",
@@ -1001,6 +1003,7 @@ def _cmd_runtime(
         data = cmd_runtime_stop(
             runtime_id=args.runtime_id,
             workspace=args.workspace,
+            grace_seconds=args.grace,
         )
         return data, 0, []
     elif sub == "restart":

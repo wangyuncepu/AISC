@@ -17,6 +17,8 @@ identity check, session record) lives in ``container/aisc-session-wrapper``.
 
 from __future__ import annotations
 
+import math
+
 import json
 import re
 from typing import Any, Dict, List, Optional
@@ -216,6 +218,15 @@ def terminate_session(
             error_code=RuntimeErrorCode.INVALID_SESSION_ID,
         )
 
+    # --grace must be finite and in 0..600; reject NaN/Infinity/out-of-range
+    # before any Docker call (05 §4.2).
+    if not isinstance(grace_seconds, (int, float)) or not math.isfinite(grace_seconds) or not 0 <= grace_seconds <= 600:
+        raise CliError(
+            message=f"Invalid --grace {grace_seconds!r}: must be a finite number in 0..600",
+            exit_code=2,
+            error_code="AISC_ERR_USAGE",
+        )
+
     container_name = _resolve_running_container(runtime_id, executor, registry_root)
 
     docker_argv = [
@@ -227,7 +238,10 @@ def terminate_session(
         "--grace", str(grace_seconds),
     ]
 
-    result = executor.run_captured(docker_argv, timeout=grace_seconds + 10.0)
+    # Outer transport budget is grace + 1s (05 §4.2): keeps the Workbench
+    # --grace 3 path inside its 5s command budget while leaving TERM->KILL
+    # grace untouched.
+    result = executor.run_captured(docker_argv, timeout=grace_seconds + 1.0)
 
     if result.exit_code != 0:
         raise CliError(

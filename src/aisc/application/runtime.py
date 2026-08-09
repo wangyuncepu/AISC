@@ -1244,17 +1244,19 @@ def stop_runtime(
     runtime_id: str,
     executor: Any,
     registry_root: Path,
+    grace_seconds: int = 10,
 ) -> RuntimeSnapshot:
     """Stop a runtime but keep container + registry metadata per §5.5.
 
     Idempotent for a stopped-but-present container: ``docker stop`` on an
     already-stopped container is a no-op success. A runtime whose container
-    is gone raises RUNTIME_NOT_FOUND.
+    is gone raises RUNTIME_NOT_FOUND. ``grace_seconds`` is passed through to
+    ``docker stop -t`` (CLI default 10; Workbench fast path 3).
     """
     name, container_id, meta, registry_state = _resolve_container_for_lifecycle(
         runtime_id, executor, registry_root
     )
-    result = executor.stop_container(name)
+    result = executor.stop_container(name, timeout=grace_seconds)
     if result.exit_code != 0:
         stderr = (result.stderr or "").lower()
         if any(kw in stderr for kw in ("no such", "not found")):
