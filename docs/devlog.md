@@ -116,6 +116,17 @@
 - [x] **8c-1** 手动测试（2026-08-10）：侧栏分层/详情/复制/双语、banner 三动作、cc-switch 配置后启动会话、官方登录进 TUI 可直输、恢复布局 gate、外部 stop stale 样式。全部通过。
 - **Step 8 结论（2026-08-10）**：vitest 44 绿（sidebar 5 + restore-gate 1 新增）；A-G05-1..4、A-G12-1/2 证据齐。
 
+## Step 9 验收清单（G-02 Resize 根因定位与修复，分支 step-9-resize）
+
+> 规范：06 §十（先诊断后修改）、05 A-G02-1..4。
+
+- [x] **9a-1** 诊断链路测试（A-G02-1/2）：`resize_chain_stty_probe_three_sizes_20_reps` — 80×24/120×40/60×20 × 20 次，容器内 `stty size` 探针。
+- [x] **9a-2** 根因记录（A-G02-2，提交 62cb985）：`docker exec -it` 的 exec pty 创建时定尺寸，docker CLI 无 resize 命令 → ConPTY resize 到不了容器（stty 恒为 spawn 尺寸）。
+- [x] **9a-3** CLI 修复（A-G02-3）：交互会话改走 Docker SDK（`open_interactive`：exec_create(tty) + exec_start(socket) + 尺寸 watcher → `exec_resize`）；docker-py 成为首个运行时依赖。Windows 特有问题三连：os.read 在两种 console 模式都丢 CR/LF（cooked 等 Enter 吃 CR、raw 丢终止符）→ 改 `ReadConsoleInputW` 读 KEY_EVENT（Enter 自带 CR），resize 风暴期控制台 API 瞬断重试 ~1s；`os.get_terminal_size` 对输入句柄失败 → stdout `GetConsoleScreenBufferInfo`；exec 初始 0×0 → watcher 首轮即 resize。
+- [x] **9a-4** 端到端（A-G02-4）：外部探针（`stty size < /proc/<agent-pid>/fd/0`，与会话 stdin 解耦——ConPTY 在 resize 风暴下周期性丢输入事件属平台限制，已在测试注释记录）3 尺寸 × 20 次全过；输入路径单测 echo 验证。
+- [ ] **9b-1** 手动测试（待）：cc-switch TUI 连续 20 次 resize 无残留旧区域、光标可见；应用内窗口拖拽 resize 终端跟随。
+- **Step 9 结论（2026-08-10）**：python 390 绿；A-G02-1..3 证据齐，A-G02-4 待手测。
+
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
 ### S4.2 发布门（2026-08-09，06-implementation-plan.md §七 S4.2）
