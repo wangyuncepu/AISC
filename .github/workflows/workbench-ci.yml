@@ -75,6 +75,15 @@ jobs:
         with:
           workspaces: workbench/src-tauri
 
+      - name: Stage sidecar stub + bundle resource for tauri-build
+        run: |
+          # tauri-build validates externalBin/resource existence at compile
+          # time; bundle workflows stage the real artifacts before `tauri
+          # build`, a test-only job only needs placeholders.
+          mkdir -p workbench/src-tauri/binaries workbench/src-tauri/nsis/bundle
+          touch workbench/src-tauri/binaries/aisc-x86_64-unknown-linux-gnu
+          mkdir -p workbench/src-tauri/nsis/bundle/aisc-bundle
+
       - name: Cargo test
         working-directory: workbench/src-tauri
         run: cargo test
