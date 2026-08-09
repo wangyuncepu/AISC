@@ -666,6 +666,8 @@ Var PathHit
 Function ${UN}PathNormalizeDir
   Push $1
   Push $2
+  Push $3
+  Push $4
   StrCpy $1 $0
   ${Do}
     StrCpy $2 $1 1
@@ -712,6 +714,8 @@ Function ${UN}PathNormalizeDir
     StrCpy $2 $2 "" 1
   ${Loop}
   StrCpy $0 $1
+  Pop $4
+  Pop $3
   Pop $2
   Pop $1
 FunctionEnd
