@@ -92,6 +92,14 @@ export const enUS: Record<string, string> = {
   "conflict.back": "Back",
 
   // --- runtime sidebar (RuntimeSidebar.vue) ---
+  "sidebar.workspace": "Workspace",
+  "sidebar.runtime": "Runtime",
+  "sidebar.config": "Config",
+  "sidebar.activeAgent": "Active agent",
+  "sidebar.provider": "Provider",
+  "sidebar.sessions": "Sessions",
+  "sidebar.observed": "observed",
+  "sidebar.noSession": "No session",
   "sidebar.refreshing": "Refreshing…",
   "sidebar.refresh": "Refresh",
   "sidebar.unknown": "Unknown",

@@ -92,6 +92,14 @@ export const zhCN = {
   "conflict.back": "返回",
 
   // --- runtime sidebar (RuntimeSidebar.vue) ---
+  "sidebar.workspace": "工作区",
+  "sidebar.runtime": "Runtime",
+  "sidebar.config": "配置",
+  "sidebar.activeAgent": "活动 Agent",
+  "sidebar.provider": "Provider",
+  "sidebar.sessions": "会话",
+  "sidebar.observed": "观察于",
+  "sidebar.noSession": "无会话",
   "sidebar.refreshing": "刷新中…",
   "sidebar.refresh": "刷新",
   "sidebar.unknown": "未知",

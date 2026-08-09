@@ -101,14 +101,14 @@ function short(id: string): string {
 </script>
 
 <template>
-  <aside class="sidebar" aria-label="Runtime status">
+  <aside class="sidebar" :aria-label="t('sidebar.runtime')">
     <section class="block">
-      <div class="label">Workspace</div>
+      <div class="label">{{ t("sidebar.workspace") }}</div>
       <div class="value" :title="store.workspace">{{ workspaceName }}</div>
     </section>
 
     <section class="block">
-      <div class="label">Runtime</div>
+      <div class="label">{{ t("sidebar.runtime") }}</div>
       <div class="runtime-row">
         <span
           class="state"
@@ -117,7 +117,7 @@ function short(id: string): string {
         >{{ t(STATE_LABEL_KEY[store.runtimeState]) }}</span>
         <span class="fresh" :data-fresh="store.freshness">{{ store.freshness }}</span>
       </div>
-      <div class="muted">observed {{ observedAgoText }}</div>
+      <div class="muted">{{ t("sidebar.observed") }} {{ observedAgoText }}</div>
       <div
         class="id copyable"
         :title="store.runtimeId ? t('sidebar.copyRuntime', { id: store.runtimeId }) : ''"
@@ -138,19 +138,19 @@ function short(id: string): string {
     </section>
 
     <section class="block">
-      <div class="label">Config</div>
+      <div class="label">{{ t("sidebar.config") }}</div>
       <div class="kv">image <span>{{ snap?.config.image || "-" }}</span></div>
       <div class="kv">network <span>{{ snap?.config.network || "-" }}</span></div>
       <div class="kv">scope <span>{{ snap?.config.scope || "-" }}</span></div>
     </section>
 
     <section class="block">
-      <div class="label">Active agent</div>
-      <div class="value">{{ activeTab?.title ?? "No session" }}</div>
+      <div class="label">{{ t("sidebar.activeAgent") }}</div>
+      <div class="value">{{ activeTab?.title ?? t("sidebar.noSession") }}</div>
     </section>
 
     <section class="block">
-      <div class="label">Provider</div>
+      <div class="label">{{ t("sidebar.provider") }}</div>
       <div v-if="!providerSupported" class="muted">{{ t("sidebar.providerUnsupported") }}</div>
       <div v-else-if="activeAgent !== 'claude' && activeAgent !== 'codex'" class="muted">{{ t("sidebar.providerN/a") }}</div>
       <template v-else>
@@ -165,7 +165,7 @@ function short(id: string): string {
     </section>
 
     <section class="block sessions">
-      <div class="label">Sessions</div>
+      <div class="label">{{ t("sidebar.sessions") }}</div>
       <ul>
         <li
           v-for="t in store.tabs"
