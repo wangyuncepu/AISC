@@ -58,6 +58,8 @@ function stateLabel(tab: Tab): string {
   switch (tab.sessionState) {
     case "idle":
       return t("tabbar.idle");
+    case "guide":
+      return t("tabbar.guide");
     case "starting":
       return t("tabbar.starting");
     case "running":

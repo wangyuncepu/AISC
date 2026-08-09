@@ -51,15 +51,14 @@ export type WorkbenchStatus =
   | "error";
 
 const DEFAULT_LAUNCH: LaunchConfig = {
-  agent: "claude",
   image: "super-claude:latest",
   network: "direct",
   scope: "project",
 };
 
-/** Fixed 4-agent tab order for fresh starts (03 §六; Step 5 replaces with the
- * dynamic createTab model). */
-const AGENT_ORDER: LaunchAgent[] = ["claude", "codex", "bash", "cc-switch"];
+/** G-08 (Step 5): per-Runtime leaf cap - the 9th concurrent tab is refused
+ * (A-G08-8). History saves truncate defensively at the same bound. */
+const MAX_TABS = 8;
 
 /** Session states that have reached a terminal outcome (no live PTY). */
 const TERMINAL_STATES: TabSessionState[] = ["exited", "failed", "disconnected"];
@@ -494,14 +493,19 @@ export const useRuntimeStore = defineStore("runtime", () => {
    * on disk are preserved by the backend merge (02 §九). */
   function buildPatch(): HistoryPatch {
     const openTabs = tabs.value.filter((t) => t.sessionState !== "idle");
-    const tabsRecord = openTabs.map((t, i) => ({
+    // A-G08-3: saved layout records are truncated at the per-Runtime leaf cap
+    // (defensive - createTab already refuses the 9th) with a warning.
+    const overCap = openTabs.length - MAX_TABS;
+    if (overCap > 0) console.warn(`[g08] ${overCap} tab(s) beyond the ${MAX_TABS} cap truncated from history`);
+    const savedTabs = openTabs.slice(0, MAX_TABS);
+    const tabsRecord = savedTabs.map((t, i) => ({
       tab_id: t.tabId,
       agent: t.agent,
       title: t.title,
       position: i,
     }));
     const activeAgent =
-      tabs.value.find((t) => t.tabId === activeTabId.value)?.agent ?? launch.value.agent;
+      tabs.value.find((t) => t.tabId === activeTabId.value)?.agent ?? tabs.value[0]?.agent ?? "bash";
     const activeTabIdRec = openTabs.some((t) => t.tabId === activeTabId.value)
       ? activeTabId.value
       : null;
@@ -572,9 +576,6 @@ export const useRuntimeStore = defineStore("runtime", () => {
         launch.value.network = rec.runtime.network as LaunchConfig["network"];
         launch.value.scope = rec.runtime.scope as LaunchConfig["scope"];
         lastRuntimeRef.value = rec.runtime;
-      }
-      if (rec.last_agent) {
-        launch.value.agent = rec.last_agent as LaunchAgent;
       }
     }
     workspace.value = path;
@@ -721,6 +722,49 @@ export const useRuntimeStore = defineStore("runtime", () => {
     openTab(tabId);
   }
 
+  /** G-08 (Step 5): create a dynamic tab (A-G08-1/8). Refused beyond the
+   * per-Runtime leaf cap. The tab starts idle and opens on activation unless
+   * the provider gate routes it to the guide state (Step 5c). */
+  function createTab(agent: LaunchAgent): string | null {
+    if (tabs.value.length >= MAX_TABS) return null;
+    const tabId = uuid();
+    tabs.value.push({
+      tabId,
+      agent,
+      title: AGENT_TITLE[agent],
+      sessionId: null,
+      sessionState: "idle",
+      exit: null,
+      savedTabId: null,
+    });
+    activeTabId.value = tabId;
+    scheduleSave();
+    return tabId;
+  }
+
+  /** G-08: remove a tab entirely (× button). Live sessions are closed
+   * best-effort (the PTY Exit event finalizes; Rust reaps); guide/idle tabs
+   * have nothing to terminate. Active-tab focus falls to the right neighbor,
+   * then the left, then the empty state (A-G08-6). */
+  async function removeTab(tabId: string) {
+    const tab = findTab(tabId);
+    if (!tab) return;
+    if (
+      tab.sessionId &&
+      !TERMINAL_STATES.includes(tab.sessionState) &&
+      tab.sessionState !== "closing"
+    ) {
+      tab.sessionState = "closing";
+      void ipc.closeSession(tab.sessionId).catch(() => null);
+    }
+    const idx = tabs.value.indexOf(tab);
+    tabs.value.splice(idx, 1);
+    if (activeTabId.value === tabId) {
+      activeTabId.value = tabs.value[Math.min(idx, tabs.value.length - 1)]?.tabId ?? null;
+    }
+    scheduleSave();
+  }
+
   /** Close a running/starting tab: terminate the session. The PTY Exit event
    * (single authoritative signal, 03 §五.2) finalizes the state via
    * onTabSessionExit; close_session guarantees the child is reaped. */
@@ -842,16 +886,12 @@ export const useRuntimeStore = defineStore("runtime", () => {
 
   async function startFromSummary() {
     if (!preflight.value) return;
-    const records: TabRecord[] = AGENT_ORDER.map((agent, position) => ({
-      tab_id: uuid(),
-      agent,
-      title: AGENT_TITLE[agent],
-      position,
-    }));
-    await launchRuntime(records, {
-      openAgents: [launch.value.agent],
-      activeAgent: launch.value.agent,
-    });
+    // G-08 (A-G08-1): a fresh start opens exactly one Bash tab; more tabs are
+    // created dynamically via the + menu. Restore layout is unchanged.
+    const records: TabRecord[] = [
+      { tab_id: uuid(), agent: "bash", title: AGENT_TITLE["bash"], position: 0 },
+    ];
+    await launchRuntime(records, { openAgents: ["bash"], activeAgent: "bash" });
   }
 
   /** S2.4.b: restore the history layout's open tabs with fresh sessions
@@ -1018,6 +1058,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     activateTab,
     closeTab,
     reopenTab,
+    createTab,
+    removeTab,
     onTabOpenOk,
     onTabOpenFail,
     onTabSessionExit,

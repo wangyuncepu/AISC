@@ -92,7 +92,9 @@ function focusTabTerminal(tabId: string): void {
 function onKeydown(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
-  if (e.key >= "1" && e.key <= "4") {
+  // G-08 (A-G08-6): Ctrl/Cmd+1..9 map the current committed tab order; the
+  // 10th tab and beyond use the tablist arrow/Home/End navigation.
+  if (e.key >= "1" && e.key <= "9") {
     if (store.status !== "ready") return;
     e.preventDefault();
     const tab = store.tabs[Number(e.key) - 1];

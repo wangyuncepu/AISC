@@ -257,7 +257,6 @@ export interface WorkbenchHistory {
 export type LaunchAgent = "claude" | "codex" | "bash" | "cc-switch";
 
 export interface LaunchConfig {
-  agent: LaunchAgent;
   image: string;
   network: "direct" | "proxy";
   scope: "project" | "temporary";
@@ -285,7 +284,7 @@ export type Freshness = "fresh" | "stale" | "unknown";
 // --- S2.2.a: multi-tab (03 §五/§六) ---
 
 /** Per-tab session lifecycle. `idle` = never opened; the rest mirror SessionState. */
-export type TabSessionState = "idle" | SessionState;
+export type TabSessionState = "idle" | "guide" | SessionState;
 
 /** Minimal exit info shown on an exited/failed tab (reason + code only). */
 export interface TabExit {
