@@ -111,12 +111,13 @@ def open_session(
 
     container_name = _resolve_running_container(runtime_id, executor, registry_root)
 
-    # Controlled argv: docker exec -it <container> <wrapper> <session_id> <runtime_id> <agent>
+    # Controlled in-container argv: <wrapper> open <session_id> <runtime_id> <agent>
     # The wrapper reads /run/aisc/runtime-context.json to rebuild scope env,
     # starts the agent in its own process group, records session metadata,
-    # and propagates the agent's exit code.
+    # and propagates the agent's exit code. The session runs through the
+    # Docker SDK (open_interactive) so the exec pty can be resized via
+    # exec_resize (G-02: docker CLI exec ptys are frozen at spawn size).
     docker_argv = [
-        "exec", "-it", container_name,
         _SESSION_WRAPPER_PATH,
         "open",
         "--session-id", session_id,
@@ -124,7 +125,7 @@ def open_session(
         "--agent", agent,
     ]
 
-    return executor.run_streaming(docker_argv, timeout=None)
+    return executor.open_interactive(container_name, docker_argv)
 
 
 # ---------------------------------------------------------------------------

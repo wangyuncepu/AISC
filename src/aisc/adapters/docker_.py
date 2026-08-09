@@ -19,6 +19,8 @@ from __future__ import annotations
 import os
 import queue
 import select
+import socket
+import time
 import shlex
 import signal
 import shutil
@@ -67,6 +69,13 @@ class DockerExecutor(Protocol):
                       *, timeout: Optional[float] = None) -> ProcessResult:
         """Execute ``docker <argv>`` with inherited stdin / stdout / stderr.
         Returns a ``ProcessResult`` with exit code captured, stderr empty."""
+
+    def open_interactive(self, container: str, argv: List[str]) -> ProcessResult:
+        """Open an interactive TTY session via the Docker SDK so the exec pty
+        can be resized with ``exec_resize`` (G-02: the docker CLI's exec pty is
+        frozen at the spawn size). Raw tty stream: stdout forwarded to fd 1,
+        stdin forwarded to the socket, terminal-size watcher forwards changes.
+        Returns the agent's exit code from exec_inspect."""
 
     def run_non_interactive(self, docker_argv: List[str],
                             *, timeout: Optional[float] = None) -> ProcessResult:
@@ -398,6 +407,255 @@ class RealDockerExecutor:
             )
 
     # ------------------------------------------------------------------
+    # open_interactive (G-02 resize chain)
+    # ------------------------------------------------------------------
+
+    def open_interactive(self, container: str, argv: List[str]) -> ProcessResult:
+        """Interactive TTY session via the Docker SDK (see protocol doc).
+
+        G-02 root cause (2026-08-10): ``docker exec -it``'s exec pty is sized
+        once at creation; the docker CLI has no resize command, so the local
+        ConPTY resize never reached the container. The SDK's ``exec_resize``
+        is the in-band fix: a watcher thread polls the local terminal size
+        (ConPTY on Windows, winsize ioctl on POSIX) and forwards changes.
+        """
+        import docker  # lazy: every other path stays dependency-free
+
+        try:
+            client = docker.from_env()
+        except docker.errors.DockerException as exc:
+            return ProcessResult(
+                stdout="", stderr=f"docker daemon unreachable: {exc}",
+                exit_code=-1, command_not_found=True,
+            )
+        try:
+            exec_id = client.api.exec_create(container, list(argv), tty=True, stdin=True)["Id"]
+        except docker.errors.NotFound:
+            return ProcessResult(
+                stdout="", stderr="container not found",
+                exit_code=-1, command_not_found=True,
+            )
+        except docker.errors.APIError as exc:
+            return ProcessResult(
+                stdout="", stderr=f"exec create failed: {exc}",
+                exit_code=-1, command_not_found=True,
+            )
+        try:
+            sock = client.api.exec_start(exec_id, socket=True, tty=True)
+        except docker.errors.APIError as exc:
+            return ProcessResult(
+                stdout="", stderr=f"exec start failed: {exc}",
+                exit_code=-1, command_not_found=True,
+            )
+
+        stop = threading.Event()
+        errors: List[Exception] = []
+
+        def drain() -> None:
+            """Socket -> stdout (raw bytes; tty stream is not multiplexed)."""
+            try:
+                while True:
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        break
+                    os.write(sys.stdout.fileno(), chunk)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        def forward() -> None:
+            """stdin -> socket; on EOF, close the write side so the exec sees it.
+
+            Windows: plain os.read on a ConPTY input handle loses CR/LF in both
+            console modes (G-02 diagnostics 2026-08-10) - cooked mode buffers
+            until Enter and eats the CR, raw mode drops the terminator bytes.
+            ReadConsoleInputW returns KEY_EVENT records, where Enter is its own
+            CR character, so the byte stream reconstructs losslessly (this is
+            what the docker CLI does for -it sessions).
+            """
+            if os.name == "nt":
+                _forward_console_input()
+                return
+            try:
+                while True:
+                    chunk = os.read(sys.stdin.fileno(), 4096)
+                    if not chunk:
+                        break
+                    sock.sendall(chunk)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        def _forward_console_input() -> None:
+            import ctypes
+            from ctypes import wintypes
+
+            try:
+                import msvcrt
+                handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+            except (OSError, ValueError, AttributeError):
+                errors.append(RuntimeError("stdin is not a console handle"))
+                return
+            kernel32 = ctypes.windll.kernel32
+            mode = wintypes.DWORD()
+            if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                errors.append(RuntimeError("GetConsoleMode failed"))
+                return
+            # Raw: key records stream immediately, no line buffering/echo.
+            kernel32.SetConsoleMode(handle, mode.value & ~0x0007)
+
+            class KEY_EVENT_RECORD(ctypes.Structure):
+                _fields_ = [
+                    ("bKeyDown", wintypes.BOOL),
+                    ("wRepeatCount", wintypes.WORD),
+                    ("wVirtualKeyCode", wintypes.WORD),
+                    ("wVirtualScanCode", wintypes.WORD),
+                    ("uChar", wintypes.WCHAR),
+                    ("dwControlKeyState", wintypes.DWORD),
+                ]
+
+            class INPUT_RECORD(ctypes.Structure):
+                _fields_ = [
+                    ("EventType", wintypes.WORD),
+                    ("_pad", wintypes.WORD),
+                    ("KeyEvent", KEY_EVENT_RECORD),
+                ]
+
+            buf = (INPUT_RECORD * 1)()
+            n = wintypes.DWORD()
+            # ConPTY resizes can transiently fail the console API (G-02
+            # diagnostics 2026-08-10): retry ~1s before giving up so the
+            # forward survives resize storms during a session.
+            failures = 0
+            try:
+                while True:
+                    if not kernel32.GetNumberOfConsoleInputEvents(handle, ctypes.byref(n)):
+                        failures += 1
+                        if failures > 50:
+                            break
+                        time.sleep(0.02)
+                        continue
+                    failures = 0
+                    if n.value == 0:
+                        time.sleep(0.02)
+                        continue
+                    if not kernel32.ReadConsoleInputW(handle, buf, 1, ctypes.byref(n)):
+                        failures += 1
+                        if failures > 50:
+                            break
+                        time.sleep(0.02)
+                        continue
+                    rec = buf[0]
+                    if rec.EventType != 1 or not rec.KeyEvent.bKeyDown:
+                        continue
+                    ch = rec.KeyEvent.uChar
+                    if ch == "\x00":
+                        continue
+                    data = ch.encode("utf-8")
+                    sock.sendall(data)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+            finally:
+                try:
+                    sock.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+
+        def terminal_size() -> Optional[tuple]:
+            """(cols, rows) of the local terminal. Windows: the ConPTY size via
+            GetConsoleScreenBufferInfo on the stdout handle (os.get_terminal_size
+            fails on console INPUT handles). POSIX: winsize ioctl."""
+            if os.name == "nt":
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+
+                    kernel32 = ctypes.windll.kernel32
+                    handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+
+                    class COORD(ctypes.Structure):
+                        _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
+
+                    class SMALL_RECT(ctypes.Structure):
+                        _fields_ = [
+                            ("Left", wintypes.SHORT),
+                            ("Top", wintypes.SHORT),
+                            ("Right", wintypes.SHORT),
+                            ("Bottom", wintypes.SHORT),
+                        ]
+
+                    class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
+                        _fields_ = [
+                            ("dwSize", COORD),
+                            ("dwCursorPosition", COORD),
+                            ("wAttributes", wintypes.WORD),
+                            ("srWindow", SMALL_RECT),
+                            ("dwMaximumWindowSize", COORD),
+                        ]
+
+                    info = CONSOLE_SCREEN_BUFFER_INFO()
+                    if kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)):
+                        cols = info.srWindow.Right - info.srWindow.Left + 1
+                        rows = info.srWindow.Bottom - info.srWindow.Top + 1
+                        if cols > 0 and rows > 0:
+                            return (cols, rows)
+                except Exception:  # noqa: BLE001
+                    return None
+                return None
+            try:
+                size = os.get_terminal_size(sys.stdin.fileno())
+                return (size.columns, size.lines)
+            except (OSError, ValueError):
+                return None
+
+        def watch_resize() -> None:
+            """Poll the local terminal size; forward changes to the exec pty."""
+            last: Optional[tuple] = None
+            while not stop.is_set():
+                cur = terminal_size()
+                if cur is None:
+                    return  # not a terminal - nothing to resize
+                if cur != last:
+                    last = cur
+                    try:
+                        client.api.exec_resize(exec_id, height=cur[1], width=cur[0])
+                    except docker.errors.APIError as exc:
+                        errors.append(exc)
+                        return
+                stop.wait(0.2)
+
+        t_drain = threading.Thread(target=drain, daemon=True)
+        t_fwd = threading.Thread(target=forward, daemon=True)
+        t_resize = threading.Thread(target=watch_resize, daemon=True)
+        t_drain.start()
+        t_fwd.start()
+        t_resize.start()
+
+        exit_code = -1
+        try:
+            while True:
+                info = client.api.exec_inspect(exec_id)
+                if not info.get("Running"):
+                    exit_code = int(info.get("ExitCode", 0))
+                    break
+                time.sleep(0.2)
+        except docker.errors.APIError as exc:
+            errors.append(exc)
+        finally:
+            stop.set()
+            t_drain.join(timeout=5)
+            t_fwd.join(timeout=5)
+
+        if errors:
+            try:
+                os.write(2, ("[open_interactive] thread error: %r\n" % (errors[0],)).encode())
+            except OSError:
+                pass
+            return ProcessResult(
+                stdout="", stderr=f"exec stream error: {errors[0]}",
+                exit_code=-1,
+            )
+        return ProcessResult(stdout="", stderr="", exit_code=exit_code)
+
+    # ------------------------------------------------------------------
     # run_non_interactive
     # ------------------------------------------------------------------
 
@@ -634,6 +892,7 @@ class FakeDockerExecutor:
         # Call tracking
         self.calls: List[List[str]] = []           # run_captured argv
         self.streaming_calls: List[List[str]] = []  # run_streaming argv
+        self.interactive_calls: List[tuple] = []    # (container, argv) for open_interactive
         self.preflight_calls: int = 0
         self.inspect_calls: List[str] = []          # image names inspected
 
@@ -707,25 +966,12 @@ class FakeDockerExecutor:
         )
 
     # ------------------------------------------------------------------
-    # run_non_interactive
+    # open_interactive (G-02 resize chain)
     # ------------------------------------------------------------------
-
-    def run_non_interactive(self, docker_argv: List[str],
-                            *, timeout: Optional[float] = None) -> ProcessResult:
-        """Fake non-interactive — tracks call, returns streaming exit code."""
-        self.streaming_calls.append(list(docker_argv))
-        return ProcessResult(
-            stdout="", stderr="",
-            exit_code=self._streaming_exit_code if self._streaming_exit_code >= 0 else -1,
-            command_not_found=(self._streaming_exit_code < 0),
-        )
 
     def set_streaming_exit(self, code: int) -> None:
+        """Configure the exit code returned by run_streaming / open_interactive."""
         self._streaming_exit_code = code
-
-    # ------------------------------------------------------------------
-    # run_streaming_captured (build --events)
-    # ------------------------------------------------------------------
 
     def run_streaming_captured(self, docker_argv: List[str],
                                on_chunk: "Callable[[str, str], None]",
@@ -745,13 +991,23 @@ class FakeDockerExecutor:
         """Configure ``[(stream, chunk), ...]`` replayed by run_streaming_captured."""
         self._streaming_chunks = list(chunks)
 
+    def open_interactive(self, container: str, argv: List[str]) -> ProcessResult:
+        """Fake interactive session: record (container, argv), return the
+        configured streaming exit code."""
+        self.interactive_calls.append((container, list(argv)))
+        return ProcessResult(
+            stdout="", stderr="",
+            exit_code=self._streaming_exit_code if self._streaming_exit_code >= 0 else -1,
+            command_not_found=(self._streaming_exit_code < 0),
+        )
+
     # ------------------------------------------------------------------
     # Zero-call assertion
     # ------------------------------------------------------------------
 
     @property
     def total_calls(self) -> int:
-        return len(self.calls) + len(self.streaming_calls)
+        return len(self.calls) + len(self.streaming_calls) + len(self.interactive_calls)
 
     def assert_zero_docker_calls(self, msg: str = "") -> None:
         """Fail if any docker subprocess call was made."""
