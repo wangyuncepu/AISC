@@ -13,6 +13,7 @@ import { useSettingsStore } from "./stores/settings";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
 import { useProviderPolling } from "./composables/useProviderPolling";
 import Terminal from "./features/terminal/Terminal.vue";
+import GuidePane from "./features/terminal/GuidePane.vue";
 import TabBar from "./features/workspace/TabBar.vue";
 import RuntimeSidebar from "./features/workspace/RuntimeSidebar.vue";
 import LaunchSummary from "./features/startup/LaunchSummary.vue";
@@ -169,9 +170,13 @@ function isStartingView(s: string): boolean {
   return s === "starting" || s === "cancelled";
 }
 
-// S2.2.a: render a Terminal for every non-idle tab; v-show keeps hidden tabs
+// S2.2.a: render a Terminal for every live tab; v-show keeps hidden tabs
 // (and their PTY) alive so switching back preserves scrollback (03 §六.8).
-const openTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idle"));
+// G-08 guide tabs render GuidePane instead (no PTY for them, A-G08-2).
+const openTabs = computed(() =>
+  store.tabs.filter((t) => t.sessionState !== "idle" && t.sessionState !== "guide")
+);
+const guideTabs = computed(() => store.tabs.filter((t) => t.sessionState === "guide"));
 
 // S3.3: expose each Terminal's focus so the tab shortcut can move keyboard
 // focus into the terminal after switching.
@@ -288,6 +293,12 @@ function selectRecent(path: string): void {
             <p>{{ t("tabs.empty") }}</p>
             <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
           </div>
+          <GuidePane
+            v-for="t in guideTabs"
+            :key="t.tabId"
+            :tab-id="t.tabId"
+            v-show="t.tabId === store.activeTabId"
+          />
           <Terminal
             v-for="t in openTabs"
             :key="t.tabId"

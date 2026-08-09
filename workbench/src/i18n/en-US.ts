@@ -130,6 +130,10 @@ export const enUS: Record<string, string> = {
   "tabbar.menu.cc-switch": "cc-switch",
   "tabs.empty": "No open tabs.",
   "tabs.newTab": "New tab",
+  "guide.title": "{agent} provider not configured",
+  "guide.desc": "The session opens automatically once the provider is configured. You can open cc-switch now.",
+  "guide.retry": "Retry",
+  "guide.openCcSwitch": "Open cc-switch",
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench terminal ready.",

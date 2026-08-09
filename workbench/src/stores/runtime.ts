@@ -738,9 +738,26 @@ export const useRuntimeStore = defineStore("runtime", () => {
       savedTabId: null,
     });
     activeTabId.value = tabId;
-    openTab(tabId);
+    void maybeOpenCreated(tabId, agent);
     scheduleSave();
     return tabId;
+  }
+
+  /** G-08 (A-G08-2): claude/codex tabs first query their provider (deduped by
+   * type). Unconfigured providers route the tab to the guide state without
+   * calling open_session; bash/cc-switch open immediately. */
+  async function maybeOpenCreated(tabId: string, agent: LaunchAgent) {
+    if (agent === "claude" || agent === "codex") {
+      await loadProviderStatus(agent);
+      const st = providerStatuses.value[agent];
+      const tab = findTab(tabId);
+      if (!tab || tab.sessionState !== "idle") return;
+      if (!st || st.auth_status === "not_configured") {
+        tab.sessionState = "guide";
+        return;
+      }
+    }
+    openTab(tabId);
   }
 
   /** G-08: remove a tab entirely (× button). Live sessions are closed

@@ -130,6 +130,10 @@ export const zhCN = {
   "tabbar.menu.cc-switch": "cc-switch",
   "tabs.empty": "没有打开的标签。",
   "tabs.newTab": "新建标签",
+  "guide.title": "{agent} Provider 未配置",
+  "guide.desc": "配置 Provider 后会自动打开会话。当前可先打开 cc-switch 使用。",
+  "guide.retry": "重试",
+  "guide.openCcSwitch": "打开 cc-switch",
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench 终端就绪。",
