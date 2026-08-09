@@ -118,6 +118,16 @@ function focusTabTerminal(tabId: string): void {
   });
 }
 
+// G-08 (2026-08-10): every activation path (click, + menu, empty-state
+// button, restore, shortcuts) moves keyboard focus into the terminal - a
+// freshly created tab must be typeable without an extra click.
+watch(
+  () => store.activeTabId,
+  (id) => {
+    if (id && store.status === "ready") focusTabTerminal(id);
+  }
+);
+
 function onKeydown(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
