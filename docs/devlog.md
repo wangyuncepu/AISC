@@ -17,7 +17,9 @@
 - **CI（A-INFRA-4）**：新 `workbench-ci.yml`（push/PR：npm ci/build/test + cargo test + pytest）；bundle-linux-macos/nsis-installer 补前端/package path filters；bundle 产物在非 checkout cwd 验证 sidecar 权限/架构/`version --format json`/aisc-bundle 资源；`tests/test_workflow_contract.py` 静态断言 path filters（PyYAML 加入 dev extras）。
 - **本地验证（Windows 11 + Docker Desktop 29.6.2 + aisc 2.1.5-dev + super-claude:latest runtime）**：Rust 76 单测 + cli_runner 7（含真实 aisc negotiate）+ pty_supervisor 4（含真实容器内 `aisc session open`，3× 稳定）+ vitest 7 + 契约测试 6 全绿；`npm run build` 通过。
 - **测试环境修复**：`pty_supervisor` 模拟终端应答 `ESC[6n` 光标查询（bash/msys sh 启动即查询并阻塞），`SH` 环境变量提供 sh 绝对路径（ConPTY 后端不做 PATH 解析），real-aisc 截止 20s（冷容器 docker exec 延迟）。本地验证需 `PATH` 前置 `/tmp/pyshim`（python3 桩，Store 版 python3 不可用）。
-- **待办**：CI 推送验证（git proxy 127.0.0.1:7890 失效，push 前需处理）；A-INFRA-2 的 100× reopen 集成测试（计划随 Step 2 registry 预算重构补齐）；手动测试清单见阶段汇报。
+- **手动测试（2026-08-09，Windows 11 + Docker Desktop 29.6.2 + aisc 2.1.5-dev，`npm run tauri dev`）**：启动/negotiate/picker ✅；选工作区 preflight→summary ✅；Start 后会话 opening→running ✅；`echo hello` 回显 ✅；tab 切换回来历史消失 → 修复（xterm 重新显示不重绘，`refresh(0, rows-1)` + 隐藏时跳过 fit）后恢复 ✅；× 关闭会话 → exited ✅；↔ 重开 ✅；关窗确认 → 关闭 ✅；任务管理器无 aisc/python/docker exec 残留 ✅（Docker Desktop 保持运行，符合退出保留 Runtime 语义）；`%APPDATA%\cn.aisc.workbench\` settings.json + history.json 存在 ✅。
+- **CI（2026-08-09）**：Workbench CI 三 job 全绿（frontend npm build+vitest 7/7 / rust cargo test / cli pytest 427 过 1 修复）；Bundle Linux/macOS 全绿（含非 checkout cwd sidecar 权限/架构/version/resource 验证）；NSIS installer 全绿；cli-sidecar 全绿。修复项：vitest 4.1 forks worker 在 Node 20 失败 → CI 用 Node 22；rust job 补 GTK/webkit 系统依赖；tauri-build 需 externalBin/resource 存在 → 测试 job stage 占位；`docs/releases/v2.1.5-dev.md` 缺失 → 补发布说明。
+- **Step 0 结论**：A-INFRA-1..5 门禁证据齐（A-INFRA-2 的 100× reopen 集成测试随 Step 2 registry 预算重构补齐，已确认）。
 
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
