@@ -52,6 +52,27 @@
   - (2) 关窗等待慢（前端 `await hide()` 挂起）：确认后 handler 死在 `await getCurrentWindow().hide()`（close-request 挂起期间该 Tauri 版本 hide IPC 不返回）→ shutdown 从未调用、窗口永不关、无日志（c9033a5：hide 与 shutdown 全部 fire-and-forget + 失败兜底 destroy；82a9bdd：改 Rust 侧 `app.get_webview_window("main").hide()` 直接 win32 隐藏——前端 hide IPC 在 close-request 挂起时不可靠）。stale/fresh 交替为原生确认框 focus/blur 触发轮询 markStale→tick 的正常现象，非 bug。
 - **Step 2 结论（2026-08-10）**：CLI grace 链 + Rust 预算 + 分段 stop + 后台关闭全链 PASS；cargo session 19 绿 / vitest 9 绿（4 新增路径归一化）/ npm build 零错。A-G07-1..4 证据齐。
 
+## Step 3 验收清单（typed settings 基础设施，分支 step-3-typed-settings）
+
+> 规范：02-startup-flow.md §三.4（字段/默认/边界）+ §九（保存协议）；门禁 A-G01-1。
+
+- [x] **3a-1** Rust typed settings：`ui/terminal/window` 三区全字段边界校验（语言/字号/主题/字体/行高/字距/回滚/渲染器/平滑滚动/窗口记忆/关闭行为/geometry schema），字段级非法回退 + validation issue，默认值只在 Rust。
+- [x] **3a-2** 保存协议：独立 settings.lock + expected-revision 冲突 replay（≤3，Rust 侧）；unknown 字段（顶层/嵌套）深合并保留（A-INFRA-5）；pin 写复用锁不破坏 GUI 字段；corrupt 隔离 `.corrupt` 仅 reset 写默认；高版本 schema 只读拒写。命令 `load_settings/save_settings/reset_gui_settings`（reset 保 pin + unknown）。
+- [x] **3b-1** 设置对话框骨架：键盘可达 modal（Esc/初始焦点/Tab）、每字段 label/错误/生效标记（即时/重建 Terminal/下次启动）、脏标记「未保存更改」（内存≠磁盘，A-G01-5）、保存失败可重试、readOnly/corrupt 警告条；重置从后端重载默认（前端无第二份默认）。
+- [x] **3c-1** 手动测试（2026-08-09/10）：打开/编辑/保存/重启保持、非法值字段报错、corrupt 隔离、重置保 pin 均通过（字号实时生效属 Step 6/7 接线，已在手测中澄清范围）。
+- **Step 3 结论（2026-08-10）**：cargo 13 新测试 + vitest 9 新测试全绿；A-G01-1 证据齐。
+
+## Step 4 验收清单（G-09 UI i18n，分支 step-3-typed-settings）
+
+> 规范：02 §三.1/§三.2/§三.3、06 §五；门禁 A-G09-1..4。
+
+- [x] **4a-1** Rust locale 解析（`locale.rs`）：显式 `ui.language` > 安装器（`HKCU\Software\aisc\AISC Workbench\Installer Language`，1033→en-US/2052→zh-CN，字符串或 DWORD）> 系统（sys-locale）> zh-CN；`resolve_locale` 命令异步不阻塞 CLI 协商。6 纯函数矩阵测试。
+- [x] **4b-1** vue-i18n 接入：zh-CN/en-US 全量字典（key 集完全一致，parity/空值/占位符/缺失 key 报错测试，A-G09-2）；启动并行解析应用；设置改语言保存后即时切换（A-G09-3）。
+- [x] **4c-1** 全前端硬编码扫描替换（12 文件）：blocked/picker/summary/build/conflict/ready/error/侧栏/tab/设置/终端欢迎与 Session error/exit 辅助文本入字典（A-G09-4 原始 PTY 字节不动）；allowlist：raw 代码、路径、技术 token（id/ctr/image/network/scope/route/auth）、稳定错误码、后端错误消息。
+- [x] **4c-2** 手动测试（2026-08-10）：en-US 切换全局即时生效 ✅；重启保持 ✅；auto 回中文 ✅；侧栏区标签本地化（手测反馈补 8 键）✅；终端欢迎/退出文本随语言 ✅。字号实时生效澄清为 Step 6/7 接线范围。
+- **sidecar staging 二次事故（2026-08-10）**：`--grace 3` 复发。根因：tauri externalBin staging 源 `workbench/src-tauri/binaries/` 是旧 CLI，每次 cargo build 自动覆盖 `target/debug/aisc.exe`（pin 目标）。修复：重建 sidecar 同步 binaries/ + target/debug + 安装目录；同步清单记入 memory。
+- **Step 4 结论（2026-08-10）**：cargo 6 新 + vitest 14 新测试全绿；A-G09-1..4 证据齐。
+
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
 ### S4.2 发布门（2026-08-09，06-implementation-plan.md §七 S4.2）

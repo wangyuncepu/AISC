@@ -5,8 +5,10 @@
  * with their live state, and lets the user stop / remove the incompatible
  * one before re-preflighting (03 §三; 02 §四.2 runtime_conflict config gate).
  */
+import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 
+const { t } = useI18n();
 const store = useRuntimeStore();
 
 function short(id: string): string {
@@ -16,10 +18,8 @@ function short(id: string): string {
 
 <template>
   <div class="conflict">
-    <h2>工作区已有 Runtime</h2>
-    <p class="hint">
-      工作区存在不兼容的 Workbench Runtime，需先停止或移除后才能继续启动。
-    </p>
+    <h2>{{ t("conflict.title") }}</h2>
+    <p class="hint">{{ t("conflict.desc") }}</p>
 
     <ul class="list">
       <li v-for="r in store.conflicts" :key="r.runtime_id">
@@ -30,28 +30,28 @@ function short(id: string): string {
           <button
             v-if="r.state === 'running' || r.state === 'starting'"
             @click="store.stopConflictRuntime(r.runtime_id)"
-          >停止</button>
+          >{{ t("conflict.stop") }}</button>
           <button
             v-if="r.state === 'running' || r.state === 'starting'"
             class="danger"
-            title="强制移除运行中的 Runtime"
+            :title="t('conflict.forceRemoveTitle')"
             @click="store.removeConflictRuntime(r.runtime_id, true)"
-          >强制移除</button>
+          >{{ t("conflict.forceRemove") }}</button>
           <button
             v-else-if="r.state === 'stopped' || r.state === 'stopping'"
             class="danger"
             @click="store.removeConflictRuntime(r.runtime_id, false)"
-          >移除</button>
+          >{{ t("conflict.remove") }}</button>
         </span>
       </li>
-      <li v-if="store.conflicts.length === 0" class="empty">无 Runtime（可重新预检）</li>
+      <li v-if="store.conflicts.length === 0" class="empty">{{ t("conflict.empty") }}</li>
     </ul>
 
     <p v-if="store.conflictError" class="err">{{ store.conflictError.message }}</p>
 
     <div class="actions">
-      <button class="primary" @click="store.retryFromConflict()">重新预检</button>
-      <button @click="store.backToPicker()">返回</button>
+      <button class="primary" @click="store.retryFromConflict()">{{ t("conflict.repreflight") }}</button>
+      <button @click="store.backToPicker()">{{ t("conflict.back") }}</button>
     </div>
   </div>
 </template>

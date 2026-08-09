@@ -6,9 +6,11 @@
  * can be reopened with a fresh session id.
  */
 import { ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 import type { Tab, TabSessionState } from "../../types";
 
+const { t } = useI18n();
 const store = useRuntimeStore();
 
 // S3.3: ARIA tabs keyboard navigation (Left/Right/Up/Down move + activate,
@@ -52,24 +54,26 @@ function onTablistKeydown(e: KeyboardEvent) {
   }
 }
 
-function stateLabel(t: Tab): string {
-  switch (t.sessionState) {
+function stateLabel(tab: Tab): string {
+  switch (tab.sessionState) {
     case "idle":
-      return "未打开";
+      return t("tabbar.idle");
     case "starting":
-      return "启动中";
+      return t("tabbar.starting");
     case "running":
       return "";
     case "closing":
-      return "关闭中";
+      return t("tabbar.closing");
     case "exited":
-      return t.exit
-        ? `退出${t.exit.exitCode !== null ? ` ${t.exit.exitCode}` : ""}`
-        : "已退出";
+      return tab.exit
+        ? tab.exit.exitCode !== null
+          ? t("tabbar.exitedCode", { code: tab.exit.exitCode })
+          : t("tabbar.exited")
+        : t("tabbar.exited");
     case "failed":
-      return "失败";
+      return t("tabbar.failed");
     case "disconnected":
-      return "已断开";
+      return t("tabbar.disconnected");
   }
 }
 
@@ -85,31 +89,31 @@ function canReopen(s: TabSessionState): boolean {
 <template>
   <div class="tabbar" role="tablist" @keydown="onTablistKeydown">
     <button
-      v-for="(t, i) in store.tabs"
-      :key="t.tabId"
+      v-for="(tab, i) in store.tabs"
+      :key="tab.tabId"
       :ref="setTabRef(i)"
       role="tab"
       class="tab"
-      :class="[t.sessionState, { active: t.tabId === store.activeTabId }]"
-      :aria-selected="t.tabId === store.activeTabId"
-      :aria-controls="`terminal-${t.tabId}`"
-      :title="t.title"
-      @click="store.activateTab(t.tabId)"
+      :class="[tab.sessionState, { active: tab.tabId === store.activeTabId }]"
+      :aria-selected="tab.tabId === store.activeTabId"
+      :aria-controls="`terminal-${tab.tabId}`"
+      :title="tab.title"
+      @click="store.activateTab(tab.tabId)"
     >
-      <span class="title">{{ t.title }}</span>
-      <span v-if="stateLabel(t)" class="state">{{ stateLabel(t) }}</span>
-      <span class="actions" v-if="canClose(t.sessionState) || canReopen(t.sessionState)">
+      <span class="title">{{ tab.title }}</span>
+      <span v-if="stateLabel(tab)" class="state">{{ stateLabel(tab) }}</span>
+      <span class="actions" v-if="canClose(tab.sessionState) || canReopen(tab.sessionState)">
         <button
-          v-if="canClose(t.sessionState)"
+          v-if="canClose(tab.sessionState)"
           class="icon x"
-          title="关闭会话（保留 Runtime）"
-          @click.stop="store.closeTab(t.tabId)"
+          :title="t('tabbar.closeTitle')"
+          @click.stop="store.closeTab(tab.tabId)"
         >×</button>
         <button
-          v-if="canReopen(t.sessionState)"
+          v-if="canReopen(tab.sessionState)"
           class="icon reopen"
-          title="重新打开（新会话）"
-          @click.stop="store.reopenTab(t.tabId)"
+          :title="t('tabbar.reopenTitle')"
+          @click.stop="store.reopenTab(tab.tabId)"
         >↻</button>
       </span>
     </button>

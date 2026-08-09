@@ -1,8 +1,10 @@
 <script setup lang="ts">
 /** Start progress (02 §八): elapsed + Cancel; after cancel, inspect -> keep/stop. */
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 
+const { t } = useI18n();
 const store = useRuntimeStore();
 
 const elapsedSec = computed(() => (store.startElapsedMs / 1000).toFixed(1));
@@ -12,19 +14,19 @@ const cancelledSnap = computed(() => store.cancelInspect);
 <template>
   <div class="progress">
     <template v-if="!cancelledSnap">
-      <p class="msg">正在启动 Runtime… {{ elapsedSec }}s</p>
-      <p class="hint">CLI 未提供子阶段事件，仅显示经过时间。</p>
+      <p class="msg">{{ t("start.msg", { sec: elapsedSec }) }}</p>
+      <p class="hint">{{ t("start.hint") }}</p>
       <button class="danger" @click="store.cancelStart()">Cancel</button>
     </template>
     <template v-else>
-      <p class="msg">启动已取消。Runtime 状态：{{ cancelledSnap.state }}</p>
-      <p v-if="cancelledSnap.state === 'not_found'" class="hint">无残留资源。</p>
-      <p v-else class="hint">Runtime 已创建（container {{ cancelledSnap.container_name }}）。</p>
+      <p class="msg">{{ t("start.cancelled", { state: cancelledSnap.state }) }}</p>
+      <p v-if="cancelledSnap.state === 'not_found'" class="hint">{{ t("start.cancelledNotFound") }}</p>
+      <p v-else class="hint">{{ t("start.cancelledExists", { name: cancelledSnap.container_name }) }}</p>
       <div class="actions">
-        <button v-if="cancelledSnap.state === 'not_found'" class="primary" @click="store.keepCancelledRuntime()">返回摘要</button>
+        <button v-if="cancelledSnap.state === 'not_found'" class="primary" @click="store.keepCancelledRuntime()">{{ t("start.backToSummary") }}</button>
         <template v-else>
-          <button class="primary" @click="store.keepCancelledRuntime()">保留</button>
-          <button class="danger" @click="store.stopCancelledRuntime()">停止 Runtime</button>
+          <button class="primary" @click="store.keepCancelledRuntime()">{{ t("start.keep") }}</button>
+          <button class="danger" @click="store.stopCancelledRuntime()">{{ t("start.stopRuntime") }}</button>
         </template>
       </div>
     </template>

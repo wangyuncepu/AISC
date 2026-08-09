@@ -8,6 +8,7 @@ pub mod cli;
 pub mod error;
 pub mod history;
 pub mod identity;
+pub mod locale;
 pub mod pty;
 pub mod runtime;
 pub mod session;
@@ -16,6 +17,7 @@ pub mod storage;
 
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use history::{load_history, save_history};
+use locale::resolve_locale;
 use runtime::{
     build_image, cancel_build, cancel_runtime_start, get_provider_status, list_runtimes,
     remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_docker,
@@ -25,6 +27,7 @@ use session::{
     ack_session_exit, close_session, open_session, resize_session, shutdown_workbench,
     write_session, SessionRegistry,
 };
+use settings::{load_settings, reset_gui_settings, save_settings};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(cli_arg: Option<String>) {
@@ -61,6 +64,10 @@ pub fn run(cli_arg: Option<String>) {
             build_image,
             cancel_build,
             start_docker,
+            load_settings,
+            save_settings,
+            reset_gui_settings,
+            resolve_locale,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

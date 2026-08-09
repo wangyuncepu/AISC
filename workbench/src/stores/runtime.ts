@@ -25,6 +25,7 @@ import type {
   WorkspaceRecord,
 } from "../types";
 import * as ipc from "../lib/ipc";
+import { i18n } from "../i18n";
 import {
   AGENT_TITLE,
   normalizePath,
@@ -172,7 +173,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     const picked = await open({
       multiple: false,
       directory: false,
-      title: "选择 AISC CLI 可执行文件",
+      title: i18n.global.t("runtime.pickCli"),
     });
     if (!picked || typeof picked !== "string") return;
     try {
@@ -187,7 +188,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   async function pickWorkspace() {
-    const picked = await open({ directory: true, multiple: false, title: "选择工作区目录" });
+    const picked = await open({ directory: true, multiple: false, title: i18n.global.t("runtime.pickWorkspace") });
     if (typeof picked === "string") workspace.value = picked;
   }
 
@@ -370,7 +371,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
           dockerStarting.value = false;
           error.value = {
             code: "WB_ERR_DOCKER_START_TIMEOUT",
-            message: "Docker 引擎启动超时，请手动打开 Docker Desktop",
+            message: i18n.global.t("runtime.dockerTimeout"),
             technical_detail: null,
             retryable: true,
             action: "start_docker",
@@ -593,7 +594,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   async function stopConflictRuntime(id: string) {
-    const ok = await confirm(`停止 Runtime ${id.slice(0, 8)}？容器将停止但保留。`);
+    const ok = await confirm(i18n.global.t("runtime.stopConfirm", { id: id.slice(0, 8) }));
     if (!ok) return;
     try {
       await ipc.stopRuntime(workspace.value.trim(), id);
@@ -606,8 +607,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
   async function removeConflictRuntime(id: string, force = false) {
     const ok = await confirm(
       force
-        ? `强制移除运行中的 Runtime ${id.slice(0, 8)}？容器与元数据将永久删除。`
-        : `移除 Runtime ${id.slice(0, 8)}？容器与元数据将永久删除。`
+        ? i18n.global.t("runtime.forceRemoveConfirm", { id: id.slice(0, 8) })
+        : i18n.global.t("runtime.removeConfirm", { id: id.slice(0, 8) })
     );
     if (!ok) return;
     try {
@@ -648,7 +649,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     );
     if (live.length === 0) return true;
     const ok = await confirm(
-      `有 ${live.length} 个活动会话，退出将结束它们（Runtime 保留运行）。继续？`
+      i18n.global.t("runtime.exitConfirm", { count: live.length })
     );
     if (!ok) return false;
     // Cleanup is owned by shutdown_workbench (03 §4.3); no fire-and-forget here.
@@ -907,8 +908,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     );
     const ok = await confirm(
       live.length > 0
-        ? `有 ${live.length} 个活动会话，停止将结束它们并停止 Runtime。继续？`
-        : "停止 Runtime？容器将停止但保留。"
+        ? i18n.global.t("runtime.stopWithSessions", { count: live.length })
+        : i18n.global.t("runtime.stopPlain")
     );
     if (!ok) return;
     status.value = "stopping";
@@ -936,7 +937,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
           if (!["stopped", "not_found"].includes(insp.state)) {
             throw {
               code: "WB_ERR_RUNTIME_NOT_STOPPED",
-              message: `Runtime 仍处于 ${insp.state}（stop 后 inspect 确认失败）`,
+              message: i18n.global.t("runtime.notStopped", { state: insp.state }),
               technical_detail: null,
               retryable: true,
               action: "retry",

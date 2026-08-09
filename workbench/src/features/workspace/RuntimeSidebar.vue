@@ -7,9 +7,11 @@
  * (P1) land in S2.3.b.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 import type { RuntimeState } from "../../types";
 
+const { t } = useI18n();
 const store = useRuntimeStore();
 
 // 1s ticker so "observed Xs ago" stays current without re-polling.
@@ -54,14 +56,14 @@ const workspaceName = computed(() => {
   return parts[parts.length - 1] || p;
 });
 
-const STATE_LABEL: Record<RuntimeState, string> = {
-  running: "Running",
-  stopped: "Stopped",
-  not_found: "Not found",
-  unknown: "Unknown",
-  starting: "Starting",
-  stopping: "Stopping",
-  removing: "Removing",
+const STATE_LABEL_KEY: Record<RuntimeState, string> = {
+  running: "app.running",
+  stopped: "app.stopped",
+  not_found: "app.notFound",
+  unknown: "app.unknown",
+  starting: "app.starting",
+  stopping: "app.stopping",
+  removing: "app.removing",
 };
 
 const observedAgoText = computed(() => {
@@ -89,8 +91,8 @@ const providerStatus = computed(() => {
 });
 const providerInFlightLabel = computed(() => {
   const a = activeAgent.value;
-  if (a && store.providerInFlight === a) return "加载中…";
-  return "未知";
+  if (a && store.providerInFlight === a) return t("sidebar.loading");
+  return t("sidebar.unknown");
 });
 
 function short(id: string): string {
@@ -99,60 +101,60 @@ function short(id: string): string {
 </script>
 
 <template>
-  <aside class="sidebar" aria-label="Runtime status">
+  <aside class="sidebar" :aria-label="t('sidebar.runtime')">
     <section class="block">
-      <div class="label">Workspace</div>
+      <div class="label">{{ t("sidebar.workspace") }}</div>
       <div class="value" :title="store.workspace">{{ workspaceName }}</div>
     </section>
 
     <section class="block">
-      <div class="label">Runtime</div>
+      <div class="label">{{ t("sidebar.runtime") }}</div>
       <div class="runtime-row">
         <span
           class="state"
           :data-state="store.runtimeState"
-          :aria-label="`Runtime ${STATE_LABEL[store.runtimeState]}`"
-        >{{ STATE_LABEL[store.runtimeState] }}</span>
+          :aria-label="`Runtime ${t(STATE_LABEL_KEY[store.runtimeState])}`"
+        >{{ t(STATE_LABEL_KEY[store.runtimeState]) }}</span>
         <span class="fresh" :data-fresh="store.freshness">{{ store.freshness }}</span>
       </div>
-      <div class="muted">observed {{ observedAgoText }}</div>
+      <div class="muted">{{ t("sidebar.observed") }} {{ observedAgoText }}</div>
       <div
         class="id copyable"
-        :title="store.runtimeId ? `点击复制: ${store.runtimeId}` : ''"
+        :title="store.runtimeId ? t('sidebar.copyRuntime', { id: store.runtimeId }) : ''"
         @click="copy('rt', store.runtimeId)"
       >
         id {{ store.runtimeId ? short(store.runtimeId) : "-" }}
-        <span v-if="copiedKey === 'rt'" class="copied">已复制</span>
+        <span v-if="copiedKey === 'rt'" class="copied">{{ t("sidebar.copied") }}</span>
       </div>
       <div
         v-if="snap?.container_name"
         class="id copyable"
-        :title="`点击复制: ${snap.container_name}`"
+        :title="t('sidebar.copyContainer', { name: snap.container_name })"
         @click="copy('ctr', snap!.container_name)"
       >
         ctr {{ snap.container_name }}
-        <span v-if="copiedKey === 'ctr'" class="copied">已复制</span>
+        <span v-if="copiedKey === 'ctr'" class="copied">{{ t("sidebar.copied") }}</span>
       </div>
     </section>
 
     <section class="block">
-      <div class="label">Config</div>
+      <div class="label">{{ t("sidebar.config") }}</div>
       <div class="kv">image <span>{{ snap?.config.image || "-" }}</span></div>
       <div class="kv">network <span>{{ snap?.config.network || "-" }}</span></div>
       <div class="kv">scope <span>{{ snap?.config.scope || "-" }}</span></div>
     </section>
 
     <section class="block">
-      <div class="label">Active agent</div>
-      <div class="value">{{ activeTab?.title ?? "No session" }}</div>
+      <div class="label">{{ t("sidebar.activeAgent") }}</div>
+      <div class="value">{{ activeTab?.title ?? t("sidebar.noSession") }}</div>
     </section>
 
     <section class="block">
-      <div class="label">Provider</div>
-      <div v-if="!providerSupported" class="muted">Unknown · 需升级 CLI</div>
-      <div v-else-if="activeAgent !== 'claude' && activeAgent !== 'codex'" class="muted">不适用</div>
+      <div class="label">{{ t("sidebar.provider") }}</div>
+      <div v-if="!providerSupported" class="muted">{{ t("sidebar.providerUnsupported") }}</div>
+      <div v-else-if="activeAgent !== 'claude' && activeAgent !== 'codex'" class="muted">{{ t("sidebar.providerN/a") }}</div>
       <template v-else>
-        <div v-if="providerStatus" class="p-name">{{ providerStatus.provider_name || "未知" }}</div>
+        <div v-if="providerStatus" class="p-name">{{ providerStatus.provider_name || t("sidebar.unknown") }}</div>
         <div v-else class="muted">{{ providerInFlightLabel }}</div>
         <div v-if="providerStatus" class="kv">route <span>{{ providerStatus.route_mode || "-" }}</span></div>
         <div v-if="providerStatus" class="kv">
@@ -163,7 +165,7 @@ function short(id: string): string {
     </section>
 
     <section class="block sessions">
-      <div class="label">Sessions</div>
+      <div class="label">{{ t("sidebar.sessions") }}</div>
       <ul>
         <li
           v-for="t in store.tabs"
@@ -178,9 +180,9 @@ function short(id: string): string {
 
     <section class="actions">
       <button :disabled="store.inspectInFlight" @click="store.refreshRuntime()">
-        {{ store.inspectInFlight ? "刷新中…" : "刷新" }}
+        {{ store.inspectInFlight ? t("sidebar.refreshing") : t("sidebar.refresh") }}
       </button>
-      <button class="danger" @click="store.stopRuntime()">停止 Runtime</button>
+      <button class="danger" @click="store.stopRuntime()">{{ t("sidebar.stopRuntime") }}</button>
     </section>
   </aside>
 </template>

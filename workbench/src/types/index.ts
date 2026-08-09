@@ -310,3 +310,67 @@ export interface Tab {
    * freshly created tabs. */
   savedTabId: string | null;
 }
+
+// --- Step 3: typed settings (02 §三.4; wire sections are snake_case, the
+// document envelope is camelCase - defaults live in Rust, never here) ---
+
+export interface UiSettings {
+  language: string; // auto | zh-CN | en-US
+  font_scale: number; // 0.80..=1.50
+  theme: string; // system | dark | light
+}
+
+export interface TerminalSettings {
+  font_family: string; // non-empty, <=256
+  font_size: number; // 10..=24
+  line_height: number; // 1.0..=1.6
+  letter_spacing: number; // -1..=3
+  scrollback: number; // 1000..=50000
+  renderer: string; // auto | default | webgl
+  smooth_scroll_duration: number; // 0..=500 ms
+}
+
+export interface WindowGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  maximized: boolean;
+}
+
+export interface WindowSettings {
+  remember_geometry: boolean;
+  close_behavior: string; // quit | minimize-to-tray
+  geometry: WindowGeometry | null;
+}
+
+export interface ValidationIssue {
+  field: string;
+  reason: string;
+}
+
+export interface SettingsDocument {
+  schemaVersion: number;
+  revision: number;
+  aiscCliPath: string | null;
+  ui: UiSettings;
+  terminal: TerminalSettings;
+  window: WindowSettings;
+  issues: ValidationIssue[];
+  /** On-disk file was corrupt and isolated; app runs on defaults. */
+  corrupted: boolean;
+  /** On-disk schema is newer than supported: read-only, saves refused. */
+  readOnly: boolean;
+}
+
+/** Section-level GUI patch. Omitted sections stay unchanged. */
+export interface SettingsPatch {
+  ui?: UiSettings;
+  terminal?: TerminalSettings;
+  window?: WindowSettings;
+}
+
+export interface SaveOutcome {
+  revision: number;
+  issues: ValidationIssue[];
+}

@@ -14,6 +14,7 @@
  *   which merges duplicate terminate/exit results into one TabExit.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Channel } from "@tauri-apps/api/core";
@@ -22,6 +23,7 @@ import { useRuntimeStore } from "../../stores/runtime";
 import { closeSession, openSession, resizeSession, writeSession } from "../../lib/ipc";
 import type { PtyEvent } from "../../types";
 
+const { t } = useI18n();
 const props = defineProps<{ tabId: string }>();
 const store = useRuntimeStore();
 
@@ -56,13 +58,17 @@ function openPty(sid: string) {
         break;
       case "exit":
         closed = true;
+        // G-09: Workbench-written exit helper text follows the locale
+        // (A-G09-4); raw PTY bytes are never touched.
         term.write(
-          `\r\n\x1b[90m[Session exited: ${ev.reason}${ev.exitCode !== null ? `, code ${ev.exitCode}` : ""}]\x1b[0m\r\n`
+          `\r\n\x1b[90m[${t("terminal.exited")}: ${ev.reason}${ev.exitCode !== null ? `, code ${ev.exitCode}` : ""}]\x1b[0m\r\n`
         );
         store.onTabSessionExit(props.tabId, ev.reason, ev.exitCode);
         break;
       case "error":
-        term.write(`\r\n\x1b[31m[Session error: ${ev.code} ${ev.message}]\x1b[0m\r\n`);
+        term.write(
+          `\r\n\x1b[31m${t("terminal.sessionError", { code: ev.code, message: ev.message })}\x1b[0m\r\n`
+        );
         store.onTabOpenFail(props.tabId);
         break;
     }
@@ -70,7 +76,9 @@ function openPty(sid: string) {
   openSession(store.runtimeId, sid, agent, store.workspace.trim(), channel)
     .then(() => store.onTabOpenOk(props.tabId))
     .catch((e) => {
-      term?.write(`\r\n\x1b[31m[open_session failed: ${e?.code ?? e}]\x1b[0m\r\n`);
+      term?.write(
+        `\r\n\x1b[31m${t("terminal.openFailed", { code: e?.code ?? e })}\x1b[0m\r\n`
+      );
       store.onTabOpenFail(props.tabId);
     });
 }
@@ -113,7 +121,7 @@ onMounted(() => {
   fit = new FitAddon();
   term.loadAddon(fit);
   term.open(container.value!);
-  term.writeln("AISC Workbench 终端就绪。");
+  term.writeln(t("terminal.welcome"));
   fit.fit();
 
   term.onData((data) => {
