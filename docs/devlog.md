@@ -21,6 +21,21 @@
 - **CI（2026-08-09）**：Workbench CI 三 job 全绿（frontend npm build+vitest 7/7 / rust cargo test / cli pytest 427 过 1 修复）；Bundle Linux/macOS 全绿（含非 checkout cwd sidecar 权限/架构/version/resource 验证）；NSIS installer 全绿；cli-sidecar 全绿。修复项：vitest 4.1 forks worker 在 Node 20 失败 → CI 用 Node 22；rust job 补 GTK/webkit 系统依赖；tauri-build 需 externalBin/resource 存在 → 测试 job stage 占位；`docs/releases/v2.1.5-dev.md` 缺失 → 补发布说明。
 - **Step 0 结论**：A-INFRA-1..5 门禁证据齐（A-INFRA-2 的 100× reopen 集成测试随 Step 2 registry 预算重构补齐，已确认）。
 
+## Step 1 验收清单（G-18 sidecar 入用户 PATH，分支 step-1-g18-path）
+
+> 规范：05-cli-gui-contract.md §五（PATH 安全算法）、06 §二；门禁 A-G18-1..4。
+
+- [ ] **1a-1** PATH helper：目录项规范化（trim/去引号/尾斜杠/大小写）、冲突探测（展开 %VAR% 后查 `\aisc.exe`，跳过空项/UNC）、`WM_SETTINGCHANGE("Environment")` 广播。
+- [ ] **1a-2** 安装：只改 `HKCU\Environment\Path` 单目录项；`$INSTDIR` 已存在不重复追加；marker `PathEntryOwned=1` + `PathEntry="$INSTDIR"`；首个命中非 `$INSTDIR` 时不覆盖不追加（交互提示/静默日志）；安装目录变化且旧 marker owned 时先移除旧精确项。
+- [ ] **1a-3** 卸载：仅当 marker owned 且 marker 路径规范化相等才删除精确项；`/UPDATE` 跳过 ownership 清理；不删其他目录/其他 aisc。
+- [ ] **1a-4** 注册表类型：原 REG_EXPAND_SZ 保留；`%VAR%` 不无故展开。
+- [ ] **1a-5** 身份：`tauri.conf.json bundle.publisher=aisc`；Rust 常量 MANUFACTURER/PRODUCT_NAME + 一致性测试（解析 tauri.conf.json 与常量断言）。
+- [ ] **1b-1** 移除 CheckPython/CheckWinget/PageDepsCheck/Section Dependencies 及 DEP_* 文案；保留 Docker 检测/启动链（finish 页启动 Docker 属宿主集成，保留）。
+- [x] **1c-1** nsis-installer.yml smoke：从新 PowerShell 进程经 PATH 执行 `aisc version --format json`；重复安装 entry 恰好一次；卸载后 PATH 逐项相等。（smoke 已重写覆盖冲突/EXPAND_SZ/新进程解析/卸载保留，待 CI 验证）
+- [x] **1c-2** 手动测试（Windows 11 实机，2026-08-09）：静默安装 → 新 PowerShell `Get-Command aisc` = `$INSTDIR\aisc.exe` ✅ + `aisc version` exit 0 ✅；重复安装 entry 恰好 1 ✅；类型 ExpandString 保留 ✅；静默卸载 owned entry 精确删除、其它条目不动 ✅。冲突场景（sentinel aisc）由 CI smoke 覆盖。
+- [x] 模板 rebase 记录：模板来源 Tauri 2.11.5（tauri-bundler installer.nsi），结构 diff = 默认模板 + G-18 PATH + S4.2 保留逻辑，无其他偏离。
+- **实机验证发现并修复 3 个真实 bug**（提交 40678d9）：(1) `CharLowerBuffW(w .r3)` 输出-only 导致输入丢失 → normalize 返回空 → 安装误判"已在 PATH"；(2) `PathRead` 用 System::Call `.r1-.r5` 破坏调用方寄存器 → 卸载 RemovePathEntryExact 比较全失败；(3) 测试方法坑：`cmd /c` 对 GUI 卸载器异步返回，需 `Start-Process -Wait`。附带修复：`\a` 序列经 handlebars 渲染变 bell（调试路径避开）。
+
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
 ### S4.2 发布门（2026-08-09，06-implementation-plan.md §七 S4.2）
