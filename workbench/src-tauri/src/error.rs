@@ -118,6 +118,17 @@ impl WorkbenchError {
         )
     }
 
+    /// settings.json revision conflict: another Workbench window wrote first.
+    /// Retryable - the caller reloads and replays the patch (bounded, Rust-side).
+    pub fn settings_conflict() -> Self {
+        Self::new(
+            "WB_ERR_SETTINGS_CONFLICT",
+            "设置已被其他窗口修改",
+            true,
+            Action::Retry,
+        )
+    }
+
     /// history.json revision conflict: another Workbench window wrote first.
     /// Retryable - the caller reloads, merges its own workspace, and retries.
     pub fn history_conflict() -> Self {

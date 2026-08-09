@@ -25,6 +25,7 @@ use session::{
     ack_session_exit, close_session, open_session, resize_session, shutdown_workbench,
     write_session, SessionRegistry,
 };
+use settings::{load_settings, reset_gui_settings, save_settings};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(cli_arg: Option<String>) {
@@ -61,6 +62,9 @@ pub fn run(cli_arg: Option<String>) {
             build_image,
             cancel_build,
             start_docker,
+            load_settings,
+            save_settings,
+            reset_gui_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
