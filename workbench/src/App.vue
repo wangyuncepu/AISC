@@ -36,7 +36,15 @@ const settingsOpen = ref(false);
 // terminal area is counter-zoomed so xterm stays 1:1 (its own font settings
 // govern terminal text). Backend default 1.0 when settings are not loaded.
 const uiScale = computed(() => settingsStore.doc?.ui.font_scale ?? 1);
-const uiZoom = computed(() => ({ zoom: String(uiScale.value) }));
+// Zoom scales layout too, so the app box must compensate its height/width
+// (calc(100vh/scale) zoomed = 100vh) or the content shrinks away from the
+// window edges at scale < 1 (observed 2026-08-10: sidebar buttons and the
+// terminal area lifted off the bottom edge).
+const uiZoom = computed(() => ({
+  zoom: String(uiScale.value),
+  height: `calc(100vh / ${uiScale.value})`,
+  width: `calc(100vw / ${uiScale.value})`,
+}));
 const terminalZoom = computed(() => ({ zoom: String(1 / uiScale.value) }));
 
 // S3.3: aria-live regions (04 §九 - announce semantic changes only, never

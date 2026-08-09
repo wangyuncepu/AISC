@@ -21,6 +21,9 @@ body,
 
 body {
   overflow: hidden;
+  /* G-01: matches the app chrome so the compensated zoom never exposes a
+   * mismatched edge while the UI scale is applied (zoom < 1 or > 1). */
+  background-color: #1e1e1e;
 }
 
 /* S3.3: keyboard-focus visibility (only for keyboard navigation, never on
