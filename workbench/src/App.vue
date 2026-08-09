@@ -31,6 +31,14 @@ const providerPolling = useProviderPolling();
 // Step 3: settings dialog entry (keyboard-reachable topbar button).
 const settingsOpen = ref(false);
 
+// G-01 (Step 7, A-G01-3): ui.font_scale is immediate-effect. Applied as CSS
+// zoom on the UI chrome (topbar/picker/summary/sidebar/tabbar/dialog); the
+// terminal area is counter-zoomed so xterm stays 1:1 (its own font settings
+// govern terminal text). Backend default 1.0 when settings are not loaded.
+const uiScale = computed(() => settingsStore.doc?.ui.font_scale ?? 1);
+const uiZoom = computed(() => ({ zoom: String(uiScale.value) }));
+const terminalZoom = computed(() => ({ zoom: String(1 / uiScale.value) }));
+
 // S3.3: aria-live regions (04 §九 - announce semantic changes only, never
 // routine polls). Throttled ~1s so a burst of updates coalesces to the latest.
 const livePolite = ref("");
@@ -199,7 +207,7 @@ function selectRecent(path: string): void {
 </script>
 
 <template>
-  <div class="app">
+  <div class="app" :style="uiZoom">
     <header class="topbar">
       <span class="brand">AISC Workbench</span>
       <span class="status" :data-status="store.status">{{ store.status }}</span>
@@ -287,7 +295,7 @@ function selectRecent(path: string): void {
       <RuntimeSidebar />
       <div class="main">
         <TabBar />
-        <main class="terminal-area">
+        <main class="terminal-area" :style="terminalZoom">
           <!-- G-08 empty state (A-G08-6): focus target for creating the first tab -->
           <div v-if="store.tabs.length === 0" class="empty-tabs">
             <p>{{ t("tabs.empty") }}</p>
