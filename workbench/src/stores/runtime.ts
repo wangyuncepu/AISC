@@ -17,12 +17,14 @@ import type {
   RuntimeState,
   Tab,
   TabExit,
+  TabRecord,
   TabSessionState,
   WorkbenchError,
   WorkbenchHistory,
   WorkspaceRecord,
 } from "../types";
 import * as ipc from "../lib/ipc";
+import { AGENT_TITLE, resolveActiveTabId, tabsFromRecords } from "./tabLayout";
 
 /** S2.1.a/b startup state machine (02-startup-flow.md §三). S2.2.b adds `conflict`. */
 export type WorkbenchStatus =
@@ -47,15 +49,9 @@ const DEFAULT_LAUNCH: LaunchConfig = {
   scope: "project",
 };
 
-/** Fixed 4-agent tab order (03 §六; 06 §五 S2.2). */
+/** Fixed 4-agent tab order for fresh starts (03 §六; Step 5 replaces with the
+ * dynamic createTab model). */
 const AGENT_ORDER: LaunchAgent[] = ["claude", "codex", "bash", "cc-switch"];
-
-const AGENT_TITLE: Record<LaunchAgent, string> = {
-  claude: "Claude",
-  codex: "Codex",
-  bash: "Bash",
-  "cc-switch": "cc-switch",
-};
 
 /** Session states that have reached a terminal outcome (no live PTY). */
 const TERMINAL_STATES: TabSessionState[] = ["exited", "failed", "disconnected"];
@@ -113,19 +109,17 @@ export const useRuntimeStore = defineStore("runtime", () => {
   });
   /** S2.4.b: a restorable tab layout for the current workspace - non-null only
    * when preflight says the runtime exists (reuse/restart) and history has open
-   * tabs. Drives the 恢复布局 button in LaunchSummary (02 §2.3). */
-  const restorableLayout = computed<{ agents: LaunchAgent[]; activeAgent?: LaunchAgent } | null>(() => {
+   * tabs. Drives the 恢复布局 button in LaunchSummary (02 §2.3). The input is
+   * the complete TabRecord list (position-sorted), not an agent list; the
+   * active tab is mapped by saved tab_id (A-INFRA-1). */
+  const restorableLayout = computed<{ records: TabRecord[]; activeSavedId: string | null } | null>(() => {
     const report = preflight.value;
     if (!report || !["reuse", "restart"].includes(report.recommended_action)) return null;
     const rec = (history.value?.workspaces ?? []).find((w) => w.path === workspace.value.trim());
     const histTabs = rec?.layout?.tabs ?? [];
     if (histTabs.length === 0) return null;
-    const agents = histTabs.map((t) => t.agent as LaunchAgent);
-    const activeId = rec?.layout?.active_tab_id;
-    const activeAgent = activeId
-      ? (histTabs.find((t) => t.tab_id === activeId)?.agent as LaunchAgent | undefined)
-      : undefined;
-    return { agents, activeAgent };
+    const records = [...histTabs].sort((a, b) => a.position - b.position);
+    return { records, activeSavedId: rec?.layout?.active_tab_id ?? null };
   });
   let saveTimer: number | null = null;
 
@@ -646,32 +640,33 @@ export const useRuntimeStore = defineStore("runtime", () => {
 
   // --- S2.2.a: multi-tab session lifecycle (03 §五/§六) ---
 
-  /** Build the 4 fixed tabs and open the initial agent's tab (runtime ready). */
-  /** Build the 4 fixed tabs and open a fresh session (new id, never reattaching
-   * a PTY - 03 §六) for each agent in `agentsToOpen`. Normal start opens one
-   * agent; resume (S2.4.b) opens the history layout's agents. */
-  function initTabs(agentsToOpen: LaunchAgent[], activeAgent?: LaunchAgent) {
+  /** Build tabs from TabRecords and open fresh sessions (new id, never
+   * reattaching a PTY - 03 §六). Fresh start passes the fixed 4 records and
+   * opens only the requested agents; resume (S2.4.b) passes the history
+   * records (duplicates preserved, A-INFRA-1) and opens all. */
+  function initTabs(
+    records: TabRecord[],
+    opts: {
+      activeSavedId?: string | null;
+      activeAgent?: LaunchAgent | null;
+      openAgents?: LaunchAgent[];
+    } = {}
+  ) {
     lastRuntimeRef.value = {
       runtime_id: runtimeId.value,
       image: launch.value.image,
       network: launch.value.network,
       scope: launch.value.scope,
     };
-    tabs.value = AGENT_ORDER.map((agent) => ({
-      tabId: uuid(),
-      agent,
-      title: AGENT_TITLE[agent],
-      sessionId: null,
-      sessionState: "idle" as TabSessionState,
-      exit: null,
-    }));
-    for (const agent of agentsToOpen) {
-      const tab = tabs.value.find((t) => t.agent === agent);
-      if (tab) void openTab(tab.tabId);
+    const { tabs: created, bySavedId } = tabsFromRecords(records);
+    tabs.value = created;
+    for (const tab of created) {
+      if (!opts.openAgents || opts.openAgents.includes(tab.agent)) void openTab(tab.tabId);
     }
-    const ag = activeAgent ?? agentsToOpen[0];
-    const activeTab = tabs.value.find((t) => t.agent === ag);
-    if (activeTab) activeTabId.value = activeTab.tabId;
+    activeTabId.value = resolveActiveTabId(created, bySavedId, {
+      activeSavedId: opts.activeSavedId,
+      activeAgent: opts.activeAgent,
+    });
     status.value = "ready";
     scheduleSave();
   }
@@ -793,7 +788,14 @@ export const useRuntimeStore = defineStore("runtime", () => {
 
   /** Start/reuse/restart the runtime then open tabs. Shared by the normal
    * Start (one tab) and 恢复布局 (history tabs, 02 §2.3). */
-  async function launchRuntime(agentsToOpen: LaunchAgent[], activeAgent: LaunchAgent) {
+  async function launchRuntime(
+    records: TabRecord[],
+    opts: {
+      activeSavedId?: string | null;
+      activeAgent?: LaunchAgent | null;
+      openAgents?: LaunchAgent[];
+    } = {}
+  ) {
     error.value = null;
     cancelInspect.value = null;
     startTimerTick();
@@ -807,7 +809,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       }
       stopTimer();
       runtimeReady.value = true;
-      initTabs(agentsToOpen, activeAgent);
+      initTabs(records, opts);
     } catch (e) {
       stopTimer();
       const err = e as WorkbenchError;
@@ -822,15 +824,25 @@ export const useRuntimeStore = defineStore("runtime", () => {
 
   async function startFromSummary() {
     if (!preflight.value) return;
-    await launchRuntime([launch.value.agent], launch.value.agent);
+    const records: TabRecord[] = AGENT_ORDER.map((agent, position) => ({
+      tab_id: uuid(),
+      agent,
+      title: AGENT_TITLE[agent],
+      position,
+    }));
+    await launchRuntime(records, {
+      openAgents: [launch.value.agent],
+      activeAgent: launch.value.agent,
+    });
   }
 
   /** S2.4.b: restore the history layout's open tabs with fresh sessions
-   * (02 §2.3). Each tab gets a new session_id; PTY content is not reattached. */
+   * (02 §2.3). Per-record restore (A-INFRA-1); each tab gets a new session_id;
+   * PTY content is not reattached. */
   async function resumeLayout() {
     const layout = restorableLayout.value;
     if (!layout) return;
-    await launchRuntime(layout.agents, layout.activeAgent ?? layout.agents[0]);
+    await launchRuntime(layout.records, { activeSavedId: layout.activeSavedId });
   }
 
   async function handleCancelledStart() {

@@ -306,4 +306,7 @@ export interface Tab {
   sessionId: string | null;
   sessionState: TabSessionState;
   exit: TabExit | null;
+  /** Saved history tab_id when restored (02 §2.3 saved→new mapping); null for
+   * freshly created tabs. */
+  savedTabId: string | null;
 }
