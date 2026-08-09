@@ -115,6 +115,19 @@ export interface SessionSnapshot {
   runtime_id: string;
   agent: Agent;
   state: SessionState;
+  generation: number;
+}
+
+export type AckResult = "acknowledged" | "already_acknowledged";
+
+/** Result of the unified exit coordinator (03 §4.3). */
+export interface ShutdownReport {
+  graceful_closed: number;
+  force_reaped: number;
+  terminate_timed_out: number;
+  reap_timed_out: number;
+  unreaped_session_ids: string[];
+  flush_errors: string[];
 }
 
 export interface SessionExit {

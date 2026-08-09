@@ -10,8 +10,8 @@
 //! resume-layout land in S2.4.b.
 
 use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use fs4::fs_std::FileExt;
@@ -20,6 +20,7 @@ use tauri::AppHandle;
 
 use crate::error::WorkbenchError;
 use crate::session::config_dir;
+use crate::storage;
 
 const SCHEMA_VERSION: u64 = 1;
 const HISTORY_FILE: &str = "history.json";
@@ -227,21 +228,7 @@ fn save_locked(
 }
 
 fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = target.parent().unwrap_or_else(|| Path::new("."));
-    let tmp: PathBuf = dir.join(format!(
-        "{}.tmp",
-        target.file_name().and_then(|s| s.to_str()).unwrap_or("history")
-    ));
-    {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-    }
-    if let Err(e) = fs::rename(&tmp, target) {
-        let _ = fs::remove_file(target);
-        fs::rename(&tmp, target).map_err(|_| e)?;
-    }
-    Ok(())
+    storage::atomic_replace(target, bytes)
 }
 
 // --- Tauri commands ---

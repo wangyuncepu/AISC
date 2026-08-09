@@ -5,6 +5,7 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import * as ipc from "./lib/ipc";
 import { useRuntimeStore } from "./stores/runtime";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
 import { useProviderPolling } from "./composables/useProviderPolling";
@@ -98,16 +99,27 @@ function onKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   store.negotiate();
-  // S2.2.b: exit-Workbench gate (02 §七.3). Always prevent the default close
-  // and decide explicitly: confirm + end live sessions if any, then destroy.
-  // The runtime is left running. (preventDefault must precede the async
-  // confirm, otherwise the default close races the awaited dialog.)
+  // Exit gate (03 §4.3): always prevent the default close and route through
+  // the Rust shutdown coordinator. The window is destroyed only after
+  // shutdown_workbench returns with no unreaped children; otherwise the app
+  // stays open with the report surfaced as a recoverable error. (preventDefault
+  // must precede the async confirm, otherwise the default close races it.)
   void getCurrentWindow().onCloseRequested(async (event) => {
     event.preventDefault();
     const allow = await store.confirmExit();
-    if (allow) {
-      await getCurrentWindow().destroy();
+    if (!allow) return;
+    const report = await ipc.shutdownWorkbench().catch((e) => {
+      store.setExitError(e);
+      return null;
+    });
+    if (!report) return; // keep the window open; error is displayed
+    if (report.unreaped_session_ids.length > 0) {
+      store.setExitError(
+        `仍有 ${report.unreaped_session_ids.length} 个会话未被回收，请重试退出`
+      );
+      return;
     }
+    await getCurrentWindow().destroy();
   });
   window.addEventListener("keydown", onKeydown, { capture: true });
 });

@@ -10,10 +10,12 @@
 //! operations from a single Workbench process.
 
 use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::Path;
 
 use serde_json::Value;
+
+use crate::storage;
 
 const SCHEMA_VERSION: u64 = 1;
 const SETTINGS_FILE: &str = "settings.json";
@@ -98,33 +100,14 @@ impl Settings {
         }
     }
 
-    /// Atomically write to `dir/settings.json` (temp file + fsync + rename).
+    /// Atomically write to `dir/settings.json` (temp + fsync + replace).
     pub fn save(&self, dir: &Path) -> Result<(), SettingsError> {
         fs::create_dir_all(dir).map_err(|e| SettingsError::Io(e.to_string()))?;
         let target = dir.join(SETTINGS_FILE);
         let bytes = serde_json::to_vec_pretty(&self.raw)
             .map_err(|e| SettingsError::Corrupt(e.to_string()))?;
-        atomic_write(&target, &bytes).map_err(|e| SettingsError::Io(e.to_string()))
+        storage::atomic_replace(&target, &bytes).map_err(|e| SettingsError::Io(e.to_string()))
     }
-}
-
-fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = target.parent().unwrap_or_else(|| Path::new("."));
-    let tmp: PathBuf = dir.join(format!(
-        "{}.tmp",
-        target.file_name().and_then(|s| s.to_str()).unwrap_or("settings")
-    ));
-    {
-        let mut f = fs::File::create(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-    }
-    // Unix rename atomically replaces; Windows may need the target cleared.
-    if let Err(e) = fs::rename(&tmp, target) {
-        let _ = fs::remove_file(target);
-        fs::rename(&tmp, target).map_err(|_| e)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

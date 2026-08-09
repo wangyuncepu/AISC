@@ -1,15 +1,17 @@
 //! Session data-plane Tauri commands + registry. Wraps `pty.rs` core with
-//! AISC session semantics (runtime_id/session_id/agent, terminate-on-close).
+//! AISC session semantics (runtime_id/session_id/agent/workspace,
+//! terminate-on-close, exit ack, shutdown coordination).
 //!
 //! Spec refs:
-//! - 05-cli-gui-contract.md §6.1 (session open argv, text-only TTY),
-//!   §9.2 (per-Session handles, byte chunks + seq, paste cap)
-//! - 03-lifecycle-contract.md §五 (state machine), §七.1 (close order),
-//!   §十 (domain API: open/write/resize/close_session)
+//! - 05-cli-gui-contract.md §4.1 (canonical workspace as Session identity),
+//!   §6.1 (session open argv, text-only TTY), §9.2 (per-Session handles)
+//! - 03-lifecycle-contract.md §2.3 (SessionRegistry Reserved/Closing/ack/TTL),
+//!   §3.3 (natural-exit ack), §4.3 (shutdown coordinator), §五 (state machine)
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -21,7 +23,7 @@ use crate::cli::run_control;
 use crate::error::WorkbenchError;
 use crate::pty::{
     spawn_pty_session, now_ms, ExitSignal, PtyEvent, PtySession, SessionExit, SessionState,
-    REASON_TRANSPORT_ERROR,
+    REASON_TRANSPORT_ERROR, REASON_USER_CLOSE,
 };
 use crate::settings::Settings;
 
@@ -32,6 +34,10 @@ const TERMINATE_TIMEOUT: Duration = Duration::from_secs(15);
 const CLOSE_WAIT: Duration = Duration::from_secs(10);
 const CLOSE_FORCE_WAIT: Duration = Duration::from_secs(2);
 const EVENT_CHANNEL_CAP: usize = 256;
+/// Terminal (reaped) entry TTL before lazy eviction (03 §3.3.5).
+const TERMINAL_TTL_MS: i64 = 60_000;
+/// Max terminal entries retained per runtime (03 §3.3.5).
+const MAX_TERMINAL_ENTRIES_PER_RUNTIME: usize = 32;
 
 const AGENTS: &[&str] = &["claude", "codex", "bash", "cc-switch"];
 
@@ -42,10 +48,12 @@ pub struct SessionSnapshot {
     pub runtime_id: String,
     pub agent: String,
     pub state: SessionState,
+    pub generation: u64,
 }
 
 pub struct SessionEntry {
-    pub session: PtySession,
+    /// `None` while the entry is `Reserved` (pre-spawn) or during closing.
+    pub session: Option<PtySession>,
     pub signal: ExitSignal,
     pub state: SessionState,
     pub exit: Option<SessionExit>,
@@ -55,12 +63,55 @@ pub struct SessionEntry {
     /// the identity key for open/terminate argv (05 §4.1). Never the raw
     /// frontend string.
     pub workspace: String,
+    /// Monotonic per-registry generation; guards late events after reopen.
+    pub generation: u64,
+    /// Shared closing completion: concurrent closes await the same result
+    /// (03 §2.3.4); set once the terminal exit is known.
+    pub close: Option<Arc<ExitSignal>>,
 }
 
-/// Managed Tauri state: `session_id -> SessionEntry`.
-pub type SessionRegistry = Arc<Mutex<HashMap<String, SessionEntry>>>;
+/// Managed Tauri state: `session_id -> SessionEntry`, with the spawn-reserve
+/// gate and shutdown reject flag. Clone is cheap (Arc fields); managed as
+/// `SessionRegistry::default()`.
+#[derive(Clone)]
+pub struct SessionRegistry {
+    map: Arc<Mutex<HashMap<String, SessionEntry>>>,
+    next_generation: Arc<AtomicU64>,
+    rejecting: Arc<AtomicBool>,
+}
 
-fn registry(app: &AppHandle) -> Arc<Mutex<HashMap<String, SessionEntry>>> {
+impl Default for SessionRegistry {
+    fn default() -> Self {
+        Self {
+            map: Arc::new(Mutex::new(HashMap::new())),
+            next_generation: Arc::new(AtomicU64::new(0)),
+            rejecting: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl SessionRegistry {
+    pub fn lock(&self) -> Result<MutexGuard<'_, HashMap<String, SessionEntry>>, WorkbenchError> {
+        self.map
+            .lock()
+            .map_err(|_| WorkbenchError::cli_protocol().with_detail("registry lock"))
+    }
+
+    fn next_generation(&self) -> u64 {
+        self.next_generation.fetch_add(1, Ordering::SeqCst)
+    }
+
+    /// Shutdown gate: after `reject_new`, `open_session` refuses new sessions.
+    pub fn reject_new(&self) {
+        self.rejecting.store(true, Ordering::SeqCst);
+    }
+
+    pub fn accepting(&self) -> bool {
+        !self.rejecting.load(Ordering::SeqCst)
+    }
+}
+
+fn registry(app: &AppHandle) -> SessionRegistry {
     app.state::<SessionRegistry>().inner().clone()
 }
 
@@ -156,6 +207,46 @@ fn canonical_workspace(raw: &str) -> Result<String, WorkbenchError> {
     Ok(canon.to_string_lossy().into_owned())
 }
 
+fn session_failed(detail: impl Into<String>) -> WorkbenchError {
+    WorkbenchError::map_aisc("AISC_ERR_SESSION_FAILED").with_detail(detail)
+}
+
+fn is_terminal(state: SessionState) -> bool {
+    matches!(state, SessionState::Exited | SessionState::Failed | SessionState::Disconnected)
+}
+
+/// Lazy eviction of reaped-but-unacknowledged terminal entries (03 §3.3.5):
+/// drop entries past `TERMINAL_TTL_MS`, then per runtime keep at most
+/// `MAX_TERMINAL_ENTRIES_PER_RUNTIME`, removing oldest by finished time.
+fn sweep_terminal_entries(map: &mut HashMap<String, SessionEntry>) {
+    let now = now_ms();
+    map.retain(|_, e| {
+        e.exit
+            .as_ref()
+            .map(|x| x.finished_at_ms + TERMINAL_TTL_MS > now)
+            .unwrap_or(true)
+    });
+    let mut per_runtime: HashMap<String, Vec<(String, i64)>> = HashMap::new();
+    for (id, e) in map.iter() {
+        if let Some(exit) = &e.exit {
+            per_runtime
+                .entry(e.runtime_id.clone())
+                .or_default()
+                .push((id.clone(), exit.finished_at_ms));
+        }
+    }
+    for (_, mut entries) in per_runtime {
+        if entries.len() <= MAX_TERMINAL_ENTRIES_PER_RUNTIME {
+            continue;
+        }
+        entries.sort_by_key(|(_, finished)| *finished);
+        let surplus = entries.len().saturating_sub(MAX_TERMINAL_ENTRIES_PER_RUNTIME);
+        for (id, _) in entries.into_iter().take(surplus) {
+            map.remove(&id);
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn open_session(
     app: AppHandle,
@@ -179,31 +270,109 @@ pub async fn open_session(
     // workspace error, no child is started.
     let ws = canonical_workspace(&workspace)?;
 
+    let reg = registry(&app);
+    if !reg.accepting() {
+        return Err(session_failed("shutdown in progress: new sessions rejected"));
+    }
+
+    // Reserve BEFORE spawn (03 §2.3.1): duplicate session_id fails pre-spawn.
+    let generation = {
+        let mut g = reg.lock()?;
+        if g.contains_key(&session_id) {
+            return Err(session_failed("session_id already open"));
+        }
+        sweep_terminal_entries(&mut g);
+        let gen = reg.next_generation();
+        g.insert(
+            session_id.clone(),
+            SessionEntry {
+                session: None,
+                signal: ExitSignal::new(),
+                state: SessionState::Starting,
+                exit: None,
+                runtime_id: runtime_id.clone(),
+                agent: agent.clone(),
+                workspace: ws.clone(),
+                generation: gen,
+                close: None,
+            },
+        );
+        gen
+    };
+
     let pin = resolve_pin(&app)?;
     let argv = session_open_argv(&runtime_id, &session_id, &agent, &ws);
 
     let (event_tx, event_rx) = mpsc::channel::<PtyEvent>(EVENT_CHANNEL_CAP);
-    let (session, signal) = spawn_pty_session(&pin, argv, DEFAULT_COLS, DEFAULT_ROWS, event_tx)?;
-
-    let reg = registry(&app);
-    {
-        let mut g = reg.lock().map_err(|_| WorkbenchError::cli_protocol().with_detail("registry lock"))?;
-        if g.contains_key(&session_id) {
-            return Err(WorkbenchError::map_aisc("AISC_ERR_SESSION_FAILED")
-                .with_detail("session_id already open"));
+    let spawned = spawn_pty_session(&pin, argv, DEFAULT_COLS, DEFAULT_ROWS, event_tx);
+    let (session, signal) = match spawned {
+        Ok(pair) => pair,
+        Err(e) => {
+            // Roll back the reservation; wake any concurrent closer.
+            let mut g = reg.lock()?;
+            if let Some(en) = g.get_mut(&session_id) {
+                if en.state == SessionState::Starting && en.session.is_none() {
+                    if let Some(close) = en.close.take() {
+                        close.set(SessionExit {
+                            exit_code: None,
+                            reason: REASON_USER_CLOSE.into(),
+                            finished_at_ms: now_ms(),
+                        });
+                    }
+                    g.remove(&session_id);
+                }
+            }
+            return Err(e);
         }
-        g.insert(
-            session_id.clone(),
-            SessionEntry {
-                session,
-                signal: signal.clone(),
-                state: SessionState::Running,
-                exit: None,
-                runtime_id: runtime_id.clone(),
-                agent: agent.clone(),
-                workspace: ws,
-            },
-        );
+    };
+
+    // Commit Running, or roll back if the reservation was closed/removed while
+    // the spawn was in flight (concurrent close, shutdown).
+    enum CommitOutcome {
+        Committed,
+        Rollback(PtySession),
+    }
+    let outcome = {
+        let mut g = reg.lock()?;
+        match g.get_mut(&session_id) {
+            Some(en) if en.state == SessionState::Starting && en.session.is_none() => {
+                en.session = Some(session);
+                en.signal = signal.clone();
+                en.state = SessionState::Running;
+                CommitOutcome::Committed
+            }
+            // Closing/removed: the closer owns the entry; we kill + reap the
+            // child we just created and hand the result to the completion.
+            _ => CommitOutcome::Rollback(session),
+        }
+    };
+
+    let session = match outcome {
+        CommitOutcome::Committed => None,
+        CommitOutcome::Rollback(session) => Some(session),
+    };
+    if let Some(session) = session {
+        // A closer is waiting on the shared completion: kill + reap.
+        // Reservation was closed/removed mid-spawn: kill and reap the child we
+        // just created; never leak it (03 §2.3.2).
+        session.force_kill();
+        let exit = signal
+            .wait_timeout(CLOSE_FORCE_WAIT)
+            .await
+            .unwrap_or(SessionExit {
+                exit_code: None,
+                reason: REASON_TRANSPORT_ERROR.into(),
+                finished_at_ms: now_ms(),
+            });
+        let mut g = reg.lock()?;
+        if let Some(en) = g.get_mut(&session_id) {
+            en.state = SessionState::Exited;
+            en.exit = Some(exit.clone());
+            if let Some(close) = en.close.take() {
+                close.set(exit);
+            }
+        }
+        return Err(session_failed("session closed while opening"));
     }
 
     // Bridge mpsc -> Tauri Channel (frontend receives Output/Exit events).
@@ -219,7 +388,7 @@ pub async fn open_session(
     // Observer: update registry state/exit when the child exits on its own
     // (process_exit / transport_error) so close_session on an already-exited
     // session returns the cached exit.
-    let reg_obs = Arc::clone(&reg);
+    let reg_obs = reg.clone();
     let sig_obs = signal.clone();
     let sid_obs = session_id.clone();
     tokio::spawn(async move {
@@ -241,6 +410,7 @@ pub async fn open_session(
         runtime_id,
         agent,
         state: SessionState::Running,
+        generation,
     })
 }
 
@@ -255,15 +425,14 @@ pub async fn write_session(
     }
     let sender = {
         let reg = registry(&app);
-        let g = reg.lock().map_err(|_| WorkbenchError::cli_protocol().with_detail("registry lock"))?;
+        let g = reg.lock()?;
         let entry = g
             .get(&session_id)
             .ok_or_else(|| WorkbenchError::map_aisc("AISC_ERR_SESSION_NOT_FOUND"))?;
         if entry.state != SessionState::Running {
-            return Err(WorkbenchError::map_aisc("AISC_ERR_SESSION_FAILED")
-                .with_detail(format!("session state: {:?}", entry.state)));
+            return Err(session_failed(format!("session state: {:?}", entry.state)));
         }
-        entry.session.writer_sender()
+        entry.session.as_ref().ok_or_else(|| session_failed("session not running"))?.writer_sender()
     };
     sender
         .send(bytes)
@@ -282,11 +451,42 @@ pub async fn resize_session(
         return Err(WorkbenchError::cli_protocol().with_detail("cols/rows must be > 0"));
     }
     let reg = registry(&app);
-    let g = reg.lock().map_err(|_| WorkbenchError::cli_protocol().with_detail("registry lock"))?;
+    let g = reg.lock()?;
     let entry = g
         .get(&session_id)
         .ok_or_else(|| WorkbenchError::map_aisc("AISC_ERR_SESSION_NOT_FOUND"))?;
-    entry.session.resize(cols, rows)
+    entry
+        .session
+        .as_ref()
+        .ok_or_else(|| session_failed("session not running"))?
+        .resize(cols, rows)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AckResult {
+    Acknowledged,
+    AlreadyAcknowledged,
+}
+
+/// Natural-exit ack (03 §3.3): removes a terminal registry entry; idempotent
+/// for already-deleted entries; live sessions return a stable error.
+#[tauri::command]
+pub async fn ack_session_exit(
+    app: AppHandle,
+    session_id: String,
+) -> Result<AckResult, WorkbenchError> {
+    let reg = registry(&app);
+    let mut g = reg.lock()?;
+    match g.get(&session_id) {
+        None => Ok(AckResult::AlreadyAcknowledged),
+        Some(en) if en.exit.is_some() => {
+            g.remove(&session_id);
+            sweep_terminal_entries(&mut g);
+            Ok(AckResult::Acknowledged)
+        }
+        Some(_) => Err(session_failed("session is not in a terminal state")),
+    }
 }
 
 #[tauri::command]
@@ -294,57 +494,233 @@ pub async fn close_session(
     app: AppHandle,
     session_id: String,
 ) -> Result<SessionExit, WorkbenchError> {
-    let entry = {
-        let reg = registry(&app);
-        let mut g = reg.lock().map_err(|_| WorkbenchError::cli_protocol().with_detail("registry lock"))?;
-        g.remove(&session_id)
-            .ok_or_else(|| WorkbenchError::map_aisc("AISC_ERR_SESSION_NOT_FOUND"))?
-    };
+    let reg = registry(&app);
 
-    // Already exited (observer cached the exit): return it.
-    if let Some(exit) = entry.exit {
-        return Ok(exit);
+    // Phase 1 (under lock): transition to Closing in place, or share an
+    // in-flight close's completion (03 §2.3.3-4).
+    enum Slot {
+        Terminal(SessionExit),
+        Run {
+            session: Option<PtySession>,
+            signal: ExitSignal,
+            close: Arc<ExitSignal>,
+            runtime_id: String,
+            workspace: String,
+        },
+        Wait(Arc<ExitSignal>),
+        Gone,
     }
-
-    let session = entry.session;
-    let signal = entry.signal;
-    let runtime_id = entry.runtime_id;
-    let workspace = entry.workspace;
-
-    // §七.1: terminate (kill container agent) -> wait/reap local child.
-    // cancel() sets the exit reason to user_close.
-    session.cancel();
-    let pin = resolve_pin(&app)?;
-    let _ = run_control(
-        &pin,
-        session_terminate_argv(&runtime_id, &session_id, &workspace),
-        TERMINATE_TIMEOUT,
-        CancellationToken::new(),
-    )
-    .await; // best-effort; terminate is idempotent
-
-    let exit = match signal.wait_timeout(CLOSE_WAIT).await {
-        Some(exit) => exit,
-        None => {
-            // Child didn't exit after terminate: force-kill + brief reap wait.
-            session.force_kill();
-            signal
-                .wait_timeout(CLOSE_FORCE_WAIT)
-                .await
-                .unwrap_or(SessionExit {
-                    exit_code: None,
-                    reason: REASON_TRANSPORT_ERROR.into(),
-                    finished_at_ms: now_ms(),
-                })
+    let slot = {
+        let mut g = reg.lock()?;
+        match g.get_mut(&session_id) {
+            None => Slot::Gone,
+            Some(en) if en.state == SessionState::Closing => {
+                let close = en
+                    .close
+                    .clone()
+                    .unwrap_or_else(|| {
+                        let c = Arc::new(ExitSignal::new());
+                        en.close = Some(Arc::clone(&c));
+                        c
+                    });
+                Slot::Wait(close)
+            }
+            Some(en) => {
+                if let Some(exit) = en.exit.clone() {
+                    // Cached terminal exit: return it and drop the entry
+                    // (03 §3.3.4); a later ack stays idempotent.
+                    g.remove(&session_id);
+                    Slot::Terminal(exit)
+                } else {
+                    en.state = SessionState::Closing;
+                    let close = Arc::new(ExitSignal::new());
+                    en.close = Some(Arc::clone(&close));
+                    Slot::Run {
+                        session: en.session.take(),
+                        signal: en.signal.clone(),
+                        close,
+                        runtime_id: en.runtime_id.clone(),
+                        workspace: en.workspace.clone(),
+                    }
+                }
+            }
         }
     };
-    // `session` dropped here -> closes PTY master/writer (cleanup).
-    Ok(exit)
+
+    match slot {
+        Slot::Gone => Err(WorkbenchError::map_aisc("AISC_ERR_SESSION_NOT_FOUND")),
+        Slot::Terminal(exit) => Ok(exit),
+        Slot::Wait(close) => {
+            // Concurrent close: await the shared completion, no second
+            // terminate (03 §2.3.4).
+            let deadline = CLOSE_WAIT + CLOSE_FORCE_WAIT + Duration::from_secs(1);
+            close.wait_timeout(deadline).await.ok_or_else(|| {
+                session_failed("close timed out while another close was in flight")
+            })
+        }
+        Slot::Run { session, signal, close, runtime_id, workspace } => {
+            let exit = if let Some(session) = session {
+                // §3.1: terminate (kill container agent) -> wait/reap local
+                // child. cancel() sets the exit reason to user_close.
+                session.cancel();
+                let pin = resolve_pin(&app)?;
+                let _ = run_control(
+                    &pin,
+                    session_terminate_argv(&runtime_id, &session_id, &workspace),
+                    TERMINATE_TIMEOUT,
+                    CancellationToken::new(),
+                )
+                .await; // best-effort; terminate is idempotent
+
+                match signal.wait_timeout(CLOSE_WAIT).await {
+                    Some(exit) => exit,
+                    None => {
+                        // Child didn't exit after terminate: force-kill + reap.
+                        session.force_kill();
+                        signal
+                            .wait_timeout(CLOSE_FORCE_WAIT)
+                            .await
+                            .unwrap_or(SessionExit {
+                                exit_code: None,
+                                reason: REASON_TRANSPORT_ERROR.into(),
+                                finished_at_ms: now_ms(),
+                            })
+                    }
+                }
+            } else {
+                // Reserved entry: the spawn-in-flight path kills and reaps on
+                // commit (03 §2.3.2); we wait for the shared completion.
+                close.wait_timeout(CLOSE_WAIT).await.unwrap_or(SessionExit {
+                    exit_code: None,
+                    reason: REASON_USER_CLOSE.into(),
+                    finished_at_ms: now_ms(),
+                })
+            };
+            let mut g = reg.lock()?;
+            if let Some(en) = g.get_mut(&session_id) {
+                en.state = if exit.reason == REASON_TRANSPORT_ERROR {
+                    SessionState::Disconnected
+                } else {
+                    SessionState::Exited
+                };
+                en.exit = Some(exit.clone());
+            }
+            close.set(exit.clone());
+            sweep_terminal_entries(&mut g);
+            Ok(exit)
+        }
+    }
+}
+
+/// Unified shutdown coordinator (03 §4.3): reject new sessions, close every
+/// Reserved/Running/Closing session (shared completions), force-reap leftovers,
+/// flush settings, and report what happened. Budgets are tightened in G-07
+/// (Step 2); here every step is bounded by the per-close constants.
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub struct ShutdownReport {
+    pub graceful_closed: usize,
+    pub force_reaped: usize,
+    pub terminate_timed_out: usize,
+    pub reap_timed_out: usize,
+    pub unreaped_session_ids: Vec<String>,
+    pub flush_errors: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn shutdown_workbench(
+    app: AppHandle,
+    stop_runtime: bool,
+) -> Result<ShutdownReport, WorkbenchError> {
+    let reg = registry(&app);
+    reg.reject_new();
+
+    let ids: Vec<String> = {
+        let g = reg.lock()?;
+        g.keys().cloned().collect()
+    };
+
+    // Concurrent bounded close; each close_session path owns reap/force-kill.
+    let mut handles = Vec::new();
+    for id in &ids {
+        let app = app.clone();
+        let id = id.clone();
+        handles.push(tokio::spawn(async move { close_session(app, id).await }));
+    }
+    let mut report = ShutdownReport::default();
+    for h in handles {
+        match h.await {
+            Ok(Ok(_)) => report.graceful_closed += 1,
+            Ok(Err(_)) => report.terminate_timed_out += 1,
+            Err(_) => report.terminate_timed_out += 1,
+        }
+    }
+
+    // Force-reap any leftover live children (03 §4.3: force-reap leftovers).
+    let mut leftover: Vec<String> = {
+        let g = reg.lock()?;
+        g.iter()
+            .filter(|(_, e)| e.session.is_some() && e.exit.is_none())
+            .map(|(k, _)| k.clone())
+            .collect()
+    };
+    for id in &leftover {
+        {
+            let mut g = reg.lock()?;
+            if let Some(en) = g.get_mut(id) {
+                if let Some(s) = en.session.take() {
+                    s.force_kill();
+                }
+            }
+        }
+        let _ = tokio::time::timeout(CLOSE_FORCE_WAIT, async {
+            let reg = reg.clone();
+            loop {
+                let done = {
+                    let g = reg.lock()?;
+                    g.get(id).map(|e| e.exit.is_some()).unwrap_or(true)
+                };
+                if done {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Ok::<(), WorkbenchError>(())
+        })
+        .await;
+    }
+    // Reap wait is the force path; anything still alive is unreaped.
+    let still_alive: Vec<String> = {
+        let g = reg.lock()?;
+        g.iter()
+            .filter(|(_, e)| e.session.is_some() || !is_terminal(e.state))
+            .map(|(k, _)| k.clone())
+            .collect()
+    };
+    if still_alive.is_empty() {
+        report.force_reaped = leftover.len();
+    } else {
+        report.reap_timed_out = still_alive.len();
+        report.unreaped_session_ids = still_alive;
+    }
+
+    // Flush settings (pin) so no dirty state is left behind (03 §4.3).
+    if let Ok(dir) = config_dir(&app) {
+        match Settings::load(&dir).and_then(|s| s.save(&dir)) {
+            Ok(()) => {}
+            Err(e) => report.flush_errors.push(e.to_string()),
+        }
+    }
+
+    let _ = stop_runtime; // runtime stop lands in G-07 (Step 2)
+    Ok(report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pty::REASON_PROCESS_EXIT;
+    use tempfile::tempdir;
 
     #[test]
     fn uuid_v4_validation() {
@@ -392,7 +768,7 @@ mod tests {
 
     #[test]
     fn canonical_workspace_resolves_absolute_path() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let ws = canonical_workspace(dir.path().to_str().unwrap()).unwrap();
         assert_eq!(ws, std::fs::canonicalize(dir.path()).unwrap().to_string_lossy());
     }
@@ -403,6 +779,85 @@ mod tests {
         assert_eq!(err.code, "AISC_ERR_WORKSPACE_INVALID");
     }
 
+    fn terminal_entry(runtime_id: &str, finished_at_ms: i64) -> SessionEntry {
+        SessionEntry {
+            session: None,
+            signal: ExitSignal::new(),
+            state: SessionState::Exited,
+            exit: Some(SessionExit {
+                exit_code: Some(0),
+                reason: REASON_PROCESS_EXIT.into(),
+                finished_at_ms,
+            }),
+            runtime_id: runtime_id.into(),
+            agent: "bash".into(),
+            workspace: "/ws".into(),
+            generation: 0,
+            close: None,
+        }
+    }
+
+    fn live_entry(runtime_id: &str, workspace: &str) -> SessionEntry {
+        SessionEntry {
+            session: None,
+            signal: ExitSignal::new(),
+            state: SessionState::Running,
+            exit: None,
+            runtime_id: runtime_id.into(),
+            agent: "bash".into(),
+            workspace: workspace.into(),
+            generation: 0,
+            close: None,
+        }
+    }
+
+    #[test]
+    fn sweep_removes_expired_terminal_entries() {
+        let mut map = HashMap::new();
+        map.insert("old".into(), terminal_entry("r1", now_ms() - 61_000));
+        map.insert("fresh".into(), terminal_entry("r1", now_ms() - 1_000));
+        map.insert("live".into(), live_entry("r1", "/ws"));
+        sweep_terminal_entries(&mut map);
+        assert!(!map.contains_key("old"));
+        assert!(map.contains_key("fresh"));
+        assert!(map.contains_key("live"));
+    }
+
+    #[test]
+    fn sweep_caps_terminal_entries_per_runtime() {
+        let mut map = HashMap::new();
+        for i in 0..(MAX_TERMINAL_ENTRIES_PER_RUNTIME + 5) {
+            map.insert(
+                format!("s{i}"),
+                terminal_entry("r1", now_ms() - 10_000 + i as i64),
+            );
+        }
+        map.insert("other".into(), terminal_entry("r2", now_ms() - 5));
+        sweep_terminal_entries(&mut map);
+        let r1_count = map.values().filter(|e| e.runtime_id == "r1").count();
+        assert_eq!(r1_count, MAX_TERMINAL_ENTRIES_PER_RUNTIME);
+        assert!(map.contains_key("other"));
+        // Oldest entries were evicted.
+        assert!(!map.contains_key("s0"));
+        assert!(!map.contains_key("s4"));
+    }
+
+    #[test]
+    fn registry_generation_is_monotonic() {
+        let reg = SessionRegistry::default();
+        let a = reg.next_generation();
+        let b = reg.next_generation();
+        assert_eq!(b, a + 1);
+    }
+
+    #[test]
+    fn registry_reject_new_gates_accepting() {
+        let reg = SessionRegistry::default();
+        assert!(reg.accepting());
+        reg.reject_new();
+        assert!(!reg.accepting());
+    }
+
     #[test]
     fn snapshot_serializes_camel_case() {
         let s = SessionSnapshot {
@@ -410,10 +865,12 @@ mod tests {
             runtime_id: "rid".into(),
             agent: "bash".into(),
             state: SessionState::Running,
+            generation: 3,
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""sessionId":"sid""#));
         assert!(json.contains(r#""runtimeId":"rid""#));
         assert!(json.contains(r#""state":"running""#));
+        assert!(json.contains(r#""generation":3"#));
     }
 }

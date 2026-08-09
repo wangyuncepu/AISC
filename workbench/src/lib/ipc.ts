@@ -1,6 +1,7 @@
 /** Typed wrappers over the Workbench Tauri commands (S1.2-S1.4). */
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  AckResult,
   BuildEvent,
   CapabilityReport,
   DiscoveryReport,
@@ -13,6 +14,7 @@ import type {
   RuntimeStartResult,
   SessionExit,
   SessionSnapshot,
+  ShutdownReport,
   WorkbenchHistory,
 } from "../types";
 
@@ -42,6 +44,14 @@ export const resizeSession = (sessionId: string, cols: number, rows: number) =>
   invoke<void>("resize_session", { sessionId, cols, rows });
 
 export const closeSession = (sessionId: string) => invoke<SessionExit>("close_session", { sessionId });
+
+/** Natural-exit ack (03 §3.3): idempotent, removes terminal registry entries. */
+export const ackSessionExit = (sessionId: string) =>
+  invoke<AckResult>("ack_session_exit", { sessionId });
+
+/** Unified exit coordinator: bounded session close + force-reap + flush. */
+export const shutdownWorkbench = (stopRuntime: boolean = false) =>
+  invoke<ShutdownReport>("shutdown_workbench", { stopRuntime });
 
 // --- S1.4: runtime control ---
 

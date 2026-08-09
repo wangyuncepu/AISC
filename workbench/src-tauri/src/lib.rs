@@ -11,6 +11,7 @@ pub mod pty;
 pub mod runtime;
 pub mod session;
 pub mod settings;
+pub mod storage;
 
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use history::{load_history, save_history};
@@ -19,7 +20,10 @@ use runtime::{
     remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_docker,
     start_runtime, stop_runtime, BuildOp, OpMutexes, StartOp,
 };
-use session::{close_session, open_session, resize_session, write_session, SessionRegistry};
+use session::{
+    ack_session_exit, close_session, open_session, resize_session, shutdown_workbench,
+    write_session, SessionRegistry,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(cli_arg: Option<String>) {
@@ -40,6 +44,8 @@ pub fn run(cli_arg: Option<String>) {
             write_session,
             resize_session,
             close_session,
+            ack_session_exit,
+            shutdown_workbench,
             start_runtime,
             stop_runtime,
             runtime_preflight,

@@ -619,6 +619,18 @@ export const useRuntimeStore = defineStore("runtime", () => {
   /** Exit-Workbench gate (02 §七.3): confirm if any session is live, then end
    * owned sessions (keep the runtime running). Returns whether the window may
    * close. */
+  /** Surface a shutdown/exit failure as a recoverable error view (03 §4.3). */
+  function setExitError(message: string) {
+    error.value = {
+      code: "WB_ERR_REAP_TIMEOUT",
+      message,
+      technical_detail: null,
+      retryable: true,
+      action: "retry",
+    };
+    status.value = "error";
+  }
+
   async function confirmExit(): Promise<boolean> {
     const live = tabs.value.filter(
       (t) => t.sessionState === "running" || t.sessionState === "starting"
@@ -628,11 +640,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       `有 ${live.length} 个活动会话，退出将结束它们（Runtime 保留运行）。继续？`
     );
     if (!ok) return false;
-    await Promise.all(
-      live
-        .filter((t) => t.sessionId)
-        .map((t) => ipc.closeSession(t.sessionId!).catch(() => null))
-    );
+    // Cleanup is owned by shutdown_workbench (03 §4.3); no fire-and-forget here.
     return true;
   }
 
@@ -730,13 +738,18 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   /** PTY Exit event (process_exit / user_close / transport_error). Applied
-   * once per tab (idempotent) - duplicate Exit/terminate results merge. */
+   * once per tab (idempotent) - duplicate Exit/terminate results merge. After
+   * the pane state is committed, ack the backend so the terminal registry
+   * entry can be evicted (03 §3.3.2; idempotent on both sides). */
   function onTabSessionExit(tabId: string, reason: string, exitCode: number | null) {
     const tab = findTab(tabId);
     if (!tab || tab.exit) return; // first writer wins (03 §五.2)
     const exit: TabExit = { reason, exitCode };
     tab.exit = exit;
     tab.sessionState = reason === "transport_error" ? "disconnected" : "exited";
+    if (tab.sessionId) {
+      void ipc.ackSessionExit(tab.sessionId).catch(() => null); // TTL sweeps if lost
+    }
   }
 
   /** Ensure the runtime is ready per preflight's recommended_action (start /
@@ -904,6 +917,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     capability,
     status,
     error,
+    setExitError,
     workspace,
     runtimeId,
     runtimeReady,
