@@ -489,6 +489,61 @@ pub async fn ack_session_exit(
     }
 }
 
+/// Phase-1 close plan computed under the registry lock (03 §2.3.3-4):
+/// - `Gone`: nothing to close.
+/// - `Terminal`: cached exit returned and entry dropped (03 §3.3.4).
+/// - `Run`: caller owns the close (session may be `None` for a Reserved entry
+///   whose spawn is still in flight).
+/// - `Wait`: a close is already in flight; share its completion.
+enum ClosePlan {
+    Terminal(SessionExit),
+    Run {
+        session: Option<PtySession>,
+        signal: ExitSignal,
+        close: Arc<ExitSignal>,
+        runtime_id: String,
+        workspace: String,
+    },
+    Wait(Arc<ExitSignal>),
+    Gone,
+}
+
+fn plan_close(
+    g: &mut HashMap<String, SessionEntry>,
+    session_id: &str,
+) -> ClosePlan {
+    match g.get_mut(session_id) {
+        None => ClosePlan::Gone,
+        Some(en) if en.state == SessionState::Closing => {
+            let close = en.close.clone().unwrap_or_else(|| {
+                let c = Arc::new(ExitSignal::new());
+                en.close = Some(Arc::clone(&c));
+                c
+            });
+            ClosePlan::Wait(close)
+        }
+        Some(en) => {
+            if let Some(exit) = en.exit.clone() {
+                // Cached terminal exit: return it and drop the entry; a later
+                // ack stays idempotent (03 §3.3.4).
+                g.remove(session_id);
+                ClosePlan::Terminal(exit)
+            } else {
+                en.state = SessionState::Closing;
+                let close = Arc::new(ExitSignal::new());
+                en.close = Some(Arc::clone(&close));
+                ClosePlan::Run {
+                    session: en.session.take(),
+                    signal: en.signal.clone(),
+                    close,
+                    runtime_id: en.runtime_id.clone(),
+                    workspace: en.workspace.clone(),
+                }
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn close_session(
     app: AppHandle,
@@ -496,61 +551,15 @@ pub async fn close_session(
 ) -> Result<SessionExit, WorkbenchError> {
     let reg = registry(&app);
 
-    // Phase 1 (under lock): transition to Closing in place, or share an
-    // in-flight close's completion (03 §2.3.3-4).
-    enum Slot {
-        Terminal(SessionExit),
-        Run {
-            session: Option<PtySession>,
-            signal: ExitSignal,
-            close: Arc<ExitSignal>,
-            runtime_id: String,
-            workspace: String,
-        },
-        Wait(Arc<ExitSignal>),
-        Gone,
-    }
     let slot = {
         let mut g = reg.lock()?;
-        match g.get_mut(&session_id) {
-            None => Slot::Gone,
-            Some(en) if en.state == SessionState::Closing => {
-                let close = en
-                    .close
-                    .clone()
-                    .unwrap_or_else(|| {
-                        let c = Arc::new(ExitSignal::new());
-                        en.close = Some(Arc::clone(&c));
-                        c
-                    });
-                Slot::Wait(close)
-            }
-            Some(en) => {
-                if let Some(exit) = en.exit.clone() {
-                    // Cached terminal exit: return it and drop the entry
-                    // (03 §3.3.4); a later ack stays idempotent.
-                    g.remove(&session_id);
-                    Slot::Terminal(exit)
-                } else {
-                    en.state = SessionState::Closing;
-                    let close = Arc::new(ExitSignal::new());
-                    en.close = Some(Arc::clone(&close));
-                    Slot::Run {
-                        session: en.session.take(),
-                        signal: en.signal.clone(),
-                        close,
-                        runtime_id: en.runtime_id.clone(),
-                        workspace: en.workspace.clone(),
-                    }
-                }
-            }
-        }
+        plan_close(&mut g, &session_id)
     };
 
     match slot {
-        Slot::Gone => Err(WorkbenchError::map_aisc("AISC_ERR_SESSION_NOT_FOUND")),
-        Slot::Terminal(exit) => Ok(exit),
-        Slot::Wait(close) => {
+        ClosePlan::Gone => Err(WorkbenchError::map_aisc("AISC_ERR_SESSION_NOT_FOUND")),
+        ClosePlan::Terminal(exit) => Ok(exit),
+        ClosePlan::Wait(close) => {
             // Concurrent close: await the shared completion, no second
             // terminate (03 §2.3.4).
             let deadline = CLOSE_WAIT + CLOSE_FORCE_WAIT + Duration::from_secs(1);
@@ -558,7 +567,7 @@ pub async fn close_session(
                 session_failed("close timed out while another close was in flight")
             })
         }
-        Slot::Run { session, signal, close, runtime_id, workspace } => {
+        ClosePlan::Run { session, signal, close, runtime_id, workspace } => {
             let exit = if let Some(session) = session {
                 // §3.1: terminate (kill container agent) -> wait/reap local
                 // child. cancel() sets the exit reason to user_close.
@@ -840,6 +849,87 @@ mod tests {
         // Oldest entries were evicted.
         assert!(!map.contains_key("s0"));
         assert!(!map.contains_key("s4"));
+    }
+
+    #[test]
+    fn close_plan_missing_is_gone() {
+        let mut map = HashMap::new();
+        assert!(matches!(plan_close(&mut map, "ghost"), ClosePlan::Gone));
+    }
+
+    #[test]
+    fn close_plan_terminal_returns_cached_exit_and_removes_entry() {
+        let mut map = HashMap::new();
+        map.insert("s1".into(), terminal_entry("r1", now_ms()));
+        let plan = plan_close(&mut map, "s1");
+        match plan {
+            ClosePlan::Terminal(exit) => assert_eq!(exit.exit_code, Some(0)),
+            _ => panic!("expected Terminal"),
+        }
+        assert!(!map.contains_key("s1"));
+    }
+
+    #[test]
+    fn close_plan_running_takes_session_and_marks_closing() {
+        let mut map = HashMap::new();
+        map.insert("s1".into(), live_entry("r1", "/ws"));
+        let plan = plan_close(&mut map, "s1");
+        match plan {
+            ClosePlan::Run { session, workspace, .. } => {
+                assert!(session.is_none()); // live_entry has no PtySession
+                assert_eq!(workspace, "/ws");
+            }
+            _ => panic!("expected Run"),
+        }
+        let en = map.get("s1").unwrap();
+        assert_eq!(en.state, SessionState::Closing);
+        assert!(en.session.is_none());
+        assert!(en.close.is_some());
+    }
+
+    #[test]
+    fn close_plan_concurrent_close_shares_completion() {
+        let mut map = HashMap::new();
+        map.insert("s1".into(), live_entry("r1", "/ws"));
+        // First close takes the Run slot and installs a completion.
+        let first = plan_close(&mut map, "s1");
+        let first_close = match &first {
+            ClosePlan::Run { close, .. } => Arc::clone(close),
+            _ => panic!("expected Run"),
+        };
+        // Second close on the same entry must Wait on the SAME completion.
+        let second = plan_close(&mut map, "s1");
+        match second {
+            ClosePlan::Wait(close) => {
+                assert!(Arc::ptr_eq(&first_close, &close));
+            }
+            _ => panic!("expected Wait"),
+        }
+    }
+
+    #[test]
+    fn close_plan_reserved_entry_is_run_without_session() {
+        let mut map = HashMap::new();
+        map.insert(
+            "s1".into(),
+            SessionEntry {
+                session: None,
+                signal: ExitSignal::new(),
+                state: SessionState::Starting,
+                exit: None,
+                runtime_id: "r1".into(),
+                agent: "bash".into(),
+                workspace: "/ws".into(),
+                generation: 1,
+                close: None,
+            },
+        );
+        let plan = plan_close(&mut map, "s1");
+        match plan {
+            ClosePlan::Run { session, .. } => assert!(session.is_none()),
+            _ => panic!("expected Run"),
+        }
+        assert_eq!(map.get("s1").unwrap().state, SessionState::Closing);
     }
 
     #[test]

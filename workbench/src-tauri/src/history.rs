@@ -80,6 +80,9 @@ pub struct WorkbenchHistory {
     pub revision: u64,
     #[serde(default)]
     pub workspaces: Vec<WorkspaceRecord>,
+    /// Unknown root fields survive round-trips (A-INFRA-5).
+    #[serde(default, flatten)]
+    pub extra: serde_json::Value,
 }
 
 impl WorkbenchHistory {
@@ -89,6 +92,7 @@ impl WorkbenchHistory {
             schema_version: SCHEMA_VERSION,
             revision: 0,
             workspaces: Vec::new(),
+            extra: serde_json::Value::Object(Default::default()),
         }
     }
 }
@@ -106,6 +110,10 @@ pub struct WorkspaceRecord {
     pub runtime: Option<RuntimeRef>,
     #[serde(default)]
     pub layout: Option<Layout>,
+    /// Unknown fields survive round-trips (A-INFRA-5): never drop forward
+    /// fields written by a newer Workbench.
+    #[serde(default, flatten)]
+    pub extra: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -125,6 +133,9 @@ pub struct Layout {
     pub active_tab_id: Option<String>,
     #[serde(default)]
     pub tabs: Vec<TabRecord>,
+    /// Unknown fields survive round-trips (A-INFRA-5).
+    #[serde(default, flatten)]
+    pub extra: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -135,6 +146,9 @@ pub struct TabRecord {
     pub title: String,
     #[serde(default)]
     pub position: u32,
+    /// Unknown fields survive round-trips (A-INFRA-5).
+    #[serde(default, flatten)]
+    pub extra: serde_json::Value,
 }
 
 /// Patch a window submits to `save`. Workspaces are upserted by path; other
@@ -201,6 +215,49 @@ pub fn save(dir: &Path, expected_revision: u64, patch: &HistoryPatch) -> Result<
     result
 }
 
+/// Deep-merge `src` into `dst` (unknown-field maps): `src` fills keys `dst`
+/// lacks; `dst` wins on conflict. Used so an old window's patch never drops
+/// unknown fields a newer window wrote (A-INFRA-5).
+fn merge_value(dst: &mut serde_json::Value, src: &serde_json::Value) {
+    if src.is_null() {
+        return;
+    }
+    if dst.is_null() {
+        *dst = src.clone();
+        return;
+    }
+    if let (Some(d_obj), Some(s_obj)) = (dst.as_object_mut(), src.as_object()) {
+        for (k, v) in s_obj {
+            match d_obj.get_mut(k) {
+                Some(dv) if dv.is_object() && v.is_object() => merge_value(dv, v),
+                _ => {
+                    d_obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Merge a freshly-loaded on-disk workspace record into the patch record so
+/// omitted typed fields and unknown fields at workspace/layout/tab layers
+/// survive the replace (A-INFRA-5: field-level deep merge).
+fn merge_workspace(old: &WorkspaceRecord, new: &mut WorkspaceRecord) {
+    merge_value(&mut new.extra, &old.extra);
+    if new.layout.is_none() {
+        // Patch omitted the layout entirely: keep the on-disk one.
+        new.layout = old.layout.clone();
+        return;
+    }
+    if let (Some(old_l), Some(new_l)) = (&old.layout, &mut new.layout) {
+        merge_value(&mut new_l.extra, &old_l.extra);
+        for old_t in &old_l.tabs {
+            if let Some(new_t) = new_l.tabs.iter_mut().find(|t| t.tab_id == old_t.tab_id) {
+                merge_value(&mut new_t.extra, &old_t.extra);
+            }
+        }
+    }
+}
+
 fn save_locked(
     dir: &Path,
     expected_revision: u64,
@@ -212,10 +269,13 @@ fn save_locked(
             current_revision: current.revision,
         });
     }
-    // Merge: upsert patch workspaces by path; preserve others.
+    // Merge: upsert patch workspaces by path; preserve others and their
+    // unknown fields.
     for ws in &patch.workspaces {
         if let Some(slot) = current.workspaces.iter_mut().find(|w| w.path == ws.path) {
+            let old = slot.clone();
             *slot = ws.clone();
+            merge_workspace(&old, slot);
         } else {
             current.workspaces.push(ws.clone());
         }
@@ -286,9 +346,12 @@ mod tests {
                         agent: "claude".into(),
                         title: "Claude".into(),
                         position: 0,
+                        ..Default::default()
                     }],
+                    ..Default::default()
                 }),
                 pinned: false,
+                ..Default::default()
             }],
         };
         let rev = save(dir.path(), 0, &patch).unwrap();
@@ -363,6 +426,63 @@ mod tests {
         let paths: Vec<_> = h.workspaces.iter().map(|w| w.path.as_str()).collect();
         assert!(paths.contains(&"/a"));
         assert!(paths.contains(&"/b"));
+    }
+
+    #[test]
+    fn unknown_fields_round_trip_at_every_layer() {
+        // A future/newer Workbench wrote unknown fields at root, workspace,
+        // layout and tab layers. They must survive load -> save -> reload
+        // (A-INFRA-5), never silently dropped.
+        let dir = tempdir().unwrap();
+        let raw = serde_json::json!({
+            "schema_version": 1,
+            "revision": 0,
+            "root_future": {"a": 1},
+            "workspaces": [{
+                "path": "/ws",
+                "ws_future": "keep-me",
+                "layout": {
+                    "active_tab_id": "t1",
+                    "layout_future": true,
+                    "tabs": [{
+                        "tab_id": "t1",
+                        "agent": "bash",
+                        "position": 0,
+                        "tab_future": [1, 2, 3]
+                    }]
+                }
+            }]
+        });
+        fs::write(
+            dir.path().join(HISTORY_FILE),
+            serde_json::to_vec_pretty(&raw).unwrap(),
+        )
+        .unwrap();
+
+        let h = load(dir.path()).unwrap();
+        // Round-trip through save with a patch touching the same workspace.
+        let rev = save(
+            dir.path(),
+            0,
+            &HistoryPatch {
+                workspaces: vec![WorkspaceRecord {
+                    path: "/ws".into(),
+                    last_agent: "bash".into(),
+                    ..Default::default()
+                }],
+            },
+        )
+        .unwrap();
+        assert_eq!(rev, 1);
+
+        let h = load(dir.path()).unwrap();
+        assert_eq!(h.extra.get("root_future").and_then(|v| v.get("a")), Some(&serde_json::json!(1)));
+        let ws = &h.workspaces[0];
+        assert_eq!(ws.extra.get("ws_future").and_then(|v| v.as_str()), Some("keep-me"));
+        let layout = ws.layout.as_ref().unwrap();
+        assert_eq!(layout.extra.get("layout_future").and_then(|v| v.as_bool()), Some(true));
+        let tab = &layout.tabs[0];
+        assert_eq!(tab.extra.get("tab_future").and_then(|v| v.as_array()).map(|a| a.len()), Some(3));
     }
 
     #[test]
