@@ -75,7 +75,6 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
-; S4.1.b: dependency check page state
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -399,14 +398,7 @@ Var AppStartMenuFolder
 !endif
 !insertmacro MUI_PAGE_STARTMENU Application $AppStartMenuFolder
 
-; 7. Dependency check page (S4.1.b) - check Docker Desktop / Python 3 / winget / WebView2
-;    and offer to install the missing ones via winget. WebView2 is handled by
-;    the WebView2 section below and is shown for information only.
-
-  ; the dependency install itself happens in Section Dependencies.
-FunctionEnd
-
-; 8. Installation page
+; 7. Installation page
 !insertmacro MUI_PAGE_INSTFILES
 
 ; 8. Finish page
@@ -670,7 +662,8 @@ Var PathHit
 
 ; $0 in/out: normalize a directory entry - trim spaces, strip one matching
 ; quote pair, remove trailing backslashes, lowercase (Windows compare).
-Function PathNormalizeDir
+!macro G18_PATH_FUNCS UN
+Function ${UN}PathNormalizeDir
   Push $1
   Push $2
   StrCpy $1 $0
@@ -705,7 +698,19 @@ Function PathNormalizeDir
       ${Break}
     ${EndIf}
   ${Loop}
-  ${StrCase} $1 $1 "L"
+  ; Lowercase (ASCII + locale). ${StrCase} from StrFunc cannot be invoked
+  ; from inside a macro (STRFUNC_CALL limitation), so use CharLowerBuffW.
+  StrCpy $2 $1
+  StrCpy $1 ""
+  ${Do}
+    StrCpy $3 $2 1
+    ${If} $3 == ""
+      ${Break}
+    ${EndIf}
+    System::Call 'user32::CharLowerBuffW(w .r3, i 1) i .r4'
+    StrCpy $1 "$1$3"
+    StrCpy $2 $2 "" 1
+  ${Loop}
   StrCpy $0 $1
   Pop $2
   Pop $1
@@ -713,7 +718,7 @@ FunctionEnd
 
 ; Read HKCU\Environment\Path into $PathRaw and its value type into $PathType
 ; (2 = REG_EXPAND_SZ, else REG_SZ); missing value -> $PathRaw = "", type SZ.
-Function PathRead
+Function ${UN}PathRead
   StrCpy $PathType 1
   System::Call 'advapi32::RegOpenKeyExW(i 0x80000001, w "Environment", i 0, i 0x20019, *i .r1) i .r2'
   ${If} $2 = 0
@@ -730,7 +735,7 @@ Function PathRead
 FunctionEnd
 
 ; Write $PathRaw back preserving $PathType, then broadcast WM_SETTINGCHANGE.
-Function PathWrite
+Function ${UN}PathWrite
   ${If} $PathType = 2
     WriteRegExpandStr HKCU "Environment" "Path" $PathRaw
   ${Else}
@@ -741,8 +746,8 @@ FunctionEnd
 
 ; Remove every PATH entry whose normalized form equals $1 (caller passes the
 ; normalized directory). Rewrites the value and broadcasts.
-Function RemovePathEntryExact
-  Call PathRead
+Function ${UN}RemovePathEntryExact
+  Call ${UN}PathRead
   StrCpy $2 $PathRaw
   StrCpy $3 ""
   ${Do}
@@ -765,7 +770,7 @@ Function RemovePathEntryExact
       StrCpy $2 $2 "" 1
     ${Loop}
     StrCpy $0 $6
-    Call PathNormalizeDir
+    Call ${UN}PathNormalizeDir
     ${If} $0 != $1
       ${If} $3 == ""
         StrCpy $3 $6
@@ -775,30 +780,30 @@ Function RemovePathEntryExact
     ${EndIf}
   ${Loop}
   StrCpy $PathRaw $3
-  Call PathWrite
+  Call ${UN}PathWrite
 FunctionEnd
 
 ; Install: ensure $INSTDIR is a PATH entry (05 §5.2 algorithm).
-Function AddInstDirToPath
+Function ${UN}AddInstDirToPath
   ; Install dir moved? Remove the old owned entry first (exact match only).
   ReadRegDWORD $0 HKCU "${MANUPRODUCTKEY}" "PathEntryOwned"
   ${If} $0 = 1
     ReadRegStr $1 HKCU "${MANUPRODUCTKEY}" "PathEntry"
     ${If} $1 != ""
       StrCpy $0 $1
-      Call PathNormalizeDir
+      Call ${UN}PathNormalizeDir
       StrCpy $1 $0
       StrCpy $0 $INSTDIR
-      Call PathNormalizeDir
+      Call ${UN}PathNormalizeDir
       ${If} $1 != $0
-        Call RemovePathEntryExact
+        Call ${UN}RemovePathEntryExact
       ${EndIf}
     ${EndIf}
   ${EndIf}
 
-  Call PathRead
+  Call ${UN}PathRead
   StrCpy $0 $INSTDIR
-  Call PathNormalizeDir
+  Call ${UN}PathNormalizeDir
   StrCpy $PathNorm $0
   StrCpy $6 0                ; $INSTDIR already present?
   StrCpy $PathHit ""
@@ -824,7 +829,7 @@ Function AddInstDirToPath
     ${Loop}
     ${If} $3 != ""
       StrCpy $0 $3
-      Call PathNormalizeDir
+      Call ${UN}PathNormalizeDir
       ${If} $0 == $PathNorm
         StrCpy $6 1
         ${Break}
@@ -869,14 +874,14 @@ Function AddInstDirToPath
   ${Else}
     StrCpy $PathRaw "$PathRaw;$INSTDIR"
   ${EndIf}
-  Call PathWrite
+  Call ${UN}PathWrite
   WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "PathEntryOwned" 1
   WriteRegStr HKCU "${MANUPRODUCTKEY}" "PathEntry" $INSTDIR
 FunctionEnd
 
 ; Uninstall: remove the owned entry only when the marker path matches $INSTDIR
 ; (normalized); never touches other entries or other aisc installs.
-Function RemoveInstDirFromPath
+Function ${UN}RemoveInstDirFromPath
   ReadRegDWORD $0 HKCU "${MANUPRODUCTKEY}" "PathEntryOwned"
   ${If} $0 <> 1
     Return
@@ -886,17 +891,25 @@ Function RemoveInstDirFromPath
     Return
   ${EndIf}
   StrCpy $0 $1
-  Call PathNormalizeDir
+  Call ${UN}PathNormalizeDir
   StrCpy $1 $0
   StrCpy $0 $INSTDIR
-  Call PathNormalizeDir
+  Call ${UN}PathNormalizeDir
   ${If} $1 != $0
     Return
   ${EndIf}
-  Call RemovePathEntryExact
+  Call ${UN}RemovePathEntryExact
   DeleteRegValue HKCU "${MANUPRODUCTKEY}" "PathEntryOwned"
   DeleteRegValue HKCU "${MANUPRODUCTKEY}" "PathEntry"
 FunctionEnd
+
+!macroend
+
+; installer-scope helpers (called from Section Install)
+!insertmacro G18_PATH_FUNCS ""
+; uninstaller-scope helpers (called from Section Uninstall; NSIS
+; requires un. functions in the uninstall section)
+!insertmacro G18_PATH_FUNCS "un."
 
 Section Install
   SetOutPath $INSTDIR
@@ -1134,7 +1147,7 @@ Section Uninstall
   ; G-18: remove the owned PATH entry (exact match only); /UPDATE keeps it so
   ; a reinstall restores the same entry instead of removing+re-adding (05 §5.2).
   ${If} $UpdateMode <> 1
-    Call RemoveInstDirFromPath
+    Call un.RemoveInstDirFromPath
   ${EndIf}
 
   ; Delete app data if the checkbox is selected

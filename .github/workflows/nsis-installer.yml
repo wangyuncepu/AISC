@@ -93,67 +93,120 @@ jobs:
           path: workbench/src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
 
-      # End-to-end smoke on the *installed* app: silent install, then run the
-      # sidecar's version + `build --dry-run` (zero docker calls) to prove the
-      # bundled aisc-bundle is discovered next to the sidecar exe.
-      - name: Smoke test installed app (silent install + CLI bundle discovery)
+      # End-to-end smoke on the *installed* app: silent install, G-18 PATH
+      # behavior (conflict scenario, exactly-once entry, REG_EXPAND_SZ
+      # preservation, resolution from a NEW PowerShell via PATH), sidecar
+      # version + `build --dry-run`, and S4.2 upgrade/uninstall retention.
+      - name: Smoke test installed app (silent install + PATH + retention)
         shell: pwsh
         run: |
           $setup = Get-ChildItem workbench/src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
           if (-not $setup) { throw "no setup.exe artifact found" }
-          Write-Host "installing: $($setup.FullName)"
-          $proc = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
-          if ($proc.ExitCode -ne 0) { throw "silent install failed with exit $($proc.ExitCode)" }
-
           $appDir = "$env:LOCALAPPDATA\AISC Workbench"
-          if (-not (Test-Path "$appDir\aisc-bundle\VERSION")) { throw "aisc-bundle not installed under $appDir" }
-          # tauri-bundler 2.9.x installs the externalBin sidecar under its base
-          # name (aisc.exe); accept the triple-suffixed name as a fallback.
-          $sidecar = Get-ChildItem $appDir -Filter "aisc*.exe" | Where-Object { $_.Name -in @("aisc.exe", "aisc-x86_64-pc-windows-msvc.exe") } | Select-Object -First 1
-          if (-not $sidecar) { throw "sidecar not found under $appDir (expected aisc.exe or aisc-x86_64-pc-windows-msvc.exe)" }
-          Write-Host "sidecar: $($sidecar.FullName)"
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+          if ($null -eq $userPath) { $userPath = "" }
+          $origPath = $userPath
 
-          & $sidecar.FullName version --format json
-          if ($LASTEXITCODE -ne 0) { throw "aisc version failed with exit $LASTEXITCODE" }
-
-          & $sidecar.FullName build --dry-run --tag smoke:latest --events
-          if ($LASTEXITCODE -ne 0) { throw "aisc build --dry-run failed with exit $LASTEXITCODE" }
-          Write-Host "SMOKE: PASSED"
-
-          # --- S4.2: upgrade + uninstall smoke (data retention) ---
-          # App data lives in the tauri config dir (history.json/settings.json);
-          # workspace data lives under the user's chosen workspace. Neither
-          # must be touched by reinstall or uninstall.
-          $dataDir = "$env:APPDATA\cn.aisc.workbench"
-          New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
-          $appDataMarker = Join-Path $dataDir "smoke-data-marker.txt"
-          Set-Content -Path $appDataMarker -Value "survive-upgrade" -Encoding utf8
-
-          $wsMarkerDir = Join-Path $env:TEMP "aisc-smoke-workspace\.aisc"
-          New-Item -ItemType Directory -Force -Path $wsMarkerDir | Out-Null
-          $wsMarker = Join-Path $wsMarkerDir "workspace-marker.txt"
-          Set-Content -Path $wsMarker -Value "survive-uninstall" -Encoding utf8
-
-          # Upgrade: re-run the same installer (same version -> add/reinstall
-          # maintenance flow; see PageReinstall in installer.nsi).
-          $proc2 = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
-          if ($proc2.ExitCode -ne 0) { throw "upgrade install failed with exit $($proc2.ExitCode)" }
-          if (-not (Test-Path $appDataMarker)) { throw "app-data marker lost after upgrade install" }
-          if (-not (Test-Path $wsMarker)) { throw "workspace marker lost after upgrade install" }
-          if (-not (Test-Path "$appDir\aisc-bundle\VERSION")) { throw "aisc-bundle lost after upgrade install" }
-          Write-Host "UPGRADE: PASSED"
-
-          # Uninstall: silent uninstaller, then verify app files removed while
-          # app-data + workspace markers are retained.
-          $uninstaller = Join-Path $appDir "uninstall.exe"
-          if (-not (Test-Path $uninstaller)) { throw "uninstaller not found at $uninstaller" }
-          $proc3 = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru
-          if ($proc3.ExitCode -ne 0) { throw "uninstall failed with exit $($proc3.ExitCode)" }
-          if (Test-Path "$appDir\aisc-bundle") { throw "aisc-bundle still present after uninstall" }
-          if (-not (Test-Path $appDataMarker)) { throw "app-data marker lost after uninstall" }
-          if (-not (Test-Path $wsMarker)) { throw "workspace marker lost after uninstall" }
-          if (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AISC Workbench") {
-            throw "uninstall registry key still present"
+          function Set-UserPath([string]$value) {
+            Set-ItemProperty -Path "HKCU:\Environment" -Name Path -Value $value -Type ExpandString
           }
-          Write-Host "UNINSTALL: PASSED"
-          Write-Host "S4.2 UPGRADE/UNINSTALL SMOKE: PASSED"
+          function Get-UserPath { [Environment]::GetEnvironmentVariable("Path", "User") }
+          function Count-InstDirEntries([string]$p) {
+            ($p -split ';' | Where-Object { $_.TrimEnd('\') -ieq $appDir }).Count
+          }
+
+          try {
+            # --- G-18 conflict scenario: a sentinel aisc shadows us ---
+            $sentinel = Join-Path $env:TEMP "aisc-sentinel"
+            New-Item -ItemType Directory -Force -Path $sentinel | Out-Null
+            Copy-Item "$env:SystemRoot\System32\cmd.exe" (Join-Path $sentinel "aisc.exe") -Force
+            Set-UserPath "$sentinel;$env:USERPROFILE\AppData\Roaming\aisc-smoke-test"
+            $p1 = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+            if ($p1.ExitCode -ne 0) { throw "silent install (conflict) failed with exit $($p1.ExitCode)" }
+            $after = Get-UserPath
+            if (Count-InstDirEntries $after -ne 0) { throw "G-18 conflict: INSTDIR added to PATH despite sentinel aisc" }
+            if (Test-Path "HKCU:\Software\aisc\AISC Workbench") {
+              $marker = (Get-ItemProperty "HKCU:\Software\aisc\AISC Workbench" -Name PathEntryOwned -ErrorAction SilentlyContinue).PathEntryOwned
+              if ($marker) { throw "G-18 conflict: ownership marker set despite conflict" }
+            }
+            Write-Host "G-18 CONFLICT: PASSED"
+
+            # --- main install on a clean-ish PATH (REG_EXPAND_SZ) ---
+            $testEntry = "$env:USERPROFILE\AppData\Roaming\aisc-smoke-test"
+            New-Item -ItemType Directory -Force -Path $testEntry | Out-Null
+            Set-UserPath "%USERPROFILE%\AppData\Roaming\aisc-smoke-test"
+            $proc = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+            if ($proc.ExitCode -ne 0) { throw "silent install failed with exit $($proc.ExitCode)" }
+
+            if (-not (Test-Path "$appDir\aisc-bundle\VERSION")) { throw "aisc-bundle not installed under $appDir" }
+            # tauri-bundler installs the externalBin sidecar under its base
+            # name (aisc.exe); accept the triple-suffixed name as a fallback.
+            $sidecar = Get-ChildItem $appDir -Filter "aisc*.exe" | Where-Object { $_.Name -in @("aisc.exe", "aisc-x86_64-pc-windows-msvc.exe") } | Select-Object -First 1
+            if (-not $sidecar) { throw "sidecar not found under $appDir (expected aisc.exe or aisc-x86_64-pc-windows-msvc.exe)" }
+            Write-Host "sidecar: $($sidecar.FullName)"
+
+            & $sidecar.FullName version --format json
+            if ($LASTEXITCODE -ne 0) { throw "aisc version failed with exit $LASTEXITCODE" }
+
+            # --- G-18: exactly one entry, REG_EXPAND_SZ + %VAR% preserved ---
+            $after = Get-UserPath
+            if (Count-InstDirEntries $after -ne 1) { throw "G-18: expected exactly 1 INSTDIR PATH entry, got $(Count-InstDirEntries $after)" }
+            $typeCode = (Get-Item "HKCU:\Environment").GetValueKind('Path')
+            if ($typeCode -ne 'ExpandString') { throw "G-18: user PATH type changed to $typeCode (expected ExpandString)" }
+            if ($after -notlike "*%USERPROFILE%\AppData\Roaming\aisc-smoke-test*") { throw "G-18: %USERPROFILE% entry lost/expanded" }
+
+            # --- G-18: resolution from a NEW PowerShell process via PATH ---
+            $resolved = & powershell -NoProfile -Command "Get-Command aisc -ErrorAction Stop | Select-Object -ExpandProperty Source"
+            if ($LASTEXITCODE -ne 0 -or $resolved -ine "$appDir\aisc.exe") {
+              throw "G-18: PATH resolution failed - got '$resolved', expected '$appDir\aisc.exe'"
+            }
+            & powershell -NoProfile -Command "aisc version --format json | Out-Null; exit `$LASTEXITCODE"
+            if ($LASTEXITCODE -ne 0) { throw "G-18: aisc version via PATH failed with exit $LASTEXITCODE" }
+            Write-Host "G-18 PATH: PASSED"
+
+            & $sidecar.FullName build --dry-run --tag smoke:latest --events
+            if ($LASTEXITCODE -ne 0) { throw "aisc build --dry-run failed with exit $LASTEXITCODE" }
+            Write-Host "SMOKE: PASSED"
+
+            # --- S4.2: upgrade + uninstall smoke (data retention) ---
+            $dataDir = "$env:APPDATA\cn.aisc.workbench"
+            New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+            $appDataMarker = Join-Path $dataDir "smoke-data-marker.txt"
+            Set-Content -Path $appDataMarker -Value "survive-upgrade" -Encoding utf8
+
+            $wsMarkerDir = Join-Path $env:TEMP "aisc-smoke-workspace\.aisc"
+            New-Item -ItemType Directory -Force -Path $wsMarkerDir | Out-Null
+            $wsMarker = Join-Path $wsMarkerDir "workspace-marker.txt"
+            Set-Content -Path $wsMarker -Value "survive-uninstall" -Encoding utf8
+
+            # Upgrade: re-run the same installer (same version -> add/reinstall
+            # maintenance flow; see PageReinstall in installer.nsi).
+            $proc2 = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+            if ($proc2.ExitCode -ne 0) { throw "upgrade install failed with exit $($proc2.ExitCode)" }
+            if (-not (Test-Path $appDataMarker)) { throw "app-data marker lost after upgrade install" }
+            if (-not (Test-Path $wsMarker)) { throw "workspace marker lost after upgrade install" }
+            if (-not (Test-Path "$appDir\aisc-bundle\VERSION")) { throw "aisc-bundle lost after upgrade install" }
+            if (Count-InstDirEntries (Get-UserPath) -ne 1) { throw "G-18: PATH entry count changed after upgrade" }
+            Write-Host "UPGRADE: PASSED"
+
+            # Uninstall: silent uninstaller, then verify app files removed while
+            # app-data + workspace markers and the other PATH entries survive.
+            $uninstaller = Join-Path $appDir "uninstall.exe"
+            if (-not (Test-Path $uninstaller)) { throw "uninstaller not found at $uninstaller" }
+            $proc3 = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru
+            if ($proc3.ExitCode -ne 0) { throw "uninstall failed with exit $($proc3.ExitCode)" }
+            if (Test-Path "$appDir\aisc-bundle") { throw "aisc-bundle still present after uninstall" }
+            if (-not (Test-Path $appDataMarker)) { throw "app-data marker lost after uninstall" }
+            if (-not (Test-Path $wsMarker)) { throw "workspace marker lost after uninstall" }
+            if (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AISC Workbench") {
+              throw "uninstall registry key still present"
+            }
+            $final = Get-UserPath
+            if (Count-InstDirEntries $final -ne 0) { throw "G-18: INSTDIR entry not removed on uninstall" }
+            if ($final -notlike "*%USERPROFILE%\AppData\Roaming\aisc-smoke-test*") { throw "G-18: unrelated PATH entry removed on uninstall" }
+            Write-Host "UNINSTALL: PASSED"
+            Write-Host "S4.2 UPGRADE/UNINSTALL SMOKE: PASSED"
+          } finally {
+            # restore the runner's original user PATH
+            Set-UserPath $origPath
+          }
