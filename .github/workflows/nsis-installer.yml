@@ -153,7 +153,10 @@ jobs:
             if ((Count-InstDirEntries $after) -ne 1) { throw "G-18: expected exactly 1 INSTDIR PATH entry, got $(Count-InstDirEntries $after)" }
             $typeCode = (Get-Item "HKCU:\Environment").GetValueKind('Path')
             if ($typeCode -ne 'ExpandString') { throw "G-18: user PATH type changed to $typeCode (expected ExpandString)" }
-            if ($after -notlike "*%USERPROFILE%\AppData\Roaming\aisc-smoke-test*") { throw "G-18: %USERPROFILE% entry lost/expanded" }
+            # GetEnvironmentVariable expands EXPAND_SZ; check the raw registry
+            # value so a literal %USERPROFILE% entry is detectable.
+            $raw = (Get-Item "HKCU:\Environment").GetValue("Path", $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            if ($raw -notlike "*%USERPROFILE%\AppData\Roaming\aisc-smoke-test*") { throw "G-18: %USERPROFILE% entry lost/expanded (raw=$raw)" }
 
             # --- G-18: resolution from a NEW PowerShell process via PATH ---
             $resolved = & powershell -NoProfile -Command "Get-Command aisc -ErrorAction Stop | Select-Object -ExpandProperty Source"
