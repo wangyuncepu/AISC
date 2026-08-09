@@ -316,3 +316,53 @@ async fn reopen_25_cycles_leaves_no_orphan_sessions() {
     drop(session);
     eprintln!("reopen {cycles} cycles: PASSED");
 }
+#[tokio::test]
+async fn perf_runtime_stop_with_eight_sessions() {
+    // G-07 perf evidence (03 §4.2): runtime stop with 8 live container
+    // sessions, measured via the real CLI (--grace 3). Gated on the real
+    // CLI + runtime. Prints the stop duration; the P95 gate (7s for 8
+    // sessions) is judged from the recorded samples.
+    let aisc = match std::env::var("AISC_TEST_CLI") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            eprintln!("skip: AISC_TEST_CLI not set");
+            return;
+        }
+    };
+    let rid = match std::env::var("AISC_TEST_RUNTIME_ID") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            eprintln!("skip: AISC_TEST_RUNTIME_ID not set");
+            return;
+        }
+    };
+    let ws = std::env::var("AISC_TEST_WORKSPACE")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    let mut sessions = Vec::new();
+    for i in 0..8usize {
+        let sid = format!("{:08x}-0000-4000-8000-{:012x}", 0xB0000000 + i as u32, i);
+        let (tx, _rx) = mpsc::channel(256);
+        let argv = vec![
+            "session".into(),
+            "open".into(),
+            "--runtime-id".into(),
+            rid.clone(),
+            "--session-id".into(),
+            sid,
+            "--agent".into(),
+            "bash".into(),
+        ];
+        let (session, _signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx).expect("spawn");
+        sessions.push(session);
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await; // let execs settle
+    let t0 = std::time::Instant::now();
+    let out = std::process::Command::new(&aisc)
+        .args(["runtime", "stop", "--runtime-id", &rid, "--workspace", &ws, "--grace", "3", "--format", "json"])
+        .output()
+        .expect("runtime stop");
+    let elapsed = t0.elapsed();
+    eprintln!("runtime stop with 8 sessions: {elapsed:?} (exit {})", out.status);
+    drop(sessions); // PTY handles close; children already gone with the container
+    assert!(out.status.success(), "runtime stop failed: {}", String::from_utf8_lossy(&out.stderr));
+}

@@ -895,16 +895,37 @@ export const useRuntimeStore = defineStore("runtime", () => {
     );
     if (!ok) return;
     status.value = "stopping";
-    // Close every live session best-effort (03 §七.2), then stop the runtime.
+    // Staged concurrent stop (03 §4.2): start every session close in
+    // parallel, but do not wait for all of them - wait at most 400ms for the
+    // terminate CLI spawns, then stop the runtime (container-side sessions
+    // are considered terminated once stop confirms; Rust keeps reaping the
+    // local PTY children). Stop is confirmed by a follow-up inspect.
     const closing = tabs.value.filter(
       (t) => t.sessionId && !TERMINAL_STATES.includes(t.sessionState) && t.sessionState !== "closing"
     );
-    await Promise.all(closing.map((t) => ipc.closeSession(t.sessionId!).catch(() => null)));
+    const closePromises = closing.map((t) => ipc.closeSession(t.sessionId!).catch(() => null));
+    await Promise.race([
+      Promise.all(closePromises),
+      new Promise((resolve) => setTimeout(resolve, 400)),
+    ]);
     tabs.value = [];
     activeTabId.value = null;
     try {
       if (runtimeId.value) {
-        await ipc.stopRuntime(workspace.value.trim(), runtimeId.value);
+        const snap = await ipc.stopRuntime(workspace.value.trim(), runtimeId.value);
+        // Only trust an observation: inspect until stopped/not_found.
+        if (["running", "stopping", "unknown"].includes(snap.state)) {
+          const insp = await ipc.runtimeInspect(workspace.value.trim(), runtimeId.value);
+          if (!["stopped", "not_found"].includes(insp.state)) {
+            throw {
+              code: "WB_ERR_RUNTIME_NOT_STOPPED",
+              message: `Runtime 仍处于 ${insp.state}（stop 后 inspect 确认失败）`,
+              technical_detail: null,
+              retryable: true,
+              action: "retry",
+            } as WorkbenchError;
+          }
+        }
       }
     } catch (e) {
       status.value = "error";

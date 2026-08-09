@@ -36,6 +36,13 @@ const MAX_WRITE_BYTES: usize = 1024 * 1024; // 1 MB paste cap (05 §9.2)
 const TERMINATE_TIMEOUT: Duration = Duration::from_secs(5);
 const CLOSE_WAIT: Duration = Duration::from_secs(4);
 const CLOSE_FORCE_WAIT: Duration = Duration::from_secs(2);
+/// Shutdown coordinator budget (03 §4.3): graceful close 6s, force-reap 2s,
+/// flush 1s, total hard deadline 12s. All internal waits read the shared
+/// remaining deadline instead of stacking per-session timeouts.
+const SHUTDOWN_GRACEFUL: Duration = Duration::from_secs(6);
+const SHUTDOWN_FORCE: Duration = Duration::from_secs(2);
+const SHUTDOWN_FLUSH: Duration = Duration::from_secs(1);
+const SHUTDOWN_TOTAL: Duration = Duration::from_secs(12);
 const EVENT_CHANNEL_CAP: usize = 256;
 /// Terminal (reaped) entry TTL before lazy eviction (03 §3.3.5).
 const TERMINAL_TTL_MS: i64 = 60_000;
@@ -654,7 +661,10 @@ pub async fn shutdown_workbench(
         g.keys().cloned().collect()
     };
 
-    // Concurrent bounded close; each close_session path owns reap/force-kill.
+    // Concurrent bounded close (03 §4.3): all closes share the 6s graceful
+    // window; anything still running when it expires is cancelled and the
+    // force-reap phase takes over. A cancelled close that was mid-terminate
+    // is counted as terminate_timed_out; the child is force-reaped next.
     let mut handles = Vec::new();
     for id in &ids {
         let app = app.clone();
@@ -662,16 +672,25 @@ pub async fn shutdown_workbench(
         handles.push(tokio::spawn(async move { close_session(app, id).await }));
     }
     let mut report = ShutdownReport::default();
-    for h in handles {
-        match h.await {
-            Ok(Ok(_)) => report.graceful_closed += 1,
-            Ok(Err(_)) => report.terminate_timed_out += 1,
-            Err(_) => report.terminate_timed_out += 1,
+    let mut completed = 0usize;
+    let graceful_deadline = tokio::time::Instant::now() + SHUTDOWN_GRACEFUL;
+    for h in &mut handles {
+        let remaining = graceful_deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, &mut *h).await {
+            Ok(Ok(Ok(_))) => completed += 1,
+            Ok(Ok(Err(_))) => report.terminate_timed_out += 1,
+            // Window expired (or task panicked): cancel; child is force-reaped.
+            _ => {
+                h.abort();
+                report.terminate_timed_out += 1;
+            }
         }
     }
+    report.graceful_closed = completed;
 
-    // Force-reap any leftover live children (03 §4.3: force-reap leftovers).
-    let mut leftover: Vec<String> = {
+    // Force-reap any leftover live children (03 §4.3): kill everything up
+    // front, then wait for the reaps inside one shared 2s window.
+    let leftover: Vec<String> = {
         let g = reg.lock()?;
         g.iter()
             .filter(|(_, e)| e.session.is_some() && e.exit.is_none())
@@ -679,20 +698,22 @@ pub async fn shutdown_workbench(
             .collect()
     };
     for id in &leftover {
-        {
-            let mut g = reg.lock()?;
-            if let Some(en) = g.get_mut(id) {
-                if let Some(s) = en.session.take() {
-                    s.force_kill();
-                }
+        let mut g = reg.lock()?;
+        if let Some(en) = g.get_mut(id) {
+            if let Some(s) = en.session.take() {
+                s.force_kill();
             }
         }
-        let _ = tokio::time::timeout(CLOSE_FORCE_WAIT, async {
-            let reg = reg.clone();
+    }
+    let mut waiters = Vec::new();
+    for id in &leftover {
+        let reg = reg.clone();
+        let id = id.clone();
+        waiters.push(tokio::spawn(async move {
             loop {
                 let done = {
                     let g = reg.lock()?;
-                    g.get(id).map(|e| e.exit.is_some()).unwrap_or(true)
+                    g.get(&id).map(|e| e.exit.is_some()).unwrap_or(true)
                 };
                 if done {
                     break;
@@ -700,9 +721,14 @@ pub async fn shutdown_workbench(
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
             Ok::<(), WorkbenchError>(())
-        })
-        .await;
+        }));
     }
+    let _ = tokio::time::timeout(SHUTDOWN_FORCE, async {
+        for w in waiters {
+            let _ = w.await;
+        }
+    })
+    .await;
     // Reap wait is the force path; anything still alive is unreaped.
     let still_alive: Vec<String> = {
         let g = reg.lock()?;
