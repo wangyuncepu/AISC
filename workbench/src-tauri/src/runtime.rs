@@ -193,6 +193,8 @@ fn runtime_stop_argv(runtime_id: &str, workspace: &str) -> Vec<String> {
         runtime_id.into(),
         "--workspace".into(),
         workspace.into(),
+        "--grace".into(),
+        "3".into(),
         "--format".into(),
         "json".into(),
     ]
@@ -585,11 +587,14 @@ mod tests {
     }
 
     #[test]
-    fn stop_argv_threads_workspace() {
+    fn stop_argv_threads_workspace_and_grace3() {
         let argv = runtime_stop_argv("rid", "/ws");
         assert_eq!(argv[1], "stop");
         assert!(argv.contains(&"--workspace".into()));
         assert!(argv.contains(&"/ws".into()));
+        // Workbench fast path: --grace 3 (03 §4.2; CLI default stays 10).
+        let g = argv.iter().position(|a| a == "--grace").unwrap();
+        assert_eq!(argv[g + 1], "3");
     }
 
     #[test]

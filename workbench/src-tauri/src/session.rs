@@ -30,8 +30,11 @@ use crate::settings::Settings;
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const MAX_WRITE_BYTES: usize = 1024 * 1024; // 1 MB paste cap (05 §9.2)
-const TERMINATE_TIMEOUT: Duration = Duration::from_secs(15);
-const CLOSE_WAIT: Duration = Duration::from_secs(10);
+// G-07 budgets (03 §4.1): Workbench fast path uses explicit --grace 3; the
+// CLI defaults (10/5) stay untouched. These are hard upper bounds, not
+// targets.
+const TERMINATE_TIMEOUT: Duration = Duration::from_secs(5);
+const CLOSE_WAIT: Duration = Duration::from_secs(4);
 const CLOSE_FORCE_WAIT: Duration = Duration::from_secs(2);
 const EVENT_CHANNEL_CAP: usize = 256;
 /// Terminal (reaped) entry TTL before lazy eviction (03 §3.3.5).
@@ -191,6 +194,8 @@ fn session_terminate_argv(runtime_id: &str, session_id: &str, workspace: &str) -
         session_id.into(),
         "--workspace".into(),
         workspace.into(),
+        "--grace".into(),
+        "3".into(),
         "--format".into(),
         "json".into(),
     ]
@@ -766,13 +771,24 @@ mod tests {
     }
 
     #[test]
-    fn terminate_argv_includes_format_json_and_workspace() {
+    fn terminate_argv_includes_format_json_workspace_and_grace3() {
         let argv = session_terminate_argv("rid", "sid", "/ws");
         assert_eq!(argv[1], "terminate");
         assert!(argv.contains(&"--format".into()));
         assert!(argv.contains(&"json".into()));
         let i = argv.iter().position(|a| a == "--workspace").unwrap();
         assert_eq!(argv[i + 1], "/ws");
+        // Workbench fast path always uses --grace 3 (03 §4.1 / 05 §4.2).
+        let g = argv.iter().position(|a| a == "--grace").unwrap();
+        assert_eq!(argv[g + 1], "3");
+    }
+
+    #[test]
+    fn g07_budgets_match_contract() {
+        // 03 §4.1: terminate budget 5s, close wait 4s, force reap 2s.
+        assert_eq!(TERMINATE_TIMEOUT, Duration::from_secs(5));
+        assert_eq!(CLOSE_WAIT, Duration::from_secs(4));
+        assert_eq!(CLOSE_FORCE_WAIT, Duration::from_secs(2));
     }
 
     #[test]
