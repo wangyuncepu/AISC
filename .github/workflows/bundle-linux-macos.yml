@@ -1,0 +1,94 @@
+name: Bundle Linux/macOS
+
+# S4.2 release gate: produce Linux (deb) and macOS (dmg) installers on CI so
+# the three-platform bundle path is verified, not just Windows NSIS. The
+# sidecar is built from source per-platform (same pattern as cli-sidecar.yml),
+# staged aisc-bundle included, then `tauri build` runs for the requested
+# bundle type. Signing/notarization are out of scope (no cert / Apple account).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop, main]
+    paths:
+      - 'workbench/src-tauri/**'
+      - '.github/workflows/bundle-linux-macos.yml'
+      - '.github/workflows/cli-sidecar.yml'
+      - 'src/aisc/**'
+      - 'packaging/**'
+      - 'scripts/build-cli.*'
+      - 'VERSION'
+      - 'pyproject.toml'
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+            bundle: deb
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+            bundle: dmg
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install CLI build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -e .
+
+      - name: Build CLI sidecar
+        shell: bash
+        run: |
+          TARGET_TRIPLE=${{ matrix.triple }} scripts/build-cli.sh
+
+      - name: Drop sidecar into externalBin dir
+        shell: bash
+        run: |
+          mkdir -p workbench/src-tauri/binaries
+          cp dist/aisc-${{ matrix.triple }} workbench/src-tauri/binaries/
+
+      - name: Stage AISC CLI bundle (aisc-bundle for root discovery)
+        shell: bash
+        run: |
+          python packaging/artifact.py stage --root . --output workbench/src-tauri/nsis/bundle
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: workbench/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: workbench
+        run: npm ci
+
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Build ${{ matrix.bundle }} bundle
+        working-directory: workbench
+        run: npm run tauri build -- --bundles ${{ matrix.bundle }}
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aisc-workbench-${{ matrix.os }}
+          path: workbench/src-tauri/target/release/bundle/${{ matrix.bundle }}/
+          if-no-files-found: error

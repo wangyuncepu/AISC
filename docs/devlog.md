@@ -2,7 +2,17 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-08) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）
+## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
+
+### S4.2 发布门（2026-08-09，06-implementation-plan.md §七 S4.2）
+
+- **三平台契约 smoke**：`tests.yml` matrix 加 `macos-latest`（原 ubuntu+windows），3.11/3.12/3.13 × 3 OS。验证待 GitHub Actions dispatch。
+- **Linux/macOS bundle CI**：新增 `.github/workflows/bundle-linux-macos.yml`——ubuntu 产 deb、macos 产 DMG，各自从源码构建 sidecar + stage aisc-bundle + `tauri build --bundles`，产物上传 artifact。验证待 CI。
+- **Windows 覆盖升级/卸载安全冒烟**：`nsis-installer.yml` 冒烟扩展——静默装后放置 `%APPDATA%\cn.aisc.workbench\` 与 workspace `.aisc/` 数据标记 → 同版本覆盖重装（silent 走 uninstall+reinstall 维护流程）→ 断言标记存活 + bundle 在 → 静默卸载 → 断言 app 文件与卸载注册表键清除、**数据标记保留**。验证待 CI。
+- **回滚文档**：新增 `docs/releases/rollback.md`——数据保留边界（app_config_dir/工作区不受卸载影响）、降级路径（allow_downgrades=false 需先卸载）、CLI 协商顺序（`--aisc-cli` > pin > sidecar > PATH > 平台已知位置，对应 `cli.rs` `enumerate_candidates`）、pin 清理方法、回滚验证清单。
+- 范围外 blocked：Windows 代码签名（无证书）、macOS 公证（无账号/机），正式 Preview 发布在签名/公证前不进行。计划见 `docs/plans/PLAN-workbench-s4.2-release-gates.md`。
+
+
 
 ### 变更
 

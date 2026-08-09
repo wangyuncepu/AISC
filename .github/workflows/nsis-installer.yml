@@ -114,3 +114,41 @@ jobs:
           & $sidecar.FullName build --dry-run --tag smoke:latest --events
           if ($LASTEXITCODE -ne 0) { throw "aisc build --dry-run failed with exit $LASTEXITCODE" }
           Write-Host "SMOKE: PASSED"
+
+          # --- S4.2: upgrade + uninstall smoke (data retention) ---
+          # App data lives in the tauri config dir (history.json/settings.json);
+          # workspace data lives under the user's chosen workspace. Neither
+          # must be touched by reinstall or uninstall.
+          $dataDir = "$env:APPDATA\cn.aisc.workbench"
+          New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+          $appDataMarker = Join-Path $dataDir "smoke-data-marker.txt"
+          Set-Content -Path $appDataMarker -Value "survive-upgrade" -Encoding utf8
+
+          $wsMarkerDir = Join-Path $env:TEMP "aisc-smoke-workspace\.aisc"
+          New-Item -ItemType Directory -Force -Path $wsMarkerDir | Out-Null
+          $wsMarker = Join-Path $wsMarkerDir "workspace-marker.txt"
+          Set-Content -Path $wsMarker -Value "survive-uninstall" -Encoding utf8
+
+          # Upgrade: re-run the same installer (same version -> add/reinstall
+          # maintenance flow; see PageReinstall in installer.nsi).
+          $proc2 = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($proc2.ExitCode -ne 0) { throw "upgrade install failed with exit $($proc2.ExitCode)" }
+          if (-not (Test-Path $appDataMarker)) { throw "app-data marker lost after upgrade install" }
+          if (-not (Test-Path $wsMarker)) { throw "workspace marker lost after upgrade install" }
+          if (-not (Test-Path "$appDir\aisc-bundle\VERSION")) { throw "aisc-bundle lost after upgrade install" }
+          Write-Host "UPGRADE: PASSED"
+
+          # Uninstall: silent uninstaller, then verify app files removed while
+          # app-data + workspace markers are retained.
+          $uninstaller = Join-Path $appDir "uninstall.exe"
+          if (-not (Test-Path $uninstaller)) { throw "uninstaller not found at $uninstaller" }
+          $proc3 = Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait -PassThru
+          if ($proc3.ExitCode -ne 0) { throw "uninstall failed with exit $($proc3.ExitCode)" }
+          if (Test-Path "$appDir\aisc-bundle") { throw "aisc-bundle still present after uninstall" }
+          if (-not (Test-Path $appDataMarker)) { throw "app-data marker lost after uninstall" }
+          if (-not (Test-Path $wsMarker)) { throw "workspace marker lost after uninstall" }
+          if (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AISC Workbench") {
+            throw "uninstall registry key still present"
+          }
+          Write-Host "UNINSTALL: PASSED"
+          Write-Host "S4.2 UPGRADE/UNINSTALL SMOKE: PASSED"
