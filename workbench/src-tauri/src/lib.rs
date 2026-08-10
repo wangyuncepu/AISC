@@ -32,7 +32,7 @@ use session::{
     write_session, SessionRegistry,
 };
 use settings::{load_settings, reset_gui_settings, save_settings};
-use tray::{build_tray, tray_available};
+use tray::{build_tray, tray_available, tray_remove};
 use window::{capture_window_geometry, restore_window_geometry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -80,6 +80,7 @@ pub fn run(cli_arg: Option<String>) {
             capture_window_geometry,
             run_doctor,
             tray_available,
+            tray_remove,
         ])
         .on_window_event(|window, event| {
             // G-16: intercept CloseRequested on the main window. Both behaviors

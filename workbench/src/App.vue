@@ -216,6 +216,9 @@ async function runExitFlow(): Promise<void> {
   if (!allow) return;
   const win = getCurrentWindow();
   void win.hide().catch(() => undefined);
+  // G-16: hide the tray icon instantly too (window close already feels instant;
+  // cleanup runs in the background, A-G16-3).
+  void ipc.trayRemove().catch(() => undefined);
   // G-10: flush geometry before shutdown (A-G10-5).
   void ipc.captureWindowGeometry().catch(() => undefined);
   void ipc.shutdownWorkbench().catch((e) => {

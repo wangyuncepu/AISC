@@ -112,3 +112,22 @@ pub fn on_window_close_requested(window: &tauri::Window, api: &tauri::CloseReque
 pub fn tray_available(app: AppHandle) -> bool {
     tray_live(&app)
 }
+
+/// Hide the tray icon immediately (G-16, user feedback 2026-08-10). The window
+/// close already hides the window before `shutdown_workbench` finishes, but the
+/// tray icon lingered for the whole bounded cleanup (~12s). The frontend calls
+/// this right after the exit confirm passes, so the icon disappears instantly
+/// while session cleanup runs transparently in the background - same UX as the
+/// window close (A-G16-3 still holds: cancel keeps the tray + hidden window).
+/// Best-effort: no-op when no tray is live.
+#[tauri::command]
+pub fn tray_remove(app: AppHandle) -> Result<(), String> {
+    if let Some(state) = app.try_state::<TrayState>() {
+        if let Ok(g) = state.0.lock() {
+            if let Some(t) = g.as_ref() {
+                t.set_visible(false).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
