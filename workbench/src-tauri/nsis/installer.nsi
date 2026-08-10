@@ -1144,11 +1144,13 @@ Section Docker
   ${EndIf}
 
   DetailPrint "$(DOCKER_INSTALLING)"
-  ; Hidden console. winget's UTF-8 piped stdout is misdecoded by nsExec as the
-  ; ANSI codepage (mojibake in the log), but its status lines are mostly ASCII
-  ; (URLs / package names), so ExecToLog streams readable live progress into
-  ; the Details pane; the localized lines above/below keep the intent clear.
-  nsExec::ExecToLog '"winget" install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements --disable-interactivity'
+  ; Run winget through the bundled transcode helper: winget emits UTF-8 to a
+  ; pipe but nsExec decodes stdout as the ANSI codepage, so raw output shows
+  ; mojibake in the Details pane. wg-transcode.ps1 (installed via
+  ; bundle.resources) re-encodes each chunk to the system ANSI codepage,
+  ; keeping the live progress readable. PowerShell is present on all
+  ; supported Windows (WebView2 already requires a modern OS).
+  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\wg-transcode.ps1" install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements --disable-interactivity'
   Pop $0 ; winget exit code
   StrCpy $DockerWingetExit $0 ; save BEFORE CheckDocker clobbers $0
   Call CheckDocker
