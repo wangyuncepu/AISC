@@ -127,10 +127,16 @@ export function newPaneTab(
       : tree.kind === "pane"
         ? tree.paneId
         : firstPane(tree).paneId;
+  // Derive BOTH agent and title from the active leaf, never from the persisted
+  // flat record alone: a split's history `title` may predate the split (saved
+  // before the 300ms debounce flushed), leaving the tab bar on the old agent
+  // while the window title (from `agent`) showed the new one (G-17 feedback
+  // 2026-08-10). The persisted title is only a fallback for unknown agents.
+  const activeType = findPane(tree, activePaneId)?.sessionType ?? agent;
   return {
     tabId,
-    agent: findPane(tree, activePaneId)?.sessionType ?? agent,
-    title,
+    agent: activeType,
+    title: AGENT_TITLE[activeType] ?? title,
     sessionId: null,
     sessionState: "idle",
     exit: null,
