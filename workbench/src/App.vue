@@ -581,7 +581,9 @@ button.danger:hover:not(:disabled) { background: #6e3a3a; }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: #1e1e1e; display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
 .empty-tabs {
-  height: 100%; display: flex; flex-direction: column; align-items: center;
+  /* fill the terminal-area row so internal centering is global, not the
+     content-width box anchored at the left edge (G-17 feedback 2026-08-10) */
+  flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 10px; color: #888; font-size: 13px;
 }
 </style>
