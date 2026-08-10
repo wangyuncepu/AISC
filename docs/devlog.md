@@ -2,7 +2,12 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-## v2.3.1-dev (2026-08-09 ~) - GUI Fine-Tune Step 0：契约与测试基础设施（A-INFRA-1..5）
+# v2.1.5-dev (2026-08-09 ~ 2026-08-10) — GUI Fine-Tune：G-01..G-18 全部完成
+
+> **阶段总结（2026-08-09 ~ 2026-08-10）**：GUI Fine-Tune 18 个目标（G-01..G-18）全部完成并合并回 develop。覆盖：契约/测试基础设施（A-INFRA）、sidecar 入 PATH、停止/关闭/退出性能、typed settings、i18n、动态多 tab、终端渲染升级、设置页交付、侧边栏分层 + Provider 引导、Resize 根因修复、窗口记忆、终端基础 + 右键菜单、一键诊断、构建通知、动态标题、托盘、Tab 内分屏、明暗主题。
+> 每步均按 06-implementation-plan 拆子步骤 → 验收清单（A-*）→ 自动化 + 手动测试 → 汇报；CI 全绿；已知遗留（分屏键盘导航等）记录于 `docs/todo.md`。
+
+## Step 0 验收清单（契约与测试基础设施 A-INFRA-1..5，分支 step-0-*）
 
 > 规范入口：`docs/plans/gui-fine-tune-planning/`（00-06 + decisions）。Step 0 按 06-implementation-plan §0.1-0.4 执行。
 
@@ -20,74 +25,6 @@
 - **手动测试（2026-08-09，Windows 11 + Docker Desktop 29.6.2 + aisc 2.1.5-dev，`npm run tauri dev`）**：启动/negotiate/picker ✅；选工作区 preflight→summary ✅；Start 后会话 opening→running ✅；`echo hello` 回显 ✅；tab 切换回来历史消失 → 修复（xterm 重新显示不重绘，`refresh(0, rows-1)` + 隐藏时跳过 fit）后恢复 ✅；× 关闭会话 → exited ✅；↔ 重开 ✅；关窗确认 → 关闭 ✅；任务管理器无 aisc/python/docker exec 残留 ✅（Docker Desktop 保持运行，符合退出保留 Runtime 语义）；`%APPDATA%\cn.aisc.workbench\` settings.json + history.json 存在 ✅。
 - **CI（2026-08-09）**：Workbench CI 三 job 全绿（frontend npm build+vitest 7/7 / rust cargo test / cli pytest 427 过 1 修复）；Bundle Linux/macOS 全绿（含非 checkout cwd sidecar 权限/架构/version/resource 验证）；NSIS installer 全绿；cli-sidecar 全绿。修复项：vitest 4.1 forks worker 在 Node 20 失败 → CI 用 Node 22；rust job 补 GTK/webkit 系统依赖；tauri-build 需 externalBin/resource 存在 → 测试 job stage 占位；`docs/releases/v2.1.5-dev.md` 缺失 → 补发布说明。
 - **Step 0 结论**：A-INFRA-1..5 门禁证据齐（A-INFRA-2 的 100× reopen 集成测试随 Step 2 registry 预算重构补齐，已确认）。
-
-## Step 12 验收清单（G-13 一键诊断，分支 step-12-doctor）
-
-> 规范：06 §十三、02 §五（F-4）、05 §六（Doctor 契约）、01 R-10。
-
-- [x] **12a-1** Rust doctor 模块（A-G13-2 前半）：`doctor_argv()` 纯函数（`doctor --format json`）；`DoctorCheck/DoctorSummary/DoctorReport` serde 类型；Tauri `run_doctor` command 复用 `run_control`（30s timeout / 8 MiB stdout cap / stderr redaction / exit-code 校验），并额外校验 `meta.command == doctor`。成功/CLI error/timeout/stdout overflow/无效 envelope 均有稳定映射（失败保留原错误事实，A-G13-1）。
-- [x] **12a-2** 解析健壮性（A-G13-4）：`data.host.checks/summary` 类型合法；`data.container=null` 省略、未来结构存在不导致 host 解析失败；未知 check 字段忽略；每个 check 的 `detail/hint` 经 `redact()` 脱敏。
-- [x] **12b-1** Frontend 通道：`DoctorCheck/DoctorSummary/DoctorReport` TS 类型 + `ipc.runDoctor`。
-- [x] **12b-2** Doctor store：`idle/running/done/error`；在途时重复 `run()` 不启动第二个 doctor（A-G13-3）；不触碰 runtime/settings store（关闭/重开不改变 startup state）。
-- [x] **12b-3** UI：`DoctorDialog.vue` 展示 `checks`/`summary`/`hint`（不渲染原始 stdout/stderr）；blocked/error/ready（sidebar 开发者详情）三个入口触发同一 command；在途按钮禁用；失败显示结构化 Workbench error + 重试。
-- [x] **12c-1** i18n：zh-CN/en-US 文案齐全 + key-parity 测试。
-- [x] **12c-2** 自动化：Rust 单测 101（含 10 doctor）+ cli_runner 7 + pty_supervisor 7 + vitest 49 全绿；vue-tsc + cargo build 通过。
-- [x] **12b-4** 手动测试（通过，2026-08-10）：用户确认 1-6 全过——ready 详情入口弹诊断自动运行、check 状态/summary/hint 展示正常；连点运行按钮只跑一次（在途禁用）；退出 Docker Desktop 后 docker check 显示失败 + hint、页面不卡、可重试；关闭后 startup 状态不变。
-- **Step 12 结论（2026-08-10）**：Rust 101 + cli_runner 7 + pty_supervisor 7 + vitest 49 + vue-tsc + cargo build 全绿；手测 1-6 通过。**Step 12 完成。**
-
-## Step 13 验收清单（G-14 构建最终耗时与通知，分支 step-13-build-notify）
-
-> 规范：06 §十四、02 §七（F-6）、01 R-11。
-
-- [x] **13a-1** 依赖与插件（06 §十四）：npm `@tauri-apps/plugin-notification` + Rust `tauri-plugin-notification`，`.plugin(init())`；capability 仅 `notification:allow-is-permission-granted`/`allow-request-permission`/`allow-notify` + `core:window:allow-is-focused`/`allow-is-minimized`。
-- [x] **13b-1** store 计时（A-G14-1/4）：`buildStartedAt/buildFinishedAt/buildDurationMs` 入 store；`startBuild` stamp started；首次 Promise settle 冻结 finished/duration 一次；cancelled 同样冻结；离开再返回显示冻结值不增长。
-- [x] **13b-2** 单一终态（A-G14-2）：terminal 结果仅由 `buildImage()` Promise settle 写入（Channel 只流 build.output）；单调 op 计数 guard，被取代 build 的迟到 settle 忽略（duration/状态/通知不重复）。
-- [x] **13b-3** 通知（A-G14-1/3）：仅窗口后台（失焦或最小化）且 complete/failed 通知一次；cancelled 不通知；前台 0 条。权限每 launch 至多请求一次；denied/unavailable/勿扰静默降级不改变 build 事实。
-- [x] **13b-4** BuildProgress 显示：building 时活计时（tick 停止于 settle，A-G14-4），settle 后显示冻结耗时；终态耗时始终显示。
-- [x] **13c-1** i18n：notification.title/buildComplete/buildFailed zh-CN/en-US + key-parity。
-- [x] **13c-2** 自动化：vitest 59（+10 build/notify，含 A-G14-2 乱序/被取代、A-G14-1 前台 0 条/后台恰好 1 条、A-G14-3 权限降级不循环）；Rust 101 + cli_runner 7 + pty_supervisor 7 + vue-tsc + cargo build 全绿。
-- [x] **13b-5** 手动测试（通过，2026-08-10）：后台 build 完成收到恰好 1 条系统通知；前台 build 0 条；终态耗时冻结不增长；权限拒绝降级、cancelled 不通知。
-- [x] **13d-1** 手测中发现并修复的 bug：① 镜像缺失时若 action=reuse（工作区有匹配 runtime），构建按钮被 `imageMissing` 隐藏 → 死路；改为 `imageNotFound`（fail + `AISC_ERR_IMAGE_NOT_FOUND`，与 action 无关）驱动按钮与提示。② stale registry 记录（container 被手动删除）被 preflight 判为 reuse → session open 打不存在 container → RUNTIME_NOT_FOUND 死循环；CLI `_get_container_state` 区分 `not_found`，matching 分支对 stale 记录报 conflict（resolve_conflict → ConflictManager），ConflictManager 对 not_found 状态补「移除」按钮。均带 vitest/Python 测试锁定（vitest 65、Python 392）。
-- **Step 13 结论（2026-08-10）**：vitest 65 + Python 392 + Rust 101/cli_runner 7/pty_supervisor 7 + vue-tsc + cargo build 全绿；G-14 手测 1-6 通过；手测暴露的镜像缺失按钮、stale runtime 两个 bug 已修复并验证。**Step 13 完成。**
-
-## Step 14 验收清单（G-15 动态窗口标题，分支 step-14-dynamic-title）
-
-> 规范：06 §十五、02 §六（F-5）、01 R-12。
-
-- [x] **14a-1** 标题纯函数（A-G15-2）：`computeWindowTitle` 优先级——活动 tab 有 Session type → `<workspace> · <Session type> · AISC Workbench`；有 workspace 无 session → `<workspace> · AISC Workbench`；无 workspace → `AISC Workbench`；idle tab（空 tree）不残留旧 type。
-- [x] **14a-2** basename（A-G15-1）：跨 `/` 与 `\`、去尾分隔符、drive root 保留。
-- [x] **14a-3** 截断（A-G15-3）：workspace basename >40 grapheme 保留首尾各 18 + `…`；`Intl.Segmenter` grapheme 级，CJK/emoji/组合字符不截断 cluster。
-- [x] **14a-4** 接线：App.vue watch 活动上下文（workspace + activeTab + session state）→ `getCurrentWindow().setTitle()`；无轮询；setTitle 失败仅 console.warn 不影响主流程。仅新增 `core:window:allow-set-title` capability。
-- [x] **14a-5** 自动化：vitest 75（+10 title，含 basename/优先级/grapheme 截断）+ vue-tsc + cargo build + Rust 101/7/7 全绿。
-- [x] **14b-1** 手动测试（通过，2026-08-10）：无 workspace → `AISC Workbench`；选 workspace → `test · AISC Workbench`；开 Bash → `test · Bash · AISC Workbench`；切 Claude/Codex tab 标题跟随；关全部 tab 回落 `test · AISC Workbench`。
-- **Step 14 结论（2026-08-10）**：vitest 75 + Rust 101/cli_runner 7/pty_supervisor 7 + vue-tsc + cargo build 全绿；手测通过。**Step 14 完成。**
-
-## Step 15 验收清单（G-16 可选最小化到托盘，分支 step-15-tray）
-
-> 规范：06 §十六、03 §A-G16-1..5、01 R-13。
-
-- [x] **15a-1** Rust tray（A-G16-1）：tauri 启用 `tray-icon` feature；`tray.rs` 用 `TrayIconBuilder` 创建「显示/退出」菜单并持有 owner（`TrayState`）；左键不弹菜单。
-- [x] **15a-2** CloseRequested 拦截（A-G16-1/4）：`.on_window_event` 对主窗口 CloseRequested 一律 `prevent_close`；`effective_close_behavior`=minimize-to-tray 且 tray 可用 → hide；否则 quit（前端确认 + shutdown）。tray 初始化失败/平台不支持 → `tray_available=false` → 运行态回退 quit，最后窗口不会被隐藏。
-- [x] **15a-3** tray 菜单（A-G16-3）：显示 → `show+set_focus`；退出 → emit `exit-requested` → 前端复用同一 confirm + `shutdown_workbench`（同一 ShutdownReport）；取消确认保持隐藏前状态。
-- [x] **15b-1** Frontend：`ipc.trayAvailable()` 一次查询；onCloseRequested 分支——tray 模式且 tray 可用 → return（Rust 已 hide，Session 连续运行）；否则 runExitFlow。`listen("exit-requested")` 触发同一 runExitFlow。
-- [x] **15b-2** 设置：`window.close_behavior` 已有（Step 7）持久化；即时生效（Rust 关闭时重读 settings）；Reset 恢复 quit（settings 默认）。
-- [x] **15b-3** 自动化：vue-tsc + vitest 75 + Rust 101/cli_runner 7/pty_supervisor 7 + cargo build（tray-icon）全绿。
-- [x] **15b-4** 手动测试（通过，2026-08-10，安装版）：默认 quit 正常退出；minimize-to-tray 关窗仅隐藏无确认框、session 连续；托盘「显示」恢复窗口+焦点；托盘「退出」同确认 + shutdown；托盘图标退出后立即消失；重启后 tray 值保持。
-- [x] **15c-1** 手测发现并修复的 bug：① Tauri command 命名不匹配（fn `tray_available_command` → invoke 名 `tray_available_command`，前端调 `tray_available` → reject → trayAvailable=false → 关窗仍走 quit 流程弹确认）；helper 改名 `tray_live`、command 改名 `tray_available`。② 托盘退出后图标残留整个清理期（~12s）；新增 `tray_remove`（`set_visible(false)`），确认通过后立即隐藏图标，清理后台透明运行。③ 设置对话框小窗口下 head/foot 滚出视野，「已保存」不可见；head/foot 粘性固定。
-- **Step 15 结论（2026-08-10）**：vue-tsc + vitest 75 + Rust 101/7/7 + cargo build（tray-icon）全绿；安装版手测通过；3 个手测暴露问题已修复。**Step 15 完成。**
-
-## Step 16 验收清单（G-17 Tab 内分屏，分支 step-16-panes）
-
-> 规范：06 §十七、03 §六（G-17 分屏模型）、01 R-14。P3，最大步骤，拆 6 子阶段。
-
-- [x] **16a-1** PaneTree 纯模块（schema 冻结，03 §6.1/6.3）：`SplitNode/PaneLeaf/PaneNode` tagged union；`singleLeaf/splitLeaf/removeLeaf/setRatioBySplitKey/leafCount/depth/firstLeaf/listPaneIds/validateTree`；MAX_DEPTH=4、MAX_LEAVES=8、ratio clamp 0.10..0.90；关闭压缩、split 拒绝（深/满）时 tree 不变。
-- [x] **16a-2** 纯模块 vitest：嵌套 split、关闭压缩、ratio clamp、深度/叶数上限拒绝、非法 tree 校验、round-trip。
-- [x] **16b-1** history schema v2（A-G17-3）：Rust `schema_version=2`，TabRecord 增 `split_layout`（version/active_pane_id/root tagged union）；v1→v2 锁内原子迁移（旧 tab 转单叶、保留 tab ID/顺序/active），迁移失败保留 v1 原文件；旧版本拒写 v2；v2 round-trip + 损坏/过深/重复 ID 降级。
-- [x] **16c-1** store 迁移（A-G17-2/5/6）：tab 持有 PaneTree + `active_pane_id`；open/close/reopen/Exit reducer 按 pane；资源原子计数（opening/running/closing ≤8）；provider polling/sidebar/title/generation 经 active pane；last-pane 关闭 → dormant 单叶保留 tab。
-- [x] **16d-1** 分屏渲染与交互（A-G17-1/4/5）：PaneTree.vue 递归 CSS grid + divider；split 动作（水平/垂直）校验容量；divider 指针拖拽 + 键盘 0.05 步长；每叶独立 Terminal/Session/ResizeObserver；点击 pane 激活。
-- [x] **16d-2** 自动化：paneTree 17 + paneRuntime 12 + 全量 vitest 104 + vue-tsc 全绿；Rust 105（16b history）+ cli_runner 7 + pty_supervisor 7。
-- [ ] **16e-1** 手动测试：嵌套 split、关闭压缩、拖拽 resize、tab+pane、第 9 个拒绝、重启恢复、runtime stop/退出全回收。
-- **Step 16 结论**：待完成（自动化已绿，手测待用户）。
 
 ## Step 1 验收清单（G-18 sidecar 入用户 PATH，分支 step-1-g18-path）
 
@@ -184,28 +121,6 @@
 - [x] **8c-1** 手动测试（2026-08-10）：侧栏分层/详情/复制/双语、banner 三动作、cc-switch 配置后启动会话、官方登录进 TUI 可直输、恢复布局 gate、外部 stop stale 样式。全部通过。
 - **Step 8 结论（2026-08-10）**：vitest 44 绿（sidebar 5 + restore-gate 1 新增）；A-G05-1..4、A-G12-1/2 证据齐。
 
-## Step 11 验收清单（G-03 终端基础体验 + G-11 右键菜单，分支 step-11-terminal）
-
-> 规范：06 §十二、03 §七 A-G03-1..4 / A-G11-1..4。
-
-- [x] **11a-1** 搜索（A-G03-1/A-G11-2）：`@xterm/addon-search` 每 pane 独立加载/dispose；Ctrl/Cmd+F + 右键入口打开搜索条；上下结果、大小写切换、无结果提示、Esc 关闭；tab 切换不串查询。按键经 `attachCustomKeyEventHandler` 拦截（容器 DOM keydown 被 xterm 内部 textarea 吞掉不触发，2026-08-10 手测修复）。
-- [x] **11a-2** 剪贴板（A-G03-2/A-G11-3）：npm + Rust `tauri-plugin-clipboard-manager`，仅 `read-text`/`write-text` capability；侧边栏 ID 复制迁移到同一插件通道（弃用 `navigator.clipboard`）；权限错误显示可恢复错误。
-- [x] **11a-3** 右键菜单（A-G11-1）：复制/粘贴/搜索/清屏；无 selection 时复制禁用、session 结束后粘贴禁用；菜单关闭焦点回终端。快捷键 Ctrl/Cmd+Shift+C/V 与右键一致；粘贴走 `term.paste` -> `writeSession`（1 MiB 上限，A-G11-4）。
-- [x] **11a-4** 滚动（A-G03-3）：scrollback 5000 默认；向上查看历史不强制跳底，回底恢复 follow；PageUp/PageDown/Home/End 原生可用。
-- [x] **11a-5** 终端填满（手测修复，2026-08-10）：`.terminal-area` 加 `display: flex`（term-wrap flex:1 拉伸）；恢复 counter-zoom 防实时缩放闪烁（移除后 canvas re-fit 闪烁，已回滚恢复）。默认缩放终端填满。
-- [x] **11a-6** 设置滑块（用户反馈，2026-08-10）：`ui.font_scale`/`terminal.font_size`/`line_height`/`letter_spacing`/`scrollback`/`smooth_scroll_duration` 改滑块（限定区间 min/max/step 取自 Rust schema），内联显示当前值；`v-model.number` 修复滑块数字不更新 + 保存失败（range v-model 产生字符串 -> `.toFixed` 崩溃 + serde 拒收）。
-- [x] **11b-1** 手动测试（通过，2026-08-10）：用户确认"可以接受"，余留细节问题之后调整。
-- **Step 11 结论（2026-08-10）**：vue-tsc + 44 vitest + cargo build 全绿；搜索/剪贴板/右键/滚动/填满/滑块全部手测通过。**Step 11 完成。**
-
-## Step 10 验收清单（G-10 窗口尺寸/位置记忆，分支 step-10-geometry）
-
-> 规范：06 §十一、02 §A-G10-1..5。
-
-- [x] **10a-1** Rust 命令（A-G10-1/2/3）：`window.rs` 新模块：`restore_window_geometry`（启动时读 `window.geometry`，clamp 到显示器至少 64×64 可见、最小 800×600，应用位置/尺寸/最大化）+ `capture_window_geometry`（写当前 logical 位置/尺寸/最大化到 settings，`save_with_replay` 冲突安全；跳过 fullscreen/minimized）。physical->logical 转换 via scale_factor。离屏检测回退 OS 默认。
-- [x] **10a-2** 生命周期接线（A-G10-5）：`lib.rs` setup hook 启动时调 restore（窗口显示前）；`App.vue` 窗口 resize 后 300ms 防抖调 capture；关闭前 `onCloseRequested` 中 `shutdownWorkbench` 之前 flush。
-- [x] **10b-1** 手动测试（通过，2026-08-10）：NSIS 安装器实测--移动/调整窗口大小 -> 关闭 -> 重开 -> 位置/尺寸恢复；最大化 -> 关闭 -> 重开 -> 恢复最大化；`remember_geometry=false` 不记忆。用户确认"没有问题，测试通过"。
-- **Step 10 结论（2026-08-10）**：Rust 91 绿 + vue-tsc + vite build 零错误；settings schema（`window.geometry`）Step 3 已定义，Step 10 只加命令 + 生命周期钩子。**Step 10 完成。**
-
 ## Step 9 验收清单（G-02 Resize 根因定位与修复，分支 step-9-resize）
 
 > 规范：06 §十（先诊断后修改）、05 A-G02-1..4。
@@ -219,7 +134,110 @@
 - [x] **9a-6** 管道方案（ConPTY 彻底绕过，2026-08-10 手测通过）：9a-5 的 `WriteConsoleW`/转码/`SetConsoleMode` 路径虽修好编码，但 ConPTY 层引入多个不可调和问题：(1) `WriteConsoleW` 用 Unicode 宽度表，zh-CN 下 box-drawing = 2 列 -> 错位；(2) `ENABLE_PROCESSED_OUTPUT` 设了才能认 ESC（VT 序列），但会把 `\n` 翻译成 `\r\n` -> 错位；清了则 VT 碎裂；(3) ConPTY 固定 GBK codepage，`SetConsoleOutputCP(65001)` 被忽略；(4) `os.write`+GBK 转码丢失非 GBK 字符（emoji -> `?`）；(5) ConPTY 从屏幕缓冲区重新生成 VT -> 可见从上到下刷新；(6) console 模型开销 -> 响应慢。**根治**：`spawn_pipe_session`（pty.rs）用 `std::process::Command` + `Stdio::piped()` 替代 ConPTY；`PtySession` 结构改为支持 pipe 模式（`master: Option`、`kill_fn` 闭包、`resize_file: Option<PathBuf>`）；resize 通过临时文件传递（Rust 写 `<cols> <rows>` -> `AISC_RESIZE_FILE` env var -> sidecar 100ms 轮询 -> `exec_resize`）。docker_.py `open_interactive` 从 ~200 行 console API 简化为 ~90 行裸 `os.read`/`os.write`，删除全部 console 代码（WriteConsoleW、SetConsoleOutputCP、SetConsoleMode、transcoding、ReadConsoleInputW、GetConsoleScreenBufferInfo、`terminal_size()`、`_forward_console_input()`）。数据流：容器 UTF-8/VT -> SDK socket -> sidecar `os.write` -> pipe -> Rust base64 -> xterm.js，零 console 处理。手测：显示正常、无乱码/`?`、无错位、方向键可用、响应快、无可见刷新。Rust 91 + Python 53 绿。
 - **Step 9 结论（2026-08-10）**：python 绿 + Rust 91 绿；A-G02-1..4 证据齐 + 9a-5 编码修复 + 9a-6 管道方案（手测通过）；9b-1 手测通过（20 次 resize 无明显问题）。**Step 9 完成。**
 
-## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
+## Step 10 验收清单（G-10 窗口尺寸/位置记忆，分支 step-10-geometry）
+
+> 规范：06 §十一、02 §A-G10-1..5。
+
+- [x] **10a-1** Rust 命令（A-G10-1/2/3）：`window.rs` 新模块：`restore_window_geometry`（启动时读 `window.geometry`，clamp 到显示器至少 64×64 可见、最小 800×600，应用位置/尺寸/最大化）+ `capture_window_geometry`（写当前 logical 位置/尺寸/最大化到 settings，`save_with_replay` 冲突安全；跳过 fullscreen/minimized）。physical->logical 转换 via scale_factor。离屏检测回退 OS 默认。
+- [x] **10a-2** 生命周期接线（A-G10-5）：`lib.rs` setup hook 启动时调 restore（窗口显示前）；`App.vue` 窗口 resize 后 300ms 防抖调 capture；关闭前 `onCloseRequested` 中 `shutdownWorkbench` 之前 flush。
+- [x] **10b-1** 手动测试（通过，2026-08-10）：NSIS 安装器实测--移动/调整窗口大小 -> 关闭 -> 重开 -> 位置/尺寸恢复；最大化 -> 关闭 -> 重开 -> 恢复最大化；`remember_geometry=false` 不记忆。用户确认"没有问题，测试通过"。
+- **Step 10 结论（2026-08-10）**：Rust 91 绿 + vue-tsc + vite build 零错误；settings schema（`window.geometry`）Step 3 已定义，Step 10 只加命令 + 生命周期钩子。**Step 10 完成。**
+
+## Step 11 验收清单（G-03 终端基础体验 + G-11 右键菜单，分支 step-11-terminal）
+
+> 规范：06 §十二、03 §七 A-G03-1..4 / A-G11-1..4。
+
+- [x] **11a-1** 搜索（A-G03-1/A-G11-2）：`@xterm/addon-search` 每 pane 独立加载/dispose；Ctrl/Cmd+F + 右键入口打开搜索条；上下结果、大小写切换、无结果提示、Esc 关闭；tab 切换不串查询。按键经 `attachCustomKeyEventHandler` 拦截（容器 DOM keydown 被 xterm 内部 textarea 吞掉不触发，2026-08-10 手测修复）。
+- [x] **11a-2** 剪贴板（A-G03-2/A-G11-3）：npm + Rust `tauri-plugin-clipboard-manager`，仅 `read-text`/`write-text` capability；侧边栏 ID 复制迁移到同一插件通道（弃用 `navigator.clipboard`）；权限错误显示可恢复错误。
+- [x] **11a-3** 右键菜单（A-G11-1）：复制/粘贴/搜索/清屏；无 selection 时复制禁用、session 结束后粘贴禁用；菜单关闭焦点回终端。快捷键 Ctrl/Cmd+Shift+C/V 与右键一致；粘贴走 `term.paste` -> `writeSession`（1 MiB 上限，A-G11-4）。
+- [x] **11a-4** 滚动（A-G03-3）：scrollback 5000 默认；向上查看历史不强制跳底，回底恢复 follow；PageUp/PageDown/Home/End 原生可用。
+- [x] **11a-5** 终端填满（手测修复，2026-08-10）：`.terminal-area` 加 `display: flex`（term-wrap flex:1 拉伸）；恢复 counter-zoom 防实时缩放闪烁（移除后 canvas re-fit 闪烁，已回滚恢复）。默认缩放终端填满。
+- [x] **11a-6** 设置滑块（用户反馈，2026-08-10）：`ui.font_scale`/`terminal.font_size`/`line_height`/`letter_spacing`/`scrollback`/`smooth_scroll_duration` 改滑块（限定区间 min/max/step 取自 Rust schema），内联显示当前值；`v-model.number` 修复滑块数字不更新 + 保存失败（range v-model 产生字符串 -> `.toFixed` 崩溃 + serde 拒收）。
+- [x] **11b-1** 手动测试（通过，2026-08-10）：用户确认"可以接受"，余留细节问题之后调整。
+- **Step 11 结论（2026-08-10）**：vue-tsc + 44 vitest + cargo build 全绿；搜索/剪贴板/右键/滚动/填满/滑块全部手测通过。**Step 11 完成。**
+
+## Step 12 验收清单（G-13 一键诊断，分支 step-12-doctor）
+
+> 规范：06 §十三、02 §五（F-4）、05 §六（Doctor 契约）、01 R-10。
+
+- [x] **12a-1** Rust doctor 模块（A-G13-2 前半）：`doctor_argv()` 纯函数（`doctor --format json`）；`DoctorCheck/DoctorSummary/DoctorReport` serde 类型；Tauri `run_doctor` command 复用 `run_control`（30s timeout / 8 MiB stdout cap / stderr redaction / exit-code 校验），并额外校验 `meta.command == doctor`。成功/CLI error/timeout/stdout overflow/无效 envelope 均有稳定映射（失败保留原错误事实，A-G13-1）。
+- [x] **12a-2** 解析健壮性（A-G13-4）：`data.host.checks/summary` 类型合法；`data.container=null` 省略、未来结构存在不导致 host 解析失败；未知 check 字段忽略；每个 check 的 `detail/hint` 经 `redact()` 脱敏。
+- [x] **12b-1** Frontend 通道：`DoctorCheck/DoctorSummary/DoctorReport` TS 类型 + `ipc.runDoctor`。
+- [x] **12b-2** Doctor store：`idle/running/done/error`；在途时重复 `run()` 不启动第二个 doctor（A-G13-3）；不触碰 runtime/settings store（关闭/重开不改变 startup state）。
+- [x] **12b-3** UI：`DoctorDialog.vue` 展示 `checks`/`summary`/`hint`（不渲染原始 stdout/stderr）；blocked/error/ready（sidebar 开发者详情）三个入口触发同一 command；在途按钮禁用；失败显示结构化 Workbench error + 重试。
+- [x] **12c-1** i18n：zh-CN/en-US 文案齐全 + key-parity 测试。
+- [x] **12c-2** 自动化：Rust 单测 101（含 10 doctor）+ cli_runner 7 + pty_supervisor 7 + vitest 49 全绿；vue-tsc + cargo build 通过。
+- [x] **12b-4** 手动测试（通过，2026-08-10）：用户确认 1-6 全过——ready 详情入口弹诊断自动运行、check 状态/summary/hint 展示正常；连点运行按钮只跑一次（在途禁用）；退出 Docker Desktop 后 docker check 显示失败 + hint、页面不卡、可重试；关闭后 startup 状态不变。
+- **Step 12 结论（2026-08-10）**：Rust 101 + cli_runner 7 + pty_supervisor 7 + vitest 49 + vue-tsc + cargo build 全绿；手测 1-6 通过。**Step 12 完成。**
+
+## Step 13 验收清单（G-14 构建最终耗时与通知，分支 step-13-build-notify）
+
+> 规范：06 §十四、02 §七（F-6）、01 R-11。
+
+- [x] **13a-1** 依赖与插件（06 §十四）：npm `@tauri-apps/plugin-notification` + Rust `tauri-plugin-notification`，`.plugin(init())`；capability 仅 `notification:allow-is-permission-granted`/`allow-request-permission`/`allow-notify` + `core:window:allow-is-focused`/`allow-is-minimized`。
+- [x] **13b-1** store 计时（A-G14-1/4）：`buildStartedAt/buildFinishedAt/buildDurationMs` 入 store；`startBuild` stamp started；首次 Promise settle 冻结 finished/duration 一次；cancelled 同样冻结；离开再返回显示冻结值不增长。
+- [x] **13b-2** 单一终态（A-G14-2）：terminal 结果仅由 `buildImage()` Promise settle 写入（Channel 只流 build.output）；单调 op 计数 guard，被取代 build 的迟到 settle 忽略（duration/状态/通知不重复）。
+- [x] **13b-3** 通知（A-G14-1/3）：仅窗口后台（失焦或最小化）且 complete/failed 通知一次；cancelled 不通知；前台 0 条。权限每 launch 至多请求一次；denied/unavailable/勿扰静默降级不改变 build 事实。
+- [x] **13b-4** BuildProgress 显示：building 时活计时（tick 停止于 settle，A-G14-4），settle 后显示冻结耗时；终态耗时始终显示。
+- [x] **13c-1** i18n：notification.title/buildComplete/buildFailed zh-CN/en-US + key-parity。
+- [x] **13c-2** 自动化：vitest 59（+10 build/notify，含 A-G14-2 乱序/被取代、A-G14-1 前台 0 条/后台恰好 1 条、A-G14-3 权限降级不循环）；Rust 101 + cli_runner 7 + pty_supervisor 7 + vue-tsc + cargo build 全绿。
+- [x] **13b-5** 手动测试（通过，2026-08-10）：后台 build 完成收到恰好 1 条系统通知；前台 build 0 条；终态耗时冻结不增长；权限拒绝降级、cancelled 不通知。
+- [x] **13d-1** 手测中发现并修复的 bug：① 镜像缺失时若 action=reuse（工作区有匹配 runtime），构建按钮被 `imageMissing` 隐藏 → 死路；改为 `imageNotFound`（fail + `AISC_ERR_IMAGE_NOT_FOUND`，与 action 无关）驱动按钮与提示。② stale registry 记录（container 被手动删除）被 preflight 判为 reuse → session open 打不存在 container → RUNTIME_NOT_FOUND 死循环；CLI `_get_container_state` 区分 `not_found`，matching 分支对 stale 记录报 conflict（resolve_conflict → ConflictManager），ConflictManager 对 not_found 状态补「移除」按钮。均带 vitest/Python 测试锁定（vitest 65、Python 392）。
+- **Step 13 结论（2026-08-10）**：vitest 65 + Python 392 + Rust 101/cli_runner 7/pty_supervisor 7 + vue-tsc + cargo build 全绿；G-14 手测 1-6 通过；手测暴露的镜像缺失按钮、stale runtime 两个 bug 已修复并验证。**Step 13 完成。**
+
+## Step 14 验收清单（G-15 动态窗口标题，分支 step-14-dynamic-title）
+
+> 规范：06 §十五、02 §六（F-5）、01 R-12。
+
+- [x] **14a-1** 标题纯函数（A-G15-2）：`computeWindowTitle` 优先级——活动 tab 有 Session type → `<workspace> · <Session type> · AISC Workbench`；有 workspace 无 session → `<workspace> · AISC Workbench`；无 workspace → `AISC Workbench`；idle tab（空 tree）不残留旧 type。
+- [x] **14a-2** basename（A-G15-1）：跨 `/` 与 `\`、去尾分隔符、drive root 保留。
+- [x] **14a-3** 截断（A-G15-3）：workspace basename >40 grapheme 保留首尾各 18 + `…`；`Intl.Segmenter` grapheme 级，CJK/emoji/组合字符不截断 cluster。
+- [x] **14a-4** 接线：App.vue watch 活动上下文（workspace + activeTab + session state）→ `getCurrentWindow().setTitle()`；无轮询；setTitle 失败仅 console.warn 不影响主流程。仅新增 `core:window:allow-set-title` capability。
+- [x] **14a-5** 自动化：vitest 75（+10 title，含 basename/优先级/grapheme 截断）+ vue-tsc + cargo build + Rust 101/7/7 全绿。
+- [x] **14b-1** 手动测试（通过，2026-08-10）：无 workspace → `AISC Workbench`；选 workspace → `test · AISC Workbench`；开 Bash → `test · Bash · AISC Workbench`；切 Claude/Codex tab 标题跟随；关全部 tab 回落 `test · AISC Workbench`。
+- **Step 14 结论（2026-08-10）**：vitest 75 + Rust 101/cli_runner 7/pty_supervisor 7 + vue-tsc + cargo build 全绿；手测通过。**Step 14 完成。**
+
+## Step 15 验收清单（G-16 可选最小化到托盘，分支 step-15-tray）
+
+> 规范：06 §十六、03 §A-G16-1..5、01 R-13。
+
+- [x] **15a-1** Rust tray（A-G16-1）：tauri 启用 `tray-icon` feature；`tray.rs` 用 `TrayIconBuilder` 创建「显示/退出」菜单并持有 owner（`TrayState`）；左键不弹菜单。
+- [x] **15a-2** CloseRequested 拦截（A-G16-1/4）：`.on_window_event` 对主窗口 CloseRequested 一律 `prevent_close`；`effective_close_behavior`=minimize-to-tray 且 tray 可用 → hide；否则 quit（前端确认 + shutdown）。tray 初始化失败/平台不支持 → `tray_available=false` → 运行态回退 quit，最后窗口不会被隐藏。
+- [x] **15a-3** tray 菜单（A-G16-3）：显示 → `show+set_focus`；退出 → emit `exit-requested` → 前端复用同一 confirm + `shutdown_workbench`（同一 ShutdownReport）；取消确认保持隐藏前状态。
+- [x] **15b-1** Frontend：`ipc.trayAvailable()` 一次查询；onCloseRequested 分支——tray 模式且 tray 可用 → return（Rust 已 hide，Session 连续运行）；否则 runExitFlow。`listen("exit-requested")` 触发同一 runExitFlow。
+- [x] **15b-2** 设置：`window.close_behavior` 已有（Step 7）持久化；即时生效（Rust 关闭时重读 settings）；Reset 恢复 quit（settings 默认）。
+- [x] **15b-3** 自动化：vue-tsc + vitest 75 + Rust 101/cli_runner 7/pty_supervisor 7 + cargo build（tray-icon）全绿。
+- [x] **15b-4** 手动测试（通过，2026-08-10，安装版）：默认 quit 正常退出；minimize-to-tray 关窗仅隐藏无确认框、session 连续；托盘「显示」恢复窗口+焦点；托盘「退出」同确认 + shutdown；托盘图标退出后立即消失；重启后 tray 值保持。
+- [x] **15c-1** 手测发现并修复的 bug：① Tauri command 命名不匹配（fn `tray_available_command` → invoke 名 `tray_available_command`，前端调 `tray_available` → reject → trayAvailable=false → 关窗仍走 quit 流程弹确认）；helper 改名 `tray_live`、command 改名 `tray_available`。② 托盘退出后图标残留整个清理期（~12s）；新增 `tray_remove`（`set_visible(false)`），确认通过后立即隐藏图标，清理后台透明运行。③ 设置对话框小窗口下 head/foot 滚出视野，「已保存」不可见；head/foot 粘性固定。
+- **Step 15 结论（2026-08-10）**：vue-tsc + vitest 75 + Rust 101/7/7 + cargo build（tray-icon）全绿；安装版手测通过；3 个手测暴露问题已修复。**Step 15 完成。**
+
+## Step 16 验收清单（G-17 Tab 内分屏，分支 step-16-panes）
+
+> 规范：06 §十七、03 §六（G-17 分屏模型）、01 R-14。P3，最大步骤，拆 6 子阶段。
+
+- [x] **16a-1** PaneTree 纯模块（schema 冻结，03 §6.1/6.3）：`SplitNode/PaneLeaf/PaneNode` tagged union；`singleLeaf/splitLeaf/removeLeaf/setRatioBySplitKey/leafCount/depth/firstLeaf/listPaneIds/validateTree`；MAX_DEPTH=4、MAX_LEAVES=8、ratio clamp 0.10..0.90；关闭压缩、split 拒绝（深/满）时 tree 不变。
+- [x] **16a-2** 纯模块 vitest：嵌套 split、关闭压缩、ratio clamp、深度/叶数上限拒绝、非法 tree 校验、round-trip。
+- [x] **16b-1** history schema v2（A-G17-3）：Rust `schema_version=2`，TabRecord 增 `split_layout`（version/active_pane_id/root tagged union）；v1→v2 锁内原子迁移（旧 tab 转单叶、保留 tab ID/顺序/active），迁移失败保留 v1 原文件；旧版本拒写 v2；v2 round-trip + 损坏/过深/重复 ID 降级。
+- [x] **16c-1** store 迁移（A-G17-2/5/6）：tab 持有 PaneTree + `active_pane_id`；open/close/reopen/Exit reducer 按 pane；资源原子计数（opening/running/closing ≤8）；provider polling/sidebar/title/generation 经 active pane；last-pane 关闭 → dormant 单叶保留 tab。
+- [x] **16d-1** 分屏渲染与交互（A-G17-1/4/5）：PaneTree.vue 递归 CSS grid + divider；split 动作（水平/垂直）校验容量；divider 指针拖拽 + 键盘 0.05 步长；每叶独立 Terminal/Session/ResizeObserver；点击 pane 激活。
+- [x] **16d-2** 自动化：paneTree 17 + paneRuntime 12 + 全量 vitest 104 + vue-tsc 全绿；Rust 105（16b history）+ cli_runner 7 + pty_supervisor 7。
+- [x] **16e-1** 手动测试：嵌套 split、关闭压缩、拖拽 resize、tab+pane、第 9 个拒绝、重启恢复、runtime stop/退出全回收（2026-08-10 用户确认"暂时算通过，之后再改"）。
+- **Step 16 结论（2026-08-10）**：自动化全绿 + 手测通过。**Step 16 完成。** 遗留：分屏键盘导航（Ctrl+Shift+hjkl/方向键）在 WebView2 无效、其他小问题，见 `docs/todo.md`。
+
+## Step 17 验收清单（G-04 明暗主题切换，分支 step-17-theme）
+
+> 规范：06 §十八、02 §三.5；门禁 A-G04-1..4。
+
+- [x] **17a-1** 主题基础设施（A-G04-1/2）：`theme.ts` 纯模块——`ThemeMode`（system/dark/light）→ `resolveTheme` → `effectiveTheme` reactive；`applyTheme` 写 DOM `data-theme` + `color-scheme` + localStorage 渲染缓存；`systemDark()`/`createSystemListener`（单实例 + unsubscribe）；`index.html` 首帧前内联脚本读缓存设 `data-theme`（无暗/亮闪屏）。
+- [x] **17a-2** 语义 token：`styles.css` `:root`（dark 默认）+ `:root[data-theme="light"]` 覆盖；`--bg/--surface/--text/--muted/--border/--accent/--success/--warn/--error/--selection/--focus` 全套 token；`color-scheme` 跟随。
+- [x] **17b-1** 全量 token 收敛：13 个组件 CSS 全部 `var(--*)`（LaunchSummary/PreflightGate/StartProgress/BuildProgress/ConflictManager/SettingsDialog/DoctorDialog/RuntimeSidebar/TabBar/Terminal/PaneTree/GuidePane）；App chrome token 化。
+- [x] **17c-1** xterm 明暗（A-G04-3）：`TERMINAL_THEME`/`LIGHT_TERMINAL_THEME` + `terminalTheme(effectiveTheme)`；Terminal.vue watch `effectiveTheme` 原地更新 `term.options.theme` + `term.refresh(0, rows-1)`，不重建 Session/PTY。
+- [x] **17c-2** 设置接线：SettingsDialog theme 字段 `effect: "immediate"`；`ui.theme` 持久化、重启保持。
+- [x] **17d-1** 自动化：`theme.test.ts`（resolveTheme/applyTheme/cache/system 解析/createSystemListener 单例+清理/token 对比度 WCAG AA fixture）；settings.rs theme 校验；全量 vitest 122 + Rust + vue-tsc + cargo build 全绿。
+- [x] **17d-2** 手动测试（通过，2026-08-10）：深/浅色切换即时生效、xterm 跟随、重启保持、对比度达标；用户确认"一切正常"。
+- **Step 17 结论（2026-08-10）**：vitest 122 + Rust 全绿 + 手测通过。**Step 17 完成。G-01..G-18 全部 18 个目标完成。**
+
+# v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
 ### S4.2 发布门（2026-08-09，06-implementation-plan.md §七 S4.2）
 
@@ -229,8 +247,6 @@
 - **回滚文档**：新增 `docs/releases/rollback.md`——数据保留边界（app_config_dir/工作区不受卸载影响）、降级路径（allow_downgrades=false 需先卸载）、CLI 协商顺序（`--aisc-cli` > pin > sidecar > PATH > 平台已知位置，对应 `cli.rs` `enumerate_candidates`）、pin 清理方法、回滚验证清单。
 - 范围外 blocked：Windows 代码签名（无证书）、macOS 公证（无账号/机），正式 Preview 发布在签名/公证前不进行。计划见 `docs/plans/PLAN-workbench-s4.2-release-gates.md`。
 - **CI 验证（2026-08-09）全绿**：Tests 9/9（3 OS × 3 Python，macOS runner 新接入）；Bundle Linux/macOS 产出 deb + DMG；NSIS 冒烟 SMOKE/UPGRADE/UNINSTALL 三阶段 PASSED（升级重装与卸载均保留 `%APPDATA%\cn.aisc.workbench\` 与 workspace 数据标记）。macOS runner 暴露 2 个平台假设并修复：(1) `test_session_wrapper.py` /proc start-ticks 测试 macOS 无 /proc → 拆 `linux_only` guard（POSIX 部分保留 `posix_only`）；(2) `test_runtime_preflight_no_side_effects.py` 无 docker CLI 时 docker 存在性断言 FileNotFoundError → try/except 容错跳过。
-
-
 
 ### 变更
 
@@ -455,7 +471,7 @@
 - 登记校验类错误码（SCOPE/NETWORK/WORKSPACE/INVALID_AGENT/INVALID_SESSION_ID）到契约 §八 + RFC §4.1 注明退出码与 code 多对一（JSON `errors[].code` 权威）；修正 INVALID_SESSION_ID 退出码 15->2（不再与 INVALID_RUNTIME_ID 冲突）。
 - 实机 deferral：claude/codex/cc-switch 交互、PTY 信号链路 -> Phase 1 S1.3；Windows/macOS 实机 -> 手测。
 
-## v2.2.0-dev (2026-08-03 ~ 2026-08-06) — Workbench Phase 0 S0.2: Runtime 控制面
+# v2.2.0-dev (2026-08-03 ~ 2026-08-06) — Workbench Phase 0 S0.2: Runtime 控制面
 
 ### 变更
 
@@ -520,7 +536,7 @@
 
 ---
 
-## v2.1.4 (2026-07-24) — Codex 官方登录直连与安全的 Skills 同步
+# v2.1.4 (2026-07-24) — Codex 官方登录直连与安全的 Skills 同步
 
 ### 变更
 
@@ -545,7 +561,7 @@
 
 ---
 
-## v2.1.3 (2026-07-24) — 稳定发布与跨平台制品校验
+# v2.1.3 (2026-07-24) — 稳定发布与跨平台制品校验
 
 ### 变更
 
@@ -562,7 +578,7 @@
 
 ---
 
-## v2.1.2-dev (2026-07-24) — 单一版本源、宿主入口与 cc-switch 收敛
+# v2.1.2-dev (2026-07-24) — 单一版本源、宿主入口与 cc-switch 收敛
 
 ### 变更
 
@@ -580,7 +596,7 @@
 
 ---
 
-## v2.1.1-dev (2026-07-23 ~ 2026-07-24) — root 运行时与 `/root/app` 工作区
+# v2.1.1-dev (2026-07-23 ~ 2026-07-24) — root 运行时与 `/root/app` 工作区
 
 ### 变更
 
@@ -599,7 +615,7 @@
 
 ---
 
-## v2.1.0-dev (2026-07-23) — Claude 与 Codex 双 CLI
+# v2.1.0-dev (2026-07-23) — Claude 与 Codex 双 CLI
 
 ### 变更
 
@@ -616,7 +632,7 @@
 
 ---
 
-## v2.0.5 (2026-07-22) — 配置管理与 Windows bind mount 修复
+# v2.0.5 (2026-07-22) — 配置管理与 Windows bind mount 修复
 
 ### 变更
 
@@ -637,7 +653,7 @@
 
 ---
 
-## v2.0.4-dev (2026-07-21 ~ 2026-07-22) — Provider 预览与启动初始化修复
+# v2.0.4-dev (2026-07-21 ~ 2026-07-22) — Provider 预览与启动初始化修复
 
 ### 变更
 
@@ -654,7 +670,7 @@
 
 ---
 
-## v2.0.3-dev (2026-07-21) — `.aisc` 配置迁移
+# v2.0.3-dev (2026-07-21) — `.aisc` 配置迁移
 
 ### 变更
 
@@ -672,7 +688,7 @@
 
 ---
 
-## v2.0.1-dev (2026-07-20 ~ 2026-07-21) — 多容器管理与自动 Release
+# v2.0.1-dev (2026-07-20 ~ 2026-07-21) — 多容器管理与自动 Release
 
 ### 变更
 
@@ -690,7 +706,7 @@
 
 ---
 
-## v2.0.0-dev (2026-07-16 ~ 2026-07-20) — Python CLI、可验证制品与跨平台安装器
+# v2.0.0-dev (2026-07-16 ~ 2026-07-20) — Python CLI、可验证制品与跨平台安装器
 
 本节按 `v1.2.0..v2.0.0-dev` 的真实 commit 顺序重新整理。旧日志曾把计划、未提交实验和后续版本混入同一节，现只保留已经进入 `v2.0.0-dev` 标签的结果。
 
@@ -731,7 +747,7 @@
 
 ---
 
-## v1.5.2 (2026-07-16) — AI 简讯性能与可靠性
+# v1.5.2 (2026-07-16) — AI 简讯性能与可靠性
 
 - commit `e9945e4`：5 个资讯源并发抓取、全局截止时间、瞬时错误重试、gzip/deflate 解压、raw/rendered 双层缓存和 `--debug` 计时。
 - `--ai` 模式处理 reasoning-only 输出、token 耗尽和独立 LLM timeout；失败时降素材重试。
@@ -739,7 +755,7 @@
 
 ---
 
-## v1.5.1 (2026-07-14) - 权限修复 + 简讯 URL 增强
+# v1.5.1 (2026-07-14) - 权限修复 + 简讯 URL 增强
 
 ### 变更
 - **`entrypoint.sh`**：项目模式下对 `.claude` 目录追加 `sudo chown -R AISC:AISC`，解决挂载卷文件属主非 uid 1000 导致 `cs` 写 `settings.json` 时报 `EACCES: permission denied`。
@@ -751,7 +767,7 @@
 
 ---
 
-## v1.5.0 (2026-07-12) - AI 每日简讯注入启动头（TLDR + The Rundown）
+# v1.5.0 (2026-07-12) - AI 每日简讯注入启动头（TLDR + The Rundown）
 
 ### 动机
 启动头那段「🚀 [Super Claude] 工作站初始化中... + 后端状态 + 分隔线」纯装饰、无信息量。把每日 AI 资讯（TLDR AI + The Rundown AI）抓取 + LLM 中文精选后注入启动头，每次进容器先看今日要闻；同时支持单独 CLI 输出。
@@ -822,7 +838,7 @@
 
 ---
 
-## v1.4.0 (2026-07-10) - LiteLLM 协议转换 + cc-switch-cli 集成
+# v1.4.0 (2026-07-10) - LiteLLM 协议转换 + cc-switch-cli 集成
 
 ### 动机
 TODO「claude code CLI外配置 cc-switch-cli」+ 汇报演示「Claude Code 接入 OpenAI 格式渠道的技术可行性」。内置 `cs` 只切 Anthropic 兼容后端（不改协议）；需 LiteLLM 做 Anthropic↔OpenAI 协议转换，并集成 cc-switch-cli（4.1k stars，多 AI CLI 管理）与 cs 共存。
@@ -859,7 +875,7 @@ TODO「claude code CLI外配置 cc-switch-cli」+ 汇报演示「Claude Code 接
 
 ---
 
-## v1.3.2 (2026-07-04) — 容器内 Python 运行时
+# v1.3.2 (2026-07-04) — 容器内 Python 运行时
 
 ### 动机
 TODO「配置 docker 容器系统的 python」——容器内无 Python，Claude Code 无法跑 Python 脚本 / pip 装包。
@@ -884,7 +900,7 @@ TODO「配置 docker 容器系统的 python」——容器内无 Python，Claude
 
 ---
 
-## v1.3.1 (2026-07-04) — 项目目录重构（按职责分组）
+# v1.3.1 (2026-07-04) — 项目目录重构（按职责分组）
 
 ### 动机
 
@@ -915,7 +931,7 @@ TODO「配置 docker 容器系统的 python」——容器内无 Python，Claude
 
 ---
 
-## v1.3.0 (2026-07-04) — 启动器模块化重构（流水线 + 状态解耦）
+# v1.3.0 (2026-07-04) — 启动器模块化重构（流水线 + 状态解耦）
 
 ### 动机
 
@@ -955,7 +971,7 @@ TODO「配置 docker 容器系统的 python」——容器内无 Python，Claude
 
 ---
 
-## v1.2.3 (2026-07-04) — 容器内建 Mihomo TUN 透明代理
+# v1.2.3 (2026-07-04) — 容器内建 Mihomo TUN 透明代理
 
 ### 动机
 
@@ -1002,7 +1018,7 @@ TODO「配置 docker 容器系统的 python」——容器内无 Python，Claude
 
 ---
 
-## v1.2.2 (2026-07-01) — 非 root 运行（AISC 用户）
+# v1.2.2 (2026-07-01) — 非 root 运行（AISC 用户）
 
 ### 动机
 
@@ -1063,14 +1079,14 @@ Claude Code 在 root 下拒绝 `--dangerously-skip-permissions` 模式。容器�
 - duo-cc/1y 设 COMPACT=1M 但模型未必真支持 1M：若实际窗口 <1M，到模型上限才报错而非提前压缩。duo-cc 充值后实测确认。
 - xf OPUS `xopglm52` 不加 `[1m]`：glm5.2 在讯飞只有 512k，加后缀会错。
 
-## v1.2.1 (2026-06-30) — README 手动构建/运行 文档完善
+# v1.2.1 (2026-06-30) — README 手动构建/运行 文档完善
 
 - **README 手动构建/运行部分重写**：拆分为构建/运行/常用变体三个小节，覆盖三平台命令。
   - 构建：明确 `USE_CN_MIRROR` 默认=1，新增 `--no-cache` 示例。
   - 运行：新增 Windows PowerShell/CMD 的 `-v` 语法，强调 `TERM=xterm-256color` 必要性。
   - 常用变体：`CLAUDE_SCOPE` 跳过菜单、`bash` 直接进 shell、`cs <后端>` 一键切换、`--name` 容器命名。
 
-## v1.2.0 (2026-06-30) — 插件化重构 + 双作用域 + 跨平台修复
+# v1.2.0 (2026-06-30) — 插件化重构 + 双作用域 + 跨平台修复
 
 ### 架构重构
 
@@ -1152,7 +1168,7 @@ Claude Code 在 root 下拒绝 `--dangerously-skip-permissions` 模式。容器�
 `docker build` 通过；容器内 `locale` 确认 `C.UTF-8`，`ls` 中文无乱码。
 Windows `.bat` 的 no.4 需在 Windows + Windows Terminal 环境实测确认。
 
-## v1.1.3 (2026-06-28)
+# v1.1.3 (2026-06-28)
 
 ### 🚀 启动体验与全局行为优化
 
@@ -1190,7 +1206,7 @@ Windows `.bat` 的 no.4 需在 Windows + Windows Terminal 环境实测确认。
 
 ---
 
-## v1.1.2 (2026-06-27)
+# v1.1.2 (2026-06-27)
 
 ### 🔐 安全重构：API Key 与脚本分离
 
@@ -1228,7 +1244,7 @@ Windows `.bat` 的 no.4 需在 Windows + Windows Terminal 环境实测确认。
 
 ---
 
-## v1.1.1 (2026-06-27)
+# v1.1.1 (2026-06-27)
 
 ### 🔄 切换脚本重构：`cs` 统一入口
 
@@ -1301,7 +1317,7 @@ Windows `.bat` 的 no.4 需在 Windows + Windows Terminal 环境实测确认。
 
 ---
 
-## v1.1.0 (2026-06-27)
+# v1.1.0 (2026-06-27)
 
 ### 🔄 架构重构：纯终端闭环
 
@@ -1373,7 +1389,7 @@ Windows `.bat` 的 no.4 需在 Windows + Windows Terminal 环境实测确认。
 
 ---
 
-## v1.0.0 (2026-06-25)
+# v1.0.0 (2026-06-25)
 
 ### 初始版本
 
