@@ -116,6 +116,19 @@
 - [x] **8c-1** 手动测试（2026-08-10）：侧栏分层/详情/复制/双语、banner 三动作、cc-switch 配置后启动会话、官方登录进 TUI 可直输、恢复布局 gate、外部 stop stale 样式。全部通过。
 - **Step 8 结论（2026-08-10）**：vitest 44 绿（sidebar 5 + restore-gate 1 新增）；A-G05-1..4、A-G12-1/2 证据齐。
 
+## Step 11 验收清单（G-03 终端基础体验 + G-11 右键菜单，分支 step-11-terminal）
+
+> 规范：06 §十二、03 §七 A-G03-1..4 / A-G11-1..4。
+
+- [x] **11a-1** 搜索（A-G03-1/A-G11-2）：`@xterm/addon-search` 每 pane 独立加载/dispose；Ctrl/Cmd+F + 右键入口打开搜索条；上下结果、大小写切换、无结果提示、Esc 关闭；tab 切换不串查询。按键经 `attachCustomKeyEventHandler` 拦截（容器 DOM keydown 被 xterm 内部 textarea 吞掉不触发，2026-08-10 手测修复）。
+- [x] **11a-2** 剪贴板（A-G03-2/A-G11-3）：npm + Rust `tauri-plugin-clipboard-manager`，仅 `read-text`/`write-text` capability；侧边栏 ID 复制迁移到同一插件通道（弃用 `navigator.clipboard`）；权限错误显示可恢复错误。
+- [x] **11a-3** 右键菜单（A-G11-1）：复制/粘贴/搜索/清屏；无 selection 时复制禁用、session 结束后粘贴禁用；菜单关闭焦点回终端。快捷键 Ctrl/Cmd+Shift+C/V 与右键一致；粘贴走 `term.paste` -> `writeSession`（1 MiB 上限，A-G11-4）。
+- [x] **11a-4** 滚动（A-G03-3）：scrollback 5000 默认；向上查看历史不强制跳底，回底恢复 follow；PageUp/PageDown/Home/End 原生可用。
+- [x] **11a-5** 终端填满（手测修复，2026-08-10）：`.terminal-area` 加 `display: flex`（term-wrap flex:1 拉伸）；恢复 counter-zoom 防实时缩放闪烁（移除后 canvas re-fit 闪烁，已回滚恢复）。默认缩放终端填满。
+- [x] **11a-6** 设置滑块（用户反馈，2026-08-10）：`ui.font_scale`/`terminal.font_size`/`line_height`/`letter_spacing`/`scrollback`/`smooth_scroll_duration` 改滑块（限定区间 min/max/step 取自 Rust schema），内联显示当前值；`v-model.number` 修复滑块数字不更新 + 保存失败（range v-model 产生字符串 -> `.toFixed` 崩溃 + serde 拒收）。
+- [x] **11b-1** 手动测试（通过，2026-08-10）：用户确认"可以接受"，余留细节问题之后调整。
+- **Step 11 结论（2026-08-10）**：vue-tsc + 44 vitest + cargo build 全绿；搜索/剪贴板/右键/滚动/填满/滑块全部手测通过。**Step 11 完成。**
+
 ## Step 10 验收清单（G-10 窗口尺寸/位置记忆，分支 step-10-geometry）
 
 > 规范：06 §十一、02 §A-G10-1..5。
