@@ -7,6 +7,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useRuntimeStore } from "../runtime";
+import { normalizePath } from "../tabLayout";
+import type { HistoryPatch, WorkbenchHistory } from "../../types";
 
 const mockIpc = vi.hoisted(() => ({
   closeSession: vi.fn().mockResolvedValue({ reason: "user_close", exitCode: null }),
@@ -193,5 +195,60 @@ describe("removeTab (A-G08-6)", () => {
     expect(s.tabs.find((t) => t.tabId === a)).toBeUndefined();
     expect(s.tabs).toHaveLength(2);
     void b;
+  });
+});
+
+describe("history memory stays in sync with disk (G-07 last-layout fallback)", () => {
+  it("doSave reloads history.value, so a runtime stop preserves the multi-tab layout", async () => {
+    // Disk starts with a stale single-codex layout (e.g. from a prior session).
+    const wsPath = normalizePath("/ws");
+    let disk: WorkbenchHistory = {
+      schema_version: 2,
+      revision: 0,
+      workspaces: [
+        {
+          path: wsPath,
+          last_used_at: "t",
+          pinned: false,
+          last_agent: "codex",
+          runtime: null,
+          layout: {
+            active_tab_id: null,
+            tabs: [{ tab_id: "old", agent: "codex", title: "Codex", position: 0 }],
+          },
+        },
+      ],
+    };
+    mockIpc.loadHistory.mockImplementation(async () => disk);
+    mockIpc.saveHistory.mockImplementation(async (_rev: number, patch: HistoryPatch) => {
+      const patched = patch.workspaces[0];
+      const others = disk.workspaces.filter((w) => w.path !== patched.path);
+      disk = { schema_version: 2, revision: disk.revision + 1, workspaces: [patched, ...others] };
+      return disk.revision;
+    });
+
+    const s = useRuntimeStore();
+    s.runtimeState = "running";
+    s.runtimeId = "rid";
+    s.workspace = "/ws";
+    await s.loadHistory(); // memory seeded from disk = single [codex]
+
+    // Open two tabs; the debounced save must carry BOTH and doSave must reload
+    // history.value so the in-memory copy mirrors the freshly-saved disk state.
+    await s.initTabs(
+      [
+        { tab_id: "a", agent: "bash", title: "Bash", position: 0 },
+        { tab_id: "b", agent: "codex", title: "Codex", position: 1 },
+      ],
+      { openAgents: ["bash", "codex"] }
+    );
+    await tick();
+    await tick();
+    await s.flushSave();
+    await tick();
+
+    const rec = s.history?.workspaces.find((w) => w.path === wsPath);
+    expect(rec?.layout?.tabs).toHaveLength(2); // memory synced, NOT the stale [codex]
+    expect(disk.workspaces[0].layout?.tabs).toHaveLength(2); // disk too
   });
 });

@@ -678,6 +678,16 @@ export const useRuntimeStore = defineStore("runtime", () => {
     try {
       const newRev = await ipc.saveHistory(historyRevision.value, patch);
       historyRevision.value = newRev;
+      // Keep the in-memory history in sync with disk: buildPatch's G-07 fallback
+      // (empty tabs after a runtime stop) preserves the workspace's LAST layout,
+      // and that must be the freshly-saved one - not the startup snapshot, or
+      // 恢复布局 restores the wrong tabs (feedback 2026-08-10).
+      try {
+        const fresh = await ipc.loadHistory();
+        history.value = fresh;
+      } catch {
+        /* best-effort: memory stays on the last known snapshot */
+      }
     } catch (e) {
       const err = e as WorkbenchError;
       if (err?.code === "WB_ERR_HISTORY_CONFLICT" && retries > 0) {
