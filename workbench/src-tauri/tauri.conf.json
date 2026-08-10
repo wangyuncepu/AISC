@@ -35,7 +35,8 @@
       "binaries/aisc"
     ],
     "resources": {
-      "nsis/bundle/aisc-bundle": "aisc-bundle"
+      "nsis/bundle/aisc-bundle": "aisc-bundle",
+      "nsis/wg-transcode.ps1": "wg-transcode.ps1"
     },
     "windows": {
       "nsis": {

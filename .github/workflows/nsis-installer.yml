@@ -1,8 +1,13 @@
 name: NSIS installer build
 
 # Builds the Windows NSIS installer on a Windows runner. The custom
-# installer.nsi template (dependency check + winget install) is rendered and
-# compiled here - local Linux dev cannot validate it.
+# installer.nsi template (Docker Desktop host integration + G-18 PATH) is
+# rendered and compiled here - local Linux dev cannot validate it.
+#
+# NOTE: installer.nsi's `Section Docker` auto-installs Docker Desktop via
+# winget on interactive GUI installs, but is guarded by ${Silent}/$PassiveMode,
+# so every silent install in this workflow never invokes winget - do not
+# "simplify" that guard away.
 #
 # Prerequisite: the AISC CLI sidecar binary for the Windows target must be
 # present in workbench/src-tauri/binaries/ (it is built by cli-sidecar.yml

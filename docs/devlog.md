@@ -43,6 +43,17 @@
 - **CI 冒烟抓出并修复 4 个问题**（05ca3b0/983cd6e + smoke 修复 3e37abc/f04164c/056bd2b/988dd4e）：(1) PathNormalizeDir 只保护 $1/$2，CharLowerBuffW 用 $3 破坏扫描循环 → 冲突探测永远不命中（sentinel 场景 INSTDIR 被追加）；(2) smoke 的 `Count-InstDirEntries $x -ne 1` 被 PowerShell 解析为函数参数 → 断言恒真；(3) `RegQueryValueExW` 带大小指针(NULL 数据) 返回 ERROR_MORE_DATA → PathType 恒 1 → WriteRegStr 展开 `%USERPROFILE%`；(4) smoke 用 GetEnvironmentVariable（自动展开 EXPAND_SZ）匹配字面 `%USERPROFILE%` → 恒失败，改 DoNotExpandEnvironmentNames 读原始值；另接受 runner 系统 PATH 已有 pip aisc 的真实遮蔽语义（05 §5.2.5 不覆盖）。
 - **Step 1 结论（2026-08-09）**：NSIS installer / Workbench CI / Bundle Linux-macOS 三 workflow 全绿；本地实机安装/重复安装/卸载/冲突全链 PASS。A-G18-1..4 证据齐。
 
+### 补记：安装器 Docker Desktop 宿主集成（分支 step-18-docker-installer，2026-08-10）
+
+用户反馈 G-18 移除依赖检测页后，安装器启动 Workbench 前不再处理 Docker。补上三分支宿主集成（`workbench/src-tauri/nsis/installer.nsi`）：
+
+- **`Section Docker`**（INSTFILES 页，`Section Install` 之后）：交互式 GUI 安装（`${Silent}` / `$PassiveMode` guard）检测 Docker 缺失时用 winget 安装 `Docker.DockerDesktop`；winget 输出经随安装器打包的 `wg-transcode.ps1`（`bundle.resources`）把 UTF-8 流式转码为系统 ANSI 代码页，Details 面板实时显示可读进度（winget 非 TTY 无百分比条，仅文本状态行；转码避免 zh-CN 下 mojibake——2026-08-10 用户反馈"winget 日志乱码"后修复）；`$DockerWingetExit` 先存再 `CheckDocker`（修复旧 `Section Dependencies` 中 $0 被 clobber 的 latent bug）。失败不中止安装，由 Workbench 首次启动 preflight 报告真实引擎状态。
+- **`RunFinishApp` 重写**：`CheckDocker` → 已装则 `StartDockerDesktop`（`FindProcessCurrentUser` + `FindProcess` 判运行，0=运行；未运行则 `ExecShell open` 静默启动）→ 未装则 MessageBox 询问打开 Docker 下载页（仍启动 Workbench）；然后 `RunAsUser` 启动 Workbench。
+- **`.onInstSuccess` `/R` 路径**：silent/passive 自动启动前 `Call CheckDocker` + `StartDockerDesktop`（CI 不传 `/R`，无 Docker runner 上 no-op 无 MessageBox）。
+- **新增**：`CheckDocker`（exe 存在 + 卸载注册表 InstallLocation 回退，`800715c` 逐字恢复）/ `CheckWinget`（`where winget`）/ `StartDockerDesktop`；`DOCKER_INSTALLING/INSTALL_OK/INSTALL_FAIL/NO_WINGET/MISSING_LAUNCH` 中英文 LangString。
+- **silent/passive 安全**：`Section Docker` 被 `${Silent}`/`$PassiveMode` guard，CI smoke（`/S` 安装/升级/卸载）永不触发 winget；README/CI workflow 头部注释同步，防后人"简化"掉 guard。
+- **验证**：`npm run tauri build -- --bundles nsis` 全绿，渲染 installer.nsi 含全部新符号；`check-deps-test.nsi` 更新为 `CheckDocker`+`CheckWinget`（去掉已删的 `CheckPython`），makensis 编译 + `/S` 实跑：本机 `docker_installed=0`（Docker Desktop 当前未安装）、`winget_installed=1` ✅。手测矩阵 a–g 待用户实机（见计划）。
+
 ## Step 2 验收清单（G-07 停止/关闭/退出性能，分支 step-2-g07-perf）
 
 > 规范：03-lifecycle-contract.md §4.2/§4.3、06-implementation-plan §0.5；门禁 A-G07-1..4。目标：终止 Runtime / 关窗退出 / 会话回收三条路径的感知延迟与预算。
