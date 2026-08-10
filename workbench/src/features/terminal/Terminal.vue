@@ -323,30 +323,38 @@ function clearScreen() {
   closeMenu();
 }
 
-function onContainerKeydown(e: KeyboardEvent) {
+/** A-G03-1/A-G03-2: intercept Ctrl+F / copy / paste via xterm's custom key
+ * handler so they work when the terminal has focus (a DOM listener on the
+ * container misses keys captured by xterm's internal textarea). Returns true
+ * to let the key reach the PTY, false to swallow it. */
+function onTermCustomKey(e: KeyboardEvent): boolean {
   const mod = e.ctrlKey || e.metaKey;
   const key = e.key.toLowerCase();
-  // Ctrl/Cmd+Shift+C / Ctrl/Cmd+Shift+V: copy/paste (A-G03-2). These never
-  // reach the PTY - the terminal app's plain Ctrl+C/V still work as SIGINT/
-  // literal-echo.
+  // Ctrl/Cmd+Shift+C / Ctrl/Cmd+Shift+V: copy/paste (A-G03-2). Never reach
+  // the PTY - plain Ctrl+C/V still work as SIGINT / literal-echo.
   if (mod && e.shiftKey && key === "c") {
     e.preventDefault();
     void doCopy();
-    return;
+    return false;
   }
   if (mod && e.shiftKey && key === "v") {
     e.preventDefault();
     void doPaste();
-    return;
+    return false;
   }
-  // Ctrl/Cmd+F opens search (A-G03-1); Esc closes it.
+  // Ctrl/Cmd+F opens search (A-G03-1).
   if (mod && key === "f") {
     e.preventDefault();
     openSearch();
-  } else if (e.key === "Escape" && searchOpen.value) {
+    return false;
+  }
+  // Esc closes the search overlay.
+  if (e.key === "Escape" && searchOpen.value) {
     e.preventDefault();
     closeSearch();
+    return false;
   }
+  return true;
 }
 
 function onTerminalClick() {
@@ -361,11 +369,10 @@ onMounted(() => {
   term.writeln(t("terminal.welcome"));
   term.onData(onTermData);
   term.onSelectionChange(onSelectionChange);
+  term.attachCustomKeyEventHandler(onTermCustomKey);
   mountWebgl();
   mountSearch();
   fit.fit();
-
-  container.value?.addEventListener("keydown", onContainerKeydown);
 
   resizeObserver = new ResizeObserver(scheduleResize);
   if (container.value) resizeObserver.observe(container.value);
@@ -422,9 +429,8 @@ onBeforeUnmount(() => {
   if (resizeObserver) resizeObserver.disconnect();
   if (resizeTimer !== null) window.clearTimeout(resizeTimer);
   window.removeEventListener("resize", scheduleResize);
-  container.value?.removeEventListener("keydown", onContainerKeydown);
   closePty();
-  term?.dispose(); // disposes fit/webgl/search addons (03 §七)
+  term?.dispose(); // disposes fit/webgl/search addons + custom key handler (03 §七)
   term = null;
   fit = null;
   webgl = null;

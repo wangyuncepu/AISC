@@ -64,7 +64,11 @@ const uiZoom = computed(() => ({
   height: `calc(100vh / ${effectiveScale.value})`,
   width: `calc(100vw / ${effectiveScale.value})`,
 }));
-const terminalZoom = computed(() => ({ zoom: String(1 / effectiveScale.value) }));
+// G-11 (2026-08-10): the terminal must FILL the terminal-area. The old
+// counter-zoom (1/effectiveScale) shrank it to (1/scale) of the area at
+// font_scale > 1, leaving a visible gap. Removing it lets the terminal scale
+// with the UI; terminal text size is governed by terminal.font_size alone.
+// (The terminal-area itself is inside the UI-zoomed app box.)
 
 // S3.3: aria-live regions (04 §九 - announce semantic changes only, never
 // routine polls). Throttled ~1s so a burst of updates coalesces to the latest.
@@ -374,7 +378,6 @@ function selectRecent(path: string): void {
             v-for="t in openTabs"
             :key="t.tabId"
             class="term-wrap"
-            :style="terminalZoom"
             v-show="t.tabId === store.activeTabId"
           >
             <Terminal :ref="setTerminalRef(t.tabId)" :tab-id="t.tabId" />
@@ -475,7 +478,7 @@ button.primary:hover:not(:disabled) { background: #1177bb; }
 button.danger { background: #5a2d2d; border-color: #6b3636; }
 button.danger:hover:not(:disabled) { background: #6e3a3a; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
-.terminal-area { flex: 1; min-height: 0; padding: 4px; background: #1e1e1e; }
+.terminal-area { flex: 1; min-height: 0; padding: 4px; background: #1e1e1e; display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
 .empty-tabs {
   height: 100%; display: flex; flex-direction: column; align-items: center;
