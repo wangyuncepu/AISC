@@ -2,6 +2,12 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import type {
   BuildEvent,
   BuildStatus,
@@ -137,11 +143,23 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const dockerStarting = ref(false);
   const cancelInspect = ref<RuntimeSnapshot | null>(null);
 
-  // S2.1.b build state (in-memory only, 05 §4.1.5)
+  // S2.1.b build state (in-memory only, 05 §4.1.5). G-14 (Step 13) adds
+  // store-owned timing: startBuild stamps buildStartedAt; the FIRST Promise
+  // settle freezes buildFinishedAt/buildDurationMs once (A-G14-1/2/4). The
+  // ticking display lives in BuildProgress while building; after settle the
+  // frozen duration is shown and never grows.
   const buildStatus = ref<BuildStatus>("idle");
   const buildLog = ref("");
   const buildTag = ref("");
   const buildError = ref<WorkbenchError | null>(null);
+  const buildStartedAt = ref<number | null>(null);
+  const buildFinishedAt = ref<number | null>(null);
+  const buildDurationMs = ref<number | null>(null);
+  /** Monotonic per-build op id (A-G14-2): a superseded build's late settle is
+   * ignored so duration/status/notification are never double-written. */
+  let buildOpId = 0;
+  /** Session-scoped: at most one permission request per launch (A-G14-3). */
+  let notificationPermissionRequested = false;
 
   // S2.2.a: multi-tab. One tab per agent, sharing the runtime (03 §二.3/§六).
   const tabs = ref<Tab[]>([]);
@@ -219,15 +237,21 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   // S2.1.b: build the image with `aisc build --events` (05 §4.1).
+  // G-14 (Step 13): the terminal outcome is authoritative from the Promise
+  // settle only - the Channel never writes terminal state (A-G14-2). The FIRST
+  // settle for the current op freezes buildFinishedAt/buildDurationMs once and
+  // triggers the background notification (A-G14-1/3).
   async function startBuild(tag: string) {
+    const op = ++buildOpId;
     buildTag.value = tag;
     buildLog.value = "";
     buildError.value = null;
     buildStatus.value = "building";
+    buildStartedAt.value = Date.now();
+    buildFinishedAt.value = null;
+    buildDurationMs.value = null;
     status.value = "building";
-    // Channel only streams opaque build.output chunks for display. The terminal
-    // outcome (complete/failed/cancelled) is authoritative from the command
-    // return (try/catch below), avoiding any race with callback delivery.
+    // Channel only streams opaque build.output chunks for display.
     const ch = new Channel<BuildEvent>();
     ch.onmessage = (ev) => {
       if (ev.type === "build.output") {
@@ -239,11 +263,66 @@ export const useRuntimeStore = defineStore("runtime", () => {
       await ipc.buildImage(tag, ch);
       // Ok return == build.complete (05 §4.1.2). Stay on BuildProgress so the
       // user can review the log; "返回摘要" triggers re-preflight.
+      if (op !== buildOpId) return; // superseded build: ignore late settle
       buildStatus.value = "complete";
     } catch (e) {
+      if (op !== buildOpId) return; // superseded build: ignore late settle
       const err = e as WorkbenchError;
       buildError.value = err;
       buildStatus.value = err.code === "WB_ERR_CLI_CANCELLED" ? "cancelled" : "failed";
+    }
+    freezeBuildDuration();
+    if (buildStatus.value === "complete" || buildStatus.value === "failed") {
+      await maybeNotifyBuildFinished();
+    }
+  }
+
+  /** Freeze the final duration on the first settle of the current op. */
+  function freezeBuildDuration(): void {
+    const started = buildStartedAt.value;
+    if (started === null) return;
+    const finished = Date.now();
+    buildFinishedAt.value = finished;
+    buildDurationMs.value = finished - started;
+  }
+
+  /** Background system notification, once per build, complete/failed only
+   * (A-G14-1: foreground -> 0 notifications; A-G14-3: permission denied /
+   * unavailable never changes the build facts - degrade silently, request
+   * permission at most once per launch). */
+  async function maybeNotifyBuildFinished(): Promise<void> {
+    let background: boolean;
+    try {
+      const win = getCurrentWindow();
+      const [focused, minimized] = await Promise.all([win.isFocused(), win.isMinimized()]);
+      background = !focused || minimized;
+    } catch {
+      return; // cannot determine focus -> no notification (degrade)
+    }
+    if (!background) return;
+
+    let granted = false;
+    try {
+      granted = await isPermissionGranted();
+      if (!granted && !notificationPermissionRequested) {
+        notificationPermissionRequested = true;
+        granted = (await requestPermission()) === "granted";
+      }
+    } catch {
+      granted = false;
+    }
+    if (!granted) return; // denied/default/error: no loop, no re-request
+
+    const duration = ((buildDurationMs.value ?? 0) / 1000).toFixed(1);
+    const t = i18n.global.t.bind(i18n.global);
+    const body =
+      buildStatus.value === "complete"
+        ? t("notification.buildComplete", { duration })
+        : t("notification.buildFailed");
+    try {
+      await sendNotification({ title: t("notification.title"), body });
+    } catch {
+      /* degrade: notification failure never affects build state (A-G14-3) */
     }
   }
 
@@ -1068,6 +1147,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
     buildLog,
     buildTag,
     buildError,
+    buildStartedAt,
+    buildFinishedAt,
+    buildDurationMs,
     tabs,
     activeTabId,
     runtimeState,

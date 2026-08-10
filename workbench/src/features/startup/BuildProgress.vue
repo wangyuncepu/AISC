@@ -19,20 +19,42 @@ const STATUS_KEY: Record<string, string> = {
   idle: "",
 };
 const statusText = computed(() => (STATUS_KEY[store.buildStatus] ? t(STATUS_KEY[store.buildStatus]) : ""));
-const elapsedSec = computed(() => (elapsedMs.value / 1000).toFixed(1));
+// G-14 (Step 13): live tick while building; frozen store duration after the
+// first settle - never grows again (A-G14-1/4). Timing is store-owned; the
+// component only renders it.
+const elapsedSec = computed(() => {
+  if (store.buildStatus === "building") return (elapsedMs.value / 1000).toFixed(1);
+  return ((store.buildDurationMs ?? 0) / 1000).toFixed(1);
+});
 const dockerError = computed(
   () => store.buildError?.code === "AISC_ERR_DOCKER_UNAVAILABLE"
 );
 
-onMounted(() => {
-  const begun = Date.now();
+function stopTimer(): void {
+  if (timer !== null) {
+    window.clearInterval(timer);
+    timer = null;
+  }
+}
+function startTimer(): void {
+  if (timer !== null) return;
   timer = window.setInterval(() => {
-    elapsedMs.value = Date.now() - begun;
+    elapsedMs.value = Date.now() - (store.buildStartedAt ?? Date.now());
   }, 200);
+}
+onMounted(() => {
+  if (store.buildStatus === "building") startTimer();
 });
-onBeforeUnmount(() => {
-  if (timer !== null) window.clearInterval(timer);
-});
+onBeforeUnmount(stopTimer);
+// A-G14-4: the elapsed timer stops at the first settle (complete/failed/
+// cancelled); leaving and returning shows the frozen value.
+watch(
+  () => store.buildStatus,
+  (s) => {
+    if (s === "building") startTimer();
+    else stopTimer();
+  }
+);
 
 // Auto-scroll the log to the bottom on new output.
 watch(
@@ -50,7 +72,7 @@ watch(
     <div class="head">
       <span class="title">{{ t("build.title", { tag: store.buildTag }) }}</span>
       <span class="state" :data-state="store.buildStatus">{{ statusText }}</span>
-      <span v-if="store.buildStatus === 'building'" class="elapsed">{{ elapsedSec }}s</span>
+      <span v-if="store.buildStatus !== 'idle'" class="elapsed">{{ elapsedSec }}s</span>
     </div>
     <pre ref="logEl" class="log">{{ store.buildLog || t("build.logEmpty") }}</pre>
     <p v-if="store.buildError" class="err">{{ store.buildError.message }}</p>

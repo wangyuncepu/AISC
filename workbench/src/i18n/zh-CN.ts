@@ -190,6 +190,10 @@ export const zhCN = {
   "doctor.status.warn": "警告",
   "doctor.status.fail": "失败",
   "doctor.status.skip": "跳过",
+  // --- 构建完成通知 (G-14, Step 13) ---
+  "notification.title": "AISC Workbench",
+  "notification.buildComplete": "镜像构建完成（{duration} 秒）",
+  "notification.buildFailed": "镜像构建失败",
 
   // --- settings dialog (SettingsDialog.vue) ---
   "settings.title": "设置",
