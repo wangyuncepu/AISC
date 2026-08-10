@@ -1380,6 +1380,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
     );
     if (!ok) return;
     status.value = "stopping";
+    // G-07 (2026-08-10): persist the CURRENT tab layout before it is cleared
+    // below - if the 300ms debounce had not fired yet, clearing tabs would lose
+    // this session's layout and 恢复布局 would fall back to a previous one.
+    await flushSave();
     // Staged concurrent stop (03 §4.2): start every session close in
     // parallel, but do not wait for all of them - wait at most 400ms for the
     // terminate CLI spawns, then stop the runtime (container-side sessions

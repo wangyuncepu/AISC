@@ -20,6 +20,8 @@ const mockIpc = vi.hoisted(() => ({
   openSession: vi.fn().mockResolvedValue({}),
   writeSession: vi.fn().mockResolvedValue(undefined),
   ackSessionExit: vi.fn().mockResolvedValue("acknowledged"),
+  stopRuntime: vi.fn().mockResolvedValue({ state: "stopped" }),
+  runtimeInspect: vi.fn().mockResolvedValue({ state: "stopped" }),
 }));
 
 vi.mock("../../lib/ipc", () => mockIpc);
@@ -249,6 +251,58 @@ describe("history memory stays in sync with disk (G-07 last-layout fallback)", (
 
     const rec = s.history?.workspaces.find((w) => w.path === wsPath);
     expect(rec?.layout?.tabs).toHaveLength(2); // memory synced, NOT the stale [codex]
+    expect(disk.workspaces[0].layout?.tabs).toHaveLength(2); // disk too
+  });
+
+  it("stopRuntime flushes the CURRENT layout before clearing tabs", async () => {
+    // Disk starts with a stale single-codex layout; the current session opens
+    // two tabs and stops immediately (before the 300ms debounce fires).
+    const wsPath = normalizePath("/ws");
+    let disk: WorkbenchHistory = {
+      schema_version: 2,
+      revision: 0,
+      workspaces: [
+        {
+          path: wsPath,
+          last_used_at: "t",
+          pinned: false,
+          last_agent: "codex",
+          runtime: null,
+          layout: {
+            active_tab_id: null,
+            tabs: [{ tab_id: "old", agent: "codex", title: "Codex", position: 0 }],
+          },
+        },
+      ],
+    };
+    mockIpc.loadHistory.mockImplementation(async () => disk);
+    mockIpc.saveHistory.mockImplementation(async (_rev: number, patch: HistoryPatch) => {
+      const patched = patch.workspaces[0];
+      const others = disk.workspaces.filter((w) => w.path !== patched.path);
+      disk = { schema_version: 2, revision: disk.revision + 1, workspaces: [patched, ...others] };
+      return disk.revision;
+    });
+
+    const s = useRuntimeStore();
+    s.runtimeState = "running";
+    s.runtimeId = "rid";
+    s.workspace = "/ws";
+    await s.loadHistory();
+    await s.initTabs(
+      [
+        { tab_id: "a", agent: "bash", title: "Bash", position: 0 },
+        { tab_id: "b", agent: "codex", title: "Codex", position: 1 },
+      ],
+      { openAgents: ["bash", "codex"] }
+    );
+    await tick();
+    await tick();
+
+    await s.stopRuntime(); // no wait for the debounce - flushSave must persist the 2 tabs
+
+    expect(s.tabs).toHaveLength(0); // runtime stopped, tabs cleared
+    const rec = s.history?.workspaces.find((w) => w.path === wsPath);
+    expect(rec?.layout?.tabs).toHaveLength(2); // current layout survived the stop
     expect(disk.workspaces[0].layout?.tabs).toHaveLength(2); // disk too
   });
 });
