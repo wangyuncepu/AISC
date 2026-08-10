@@ -796,7 +796,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
    * reattaching a PTY - 03 §六). Fresh start passes the fixed 4 records and
    * opens only the requested agents; resume (S2.4.b) passes the history
    * records (duplicates preserved, A-INFRA-1) and opens all. */
-  function initTabs(
+  async function initTabs(
     records: TabRecord[],
     opts: {
       activeSavedId?: string | null;
@@ -812,14 +812,23 @@ export const useRuntimeStore = defineStore("runtime", () => {
     };
     const { tabs: created, bySavedId } = tabsFromRecords(records);
     tabs.value = created;
+    // G-17: open EVERY pane leaf (a restored split tab has several), each
+    // through the same provider gate as + menu tabs - unconfigured claude/
+    // codex restore as guide without a session (A-G08-3). `openAgents`
+    // filters the pane types to open (fresh start opens only the requested).
+    const gates: Promise<void>[] = [];
     for (const tab of created) {
-      // G-17: open EVERY pane leaf (a restored split tab has several), each
-      // through the same provider gate as + menu tabs - unconfigured claude/
-      // codex restore as guide without a session (A-G08-3). `openAgents`
-      // filters the pane types to open (fresh start opens only the requested).
       for (const leaf of listLeaves(tab.tree)) {
         if (opts.openAgents && !opts.openAgents.includes(leaf.sessionType)) continue;
-        void maybeOpenPaneCreated(tab, leaf.paneId, leaf.sessionType);
+        // bash/cc-switch open synchronously ("starting"); claude/codex await a
+        // provider query. Wait for the latter so a restored claude/codex pane
+        // resolves to guide/session BEFORE "ready" - never a dormant flash
+        // (G-17 feedback 2026-08-10). Bounded so a hung query can't block start.
+        if (leaf.sessionType === "claude" || leaf.sessionType === "codex") {
+          gates.push(maybeOpenPaneCreated(tab, leaf.paneId, leaf.sessionType));
+        } else {
+          void maybeOpenPaneCreated(tab, leaf.paneId, leaf.sessionType);
+        }
       }
       syncProjection(tab);
     }
@@ -827,6 +836,12 @@ export const useRuntimeStore = defineStore("runtime", () => {
       activeSavedId: opts.activeSavedId,
       activeAgent: opts.activeAgent,
     });
+    if (gates.length > 0) {
+      await Promise.race([
+        Promise.all(gates),
+        new Promise((resolve) => setTimeout(resolve, 1500)),
+      ]);
+    }
     status.value = "ready";
     scheduleSave();
   }
@@ -1273,7 +1288,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       }
       stopTimer();
       runtimeReady.value = true;
-      initTabs(records, opts);
+      await initTabs(records, opts);
     } catch (e) {
       stopTimer();
       const err = e as WorkbenchError;

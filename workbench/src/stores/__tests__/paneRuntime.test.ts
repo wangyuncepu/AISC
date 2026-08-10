@@ -283,4 +283,37 @@ describe("restore of unconfigured claude|codex panes (G-17 feedback 2026-08-10)"
     expect(tab.agent).toBe("claude");
     expect(tab.title).toBe("Claude");
   });
+
+  it("restore of a CONFIGURED codex opens a live session - never dormant", async () => {
+    mockIpc.getProviderStatus.mockResolvedValue({
+      provider_name: "official",
+      route_mode: "official-direct",
+      auth_status: "configured",
+      observed_at: "x",
+    });
+    const s = useRuntimeStore();
+    s.runtimeState = "running";
+    s.runtimeId = "rid";
+    s.workspace = "/ws";
+    const tree = singleLeaf("p1", "codex");
+    s.initTabs(
+      [
+        {
+          tab_id: "saved1",
+          agent: "codex",
+          title: "Codex",
+          position: 0,
+          split_layout: { version: 1, active_pane_id: "p1", root: internalToPersisted(tree) },
+        },
+      ],
+      {}
+    );
+    await tick();
+    await tick();
+    const tab = s.tabs[0];
+    expect(tab).toBeDefined();
+    // Configured codex must open a session (TUI), NOT stay idle/dormant.
+    expect(["starting", "running"]).toContain(tab.panes["p1"].sessionState);
+    expect(tab.panes["p1"].sessionId).not.toBeNull();
+  });
 });
