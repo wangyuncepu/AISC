@@ -142,7 +142,7 @@ defineExpose({ focusActivePane });
     v-else-if="pane"
     class="pane"
     :data-active="tab?.activePaneId === pane.paneId"
-    @pointerdown.self="activatePane"
+    @pointerdown="activatePane"
   >
     <button
       v-if="canClosePane"

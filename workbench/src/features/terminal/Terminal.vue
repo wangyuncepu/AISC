@@ -329,7 +329,7 @@ function onTermCustomKey(e: KeyboardEvent): boolean {
     openSearch();
     return false;
   }
-  // G-17: Ctrl+Shift+W closes the focused pane (only when the tab has >1 leaf).
+  // G-17: Ctrl+Shift+W closes the focused pane (multi-leaf tabs only).
   if (mod && e.shiftKey && key === "w") {
     const t = tab.value;
     const paneId = t?.activePaneId;
@@ -339,8 +339,9 @@ function onTermCustomKey(e: KeyboardEvent): boolean {
       return false;
     }
   }
-  // G-17: pane focus navigation (Ctrl+arrows / Ctrl+hjkl vim-style). When no
-  // neighbor exists the key falls through so e.g. Ctrl+h still backspaces.
+  // G-17: pane focus navigation (Ctrl+arrows / Ctrl+hjkl vim-style). Returns
+  // false (consume) ONLY when focus actually moved; otherwise the key falls
+  // through so e.g. Ctrl+h stays a backspace at a pane edge.
   if (mod && !e.shiftKey && !e.altKey) {
     const dir = e.key === "ArrowLeft" || key === "h" ? "left"
       : e.key === "ArrowRight" || key === "l" ? "right"
