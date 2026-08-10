@@ -24,7 +24,7 @@ use crate::settings::Settings;
 pub struct TrayState(pub Mutex<Option<TrayIcon>>);
 
 /// Whether a tray is live in this process (A-G16-4 gate).
-pub fn tray_available(app: &AppHandle) -> bool {
+pub fn tray_live(app: &AppHandle) -> bool {
     app.try_state::<TrayState>()
         .map(|s| s.0.lock().map(|g| g.is_some()).unwrap_or(false))
         .unwrap_or(false)
@@ -85,7 +85,7 @@ pub fn build_tray(app: &AppHandle) -> Result<(), tauri::Error> {
 /// stored `minimize-to-tray` value falls back to quit at runtime (A-G16-4) so
 /// the last window is never hidden without a tray to restore it.
 pub fn effective_close_behavior(app: &AppHandle) -> &'static str {
-    if close_behavior(app) == "minimize-to-tray" && tray_available(app) {
+    if close_behavior(app) == "minimize-to-tray" && tray_live(app) {
         "minimize-to-tray"
     } else {
         "quit"
@@ -109,6 +109,6 @@ pub fn on_window_close_requested(window: &tauri::Window, api: &tauri::CloseReque
 }
 
 #[tauri::command]
-pub fn tray_available_command(app: AppHandle) -> bool {
-    tray_available(&app)
+pub fn tray_available(app: AppHandle) -> bool {
+    tray_live(&app)
 }
