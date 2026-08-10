@@ -31,7 +31,6 @@ import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import { resizeSession, writeSession } from "../../lib/ipc";
 import { resolveRenderer, TERMINAL_THEME } from "./renderer";
-import { leafCount } from "../../stores/paneTree";
 import type { LaunchAgent } from "../../types";
 
 const { t } = useI18n();
@@ -329,30 +328,9 @@ function onTermCustomKey(e: KeyboardEvent): boolean {
     openSearch();
     return false;
   }
-  // G-17: Ctrl+Shift+W closes the focused pane (multi-leaf tabs only).
-  if (mod && e.shiftKey && key === "w") {
-    const t = tab.value;
-    const paneId = t?.activePaneId;
-    if (t && paneId && leafCount(t.tree) > 1) {
-      e.preventDefault();
-      void store.closePane(props.tabId, paneId);
-      return false;
-    }
-  }
-  // G-17: pane focus navigation (Ctrl+arrows / Ctrl+hjkl vim-style). Returns
-  // false (consume) ONLY when focus actually moved; otherwise the key falls
-  // through so e.g. Ctrl+h stays a backspace at a pane edge.
-  if (mod && !e.shiftKey && !e.altKey) {
-    const dir = e.key === "ArrowLeft" || key === "h" ? "left"
-      : e.key === "ArrowRight" || key === "l" ? "right"
-      : e.key === "ArrowUp" || key === "k" ? "up"
-      : e.key === "ArrowDown" || key === "j" ? "down"
-      : null;
-    if (dir && store.navigatePane(props.tabId, dir)) {
-      e.preventDefault();
-      return false;
-    }
-  }
+  // G-17: pane navigation + Ctrl+Shift+W close are handled by the WINDOW-level
+  // capture handler in App.vue (runs before the terminal sees the key); the
+  // xterm handler keeps only the terminal-specific bindings.
   // Esc closes the search overlay.
   if (e.key === "Escape" && searchOpen.value) {
     e.preventDefault();

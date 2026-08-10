@@ -10,6 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import * as ipc from "./lib/ipc";
 import { applyLocale } from "./i18n";
 import { computeWindowTitle } from "./lib/title";
+import { leafCount } from "./stores/paneTree";
 import { useRuntimeStore } from "./stores/runtime";
 import { useSettingsStore } from "./stores/settings";
 import { useDoctorStore } from "./stores/doctor";
@@ -187,6 +188,37 @@ watch(
 function onKeydown(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
+  const key = e.key.toLowerCase();
+  // G-17: pane focus navigation + close. This window-level CAPTURE handler runs
+  // before the terminal textarea and before any WebView2 accelerator the page
+  // can see; scoped to keys originating inside an xterm. Consumed keys never
+  // reach the PTY. (Note: WebView2 may swallow some browser-reserved combos -
+  // Ctrl+J opened the downloads page; Ctrl+arrows are page-level and safe.)
+  if (store.status === "ready" && store.activeTabId) {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.(".xterm")) {
+      if (e.shiftKey && key === "w") {
+        // Ctrl+Shift+W closes the focused pane (multi-leaf tabs only).
+        const t = store.tabs.find((x) => x.tabId === store.activeTabId);
+        if (t && leafCount(t.tree) > 1) {
+          e.preventDefault();
+          void store.closePane(store.activeTabId, t.activePaneId);
+        }
+        return;
+      }
+      if (!e.shiftKey && !e.altKey) {
+        const dir = e.key === "ArrowLeft" || key === "h" ? "left"
+          : e.key === "ArrowRight" || key === "l" ? "right"
+          : e.key === "ArrowUp" || key === "k" ? "up"
+          : e.key === "ArrowDown" || key === "j" ? "down"
+          : null;
+        if (dir && store.navigatePane(store.activeTabId, dir)) {
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+  }
   // G-08 (A-G08-6): Ctrl/Cmd+1..9 map the current committed tab order; the
   // 10th tab and beyond use the tablist arrow/Home/End navigation.
   if (e.key >= "1" && e.key <= "9") {
