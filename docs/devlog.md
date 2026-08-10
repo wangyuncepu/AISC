@@ -46,8 +46,9 @@
 - [x] **13b-4** BuildProgress 显示：building 时活计时（tick 停止于 settle，A-G14-4），settle 后显示冻结耗时；终态耗时始终显示。
 - [x] **13c-1** i18n：notification.title/buildComplete/buildFailed zh-CN/en-US + key-parity。
 - [x] **13c-2** 自动化：vitest 59（+10 build/notify，含 A-G14-2 乱序/被取代、A-G14-1 前台 0 条/后台恰好 1 条、A-G14-3 权限降级不循环）；Rust 101 + cli_runner 7 + pty_supervisor 7 + vue-tsc + cargo build 全绿。
-- [ ] **13b-5** 手动测试：起 build 后切到后台，complete/failed 收到恰好 1 条系统通知；前台 build 0 条；cancelled 后台 0 条；通知权限拒绝后降级页面内终态不弹权限；终态耗时冻结不增长。
-- **Step 13 结论**：待完成（自动化已绿，手测待用户）。
+- [x] **13b-5** 手动测试（通过，2026-08-10）：后台 build 完成收到恰好 1 条系统通知；前台 build 0 条；终态耗时冻结不增长；权限拒绝降级、cancelled 不通知。
+- [x] **13d-1** 手测中发现并修复的 bug：① 镜像缺失时若 action=reuse（工作区有匹配 runtime），构建按钮被 `imageMissing` 隐藏 → 死路；改为 `imageNotFound`（fail + `AISC_ERR_IMAGE_NOT_FOUND`，与 action 无关）驱动按钮与提示。② stale registry 记录（container 被手动删除）被 preflight 判为 reuse → session open 打不存在 container → RUNTIME_NOT_FOUND 死循环；CLI `_get_container_state` 区分 `not_found`，matching 分支对 stale 记录报 conflict（resolve_conflict → ConflictManager），ConflictManager 对 not_found 状态补「移除」按钮。均带 vitest/Python 测试锁定（vitest 65、Python 392）。
+- **Step 13 结论（2026-08-10）**：vitest 65 + Python 392 + Rust 101/cli_runner 7/pty_supervisor 7 + vue-tsc + cargo build 全绿；G-14 手测 1-6 通过；手测暴露的镜像缺失按钮、stale runtime 两个 bug 已修复并验证。**Step 13 完成。**
 
 ## Step 1 验收清单（G-18 sidecar 入用户 PATH，分支 step-1-g18-path）
 
