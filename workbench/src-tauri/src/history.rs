@@ -22,7 +22,7 @@ use crate::error::WorkbenchError;
 use crate::session::config_dir;
 use crate::storage;
 
-const SCHEMA_VERSION: u64 = 1;
+const SCHEMA_VERSION: u64 = 2;
 const HISTORY_FILE: &str = "history.json";
 const LOCK_FILE: &str = "history.lock";
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -138,6 +138,39 @@ pub struct Layout {
     pub extra: serde_json::Value,
 }
 
+// --- G-17 (Step 16) pane tree persistence (03 §6.3 tagged union) ---
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum PaneNode {
+    Split(PaneSplit),
+    Pane(PaneLeaf),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PaneSplit {
+    pub axis: String, // "horizontal" | "vertical"
+    pub ratio: f64,
+    pub first: Box<PaneNode>,
+    pub second: Box<PaneNode>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PaneLeaf {
+    pub pane_id: String,
+    pub session_type: String,
+}
+
+/// Per-tab split layout (history schema v2). `version` is the layout format
+/// version (1); `agent` stays as the flat fallback (active/first leaf type,
+/// 03 §6.3 - the v2 writer must keep it in sync).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SplitLayout {
+    pub version: u64,
+    pub active_pane_id: String,
+    pub root: PaneNode,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct TabRecord {
     pub tab_id: String,
@@ -146,6 +179,9 @@ pub struct TabRecord {
     pub title: String,
     #[serde(default)]
     pub position: u32,
+    /// G-17: the tab's split tree (None for a G-08 flat tab, or before v2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_layout: Option<SplitLayout>,
     /// Unknown fields survive round-trips (A-INFRA-5).
     #[serde(default, flatten)]
     pub extra: serde_json::Value,
@@ -161,33 +197,110 @@ pub struct HistoryPatch {
 
 // --- load / save ---
 
-/// Load `dir/history.json`. Missing -> empty. Corrupt JSON -> isolate the file
-/// (rename to `.corrupt`) and return empty so the app starts. Unsupported
-/// schema -> error (caller treats as no history; file left untouched).
-pub fn load(dir: &Path) -> Result<WorkbenchHistory, HistoryError> {
+/// Isolate a corrupt history file (rename to `.corrupt`) so a fresh one can be
+/// written while the corrupt bytes stay available for diagnosis.
+fn isolate_corrupt(dir: &Path) {
+    let _ = fs::rename(dir.join(HISTORY_FILE), dir.join(format!("{HISTORY_FILE}.corrupt")));
+}
+
+/// Load `dir/history.json` and normalize it to the current schema.
+///
+/// Missing -> empty. Corrupt JSON -> isolate the file (rename to `.corrupt`)
+/// and return empty so the app starts. Schema v1 -> migrated in memory to v2
+/// (each flat tab becomes a single-leaf tree, 03 §6.3) and `migrated=true` so
+/// the caller can persist it under the lock. Unsupported schema -> error (file
+/// left untouched).
+pub fn load(dir: &Path) -> Result<(WorkbenchHistory, bool), HistoryError> {
     let path = dir.join(HISTORY_FILE);
     match fs::read(&path) {
-        Ok(bytes) => match serde_json::from_slice::<WorkbenchHistory>(&bytes) {
-            Ok(hist) if hist.schema_version == SCHEMA_VERSION => Ok(hist),
-            Ok(hist) => Err(HistoryError::UnsupportedSchema {
-                found: Some(hist.schema_version),
-            }),
-            Err(e) => {
-                // Isolate the corrupt file so a fresh history can be written.
-                let _ = fs::rename(&path, dir.join(format!("{HISTORY_FILE}.corrupt")));
-                Err(HistoryError::Corrupt(e.to_string()))
+        Ok(bytes) => {
+            let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+                Ok(v) => v,
+                Err(e) => {
+                    isolate_corrupt(dir);
+                    return Err(HistoryError::Corrupt(e.to_string()));
+                }
+            };
+            let found = value.get("schema_version").and_then(|v| v.as_u64());
+            match found {
+                Some(v) if v == SCHEMA_VERSION => {
+                    match serde_json::from_value(value) {
+                        Ok(h) => Ok((h, false)),
+                        Err(e) => {
+                            isolate_corrupt(dir);
+                            Err(HistoryError::Corrupt(e.to_string()))
+                        }
+                    }
+                }
+                Some(1) => match serde_json::from_value::<WorkbenchHistory>(value) {
+                    Ok(mut h) => {
+                        migrate_v1_to_v2(&mut h);
+                        Ok((h, true))
+                    }
+                    Err(e) => {
+                        isolate_corrupt(dir);
+                        Err(HistoryError::Corrupt(e.to_string()))
+                    }
+                },
+                other => Err(HistoryError::UnsupportedSchema { found: other }),
             }
-        },
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(WorkbenchHistory::empty()),
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok((WorkbenchHistory::empty(), false)),
         Err(e) => Err(HistoryError::Io(e.to_string())),
     }
 }
 
-/// Save under the cross-process lock: reload, verify `expected_revision`, merge
-/// the patch (upsert by path, preserve others), bump revision, atomic write.
-/// Returns the new revision, or `Conflict` if the on-disk revision moved.
-pub fn save(dir: &Path, expected_revision: u64, patch: &HistoryPatch) -> Result<u64, HistoryError> {
-    fs::create_dir_all(dir).map_err(|e| HistoryError::Io(e.to_string()))?;
+/// v1 -> v2: every flat tab becomes a single-leaf tree whose pane shares the
+/// tab's UUID; the tab's `agent` is already the flat fallback (03 §6.3). Keeps
+/// tab IDs, order and the active tab untouched (A-G17-3).
+fn migrate_v1_to_v2(h: &mut WorkbenchHistory) {
+    h.schema_version = SCHEMA_VERSION;
+    for ws in &mut h.workspaces {
+        if let Some(layout) = &mut ws.layout {
+            for tab in &mut layout.tabs {
+                if tab.split_layout.is_none() {
+                    tab.split_layout = Some(SplitLayout {
+                        version: 1,
+                        active_pane_id: tab.tab_id.clone(),
+                        root: PaneNode::Pane(PaneLeaf {
+                            pane_id: tab.tab_id.clone(),
+                            session_type: tab.agent.clone(),
+                        }),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Load and persist the v1 -> v2 migration under the cross-process lock when the
+/// on-disk file was v1 (atomic replace; a failed migration never overwrites the
+/// v1 original, A-G17-3). Re-reads inside the lock so a concurrent migration
+/// wins instead of being overwritten.
+pub fn load_migrated(dir: &Path) -> Result<WorkbenchHistory, HistoryError> {
+    let (h, migrated) = load(dir)?;
+    if migrated {
+        fs::create_dir_all(dir).map_err(|e| HistoryError::Io(e.to_string()))?;
+        let lock_file = acquire_lock(dir)?;
+        let result = (|| {
+            let (current, migrated_now) = load(dir)?;
+            if migrated_now {
+                let bytes = serde_json::to_vec_pretty(&current)
+                    .map_err(|e| HistoryError::Corrupt(e.to_string()))?;
+                atomic_write(&dir.join(HISTORY_FILE), &bytes)
+                    .map_err(|e| HistoryError::Io(e.to_string()))?;
+            }
+            Ok::<(), HistoryError>(())
+        })();
+        let _ = lock_file.unlock();
+        result?;
+    }
+    Ok(h)
+}
+
+/// Acquire the cross-process exclusive lock with a bounded wait (fail-closed on
+/// timeout: no lockless write, 02 §九).
+fn acquire_lock(dir: &Path) -> Result<fs::File, HistoryError> {
     let lock_path = dir.join(LOCK_FILE);
     let lock_file = fs::OpenOptions::new()
         .create(true)
@@ -195,8 +308,6 @@ pub fn save(dir: &Path, expected_revision: u64, patch: &HistoryPatch) -> Result<
         .write(true)
         .open(&lock_path)
         .map_err(|e| HistoryError::Io(e.to_string()))?;
-
-    // Bounded wait for the exclusive lock (fail-closed on timeout).
     let deadline = Instant::now() + LOCK_TIMEOUT;
     loop {
         match lock_file.try_lock_exclusive() {
@@ -210,6 +321,15 @@ pub fn save(dir: &Path, expected_revision: u64, patch: &HistoryPatch) -> Result<
             Err(e) => return Err(HistoryError::Io(e.to_string())),
         }
     }
+    Ok(lock_file)
+}
+
+/// Save under the cross-process lock: reload, verify `expected_revision`, merge
+/// the patch (upsert by path, preserve others), bump revision, atomic write.
+/// Returns the new revision, or `Conflict` if the on-disk revision moved.
+pub fn save(dir: &Path, expected_revision: u64, patch: &HistoryPatch) -> Result<u64, HistoryError> {
+    fs::create_dir_all(dir).map_err(|e| HistoryError::Io(e.to_string()))?;
+    let lock_file = acquire_lock(dir)?;
     let result = save_locked(dir, expected_revision, patch);
     let _ = lock_file.unlock();
     result
@@ -263,7 +383,8 @@ fn save_locked(
     expected_revision: u64,
     patch: &HistoryPatch,
 ) -> Result<u64, HistoryError> {
-    let mut current = load(dir)?;
+    // load migrates v1 -> v2 in memory; the atomic write below persists v2.
+    let (mut current, _) = load(dir)?;
     if current.revision != expected_revision {
         return Err(HistoryError::Conflict {
             current_revision: current.revision,
@@ -296,9 +417,10 @@ fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
 #[tauri::command]
 pub async fn load_history(app: AppHandle) -> Result<WorkbenchHistory, WorkbenchError> {
     let dir = config_dir(&app)?;
-    // Corrupt files are isolated by `load`; unsupported/other errors -> empty so
-    // the app starts clean without overwriting a recoverable file.
-    Ok(load(&dir).unwrap_or_else(|_| WorkbenchHistory::empty()))
+    // Corrupt files are isolated by `load`; v1 files are migrated to v2 under
+    // the lock; unsupported/other errors -> empty so the app starts clean
+    // without overwriting a recoverable file.
+    Ok(load_migrated(&dir).unwrap_or_else(|_| WorkbenchHistory::empty()))
 }
 
 #[tauri::command]
@@ -319,7 +441,7 @@ mod tests {
     #[test]
     fn load_missing_file_is_empty() {
         let dir = tempdir().unwrap();
-        let h = load(dir.path()).unwrap();
+        let h = load(dir.path()).unwrap().0;
         assert_eq!(h.schema_version, SCHEMA_VERSION);
         assert_eq!(h.revision, 0);
         assert!(h.workspaces.is_empty());
@@ -356,7 +478,7 @@ mod tests {
         };
         let rev = save(dir.path(), 0, &patch).unwrap();
         assert_eq!(rev, 1);
-        let h = load(dir.path()).unwrap();
+        let h = load(dir.path()).unwrap().0;
         assert_eq!(h.revision, 1);
         assert_eq!(h.workspaces.len(), 1);
         assert_eq!(h.workspaces[0].path, "/ws");
@@ -421,7 +543,7 @@ mod tests {
             },
         )
         .unwrap();
-        let h = load(dir.path()).unwrap();
+        let h = load(dir.path()).unwrap().0;
         assert_eq!(h.revision, 2);
         let paths: Vec<_> = h.workspaces.iter().map(|w| w.path.as_str()).collect();
         assert!(paths.contains(&"/a"));
@@ -459,7 +581,7 @@ mod tests {
         )
         .unwrap();
 
-        let h = load(dir.path()).unwrap();
+        let h = load(dir.path()).unwrap().0;
         // Round-trip through save with a patch touching the same workspace.
         let rev = save(
             dir.path(),
@@ -475,7 +597,7 @@ mod tests {
         .unwrap();
         assert_eq!(rev, 1);
 
-        let h = load(dir.path()).unwrap();
+        let h = load(dir.path()).unwrap().0;
         assert_eq!(h.extra.get("root_future").and_then(|v| v.get("a")), Some(&serde_json::json!(1)));
         let ws = &h.workspaces[0];
         assert_eq!(ws.extra.get("ws_future").and_then(|v| v.as_str()), Some("keep-me"));
@@ -495,7 +617,7 @@ mod tests {
         assert!(matches!(err, HistoryError::Corrupt(_)));
         assert!(dir.path().join(format!("{HISTORY_FILE}.corrupt")).exists());
         // Original file no longer in place -> next load is empty.
-        let h = load(dir.path()).unwrap();
+        let h = load(dir.path()).unwrap().0;
         assert!(h.workspaces.is_empty());
     }
 
@@ -541,8 +663,161 @@ mod tests {
             }],
         };
         save(dir.path(), 1, &v2).unwrap();
-        let h = load(dir.path()).unwrap();
+        let h = load(dir.path()).unwrap().0;
         assert_eq!(h.workspaces.len(), 1);
         assert_eq!(h.workspaces[0].last_agent, "bash");
+    }
+
+    // --- G-17 (Step 16): schema v2 + v1 migration (A-G17-3) ---
+
+    fn v1_file(dir: &Path) {
+        let v1 = serde_json::json!({
+            "schema_version": 1,
+            "revision": 0,
+            "workspaces": [{
+                "path": "/ws",
+                "layout": {
+                    "active_tab_id": "t2",
+                    "tabs": [
+                        {"tab_id": "t1", "agent": "bash", "title": "Bash", "position": 0},
+                        {"tab_id": "t2", "agent": "claude", "title": "Claude", "position": 1}
+                    ]
+                }
+            }]
+        });
+        fs::write(dir.join(HISTORY_FILE), serde_json::to_vec_pretty(&v1).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn v1_migrates_to_v2_in_memory_preserving_tabs_order_and_active() {
+        let dir = tempdir().unwrap();
+        v1_file(dir.path());
+        let (h, migrated) = load(dir.path()).unwrap();
+        assert!(migrated);
+        assert_eq!(h.schema_version, SCHEMA_VERSION);
+        let layout = h.workspaces[0].layout.as_ref().unwrap();
+        assert_eq!(layout.active_tab_id.as_deref(), Some("t2"));
+        assert_eq!(layout.tabs.len(), 2);
+        // Order + ids preserved.
+        assert_eq!(layout.tabs[0].tab_id, "t1");
+        assert_eq!(layout.tabs[1].tab_id, "t2");
+        // Every flat tab became a single-leaf tree sharing the tab's UUID.
+        for (tab, agent) in layout.tabs.iter().zip(["bash", "claude"]) {
+            let sl = tab.split_layout.as_ref().expect("split_layout present after migration");
+            assert_eq!(sl.version, 1);
+            assert_eq!(sl.active_pane_id, tab.tab_id);
+            match &sl.root {
+                PaneNode::Pane(leaf) => {
+                    assert_eq!(leaf.pane_id, tab.tab_id);
+                    assert_eq!(leaf.session_type, agent);
+                }
+                PaneNode::Split(_) => panic!("v1 migration must yield a single leaf"),
+            }
+            // Flat fallback `agent` kept in sync.
+            assert_eq!(tab.agent, agent);
+        }
+    }
+
+    #[test]
+    fn load_migrated_persists_v2_and_second_load_reports_no_migration() {
+        let dir = tempdir().unwrap();
+        v1_file(dir.path());
+        let h = load_migrated(dir.path()).unwrap();
+        assert_eq!(h.schema_version, SCHEMA_VERSION);
+        // On-disk file is now v2.
+        let on_disk: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join(HISTORY_FILE)).unwrap()).unwrap();
+        assert_eq!(on_disk.get("schema_version").and_then(|v| v.as_u64()), Some(2));
+        assert!(on_disk["workspaces"][0]["layout"]["tabs"][0]["split_layout"].is_object());
+        // Second load: no migration flag, revision preserved.
+        let (h2, migrated2) = load(dir.path()).unwrap();
+        assert!(!migrated2);
+        assert_eq!(h2.revision, 0);
+    }
+
+    #[test]
+    fn v2_nested_split_tree_round_trips() {
+        let dir = tempdir().unwrap();
+        let split = PaneNode::Split(PaneSplit {
+            axis: "horizontal".into(),
+            ratio: 0.4,
+            first: Box::new(PaneNode::Pane(PaneLeaf {
+                pane_id: "pane-a".into(),
+                session_type: "bash".into(),
+            })),
+            second: Box::new(PaneNode::Split(PaneSplit {
+                axis: "vertical".into(),
+                ratio: 0.5,
+                first: Box::new(PaneNode::Pane(PaneLeaf {
+                    pane_id: "pane-b".into(),
+                    session_type: "claude".into(),
+                })),
+                second: Box::new(PaneNode::Pane(PaneLeaf {
+                    pane_id: "pane-c".into(),
+                    session_type: "codex".into(),
+                })),
+            })),
+        });
+        let patch = HistoryPatch {
+            workspaces: vec![WorkspaceRecord {
+                path: "/ws".into(),
+                layout: Some(Layout {
+                    active_tab_id: Some("t1".into()),
+                    tabs: vec![TabRecord {
+                        tab_id: "t1".into(),
+                        agent: "bash".into(),
+                        title: "Bash".into(),
+                        position: 0,
+                        split_layout: Some(SplitLayout {
+                            version: 1,
+                            active_pane_id: "pane-a".into(),
+                            root: split,
+                        }),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+        };
+        save(dir.path(), 0, &patch).unwrap();
+        let h = load(dir.path()).unwrap().0;
+        let tab = &h.workspaces[0].layout.as_ref().unwrap().tabs[0];
+        let sl = tab.split_layout.as_ref().expect("split_layout present");
+        assert_eq!(sl.active_pane_id, "pane-a");
+        match &sl.root {
+            PaneNode::Split(s) => {
+                assert_eq!(s.axis, "horizontal");
+                assert_eq!(s.ratio, 0.4);
+                match s.second.as_ref() {
+                    PaneNode::Split(inner) => {
+                        assert_eq!(inner.axis, "vertical");
+                        assert_eq!(inner.ratio, 0.5);
+                    }
+                    PaneNode::Pane(_) => panic!("expected inner split"),
+                }
+            }
+            PaneNode::Pane(_) => panic!("expected split root"),
+        }
+        // Flat `agent` fallback kept in sync.
+        assert_eq!(tab.agent, "bash");
+    }
+
+    #[test]
+    fn newer_schema_is_refused_and_not_overwritten() {
+        // A newer Workbench wrote v3; this (v2) build must refuse to read/write
+        // it and leave the file untouched - the same mechanism that keeps old
+        // builds from editing v2 files (A-G17-3 "旧版本拒写 v2").
+        let dir = tempdir().unwrap();
+        let v3 = serde_json::json!({"schema_version": 3, "revision": 0, "workspaces": []});
+        fs::write(dir.path().join(HISTORY_FILE), serde_json::to_vec(&v3).unwrap()).unwrap();
+        let err = load(dir.path()).unwrap_err();
+        assert!(matches!(
+            err,
+            HistoryError::UnsupportedSchema { found: Some(3) }
+        ));
+        let on_disk: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join(HISTORY_FILE)).unwrap()).unwrap();
+        assert_eq!(on_disk.get("schema_version").and_then(|v| v.as_u64()), Some(3));
     }
 }

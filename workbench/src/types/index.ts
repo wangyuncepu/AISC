@@ -254,11 +254,33 @@ export interface TabRecord {
   agent: Agent;
   title: string;
   position: number;
+  /** G-17: the tab's split tree (absent for a flat G-08 tab). */
+  split_layout?: SplitLayout | null;
 }
 
 export interface Layout {
   active_tab_id: string | null;
   tabs: TabRecord[];
+}
+
+// --- G-17 (Step 16): PaneTree persistence schema v2 (03 §6.3) ---
+
+/** Persisted tagged union (snake_case, mirrors the Rust PaneNode exactly). */
+export type PaneNode =
+  | {
+      kind: "split";
+      axis: "horizontal" | "vertical";
+      ratio: number;
+      first: PaneNode;
+      second: PaneNode;
+    }
+  | { kind: "pane"; pane_id: string; session_type: LaunchAgent };
+
+/** Per-tab split layout persisted in history v2. */
+export interface SplitLayout {
+  version: number;
+  active_pane_id: string;
+  root: PaneNode;
 }
 
 export interface WorkspaceRecord {
