@@ -940,6 +940,11 @@ export const useRuntimeStore = defineStore("runtime", () => {
     const ch = new Channel<PtyEvent>();
     ch.onmessage = (ev) => {
       if (ev.type === "output") {
+        // First output proves the PTY is live: promote a `starting` pane to
+        // running. The invoke response can lag the channel delivery, leaving
+        // the tab bar on 启动中 while bash is already showing output
+        // (G-17 feedback 2026-08-10).
+        onTabOpenOk(paneId);
         paneStreams.value[paneId]?.push(ev.bytes);
       } else if (ev.type === "exit") {
         if (!p.exit) {

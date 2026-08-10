@@ -101,6 +101,24 @@ describe("store session ops route through the active pane (A-G17-5)", () => {
     expect(tab.exit?.reason).toBe("process_exit");
   });
 
+  it("first PTY output promotes a starting pane to running (onTabOpenOk)", async () => {
+    // Delay the open_session invoke: while it is still pending, PTY output
+    // arriving on the channel must already flip the pane to running.
+    mockIpc.openSession.mockImplementationOnce((...args: unknown[]) => {
+      channels.push((args[4] as { onmessage?: (ev: unknown) => void }) ?? {});
+      return new Promise<void>(() => {}); // never settles - invoke stays pending
+    });
+    const s = useRuntimeStore();
+    s.runtimeState = "running";
+    s.runtimeId = "rid";
+    const id = s.createTab("bash")!;
+    const tab = s.tabs.find((t) => t.tabId === id)!;
+    expect(tab.panes[id].sessionState).toBe("starting"); // invoke still pending
+    lastChannel().onmessage?.({ type: "output", bytes: "eA==" }); // bash prompt arrives
+    expect(tab.panes[id].sessionState).toBe("running"); // output => running
+    expect(tab.sessionState).toBe("running"); // projection synced
+  });
+
   it("open failure keeps a failed pane (no silent rollback, A-G17-2)", async () => {
     const s = useRuntimeStore();
     s.runtimeState = "running";
