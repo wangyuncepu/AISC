@@ -143,3 +143,11 @@ export const captureWindowGeometry = () => invoke<boolean>("capture_window_geome
 // --- G-13: one-click diagnosis (05 §六, Step 12) ---
 
 export const runDoctor = () => invoke<DoctorReport>("run_doctor");
+
+// --- G-16: tray availability (03 §A-G16-4, Step 15) ---
+
+export const trayAvailable = () => invoke<boolean>("tray_available");
+
+/** Hide the tray icon immediately after the exit confirm passes (the window
+ * already hides instantly; cleanup continues in the background). */
+export const trayRemove = () => invoke<void>("tray_remove");

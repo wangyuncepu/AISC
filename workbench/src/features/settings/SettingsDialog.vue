@@ -249,6 +249,9 @@ function onCancel() {
 .head {
   display: flex; align-items: center; gap: 10px; padding: 10px 14px;
   border-bottom: 1px solid #333;
+  /* Small windows scroll the panel body; keep the header (with the saved
+     confirmation chip) and the footer (Save button) always in view. */
+  position: sticky; top: 0; z-index: 2; background: #252526;
 }
 .head h2 { margin: 0; font-size: 15px; color: #ddd; }
 .chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
@@ -281,6 +284,8 @@ input:disabled, select:disabled { opacity: 0.5; }
 .loading { color: #888; font-size: 13px; }
 .foot {
   display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid #333;
+  /* Sticky bottom so Save is reachable in a small window (see .head). */
+  position: sticky; bottom: 0; z-index: 2; background: #252526;
 }
 button {
   background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;
