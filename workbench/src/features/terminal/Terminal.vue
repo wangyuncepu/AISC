@@ -12,12 +12,19 @@
  * - ResizeObserver throttled + re-fit when the tab becomes visible.
  * - PTY Exit is the single terminal signal (03 §五.2); reported to the store
  *   which merges duplicate terminate/exit results into one TabExit.
+ *
+ * G-03/G-11 (Step 11): SearchAddon (Ctrl+F search bar, prev/next, case,
+ * Esc close), context menu (copy/paste/search/clear) via the Tauri clipboard
+ * plugin (only read-text/write-text granted), and per-pane dispose of all
+ * addons/listeners in onBeforeUnmount (03 §七).
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Terminal, type ITerminalOptions } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { SearchAddon } from "@xterm/addon-search";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Channel } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
 import { useRuntimeStore } from "../../stores/runtime";
@@ -32,6 +39,7 @@ const store = useRuntimeStore();
 const settingsStore = useSettingsStore();
 
 const container = ref<HTMLDivElement | null>(null);
+const searchInput = ref<HTMLInputElement | null>(null);
 const tab = computed(() => store.tabs.find((t) => t.tabId === props.tabId));
 const sessionId = computed(() => tab.value?.sessionId ?? null);
 const visible = computed(() => store.activeTabId === props.tabId);
@@ -39,10 +47,20 @@ const visible = computed(() => store.activeTabId === props.tabId);
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
 let webgl: WebglAddon | null = null;
+let searchAddon: SearchAddon | null = null;
 let channel: Channel<PtyEvent> | null = null;
 let resizeTimer: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let closed = false;
+
+// G-03 search overlay state.
+const searchOpen = ref(false);
+const searchTerm = ref("");
+const caseSensitive = ref(false);
+const searchResult = ref<{ current: number; total: number } | null>(null);
+// G-11 context menu state.
+const ctxMenu = ref<{ x: number; y: number } | null>(null);
+const hasSelection = ref(false);
 
 /** G-06: build the Terminal from the typed settings (02 §三.4 table). Values
  * come from the backend; when settings are not yet loaded the xterm native
@@ -83,6 +101,20 @@ function mountWebgl() {
   }
 }
 
+/** G-03/A-G03-1: load SearchAddon (per pane, disposed with the Terminal). */
+function mountSearch() {
+  try {
+    const addon = new SearchAddon();
+    addon.onDidChangeResults((r) => {
+      searchResult.value = { current: r.resultIndex, total: r.resultCount };
+    });
+    term!.loadAddon(addon);
+    searchAddon = addon;
+  } catch {
+    searchAddon = null;
+  }
+}
+
 function onTermData(data: string) {
   const sid = sessionId.value;
   if (sid && !closed) {
@@ -98,15 +130,19 @@ function rebuildTerminal() {
   const host = container.value;
   const sid = sessionId.value;
   if (!host || !term) return;
-  term.dispose(); // also disposes loaded addons (webgl/fit)
+  term.dispose(); // also disposes loaded addons (webgl/fit/search)
   webgl = null;
+  searchAddon = null;
+  searchResult.value = null;
   term = new Terminal(terminalOptions());
   fit = new FitAddon();
   term.loadAddon(fit);
   term.open(host);
   term.writeln(t("terminal.welcome"));
   term.onData(onTermData);
+  term.onSelectionChange(onSelectionChange);
   mountWebgl();
+  mountSearch();
   if (sid && !closed) {
     // Keep the existing channel; the PTY must NOT be reopened.
     setTimeout(doResize, 0);
@@ -186,6 +222,145 @@ function doResize() {
   }
 }
 
+// --- G-03/A-G03-1 search ---
+
+function openSearch() {
+  searchOpen.value = true;
+  void nextTick(() => searchInput.value?.focus());
+}
+
+function closeSearch() {
+  searchOpen.value = false;
+  searchTerm.value = "";
+  searchResult.value = null;
+  searchAddon?.clearDecorations();
+  term?.focus();
+}
+
+function doSearch() {
+  if (!searchAddon) return;
+  if (!searchTerm.value) {
+    searchResult.value = null;
+    searchAddon.clearDecorations();
+    return;
+  }
+  searchAddon.findNext(searchTerm.value, { caseSensitive: caseSensitive.value });
+}
+
+function searchNext() {
+  if (searchAddon && searchTerm.value) {
+    searchAddon.findNext(searchTerm.value, { caseSensitive: caseSensitive.value });
+  }
+}
+
+function searchPrev() {
+  if (searchAddon && searchTerm.value) {
+    searchAddon.findPrevious(searchTerm.value, { caseSensitive: caseSensitive.value });
+  }
+}
+
+// --- G-11/A-G11-1 context menu ---
+
+function onSelectionChange() {
+  hasSelection.value = term?.hasSelection() ?? false;
+}
+
+function onContextMenu(e: MouseEvent) {
+  e.preventDefault();
+  if (closed) return;
+  // Clamp to the viewport so the menu never overflows the window.
+  const x = Math.min(e.clientX, window.innerWidth - 180);
+  const y = Math.min(e.clientY, window.innerHeight - 150);
+  ctxMenu.value = { x, y };
+}
+
+function closeMenu() {
+  ctxMenu.value = null;
+  term?.focus(); // A-G11-1: menu close returns focus to the terminal
+}
+
+/** A-G03-2/A-G11-3: copy the current selection (keyboard + menu share this). */
+async function doCopy() {
+  const sel = term?.getSelection();
+  if (!sel) return;
+  try {
+    await writeText(sel);
+  } catch (err) {
+    term?.write(`\r\n\x1b[31m${t("terminal.clipboardError", { message: String(err) })}\x1b[0m\r\n`);
+  }
+}
+
+/** A-G03-2/A-G11-4: paste clipboard text into the session (1 MiB cap). */
+async function doPaste() {
+  try {
+    const text = await readText();
+    if (text && term) {
+      // term.paste triggers onData -> write_session (respects 1 MiB cap, A-G11-4).
+      term.paste(text);
+    }
+  } catch (err) {
+    term?.write(`\r\n\x1b[31m${t("terminal.clipboardError", { message: String(err) })}\x1b[0m\r\n`);
+  }
+}
+
+async function copySelection() {
+  await doCopy();
+  closeMenu();
+}
+
+async function pasteFromClipboard() {
+  await doPaste();
+  closeMenu();
+}
+
+function openSearchFromMenu() {
+  closeMenu();
+  openSearch();
+}
+
+function clearScreen() {
+  term?.clear();
+  closeMenu();
+}
+
+/** A-G03-1/A-G03-2: intercept Ctrl+F / copy / paste via xterm's custom key
+ * handler so they work when the terminal has focus (a DOM listener on the
+ * container misses keys captured by xterm's internal textarea). Returns true
+ * to let the key reach the PTY, false to swallow it. */
+function onTermCustomKey(e: KeyboardEvent): boolean {
+  const mod = e.ctrlKey || e.metaKey;
+  const key = e.key.toLowerCase();
+  // Ctrl/Cmd+Shift+C / Ctrl/Cmd+Shift+V: copy/paste (A-G03-2). Never reach
+  // the PTY - plain Ctrl+C/V still work as SIGINT / literal-echo.
+  if (mod && e.shiftKey && key === "c") {
+    e.preventDefault();
+    void doCopy();
+    return false;
+  }
+  if (mod && e.shiftKey && key === "v") {
+    e.preventDefault();
+    void doPaste();
+    return false;
+  }
+  // Ctrl/Cmd+F opens search (A-G03-1).
+  if (mod && key === "f") {
+    e.preventDefault();
+    openSearch();
+    return false;
+  }
+  // Esc closes the search overlay.
+  if (e.key === "Escape" && searchOpen.value) {
+    e.preventDefault();
+    closeSearch();
+    return false;
+  }
+  return true;
+}
+
+function onTerminalClick() {
+  if (ctxMenu.value) ctxMenu.value = null;
+}
+
 onMounted(() => {
   term = new Terminal(terminalOptions());
   fit = new FitAddon();
@@ -193,7 +368,10 @@ onMounted(() => {
   term.open(container.value!);
   term.writeln(t("terminal.welcome"));
   term.onData(onTermData);
+  term.onSelectionChange(onSelectionChange);
+  term.attachCustomKeyEventHandler(onTermCustomKey);
   mountWebgl();
+  mountSearch();
   fit.fit();
 
   resizeObserver = new ResizeObserver(scheduleResize);
@@ -252,10 +430,11 @@ onBeforeUnmount(() => {
   if (resizeTimer !== null) window.clearTimeout(resizeTimer);
   window.removeEventListener("resize", scheduleResize);
   closePty();
-  term?.dispose();
+  term?.dispose(); // disposes fit/webgl/search addons + custom key handler (03 §七)
   term = null;
   fit = null;
   webgl = null;
+  searchAddon = null;
 });
 
 // S3.3: allow the app-level tab shortcut (Ctrl/Cmd+1..4) to move keyboard focus
@@ -268,12 +447,140 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="container" class="terminal"></div>
+  <div
+    ref="container"
+    class="terminal"
+    @contextmenu="onContextMenu"
+    @click="onTerminalClick"
+  >
+    <!-- G-03 search overlay -->
+    <div v-if="searchOpen" class="search-overlay" @click.stop>
+      <input
+        ref="searchInput"
+        v-model="searchTerm"
+        :placeholder="t('terminal.searchPlaceholder')"
+        @input="doSearch"
+        @keydown.enter.prevent="searchNext"
+        @keydown.shift.enter.prevent="searchPrev"
+        @keydown.esc.prevent="closeSearch"
+      />
+      <button class="nav" :aria-label="t('terminal.searchPrev')" @click="searchPrev">↑</button>
+      <button class="nav" :aria-label="t('terminal.searchNext')" @click="searchNext">↓</button>
+      <button
+        class="case"
+        :class="{ active: caseSensitive }"
+        :aria-label="t('terminal.searchCase')"
+        @click="caseSensitive = !caseSensitive; doSearch()"
+      >Aa</button>
+      <span class="result" :class="{ empty: searchResult?.total === 0 }">
+        {{
+          searchResult && searchResult.total > 0
+            ? t("terminal.searchResult", { current: searchResult.current + 1, total: searchResult.total })
+            : t("terminal.searchNoResult")
+        }}
+      </span>
+      <button class="close" aria-label="Close" @click="closeSearch">×</button>
+    </div>
+
+    <!-- G-11 context menu -->
+    <div
+      v-if="ctxMenu"
+      class="ctx-menu"
+      :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+      @contextmenu.prevent
+      @click.stop
+    >
+      <button :disabled="!hasSelection" @click="copySelection">{{ t("terminal.copy") }}</button>
+      <button :disabled="closed" @click="pasteFromClipboard">{{ t("terminal.paste") }}</button>
+      <button @click="openSearchFromMenu">{{ t("terminal.search") }}</button>
+      <button @click="clearScreen">{{ t("terminal.clear") }}</button>
+    </div>
+  </div>
 </template>
 
 <style scoped>
 .terminal {
   height: 100%;
   width: 100%;
+  position: relative;
+}
+
+/* --- search overlay (top-right, above the terminal) --- */
+.search-overlay {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  font-size: 12px;
+}
+.search-overlay input {
+  width: 140px;
+  padding: 3px 6px;
+  background: #3c3c3c;
+  color: #d4d4d4;
+  border: none;
+  border-radius: 2px;
+  outline: none;
+}
+.search-overlay button {
+  padding: 3px 6px;
+  background: transparent;
+  color: #cccccc;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.search-overlay button:hover {
+  background: #3c3c3c;
+}
+.search-overlay button.case.active {
+  color: #0dbc79;
+}
+.search-overlay .result {
+  min-width: 42px;
+  text-align: center;
+  color: #9e9e9e;
+}
+.search-overlay .result.empty {
+  color: #f14c4c;
+}
+
+/* --- context menu --- */
+.ctx-menu {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 4px;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+.ctx-menu button {
+  padding: 6px 12px;
+  text-align: left;
+  background: transparent;
+  color: #d4d4d4;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.ctx-menu button:hover:not(:disabled) {
+  background: #37373d;
+}
+.ctx-menu button:disabled {
+  color: #6e6e6e;
+  cursor: default;
 }
 </style>

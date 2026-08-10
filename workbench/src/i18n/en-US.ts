@@ -160,6 +160,19 @@ export const enUS: Record<string, string> = {
   "terminal.exited": "Session exited",
   "terminal.sessionError": "[Session error: {code} {message}]",
   "terminal.openFailed": "[open_session failed: {code}]",
+  // --- search overlay (G-03/A-G03-1) ---
+  "terminal.search": "Search",
+  "terminal.searchPlaceholder": "Search terminal…",
+  "terminal.searchNext": "Next",
+  "terminal.searchPrev": "Prev",
+  "terminal.searchCase": "Match case",
+  "terminal.searchNoResult": "No results",
+  "terminal.searchResult": "{current}/{total}",
+  // --- context menu (G-11/A-G11-1) ---
+  "terminal.copy": "Copy",
+  "terminal.paste": "Paste",
+  "terminal.clear": "Clear screen",
+  "terminal.clipboardError": "Clipboard unavailable: {message}",
 
   // --- settings dialog (SettingsDialog.vue) ---
   "settings.title": "Settings",

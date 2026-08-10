@@ -160,6 +160,19 @@ export const zhCN = {
   "terminal.exited": "Session exited",
   "terminal.sessionError": "[Session error: {code} {message}]",
   "terminal.openFailed": "[open_session failed: {code}]",
+  // --- search overlay (G-03/A-G03-1) ---
+  "terminal.search": "搜索",
+  "terminal.searchPlaceholder": "搜索终端…",
+  "terminal.searchNext": "下一个",
+  "terminal.searchPrev": "上一个",
+  "terminal.searchCase": "大小写敏感",
+  "terminal.searchNoResult": "无结果",
+  "terminal.searchResult": "{current}/{total}",
+  // --- context menu (G-11/A-G11-1) ---
+  "terminal.copy": "复制",
+  "terminal.paste": "粘贴",
+  "terminal.clear": "清屏",
+  "terminal.clipboardError": "剪贴板不可用：{message}",
 
   // --- settings dialog (SettingsDialog.vue) ---
   "settings.title": "设置",

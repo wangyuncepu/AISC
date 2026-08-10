@@ -65,6 +65,13 @@ const uiZoom = computed(() => ({
   width: `calc(100vw / ${effectiveScale.value})`,
 }));
 const terminalZoom = computed(() => ({ zoom: String(1 / effectiveScale.value) }));
+// G-11 (2026-08-10): the counter-zoom keeps the terminal visually 1:1 when
+// the UI scale changes, preventing the canvas re-fit flicker observed when it
+// was removed (real-time font_scale preview flickered). The terminal FILLS
+// the terminal-area because .terminal-area is display:flex (term-wrap flex:1
+// stretches) and the counter-zoom is 1 at the default scale (1.0). At
+// font_scale > 1 the terminal occupies 1/scale of the area by design (it
+// stays 1:1 while the chrome grows); terminal.font_size governs text.
 
 // S3.3: aria-live regions (04 §九 - announce semantic changes only, never
 // routine polls). Throttled ~1s so a burst of updates coalesces to the latest.
@@ -475,7 +482,7 @@ button.primary:hover:not(:disabled) { background: #1177bb; }
 button.danger { background: #5a2d2d; border-color: #6b3636; }
 button.danger:hover:not(:disabled) { background: #6e3a3a; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
-.terminal-area { flex: 1; min-height: 0; padding: 4px; background: #1e1e1e; }
+.terminal-area { flex: 1; min-height: 0; padding: 4px; background: #1e1e1e; display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
 .empty-tabs {
   height: 100%; display: flex; flex-direction: column; align-items: center;
