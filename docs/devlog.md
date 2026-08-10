@@ -59,8 +59,8 @@
 - [x] **14a-3** 截断（A-G15-3）：workspace basename >40 grapheme 保留首尾各 18 + `…`；`Intl.Segmenter` grapheme 级，CJK/emoji/组合字符不截断 cluster。
 - [x] **14a-4** 接线：App.vue watch 活动上下文（workspace + activeTab + session state）→ `getCurrentWindow().setTitle()`；无轮询；setTitle 失败仅 console.warn 不影响主流程。仅新增 `core:window:allow-set-title` capability。
 - [x] **14a-5** 自动化：vitest 75（+10 title，含 basename/优先级/grapheme 截断）+ vue-tsc + cargo build + Rust 101/7/7 全绿。
-- [ ] **14b-1** 手动测试：启动无 workspace 时标题 `AISC Workbench`；选 workspace 后 `<basename> · AISC Workbench`；开 Bash tab → `test · Bash · AISC Workbench`；切 Claude/Codex tab 标题跟随；关全部 tab 标题回落 `<basename> · AISC Workbench`；退出/重开窗口标题正确。
-- **Step 14 结论**：待完成（自动化已绿，手测待用户）。
+- [x] **14b-1** 手动测试（通过，2026-08-10）：无 workspace → `AISC Workbench`；选 workspace → `test · AISC Workbench`；开 Bash → `test · Bash · AISC Workbench`；切 Claude/Codex tab 标题跟随；关全部 tab 回落 `test · AISC Workbench`。
+- **Step 14 结论（2026-08-10）**：vitest 75 + Rust 101/cli_runner 7/pty_supervisor 7 + vue-tsc + cargo build 全绿；手测通过。**Step 14 完成。**
 
 ## Step 1 验收清单（G-18 sidecar 入用户 PATH，分支 step-1-g18-path）
 
