@@ -20,12 +20,12 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 
-[project.scripts]
-aisc = "aisc.cli.main:main"
-
 # G-02 (2026-08-10): docker SDK powers interactive sessions so the exec pty
 # can be resized via exec_resize (docker CLI exec ptys are frozen at spawn).
 dependencies = ["docker>=7.1"]
+
+[project.scripts]
+aisc = "aisc.cli.main:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "PyInstaller>=6", "PyYAML>=6"]
