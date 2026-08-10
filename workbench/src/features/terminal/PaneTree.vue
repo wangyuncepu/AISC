@@ -139,6 +139,13 @@ defineExpose({ focusActivePane });
     :data-active="tab?.activePaneId === pane.paneId"
     @pointerdown.self="activatePane"
   >
+    <button
+      class="pane-close"
+      :title="t('pane.close')"
+      :aria-label="t('pane.close')"
+      @pointerdown.stop
+      @click.stop="store.closePane(tabId, pane.paneId)"
+    >×</button>
     <Terminal v-if="showTerminal" :ref="setTerm(pane.paneId)" :tab-id="tabId" :pane-id="pane.paneId" />
     <GuidePane
       v-else-if="paneRuntime?.sessionState === 'guide'"
@@ -198,8 +205,16 @@ defineExpose({ focusActivePane });
   min-width: 0;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 .pane[data-active="true"] { background: #1e1e1e; }
+.pane-close {
+  position: absolute; top: 4px; right: 4px; z-index: 2;
+  background: rgba(30, 30, 30, 0.8); border: 1px solid #444; color: #aaa;
+  width: 20px; height: 20px; line-height: 1; border-radius: 4px;
+  font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.pane-close:hover { background: #5a2d2d; border-color: #6b3636; color: #fff; }
 .dormant {
   flex: 1;
   display: flex;

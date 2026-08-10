@@ -19,6 +19,7 @@ import type {
   Layout,
   PaneRuntime,
   PreflightReport,
+  PtyEvent,
   ProviderStatus,
   RuntimeRef,
   RuntimeSnapshot,
@@ -168,6 +169,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const buildLog = ref("");
   const buildTag = ref("");
   const buildError = ref<WorkbenchError | null>(null);
+  /** G-17: per-pane PTY output buffer (base64 chunks). The store owns the
+   * session channel; Terminals replay + stream from here, so remounts never
+   * drop output or re-open the session. */
+  const paneStreams = ref<Record<string, string[]>>({});
   const buildStartedAt = ref<number | null>(null);
   const buildFinishedAt = ref<number | null>(null);
   const buildDurationMs = ref<number | null>(null);
@@ -800,12 +805,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       // filters the pane types to open (fresh start opens only the requested).
       for (const leaf of listLeaves(tab.tree)) {
         if (opts.openAgents && !opts.openAgents.includes(leaf.sessionType)) continue;
-        if (leaf.sessionType === "claude" || leaf.sessionType === "codex") {
-          openPane(tab, leaf.paneId);
-          void maybeOpenPaneCreated(tab, leaf.paneId, leaf.sessionType);
-        } else {
-          openPane(tab, leaf.paneId);
-        }
+        void maybeOpenPaneCreated(tab, leaf.paneId, leaf.sessionType);
       }
       syncProjection(tab);
     }
@@ -877,15 +877,51 @@ export const useRuntimeStore = defineStore("runtime", () => {
 
   // --- G-17 (Step 16): split / close-pane / ratio ---
 
-  /** Open a pane's session by id (fresh session_id, `starting`). The mounted
-   * Terminal watches the pane's session_id and calls open_session. */
-  function openPane(tab: Tab, paneId: string) {
+  /** Open a pane's session by id (fresh session_id, `starting`). The STORE owns
+   * the session channel + output buffer so a Terminal remount (e.g. a split
+   * restructuring the tree) never re-opens or drops the session (A-G17-2:
+   * open failure keeps a failed pane). */
+  async function openPane(tab: Tab, paneId: string) {
     const p = tab.panes[paneId];
     if (!p || p.sessionState === "starting" || p.sessionState === "running") return;
-    p.sessionId = uuid();
+    const agent = findLeaf(tab.tree, paneId)?.sessionType;
+    if (!agent || !runtimeId.value) return;
+    const sid = uuid();
+    p.sessionId = sid;
     p.sessionState = "starting";
     p.exit = null;
+    paneStreams.value[paneId] = []; // reset the per-pane output buffer
     syncProjection(tab);
+    const ch = new Channel<PtyEvent>();
+    ch.onmessage = (ev) => {
+      if (ev.type === "output") {
+        paneStreams.value[paneId]?.push(ev.bytes);
+      } else if (ev.type === "exit") {
+        if (!p.exit) {
+          p.exit = { reason: ev.reason, exitCode: ev.exitCode };
+          p.sessionState = ev.reason === "transport_error" ? "disconnected" : "exited";
+          syncProjection(tab);
+          void ipc.ackSessionExit(sid).catch(() => null);
+        }
+      } else if (ev.type === "error") {
+        if (!TERMINAL_STATES.includes(p.sessionState)) {
+          p.sessionState = "failed";
+          syncProjection(tab);
+        }
+      }
+    };
+    try {
+      await ipc.openSession(runtimeId.value, sid, agent, workspace.value.trim(), ch);
+      if (p.sessionState === "starting") {
+        p.sessionState = "running";
+        syncProjection(tab);
+      }
+    } catch {
+      if (p.sessionState === "starting") {
+        p.sessionState = "failed";
+        syncProjection(tab);
+      }
+    }
   }
 
   /** Split the tab's active pane, activating + opening the new pane. Refused
@@ -911,18 +947,18 @@ export const useRuntimeStore = defineStore("runtime", () => {
     tab.activePaneId = newPaneId;
     syncProjection(tab);
     scheduleSave();
-    openPane(tab, newPaneId);
     void maybeOpenPaneCreated(tab, newPaneId, sessionType);
     return newPaneId;
   }
 
-  /** G-12 gate for a freshly split pane (claude/codex may route to guide). */
+  /** G-12 gate for a freshly created/split pane (claude/codex may route to
+   * guide before any session is opened). */
   async function maybeOpenPaneCreated(tab: Tab, paneId: string, agent: LaunchAgent) {
     if (agent === "claude" || agent === "codex") {
       await loadProviderStatus(agent);
       const st = providerStatuses.value[agent];
       const p = tab.panes[paneId];
-      if (!p || p.sessionState !== "starting") return;
+      if (!p || p.sessionState === "starting" || p.sessionState === "running") return;
       if (!st || ["not_configured", "login_required", "unknown"].includes(st.auth_status)) {
         p.sessionState = "guide";
         p.sessionId = null;
@@ -930,6 +966,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
         return;
       }
     }
+    void openPane(tab, paneId);
   }
 
   /** Set the tab's active pane and sync the projection (A-G17-5). */
@@ -984,20 +1021,13 @@ export const useRuntimeStore = defineStore("runtime", () => {
     scheduleSave();
   }
 
-  /** Open (or reopen) a tab's session: assigns a fresh session_id and enters
-   * `starting`. The mounted Terminal watches the session_id and calls
-   * `open_session`; it reports back via onTabOpenOk/onTabOpenFail. G-17: the
-   * operation binds the tab's ACTIVE pane. */
+  /** Open (or reopen) a tab's session: binds the tab's ACTIVE pane via the
+   * store-owned session channel (openPane). G-17. */
   function openTab(tabId: string) {
     const tab = findTab(tabId);
     if (!tab) return;
-    const p = activePane(tab);
-    if (p.sessionState === "starting" || p.sessionState === "running") return;
-    p.sessionId = uuid();
-    p.sessionState = "starting";
-    p.exit = null;
-    syncProjection(tab);
     activeTabId.value = tabId;
+    void openPane(tab, tab.activePaneId);
     scheduleSave();
   }
 
@@ -1401,6 +1431,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     closePane,
     setActivePane,
     setSplitRatio,
+    paneStreams,
     activateTab,
     closeTab,
     reopenTab,

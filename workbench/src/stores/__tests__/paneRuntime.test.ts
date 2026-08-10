@@ -16,6 +16,9 @@ import {
 } from "../tabLayout";
 import { findLeaf, leafCount, leafDepth, listLeaves, singleLeaf, splitLeaf } from "../paneTree";
 
+/** Channels handed to openSession (the store owns them; tests emit events). */
+const channels: Array<{ onmessage?: (ev: unknown) => void }> = [];
+
 const mockIpc = vi.hoisted(() => ({
   getProviderStatus: vi.fn().mockResolvedValue({}),
   closeSession: vi.fn().mockResolvedValue({ reason: "user_close", exitCode: null }),
@@ -24,9 +27,17 @@ const mockIpc = vi.hoisted(() => ({
   negotiateCapabilities: vi.fn(),
   listRuntimes: vi.fn().mockResolvedValue({ runtimes: [] }),
   ackSessionExit: vi.fn().mockResolvedValue("acknowledged"),
-  openSession: vi.fn().mockResolvedValue({}),
+  openSession: vi.fn().mockImplementation((...args: unknown[]) => {
+    const ch = args[4] as { onmessage?: (ev: unknown) => void };
+    channels.push(ch ?? {});
+    return Promise.resolve({});
+  }),
   writeSession: vi.fn().mockResolvedValue(undefined),
 }));
+
+function lastChannel(): { onmessage?: (ev: unknown) => void } {
+  return channels[channels.length - 1];
+}
 
 vi.mock("../../lib/ipc", () => mockIpc);
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -53,12 +64,14 @@ function tick(): Promise<void> {
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
+  channels.length = 0;
 });
 
 describe("store session ops route through the active pane (A-G17-5)", () => {
   it("createTab builds a single-leaf tree and the projection matches", async () => {
     const s = useRuntimeStore();
     s.runtimeState = "running";
+    s.runtimeId = "rid";
     const id = s.createTab("bash")!;
     await tick();
     const tab = s.tabs.find((t) => t.tabId === id)!;
@@ -70,20 +83,19 @@ describe("store session ops route through the active pane (A-G17-5)", () => {
     expect(tab.sessionId).toBe(tab.panes[id].sessionId);
   });
 
-  it("openTab binds the active pane and Exit finalizes it + projection", async () => {
+  it("store-owned session opens on create and Exit finalizes the pane", async () => {
     const s = useRuntimeStore();
     s.runtimeState = "running";
+    s.runtimeId = "rid";
     const id = s.createTab("bash")!;
     await tick();
-    s.openTab(id);
     const tab = s.tabs.find((t) => t.tabId === id)!;
-    expect(tab.panes[id].sessionState).toBe("starting");
+    // The STORE opens the session (no Terminal involvement): starting -> running.
     expect(tab.panes[id].sessionId).not.toBeNull();
-    expect(tab.sessionState).toBe("starting");
-    s.onTabOpenOk(id);
+    expect(tab.sessionId).toBe(tab.panes[id].sessionId); // projection synced
     expect(tab.panes[id].sessionState).toBe("running");
-    expect(tab.sessionState).toBe("running");
-    s.onTabSessionExit(id, "process_exit", 0);
+    // A PTY exit event (store channel) finalizes the pane + projection.
+    lastChannel().onmessage?.({ type: "exit", reason: "process_exit", exitCode: 0 });
     expect(tab.panes[id].sessionState).toBe("exited");
     expect(tab.panes[id].exit?.reason).toBe("process_exit");
     expect(tab.exit?.reason).toBe("process_exit");
@@ -92,6 +104,7 @@ describe("store session ops route through the active pane (A-G17-5)", () => {
   it("open failure keeps a failed pane (no silent rollback, A-G17-2)", async () => {
     const s = useRuntimeStore();
     s.runtimeState = "running";
+    s.runtimeId = "rid";
     const id = s.createTab("bash")!;
     await tick();
     s.openTab(id);
@@ -106,6 +119,7 @@ describe("split / close / ratio (A-G17-1/2/5)", () => {
   async function oneTab(): Promise<{ s: ReturnType<typeof useRuntimeStore>; id: string }> {
     const s = useRuntimeStore();
     s.runtimeState = "running";
+    s.runtimeId = "rid";
     const id = s.createTab("bash")!;
     await tick();
     s.openTab(id);
@@ -119,7 +133,9 @@ describe("split / close / ratio (A-G17-1/2/5)", () => {
     const tab = s.tabs.find((t) => t.tabId === id)!;
     expect(leafCount(tab.tree)).toBe(2);
     expect(tab.activePaneId).toBe(newPane);
-    expect(tab.panes[newPane!].sessionState).toBe("starting"); // claude opens directly (mock configured? provider mock returns {})
+    // claude with the provider mock ({} -> not configured) routes to guide,
+    // never a session (A-G12-1).
+    await vi.waitFor(() => expect(tab.panes[newPane!].sessionState).toBe("guide"));
     void newPane;
   });
 

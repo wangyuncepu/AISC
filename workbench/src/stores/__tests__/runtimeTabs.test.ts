@@ -11,10 +11,13 @@ import { useRuntimeStore } from "../runtime";
 const mockIpc = vi.hoisted(() => ({
   closeSession: vi.fn().mockResolvedValue({ reason: "user_close", exitCode: null }),
   getProviderStatus: vi.fn().mockResolvedValue({}),
-  loadHistory: vi.fn().mockResolvedValue({ schema_version: 1, revision: 0, workspaces: [] }),
+  loadHistory: vi.fn().mockResolvedValue({ schema_version: 2, revision: 0, workspaces: [] }),
   saveHistory: vi.fn().mockResolvedValue(1),
   negotiateCapabilities: vi.fn(),
   listRuntimes: vi.fn().mockResolvedValue({ runtimes: [] }),
+  openSession: vi.fn().mockResolvedValue({}),
+  writeSession: vi.fn().mockResolvedValue(undefined),
+  ackSessionExit: vi.fn().mockResolvedValue("acknowledged"),
 }));
 
 vi.mock("../../lib/ipc", () => mockIpc);
@@ -48,7 +51,7 @@ beforeEach(() => {
 describe("createTab (A-G08-1/8)", () => {
   it("adds an activated tab and opens the session immediately (bash)", async () => {
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     const id = s.createTab("bash");
     expect(id).not.toBeNull();
     await tick();
@@ -60,7 +63,7 @@ describe("createTab (A-G08-1/8)", () => {
 
   it("allows duplicate session types with distinct ids", async () => {
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     const a = s.createTab("bash");
     const b = s.createTab("bash");
     expect(a).not.toBe(b);
@@ -69,7 +72,7 @@ describe("createTab (A-G08-1/8)", () => {
 
   it("refuses the 9th tab (per-Runtime leaf cap)", () => {
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     for (let i = 0; i < 8; i++) expect(s.createTab("bash")).not.toBeNull();
     expect(s.createTab("bash")).toBeNull();
     expect(s.tabs).toHaveLength(8);
@@ -85,7 +88,7 @@ describe("provider gate (A-G08-2)", () => {
       observed_at: "x",
     });
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     s.runtimeId = "rid";
     s.workspace = "/ws";
     const id = s.createTab("claude");
@@ -105,7 +108,7 @@ describe("provider gate (A-G08-2)", () => {
       observed_at: "x",
     });
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     s.runtimeId = "rid";
     s.workspace = "/ws";
     s.initTabs(
@@ -119,7 +122,7 @@ describe("provider gate (A-G08-2)", () => {
     await tick();
     const bash = s.tabs.find((t) => t.agent === "bash");
     const codex = s.tabs.find((t) => t.agent === "codex");
-    expect(bash?.sessionState).toBe("starting"); // bash opens directly
+    expect(["starting", "running"]).toContain(bash?.sessionState); // bash opens directly
     expect(bash?.sessionId).not.toBeNull();
     expect(codex?.sessionState).toBe("guide"); // codex gated, no session
     expect(codex?.sessionId).toBeNull();
@@ -133,14 +136,14 @@ describe("provider gate (A-G08-2)", () => {
       observed_at: "x",
     });
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     s.runtimeId = "rid";
     s.workspace = "/ws";
     const id = s.createTab("codex");
     await tick();
     await tick();
     const tab = s.tabs.find((t) => t.tabId === id);
-    expect(tab?.sessionState).toBe("starting");
+    expect(["starting", "running"]).toContain(tab?.sessionState);
     expect(tab?.sessionId).not.toBeNull();
   });
 });
@@ -148,7 +151,7 @@ describe("provider gate (A-G08-2)", () => {
 describe("removeTab (A-G08-6)", () => {
   async function threeTabs() {
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     const a = s.createTab("bash")!;
     const b = s.createTab("bash")!;
     const c = s.createTab("bash")!;
@@ -184,7 +187,7 @@ describe("removeTab (A-G08-6)", () => {
   it("closes a live session best-effort and removes immediately", async () => {
     const { s, a, b } = await threeTabs();
     const running = s.tabs.find((t) => t.tabId === a)!;
-    expect(running.sessionState).toBe("starting");
+    expect(["starting", "running"]).toContain(running.sessionState);
     await s.removeTab(a);
     expect(mockIpc.closeSession).toHaveBeenCalledWith(running.sessionId);
     expect(s.tabs.find((t) => t.tabId === a)).toBeUndefined();

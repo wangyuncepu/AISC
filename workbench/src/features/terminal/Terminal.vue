@@ -25,14 +25,11 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Channel } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useSettingsStore } from "../../stores/settings";
-import { closeSession, openSession, resizeSession, writeSession } from "../../lib/ipc";
+import { resizeSession, writeSession } from "../../lib/ipc";
 import { resolveRenderer, TERMINAL_THEME } from "./renderer";
-import { findLeaf } from "../../stores/paneTree";
-import type { PtyEvent } from "../../types";
 
 const { t } = useI18n();
 const props = defineProps<{ tabId: string; paneId: string }>();
@@ -42,25 +39,27 @@ const settingsStore = useSettingsStore();
 const container = ref<HTMLDivElement | null>(null);
 const searchInput = ref<HTMLInputElement | null>(null);
 // G-17: the Terminal is pane-scoped (a split tab has one instance per leaf).
+// It is a PURE VIEW: the store owns the session channel + output buffer
+// (paneStreams), so remounting a pane (tree restructure) never re-opens or
+// drops the session.
 const tab = computed(() => store.tabs.find((t) => t.tabId === props.tabId));
 const pane = computed(() => tab.value?.panes[props.paneId] ?? null);
 const sessionId = computed(() => pane.value?.sessionId ?? null);
 const visible = computed(
   () => store.activeTabId === props.tabId && tab.value?.activePaneId === props.paneId
 );
-const agent = computed(() => {
-  const t = tab.value;
-  return t ? (findLeaf(t.tree, props.paneId)?.sessionType ?? null) : null;
+/** Whether this pane has a live session (paste/copy enabled, G-11). */
+const sessionLive = computed(() => {
+  const st = pane.value?.sessionState;
+  return st === "starting" || st === "running" || st === "closing";
 });
 
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
 let webgl: WebglAddon | null = null;
 let searchAddon: SearchAddon | null = null;
-let channel: Channel<PtyEvent> | null = null;
 let resizeTimer: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
-let closed = false;
 
 // G-03 search overlay state.
 const searchOpen = ref(false);
@@ -126,18 +125,29 @@ function mountSearch() {
 
 function onTermData(data: string) {
   const sid = sessionId.value;
-  if (sid && !closed) {
+  if (sid) {
     writeSession(sid, Array.from(new TextEncoder().encode(data))).catch(() => {});
   }
 }
 
+function b64ToUint8(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
+/** Write one store-buffered output chunk to the xterm. */
+function writeChunk(b64: string): void {
+  if (term) term.write(b64ToUint8(b64));
+}
+
 /** G-06 (A-G06-3): rebuild the Terminal view in place for renderer/font-family
- * changes. The session_id, PTY child and event channel stay untouched (the
- * channel callbacks close over the module-level `term` binding); the old
- * instance (and its addons/listeners) is disposed, so nothing accumulates. */
+ * changes. The session is STORE-owned (output buffered in paneStreams), so the
+ * rebuild disposes only the view and replays the buffer - the PTY/session are
+ * untouched. */
 function rebuildTerminal() {
   const host = container.value;
-  const sid = sessionId.value;
   if (!host || !term) return;
   term.dispose(); // also disposes loaded addons (webgl/fit/search)
   webgl = null;
@@ -152,64 +162,9 @@ function rebuildTerminal() {
   term.onSelectionChange(onSelectionChange);
   mountWebgl();
   mountSearch();
-  if (sid && !closed) {
-    // Keep the existing channel; the PTY must NOT be reopened.
-    setTimeout(doResize, 0);
-  }
+  for (const chunk of store.paneStreams[props.paneId] ?? []) writeChunk(chunk);
   if (visible.value) term.refresh(0, term.rows - 1);
-}
-
-function b64ToUint8(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const u8 = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-  return u8;
-}
-
-function openPty(sid: string) {
-  const agentType = agent.value;
-  if (!agentType || !store.runtimeId) return;
-  channel = new Channel<PtyEvent>();
-  channel.onmessage = (ev) => {
-    if (!term) return;
-    switch (ev.type) {
-      case "output":
-        term.write(b64ToUint8(ev.bytes));
-        break;
-      case "exit":
-        closed = true;
-        // G-09: Workbench-written exit helper text follows the locale
-        // (A-G09-4); raw PTY bytes are never touched.
-        term.write(
-          `\r\n\x1b[90m[${t("terminal.exited")}: ${ev.reason}${ev.exitCode !== null ? `, code ${ev.exitCode}` : ""}]\x1b[0m\r\n`
-        );
-        store.onTabSessionExit(props.paneId, ev.reason, ev.exitCode);
-        break;
-      case "error":
-        term.write(
-          `\r\n\x1b[31m${t("terminal.sessionError", { code: ev.code, message: ev.message })}\x1b[0m\r\n`
-        );
-        store.onTabOpenFail(props.paneId);
-        break;
-    }
-  };
-  openSession(store.runtimeId, sid, agentType, store.workspace.trim(), channel)
-    .then(() => store.onTabOpenOk(props.paneId))
-    .catch((e) => {
-      term?.write(
-        `\r\n\x1b[31m${t("terminal.openFailed", { code: e?.code ?? e })}\x1b[0m\r\n`
-      );
-      store.onTabOpenFail(props.paneId);
-    });
-}
-
-function closePty(sid?: string) {
-  const target = sid ?? sessionId.value;
-  if (target && !closed) {
-    closed = true;
-    closeSession(target).catch(() => {});
-  }
-  channel = null;
+  setTimeout(doResize, 0);
 }
 
 function scheduleResize() {
@@ -221,7 +176,7 @@ function scheduleResize() {
 }
 
 function doResize() {
-  if (!visible.value || !term || !fit || closed) return;
+  if (!visible.value || !term || !fit || !sessionLive.value) return;
   try {
     fit.fit();
     const sid = sessionId.value;
@@ -276,7 +231,6 @@ function onSelectionChange() {
 
 function onContextMenu(e: MouseEvent) {
   e.preventDefault();
-  if (closed) return;
   // Clamp to the viewport so the menu never overflows the window.
   const x = Math.min(e.clientX, window.innerWidth - 180);
   const y = Math.min(e.clientY, window.innerHeight - 150);
@@ -400,17 +354,33 @@ onMounted(() => {
     }
   });
 
+  // G-17: stream the store-owned output buffer (replay what is already there,
+  // then append live). Remounts never re-open the session.
+  let streamLen = 0;
   watch(
-    sessionId,
-    (sid, oldSid) => {
-      if (oldSid && sid !== oldSid) closePty(oldSid);
-      if (sid) {
-        closed = false;
-        openPty(sid);
-        setTimeout(doResize, 0); // fit after layout settles
-      }
+    () => store.paneStreams[props.paneId],
+    (chunks) => {
+      const arr = chunks ?? [];
+      for (let i = streamLen; i < arr.length; i++) writeChunk(arr[i]);
+      streamLen = arr.length;
     },
     { immediate: true }
+  );
+  // Session end hint: the STORE finalizes the pane state from the channel; this
+  // view just reflects it (G-09: Workbench-written helper text follows locale).
+  watch(
+    () => pane.value?.sessionState,
+    (st, prev) => {
+      if (!prev || st === prev) return;
+      if (st === "exited" || st === "disconnected") {
+        const exit = pane.value?.exit;
+        term?.write(
+          `\r\n\x1b[90m[${t("terminal.exited")}: ${exit?.reason ?? st}${exit?.exitCode != null ? `, code ${exit.exitCode}` : ""}]\x1b[0m\r\n`
+        );
+      } else if (st === "failed") {
+        term?.write(`\r\n\x1b[31m${t("terminal.openFailed", { code: "AISC_ERR_SESSION_FAILED" })}\x1b[0m\r\n`);
+      }
+    }
   );
 });
 
@@ -438,7 +408,6 @@ onBeforeUnmount(() => {
   if (resizeObserver) resizeObserver.disconnect();
   if (resizeTimer !== null) window.clearTimeout(resizeTimer);
   window.removeEventListener("resize", scheduleResize);
-  closePty();
   term?.dispose(); // disposes fit/webgl/search addons + custom key handler (03 §七)
   term = null;
   fit = null;
@@ -500,7 +469,7 @@ defineExpose({
       @click.stop
     >
       <button :disabled="!hasSelection" @click="copySelection">{{ t("terminal.copy") }}</button>
-      <button :disabled="closed" @click="pasteFromClipboard">{{ t("terminal.paste") }}</button>
+      <button :disabled="!sessionLive" @click="pasteFromClipboard">{{ t("terminal.paste") }}</button>
       <button @click="openSearchFromMenu">{{ t("terminal.search") }}</button>
       <button @click="clearScreen">{{ t("terminal.clear") }}</button>
     </div>
