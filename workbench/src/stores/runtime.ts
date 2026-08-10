@@ -840,7 +840,13 @@ export const useRuntimeStore = defineStore("runtime", () => {
    * unchanged. Single-pane tabs are exact; split tabs show the active pane. */
   function syncProjection(tab: Tab) {
     const leaf = findLeaf(tab.tree, tab.activePaneId) ?? firstLeaf(tab.tree);
-    if (leaf) tab.agent = leaf.sessionType;
+    if (leaf) {
+      tab.agent = leaf.sessionType;
+      // Tab-bar label follows the active leaf too: closing the bash pane off a
+      // bash|claude split leaves a claude tab labelled Claude, not the stale
+      // Bash set at creation time (03 §6.3 keeps agent + title in sync).
+      tab.title = AGENT_TITLE[leaf.sessionType] ?? tab.title;
+    }
     const p = tab.panes[tab.activePaneId];
     if (p) {
       tab.sessionId = p.sessionId;
