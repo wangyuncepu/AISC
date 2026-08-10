@@ -18,11 +18,13 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useRuntimeStore } from "../../stores/runtime";
+import { useDoctorStore } from "../../stores/doctor";
 import { i18n as i18nLocale } from "../../i18n";
 import type { RuntimeState } from "../../types";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
+const doctorStore = useDoctorStore();
 
 const snap = computed(() => store.runtimeSnapshot);
 
@@ -240,6 +242,8 @@ function copyDone(key: string): boolean {
           <div class="kv">route <span class="mono">{{ providerStatus.route_mode || "-" }}</span></div>
           <div class="kv">auth <span class="mono" :data-auth="providerStatus.auth_status">{{ providerStatus.auth_status || "-" }}</span></div>
         </template>
+        <!-- G-13 (Step 12): one-click diagnosis from ready details -->
+        <button class="diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
       </div>
     </details>
   </aside>
@@ -301,6 +305,7 @@ function copyDone(key: string): boolean {
 .t-state[data-state="failed"] { color: #e57373; }
 .details { margin-top: auto; }
 .details summary { cursor: pointer; user-select: none; }
+.diagnose { background: #2d3a4a; border-color: #3a4a5a; margin-top: 8px; }
 .dev { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
 button {
   background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;

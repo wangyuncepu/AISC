@@ -173,6 +173,23 @@ export const zhCN = {
   "terminal.paste": "粘贴",
   "terminal.clear": "清屏",
   "terminal.clipboardError": "剪贴板不可用：{message}",
+  // --- 一键诊断 (G-13, Step 12) ---
+  "doctor.title": "诊断",
+  "doctor.run": "运行诊断",
+  "doctor.running": "正在运行诊断…",
+  "doctor.retry": "重试",
+  "doctor.close": "关闭",
+  "doctor.failed": "诊断失败",
+  "doctor.keepErrorPage": "原错误信息保持不变。",
+  "doctor.idle": "尚未运行。",
+  "doctor.sum.fail": "失败",
+  "doctor.sum.warn": "警告",
+  "doctor.sum.skip": "跳过",
+  "doctor.sum.pass": "通过",
+  "doctor.status.pass": "通过",
+  "doctor.status.warn": "警告",
+  "doctor.status.fail": "失败",
+  "doctor.status.skip": "跳过",
 
   // --- settings dialog (SettingsDialog.vue) ---
   "settings.title": "设置",

@@ -173,6 +173,23 @@ export const enUS: Record<string, string> = {
   "terminal.paste": "Paste",
   "terminal.clear": "Clear screen",
   "terminal.clipboardError": "Clipboard unavailable: {message}",
+  // --- one-click diagnosis (G-13, Step 12) ---
+  "doctor.title": "Diagnostics",
+  "doctor.run": "Run diagnostics",
+  "doctor.running": "Running diagnostics…",
+  "doctor.retry": "Retry",
+  "doctor.close": "Close",
+  "doctor.failed": "Diagnostics failed",
+  "doctor.keepErrorPage": "The original error details are unchanged.",
+  "doctor.idle": "Not run yet.",
+  "doctor.sum.fail": "failed",
+  "doctor.sum.warn": "warnings",
+  "doctor.sum.skip": "skipped",
+  "doctor.sum.pass": "passed",
+  "doctor.status.pass": "Pass",
+  "doctor.status.warn": "Warn",
+  "doctor.status.fail": "Fail",
+  "doctor.status.skip": "Skip",
 
   // --- settings dialog (SettingsDialog.vue) ---
   "settings.title": "Settings",

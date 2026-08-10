@@ -10,6 +10,7 @@ import * as ipc from "./lib/ipc";
 import { applyLocale } from "./i18n";
 import { useRuntimeStore } from "./stores/runtime";
 import { useSettingsStore } from "./stores/settings";
+import { useDoctorStore } from "./stores/doctor";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
 import { useProviderPolling } from "./composables/useProviderPolling";
 import Terminal from "./features/terminal/Terminal.vue";
@@ -21,10 +22,12 @@ import StartProgress from "./features/startup/StartProgress.vue";
 import BuildProgress from "./features/startup/BuildProgress.vue";
 import ConflictManager from "./features/startup/ConflictManager.vue";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
+import DoctorDialog from "./features/doctor/DoctorDialog.vue";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
 const settingsStore = useSettingsStore();
+const doctorStore = useDoctorStore();
 const polling = useRuntimePolling();
 const providerPolling = useProviderPolling();
 
@@ -294,7 +297,10 @@ function selectRecent(path: string): void {
       <h2>{{ t("app.blocked.title") }}</h2>
       <p class="err">{{ store.error?.message ?? t("app.blocked.cli") }}</p>
       <p class="detail">{{ store.error?.technical_detail }}</p>
-      <button @click="store.pickAndPinCli()">{{ t("app.blocked.pickCli") }}</button>
+      <div class="actions">
+        <button @click="store.pickAndPinCli()">{{ t("app.blocked.pickCli") }}</button>
+        <button class="diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
+      </div>
     </div>
 
     <!-- Loading / stopping -->
@@ -398,8 +404,13 @@ function selectRecent(path: string): void {
       <div class="actions">
         <button @click="store.negotiate()">{{ t("app.error.retry") }}</button>
         <button @click="store.backToPicker()">{{ t("app.error.back") }}</button>
+        <!-- G-13: one-click diagnosis from the error page (A-G13-1/3) -->
+        <button class="diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
       </div>
     </div>
+
+    <!-- G-13: diagnosis dialog, shared by blocked/error/ready entry points -->
+    <DoctorDialog v-if="doctorStore.open" />
   </div>
 </template>
 
@@ -482,6 +493,7 @@ button.primary:hover:not(:disabled) { background: #1177bb; }
 button.danger { background: #5a2d2d; border-color: #6b3636; }
 button.danger:hover:not(:disabled) { background: #6e3a3a; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
+.diagnose { background: #2d3a4a; border-color: #3a4a5a; }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: #1e1e1e; display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
 .empty-tabs {

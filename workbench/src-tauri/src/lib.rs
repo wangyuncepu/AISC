@@ -5,6 +5,7 @@
 // See docs/gui-planning/06-implementation-plan.md §四.
 
 pub mod cli;
+pub mod doctor;
 pub mod error;
 pub mod history;
 pub mod identity;
@@ -17,6 +18,7 @@ pub mod storage;
 pub mod window;
 
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
+use doctor::run_doctor;
 use history::{load_history, save_history};
 use locale::resolve_locale;
 use runtime::{
@@ -73,6 +75,7 @@ pub fn run(cli_arg: Option<String>) {
             resolve_locale,
             restore_window_geometry,
             capture_window_geometry,
+            run_doctor,
         ])
         .setup(|app| {
             // G-10: restore window geometry on startup (before the window

@@ -158,6 +158,33 @@ export interface SessionRequest {
 
 // --- S2.1.a: preflight + inspect ---
 
+// --- G-13: one-click diagnosis (05 §六, Step 12) ---
+
+export type DoctorStatus = "pass" | "warn" | "fail" | "skip";
+
+/** One `aisc doctor` host check (05 §六): hint/detail are per-check, already
+ * redacted Rust-side; unknown fields are ignored. */
+export interface DoctorCheck {
+  name: string;
+  status: DoctorStatus;
+  message: string;
+  detail: string | null;
+  hint: string | null;
+}
+
+export interface DoctorSummary {
+  passed: number;
+  warnings: number;
+  failures: number;
+  skipped: number;
+}
+
+/** `data.host` from the doctor envelope; `data.container` is not surfaced. */
+export interface DoctorReport {
+  checks: DoctorCheck[];
+  summary: DoctorSummary;
+}
+
 export type CheckStatus = "pass" | "warn" | "fail";
 
 export interface PreflightCheck {
