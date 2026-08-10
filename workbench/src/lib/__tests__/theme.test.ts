@@ -5,8 +5,8 @@
  * - applyTheme: sets the DOM data-theme + color-scheme, publishes the reactive
  *   effectiveTheme, and refreshes the localStorage render hint.
  */
-import { describe, expect, it } from "vitest";
-import { applyTheme, effectiveTheme, readCachedTheme, resolveTheme } from "../../theme";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { applyTheme, createSystemListener, effectiveTheme, readCachedTheme, resolveTheme } from "../../theme";
 
 describe("resolveTheme (A-G04-1)", () => {
   it("fixed dark/light win over the system preference", () => {
@@ -36,5 +36,44 @@ describe("applyTheme (A-G04-2)", () => {
     expect(document.documentElement.style.colorScheme).toBe("dark");
     expect(effectiveTheme.value).toBe("dark");
     expect(readCachedTheme()).toBe("dark");
+  });
+
+  it("system mode resolves from the OS via matchMedia (dark-first default)", () => {
+    vi.stubGlobal("window", {
+      ...window,
+      matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
+    });
+    applyTheme("system");
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(readCachedTheme()).toBe("light");
+  });
+});
+
+describe("createSystemListener (A-G04-4)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("single listener fires on OS change and unsubscribe removes it", () => {
+    const listeners: Array<(e: { matches: boolean }) => void> = [];
+    const mq = {
+      matches: true,
+      addEventListener: vi.fn((_: string, cb: (e: { matches: boolean }) => void) => listeners.push(cb)),
+      removeEventListener: vi.fn((_: string, cb: unknown) => {
+        const i = listeners.indexOf(cb as (e: { matches: boolean }) => void);
+        if (i >= 0) listeners.splice(i, 1);
+      }),
+    };
+    vi.stubGlobal("window", { ...window, matchMedia: () => mq });
+
+    const onChange = vi.fn();
+    const stop = createSystemListener(onChange);
+    expect(mq.addEventListener).toHaveBeenCalledTimes(1); // single instance
+    expect(listeners).toHaveLength(1);
+
+    listeners[0]?.({ matches: false });
+    expect(onChange).toHaveBeenCalledWith(false);
+
+    stop();
+    expect(mq.removeEventListener).toHaveBeenCalledTimes(1); // cleanup
+    expect(listeners).toHaveLength(0); // removed, no further events
   });
 });

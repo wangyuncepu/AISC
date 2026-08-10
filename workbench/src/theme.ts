@@ -21,14 +21,16 @@ export const THEME_MODES: readonly ThemeMode[] = ["system", "dark", "light"] as 
  * not the mode - the mode lives in the settings file). */
 const CACHE_KEY = "aisc-wb-theme";
 
-const mq: MediaQueryList | null =
-  typeof window !== "undefined" && typeof window.matchMedia === "function"
+/** Lazy access so tests can stub `matchMedia` before first use. */
+function getMediaQuery(): MediaQueryList | null {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function"
     ? window.matchMedia("(prefers-color-scheme: dark)")
     : null;
+}
 
 /** Current system color-scheme preference (dark-first default). */
 export function systemDark(): boolean {
-  return mq?.matches ?? true;
+  return getMediaQuery()?.matches ?? true;
 }
 
 /** Resolve a mode against the system preference. Unknown/falsy => `system`. */
@@ -73,6 +75,7 @@ export function applyTheme(mode: ThemeMode | string | null | undefined): Effecti
 /** Register a listener for system dark/light changes. Returns an unsubscribe;
  * the caller owns the lifecycle (single instance + cleanup, A-G04-4). */
 export function createSystemListener(onChange: (dark: boolean) => void): () => void {
+  const mq = getMediaQuery();
   if (!mq || typeof mq.addEventListener !== "function") return () => {};
   const handler = (e: MediaQueryListEvent) => onChange(e.matches);
   mq.addEventListener("change", handler);

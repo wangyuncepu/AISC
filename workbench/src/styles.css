@@ -27,11 +27,14 @@
   --success: #9cce9c;
   --warn: #cca84a;
   --warn-bg: #3a3220;            /* warn banner (guide) background */
+  --warn-border: #55482a;
   --warn-fg: #e0c97a;            /* warn banner text */
   --error: #e57373;
   --error-bg: #5a2d2d;           /* error badge/banner background */
   --error-hover: #6e3a3a;
+  --error-border: #6b3636;
   --error-fg: #e0b0b0;           /* error banner text */
+  --success-bg: #1e3a2a;         /* success badge background */
   --info-bg: #2d3a4a;            /* informational button (diagnose) */
   --info-border: #3a4a5a;
   --selection: #264f78;          /* text selection */
@@ -68,11 +71,14 @@
   --success: #2e7d32;
   --warn: #9a6b00;
   --warn-bg: #f5e9c9;
+  --warn-border: #d9c287;
   --warn-fg: #6b4d00;
   --error: #c62828;
   --error-bg: #f6d2d2;
   --error-hover: #efbdbd;
+  --error-border: #d9a5a5;
   --error-fg: #8f1d1d;
+  --success-bg: #d7ead7;
   --info-bg: #dbe7f5;
   --info-border: #b8c8da;
   --selection: #b4d5fe;

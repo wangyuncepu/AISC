@@ -30,7 +30,8 @@ import { useRuntimeStore } from "../../stores/runtime";
 import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import { resizeSession, writeSession } from "../../lib/ipc";
-import { resolveRenderer, TERMINAL_THEME } from "./renderer";
+import { resolveRenderer, terminalTheme } from "./renderer";
+import { effectiveTheme } from "../../theme";
 import { findLeaf } from "../../stores/paneTree";
 import type { LaunchAgent } from "../../types";
 
@@ -94,7 +95,7 @@ function terminalOptions(): ITerminalOptions {
     smoothScrollDuration: s?.smooth_scroll_duration,
     convertEol: false,
     cursorBlink: true,
-    theme: TERMINAL_THEME,
+    theme: terminalTheme(effectiveTheme.value),
   };
 }
 
@@ -380,6 +381,14 @@ onMounted(() => {
     }
   });
 
+  // G-04 (Step 17, A-G04-2): apply the effective theme to the EXISTING xterm -
+  // only its options change, never a rebuild / session / PTY.
+  watch(effectiveTheme, (eff) => {
+    if (!term) return;
+    term.options.theme = terminalTheme(eff);
+    term.refresh(0, term.rows - 1);
+  });
+
   // G-17: stream the store-owned output buffer (replay what is already there,
   // then append live). The store PUSHES into the array (in-place), so a shallow
   // watch on the array reference would never fire - watch its LENGTH instead
@@ -546,8 +555,8 @@ defineExpose({
   align-items: center;
   gap: 4px;
   padding: 6px 8px;
-  background: #252526;
-  border: 1px solid #3c3c3c;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
   border-radius: 4px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   font-size: 12px;
@@ -555,8 +564,8 @@ defineExpose({
 .search-overlay input {
   width: 140px;
   padding: 3px 6px;
-  background: #3c3c3c;
-  color: #d4d4d4;
+  background: var(--surface-hover);
+  color: var(--text-2);
   border: none;
   border-radius: 2px;
   outline: none;
@@ -564,24 +573,24 @@ defineExpose({
 .search-overlay button {
   padding: 3px 6px;
   background: transparent;
-  color: #cccccc;
+  color: var(--text-2);
   border: none;
   border-radius: 2px;
   cursor: pointer;
 }
 .search-overlay button:hover {
-  background: #3c3c3c;
+  background: var(--surface-hover);
 }
 .search-overlay button.case.active {
-  color: #0dbc79;
+  color: var(--success);
 }
 .search-overlay .result {
   min-width: 42px;
   text-align: center;
-  color: #9e9e9e;
+  color: var(--text-muted);
 }
 .search-overlay .result.empty {
-  color: #f14c4c;
+  color: var(--error);
 }
 
 /* --- context menu --- */
@@ -592,8 +601,8 @@ defineExpose({
   flex-direction: column;
   min-width: 140px;
   padding: 4px;
-  background: #252526;
-  border: 1px solid #3c3c3c;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
   border-radius: 4px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
@@ -601,22 +610,22 @@ defineExpose({
   padding: 6px 12px;
   text-align: left;
   background: transparent;
-  color: #d4d4d4;
+  color: var(--text-2);
   border: none;
   border-radius: 2px;
   cursor: pointer;
   font-size: 13px;
 }
 .ctx-menu button:hover:not(:disabled) {
-  background: #37373d;
+  background: var(--surface-active);
 }
 .ctx-menu button:disabled {
-  color: #6e6e6e;
+  color: var(--text-muted);
   cursor: default;
 }
 .ctx-menu .sep {
   height: 1px;
   margin: 4px 8px;
-  background: #3c3c3c;
+  background: var(--surface-hover);
 }
 </style>

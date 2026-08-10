@@ -58,8 +58,8 @@ function statusText(c: PreflightCheck): string {
   flex-direction: column;
   gap: 4px;
   padding: 8px 10px;
-  background: #1e1e1e;
-  border: 1px solid #333;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 4px;
 }
 .check {
@@ -68,18 +68,18 @@ function statusText(c: PreflightCheck): string {
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: #ccc;
+  color: var(--text-2);
 }
 .dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #888;
+  background: var(--text-muted);
 }
-.check[data-status="pass"] .dot { background: #4caf50; }
-.check[data-status="warn"] .dot { background: #ffb300; }
-.check[data-status="fail"] .dot { background: #e57373; }
-.cat { color: #888; font-size: 11px; }
-.state { color: #ddd; }
-.code { color: #e57373; font-size: 11px; }
+.check[data-status="pass"] .dot { background: var(--success); }
+.check[data-status="warn"] .dot { background: var(--warn); }
+.check[data-status="fail"] .dot { background: var(--error); }
+.cat { color: var(--text-muted); font-size: 11px; }
+.state { color: var(--text-2); }
+.code { color: var(--error); font-size: 11px; }
 </style>

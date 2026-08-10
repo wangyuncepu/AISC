@@ -110,7 +110,7 @@ function onConfigChanged() {
   flex-direction: column;
   gap: 10px;
   padding: 16px;
-  color: #ccc;
+  color: var(--text-2);
   overflow: auto;
 }
 h2 { margin: 0 0 4px; font-size: 15px; }
@@ -120,12 +120,12 @@ h2 { margin: 0 0 4px; font-size: 15px; }
   gap: 12px;
   font-size: 13px;
 }
-.k { width: 90px; color: #888; }
-.v { color: #ddd; word-break: break-all; }
+.k { width: 90px; color: var(--text-muted); }
+.v { color: var(--text-2); word-break: break-all; }
 input, select {
-  background: #252526;
-  color: #ddd;
-  border: 1px solid #444;
+  background: var(--surface);
+  color: var(--text-2);
+  border: 1px solid var(--border-2);
   border-radius: 4px;
   padding: 4px 6px;
   font-size: 13px;
@@ -134,24 +134,24 @@ input, select {
 }
 .advanced {
   padding: 8px;
-  background: #252526;
+  background: var(--surface);
   border-radius: 4px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 .gate-msg { font-size: 12px; padding: 6px 8px; border-radius: 4px; margin: 0; }
-.gate-msg.config { background: #3a3220; color: #e0c97a; }
-.gate-msg.hard { background: #4a2626; color: #e0b0b0; }
-.gate-msg.resume { background: #1e2e3a; color: #9cc4e0; }
+.gate-msg.config { background: var(--warn-bg); color: var(--warn-fg); }
+.gate-msg.hard { background: var(--error-bg); color: var(--error-fg); }
+.gate-msg.resume { background: var(--info-bg); color: var(--info); }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
-  background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
   padding: 6px 14px; font-size: 13px; cursor: pointer;
 }
-button:hover:not(:disabled) { background: #3c3c3c; }
+button:hover:not(:disabled) { background: var(--surface-hover); }
 button:disabled { opacity: 0.45; cursor: default; }
-button.primary { background: #0e639c; border-color: #0e639c; }
-button.primary:hover:not(:disabled) { background: #1177bb; }
-button.danger { background: #5a2d2d; border-color: #6b3636; }
+button.primary { background: var(--accent); border-color: var(--accent); }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+button.danger { background: var(--error-bg); border-color: var(--error-border); }
 </style>
