@@ -533,16 +533,26 @@ class RealDockerExecutor:
                 decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
                 written = wintypes.DWORD()
                 wh = wintypes.HANDLE(handle)
+                # Replace bare LF with IND (ESC D). With ENABLE_PROCESSED_OUTPUT
+                # set (required for VT/ESC recognition), the console translates
+                # every \n into \r\n, shifting the cursor to column 1 and
+                # misaligning the TUI. IND is a VT sequence (ESC D = "index",
+                # move cursor down one line, same column) that ENABLE_PROCESSED_
+                # OUTPUT does not touch and the VT parser executes as a plain
+                # line-feed. This reconciles VT sequence processing with
+                # correct LF behavior. (G-02, 2026-08-10.)
                 while True:
                     chunk = sock.recv(65536)
                     if not chunk:
                         text = decoder.decode(b"", final=True)
                         if text:
+                            text = text.replace("\n", "\x1bD")
                             k32.WriteConsoleW(wh, text, len(text),
                                               ctypes.byref(written), None)
                         break
                     text = decoder.decode(chunk)
                     if text:
+                        text = text.replace("\n", "\x1bD")
                         k32.WriteConsoleW(wh, text, len(text),
                                           ctypes.byref(written), None)
             except Exception as exc:  # noqa: BLE001
