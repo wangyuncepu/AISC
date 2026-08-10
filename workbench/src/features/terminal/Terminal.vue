@@ -355,12 +355,14 @@ onMounted(() => {
   });
 
   // G-17: stream the store-owned output buffer (replay what is already there,
-  // then append live). Remounts never re-open the session.
+  // then append live). The store PUSHES into the array (in-place), so a shallow
+  // watch on the array reference would never fire - watch its LENGTH instead
+  // (a push changes the length). Remounts never re-open the session.
   let streamLen = 0;
   watch(
-    () => store.paneStreams[props.paneId],
-    (chunks) => {
-      const arr = chunks ?? [];
+    () => store.paneStreams[props.paneId]?.length ?? 0,
+    () => {
+      const arr = store.paneStreams[props.paneId] ?? [];
       for (let i = streamLen; i < arr.length; i++) writeChunk(arr[i]);
       streamLen = arr.length;
     },
