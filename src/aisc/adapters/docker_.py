@@ -506,11 +506,6 @@ class RealDockerExecutor:
                         os.write(sys.stdout.fileno(), chunk)
                     return
                 # Set output mode for TUI compatibility:
-                # - Clear ENABLE_PROCESSED_OUTPUT (0x0001): LF must be a
-                #   plain line-feed (cursor down, same column), not CR+LF.
-                #   With it set, the console translates every bare \n the
-                #   TUI emits into \r\n, shifting cursor to column 1 and
-                #   misaligning the layout.
                 # - Set DISABLE_NEWLINE_AUTO_RETURN (0x0008): in VT mode the
                 #   console auto-inserts a CR after a LF that reaches a new
                 #   line; disable it so the cursor stays in its column.
@@ -519,12 +514,16 @@ class RealDockerExecutor:
                 #   column) in all locales. On zh-CN Windows the default
                 #   East-Asian width rules treat them as Ambiguous=wide (2
                 #   columns), which stretches TUI borders and shifts content.
-                # - VT processing (0x0004) + wrap (0x0002) are preserved.
+                # - ENABLE_PROCESSED_OUTPUT (0x0001) is PRESERVED: clearing
+                #   it prevents the console from recognizing ESC (0x1B) as a
+                #   control character, so VT sequences are displayed as
+                #   literal text (SGR fragments like "9m", "[" leak). VT
+                #   processing (0x0004) + wrap (0x0002) are also preserved.
                 k32.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
                 k32.SetConsoleMode.restype = wintypes.BOOL
                 k32.SetConsoleMode(
                     wintypes.HANDLE(handle),
-                    wintypes.DWORD((cmode.value & ~0x0001) | 0x0008 | 0x0010),
+                    wintypes.DWORD(cmode.value | 0x0008 | 0x0010),
                 )
                 k32.WriteConsoleW.restype = wintypes.BOOL
                 k32.WriteConsoleW.argtypes = [
@@ -552,92 +551,39 @@ class RealDockerExecutor:
         def forward() -> None:
             """stdin -> socket; on EOF, close the write side so the exec sees it.
 
-            Windows: plain os.read on a ConPTY input handle loses CR/LF in both
-            console modes (G-02 diagnostics 2026-08-10) - cooked mode buffers
-            until Enter and eats the CR, raw mode drops the terminator bytes.
-            ReadConsoleInputW returns KEY_EVENT records, where Enter is its own
-            CR character, so the byte stream reconstructs losslessly (this is
-            what the docker CLI does for -it sessions).
+            Windows: ENABLE_VIRTUAL_TERMINAL_INPUT (0x0200) directs the ConPTY
+            to pass VT input sequences through as raw bytes - no translation to
+            KEY_EVENT_RECORDs. This fixes two issues with the previous
+            ReadConsoleInputW approach:
+            1. Arrow/special keys: ReadConsoleInputW gives uChar=NUL for
+               VK_UP/VK_DOWN/etc., which were silently dropped (arrow keys
+               did nothing in TUIs). VT passthrough preserves ESC[A etc.
+            2. CR/LF loss: os.read on a cooked/raw-mode console handle loses
+               CR/LF (cooked eats CR, raw drops terminators). VT input mode
+               passes the exact byte stream from xterm.js (incl. \\r for Enter).
+            POSIX: plain os.read (no codepage on pty).
             """
             if os.name == "nt":
-                _forward_console_input()
-                return
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+                    import msvcrt
+                    in_handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+                    k32 = ctypes.windll.kernel32
+                    in_mode = wintypes.DWORD()
+                    if k32.GetConsoleMode(in_handle, ctypes.byref(in_mode)):
+                        # Clear PROCESSED/LINE/ECHO input; set VT passthrough.
+                        k32.SetConsoleMode(
+                            in_handle, (in_mode.value & ~0x0007) | 0x0200
+                        )
+                except Exception:  # noqa: BLE001
+                    pass  # not a console - os.read still works on pipes
             try:
                 while True:
                     chunk = os.read(sys.stdin.fileno(), 4096)
                     if not chunk:
                         break
                     sock.sendall(chunk)
-            except Exception as exc:  # noqa: BLE001
-                errors.append(exc)
-
-        def _forward_console_input() -> None:
-            import ctypes
-            from ctypes import wintypes
-
-            try:
-                import msvcrt
-                handle = msvcrt.get_osfhandle(sys.stdin.fileno())
-            except (OSError, ValueError, AttributeError):
-                errors.append(RuntimeError("stdin is not a console handle"))
-                return
-            kernel32 = ctypes.windll.kernel32
-            mode = wintypes.DWORD()
-            if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
-                errors.append(RuntimeError("GetConsoleMode failed"))
-                return
-            # Raw: key records stream immediately, no line buffering/echo.
-            kernel32.SetConsoleMode(handle, mode.value & ~0x0007)
-
-            class KEY_EVENT_RECORD(ctypes.Structure):
-                _fields_ = [
-                    ("bKeyDown", wintypes.BOOL),
-                    ("wRepeatCount", wintypes.WORD),
-                    ("wVirtualKeyCode", wintypes.WORD),
-                    ("wVirtualScanCode", wintypes.WORD),
-                    ("uChar", wintypes.WCHAR),
-                    ("dwControlKeyState", wintypes.DWORD),
-                ]
-
-            class INPUT_RECORD(ctypes.Structure):
-                _fields_ = [
-                    ("EventType", wintypes.WORD),
-                    ("_pad", wintypes.WORD),
-                    ("KeyEvent", KEY_EVENT_RECORD),
-                ]
-
-            buf = (INPUT_RECORD * 1)()
-            n = wintypes.DWORD()
-            # ConPTY resizes can transiently fail the console API (G-02
-            # diagnostics 2026-08-10): retry ~1s before giving up so the
-            # forward survives resize storms during a session.
-            failures = 0
-            try:
-                while True:
-                    if not kernel32.GetNumberOfConsoleInputEvents(handle, ctypes.byref(n)):
-                        failures += 1
-                        if failures > 50:
-                            break
-                        time.sleep(0.02)
-                        continue
-                    failures = 0
-                    if n.value == 0:
-                        time.sleep(0.02)
-                        continue
-                    if not kernel32.ReadConsoleInputW(handle, buf, 1, ctypes.byref(n)):
-                        failures += 1
-                        if failures > 50:
-                            break
-                        time.sleep(0.02)
-                        continue
-                    rec = buf[0]
-                    if rec.EventType != 1 or not rec.KeyEvent.bKeyDown:
-                        continue
-                    ch = rec.KeyEvent.uChar
-                    if ch == "\x00":
-                        continue
-                    data = ch.encode("utf-8")
-                    sock.sendall(data)
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
             finally:
