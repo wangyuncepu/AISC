@@ -1,15 +1,84 @@
-/* Minimal global styles for the Workbench scaffold (S1.1).
- * No theme system yet (per plan §四 S1.1); just enough for a usable terminal
- * area. Theming arrives in a later phase. */
+/* Global styles + G-04 (Step 17) semantic color tokens.
+ *
+ * Components MUST use `var(--*)` for theme-related colors (02 §3.5); the dark
+ * palette is the default on :root, the light palette overrides under
+ * `[data-theme="light"]` (driven by theme.ts -> ui.theme, A-G04-1/2).
+ */
 
 :root {
+  /* --- semantic tokens (dark) --- */
+  --bg: #1e1e1e;                 /* app / terminal area background */
+  --surface: #252526;            /* tabbar, sidebar, menus, dialogs */
+  --surface-2: #2d2d2d;          /* elevated panels, dropdowns */
+  --surface-3: #333;             /* buttons, inputs */
+  --surface-hover: #3c3c3c;      /* hover states */
+  --surface-active: #37373d;     /* menu-item hover / active rows */
+  --text: #e6e6e6;               /* primary text */
+  --text-2: #d0d0d0;             /* secondary text (buttons, values) */
+  --text-muted: #888;            /* muted / hint text */
+  --text-faint: #6a6a6a;         /* disabled / idle */
+  --border: #333;                /* subtle dividers */
+  --border-2: #3c3c3c;           /* menu/dialog edges */
+  --border-strong: #555;         /* buttons, input edges */
+  --accent: #0e639c;             /* primary action */
+  --accent-hover: #1177bb;
+  --accent-fg: #ffffff;          /* text on accent */
+  --info: #9cdcfe;               /* info / link-ish text */
+  --success: #9cce9c;
+  --warn: #cca84a;
+  --warn-bg: #3a3220;            /* warn banner (guide) background */
+  --warn-fg: #e0c97a;            /* warn banner text */
+  --error: #e57373;
+  --error-bg: #5a2d2d;           /* error badge/banner background */
+  --error-hover: #6e3a3a;
+  --error-fg: #e0b0b0;           /* error banner text */
+  --info-bg: #2d3a4a;            /* informational button (diagnose) */
+  --info-border: #3a4a5a;
+  --selection: #264f78;          /* text selection */
+  --focus: #0e639c;              /* focus ring */
+
+  color-scheme: dark;
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
   font-size: 14px;
-  color: #e6e6e6;
-  background-color: #1e1e1e;
-  color-scheme: dark; /* native form controls (select/option/input) render dark */
+  color: var(--text);
+  background-color: var(--bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* G-04: light palette (resolved fixed/system-light -> data-theme="light"). */
+:root[data-theme="light"] {
+  --bg: #f3f3f3;
+  --surface: #ffffff;
+  --surface-2: #ececec;
+  --surface-3: #e6e6e6;
+  --surface-hover: #dedede;
+  --surface-active: #d6d6d6;
+  --text: #1e1e1e;
+  --text-2: #2d2d2d;
+  --text-muted: #666666;
+  --text-faint: #9a9a9a;
+  --border: #d4d4d4;
+  --border-2: #c8c8c8;
+  --border-strong: #b0b0b0;
+  --accent: #0e639c;
+  --accent-hover: #1177bb;
+  --accent-fg: #ffffff;
+  --info: #005fb8;
+  --success: #2e7d32;
+  --warn: #9a6b00;
+  --warn-bg: #f5e9c9;
+  --warn-fg: #6b4d00;
+  --error: #c62828;
+  --error-bg: #f6d2d2;
+  --error-hover: #efbdbd;
+  --error-fg: #8f1d1d;
+  --info-bg: #dbe7f5;
+  --info-border: #b8c8da;
+  --selection: #b4d5fe;
+  --focus: #005fb8;
+
+  color-scheme: light;
 }
 
 html,
@@ -23,7 +92,7 @@ body {
   overflow: hidden;
   /* G-01: matches the app chrome so the compensated zoom never exposes a
    * mismatched edge while the UI scale is applied (zoom < 1 or > 1). */
-  background-color: #1e1e1e;
+  background-color: var(--bg);
 }
 
 /* S3.3: keyboard-focus visibility (only for keyboard navigation, never on
@@ -31,6 +100,6 @@ body {
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 2px solid #0e639c;
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }

@@ -9,6 +9,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import * as ipc from "./lib/ipc";
 import { applyLocale } from "./i18n";
+import { applyTheme, createSystemListener } from "./theme";
 import { computeWindowTitle } from "./lib/title";
 import { leafCount } from "./stores/paneTree";
 import { useRuntimeStore } from "./stores/runtime";
@@ -41,6 +42,19 @@ const settingsOpen = ref(false);
 // terminal area is counter-zoomed so xterm stays 1:1 (its own font settings
 // govern terminal text). Backend default 1.0 when settings are not loaded.
 const uiScale = computed(() => settingsStore.doc?.ui.font_scale ?? 1);
+// G-04 (Step 17, A-G04-1/2): apply the persisted theme mode as soon as it is
+// known; main.ts already painted the system default before the first frame.
+watch(
+  () => settingsStore.doc?.ui.theme,
+  (mode) => applyTheme(mode ?? "system"),
+  { immediate: true }
+);
+// A-G04-4: `system` (or unset) re-resolves on OS dark/light changes; fixed
+// dark/light stay sticky. Single listener, removed on unmount.
+const stopSystemTheme = createSystemListener(() => {
+  const mode = settingsStore.doc?.ui.theme;
+  if (!mode || mode === "system") applyTheme("system");
+});
 // The effective scale adapts to the window (user request 2026-08-10): the
 // chosen value applies only up to what fits the current window - the design
 // baseline is the 800x600 default window, so a non-maximized window at 1.5
@@ -334,6 +348,7 @@ watch(
 onBeforeUnmount(() => {
   polling.stop();
   providerPolling.stop();
+  stopSystemTheme();
   window.removeEventListener("resize", onViewportResize);
   window.removeEventListener("keydown", onKeydown, { capture: true });
   if (announceTimer !== null) window.clearTimeout(announceTimer);
@@ -529,16 +544,16 @@ function selectRecent(path: string): void {
   align-items: center;
   gap: 12px;
   padding: 6px 12px;
-  background: #252526;
-  color: #ccc;
+  background: var(--surface);
+  color: var(--text-2);
   font-size: 13px;
-  border-bottom: 1px solid #333;
+  border-bottom: 1px solid var(--border);
 }
 .brand { font-weight: 600; }
 .spacer { flex: 1; }
-.status { font-size: 12px; color: #888; }
-.status[data-status="ready"] { color: #4caf50; }
-.status[data-status="error"], .status[data-status="blocked"] { color: #e57373; }
+.status { font-size: 12px; color: var(--text-muted); }
+.status[data-status="ready"] { color: var(--success); }
+.status[data-status="error"], .status[data-status="blocked"] { color: var(--error); }
 .settings-btn { padding: 3px 10px; font-size: 12px; }
 .gate.blocked, .gate.error, .center, .picker {
   flex: 1;
@@ -547,51 +562,51 @@ function selectRecent(path: string): void {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: #ccc;
+  color: var(--text-2);
 }
-.gate .err, .picker h2 { color: #ddd; }
-.gate .detail { font-size: 12px; color: #888; }
-.center .msg { color: #888; }
+.gate .err, .picker h2 { color: var(--text-2); }
+.gate .detail { font-size: 12px; color: var(--text-muted); }
+.center .msg { color: var(--text-muted); }
 .picker { gap: 12px; }
 .picker .row { display: flex; gap: 8px; width: 560px; max-width: 90vw; }
-.picker .hint { font-size: 12px; color: #888; }
+.picker .hint { font-size: 12px; color: var(--text-muted); }
 .recents { width: 560px; max-width: 90vw; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
-.recents-label { font-size: 11px; color: #6a6a6a; text-transform: uppercase; letter-spacing: 0.5px; }
+.recents-label { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
 .recents ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .recents li { width: 100%; }
 .recent {
   width: 100%; display: flex; align-items: center; gap: 8px; text-align: left;
-  background: #252526; color: #ccc; border: 1px solid #333; border-radius: 4px;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border); border-radius: 4px;
   padding: 6px 10px; font-size: 12px; cursor: pointer;
 }
-.recent:hover { background: #2d2d2d; border-color: #444; }
-.r-name { color: #ddd; font-weight: 500; min-width: 80px; }
-.r-path { flex: 1; color: #777; font-family: monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.r-agent { color: #9cdcfe; font-size: 11px; }
+.recent:hover { background: var(--surface-2); border-color: var(--border-2); }
+.r-name { color: var(--text-2); font-weight: 500; min-width: 80px; }
+.r-path { flex: 1; color: var(--text-muted); font-family: monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-agent { color: var(--info); font-size: 11px; }
 .workspace {
-  flex: 1; min-width: 0; background: #252526; color: #ddd;
-  border: 1px solid #444; border-radius: 4px; padding: 6px 8px; font-size: 13px;
+  flex: 1; min-width: 0; background: var(--surface); color: var(--text-2);
+  border: 1px solid var(--border-2); border-radius: 4px; padding: 6px 8px; font-size: 13px;
 }
 .ready { flex: 1; display: flex; min-height: 0; }
 .main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 button {
-  background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
   padding: 6px 14px; font-size: 13px; cursor: pointer;
 }
-button:hover:not(:disabled) { background: #3c3c3c; }
+button:hover:not(:disabled) { background: var(--surface-hover); }
 button:disabled { opacity: 0.45; cursor: default; }
-button.primary { background: #0e639c; border-color: #0e639c; }
-button.primary:hover:not(:disabled) { background: #1177bb; }
-button.danger { background: #5a2d2d; border-color: #6b3636; }
-button.danger:hover:not(:disabled) { background: #6e3a3a; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+button.danger { background: var(--error-bg); border-color: var(--border-strong); color: var(--error-fg); }
+button.danger:hover:not(:disabled) { background: var(--error-hover); }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
-.diagnose { background: #2d3a4a; border-color: #3a4a5a; }
-.terminal-area { flex: 1; min-height: 0; padding: 4px; background: #1e1e1e; display: flex; }
+.diagnose { background: var(--info-bg); border-color: var(--info-border); }
+.terminal-area { flex: 1; min-height: 0; padding: 4px; background: var(--bg); display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
 .empty-tabs {
   /* fill the terminal-area row so internal centering is global, not the
      content-width box anchored at the left edge (G-17 feedback 2026-08-10) */
   flex: 1; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 10px; color: #888; font-size: 13px;
+  justify-content: center; gap: 10px; color: var(--text-muted); font-size: 13px;
 }
 </style>

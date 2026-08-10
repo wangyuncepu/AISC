@@ -5,6 +5,17 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tauri + Vue + Typescript App</title>
+    <!-- G-04 (A-G04-2): paint the cached effective theme before the bundle
+         loads so a fixed light/dark choice never flashes on cold start. -->
+    <script>
+      try {
+        var t = localStorage.getItem("aisc-wb-theme");
+        if (t === "dark" || t === "light") {
+          document.documentElement.dataset.theme = t;
+          document.documentElement.style.colorScheme = t;
+        }
+      } catch (e) {}
+    </script>
   </head>
 
   <body>
