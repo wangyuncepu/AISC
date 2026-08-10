@@ -23,6 +23,16 @@ function checkStatus(id: string): string {
 
 const hardBlocking = computed(() => checkStatus("docker") === "fail" || checkStatus("workspace") === "fail");
 const dockerDown = computed(() => checkStatus("docker") === "fail");
+/** Genuinely missing image (error_code IMAGE_NOT_FOUND, not Docker-unreachable).
+ * G-14 (2026-08-10 bugfix): unlike imageMissing this ignores recommended_action,
+ * so a matching existing runtime (action=reuse) does NOT hide the build button -
+ * the gate would show 镜像失败 with no recovery path. */
+const imageNotFound = computed(() => {
+  const c = store.preflight?.checks.find((c) => c.id === "image");
+  return c?.status === "fail" && c?.error_code === "AISC_ERR_IMAGE_NOT_FOUND";
+});
+/** Missing image on a non-reuse path - disables Start (reuse keeps the existing
+ * container, so a missing tag does not block it). */
 const imageMissing = computed(() => checkStatus("image") === "fail" && action.value !== "reuse");
 const startEnabled = computed(
   () =>
@@ -72,7 +82,7 @@ function onConfigChanged() {
       </div>
     </div>
 
-    <p v-if="imageMissing" class="gate-msg config">{{ t("summary.imageMissing") }}</p>
+    <p v-if="imageNotFound" class="gate-msg config">{{ t("summary.imageMissing") }}</p>
     <p v-if="dockerDown" class="gate-msg hard">
       {{ store.dockerStarting ? t("summary.dockerStarting") : t("summary.dockerDown") }}
     </p>
@@ -88,7 +98,7 @@ function onConfigChanged() {
         {{ store.dockerStarting ? t("summary.startingDocker") : t("summary.startDocker") }}
       </button>
       <button @click="changeSettings">{{ store.showAdvanced ? t("summary.toggleSettings") : t("summary.changeSettings") }}</button>
-      <button v-if="imageMissing" class="danger" @click="store.startBuild(store.launch.image)">{{ t("summary.buildImage") }}</button>
+      <button v-if="imageNotFound" class="danger" @click="store.startBuild(store.launch.image)">{{ t("summary.buildImage") }}</button>
       <button @click="store.backToPicker()">Cancel</button>
     </div>
   </div>
