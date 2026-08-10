@@ -69,6 +69,9 @@ function onDividerKey(e: KeyboardEvent, s: PaneSplitNode) {
 
 function startDividerDrag(e: PointerEvent, s: PaneSplitNode) {
   e.preventDefault();
+  // preventDefault suppresses the default focus; focus explicitly so the
+  // divider keeps keyboard control (arrows) after the drag ends.
+  (e.currentTarget as HTMLElement).focus();
   const host = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
   const rect = host.getBoundingClientRect();
   const key = splitKey(s);
@@ -123,7 +126,7 @@ defineExpose({ focusActivePane });
       role="separator"
       :aria-orientation="split.axis === 'horizontal' ? 'vertical' : 'horizontal'"
       tabindex="0"
-      :title="split.axis === 'horizontal' ? '调整左右比例' : '调整上下比例'"
+      :title="split.axis === 'horizontal' ? '拖动调整左右；点击后按 ←/→ 微调' : '拖动调整上下；点击后按 ↑/↓ 微调'"
       @pointerdown="startDividerDrag($event, split)"
       @keydown="onDividerKey($event, split)"
     >
