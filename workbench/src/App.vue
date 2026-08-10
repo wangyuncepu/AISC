@@ -15,8 +15,7 @@ import { useSettingsStore } from "./stores/settings";
 import { useDoctorStore } from "./stores/doctor";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
 import { useProviderPolling } from "./composables/useProviderPolling";
-import Terminal from "./features/terminal/Terminal.vue";
-import GuidePane from "./features/terminal/GuidePane.vue";
+import PaneTree from "./features/terminal/PaneTree.vue";
 import TabBar from "./features/workspace/TabBar.vue";
 import RuntimeSidebar from "./features/workspace/RuntimeSidebar.vue";
 import LaunchSummary from "./features/startup/LaunchSummary.vue";
@@ -132,8 +131,9 @@ watch(
 // after switching via Ctrl/Cmd+1..4. nextTick: the target tab becomes visible
 // (v-show) on the next render; focusing synchronously would hit a hidden xterm.
 function focusTabTerminal(tabId: string): void {
+  // G-17: focus the tab's ACTIVE pane terminal (PaneTree exposes it).
   void nextTick(() => {
-    terminalRefs.value.get(tabId)?.focus();
+    paneTreeRefs.value.get(tabId)?.focusActivePane();
   });
 }
 
@@ -297,21 +297,18 @@ function isStartingView(s: string): boolean {
   return s === "starting" || s === "cancelled";
 }
 
-// S2.2.a: render a Terminal for every live tab; v-show keeps hidden tabs
-// (and their PTY) alive so switching back preserves scrollback (03 §六.8).
-// G-08 guide tabs render GuidePane instead (no PTY for them, A-G08-2).
-const openTabs = computed(() =>
-  store.tabs.filter((t) => t.sessionState !== "idle" && t.sessionState !== "guide")
-);
-const guideTabs = computed(() => store.tabs.filter((t) => t.sessionState === "guide"));
+// G-17 (Step 16): render each non-idle tab as a PaneTree (single-leaf for a
+// flat tab, recursive splits for a split tab). v-show keeps hidden tabs (and
+// their PTYs) alive so switching back preserves scrollback (03 §六.8).
+const paneTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idle"));
 
-// S3.3: expose each Terminal's focus so the tab shortcut can move keyboard
-// focus into the terminal after switching.
-const terminalRefs = ref(new Map<string, InstanceType<typeof Terminal>>());
-function setTerminalRef(tabId: string) {
+// S3.3: expose each tab's PaneTree so switching moves keyboard focus to the
+// active pane's terminal.
+const paneTreeRefs = ref(new Map<string, InstanceType<typeof PaneTree>>());
+function setPaneTreeRef(tabId: string) {
   return (el: unknown) => {
-    if (el) terminalRefs.value.set(tabId, el as InstanceType<typeof Terminal>);
-    else terminalRefs.value.delete(tabId);
+    if (el) paneTreeRefs.value.set(tabId, el as InstanceType<typeof PaneTree>);
+    else paneTreeRefs.value.delete(tabId);
   };
 }
 
@@ -423,24 +420,17 @@ function selectRecent(path: string): void {
             <p>{{ t("tabs.empty") }}</p>
             <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
           </div>
-          <!-- The 1:1 counter-zoom wraps ONLY the xterm (GuidePane and the
-               empty state are UI chrome and must follow the UI scale). -->
+          <!-- G-17: each non-idle tab renders its PaneTree (single-leaf for a
+               flat tab, recursive splits for a split tab). The 1:1 counter-zoom
+               keeps xterm visually 1:1 under the UI scale. -->
           <div
-            v-for="t in guideTabs"
-            :key="t.tabId"
-            class="term-wrap"
-            v-show="t.tabId === store.activeTabId"
-          >
-            <GuidePane :tab-id="t.tabId" />
-          </div>
-          <div
-            v-for="t in openTabs"
+            v-for="t in paneTabs"
             :key="t.tabId"
             class="term-wrap"
             :style="terminalZoom"
             v-show="t.tabId === store.activeTabId"
           >
-            <Terminal :ref="setTerminalRef(t.tabId)" :tab-id="t.tabId" />
+            <PaneTree :ref="setPaneTreeRef(t.tabId)" :tab-id="t.tabId" :tree="t.tree" />
           </div>
         </main>
       </div>

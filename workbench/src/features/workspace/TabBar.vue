@@ -43,13 +43,28 @@ function onMenuKeydown(e: KeyboardEvent) {
     items[(idx - 1 + items.length) % items.length]?.focus();
   } else if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
-    if (idx >= 0) choose(items[idx].dataset.agent as LaunchAgent);
+    if (idx >= 0) {
+      const item = items[idx];
+      const agent = item.dataset.agent as LaunchAgent | undefined;
+      const axis = item.dataset.split as "horizontal" | "vertical" | undefined;
+      if (agent) choose(agent);
+      else if (axis) chooseSplit(axis);
+    }
   }
 }
 
 function choose(agent: LaunchAgent) {
   menuOpen.value = false;
   store.createTab(agent);
+}
+
+/** G-17 (Step 16): split the active tab's active pane (new pane keeps the
+ * active leaf's session type). Refused silently at the leaf/resource cap. */
+function chooseSplit(axis: "horizontal" | "vertical") {
+  menuOpen.value = false;
+  const tab = store.tabs.find((t) => t.tabId === store.activeTabId);
+  if (!tab) return;
+  store.splitTabPane(tab.tabId, axis, tab.agent);
 }
 
 function onDocMousedown(e: MouseEvent) {
@@ -189,6 +204,19 @@ function canReopen(s: TabSessionState): boolean {
           :data-agent="a"
           @click="choose(a)"
         >{{ t(`tabbar.menu.${a}`) }}</li>
+        <li class="divider" role="separator" />
+        <li
+          role="menuitem"
+          tabindex="0"
+          data-split="horizontal"
+          @click="chooseSplit('horizontal')"
+        >{{ t("tabbar.menu.splitH") }}</li>
+        <li
+          role="menuitem"
+          tabindex="0"
+          data-split="vertical"
+          @click="chooseSplit('vertical')"
+        >{{ t("tabbar.menu.splitV") }}</li>
       </ul>
     </div>
   </div>
@@ -252,4 +280,8 @@ function canReopen(s: TabSessionState): boolean {
   outline: none;
 }
 .menu li:hover, .menu li:focus { background: #3c3c3c; color: #fff; }
+.menu li.divider {
+  height: 1px; padding: 0; margin: 4px 8px; background: #444; cursor: default;
+}
+.menu li.divider:hover { background: #444; }
 </style>

@@ -141,6 +141,8 @@ export const enUS: Record<string, string> = {
   "tabbar.menu.codex": "Codex",
   "tabbar.menu.bash": "Bash",
   "tabbar.menu.cc-switch": "cc-switch",
+  "tabbar.menu.splitH": "Split left/right",
+  "tabbar.menu.splitV": "Split top/bottom",
   "tabs.empty": "No open tabs.",
   "tabs.newTab": "New tab",
   "guide.title.notConfigured": "{agent} provider not configured",

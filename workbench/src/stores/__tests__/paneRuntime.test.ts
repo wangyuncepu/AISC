@@ -14,7 +14,7 @@ import {
   persistedToInternal,
   tabsFromRecords,
 } from "../tabLayout";
-import { findLeaf, listLeaves, singleLeaf, splitLeaf } from "../paneTree";
+import { findLeaf, leafCount, leafDepth, listLeaves, singleLeaf, splitLeaf } from "../paneTree";
 
 const mockIpc = vi.hoisted(() => ({
   getProviderStatus: vi.fn().mockResolvedValue({}),
@@ -99,6 +99,81 @@ describe("store session ops route through the active pane (A-G17-5)", () => {
     const tab = s.tabs.find((t) => t.tabId === id)!;
     expect(tab.panes[id].sessionState).toBe("failed");
     expect(tab.sessionState).toBe("failed");
+  });
+});
+
+describe("split / close / ratio (A-G17-1/2/5)", () => {
+  async function oneTab(): Promise<{ s: ReturnType<typeof useRuntimeStore>; id: string }> {
+    const s = useRuntimeStore();
+    s.runtimeState = "running";
+    const id = s.createTab("bash")!;
+    await tick();
+    s.openTab(id);
+    return { s, id };
+  }
+
+  it("splitTabPane creates + activates a second leaf and opens it", async () => {
+    const { s, id } = await oneTab();
+    const newPane = s.splitTabPane(id, "horizontal", "claude");
+    expect(newPane).not.toBeNull();
+    const tab = s.tabs.find((t) => t.tabId === id)!;
+    expect(leafCount(tab.tree)).toBe(2);
+    expect(tab.activePaneId).toBe(newPane);
+    expect(tab.panes[newPane!].sessionState).toBe("starting"); // claude opens directly (mock configured? provider mock returns {})
+    void newPane;
+  });
+
+  it("split is refused at the 8-leaf cap and leaves the tree unchanged", async () => {
+    const { s, id } = await oneTab();
+    // Fill to 8 leaves by always splitting a leaf at depth < 4 (so the depth
+    // cap never trips before the leaf cap).
+    for (let i = 0; i < 7; i++) {
+      const tab = s.tabs.find((t) => t.tabId === id)!;
+      const target = listLeaves(tab.tree).find((l) => leafDepth(tab.tree, l.paneId) < 4)!;
+      s.setActivePane(id, target.paneId);
+      const np = s.splitTabPane(id, "vertical", "bash");
+      expect(np).not.toBeNull();
+    }
+    const tab = s.tabs.find((t) => t.tabId === id)!;
+    expect(leafCount(tab.tree)).toBe(8);
+    const before = JSON.stringify(tab.tree);
+    const r = s.splitTabPane(id, "vertical", "bash");
+    expect(r).toBeNull();
+    expect(JSON.stringify(tab.tree)).toBe(before);
+  });
+
+  it("closePane compresses the parent split", async () => {
+    const { s, id } = await oneTab();
+    const p2 = s.splitTabPane(id, "horizontal", "claude")!;
+    let tab = s.tabs.find((t) => t.tabId === id)!;
+    expect(leafCount(tab.tree)).toBe(2);
+    s.setActivePane(id, id); // active = original pane
+    await s.closePane(id, p2);
+    tab = s.tabs.find((t) => t.tabId === id)!;
+    expect(leafCount(tab.tree)).toBe(1);
+    expect(tab.panes[p2]).toBeUndefined();
+  });
+
+  it("closing the last pane keeps the tab with a single dormant leaf", async () => {
+    const { s, id } = await oneTab();
+    await s.closePane(id, id);
+    const tab = s.tabs.find((t) => t.tabId === id)!;
+    expect(tab).toBeDefined(); // tab kept
+    expect(leafCount(tab.tree)).toBe(1);
+    expect(Object.values(tab.panes)[0].sessionState).toBe("idle"); // dormant
+  });
+
+  it("setSplitRatio clamps to 0.10..0.90", async () => {
+    const { s, id } = await oneTab();
+    s.splitTabPane(id, "horizontal", "claude");
+    const tab = s.tabs.find((t) => t.tabId === id)!;
+    const key = listLeaves(tab.tree).map((l) => l.paneId).sort().join(",");
+    s.setSplitRatio(id, key, 0.95);
+    const t2 = s.tabs.find((t) => t.tabId === id)!;
+    expect((t2.tree as { ratio: number }).ratio).toBe(0.9);
+    s.setSplitRatio(id, key, 0.0);
+    const t3 = s.tabs.find((t) => t.tabId === id)!;
+    expect((t3.tree as { ratio: number }).ratio).toBe(0.1);
   });
 });
 

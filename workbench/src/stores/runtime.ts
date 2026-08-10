@@ -23,6 +23,7 @@ import type {
   RuntimeRef,
   RuntimeSnapshot,
   RuntimeState,
+  SplitAxis,
   Tab,
   TabExit,
   TabRecord,
@@ -42,7 +43,18 @@ import {
   sameWorkspace,
   tabsFromRecords,
 } from "./tabLayout";
-import { findLeaf, firstLeaf } from "./paneTree";
+import {
+  DEFAULT_RATIO,
+  MAX_LEAVES as MAX_PANES,
+  findLeaf,
+  firstLeaf,
+  leafCount,
+  listLeaves,
+  removeLeaf,
+  setRatioBySplitKey,
+  singleLeaf,
+  splitLeaf,
+} from "./paneTree";
 
 /** S2.1.a/b startup state machine (02-startup-flow.md §三). S2.2.b adds `conflict`. */
 export type WorkbenchStatus =
@@ -782,17 +794,20 @@ export const useRuntimeStore = defineStore("runtime", () => {
     const { tabs: created, bySavedId } = tabsFromRecords(records);
     tabs.value = created;
     for (const tab of created) {
-      if (!opts.openAgents || opts.openAgents.includes(tab.agent)) {
-        // G-12 (A-G08-3): restored claude/codex tabs go through the same
-        // provider gate as + menu tabs - unconfigured ones restore as guide
-        // without a session (observed 2026-08-10: restore bypassed the gate
-        // and dropped an unconfigured codex straight into its TUI login).
-        if (tab.agent === "claude" || tab.agent === "codex") {
-          void maybeOpenCreated(tab.tabId, tab.agent);
+      // G-17: open EVERY pane leaf (a restored split tab has several), each
+      // through the same provider gate as + menu tabs - unconfigured claude/
+      // codex restore as guide without a session (A-G08-3). `openAgents`
+      // filters the pane types to open (fresh start opens only the requested).
+      for (const leaf of listLeaves(tab.tree)) {
+        if (opts.openAgents && !opts.openAgents.includes(leaf.sessionType)) continue;
+        if (leaf.sessionType === "claude" || leaf.sessionType === "codex") {
+          openPane(tab, leaf.paneId);
+          void maybeOpenPaneCreated(tab, leaf.paneId, leaf.sessionType);
         } else {
-          void openTab(tab.tabId);
+          openPane(tab, leaf.paneId);
         }
       }
+      syncProjection(tab);
     }
     activeTabId.value = resolveActiveTabId(created, bySavedId, {
       activeSavedId: opts.activeSavedId,
@@ -838,6 +853,137 @@ export const useRuntimeStore = defineStore("runtime", () => {
     syncProjection(tab);
   }
 
+  /** The tab that owns a pane (pane id -> tab). */
+  function tabForPane(paneId: string): Tab | undefined {
+    return tabs.value.find((t) => t.panes[paneId]);
+  }
+
+  /** Total leaf count across all tabs (A-G17-6: <=8 per Runtime/Workbench). */
+  function totalLeaves(): number {
+    return tabs.value.reduce((n, t) => n + leafCount(t.tree), 0);
+  }
+
+  /** Total resource-holding panes (starting/running/closing; A-G17-6). */
+  function totalResources(): number {
+    return tabs.value.reduce(
+      (n, t) =>
+        n +
+        Object.values(t.panes).filter((p) =>
+          ["starting", "running", "closing"].includes(p.sessionState)
+        ).length,
+      0
+    );
+  }
+
+  // --- G-17 (Step 16): split / close-pane / ratio ---
+
+  /** Open a pane's session by id (fresh session_id, `starting`). The mounted
+   * Terminal watches the pane's session_id and calls open_session. */
+  function openPane(tab: Tab, paneId: string) {
+    const p = tab.panes[paneId];
+    if (!p || p.sessionState === "starting" || p.sessionState === "running") return;
+    p.sessionId = uuid();
+    p.sessionState = "starting";
+    p.exit = null;
+    syncProjection(tab);
+  }
+
+  /** Split the tab's active pane, activating + opening the new pane. Refused
+   * (tree unchanged) when the global leaf cap or the tree depth cap is hit
+   * (A-G17-2/6); `sizeOk` is the pane's measured minimum size check (240x160,
+   * evaluated by the UI before calling). */
+  function splitTabPane(
+    tabId: string,
+    axis: SplitAxis,
+    sessionType: LaunchAgent,
+    sizeOk = true
+  ): string | null {
+    const tab = findTab(tabId);
+    if (!tab || !sizeOk) return null;
+    // A-G17-6: leaf cap + resource cap (the new pane will hold a session).
+    if (totalLeaves() >= MAX_PANES || totalResources() >= MAX_PANES) return null;
+    const targetPaneId = tab.activePaneId;
+    const newPaneId = uuid();
+    const tree = splitLeaf(tab.tree, targetPaneId, newPaneId, axis, sessionType, DEFAULT_RATIO);
+    if (!tree) return null;
+    tab.tree = tree;
+    tab.panes[newPaneId] = { sessionId: null, sessionState: "idle", exit: null };
+    tab.activePaneId = newPaneId;
+    syncProjection(tab);
+    scheduleSave();
+    openPane(tab, newPaneId);
+    void maybeOpenPaneCreated(tab, newPaneId, sessionType);
+    return newPaneId;
+  }
+
+  /** G-12 gate for a freshly split pane (claude/codex may route to guide). */
+  async function maybeOpenPaneCreated(tab: Tab, paneId: string, agent: LaunchAgent) {
+    if (agent === "claude" || agent === "codex") {
+      await loadProviderStatus(agent);
+      const st = providerStatuses.value[agent];
+      const p = tab.panes[paneId];
+      if (!p || p.sessionState !== "starting") return;
+      if (!st || ["not_configured", "login_required", "unknown"].includes(st.auth_status)) {
+        p.sessionState = "guide";
+        p.sessionId = null;
+        syncProjection(tab);
+        return;
+      }
+    }
+  }
+
+  /** Set the tab's active pane and sync the projection (A-G17-5). */
+  function setActivePane(tabId: string, paneId: string) {
+    const tab = findTab(tabId);
+    if (!tab || !tab.panes[paneId]) return;
+    tab.activePaneId = paneId;
+    syncProjection(tab);
+    scheduleSave();
+  }
+
+  /** Set a split's ratio by its key (divider drag/keyboard, A-G17-4). */
+  function setSplitRatio(tabId: string, splitKeyId: string, ratio: number) {
+    const tab = findTab(tabId);
+    if (!tab) return;
+    tab.tree = setRatioBySplitKey(tab.tree, splitKeyId, ratio);
+    scheduleSave();
+  }
+
+  /** Close a pane: terminate its session, remove the leaf and compress the
+   * parent split (A-G17-5). Closing the LAST pane keeps the tab with a single
+   * dormant leaf of the same type (03 §6.1) instead of deleting the tab. */
+  async function closePane(tabId: string, paneId: string) {
+    const tab = findTab(tabId);
+    if (!tab || !tab.panes[paneId]) return;
+    const p = tab.panes[paneId];
+    if (
+      p.sessionId &&
+      !TERMINAL_STATES.includes(p.sessionState) &&
+      p.sessionState !== "closing"
+    ) {
+      p.sessionState = "closing";
+      void ipc.closeSession(p.sessionId).catch(() => null);
+    }
+    const removed = removeLeaf(tab.tree, paneId);
+    delete tab.panes[paneId];
+    if (removed === null) {
+      // Last pane: keep the tab as a single dormant leaf (same session type).
+      const type = (findLeaf(tab.tree, paneId) ?? firstLeaf(tab.tree))?.sessionType ?? tab.agent;
+      const newPaneId = uuid();
+      tab.tree = singleLeaf(newPaneId, type);
+      tab.panes[newPaneId] = { sessionId: null, sessionState: "idle", exit: null };
+      tab.activePaneId = newPaneId;
+    } else {
+      tab.tree = removed;
+      // Active pane may have been removed; fall back to the first leaf.
+      if (!tab.panes[tab.activePaneId]) {
+        tab.activePaneId = firstLeaf(tab.tree)?.paneId ?? "";
+      }
+    }
+    syncProjection(tab);
+    scheduleSave();
+  }
+
   /** Open (or reopen) a tab's session: assigns a fresh session_id and enters
    * `starting`. The mounted Terminal watches the session_id and calls
    * `open_session`; it reports back via onTabOpenOk/onTabOpenFail. G-17: the
@@ -873,7 +1019,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
    * per-Runtime leaf cap. The tab opens immediately (Step 5c routes
    * unconfigured claude/codex to the guide state instead). */
   function createTab(agent: LaunchAgent): string | null {
-    if (tabs.value.length >= MAX_TABS) return null;
+    // G-17 (A-G17-6): the global leaf cap governs (a split tab holds >1 leaf).
+    if (totalLeaves() >= MAX_PANES) return null;
     const tabId = uuid();
     tabs.value.push(newPaneTab(tabId, agent, AGENT_TITLE[agent], null));
     activeTabId.value = tabId;
@@ -961,32 +1108,37 @@ export const useRuntimeStore = defineStore("runtime", () => {
     }
   }
 
-  function onTabOpenOk(tabId: string) {
-    const tab = findTab(tabId);
+  /** Pane-aware session callbacks: for a single-pane tab paneId === tabId, so
+   * callers may pass either. */
+  function onTabOpenOk(paneId: string) {
+    const tab = tabForPane(paneId);
     if (!tab) return;
-    if (activePane(tab).sessionState === "starting") {
-      setActivePaneState(tab, { sessionState: "running" });
+    const p = tab.panes[paneId];
+    if (p && p.sessionState === "starting") {
+      p.sessionState = "running";
+      syncProjection(tab);
     }
   }
 
-  function onTabOpenFail(tabId: string) {
-    const tab = findTab(tabId);
+  function onTabOpenFail(paneId: string) {
+    const tab = tabForPane(paneId);
     if (!tab) return;
-    const p = activePane(tab);
-    if (TERMINAL_STATES.includes(p.sessionState)) return; // already finalized
-    setActivePaneState(tab, { sessionState: "failed" });
+    const p = tab.panes[paneId];
+    if (!p || TERMINAL_STATES.includes(p.sessionState)) return; // already finalized
+    p.sessionState = "failed";
+    syncProjection(tab);
     // exit stays null; the Terminal writes the open error inline.
   }
 
   /** PTY Exit event (process_exit / user_close / transport_error). Applied
-   * once per tab/pane (idempotent) - duplicate Exit/terminate results merge.
-   * After the pane state is committed, ack the backend so the terminal
-   * registry entry can be evicted (03 §3.3.2; idempotent on both sides). */
-  function onTabSessionExit(tabId: string, reason: string, exitCode: number | null) {
-    const tab = findTab(tabId);
+   * once per pane (idempotent) - duplicate Exit/terminate results merge. After
+   * the pane state is committed, ack the backend so the terminal registry
+   * entry can be evicted (03 §3.3.2; idempotent on both sides). */
+  function onTabSessionExit(paneId: string, reason: string, exitCode: number | null) {
+    const tab = tabForPane(paneId);
     if (!tab) return;
-    const p = activePane(tab);
-    if (p.exit) return; // first writer wins (03 §五.2)
+    const p = tab.panes[paneId];
+    if (!p || p.exit) return; // first writer wins (03 §五.2)
     const exit: TabExit = { reason, exitCode };
     p.exit = exit;
     p.sessionState = reason === "transport_error" ? "disconnected" : "exited";
@@ -1245,6 +1397,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
     stopRuntime,
     initTabs,
     openTab,
+    splitTabPane,
+    closePane,
+    setActivePane,
+    setSplitRatio,
     activateTab,
     closeTab,
     reopenTab,

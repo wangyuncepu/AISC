@@ -141,6 +141,8 @@ export const zhCN = {
   "tabbar.menu.codex": "Codex",
   "tabbar.menu.bash": "Bash",
   "tabbar.menu.cc-switch": "cc-switch",
+  "tabbar.menu.splitH": "左右分屏",
+  "tabbar.menu.splitV": "上下分屏",
   "tabs.empty": "没有打开的标签。",
   "tabs.newTab": "新建标签",
   "guide.title.notConfigured": "{agent} Provider 未配置",

@@ -1,0 +1,218 @@
+<script setup lang="ts">
+/**
+ * PaneTree (G-17, Step 16; 03 §六): recursive split-tree renderer for a tab.
+ *
+ * - split node -> CSS grid row (axis horizontal) / column (vertical) with a
+ *   keyboard+pointer divider (ratio clamp 0.10..0.90, 0.05 step, A-G17-4).
+ * - pane leaf -> its session content: Terminal (per-pane xterm), GuidePane
+ *   (unconfigured claude/codex), or a dormant 启动 view. The pane's runtime
+ *   state comes from tab.panes[paneId]; the leaf's session type from the tree.
+ * - Clicking a pane makes it active (A-G17-5: active pane drives the
+ *   projection / title / sidebar).
+ */
+import { computed, nextTick, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { useRuntimeStore } from "../../stores/runtime";
+import { RATIO_STEP, splitKey } from "../../stores/paneTree";
+import Terminal from "./Terminal.vue";
+import GuidePane from "./GuidePane.vue";
+import type { PaneNode, PaneSplitNode } from "../../types";
+
+const { t } = useI18n();
+const props = defineProps<{ tabId: string; tree: PaneNode }>();
+const store = useRuntimeStore();
+
+const tab = computed(() => store.tabs.find((t) => t.tabId === props.tabId));
+const split = computed(() => (props.tree.kind === "split" ? props.tree : null));
+const pane = computed(() => (props.tree.kind === "pane" ? props.tree : null));
+
+const paneRuntime = computed(() =>
+  pane.value ? (tab.value?.panes[pane.value.paneId] ?? null) : null
+);
+const showTerminal = computed(
+  () =>
+    paneRuntime.value &&
+    paneRuntime.value.sessionState !== "idle" &&
+    paneRuntime.value.sessionState !== "guide"
+);
+const isDormant = computed(
+  () => pane.value && (!paneRuntime.value || paneRuntime.value.sessionState === "idle")
+);
+
+/** Grid track sizes (fr) so the divider keeps its exact width. */
+function tracks(s: PaneSplitNode): { r1: string; r2: string } {
+  return { r1: `${s.ratio}fr`, r2: `${1 - s.ratio}fr` };
+}
+
+function activatePane() {
+  if (pane.value) store.setActivePane(props.tabId, pane.value.paneId);
+}
+
+function startPane() {
+  if (!pane.value) return;
+  store.setActivePane(props.tabId, pane.value.paneId);
+  store.openTab(props.tabId);
+}
+
+function onDividerKey(e: KeyboardEvent, s: PaneSplitNode) {
+  const key = splitKey(s);
+  if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+    store.setSplitRatio(props.tabId, key, s.ratio - RATIO_STEP);
+    e.preventDefault();
+  } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+    store.setSplitRatio(props.tabId, key, s.ratio + RATIO_STEP);
+    e.preventDefault();
+  }
+}
+
+function startDividerDrag(e: PointerEvent, s: PaneSplitNode) {
+  e.preventDefault();
+  const host = (e.currentTarget as HTMLElement).parentElement as HTMLElement;
+  const rect = host.getBoundingClientRect();
+  const key = splitKey(s);
+  const axis = s.axis;
+  const move = (ev: PointerEvent) => {
+    const p =
+      axis === "horizontal"
+        ? (ev.clientX - rect.left) / rect.width
+        : (ev.clientY - rect.top) / rect.height;
+    store.setSplitRatio(props.tabId, key, p);
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+}
+
+// --- focus: the tab's active pane Terminal (used by App after tab switching) ---
+const termRefs = ref(new Map<string, InstanceType<typeof Terminal>>());
+function setTerm(paneId: string) {
+  return (el: unknown) => {
+    if (el) termRefs.value.set(paneId, el as InstanceType<typeof Terminal>);
+    else termRefs.value.delete(paneId);
+  };
+}
+function focusActivePane(): void {
+  const active = tab.value?.activePaneId;
+  void nextTick(() => termRefs.value.get(active ?? "")?.focus());
+}
+defineExpose({ focusActivePane });
+</script>
+
+<template>
+  <!-- split: grid row/column + divider -->
+  <div
+    v-if="split"
+    class="split"
+    :data-axis="split.axis"
+    :style="
+      split.axis === 'horizontal'
+        ? { gridTemplateColumns: `${tracks(split).r1} 4px ${tracks(split).r2}` }
+        : { gridTemplateRows: `${tracks(split).r1} 4px ${tracks(split).r2}` }
+    "
+  >
+    <div class="child">
+      <PaneTree :tab-id="tabId" :tree="split.first" />
+    </div>
+    <div
+      class="divider"
+      role="separator"
+      :aria-orientation="split.axis === 'horizontal' ? 'vertical' : 'horizontal'"
+      tabindex="0"
+      :title="split.axis === 'horizontal' ? '调整左右比例' : '调整上下比例'"
+      @pointerdown="startDividerDrag($event, split)"
+      @keydown="onDividerKey($event, split)"
+    >
+      <span class="grip" />
+    </div>
+    <div class="child">
+      <PaneTree :tab-id="tabId" :tree="split.second" />
+    </div>
+  </div>
+
+  <!-- pane leaf: Terminal / guide / dormant -->
+  <div
+    v-else-if="pane"
+    class="pane"
+    :data-active="tab?.activePaneId === pane.paneId"
+    @pointerdown.self="activatePane"
+  >
+    <Terminal v-if="showTerminal" :ref="setTerm(pane.paneId)" :tab-id="tabId" :pane-id="pane.paneId" />
+    <GuidePane
+      v-else-if="paneRuntime?.sessionState === 'guide'"
+      :tab-id="tabId"
+      :pane-id="pane.paneId"
+    />
+    <div v-else-if="isDormant" class="dormant">
+      <span class="type">{{ pane.sessionType }}</span>
+      <button class="primary" @click="startPane">{{ t("tabs.newTab") }}</button>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.split {
+  display: grid;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+.child {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2a2a2a;
+  cursor: col-resize;
+  outline: none;
+  position: relative;
+  z-index: 1;
+}
+.divider[aria-orientation="horizontal"] {
+  cursor: row-resize;
+}
+.divider:hover, .divider:focus-visible {
+  background: #0e639c;
+}
+.grip {
+  width: 2px;
+  height: 24px;
+  background: #555;
+  border-radius: 1px;
+}
+.divider[aria-orientation="horizontal"] .grip {
+  width: 24px;
+  height: 2px;
+}
+.pane {
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pane[data-active="true"] { background: #1e1e1e; }
+.dormant {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #888;
+  background: #1e1e1e;
+}
+.dormant .type { font-family: monospace; font-size: 13px; color: #ccc; }
+button.primary {
+  background: #0e639c; color: #fff; border: 1px solid #0e639c;
+  border-radius: 4px; padding: 5px 14px; font-size: 12px; cursor: pointer;
+}
+</style>

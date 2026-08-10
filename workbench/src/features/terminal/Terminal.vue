@@ -31,18 +31,27 @@ import { useRuntimeStore } from "../../stores/runtime";
 import { useSettingsStore } from "../../stores/settings";
 import { closeSession, openSession, resizeSession, writeSession } from "../../lib/ipc";
 import { resolveRenderer, TERMINAL_THEME } from "./renderer";
+import { findLeaf } from "../../stores/paneTree";
 import type { PtyEvent } from "../../types";
 
 const { t } = useI18n();
-const props = defineProps<{ tabId: string }>();
+const props = defineProps<{ tabId: string; paneId: string }>();
 const store = useRuntimeStore();
 const settingsStore = useSettingsStore();
 
 const container = ref<HTMLDivElement | null>(null);
 const searchInput = ref<HTMLInputElement | null>(null);
+// G-17: the Terminal is pane-scoped (a split tab has one instance per leaf).
 const tab = computed(() => store.tabs.find((t) => t.tabId === props.tabId));
-const sessionId = computed(() => tab.value?.sessionId ?? null);
-const visible = computed(() => store.activeTabId === props.tabId);
+const pane = computed(() => tab.value?.panes[props.paneId] ?? null);
+const sessionId = computed(() => pane.value?.sessionId ?? null);
+const visible = computed(
+  () => store.activeTabId === props.tabId && tab.value?.activePaneId === props.paneId
+);
+const agent = computed(() => {
+  const t = tab.value;
+  return t ? (findLeaf(t.tree, props.paneId)?.sessionType ?? null) : null;
+});
 
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
@@ -158,8 +167,8 @@ function b64ToUint8(b64: string): Uint8Array {
 }
 
 function openPty(sid: string) {
-  const agent = tab.value?.agent;
-  if (!agent || !store.runtimeId) return;
+  const agentType = agent.value;
+  if (!agentType || !store.runtimeId) return;
   channel = new Channel<PtyEvent>();
   channel.onmessage = (ev) => {
     if (!term) return;
@@ -174,23 +183,23 @@ function openPty(sid: string) {
         term.write(
           `\r\n\x1b[90m[${t("terminal.exited")}: ${ev.reason}${ev.exitCode !== null ? `, code ${ev.exitCode}` : ""}]\x1b[0m\r\n`
         );
-        store.onTabSessionExit(props.tabId, ev.reason, ev.exitCode);
+        store.onTabSessionExit(props.paneId, ev.reason, ev.exitCode);
         break;
       case "error":
         term.write(
           `\r\n\x1b[31m${t("terminal.sessionError", { code: ev.code, message: ev.message })}\x1b[0m\r\n`
         );
-        store.onTabOpenFail(props.tabId);
+        store.onTabOpenFail(props.paneId);
         break;
     }
   };
-  openSession(store.runtimeId, sid, agent, store.workspace.trim(), channel)
-    .then(() => store.onTabOpenOk(props.tabId))
+  openSession(store.runtimeId, sid, agentType, store.workspace.trim(), channel)
+    .then(() => store.onTabOpenOk(props.paneId))
     .catch((e) => {
       term?.write(
         `\r\n\x1b[31m${t("terminal.openFailed", { code: e?.code ?? e })}\x1b[0m\r\n`
       );
-      store.onTabOpenFail(props.tabId);
+      store.onTabOpenFail(props.paneId);
     });
 }
 

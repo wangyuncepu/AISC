@@ -15,13 +15,18 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
+import { findLeaf } from "../../stores/paneTree";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
-const props = defineProps<{ tabId: string }>();
+const props = defineProps<{ tabId: string; paneId: string }>();
 
 const tab = computed(() => store.tabs.find((x) => x.tabId === props.tabId));
-const agent = computed(() => tab.value?.agent as "claude" | "codex" | undefined);
+const agent = computed(() => {
+  const t2 = tab.value;
+  if (!t2) return undefined;
+  return findLeaf(t2.tree, props.paneId)?.sessionType as "claude" | "codex" | undefined;
+});
 const auth = computed(() => {
   if (!agent.value) return "unknown";
   return store.providerStatuses[agent.value]?.auth_status ?? "unknown";
@@ -47,7 +52,9 @@ async function retry() {
   await store.loadProviderStatus(agent.value);
   const st = store.providerStatuses[agent.value];
   if (st && st.auth_status === "configured") {
-    store.openTab(props.tabId); // configured now - start the session
+    // Configured now - make this pane active and start its session.
+    store.setActivePane(props.tabId, props.paneId);
+    store.openTab(props.tabId);
   }
 }
 
