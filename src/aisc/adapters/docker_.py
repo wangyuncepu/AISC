@@ -423,10 +423,14 @@ class RealDockerExecutor:
 
         # The container's Linux pty emits UTF-8. On zh-CN Windows the ConPTY
         # output codepage defaults to GBK (CP936). SetConsoleOutputCP(65001)
-        # is set as a baseline, but ConPTY does not reliably honor runtime
-        # codepage changes, so the drain thread uses WriteConsoleW (Unicode,
-        # codepage-independent) - see drain() docstring. (G-02 regression
-        # 2026-08-10: cc-switch TUI rendered as mojibake after SDK switch.)
+        # sets it to UTF-8 so the drain thread's raw os.write(1, chunk)
+        # renders UTF-8 correctly (verified by diagnostic: 936 -> 65001).
+        # This is preferred over WriteConsoleW, which uses the console's
+        # Unicode width tables (box-drawing = 2 cols on zh-CN -> misaligned
+        # TUI). os.write uses the codepage width tables; ENABLE_LVB_GRID_
+        # WORLDWIDE (set in drain) makes box-drawing narrow (1 col).
+        # (G-02 regression 2026-08-10: cc-switch TUI garbled + misaligned
+        # after the SDK switch from docker exec -it.)
         if os.name == "nt":
             try:
                 import ctypes
@@ -465,96 +469,63 @@ class RealDockerExecutor:
         errors: List[Exception] = []
 
         def drain() -> None:
-            """Socket -> stdout.
+            """Socket -> stdout (raw bytes).
 
-            Windows: WriteConsoleW writes Unicode directly, bypassing the
-            ConPTY output codepage entirely. On zh-CN Windows the codepage
-            defaults to GBK (CP936): raw ``os.write(1, chunk)`` is
-            mis-decoded so UTF-8 box-drawing chars turn to mojibake
-            (``─`` -> ``鈹``) and their lead bytes eat the
-            following ESC, breaking ANSI escapes. SetConsoleOutputCP(65001)
-            proved insufficient for ConPTY; WriteConsoleW is
-            codepage-independent. An incremental UTF-8 decoder handles
-            multi-byte sequences split across recv chunk boundaries.
-            Falls back to raw os.write if stdout is not a console (pipe).
-            POSIX: raw os.write (no codepage on pty)."""
+            Windows: SetConsoleOutputCP(65001) is called at the start of
+            open_interactive to set the ConPTY output codepage to UTF-8.
+            With the codepage set, raw ``os.write(1, chunk)`` correctly
+            renders UTF-8 bytes - verified by diagnostic (CP 936 -> 65001,
+            box-drawing chars render correctly).
+
+            This replaces the earlier WriteConsoleW approach. WriteConsoleW
+            uses the console's **Unicode** width tables, which on zh-CN
+            Windows treat box-drawing chars (U+2500-U+257F) as
+            Ambiguous=wide (2 columns), stretching TUI borders and causing
+            progressive misalignment. os.write uses the **codepage** width
+            tables; with ENABLE_LVB_GRID_WORLDWIDE set, box-drawing chars
+            are narrow (1 column) in all locales.
+
+            Bare ``\\n`` is replaced with ``ESC D`` (IND) at the byte level
+            to prevent ENABLE_PROCESSED_OUTPUT from translating it to
+            ``\\r\\n`` (which would shift the cursor to column 1). ESC D
+            is a VT sequence that the VT parser executes as "index" (move
+            cursor down one line, same column). In UTF-8, 0x0A only
+            appears as a standalone LF, never inside a multi-byte sequence,
+            so the byte-level replacement is safe.
+
+            POSIX: raw os.write (no codepage on pty).
+            """
             try:
-                if os.name != "nt":
-                    while True:
-                        chunk = sock.recv(65536)
-                        if not chunk:
-                            break
-                        os.write(sys.stdout.fileno(), chunk)
-                    return
-                import ctypes
-                import codecs
-                from ctypes import wintypes
-                k32 = ctypes.windll.kernel32
-                k32.GetStdHandle.restype = wintypes.HANDLE
-                k32.GetStdHandle.argtypes = [wintypes.DWORD]
-                handle = k32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
-                # WriteConsoleW only works on console handles; a pipe
-                # redirect (rare for ConPTY sessions) must use os.write.
-                cmode = wintypes.DWORD()
-                if not handle or not k32.GetConsoleMode(
-                    wintypes.HANDLE(handle), ctypes.byref(cmode)
-                ):
-                    while True:
-                        chunk = sock.recv(65536)
-                        if not chunk:
-                            break
-                        os.write(sys.stdout.fileno(), chunk)
-                    return
-                # Set output mode for TUI compatibility:
-                # - Set DISABLE_NEWLINE_AUTO_RETURN (0x0008): in VT mode the
-                #   console auto-inserts a CR after a LF that reaches a new
-                #   line; disable it so the cursor stays in its column.
-                # - Set ENABLE_LVB_GRID_WORLDWIDE (0x0010): makes the
-                #   console treat Unicode box-drawing chars as narrow (1
-                #   column) in all locales. On zh-CN Windows the default
-                #   East-Asian width rules treat them as Ambiguous=wide (2
-                #   columns), which stretches TUI borders and shifts content.
-                # - ENABLE_PROCESSED_OUTPUT (0x0001) is PRESERVED: clearing
-                #   it prevents the console from recognizing ESC (0x1B) as a
-                #   control character, so VT sequences are displayed as
-                #   literal text (SGR fragments like "9m", "[" leak). VT
-                #   processing (0x0004) + wrap (0x0002) are also preserved.
-                k32.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-                k32.SetConsoleMode.restype = wintypes.BOOL
-                k32.SetConsoleMode(
-                    wintypes.HANDLE(handle),
-                    wintypes.DWORD(cmode.value | 0x0008 | 0x0010),
-                )
-                k32.WriteConsoleW.restype = wintypes.BOOL
-                k32.WriteConsoleW.argtypes = [
-                    wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD,
-                    ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
-                ]
-                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-                written = wintypes.DWORD()
-                wh = wintypes.HANDLE(handle)
-                # Replace bare LF with IND (ESC D). With ENABLE_PROCESSED_OUTPUT
-                # set (required for VT/ESC recognition), the console translates
-                # every \n into \r\n, shifting the cursor to column 1 and
-                # misaligning the TUI. IND is a VT sequence (ESC D = "index",
-                # move cursor down one line, same column) that ENABLE_PROCESSED_
-                # OUTPUT does not touch and the VT parser executes as a plain
-                # line-feed. This reconciles VT sequence processing with
-                # correct LF behavior. (G-02, 2026-08-10.)
+                if os.name == "nt":
+                    import ctypes
+                    from ctypes import wintypes
+                    k32 = ctypes.windll.kernel32
+                    k32.GetStdHandle.restype = wintypes.HANDLE
+                    k32.GetStdHandle.argtypes = [wintypes.DWORD]
+                    oh = k32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+                    omode = wintypes.DWORD()
+                    if oh and k32.GetConsoleMode(
+                        wintypes.HANDLE(oh), ctypes.byref(omode)
+                    ):
+                        # Add ENABLE_LVB_GRID_WORLDWIDE (0x0010): makes the
+                        # console treat box-drawing chars as narrow (1 col)
+                        # via the codepage width tables. All default flags
+                        # (PROCESSED_OUTPUT, WRAP, VT_PROCESSING) preserved.
+                        k32.SetConsoleMode.argtypes = [
+                            wintypes.HANDLE, wintypes.DWORD,
+                        ]
+                        k32.SetConsoleMode.restype = wintypes.BOOL
+                        k32.SetConsoleMode(
+                            wintypes.HANDLE(oh),
+                            wintypes.DWORD(omode.value | 0x0010),
+                        )
                 while True:
                     chunk = sock.recv(65536)
                     if not chunk:
-                        text = decoder.decode(b"", final=True)
-                        if text:
-                            text = text.replace("\n", "\x1bD")
-                            k32.WriteConsoleW(wh, text, len(text),
-                                              ctypes.byref(written), None)
                         break
-                    text = decoder.decode(chunk)
-                    if text:
-                        text = text.replace("\n", "\x1bD")
-                        k32.WriteConsoleW(wh, text, len(text),
-                                          ctypes.byref(written), None)
+                    if os.name == "nt":
+                        chunk = chunk.replace(b"\n", b"\x1bD")
+                    os.write(sys.stdout.fileno(), chunk)
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
