@@ -422,12 +422,11 @@ class RealDockerExecutor:
         import docker  # lazy: every other path stays dependency-free
 
         # The container's Linux pty emits UTF-8. On zh-CN Windows the ConPTY
-        # output codepage defaults to GBK (CP936), so the drain thread's raw
-        # ``os.write(1, chunk)`` is mis-decoded: multi-byte UTF-8 sequences
-        # turn to mojibake (``─`` -> ``鈧``) AND their lead bytes
-        # eat the following ESC, breaking ANSI escapes. The docker CLI sets
-        # CP_UTF8 itself; the SDK path must too. (G-02 regression 2026-08-10:
-        # cc-switch TUI rendered as ``鈧?`` garbage after the SDK switch.)
+        # output codepage defaults to GBK (CP936). SetConsoleOutputCP(65001)
+        # is set as a baseline, but ConPTY does not reliably honor runtime
+        # codepage changes, so the drain thread uses WriteConsoleW (Unicode,
+        # codepage-independent) - see drain() docstring. (G-02 regression
+        # 2026-08-10: cc-switch TUI rendered as mojibake after SDK switch.)
         if os.name == "nt":
             try:
                 import ctypes
@@ -466,13 +465,66 @@ class RealDockerExecutor:
         errors: List[Exception] = []
 
         def drain() -> None:
-            """Socket -> stdout (raw bytes; tty stream is not multiplexed)."""
+            """Socket -> stdout.
+
+            Windows: WriteConsoleW writes Unicode directly, bypassing the
+            ConPTY output codepage entirely. On zh-CN Windows the codepage
+            defaults to GBK (CP936): raw ``os.write(1, chunk)`` is
+            mis-decoded so UTF-8 box-drawing chars turn to mojibake
+            (``─`` -> ``鈹``) and their lead bytes eat the
+            following ESC, breaking ANSI escapes. SetConsoleOutputCP(65001)
+            proved insufficient for ConPTY; WriteConsoleW is
+            codepage-independent. An incremental UTF-8 decoder handles
+            multi-byte sequences split across recv chunk boundaries.
+            Falls back to raw os.write if stdout is not a console (pipe).
+            POSIX: raw os.write (no codepage on pty)."""
             try:
+                if os.name != "nt":
+                    while True:
+                        chunk = sock.recv(65536)
+                        if not chunk:
+                            break
+                        os.write(sys.stdout.fileno(), chunk)
+                    return
+                import ctypes
+                import codecs
+                from ctypes import wintypes
+                k32 = ctypes.windll.kernel32
+                k32.GetStdHandle.restype = wintypes.HANDLE
+                k32.GetStdHandle.argtypes = [wintypes.DWORD]
+                handle = k32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+                # WriteConsoleW only works on console handles; a pipe
+                # redirect (rare for ConPTY sessions) must use os.write.
+                cmode = wintypes.DWORD()
+                if not handle or not k32.GetConsoleMode(
+                    wintypes.HANDLE(handle), ctypes.byref(cmode)
+                ):
+                    while True:
+                        chunk = sock.recv(65536)
+                        if not chunk:
+                            break
+                        os.write(sys.stdout.fileno(), chunk)
+                    return
+                k32.WriteConsoleW.restype = wintypes.BOOL
+                k32.WriteConsoleW.argtypes = [
+                    wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD,
+                    ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID,
+                ]
+                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+                written = wintypes.DWORD()
+                wh = wintypes.HANDLE(handle)
                 while True:
                     chunk = sock.recv(65536)
                     if not chunk:
+                        text = decoder.decode(b"", final=True)
+                        if text:
+                            k32.WriteConsoleW(wh, text, len(text),
+                                              ctypes.byref(written), None)
                         break
-                    os.write(sys.stdout.fileno(), chunk)
+                    text = decoder.decode(chunk)
+                    if text:
+                        k32.WriteConsoleW(wh, text, len(text),
+                                          ctypes.byref(written), None)
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
