@@ -39,6 +39,7 @@ pub fn run(cli_arg: Option<String>) {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(cli_arg_state)
         .manage(SessionRegistry::default())
         .manage(StartOp::default())

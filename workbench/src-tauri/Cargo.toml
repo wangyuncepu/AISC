@@ -32,6 +32,7 @@ libc = "0.2"
 fs4 = "0.13"
 sys-locale = "0.3"
 winreg = "0.55"
+tauri-plugin-notification = "2"
 
 [dev-dependencies]
 tempfile = "3"
