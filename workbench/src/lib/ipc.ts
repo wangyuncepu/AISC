@@ -134,3 +134,7 @@ export const loadHistory = () => invoke<WorkbenchHistory>("load_history");
 
 export const saveHistory = (expectedRevision: number, patch: HistoryPatch) =>
   invoke<number>("save_history", { expectedRevision, patch });
+
+// --- G-10: window geometry save/restore (02 §A-G10) ---
+
+export const captureWindowGeometry = () => invoke<boolean>("capture_window_geometry");

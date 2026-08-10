@@ -41,8 +41,15 @@ const uiScale = computed(() => settingsStore.doc?.ui.font_scale ?? 1);
 // baseline is the 800x600 default window, so a non-maximized window at 1.5
 // never clips (max fit = min(w/800, h/600)). Resizes update the cap live.
 const windowSize = ref({ w: window.innerWidth, h: window.innerHeight });
+// G-10: debounced geometry capture (300ms, A-G10-5).
+let geometryTimer: number | null = null;
 function onViewportResize() {
   windowSize.value = { w: window.innerWidth, h: window.innerHeight };
+  if (geometryTimer !== null) window.clearTimeout(geometryTimer);
+  geometryTimer = window.setTimeout(() => {
+    geometryTimer = null;
+    void ipc.captureWindowGeometry().catch(() => undefined);
+  }, 300);
 }
 onMounted(() => window.addEventListener("resize", onViewportResize));
 const effectiveScale = computed(() =>
@@ -192,6 +199,8 @@ onMounted(() => {
     if (!allow) return;
     const win = getCurrentWindow();
     void win.hide().catch(() => undefined);
+    // G-10: flush geometry before shutdown (A-G10-5).
+    void ipc.captureWindowGeometry().catch(() => undefined);
     void ipc.shutdownWorkbench().catch((e) => {
       console.error("shutdown_workbench failed, destroying window:", e);
       void win.destroy().catch(() => undefined);
@@ -221,6 +230,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("resize", onViewportResize);
   window.removeEventListener("keydown", onKeydown, { capture: true });
   if (announceTimer !== null) window.clearTimeout(announceTimer);
+  if (geometryTimer !== null) window.clearTimeout(geometryTimer);
 });
 
 function isStartingView(s: string): boolean {
