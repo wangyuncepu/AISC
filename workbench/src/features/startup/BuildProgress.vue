@@ -96,7 +96,7 @@ watch(
   height: 100%;
   padding: 12px;
   gap: 8px;
-  color: #ccc;
+  color: var(--text-2);
 }
 .head {
   display: flex;
@@ -105,31 +105,31 @@ watch(
   font-size: 13px;
 }
 .title { font-weight: 600; }
-.state { font-size: 12px; color: #888; }
-.elapsed { font-size: 12px; color: #888; margin-left: auto; }
-.state[data-state="complete"] { color: #4caf50; }
-.state[data-state="failed"], .state[data-state="cancelled"] { color: #e57373; }
+.state { font-size: 12px; color: var(--text-muted); }
+.elapsed { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+.state[data-state="complete"] { color: var(--success); }
+.state[data-state="failed"], .state[data-state="cancelled"] { color: var(--error); }
 .log {
   flex: 1;
   min-height: 0;
   overflow: auto;
   margin: 0;
   padding: 8px;
-  background: #111;
-  border: 1px solid #333;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 4px;
   font-family: monospace;
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
-  color: #ddd;
+  color: var(--text-2);
 }
-.err { font-size: 12px; color: #e57373; margin: 0; }
+.err { font-size: 12px; color: var(--error); margin: 0; }
 .actions { display: flex; gap: 8px; }
 button {
-  background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
   padding: 6px 14px; font-size: 13px; cursor: pointer;
 }
-button.primary { background: #0e639c; border-color: #0e639c; }
-button.danger { background: #5a2d2d; border-color: #6b3636; }
+button.primary { background: var(--accent); border-color: var(--accent); }
+button.danger { background: var(--error-bg); border-color: var(--error-border); }
 </style>

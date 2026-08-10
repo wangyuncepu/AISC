@@ -41,15 +41,15 @@ const cancelledSnap = computed(() => store.cancelInspect);
   justify-content: center;
   gap: 10px;
   padding: 32px;
-  color: #ccc;
+  color: var(--text-2);
 }
 .msg { font-size: 14px; margin: 0; }
-.hint { font-size: 12px; color: #888; margin: 0; }
+.hint { font-size: 12px; color: var(--text-muted); margin: 0; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
-  background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
   padding: 6px 14px; font-size: 13px; cursor: pointer;
 }
-button.primary { background: #0e639c; border-color: #0e639c; }
-button.danger { background: #5a2d2d; border-color: #6b3636; }
+button.primary { background: var(--accent); border-color: var(--accent); }
+button.danger { background: var(--error-bg); border-color: var(--error-border); }
 </style>

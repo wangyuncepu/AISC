@@ -65,10 +65,10 @@ function short(id: string): string {
   justify-content: center;
   gap: 10px;
   padding: 32px;
-  color: #ccc;
+  color: var(--text-2);
 }
-.conflict h2 { color: #ddd; margin: 0; }
-.hint { font-size: 12px; color: #888; max-width: 480px; text-align: center; margin: 0; }
+.conflict h2 { color: var(--text-2); margin: 0; }
+.hint { font-size: 12px; color: var(--text-muted); max-width: 480px; text-align: center; margin: 0; }
 .list {
   list-style: none;
   padding: 0;
@@ -84,28 +84,28 @@ function short(id: string): string {
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  background: #252526;
-  border: 1px solid #333;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 4px;
   font-size: 13px;
 }
-.rid { font-family: monospace; color: #9cdcfe; }
-.state { font-size: 11px; color: #888; min-width: 70px; }
-.state[data-state="running"] { color: #4caf50; }
-.state[data-state="stopped"] { color: #cca84a; }
-.state[data-state="unknown"] { color: #888; }
-.cfg { flex: 1; color: #aaa; font-size: 12px; }
+.rid { font-family: monospace; color: var(--info); }
+.state { font-size: 11px; color: var(--text-muted); min-width: 70px; }
+.state[data-state="running"] { color: var(--success); }
+.state[data-state="stopped"] { color: var(--warn); }
+.state[data-state="unknown"] { color: var(--text-muted); }
+.cfg { flex: 1; color: var(--text-muted); font-size: 12px; }
 .act { display: flex; gap: 4px; }
-.empty { color: #888; font-size: 12px; justify-content: center; }
-.err { color: #e57373; font-size: 12px; }
+.empty { color: var(--text-muted); font-size: 12px; justify-content: center; }
+.err { color: var(--error); font-size: 12px; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
-  background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
   padding: 6px 14px; font-size: 13px; cursor: pointer;
 }
-button:hover:not(:disabled) { background: #3c3c3c; }
-button.primary { background: #0e639c; border-color: #0e639c; }
-button.primary:hover { background: #1177bb; }
-button.danger { background: #5a2d2d; border-color: #6b3636; }
-button.danger:hover { background: #6e3a3a; }
+button:hover:not(:disabled) { background: var(--surface-hover); }
+button.primary { background: var(--accent); border-color: var(--accent); }
+button.primary:hover { background: var(--accent-hover); }
+button.danger { background: var(--error-bg); border-color: var(--error-border); }
+button.danger:hover { background: var(--error-hover); }
 </style>

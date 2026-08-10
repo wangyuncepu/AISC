@@ -200,8 +200,8 @@ function canReopen(s: TabSessionState): boolean {
   align-items: stretch;
   gap: 2px;
   padding: 0 6px;
-  background: #252526;
-  border-bottom: 1px solid #333;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .tab {
@@ -210,22 +210,22 @@ function canReopen(s: TabSessionState): boolean {
   gap: 6px;
   padding: 6px 10px;
   background: transparent;
-  color: #888;
+  color: var(--text-muted);
   border: none;
   border-bottom: 2px solid transparent;
   border-radius: 0;
   font-size: 13px;
   cursor: pointer;
 }
-.tab:hover { background: #2d2d2d; color: #ccc; }
-.tab.active { color: #ddd; border-bottom-color: #0e639c; background: #1e1e1e; }
+.tab:hover { background: var(--surface-2); color: var(--text-2); }
+.tab.active { color: var(--text-2); border-bottom-color: var(--accent); background: var(--bg); }
 .tab .title { font-weight: 500; }
-.tab .state { font-size: 11px; color: #777; }
-.tab.idle { color: #6a6a6a; }
-.tab.starting .state, .tab.closing .state { color: #cca84a; }
-.tab.exited .state { color: #888; }
-.tab.failed .state { color: #e57373; }
-.tab.disconnected .state { color: #e0a868; }
+.tab .state { font-size: 11px; color: var(--text-muted); }
+.tab.idle { color: var(--text-faint); }
+.tab.starting .state, .tab.closing .state { color: var(--warn); }
+.tab.exited .state { color: var(--text-muted); }
+.tab.failed .state { color: var(--error); }
+.tab.disconnected .state { color: var(--warn); }
 .actions { display: flex; gap: 2px; margin-left: 2px; }
 .icon {
   background: transparent;
@@ -237,19 +237,19 @@ function canReopen(s: TabSessionState): boolean {
   cursor: pointer;
   border-radius: 3px;
 }
-.icon:hover { background: #3c3c3c; color: #fff; }
-.icon.reopen { color: #9cce9c; }
-.icon.add { color: #9cdcfe; font-size: 16px; margin-left: 4px; }
+.icon:hover { background: var(--surface-hover); color: var(--text); }
+.icon.reopen { color: var(--success); }
+.icon.add { color: var(--info); font-size: 16px; margin-left: 4px; }
 .menu-wrap { position: relative; display: flex; align-items: center; }
 .menu {
   position: absolute; top: 100%; left: 0; z-index: 30;
   list-style: none; margin: 2px 0 0; padding: 4px 0;
-  background: #2d2d2d; border: 1px solid #444; border-radius: 4px;
+  background: var(--surface-2); border: 1px solid var(--border-2); border-radius: 4px;
   min-width: 140px;
 }
 .menu li {
-  padding: 6px 12px; font-size: 13px; color: #ccc; cursor: pointer;
+  padding: 6px 12px; font-size: 13px; color: var(--text-2); cursor: pointer;
   outline: none;
 }
-.menu li:hover, .menu li:focus { background: #3c3c3c; color: #fff; }
+.menu li:hover, .menu li:focus { background: var(--surface-hover); color: var(--text); }
 </style>

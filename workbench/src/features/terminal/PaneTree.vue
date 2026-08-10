@@ -182,7 +182,7 @@ defineExpose({ focusActivePane });
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #2a2a2a;
+  background: var(--surface-2);
   cursor: col-resize;
   outline: none;
   position: relative;
@@ -192,12 +192,12 @@ defineExpose({ focusActivePane });
   cursor: row-resize;
 }
 .divider:hover, .divider:focus-visible {
-  background: #0e639c;
+  background: var(--accent);
 }
 .grip {
   width: 2px;
   height: 24px;
-  background: #555;
+  background: var(--border-strong);
   border-radius: 1px;
 }
 .divider[aria-orientation="horizontal"] .grip {
@@ -213,14 +213,14 @@ defineExpose({ focusActivePane });
   flex-direction: column;
   position: relative;
 }
-.pane[data-active="true"] { background: #1e1e1e; }
+.pane[data-active="true"] { background: var(--bg); }
 .pane-close {
   position: absolute; top: 4px; right: 4px; z-index: 2;
-  background: rgba(30, 30, 30, 0.8); border: 1px solid #444; color: #aaa;
+  background: rgba(30, 30, 30, 0.8); border: 1px solid var(--border-2); color: var(--text-muted);
   width: 20px; height: 20px; line-height: 1; border-radius: 4px;
   font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center;
 }
-.pane-close:hover { background: #5a2d2d; border-color: #6b3636; color: #fff; }
+.pane-close:hover { background: var(--error-bg); border-color: var(--error-border); color: var(--error-fg); }
 .dormant {
   flex: 1;
   display: flex;
@@ -228,12 +228,12 @@ defineExpose({ focusActivePane });
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: #888;
-  background: #1e1e1e;
+  color: var(--text-muted);
+  background: var(--bg);
 }
-.dormant .type { font-family: monospace; font-size: 13px; color: #ccc; }
+.dormant .type { font-family: monospace; font-size: 13px; color: var(--text-2); }
 button.primary {
-  background: #0e639c; color: #fff; border: 1px solid #0e639c;
+  background: var(--accent); color: var(--accent-fg); border: 1px solid var(--accent);
   border-radius: 4px; padding: 5px 14px; font-size: 12px; cursor: pointer;
 }
 </style>

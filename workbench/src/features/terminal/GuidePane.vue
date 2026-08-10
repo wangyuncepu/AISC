@@ -150,7 +150,7 @@ function closeMenus() {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  color: #ccc;
+  color: var(--text-2);
 }
 .banner {
   display: flex;
@@ -158,35 +158,35 @@ function closeMenus() {
   gap: 10px;
   padding: 8px 12px;
   border-radius: 4px;
-  background: #3a3220;
-  color: #e0c97a;
-  border: 1px solid #55482a;
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border: 1px solid var(--warn-border);
 }
-.banner[data-auth="login_required"] { background: #3a3220; color: #e0c97a; }
-.banner[data-auth="not_configured"] { background: #3a2a2a; color: #e0b0b0; }
-.banner[data-auth="unknown"] { background: #2d2d3a; color: #b0b0e0; }
+.banner[data-auth="login_required"] { background: var(--warn-bg); color: var(--warn-fg); }
+.banner[data-auth="not_configured"] { background: var(--error-bg); color: var(--error-fg); }
+.banner[data-auth="unknown"] { background: var(--info-bg); color: var(--info); }
 .icon { font-size: 14px; }
 .text { font-size: 13px; font-weight: 500; }
 .actions { margin-left: auto; display: flex; gap: 8px; }
-.hint { font-size: 12px; color: #888; }
+.hint { font-size: 12px; color: var(--text-muted); }
 button {
-  background: #333; color: #ddd; border: 1px solid #555; border-radius: 4px;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
   padding: 4px 12px; font-size: 12px; cursor: pointer;
 }
-button:hover:not(:disabled) { background: #3c3c3c; }
-button.primary { background: #0e639c; border-color: #0e639c; }
+button:hover:not(:disabled) { background: var(--surface-hover); }
+button.primary { background: var(--accent); border-color: var(--accent); }
 .ctx-backdrop {
   position: fixed; inset: 0; z-index: 18;
 }
 .ctx-menu {
   position: fixed; z-index: 20;
   display: flex; flex-direction: column; min-width: 140px; padding: 4px;
-  background: #252526; border: 1px solid #3c3c3c; border-radius: 4px;
+  background: var(--surface); border: 1px solid var(--border-2); border-radius: 4px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
 .ctx-menu button {
-  background: transparent; color: #d4d4d4; border: none; border-radius: 2px;
+  background: transparent; color: var(--text-2); border: none; border-radius: 2px;
   text-align: left; padding: 6px 12px; cursor: pointer;
 }
-.ctx-menu button:hover { background: #37373d; }
+.ctx-menu button:hover { background: var(--surface-active); }
 </style>

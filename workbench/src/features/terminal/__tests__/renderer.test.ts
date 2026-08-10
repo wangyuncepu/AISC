@@ -5,7 +5,7 @@
  * documented contrast claims (A-G06-5 spot checks).
  */
 import { describe, expect, it } from "vitest";
-import { resolveRenderer, TERMINAL_THEME } from "../renderer";
+import { LIGHT_TERMINAL_THEME, resolveRenderer, TERMINAL_THEME, terminalTheme } from "../renderer";
 
 describe("resolveRenderer (A-G06-1/2)", () => {
   it("explicit default always wins, even when webgl is available", () => {
@@ -24,19 +24,19 @@ describe("resolveRenderer (A-G06-1/2)", () => {
   });
 });
 
-describe("TERMINAL_THEME contrast (A-G06-5)", () => {
-  // WCAG relative luminance + contrast ratio (4.5:1 AA for body text).
-  function lum(hex: string): number {
-    const c = hex.slice(1);
-    const ch = [0, 2, 4].map((i) => parseInt(c.slice(i, i + 2), 16) / 255);
-    const lin = ch.map((v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
-    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
-  }
-  function ratio(a: string, b: string): number {
-    const [l1, l2] = [lum(a), lum(b)].sort((x, y) => y - x);
-    return (l1 + 0.05) / (l2 + 0.05);
-  }
+// WCAG relative luminance + contrast ratio (4.5:1 AA for body text).
+function lum(hex: string): number {
+  const c = hex.slice(1);
+  const ch = [0, 2, 4].map((i) => parseInt(c.slice(i, i + 2), 16) / 255);
+  const lin = ch.map((v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+}
+function ratio(a: string, b: string): number {
+  const [l1, l2] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (l1 + 0.05) / (l2 + 0.05);
+}
 
+describe("TERMINAL_THEME contrast (A-G06-5)", () => {
   it("body text and selection meet WCAG AA 4.5:1", () => {
     expect(ratio(TERMINAL_THEME.foreground!, TERMINAL_THEME.background!)).toBeGreaterThanOrEqual(4.5);
     expect(ratio(TERMINAL_THEME.selectionForeground!, TERMINAL_THEME.selectionBackground!)).toBeGreaterThanOrEqual(4.5);
@@ -46,5 +46,19 @@ describe("TERMINAL_THEME contrast (A-G06-5)", () => {
     expect(TERMINAL_THEME.background).toBe("#1e1e1e");
     expect(TERMINAL_THEME.foreground).toBe("#d4d4d4");
     expect(TERMINAL_THEME.selectionBackground).toBe("#264f78");
+  });
+});
+
+describe("terminalTheme (G-04)", () => {
+  it("resolves dark/light to the matching palettes", () => {
+    expect(terminalTheme("dark")).toBe(TERMINAL_THEME);
+    expect(terminalTheme("light")).toBe(LIGHT_TERMINAL_THEME);
+  });
+
+  it("light body text and selection meet WCAG AA 4.5:1", () => {
+    expect(ratio(LIGHT_TERMINAL_THEME.foreground!, LIGHT_TERMINAL_THEME.background!)).toBeGreaterThanOrEqual(4.5);
+    expect(
+      ratio(LIGHT_TERMINAL_THEME.selectionForeground!, LIGHT_TERMINAL_THEME.selectionBackground!)
+    ).toBeGreaterThanOrEqual(4.5);
   });
 });
