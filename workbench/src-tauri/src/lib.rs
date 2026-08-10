@@ -15,6 +15,7 @@ pub mod runtime;
 pub mod session;
 pub mod settings;
 pub mod storage;
+pub mod tray;
 pub mod window;
 
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
@@ -31,6 +32,7 @@ use session::{
     write_session, SessionRegistry,
 };
 use settings::{load_settings, reset_gui_settings, save_settings};
+use tray::{build_tray, tray_available_command};
 use window::{capture_window_geometry, restore_window_geometry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -77,13 +79,27 @@ pub fn run(cli_arg: Option<String>) {
             restore_window_geometry,
             capture_window_geometry,
             run_doctor,
+            tray_available_command,
         ])
+        .on_window_event(|window, event| {
+            // G-16: intercept CloseRequested on the main window. Both behaviors
+            // prevent the default close (quit goes through the frontend confirm
+            // + shutdown coordinator; tray mode hides). Tray unavailable falls
+            // back to quit (A-G16-4).
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                tray::on_window_close_requested(window, &api);
+            }
+        })
         .setup(|app| {
             // G-10: restore window geometry on startup (before the window
             // is shown, so the user sees the saved position immediately).
             let app_handle = app.handle().clone();
             if let Err(e) = restore_window_geometry(app_handle) {
                 eprintln!("[geometry] restore failed: {:?}", e);
+            }
+            // G-16: optional tray; init failure falls back to quit-only.
+            if let Err(e) = build_tray(app.handle()) {
+                eprintln!("[tray] init failed, falling back to quit-only: {e}");
             }
             Ok(())
         })

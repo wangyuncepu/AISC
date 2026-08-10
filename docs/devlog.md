@@ -62,6 +62,19 @@
 - [x] **14b-1** 手动测试（通过，2026-08-10）：无 workspace → `AISC Workbench`；选 workspace → `test · AISC Workbench`；开 Bash → `test · Bash · AISC Workbench`；切 Claude/Codex tab 标题跟随；关全部 tab 回落 `test · AISC Workbench`。
 - **Step 14 结论（2026-08-10）**：vitest 75 + Rust 101/cli_runner 7/pty_supervisor 7 + vue-tsc + cargo build 全绿；手测通过。**Step 14 完成。**
 
+## Step 15 验收清单（G-16 可选最小化到托盘，分支 step-15-tray）
+
+> 规范：06 §十六、03 §A-G16-1..5、01 R-13。
+
+- [x] **15a-1** Rust tray（A-G16-1）：tauri 启用 `tray-icon` feature；`tray.rs` 用 `TrayIconBuilder` 创建「显示/退出」菜单并持有 owner（`TrayState`）；左键不弹菜单。
+- [x] **15a-2** CloseRequested 拦截（A-G16-1/4）：`.on_window_event` 对主窗口 CloseRequested 一律 `prevent_close`；`effective_close_behavior`=minimize-to-tray 且 tray 可用 → hide；否则 quit（前端确认 + shutdown）。tray 初始化失败/平台不支持 → `tray_available=false` → 运行态回退 quit，最后窗口不会被隐藏。
+- [x] **15a-3** tray 菜单（A-G16-3）：显示 → `show+set_focus`；退出 → emit `exit-requested` → 前端复用同一 confirm + `shutdown_workbench`（同一 ShutdownReport）；取消确认保持隐藏前状态。
+- [x] **15b-1** Frontend：`ipc.trayAvailable()` 一次查询；onCloseRequested 分支——tray 模式且 tray 可用 → return（Rust 已 hide，Session 连续运行）；否则 runExitFlow。`listen("exit-requested")` 触发同一 runExitFlow。
+- [x] **15b-2** 设置：`window.close_behavior` 已有（Step 7）持久化；即时生效（Rust 关闭时重读 settings）；Reset 恢复 quit（settings 默认）。
+- [x] **15b-3** 自动化：vue-tsc + vitest 75 + Rust 101/cli_runner 7/pty_supervisor 7 + cargo build（tray-icon）全绿。
+- [ ] **15b-4** 手动测试：默认 quit 关闭即退出；设置切 minimize-to-tray → 关窗仅隐藏、Session 连续；托盘「显示」恢复窗口+焦点；托盘「退出」同确认 + shutdown（有 Session 时弹确认、无 Session 直接退）；隐藏时关窗不退出；重启后 tray 值保持。
+- **Step 15 结论**：待完成（自动化已绿，手测待用户）。
+
 ## Step 1 验收清单（G-18 sidecar 入用户 PATH，分支 step-1-g18-path）
 
 > 规范：05-cli-gui-contract.md §五（PATH 安全算法）、06 §二；门禁 A-G18-1..4。

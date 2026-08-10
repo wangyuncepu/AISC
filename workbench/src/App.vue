@@ -6,6 +6,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import * as ipc from "./lib/ipc";
 import { applyLocale } from "./i18n";
 import { computeWindowTitle } from "./lib/title";
@@ -202,6 +203,27 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+// G-16 (Step 15): tray availability gate. A stored minimize-to-tray value falls
+// back to quit when no tray exists (A-G16-4), and the frontend only skips its
+// shutdown flow when both tray mode AND a live tray apply (Rust hides).
+const trayAvailable = ref(false);
+
+// Shared quit flow: window close confirm + hide + geometry flush + shutdown
+// coordinator. Used by both the window close (quit) and the tray 退出 menu
+// (A-G16-3: the same confirm gate and ShutdownReport).
+async function runExitFlow(): Promise<void> {
+  const allow = await store.confirmExit();
+  if (!allow) return;
+  const win = getCurrentWindow();
+  void win.hide().catch(() => undefined);
+  // G-10: flush geometry before shutdown (A-G10-5).
+  void ipc.captureWindowGeometry().catch(() => undefined);
+  void ipc.shutdownWorkbench().catch((e) => {
+    console.error("shutdown_workbench failed, destroying window:", e);
+    void win.destroy().catch(() => undefined);
+  });
+}
+
 onMounted(() => {
   store.negotiate();
   // G-09 (02 §3.1): resolve + apply the locale in parallel with capability
@@ -211,6 +233,11 @@ onMounted(() => {
     const locale = await ipc.resolveLocale(settingsStore.doc?.ui.language ?? "auto");
     applyLocale(locale);
   })();
+  // G-16: query tray availability once (Rust setup already ran).
+  void ipc
+    .trayAvailable()
+    .then((ok) => (trayAvailable.value = ok))
+    .catch(() => undefined);
   // Exit gate (03 §4.3): always prevent the default close. G-07 refinement
   // (2026-08-09): the close feels instant - the window hides and the Rust
   // shutdown coordinator runs in the background (bounded ~12s worst case),
@@ -223,18 +250,18 @@ onMounted(() => {
   // runtime container keeps running by design. An unreaped-session report is
   // logged by Rust, not shown. (preventDefault must precede the async
   // confirm, otherwise the default close races it.)
+  // G-16 (Step 15): with close_behavior=minimize-to-tray AND a live tray, Rust
+  // has already hidden the window - skip the shutdown flow entirely so sessions
+  // keep running (A-G16-1/2). Otherwise run the quit flow.
   void getCurrentWindow().onCloseRequested(async (event) => {
     event.preventDefault();
-    const allow = await store.confirmExit();
-    if (!allow) return;
-    const win = getCurrentWindow();
-    void win.hide().catch(() => undefined);
-    // G-10: flush geometry before shutdown (A-G10-5).
-    void ipc.captureWindowGeometry().catch(() => undefined);
-    void ipc.shutdownWorkbench().catch((e) => {
-      console.error("shutdown_workbench failed, destroying window:", e);
-      void win.destroy().catch(() => undefined);
-    });
+    const behavior = settingsStore.doc?.window.close_behavior ?? "quit";
+    if (behavior === "minimize-to-tray" && trayAvailable.value) return;
+    await runExitFlow();
+  });
+  // G-16: tray 退出 uses the same confirm + shutdown (A-G16-3).
+  void listen("exit-requested", () => {
+    void runExitFlow();
   });
   window.addEventListener("keydown", onKeydown, { capture: true });
 });
