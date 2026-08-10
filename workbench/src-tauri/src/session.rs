@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use crate::cli::run_control;
 use crate::error::WorkbenchError;
 use crate::pty::{
-    spawn_pty_session, now_ms, ExitSignal, PtyEvent, PtySession, SessionExit, SessionState,
+    spawn_pipe_session, now_ms, ExitSignal, PtyEvent, PtySession, SessionExit, SessionState,
     REASON_TRANSPORT_ERROR, REASON_USER_CLOSE,
 };
 use crate::settings::Settings;
@@ -316,7 +316,7 @@ pub async fn open_session(
     let argv = session_open_argv(&runtime_id, &session_id, &agent, &ws);
 
     let (event_tx, event_rx) = mpsc::channel::<PtyEvent>(EVENT_CHANNEL_CAP);
-    let spawned = spawn_pty_session(&pin, argv, DEFAULT_COLS, DEFAULT_ROWS, event_tx);
+    let spawned = spawn_pipe_session(&pin, argv, DEFAULT_COLS, DEFAULT_ROWS, event_tx);
     let (session, signal) = match spawned {
         Ok(pair) => pair,
         Err(e) => {

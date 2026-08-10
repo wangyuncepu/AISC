@@ -413,21 +413,16 @@ class RealDockerExecutor:
     def open_interactive(self, container: str, argv: List[str]) -> ProcessResult:
         """Interactive TTY session via the Docker SDK (see protocol doc).
 
-        G-02 root cause (2026-08-10): ``docker exec -it``'s exec pty is sized
-        once at creation; the docker CLI has no resize command, so the local
-        ConPTY resize never reached the container. The SDK's ``exec_resize``
-        is the in-band fix: a watcher thread polls the local terminal size
-        (ConPTY on Windows, winsize ioctl on POSIX) and forwards changes.
+        The sidecar is spawned with **pipes** (not a ConPTY) by the Rust
+        pty supervisor. stdin/stdout are raw byte streams - no console
+        processing, no codepage, no Unicode width tables. The container's
+        UTF-8 / VT sequences pass through directly to xterm.js.
+
+        Terminal size is passed via the ``AISC_RESIZE_FILE`` env var: Rust
+        writes ``"<cols> <rows>\\n"`` on resize, this sidecar polls it
+        (100ms) and calls ``exec_resize``. (G-02, 2026-08-10.)
         """
         import docker  # lazy: every other path stays dependency-free
-
-        # The container's Linux pty emits UTF-8. The ConPTY output codepage
-        # is fixed at the system default (GBK/CP936 on zh-CN) and cannot be
-        # changed at runtime (SetConsoleOutputCP is ignored by ConPTY).
-        # The drain thread transcodes: decode UTF-8 -> re-encode to the
-        # console's actual codepage -> os.write. WriteConsoleW was rejected:
-        # it uses Unicode width tables that treat box-drawing as 2 columns
-        # on zh-CN, causing TUI misalignment. (G-02, 2026-08-10.)
 
         try:
             client = docker.from_env()
@@ -459,111 +454,33 @@ class RealDockerExecutor:
         stop = threading.Event()
         errors: List[Exception] = []
 
-        def drain() -> None:
-            """Socket -> stdout (transcoded to the console's codepage).
-
-            Windows: The ConPTY output codepage is fixed (GBK/CP936 on
-            zh-CN) and SetConsoleOutputCP is ignored. Rather than writing
-            raw UTF-8 bytes (garbled) or WriteConsoleW (Unicode width
-            tables -> box-drawing = 2 cols -> misaligned), we **transcode**:
-            decode the container's UTF-8 to Unicode, re-encode to the
-            console's actual codepage (queried via GetConsoleOutputCP),
-            and write via os.write. The console decodes the transcoded
-            bytes correctly, and the codepage width tables (with
-            ENABLE_LVB_GRID_WORLDWIDE) treat box-drawing as 1 column.
-
-            Bare ``\\n`` is replaced with ``ESC D`` (IND) at the byte level
-            to prevent ENABLE_PROCESSED_OUTPUT from translating it to
-            ``\\r\\n``. Safe because 0x0A never appears inside multi-byte
-            sequences of any East-Asian codepage.
-
-            POSIX: raw os.write (no codepage on pty).
-            """
+        # Initial resize from the resize file (set by Rust before spawn).
+        resize_file = os.environ.get("AISC_RESIZE_FILE")
+        last_size: Optional[tuple] = None
+        if resize_file:
             try:
-                if os.name == "nt":
-                    import ctypes
-                    import codecs
-                    from ctypes import wintypes
-                    k32 = ctypes.windll.kernel32
-                    k32.GetConsoleOutputCP.restype = ctypes.c_uint32
-                    console_cp = k32.GetConsoleOutputCP()
-                    # Python codec name for the console's codepage.
-                    out_encoding = "cp%d" % console_cp if console_cp else "gbk"
-                    # Set ENABLE_LVB_GRID_WORLDWIDE on the output handle so
-                    # the codepage width tables treat box-drawing as 1 col.
-                    k32.GetStdHandle.restype = wintypes.HANDLE
-                    k32.GetStdHandle.argtypes = [wintypes.DWORD]
-                    oh = k32.GetStdHandle(-11)
-                    omode = wintypes.DWORD()
-                    if oh and k32.GetConsoleMode(
-                        wintypes.HANDLE(oh), ctypes.byref(omode)
-                    ):
-                        k32.SetConsoleMode.argtypes = [
-                            wintypes.HANDLE, wintypes.DWORD,
-                        ]
-                        k32.SetConsoleMode.restype = wintypes.BOOL
-                        k32.SetConsoleMode(
-                            wintypes.HANDLE(oh),
-                            wintypes.DWORD(omode.value | 0x0010),
-                        )
-                    decoder = codecs.getincrementaldecoder("utf-8")(
-                        errors="replace"
+                content = open(resize_file).read().strip().split()
+                if len(content) == 2:
+                    last_size = (int(content[0]), int(content[1]))
+                    client.api.exec_resize(
+                        exec_id, height=last_size[1], width=last_size[0]
                     )
-                    while True:
-                        chunk = sock.recv(65536)
-                        if not chunk:
-                            text = decoder.decode(b"", final=True)
-                            if text:
-                                data = text.encode(
-                                    out_encoding, errors="replace"
-                                ).replace(b"\n", b"\x1bD")
-                                os.write(sys.stdout.fileno(), data)
-                            break
-                        text = decoder.decode(chunk)
-                        if text:
-                            data = text.encode(
-                                out_encoding, errors="replace"
-                            ).replace(b"\n", b"\x1bD")
-                            os.write(sys.stdout.fileno(), data)
-                else:
-                    while True:
-                        chunk = sock.recv(65536)
-                        if not chunk:
-                            break
-                        os.write(sys.stdout.fileno(), chunk)
+            except Exception:  # noqa: BLE001
+                pass
+
+        def drain() -> None:
+            """Socket -> stdout (raw bytes, no processing)."""
+            try:
+                while True:
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        break
+                    os.write(sys.stdout.fileno(), chunk)
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
         def forward() -> None:
-            """stdin -> socket; on EOF, close the write side so the exec sees it.
-
-            Windows: ENABLE_VIRTUAL_TERMINAL_INPUT (0x0200) directs the ConPTY
-            to pass VT input sequences through as raw bytes - no translation to
-            KEY_EVENT_RECORDs. This fixes two issues with the previous
-            ReadConsoleInputW approach:
-            1. Arrow/special keys: ReadConsoleInputW gives uChar=NUL for
-               VK_UP/VK_DOWN/etc., which were silently dropped (arrow keys
-               did nothing in TUIs). VT passthrough preserves ESC[A etc.
-            2. CR/LF loss: os.read on a cooked/raw-mode console handle loses
-               CR/LF (cooked eats CR, raw drops terminators). VT input mode
-               passes the exact byte stream from xterm.js (incl. \\r for Enter).
-            POSIX: plain os.read (no codepage on pty).
-            """
-            if os.name == "nt":
-                try:
-                    import ctypes
-                    from ctypes import wintypes
-                    import msvcrt
-                    in_handle = msvcrt.get_osfhandle(sys.stdin.fileno())
-                    k32 = ctypes.windll.kernel32
-                    in_mode = wintypes.DWORD()
-                    if k32.GetConsoleMode(in_handle, ctypes.byref(in_mode)):
-                        # Clear PROCESSED/LINE/ECHO input; set VT passthrough.
-                        k32.SetConsoleMode(
-                            in_handle, (in_mode.value & ~0x0007) | 0x0200
-                        )
-                except Exception:  # noqa: BLE001
-                    pass  # not a console - os.read still works on pipes
+            """stdin -> socket; on EOF, close the write side."""
             try:
                 while True:
                     chunk = os.read(sys.stdin.fileno(), 4096)
@@ -578,68 +495,23 @@ class RealDockerExecutor:
                 except OSError:
                     pass
 
-        def terminal_size() -> Optional[tuple]:
-            """(cols, rows) of the local terminal. Windows: the ConPTY size via
-            GetConsoleScreenBufferInfo on the stdout handle (os.get_terminal_size
-            fails on console INPUT handles). POSIX: winsize ioctl."""
-            if os.name == "nt":
-                try:
-                    import ctypes
-                    from ctypes import wintypes
-
-                    kernel32 = ctypes.windll.kernel32
-                    handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
-
-                    class COORD(ctypes.Structure):
-                        _fields_ = [("X", wintypes.SHORT), ("Y", wintypes.SHORT)]
-
-                    class SMALL_RECT(ctypes.Structure):
-                        _fields_ = [
-                            ("Left", wintypes.SHORT),
-                            ("Top", wintypes.SHORT),
-                            ("Right", wintypes.SHORT),
-                            ("Bottom", wintypes.SHORT),
-                        ]
-
-                    class CONSOLE_SCREEN_BUFFER_INFO(ctypes.Structure):
-                        _fields_ = [
-                            ("dwSize", COORD),
-                            ("dwCursorPosition", COORD),
-                            ("wAttributes", wintypes.WORD),
-                            ("srWindow", SMALL_RECT),
-                            ("dwMaximumWindowSize", COORD),
-                        ]
-
-                    info = CONSOLE_SCREEN_BUFFER_INFO()
-                    if kernel32.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)):
-                        cols = info.srWindow.Right - info.srWindow.Left + 1
-                        rows = info.srWindow.Bottom - info.srWindow.Top + 1
-                        if cols > 0 and rows > 0:
-                            return (cols, rows)
-                except Exception:  # noqa: BLE001
-                    return None
-                return None
-            try:
-                size = os.get_terminal_size(sys.stdin.fileno())
-                return (size.columns, size.lines)
-            except (OSError, ValueError):
-                return None
-
         def watch_resize() -> None:
-            """Poll the local terminal size; forward changes to the exec pty."""
-            last: Optional[tuple] = None
+            """Poll the resize file; forward size changes to exec_resize."""
+            if not resize_file:
+                return
             while not stop.is_set():
-                cur = terminal_size()
-                if cur is None:
-                    return  # not a terminal - nothing to resize
-                if cur != last:
-                    last = cur
-                    try:
-                        client.api.exec_resize(exec_id, height=cur[1], width=cur[0])
-                    except docker.errors.APIError as exc:
-                        errors.append(exc)
-                        return
-                stop.wait(0.2)
+                try:
+                    content = open(resize_file).read().strip().split()
+                    if len(content) == 2:
+                        cur = (int(content[0]), int(content[1]))
+                        if cur != last_size:
+                            last_size = cur  # type: ignore[misc]
+                            client.api.exec_resize(
+                                exec_id, height=cur[1], width=cur[0]
+                            )
+                except Exception:  # noqa: BLE001
+                    pass
+                stop.wait(0.1)
 
         t_drain = threading.Thread(target=drain, daemon=True)
         t_fwd = threading.Thread(target=forward, daemon=True)
