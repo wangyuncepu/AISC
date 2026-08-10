@@ -6,6 +6,8 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "core:window:allow-destroy"
+    "core:window:allow-destroy",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text"
   ]
 }

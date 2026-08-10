@@ -36,6 +36,7 @@ pub fn run(cli_arg: Option<String>) {
     let cli_arg_state = CliArg(std::sync::Arc::new(std::sync::Mutex::new(cli_arg)));
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(cli_arg_state)
         .manage(SessionRegistry::default())
         .manage(StartOp::default())

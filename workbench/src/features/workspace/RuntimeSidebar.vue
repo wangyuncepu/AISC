@@ -16,6 +16,7 @@
  */
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useRuntimeStore } from "../../stores/runtime";
 import { i18n as i18nLocale } from "../../i18n";
 import type { RuntimeState } from "../../types";
@@ -129,12 +130,12 @@ function short(id: string): string {
 }
 
 // Click-to-copy for exact IDs (hover tooltips can't be selected).
+// A-G11-3: goes through the same Tauri clipboard plugin as terminal copy.
 const copiedKey = ref("");
 let copiedTimer: number | null = null;
 function copy(key: string, text: string): void {
   if (!text) return;
-  void navigator.clipboard
-    .writeText(text)
+  void writeText(text)
     .then(() => {
       copiedKey.value = key;
       if (copiedTimer !== null) window.clearTimeout(copiedTimer);
