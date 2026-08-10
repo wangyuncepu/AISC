@@ -17,11 +17,14 @@ import type {
   LaunchAgent,
   LaunchConfig,
   Layout,
+  PaneRuntime,
   PreflightReport,
+  PtyEvent,
   ProviderStatus,
   RuntimeRef,
   RuntimeSnapshot,
   RuntimeState,
+  SplitAxis,
   Tab,
   TabExit,
   TabRecord,
@@ -34,11 +37,27 @@ import * as ipc from "../lib/ipc";
 import { i18n } from "../i18n";
 import {
   AGENT_TITLE,
+  internalToPersisted,
+  newPaneTab,
   normalizePath,
   resolveActiveTabId,
   sameWorkspace,
   tabsFromRecords,
 } from "./tabLayout";
+import {
+  DEFAULT_RATIO,
+  MAX_LEAVES as MAX_PANES,
+  findLeaf,
+  firstLeaf,
+  leafCount,
+  listLeaves,
+  navigateLeaf,
+  removeLeaf,
+  setRatioBySplitKey,
+  singleLeaf,
+  splitLeaf,
+} from "./paneTree";
+import type { NavDir } from "./paneTree";
 
 /** S2.1.a/b startup state machine (02-startup-flow.md §三). S2.2.b adds `conflict`. */
 export type WorkbenchStatus =
@@ -152,6 +171,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const buildLog = ref("");
   const buildTag = ref("");
   const buildError = ref<WorkbenchError | null>(null);
+  /** G-17: per-pane PTY output buffer (base64 chunks). The store owns the
+   * session channel; Terminals replay + stream from here, so remounts never
+   * drop output or re-open the session. */
+  const paneStreams = ref<Record<string, string[]>>({});
   const buildStartedAt = ref<number | null>(null);
   const buildFinishedAt = ref<number | null>(null);
   const buildDurationMs = ref<number | null>(null);
@@ -589,6 +612,17 @@ export const useRuntimeStore = defineStore("runtime", () => {
       agent: t.agent,
       title: t.title,
       position: i,
+      // G-17: persist the split tree; `agent` stays as the flat fallback
+      // (03 §6.3 - the v2 writer keeps it in sync via syncProjection).
+      ...(t.tree
+        ? {
+            split_layout: {
+              version: 1,
+              active_pane_id: t.activePaneId,
+              root: internalToPersisted(t.tree),
+            },
+          }
+        : {}),
     }));
     const activeAgent =
       tabs.value.find((t) => t.tabId === activeTabId.value)?.agent ?? tabs.value[0]?.agent ?? "bash";
@@ -626,12 +660,34 @@ export const useRuntimeStore = defineStore("runtime", () => {
     }, 300);
   }
 
+  /** Flush a pending debounced save immediately (used on quit - a split or
+   * pane-close inside the 300ms window must survive "立即关窗口 → 恢复布局",
+   * G-17 feedback 2026-08-10). Best-effort: conflict retries stay fire-and-forget. */
+  function flushSave(): Promise<void> {
+    if (saveTimer !== null) {
+      window.clearTimeout(saveTimer);
+      saveTimer = null;
+      return doSave(3);
+    }
+    return Promise.resolve();
+  }
+
   async function doSave(retries: number) {
     if (!workspace.value.trim()) return;
     const patch = buildPatch();
     try {
       const newRev = await ipc.saveHistory(historyRevision.value, patch);
       historyRevision.value = newRev;
+      // Keep the in-memory history in sync with disk: buildPatch's G-07 fallback
+      // (empty tabs after a runtime stop) preserves the workspace's LAST layout,
+      // and that must be the freshly-saved one - not the startup snapshot, or
+      // 恢复布局 restores the wrong tabs (feedback 2026-08-10).
+      try {
+        const fresh = await ipc.loadHistory();
+        history.value = fresh;
+      } catch {
+        /* best-effort: memory stays on the last known snapshot */
+      }
     } catch (e) {
       const err = e as WorkbenchError;
       if (err?.code === "WB_ERR_HISTORY_CONFLICT" && retries > 0) {
@@ -731,8 +787,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   async function confirmExit(): Promise<boolean> {
-    const live = tabs.value.filter(
-      (t) => t.sessionState === "running" || t.sessionState === "starting"
+    // G-17: count live panes across all tabs (a split tab may have several).
+    const live = tabs.value.flatMap((t) => Object.values(t.panes)).filter(
+      (p) => p.sessionState === "running" || p.sessionState === "starting"
     );
     if (live.length === 0) return true;
     const ok = await confirm(
@@ -749,7 +806,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
    * reattaching a PTY - 03 §六). Fresh start passes the fixed 4 records and
    * opens only the requested agents; resume (S2.4.b) passes the history
    * records (duplicates preserved, A-INFRA-1) and opens all. */
-  function initTabs(
+  async function initTabs(
     records: TabRecord[],
     opts: {
       activeSavedId?: string | null;
@@ -765,23 +822,36 @@ export const useRuntimeStore = defineStore("runtime", () => {
     };
     const { tabs: created, bySavedId } = tabsFromRecords(records);
     tabs.value = created;
+    // G-17: open EVERY pane leaf (a restored split tab has several), each
+    // through the same provider gate as + menu tabs - unconfigured claude/
+    // codex restore as guide without a session (A-G08-3). `openAgents`
+    // filters the pane types to open (fresh start opens only the requested).
+    const gates: Promise<void>[] = [];
     for (const tab of created) {
-      if (!opts.openAgents || opts.openAgents.includes(tab.agent)) {
-        // G-12 (A-G08-3): restored claude/codex tabs go through the same
-        // provider gate as + menu tabs - unconfigured ones restore as guide
-        // without a session (observed 2026-08-10: restore bypassed the gate
-        // and dropped an unconfigured codex straight into its TUI login).
-        if (tab.agent === "claude" || tab.agent === "codex") {
-          void maybeOpenCreated(tab.tabId, tab.agent);
+      for (const leaf of listLeaves(tab.tree)) {
+        if (opts.openAgents && !opts.openAgents.includes(leaf.sessionType)) continue;
+        // bash/cc-switch open synchronously ("starting"); claude/codex await a
+        // provider query. Wait for the latter so a restored claude/codex pane
+        // resolves to guide/session BEFORE "ready" - never a dormant flash
+        // (G-17 feedback 2026-08-10). Bounded so a hung query can't block start.
+        if (leaf.sessionType === "claude" || leaf.sessionType === "codex") {
+          gates.push(maybeOpenPaneCreated(tab, leaf.paneId, leaf.sessionType));
         } else {
-          void openTab(tab.tabId);
+          void maybeOpenPaneCreated(tab, leaf.paneId, leaf.sessionType);
         }
       }
+      syncProjection(tab);
     }
     activeTabId.value = resolveActiveTabId(created, bySavedId, {
       activeSavedId: opts.activeSavedId,
       activeAgent: opts.activeAgent,
     });
+    if (gates.length > 0) {
+      await Promise.race([
+        Promise.all(gates),
+        new Promise((resolve) => setTimeout(resolve, 1500)),
+      ]);
+    }
     status.value = "ready";
     scheduleSave();
   }
@@ -790,17 +860,237 @@ export const useRuntimeStore = defineStore("runtime", () => {
     return tabs.value.find((t) => t.tabId === tabId);
   }
 
-  /** Open (or reopen) a tab's session: assigns a fresh session_id and enters
-   * `starting`. The mounted Terminal watches the session_id and calls
-   * `open_session`; it reports back via onTabOpenOk/onTabOpenFail. */
+  // --- G-17 (Step 16): pane-aware session ops ---
+
+  /** The active pane's live runtime (created on demand). */
+  function activePane(tab: Tab): PaneRuntime {
+    let p = tab.panes[tab.activePaneId];
+    if (!p) {
+      p = { sessionId: null, sessionState: "idle", exit: null };
+      tab.panes[tab.activePaneId] = p;
+    }
+    return p;
+  }
+
+  /** Mirror the active pane onto the tab-level projection (sessionId/state/exit
+   * + agent from the active leaf), so TabBar/sidebar/title/Terminal keep working
+   * unchanged. Single-pane tabs are exact; split tabs show the active pane. */
+  function syncProjection(tab: Tab) {
+    const leaf = findLeaf(tab.tree, tab.activePaneId) ?? firstLeaf(tab.tree);
+    if (leaf) {
+      tab.agent = leaf.sessionType;
+      // Tab-bar label follows the active leaf too: closing the bash pane off a
+      // bash|claude split leaves a claude tab labelled Claude, not the stale
+      // Bash set at creation time (03 §6.3 keeps agent + title in sync).
+      tab.title = AGENT_TITLE[leaf.sessionType] ?? tab.title;
+    }
+    const p = tab.panes[tab.activePaneId];
+    if (p) {
+      tab.sessionId = p.sessionId;
+      tab.sessionState = p.sessionState;
+      tab.exit = p.exit;
+    }
+  }
+
+  /** Set the active pane's session state and re-sync the projection. */
+  function setActivePaneState(tab: Tab, patch: Partial<PaneRuntime>): void {
+    Object.assign(activePane(tab), patch);
+    syncProjection(tab);
+  }
+
+  /** The tab that owns a pane (pane id -> tab). */
+  function tabForPane(paneId: string): Tab | undefined {
+    return tabs.value.find((t) => t.panes[paneId]);
+  }
+
+  /** Total leaf count across all tabs (A-G17-6: <=8 per Runtime/Workbench). */
+  function totalLeaves(): number {
+    return tabs.value.reduce((n, t) => n + leafCount(t.tree), 0);
+  }
+
+  /** Total resource-holding panes (starting/running/closing; A-G17-6). */
+  function totalResources(): number {
+    return tabs.value.reduce(
+      (n, t) =>
+        n +
+        Object.values(t.panes).filter((p) =>
+          ["starting", "running", "closing"].includes(p.sessionState)
+        ).length,
+      0
+    );
+  }
+
+  // --- G-17 (Step 16): split / close-pane / ratio ---
+
+  /** Open a pane's session by id (fresh session_id, `starting`). The STORE owns
+   * the session channel + output buffer so a Terminal remount (e.g. a split
+   * restructuring the tree) never re-opens or drops the session (A-G17-2:
+   * open failure keeps a failed pane). */
+  async function openPane(tab: Tab, paneId: string) {
+    const p = tab.panes[paneId];
+    if (!p || p.sessionState === "starting" || p.sessionState === "running") return;
+    const agent = findLeaf(tab.tree, paneId)?.sessionType;
+    if (!agent || !runtimeId.value) return;
+    const sid = uuid();
+    p.sessionId = sid;
+    p.sessionState = "starting";
+    p.exit = null;
+    paneStreams.value[paneId] = []; // reset the per-pane output buffer
+    syncProjection(tab);
+    const ch = new Channel<PtyEvent>();
+    ch.onmessage = (ev) => {
+      if (ev.type === "output") {
+        // First output proves the PTY is live: promote a `starting` pane to
+        // running. The invoke response can lag the channel delivery, leaving
+        // the tab bar on 启动中 while bash is already showing output
+        // (G-17 feedback 2026-08-10).
+        onTabOpenOk(paneId);
+        paneStreams.value[paneId]?.push(ev.bytes);
+      } else if (ev.type === "exit") {
+        if (!p.exit) {
+          p.exit = { reason: ev.reason, exitCode: ev.exitCode };
+          p.sessionState = ev.reason === "transport_error" ? "disconnected" : "exited";
+          syncProjection(tab);
+          void ipc.ackSessionExit(sid).catch(() => null);
+        }
+      } else if (ev.type === "error") {
+        if (!TERMINAL_STATES.includes(p.sessionState)) {
+          p.sessionState = "failed";
+          syncProjection(tab);
+        }
+      }
+    };
+    try {
+      await ipc.openSession(runtimeId.value, sid, agent, workspace.value.trim(), ch);
+      if (p.sessionState === "starting") {
+        p.sessionState = "running";
+        syncProjection(tab);
+      }
+    } catch {
+      if (p.sessionState === "starting") {
+        p.sessionState = "failed";
+        syncProjection(tab);
+      }
+    }
+  }
+
+  /** Split the tab's active pane, activating + opening the new pane. Refused
+   * (tree unchanged) when the global leaf cap or the tree depth cap is hit
+   * (A-G17-2/6); `sizeOk` is the pane's measured minimum size check (240x160,
+   * evaluated by the UI before calling). */
+  function splitTabPane(
+    tabId: string,
+    axis: SplitAxis,
+    sessionType: LaunchAgent,
+    sizeOk = true,
+    targetPaneId?: string
+  ): string | null {
+    const tab = findTab(tabId);
+    if (!tab || !sizeOk) return null;
+    // A-G17-6: leaf cap + resource cap (the new pane will hold a session).
+    if (totalLeaves() >= MAX_PANES || totalResources() >= MAX_PANES) return null;
+    const target = targetPaneId ?? tab.activePaneId;
+    const newPaneId = uuid();
+    const tree = splitLeaf(tab.tree, target, newPaneId, axis, sessionType, DEFAULT_RATIO);
+    if (!tree) return null;
+    tab.tree = tree;
+    tab.panes[newPaneId] = { sessionId: null, sessionState: "idle", exit: null };
+    tab.activePaneId = newPaneId;
+    syncProjection(tab);
+    scheduleSave();
+    void maybeOpenPaneCreated(tab, newPaneId, sessionType);
+    return newPaneId;
+  }
+
+  /** G-12 gate for a freshly created/split pane (claude/codex may route to
+   * guide before any session is opened). */
+  async function maybeOpenPaneCreated(tab: Tab, paneId: string, agent: LaunchAgent) {
+    if (agent === "claude" || agent === "codex") {
+      await loadProviderStatus(agent);
+      const st = providerStatuses.value[agent];
+      const p = tab.panes[paneId];
+      if (!p || p.sessionState === "starting" || p.sessionState === "running") return;
+      if (!st || ["not_configured", "login_required", "unknown"].includes(st.auth_status)) {
+        p.sessionState = "guide";
+        p.sessionId = null;
+        syncProjection(tab);
+        return;
+      }
+    }
+    void openPane(tab, paneId);
+  }
+
+  /** Set the tab's active pane and sync the projection (A-G17-5). */
+  function setActivePane(tabId: string, paneId: string) {
+    const tab = findTab(tabId);
+    if (!tab || !tab.panes[paneId]) return;
+    tab.activePaneId = paneId;
+    syncProjection(tab);
+    scheduleSave();
+  }
+
+  /** G-17: move keyboard focus to the spatial neighbor (Ctrl+arrows/hjkl).
+   * Returns whether focus moved (no move = the caller lets the key fall through
+   * to the terminal, e.g. Ctrl+h stays a backspace at a pane edge). */
+  function navigatePane(tabId: string, dir: NavDir): boolean {
+    const tab = findTab(tabId);
+    if (!tab) return false;
+    const target = navigateLeaf(tab.tree, tab.activePaneId, dir);
+    if (!target) return false;
+    setActivePane(tabId, target);
+    return true;
+  }
+
+  /** Set a split's ratio by its key (divider drag/keyboard, A-G17-4). */
+  function setSplitRatio(tabId: string, splitKeyId: string, ratio: number) {
+    const tab = findTab(tabId);
+    if (!tab) return;
+    tab.tree = setRatioBySplitKey(tab.tree, splitKeyId, ratio);
+    scheduleSave();
+  }
+
+  /** Close a pane: terminate its session, remove the leaf and compress the
+   * parent split (A-G17-5). Closing the LAST pane keeps the tab with a single
+   * dormant leaf of the same type (03 §6.1) instead of deleting the tab. */
+  async function closePane(tabId: string, paneId: string) {
+    const tab = findTab(tabId);
+    if (!tab || !tab.panes[paneId]) return;
+    const p = tab.panes[paneId];
+    if (
+      p.sessionId &&
+      !TERMINAL_STATES.includes(p.sessionState) &&
+      p.sessionState !== "closing"
+    ) {
+      p.sessionState = "closing";
+      void ipc.closeSession(p.sessionId).catch(() => null);
+    }
+    const removed = removeLeaf(tab.tree, paneId);
+    delete tab.panes[paneId];
+    if (removed === null) {
+      // Last pane: keep the tab as a single dormant leaf (same session type).
+      const type = (findLeaf(tab.tree, paneId) ?? firstLeaf(tab.tree))?.sessionType ?? tab.agent;
+      const newPaneId = uuid();
+      tab.tree = singleLeaf(newPaneId, type);
+      tab.panes[newPaneId] = { sessionId: null, sessionState: "idle", exit: null };
+      tab.activePaneId = newPaneId;
+    } else {
+      tab.tree = removed;
+      // Active pane may have been removed; fall back to the first leaf.
+      if (!tab.panes[tab.activePaneId]) {
+        tab.activePaneId = firstLeaf(tab.tree)?.paneId ?? "";
+      }
+    }
+    syncProjection(tab);
+    scheduleSave();
+  }
+
+  /** Open (or reopen) a tab's session: binds the tab's ACTIVE pane via the
+   * store-owned session channel (openPane). G-17. */
   function openTab(tabId: string) {
     const tab = findTab(tabId);
     if (!tab) return;
-    if (tab.sessionState === "starting" || tab.sessionState === "running") return;
-    tab.sessionId = uuid();
-    tab.sessionState = "starting";
-    tab.exit = null;
     activeTabId.value = tabId;
+    void openPane(tab, tab.activePaneId);
     scheduleSave();
   }
 
@@ -809,7 +1099,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     const tab = findTab(tabId);
     if (!tab) return;
     activeTabId.value = tabId;
-    if (tab.sessionState === "idle") openTab(tabId);
+    if (activePane(tab).sessionState === "idle") openTab(tabId);
     scheduleSave();
   }
 
@@ -822,17 +1112,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
    * per-Runtime leaf cap. The tab opens immediately (Step 5c routes
    * unconfigured claude/codex to the guide state instead). */
   function createTab(agent: LaunchAgent): string | null {
-    if (tabs.value.length >= MAX_TABS) return null;
+    // G-17 (A-G17-6): the global leaf cap governs (a split tab holds >1 leaf).
+    if (totalLeaves() >= MAX_PANES) return null;
     const tabId = uuid();
-    tabs.value.push({
-      tabId,
-      agent,
-      title: AGENT_TITLE[agent],
-      sessionId: null,
-      sessionState: "idle",
-      exit: null,
-      savedTabId: null,
-    });
+    tabs.value.push(newPaneTab(tabId, agent, AGENT_TITLE[agent], null));
     activeTabId.value = tabId;
     void maybeOpenCreated(tabId, agent);
     scheduleSave();
@@ -851,9 +1134,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
       await loadProviderStatus(agent);
       const st = providerStatuses.value[agent];
       const tab = findTab(tabId);
-      if (!tab || tab.sessionState !== "idle") return;
+      if (!tab || activePane(tab).sessionState !== "idle") return;
       if (!st || ["not_configured", "login_required", "unknown"].includes(st.auth_status)) {
-        tab.sessionState = "guide";
+        setActivePaneState(tab, { sessionState: "guide" });
         return;
       }
     }
@@ -872,17 +1155,26 @@ export const useRuntimeStore = defineStore("runtime", () => {
    * best-effort (the PTY Exit event finalizes; Rust reaps); guide/idle tabs
    * have nothing to terminate. Active-tab focus falls to the right neighbor,
    * then the left, then the empty state (A-G08-6). */
+  /** Close every live session in a tab's tree (tab × button; A-G17-6 full-path
+   * recycle). Best-effort: the PTY Exit event finalizes; Rust reaps. */
+  function closeTabSessions(tab: Tab) {
+    for (const p of Object.values(tab.panes)) {
+      if (
+        p.sessionId &&
+        !TERMINAL_STATES.includes(p.sessionState) &&
+        p.sessionState !== "closing"
+      ) {
+        p.sessionState = "closing";
+        void ipc.closeSession(p.sessionId).catch(() => null);
+      }
+    }
+    syncProjection(tab);
+  }
+
   async function removeTab(tabId: string) {
     const tab = findTab(tabId);
     if (!tab) return;
-    if (
-      tab.sessionId &&
-      !TERMINAL_STATES.includes(tab.sessionState) &&
-      tab.sessionState !== "closing"
-    ) {
-      tab.sessionState = "closing";
-      void ipc.closeSession(tab.sessionId).catch(() => null);
-    }
+    closeTabSessions(tab);
     const idx = tabs.value.indexOf(tab);
     tabs.value.splice(idx, 1);
     if (activeTabId.value === tabId) {
@@ -891,47 +1183,61 @@ export const useRuntimeStore = defineStore("runtime", () => {
     scheduleSave();
   }
 
-  /** Close a running/starting tab: terminate the session. The PTY Exit event
-   * (single authoritative signal, 03 §五.2) finalizes the state via
+  /** Close a running/starting tab: terminate the active pane's session. The PTY
+   * Exit event (single authoritative signal, 03 §五.2) finalizes the state via
    * onTabSessionExit; close_session guarantees the child is reaped. */
   async function closeTab(tabId: string) {
     const tab = findTab(tabId);
-    if (!tab || !tab.sessionId) return;
-    if (TERMINAL_STATES.includes(tab.sessionState) || tab.sessionState === "closing") return;
-    tab.sessionState = "closing";
+    if (!tab) return;
+    const p = activePane(tab);
+    if (!p.sessionId) return;
+    if (TERMINAL_STATES.includes(p.sessionState) || p.sessionState === "closing") return;
+    p.sessionState = "closing";
+    syncProjection(tab);
     try {
-      await ipc.closeSession(tab.sessionId);
+      await ipc.closeSession(p.sessionId);
     } catch {
       /* best-effort; Exit event still finalizes if the child is reaped */
     }
   }
 
-  function onTabOpenOk(tabId: string) {
-    const tab = findTab(tabId);
+  /** Pane-aware session callbacks: for a single-pane tab paneId === tabId, so
+   * callers may pass either. */
+  function onTabOpenOk(paneId: string) {
+    const tab = tabForPane(paneId);
     if (!tab) return;
-    if (tab.sessionState === "starting") tab.sessionState = "running";
+    const p = tab.panes[paneId];
+    if (p && p.sessionState === "starting") {
+      p.sessionState = "running";
+      syncProjection(tab);
+    }
   }
 
-  function onTabOpenFail(tabId: string) {
-    const tab = findTab(tabId);
+  function onTabOpenFail(paneId: string) {
+    const tab = tabForPane(paneId);
     if (!tab) return;
-    if (TERMINAL_STATES.includes(tab.sessionState)) return; // already finalized
-    tab.sessionState = "failed";
+    const p = tab.panes[paneId];
+    if (!p || TERMINAL_STATES.includes(p.sessionState)) return; // already finalized
+    p.sessionState = "failed";
+    syncProjection(tab);
     // exit stays null; the Terminal writes the open error inline.
   }
 
   /** PTY Exit event (process_exit / user_close / transport_error). Applied
-   * once per tab (idempotent) - duplicate Exit/terminate results merge. After
+   * once per pane (idempotent) - duplicate Exit/terminate results merge. After
    * the pane state is committed, ack the backend so the terminal registry
    * entry can be evicted (03 §3.3.2; idempotent on both sides). */
-  function onTabSessionExit(tabId: string, reason: string, exitCode: number | null) {
-    const tab = findTab(tabId);
-    if (!tab || tab.exit) return; // first writer wins (03 §五.2)
+  function onTabSessionExit(paneId: string, reason: string, exitCode: number | null) {
+    const tab = tabForPane(paneId);
+    if (!tab) return;
+    const p = tab.panes[paneId];
+    if (!p || p.exit) return; // first writer wins (03 §五.2)
     const exit: TabExit = { reason, exitCode };
-    tab.exit = exit;
-    tab.sessionState = reason === "transport_error" ? "disconnected" : "exited";
-    if (tab.sessionId) {
-      void ipc.ackSessionExit(tab.sessionId).catch(() => null); // TTL sweeps if lost
+    p.exit = exit;
+    p.sessionState = reason === "transport_error" ? "disconnected" : "exited";
+    syncProjection(tab);
+    if (p.sessionId) {
+      void ipc.ackSessionExit(p.sessionId).catch(() => null); // TTL sweeps if lost
     }
   }
 
@@ -997,7 +1303,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       }
       stopTimer();
       runtimeReady.value = true;
-      initTabs(records, opts);
+      await initTabs(records, opts);
     } catch (e) {
       stopTimer();
       const err = e as WorkbenchError;
@@ -1079,6 +1385,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
     );
     if (!ok) return;
     status.value = "stopping";
+    // G-07 (2026-08-10): persist the CURRENT tab layout before it is cleared
+    // below - if the 300ms debounce had not fired yet, clearing tabs would lose
+    // this session's layout and 恢复布局 would fall back to a previous one.
+    await flushSave();
     // Staged concurrent stop (03 §4.2): start every session close in
     // parallel, but do not wait for all of them - wait at most 400ms for the
     // terminate CLI spawns, then stop the runtime (container-side sessions
@@ -1184,6 +1494,12 @@ export const useRuntimeStore = defineStore("runtime", () => {
     stopRuntime,
     initTabs,
     openTab,
+    splitTabPane,
+    closePane,
+    setActivePane,
+    navigatePane,
+    setSplitRatio,
+    paneStreams,
     activateTab,
     closeTab,
     reopenTab,
@@ -1199,6 +1515,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     userRefreshInFlight,
     loadProviderStatus,
     clearProviderStatuses,
+    flushSave,
     loadHistory,
     selectRecentWorkspace,
     loadConflicts,

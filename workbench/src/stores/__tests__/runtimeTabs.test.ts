@@ -7,14 +7,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useRuntimeStore } from "../runtime";
+import { normalizePath } from "../tabLayout";
+import type { HistoryPatch, WorkbenchHistory } from "../../types";
 
 const mockIpc = vi.hoisted(() => ({
   closeSession: vi.fn().mockResolvedValue({ reason: "user_close", exitCode: null }),
   getProviderStatus: vi.fn().mockResolvedValue({}),
-  loadHistory: vi.fn().mockResolvedValue({ schema_version: 1, revision: 0, workspaces: [] }),
+  loadHistory: vi.fn().mockResolvedValue({ schema_version: 2, revision: 0, workspaces: [] }),
   saveHistory: vi.fn().mockResolvedValue(1),
   negotiateCapabilities: vi.fn(),
   listRuntimes: vi.fn().mockResolvedValue({ runtimes: [] }),
+  openSession: vi.fn().mockResolvedValue({}),
+  writeSession: vi.fn().mockResolvedValue(undefined),
+  ackSessionExit: vi.fn().mockResolvedValue("acknowledged"),
+  stopRuntime: vi.fn().mockResolvedValue({ state: "stopped" }),
+  runtimeInspect: vi.fn().mockResolvedValue({ state: "stopped" }),
 }));
 
 vi.mock("../../lib/ipc", () => mockIpc);
@@ -48,7 +55,7 @@ beforeEach(() => {
 describe("createTab (A-G08-1/8)", () => {
   it("adds an activated tab and opens the session immediately (bash)", async () => {
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     const id = s.createTab("bash");
     expect(id).not.toBeNull();
     await tick();
@@ -60,7 +67,7 @@ describe("createTab (A-G08-1/8)", () => {
 
   it("allows duplicate session types with distinct ids", async () => {
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     const a = s.createTab("bash");
     const b = s.createTab("bash");
     expect(a).not.toBe(b);
@@ -69,7 +76,7 @@ describe("createTab (A-G08-1/8)", () => {
 
   it("refuses the 9th tab (per-Runtime leaf cap)", () => {
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     for (let i = 0; i < 8; i++) expect(s.createTab("bash")).not.toBeNull();
     expect(s.createTab("bash")).toBeNull();
     expect(s.tabs).toHaveLength(8);
@@ -85,7 +92,7 @@ describe("provider gate (A-G08-2)", () => {
       observed_at: "x",
     });
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     s.runtimeId = "rid";
     s.workspace = "/ws";
     const id = s.createTab("claude");
@@ -105,7 +112,7 @@ describe("provider gate (A-G08-2)", () => {
       observed_at: "x",
     });
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     s.runtimeId = "rid";
     s.workspace = "/ws";
     s.initTabs(
@@ -119,7 +126,7 @@ describe("provider gate (A-G08-2)", () => {
     await tick();
     const bash = s.tabs.find((t) => t.agent === "bash");
     const codex = s.tabs.find((t) => t.agent === "codex");
-    expect(bash?.sessionState).toBe("starting"); // bash opens directly
+    expect(["starting", "running"]).toContain(bash?.sessionState); // bash opens directly
     expect(bash?.sessionId).not.toBeNull();
     expect(codex?.sessionState).toBe("guide"); // codex gated, no session
     expect(codex?.sessionId).toBeNull();
@@ -133,14 +140,14 @@ describe("provider gate (A-G08-2)", () => {
       observed_at: "x",
     });
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     s.runtimeId = "rid";
     s.workspace = "/ws";
     const id = s.createTab("codex");
     await tick();
     await tick();
     const tab = s.tabs.find((t) => t.tabId === id);
-    expect(tab?.sessionState).toBe("starting");
+    expect(["starting", "running"]).toContain(tab?.sessionState);
     expect(tab?.sessionId).not.toBeNull();
   });
 });
@@ -148,7 +155,7 @@ describe("provider gate (A-G08-2)", () => {
 describe("removeTab (A-G08-6)", () => {
   async function threeTabs() {
     const s = useRuntimeStore();
-    s.runtimeState = "running";
+    s.runtimeState = "running"; s.runtimeId = "rid";
     const a = s.createTab("bash")!;
     const b = s.createTab("bash")!;
     const c = s.createTab("bash")!;
@@ -184,11 +191,118 @@ describe("removeTab (A-G08-6)", () => {
   it("closes a live session best-effort and removes immediately", async () => {
     const { s, a, b } = await threeTabs();
     const running = s.tabs.find((t) => t.tabId === a)!;
-    expect(running.sessionState).toBe("starting");
+    expect(["starting", "running"]).toContain(running.sessionState);
     await s.removeTab(a);
     expect(mockIpc.closeSession).toHaveBeenCalledWith(running.sessionId);
     expect(s.tabs.find((t) => t.tabId === a)).toBeUndefined();
     expect(s.tabs).toHaveLength(2);
     void b;
+  });
+});
+
+describe("history memory stays in sync with disk (G-07 last-layout fallback)", () => {
+  it("doSave reloads history.value, so a runtime stop preserves the multi-tab layout", async () => {
+    // Disk starts with a stale single-codex layout (e.g. from a prior session).
+    const wsPath = normalizePath("/ws");
+    let disk: WorkbenchHistory = {
+      schema_version: 2,
+      revision: 0,
+      workspaces: [
+        {
+          path: wsPath,
+          last_used_at: "t",
+          pinned: false,
+          last_agent: "codex",
+          runtime: null,
+          layout: {
+            active_tab_id: null,
+            tabs: [{ tab_id: "old", agent: "codex", title: "Codex", position: 0 }],
+          },
+        },
+      ],
+    };
+    mockIpc.loadHistory.mockImplementation(async () => disk);
+    mockIpc.saveHistory.mockImplementation(async (_rev: number, patch: HistoryPatch) => {
+      const patched = patch.workspaces[0];
+      const others = disk.workspaces.filter((w) => w.path !== patched.path);
+      disk = { schema_version: 2, revision: disk.revision + 1, workspaces: [patched, ...others] };
+      return disk.revision;
+    });
+
+    const s = useRuntimeStore();
+    s.runtimeState = "running";
+    s.runtimeId = "rid";
+    s.workspace = "/ws";
+    await s.loadHistory(); // memory seeded from disk = single [codex]
+
+    // Open two tabs; the debounced save must carry BOTH and doSave must reload
+    // history.value so the in-memory copy mirrors the freshly-saved disk state.
+    await s.initTabs(
+      [
+        { tab_id: "a", agent: "bash", title: "Bash", position: 0 },
+        { tab_id: "b", agent: "codex", title: "Codex", position: 1 },
+      ],
+      { openAgents: ["bash", "codex"] }
+    );
+    await tick();
+    await tick();
+    await s.flushSave();
+    await tick();
+
+    const rec = s.history?.workspaces.find((w) => w.path === wsPath);
+    expect(rec?.layout?.tabs).toHaveLength(2); // memory synced, NOT the stale [codex]
+    expect(disk.workspaces[0].layout?.tabs).toHaveLength(2); // disk too
+  });
+
+  it("stopRuntime flushes the CURRENT layout before clearing tabs", async () => {
+    // Disk starts with a stale single-codex layout; the current session opens
+    // two tabs and stops immediately (before the 300ms debounce fires).
+    const wsPath = normalizePath("/ws");
+    let disk: WorkbenchHistory = {
+      schema_version: 2,
+      revision: 0,
+      workspaces: [
+        {
+          path: wsPath,
+          last_used_at: "t",
+          pinned: false,
+          last_agent: "codex",
+          runtime: null,
+          layout: {
+            active_tab_id: null,
+            tabs: [{ tab_id: "old", agent: "codex", title: "Codex", position: 0 }],
+          },
+        },
+      ],
+    };
+    mockIpc.loadHistory.mockImplementation(async () => disk);
+    mockIpc.saveHistory.mockImplementation(async (_rev: number, patch: HistoryPatch) => {
+      const patched = patch.workspaces[0];
+      const others = disk.workspaces.filter((w) => w.path !== patched.path);
+      disk = { schema_version: 2, revision: disk.revision + 1, workspaces: [patched, ...others] };
+      return disk.revision;
+    });
+
+    const s = useRuntimeStore();
+    s.runtimeState = "running";
+    s.runtimeId = "rid";
+    s.workspace = "/ws";
+    await s.loadHistory();
+    await s.initTabs(
+      [
+        { tab_id: "a", agent: "bash", title: "Bash", position: 0 },
+        { tab_id: "b", agent: "codex", title: "Codex", position: 1 },
+      ],
+      { openAgents: ["bash", "codex"] }
+    );
+    await tick();
+    await tick();
+
+    await s.stopRuntime(); // no wait for the debounce - flushSave must persist the 2 tabs
+
+    expect(s.tabs).toHaveLength(0); // runtime stopped, tabs cleared
+    const rec = s.history?.workspaces.find((w) => w.path === wsPath);
+    expect(rec?.layout?.tabs).toHaveLength(2); // current layout survived the stop
+    expect(disk.workspaces[0].layout?.tabs).toHaveLength(2); // disk too
   });
 });

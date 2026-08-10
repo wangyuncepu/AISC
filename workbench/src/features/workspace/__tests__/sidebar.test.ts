@@ -15,8 +15,25 @@ import { createPinia, setActivePinia } from "pinia";
 import { mount } from "@vue/test-utils";
 import { i18n } from "../../../i18n";
 import { useRuntimeStore } from "../../../stores/runtime";
+import { AGENT_TITLE, newPaneTab } from "../../../stores/tabLayout";
 import RuntimeSidebar from "../RuntimeSidebar.vue";
-import type { RuntimeSnapshot } from "../../../types";
+import type { LaunchAgent, RuntimeSnapshot, Tab, TabSessionState } from "../../../types";
+
+/** Build a tab with a single running/guide pane (G-17: tabs carry a PaneTree). */
+function makeTab(
+  agent: LaunchAgent,
+  state: TabSessionState,
+  id: string,
+  sessionId: string | null = null
+): Tab {
+  const t = newPaneTab(id, agent, AGENT_TITLE[agent], null);
+  const p = t.panes[t.activePaneId]!;
+  p.sessionId = sessionId;
+  p.sessionState = state;
+  t.sessionId = sessionId;
+  t.sessionState = state;
+  return t;
+}
 
 vi.mock("../../../lib/ipc", () => ({
   closeSession: vi.fn().mockResolvedValue({ reason: "user_close", exitCode: null }),
@@ -66,7 +83,7 @@ function setupStore() {
   s.workspace = "/ws";
   s.runtimeId = SNAP.runtime_id;
   s.tabs = [
-    { tabId: "t1", agent: "bash", title: "Bash", sessionId: "s1", sessionState: "running", exit: null, savedTabId: null },
+    makeTab("bash", "running", "t1", "s1"),
   ];
   s.activeTabId = "t1";
   s.capability = { provider_status: true } as never;
@@ -145,8 +162,8 @@ describe("A-G05-3 developer details completeness", () => {
   it("covers the documented field list and copyable IDs", async () => {
     const s = setupStore();
     s.tabs = [
-      { tabId: "t1", agent: "bash", title: "Bash", sessionId: "s1", sessionState: "running", exit: null, savedTabId: null },
-      { tabId: "t2", agent: "claude", title: "Claude", sessionId: "s2", sessionState: "running", exit: null, savedTabId: null },
+      makeTab("bash", "running", "t1", "s1"),
+      makeTab("claude", "running", "t2", "s2"),
     ];
     s.activeTabId = "t2"; // provider fields appear only for claude/codex
     const wrapper = mount(RuntimeSidebar, { global: { plugins: [i18n] } });
@@ -185,7 +202,7 @@ describe("A-G12 auth labels and actions", () => {
   it("shows the cc-switch action for not_configured, never for configured", async () => {
     const s = setupStore();
     s.activeTabId = "t2";
-    s.tabs.push({ tabId: "t2", agent: "claude", title: "Claude", sessionId: null, sessionState: "guide", exit: null, savedTabId: null });
+    s.tabs.push(makeTab("claude", "guide", "t2"));
     const wrapper = mount(RuntimeSidebar, { global: { plugins: [i18n] } });
     expect(wrapper.find(".auth").text()).toBe("已配置");
     expect(wrapper.find(".auth-row .link").exists()).toBe(false);

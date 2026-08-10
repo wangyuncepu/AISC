@@ -10,13 +10,13 @@ import { listen } from "@tauri-apps/api/event";
 import * as ipc from "./lib/ipc";
 import { applyLocale } from "./i18n";
 import { computeWindowTitle } from "./lib/title";
+import { leafCount } from "./stores/paneTree";
 import { useRuntimeStore } from "./stores/runtime";
 import { useSettingsStore } from "./stores/settings";
 import { useDoctorStore } from "./stores/doctor";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
 import { useProviderPolling } from "./composables/useProviderPolling";
-import Terminal from "./features/terminal/Terminal.vue";
-import GuidePane from "./features/terminal/GuidePane.vue";
+import PaneTree from "./features/terminal/PaneTree.vue";
 import TabBar from "./features/workspace/TabBar.vue";
 import RuntimeSidebar from "./features/workspace/RuntimeSidebar.vue";
 import LaunchSummary from "./features/startup/LaunchSummary.vue";
@@ -132,8 +132,9 @@ watch(
 // after switching via Ctrl/Cmd+1..4. nextTick: the target tab becomes visible
 // (v-show) on the next render; focusing synchronously would hit a hidden xterm.
 function focusTabTerminal(tabId: string): void {
+  // G-17: focus the tab's ACTIVE pane terminal (PaneTree exposes it).
   void nextTick(() => {
-    terminalRefs.value.get(tabId)?.focus();
+    paneTreeRefs.value.get(tabId)?.focusActivePane();
   });
 }
 
@@ -187,6 +188,49 @@ watch(
 function onKeydown(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
+  const key = e.key.toLowerCase();
+  // G-17: pane focus navigation + close. This window-level CAPTURE handler runs
+  // before the terminal textarea and before any WebView2 accelerator the page
+  // can see; scoped to keys originating inside a pane (`.pane` covers xterm,
+  // guide and dormant leaves alike). Consumed keys never reach the PTY.
+  // (Note: WebView2 may swallow some browser-reserved combos - Ctrl+J opened
+  // the downloads page; Ctrl+arrows and Ctrl+Shift+hjkl are page-level safe.)
+  if (store.status === "ready" && store.activeTabId) {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.(".pane")) {
+      if (e.shiftKey && key === "w") {
+        // Ctrl+Shift+W closes the focused pane (multi-leaf tabs only).
+        const t = store.tabs.find((x) => x.tabId === store.activeTabId);
+        if (t && leafCount(t.tree) > 1) {
+          e.preventDefault();
+          void store.closePane(store.activeTabId, t.activePaneId);
+        }
+        return;
+      }
+      // Ctrl+arrows (page-level, WebView2-safe) OR Ctrl+Shift+hjkl (vim; the
+      // plain Ctrl+hjkl are WebView2 browser accelerators and are swallowed).
+      if (!e.altKey) {
+        const arrow = !e.shiftKey && e.key.startsWith("Arrow")
+          ? (e.key === "ArrowLeft" ? "left"
+            : e.key === "ArrowRight" ? "right"
+            : e.key === "ArrowUp" ? "up" : "down")
+          : null;
+        const letter = e.shiftKey && "hjkl".includes(key)
+          ? (key === "h" ? "left"
+            : key === "j" ? "down"
+            : key === "k" ? "up" : "right")
+          : null;
+        const dir = arrow ?? letter;
+        if (dir && store.navigatePane(store.activeTabId, dir)) {
+          // A-G17-5: move keyboard focus into the newly active pane's terminal
+          // too - the store's activePaneId alone leaves typing in the old pane.
+          e.preventDefault();
+          focusTabTerminal(store.activeTabId);
+          return;
+        }
+      }
+    }
+  }
   // G-08 (A-G08-6): Ctrl/Cmd+1..9 map the current committed tab order; the
   // 10th tab and beyond use the tablist arrow/Home/End navigation.
   if (e.key >= "1" && e.key <= "9") {
@@ -221,6 +265,9 @@ async function runExitFlow(): Promise<void> {
   void ipc.trayRemove().catch(() => undefined);
   // G-10: flush geometry before shutdown (A-G10-5).
   void ipc.captureWindowGeometry().catch(() => undefined);
+  // G-17: flush the debounced history save so a split/pane-close inside the
+  // 300ms window survives 恢复布局 on the next launch (feedback 2026-08-10).
+  await store.flushSave();
   void ipc.shutdownWorkbench().catch((e) => {
     console.error("shutdown_workbench failed, destroying window:", e);
     void win.destroy().catch(() => undefined);
@@ -297,21 +344,23 @@ function isStartingView(s: string): boolean {
   return s === "starting" || s === "cancelled";
 }
 
-// S2.2.a: render a Terminal for every live tab; v-show keeps hidden tabs
-// (and their PTY) alive so switching back preserves scrollback (03 §六.8).
-// G-08 guide tabs render GuidePane instead (no PTY for them, A-G08-2).
-const openTabs = computed(() =>
-  store.tabs.filter((t) => t.sessionState !== "idle" && t.sessionState !== "guide")
-);
-const guideTabs = computed(() => store.tabs.filter((t) => t.sessionState === "guide"));
+// G-17 (Step 16): render each non-idle tab as a PaneTree (single-leaf for a
+// flat tab, recursive splits for a split tab). v-show keeps hidden tabs (and
+// their PTYs) alive so switching back preserves scrollback (03 §六.8).
+// Render EVERY tab's PaneTree. Each leaf already shows the right content
+// (Terminal / GuidePane / dormant start view), so a tab is never black - not
+// mid-split, not while a claude/codex provider gate is pending, not after a
+// layout restore (G-17 feedback 2026-08-10). v-show keeps only the active tab
+// visible; the projection filter was the source of the whole-page vanish.
+const paneTabs = computed(() => store.tabs);
 
-// S3.3: expose each Terminal's focus so the tab shortcut can move keyboard
-// focus into the terminal after switching.
-const terminalRefs = ref(new Map<string, InstanceType<typeof Terminal>>());
-function setTerminalRef(tabId: string) {
+// S3.3: expose each tab's PaneTree so switching moves keyboard focus to the
+// active pane's terminal.
+const paneTreeRefs = ref(new Map<string, InstanceType<typeof PaneTree>>());
+function setPaneTreeRef(tabId: string) {
   return (el: unknown) => {
-    if (el) terminalRefs.value.set(tabId, el as InstanceType<typeof Terminal>);
-    else terminalRefs.value.delete(tabId);
+    if (el) paneTreeRefs.value.set(tabId, el as InstanceType<typeof PaneTree>);
+    else paneTreeRefs.value.delete(tabId);
   };
 }
 
@@ -423,24 +472,17 @@ function selectRecent(path: string): void {
             <p>{{ t("tabs.empty") }}</p>
             <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
           </div>
-          <!-- The 1:1 counter-zoom wraps ONLY the xterm (GuidePane and the
-               empty state are UI chrome and must follow the UI scale). -->
+          <!-- G-17: each non-idle tab renders its PaneTree (single-leaf for a
+               flat tab, recursive splits for a split tab). The 1:1 counter-zoom
+               keeps xterm visually 1:1 under the UI scale. -->
           <div
-            v-for="t in guideTabs"
-            :key="t.tabId"
-            class="term-wrap"
-            v-show="t.tabId === store.activeTabId"
-          >
-            <GuidePane :tab-id="t.tabId" />
-          </div>
-          <div
-            v-for="t in openTabs"
+            v-for="t in paneTabs"
             :key="t.tabId"
             class="term-wrap"
             :style="terminalZoom"
             v-show="t.tabId === store.activeTabId"
           >
-            <Terminal :ref="setTerminalRef(t.tabId)" :tab-id="t.tabId" />
+            <PaneTree :ref="setPaneTreeRef(t.tabId)" :tab-id="t.tabId" :tree="t.tree" />
           </div>
         </main>
       </div>
@@ -547,7 +589,9 @@ button.danger:hover:not(:disabled) { background: #6e3a3a; }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: #1e1e1e; display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
 .empty-tabs {
-  height: 100%; display: flex; flex-direction: column; align-items: center;
+  /* fill the terminal-area row so internal centering is global, not the
+     content-width box anchored at the left edge (G-17 feedback 2026-08-10) */
+  flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 10px; color: #888; font-size: 13px;
 }
 </style>
