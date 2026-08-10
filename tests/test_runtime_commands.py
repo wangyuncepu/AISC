@@ -3,12 +3,17 @@
 Tests preflight_runtime() logic with mocked Docker executor.
 """
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from aisc.application.runtime import preflight_runtime, validate_uuid_v4
+from aisc.application.runtime import (
+    compute_config_fingerprint,
+    preflight_runtime,
+    validate_uuid_v4,
+)
 from aisc.domain.models import (
     DockerPreflightResult,
     ImageInspectResult,
@@ -373,6 +378,118 @@ class TestPreflightConflictCheck(unittest.TestCase):
             conflict_check = next(c for c in result.checks if c.id == "runtime_conflict")
             # Fresh workspace means no conflicts
             assert conflict_check.status == "pass"
+
+    def _stale_registry(
+        self,
+        tmpdir: str,
+        runtime_id: str,
+        container_name: str = "aisc-wb-stale",
+    ) -> Path:
+        """Registry with one matching-fingerprint record for the given runtime.
+
+        Built via json.dumps: a raw Windows tempdir path contains backslashes,
+        and a hand-written JSON string would be invalid (the fail-closed read
+        path would mask the branch under test).
+        """
+        workspace = Path(tmpdir)
+        workspace.mkdir(exist_ok=True)
+        registry_root = workspace / ".aisc"
+        registry_root.mkdir(exist_ok=True)
+        fingerprint = compute_config_fingerprint(
+            "test:latest", "direct", "project", str(workspace)
+        )
+        data = {
+            "default": container_name,
+            "containers": {
+                container_name: {
+                    "runtime_id": runtime_id,
+                    "workspace": str(workspace),
+                    "scope": "project",
+                    "owner": "workbench",
+                    "config_fingerprint": fingerprint,
+                }
+            },
+        }
+        (registry_root / "containers.json").write_text(json.dumps(data))
+        return registry_root
+
+    def test_stale_record_missing_container_is_conflict(self):
+        """A registry record matching the fingerprint whose container was deleted
+        (stale) must report a conflict, never reuse - reusing a missing container
+        dead-ends on RUNTIME_NOT_FOUND (observed 2026-08-10)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime_id = "550e8400-e29b-41d4-a716-446655440000"
+            registry_root = self._stale_registry(tmpdir, runtime_id)
+
+            executor = Mock()
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=True, reason="ok"
+            )
+            executor.inspect_image.return_value = ImageInspectResult(
+                status=ImageInspectStatus.EXISTS, image="test:latest"
+            )
+            executor.run_captured.return_value = ProcessResult(
+                stdout="", stderr="", exit_code=0
+            )
+            executor.inspect_container.return_value = ProcessResult(
+                stdout="",
+                stderr="Error: No such object: aisc-wb-stale",
+                exit_code=1,
+            )
+
+            result = preflight_runtime(
+                runtime_id=runtime_id,
+                workspace=str(Path(tmpdir)),
+                image="test:latest",
+                network="direct",
+                scope="project",
+                owner="workbench",
+                executor=executor,
+                registry_root=registry_root,
+            )
+
+            conflict_check = next(c for c in result.checks if c.id == "runtime_conflict")
+            assert conflict_check.status == "fail"
+            assert result.matching_runtime_id is None
+            assert result.recommended_action == "resolve_conflict"
+            assert any("stale" in c["reason"] for c in result.conflicts)
+
+    def test_live_matching_container_still_recommends_reuse(self):
+        """A registry record whose container is actually running still matches
+        for reuse - only a missing container becomes a conflict."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime_id = "550e8400-e29b-41d4-a716-446655440000"
+            registry_root = self._stale_registry(tmpdir, runtime_id)
+
+            executor = Mock()
+            executor.preflight.return_value = DockerPreflightResult(
+                docker_path="/usr/bin/docker", available=True, reason="ok"
+            )
+            executor.inspect_image.return_value = ImageInspectResult(
+                status=ImageInspectStatus.EXISTS, image="test:latest"
+            )
+            executor.run_captured.return_value = ProcessResult(
+                stdout="", stderr="", exit_code=0
+            )
+            executor.inspect_container.return_value = ProcessResult(
+                stdout='[{"State": {"Running": true}}]', stderr="", exit_code=0
+            )
+
+            result = preflight_runtime(
+                runtime_id=runtime_id,
+                workspace=str(Path(tmpdir)),
+                image="test:latest",
+                network="direct",
+                scope="project",
+                owner="workbench",
+                executor=executor,
+                registry_root=registry_root,
+            )
+
+            conflict_check = next(c for c in result.checks if c.id == "runtime_conflict")
+            assert conflict_check.status == "pass"
+            assert result.matching_runtime_id == runtime_id
+            assert result.recommended_action == "reuse"
 
 
 class TestPreflightCanStart(unittest.TestCase):

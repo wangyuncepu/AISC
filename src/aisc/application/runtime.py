@@ -410,6 +410,20 @@ def _check_runtime_conflict(
 
         # Same runtime ID, same fingerprint -> can reuse or restart
         if meta_runtime_id == runtime_id and meta_fingerprint == fingerprint:
+            if docker_state == "not_found":
+                # Stale registry record: the container was deleted (manually or
+                # otherwise) while the registry entry survived. Reusing it would
+                # dead-end on a missing container (observed 2026-08-10: preflight
+                # reported reuse, the app opened the session, docker exec failed
+                # with RUNTIME_NOT_FOUND, and re-preflight looped). Surface it as
+                # a conflict so the UI lists the stale record and the user can
+                # remove it, then start fresh - never as a reusable runtime.
+                conflicts.append({
+                    "runtime_id": meta_runtime_id,
+                    "container_name": container_name,
+                    "reason": "Registered runtime container no longer exists (stale record)"
+                })
+                continue
             matching_runtime_id = meta_runtime_id
             matching_state = docker_state
             continue
@@ -471,11 +485,17 @@ def _check_runtime_conflict(
 def _get_container_state(container_name: str, executor: Any) -> Optional[str]:
     """Get container state from Docker.
 
-    Returns "running", "stopped", or None if container doesn't exist or error.
+    Returns "running", "stopped", "not_found" when the container is absent, or
+    None if the inspect failed for another (transient) reason.
     """
     try:
         result = executor.inspect_container(container_name)
         if result.exit_code != 0:
+            # docker inspect exits 1 with "No such object/container" for a
+            # missing container; any other nonzero exit is an inspect error.
+            stderr = (result.stderr or "").lower()
+            if "no such object" in stderr or "no such container" in stderr:
+                return "not_found"
             return None
 
         # Parse JSON output to get State.Running
