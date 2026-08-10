@@ -72,8 +72,9 @@
 - [x] **15b-1** Frontend：`ipc.trayAvailable()` 一次查询；onCloseRequested 分支——tray 模式且 tray 可用 → return（Rust 已 hide，Session 连续运行）；否则 runExitFlow。`listen("exit-requested")` 触发同一 runExitFlow。
 - [x] **15b-2** 设置：`window.close_behavior` 已有（Step 7）持久化；即时生效（Rust 关闭时重读 settings）；Reset 恢复 quit（settings 默认）。
 - [x] **15b-3** 自动化：vue-tsc + vitest 75 + Rust 101/cli_runner 7/pty_supervisor 7 + cargo build（tray-icon）全绿。
-- [ ] **15b-4** 手动测试：默认 quit 关闭即退出；设置切 minimize-to-tray → 关窗仅隐藏、Session 连续；托盘「显示」恢复窗口+焦点；托盘「退出」同确认 + shutdown（有 Session 时弹确认、无 Session 直接退）；隐藏时关窗不退出；重启后 tray 值保持。
-- **Step 15 结论**：待完成（自动化已绿，手测待用户）。
+- [x] **15b-4** 手动测试（通过，2026-08-10，安装版）：默认 quit 正常退出；minimize-to-tray 关窗仅隐藏无确认框、session 连续；托盘「显示」恢复窗口+焦点；托盘「退出」同确认 + shutdown；托盘图标退出后立即消失；重启后 tray 值保持。
+- [x] **15c-1** 手测发现并修复的 bug：① Tauri command 命名不匹配（fn `tray_available_command` → invoke 名 `tray_available_command`，前端调 `tray_available` → reject → trayAvailable=false → 关窗仍走 quit 流程弹确认）；helper 改名 `tray_live`、command 改名 `tray_available`。② 托盘退出后图标残留整个清理期（~12s）；新增 `tray_remove`（`set_visible(false)`），确认通过后立即隐藏图标，清理后台透明运行。③ 设置对话框小窗口下 head/foot 滚出视野，「已保存」不可见；head/foot 粘性固定。
+- **Step 15 结论（2026-08-10）**：vue-tsc + vitest 75 + Rust 101/7/7 + cargo build（tray-icon）全绿；安装版手测通过；3 个手测暴露问题已修复。**Step 15 完成。**
 
 ## Step 1 验收清单（G-18 sidecar 入用户 PATH，分支 step-1-g18-path）
 
