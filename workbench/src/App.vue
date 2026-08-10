@@ -64,11 +64,14 @@ const uiZoom = computed(() => ({
   height: `calc(100vh / ${effectiveScale.value})`,
   width: `calc(100vw / ${effectiveScale.value})`,
 }));
-// G-11 (2026-08-10): the terminal must FILL the terminal-area. The old
-// counter-zoom (1/effectiveScale) shrank it to (1/scale) of the area at
-// font_scale > 1, leaving a visible gap. Removing it lets the terminal scale
-// with the UI; terminal text size is governed by terminal.font_size alone.
-// (The terminal-area itself is inside the UI-zoomed app box.)
+const terminalZoom = computed(() => ({ zoom: String(1 / effectiveScale.value) }));
+// G-11 (2026-08-10): the counter-zoom keeps the terminal visually 1:1 when
+// the UI scale changes, preventing the canvas re-fit flicker observed when it
+// was removed (real-time font_scale preview flickered). The terminal FILLS
+// the terminal-area because .terminal-area is display:flex (term-wrap flex:1
+// stretches) and the counter-zoom is 1 at the default scale (1.0). At
+// font_scale > 1 the terminal occupies 1/scale of the area by design (it
+// stays 1:1 while the chrome grows); terminal.font_size governs text.
 
 // S3.3: aria-live regions (04 §九 - announce semantic changes only, never
 // routine polls). Throttled ~1s so a burst of updates coalesces to the latest.
@@ -378,6 +381,7 @@ function selectRecent(path: string): void {
             v-for="t in openTabs"
             :key="t.tabId"
             class="term-wrap"
+            :style="terminalZoom"
             v-show="t.tabId === store.activeTabId"
           >
             <Terminal :ref="setTerminalRef(t.tabId)" :tab-id="t.tabId" />
