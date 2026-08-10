@@ -8,6 +8,7 @@ import { useI18n } from "vue-i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as ipc from "./lib/ipc";
 import { applyLocale } from "./i18n";
+import { computeWindowTitle } from "./lib/title";
 import { useRuntimeStore } from "./stores/runtime";
 import { useSettingsStore } from "./stores/settings";
 import { useDoctorStore } from "./stores/doctor";
@@ -143,6 +144,25 @@ watch(
   (id) => {
     if (id && store.status === "ready") focusTabTerminal(id);
   }
+);
+
+// G-15 (Step 14): dynamic window title, driven by the active context (workspace
+// + active tab session type), never by a polling ticker (F-5). The pure
+// computeWindowTitle is re-derived whenever workspace / activeTabId / the active
+// tab's session state changes; setTitle failure only logs (A-G15-3).
+const activeTabTitleContext = computed(() => {
+  const tab = store.tabs.find((t) => t.tabId === store.activeTabId) ?? null;
+  const sessionType = tab && tab.sessionState !== "idle" ? tab.agent : null;
+  return computeWindowTitle({ workspace: store.workspace, sessionType });
+});
+watch(
+  activeTabTitleContext,
+  (title) => {
+    getCurrentWindow()
+      .setTitle(title)
+      .catch((e) => console.warn("setTitle failed:", e));
+  },
+  { immediate: true }
 );
 
 // G-12 (2026-08-10): 官方账号登录 / 重试 start the session on the ALREADY

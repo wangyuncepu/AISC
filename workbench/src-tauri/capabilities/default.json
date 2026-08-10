@@ -9,6 +9,7 @@
     "core:window:allow-destroy",
     "core:window:allow-is-focused",
     "core:window:allow-is-minimized",
+    "core:window:allow-set-title",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
     "notification:allow-is-permission-granted",
