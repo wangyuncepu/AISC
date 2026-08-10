@@ -71,6 +71,7 @@
 - [ ] agent加上Pi/opencode
 - [ ] aisc cli的更新命令优化
 - [ ] 预配置的deepseek配置项错误，修复
+- [ ] 预配置的codesome配置项错误，修复
 - [ ] runtime内，cc-switch显示异常（表现为终端显示不及时，能正常使用TUI，但是选择的位置不到对应区域时，对应区域显示的是乱七八糟的TUI结构，应该是旧的。且在windows下，TUI不会随窗口变化自适应）
 - [x] 界面字体太小，增加设置页，可以设置软件各类属性 — 2026-08-10 Step 3/7 完成：typed settings + 设置对话框 + UI 字号缩放（自适应窗口）+ 终端字号/行高/回滚/渲染器
 - [ ] 通过winget安装docker desktop并启动，从引导界面勾选打开workbench，打开的workbench，无法内启动摘要界面无法正常检测，且点击启动docker也无效。而关闭该workbench，重新打开，就可以成功识别docker。— A+C 已实现（自动重试 preflight + CLI 绝对路径兜底）；复测发现 2 新问题已修（空目录误报冲突：resolve_conflict 仅限真冲突；构建失败：docker-credential-desktop PATH 兜底），2026-08-09 待最终复测
@@ -78,3 +79,6 @@
 
 - [ ] codex 打开即进默认配置（login_required 直接开会话，终端内登录）——用户决定保留数据驱动行为（A-G08-2 只拦 not_configured）；若日后想更保守（login_required 也先进 guide 配置页），改 `runtime.ts` maybeOpenCreated 条件为 `["not_configured", "login_required"].includes(...)`（代码内已有 TODO 注释 + 2026-08-10 决策记录）
 - [ ] **未来路线探讨：容器内 GUI 版 cc-switch**。当前 cc-switch-cli 是 TUI 应用，经终端管道渲染到 xterm.js（Step 9 管道方案已解决编码/对齐/性能/刷新问题，体验基本可用）。但 TUI 仍有固有局限：图标/emoji 需终端字体支持、布局受终端网格约束、无鼠标交互（部分 TUI 框架支持但受限）。若在容器内增加 GUI 版 cc-switch（如 Web 前端 + 后端 API），Workbench 可通过 webview 直接打开 GUI 版，绕过终端层。优势：完整 Unicode/emoji、自由布局、鼠标交互、更接近原生应用体验。需评估：cc-switch 是否有或可加 Web UI 模式、容器内端口暴露方式、Workbench webview 集成路径。保留 cc-switch-cli 作为终端备选。
+- [ ] 工作区，aisc配置文件集中在一个文件夹下，不要像现在这样太零散是否可行？
+- [ ] 退出前询问用户是否想要保留runtime，若选择不想则直接删除该runtime及对应的container
+- [ ] 分屏键盘导航无效（Step 16 遗留）：`Ctrl+Shift+W` 关 pane 可用，但 `Ctrl+Shift+hjkl` / `Ctrl+方向键` 移动 pane 焦点在实机 WebView2 无反应。已修到：window capture handler 生效、scope `.xterm`→`.pane`（覆盖 guide/dormant）、导航成功后 focusTabTerminal 移交键盘焦点（f409b3f），实测光标仍不动。结论：监听器/guard/`navigatePane`/焦点移交代码均已验证正常（`Ctrl+Shift+W` 同一路径可用），最可能是 WebView2 在浏览器加速器层拦截 Ctrl+Shift+字母 / Ctrl+方向键组合（`AreBrowserAcceleratorKeysEnabled` 默认开启；Tauri 2 未暴露禁用该行为的公共钩子，COM 方案已尝试并放弃）。留待之后解决，见 devlog。
