@@ -505,6 +505,27 @@ class RealDockerExecutor:
                             break
                         os.write(sys.stdout.fileno(), chunk)
                     return
+                # Set output mode for TUI compatibility:
+                # - Clear ENABLE_PROCESSED_OUTPUT (0x0001): LF must be a
+                #   plain line-feed (cursor down, same column), not CR+LF.
+                #   With it set, the console translates every bare \n the
+                #   TUI emits into \r\n, shifting cursor to column 1 and
+                #   misaligning the layout.
+                # - Set DISABLE_NEWLINE_AUTO_RETURN (0x0008): in VT mode the
+                #   console auto-inserts a CR after a LF that reaches a new
+                #   line; disable it so the cursor stays in its column.
+                # - Set ENABLE_LVB_GRID_WORLDWIDE (0x0010): makes the
+                #   console treat Unicode box-drawing chars as narrow (1
+                #   column) in all locales. On zh-CN Windows the default
+                #   East-Asian width rules treat them as Ambiguous=wide (2
+                #   columns), which stretches TUI borders and shifts content.
+                # - VT processing (0x0004) + wrap (0x0002) are preserved.
+                k32.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+                k32.SetConsoleMode.restype = wintypes.BOOL
+                k32.SetConsoleMode(
+                    wintypes.HANDLE(handle),
+                    wintypes.DWORD((cmode.value & ~0x0001) | 0x0008 | 0x0010),
+                )
                 k32.WriteConsoleW.restype = wintypes.BOOL
                 k32.WriteConsoleW.argtypes = [
                     wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD,
