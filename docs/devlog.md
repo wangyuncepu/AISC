@@ -21,6 +21,20 @@
 - **CI（2026-08-09）**：Workbench CI 三 job 全绿（frontend npm build+vitest 7/7 / rust cargo test / cli pytest 427 过 1 修复）；Bundle Linux/macOS 全绿（含非 checkout cwd sidecar 权限/架构/version/resource 验证）；NSIS installer 全绿；cli-sidecar 全绿。修复项：vitest 4.1 forks worker 在 Node 20 失败 → CI 用 Node 22；rust job 补 GTK/webkit 系统依赖；tauri-build 需 externalBin/resource 存在 → 测试 job stage 占位；`docs/releases/v2.1.5-dev.md` 缺失 → 补发布说明。
 - **Step 0 结论**：A-INFRA-1..5 门禁证据齐（A-INFRA-2 的 100× reopen 集成测试随 Step 2 registry 预算重构补齐，已确认）。
 
+## Step 12 验收清单（G-13 一键诊断，分支 step-12-doctor）
+
+> 规范：06 §十三、02 §五（F-4）、05 §六（Doctor 契约）、01 R-10。
+
+- [ ] **12a-1** Rust doctor 模块（A-G13-2 前半）：`doctor_argv()` 纯函数（`doctor --format json`）；`DoctorCheck/DoctorSummary/DoctorReport` serde 类型；Tauri `run_doctor` command 复用 `run_control`（30s timeout / 8 MiB stdout cap / stderr redaction / exit-code 校验），并额外校验 `meta.command == doctor`。成功/CLI error/timeout/stdout overflow/无效 envelope 均有稳定映射（失败保留原错误事实，A-G13-1）。
+- [ ] **12a-2** 解析健壮性（A-G13-4）：`data.host.checks/summary` 类型合法；`data.container=null` 省略、未来结构存在不导致 host 解析失败；未知 check 字段忽略；每个 check 的 `detail/hint` 经 `redact()` 脱敏。
+- [ ] **12b-1** Frontend 通道：`DoctorCheck/DoctorSummary/DoctorReport` TS 类型 + `ipc.runDoctor`。
+- [ ] **12b-2** Doctor store：`idle/running/done/error`；在途时重复 `run()` 不启动第二个 doctor（A-G13-3）；不触碰 runtime/settings store（关闭/重开不改变 startup state）。
+- [ ] **12b-3** UI：`DoctorDialog.vue` 展示 `checks`/`summary`/`hint`（不渲染原始 stdout/stderr）；blocked/error/ready（sidebar 开发者详情）三个入口触发同一 command；在途按钮禁用；失败显示结构化 Workbench error + 重试。
+- [ ] **12c-1** i18n：zh-CN/en-US 文案齐全 + key-parity 测试。
+- [ ] **12c-2** 自动化：Rust 单测 + vitest 全绿。
+- [ ] **12b-4** 手动测试：blocked 态、error 态、ready 态三处入口均能跑诊断并展示 checks/summary；doctor 失败（停 Docker）显示结构化错误不卡死；重复点击不产生第二个进程。
+- **Step 12 结论**：待完成。
+
 ## Step 1 验收清单（G-18 sidecar 入用户 PATH，分支 step-1-g18-path）
 
 > 规范：05-cli-gui-contract.md §五（PATH 安全算法）、06 §二；门禁 A-G18-1..4。
