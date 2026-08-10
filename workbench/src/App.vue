@@ -191,12 +191,13 @@ function onKeydown(e: KeyboardEvent) {
   const key = e.key.toLowerCase();
   // G-17: pane focus navigation + close. This window-level CAPTURE handler runs
   // before the terminal textarea and before any WebView2 accelerator the page
-  // can see; scoped to keys originating inside an xterm. Consumed keys never
-  // reach the PTY. (Note: WebView2 may swallow some browser-reserved combos -
-  // Ctrl+J opened the downloads page; Ctrl+arrows are page-level and safe.)
+  // can see; scoped to keys originating inside a pane (`.pane` covers xterm,
+  // guide and dormant leaves alike). Consumed keys never reach the PTY.
+  // (Note: WebView2 may swallow some browser-reserved combos - Ctrl+J opened
+  // the downloads page; Ctrl+arrows and Ctrl+Shift+hjkl are page-level safe.)
   if (store.status === "ready" && store.activeTabId) {
     const target = e.target as HTMLElement | null;
-    if (target?.closest?.(".xterm")) {
+    if (target?.closest?.(".pane")) {
       if (e.shiftKey && key === "w") {
         // Ctrl+Shift+W closes the focused pane (multi-leaf tabs only).
         const t = store.tabs.find((x) => x.tabId === store.activeTabId);
@@ -221,7 +222,10 @@ function onKeydown(e: KeyboardEvent) {
           : null;
         const dir = arrow ?? letter;
         if (dir && store.navigatePane(store.activeTabId, dir)) {
+          // A-G17-5: move keyboard focus into the newly active pane's terminal
+          // too - the store's activePaneId alone leaves typing in the old pane.
           e.preventDefault();
+          focusTabTerminal(store.activeTabId);
           return;
         }
       }
