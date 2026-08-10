@@ -344,7 +344,13 @@ function isStartingView(s: string): boolean {
 // G-17 (Step 16): render each non-idle tab as a PaneTree (single-leaf for a
 // flat tab, recursive splits for a split tab). v-show keeps hidden tabs (and
 // their PTYs) alive so switching back preserves scrollback (03 §六.8).
-const paneTabs = computed(() => store.tabs.filter((t) => t.sessionState !== "idle"));
+// A split tab always has content to show even when its PROJECTION is briefly
+// "idle" (a freshly split claude/codex pane is idle until the provider gate
+// resolves) - hiding it made the whole page vanish mid-split (G-17 feedback
+// 2026-08-10). Flat idle tabs (never opened) stay hidden as before.
+const paneTabs = computed(() =>
+  store.tabs.filter((t) => t.sessionState !== "idle" || leafCount(t.tree) > 1)
+);
 
 // S3.3: expose each tab's PaneTree so switching moves keyboard focus to the
 // active pane's terminal.
