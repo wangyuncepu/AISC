@@ -76,6 +76,14 @@ Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
 
+; Docker Desktop host integration (see Section Docker + RunFinishApp):
+; install-time detection state + the winget exit code (saved before any
+; CheckDocker call clobbers $0).
+Var DepsDockerInstalled
+Var DepsDockerExe
+Var DepsWingetInstalled
+Var DockerWingetExit
+
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
 OutFile "${OUTFILE}"
@@ -418,15 +426,85 @@ Var AppStartMenuFolder
 !insertmacro MUI_PAGE_FINISH
 
 Function RunFinishApp
-  ; Host integration (05 §1.2): if Docker Desktop is installed, start it first
-  ; so the engine is up for the first runtime start; then launch the Workbench.
-  ; Docker Desktop is single-instance, so this is a no-op when already running.
-  ${If} ${FileExists} "$PROGRAMFILES64\Docker\Docker\Docker Desktop.exe"
-    ExecShell "open" "$PROGRAMFILES64\Docker\Docker\Docker Desktop.exe"
-  ${ElseIf} ${FileExists} "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
-    ExecShell "open" "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
+  ; Host integration: ensure Docker Desktop is up before the first runtime
+  ; start. Three cases: installed + running -> no-op; installed + stopped ->
+  ; silently launch it; not installed -> inform and offer the download page
+  ; (a missing Docker Desktop still lets the Workbench launch - its own
+  ; preflight reports the real engine state).
+  Call CheckDocker
+  ${If} $DepsDockerInstalled = 1
+    Call StartDockerDesktop
+  ${Else}
+    MessageBox MB_ICONINFORMATION|MB_YESNO "$(DOCKER_MISSING_LAUNCH)" IDNO skip_docker
+      ExecShell "open" "https://www.docker.com/products/docker-desktop/"
+    skip_docker:
   ${EndIf}
   nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" ""
+FunctionEnd
+
+Function CheckDocker
+  ; Docker Desktop installs machine-wide to "Program Files\Docker\Docker"
+  ; (MSI) or per-user to %LOCALAPPDATA% (winget). Detect by executable
+  ; presence and remember the path so StartDockerDesktop can use it.
+  StrCpy $DepsDockerExe ""
+  ${If} ${FileExists} "$PROGRAMFILES64\Docker\Docker\Docker Desktop.exe"
+    StrCpy $DepsDockerExe "$PROGRAMFILES64\Docker\Docker\Docker Desktop.exe"
+    StrCpy $DepsDockerInstalled 1
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
+    StrCpy $DepsDockerExe "$LOCALAPPDATA\Docker\Docker Desktop\Docker Desktop.exe"
+    StrCpy $DepsDockerInstalled 1
+    Return
+  ${EndIf}
+  ; Non-standard install location: read the uninstaller registry entry
+  ; (64-bit view first - Docker Desktop is a 64-bit app - then per-user HKCU).
+  SetRegView 64
+  ReadRegStr $0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
+  ${If} $0 == ""
+    ReadRegStr $0 HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
+  ${EndIf}
+  SetRegView 32
+  ${If} $0 == ""
+    ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
+  ${EndIf}
+  ${If} $0 != ""
+  ${AndIf} ${FileExists} "$0\Docker Desktop.exe"
+    StrCpy $DepsDockerExe "$0\Docker Desktop.exe"
+    StrCpy $DepsDockerInstalled 1
+    Return
+  ${EndIf}
+  StrCpy $DepsDockerInstalled 0
+FunctionEnd
+
+Function CheckWinget
+  ; winget (App Installer) is installed if the WindowsApps alias exists on PATH
+  ClearErrors
+  nsExec::ExecToStack '"where" winget'
+  Pop $0 ; exit code (0 = found)
+  ${If} $0 = 0
+    StrCpy $DepsWingetInstalled 1
+  ${Else}
+    StrCpy $DepsWingetInstalled 0
+  ${EndIf}
+FunctionEnd
+
+Function StartDockerDesktop
+  ; Silently start Docker Desktop when it is installed but not running.
+  ; nsis_tauri_utils FindProcess* returns 0 when the process exists; check the
+  ; per-user session first (matches INSTALLMODE=currentUser), then broaden to
+  ; a machine-wide check in case Docker runs elevated.
+  nsis_tauri_utils::FindProcessCurrentUser "Docker Desktop.exe"
+  Pop $0
+  ${If} $0 <> 0
+    nsis_tauri_utils::FindProcess "Docker Desktop.exe"
+    Pop $0
+    ${If} $0 <> 0
+      ${If} $DepsDockerExe != ""
+        ExecShell "open" "$DepsDockerExe"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
 FunctionEnd
 
 ; Uninstaller Pages
@@ -485,6 +563,16 @@ FunctionEnd
 
 LangString DEP_FINISH_RUN ${LANG_ENGLISH} "Start AISC Workbench"
 LangString DEP_FINISH_RUN ${LANG_SIMPCHINESE} "启动 AISC Workbench"
+LangString DOCKER_INSTALLING ${LANG_ENGLISH} "Installing Docker Desktop via winget (this may take a few minutes)..."
+LangString DOCKER_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 下载并安装 Docker Desktop（可能需要几分钟）……"
+LangString DOCKER_INSTALL_OK ${LANG_ENGLISH} "Docker Desktop installed."
+LangString DOCKER_INSTALL_OK ${LANG_SIMPCHINESE} "Docker Desktop 已安装。"
+LangString DOCKER_INSTALL_FAIL ${LANG_ENGLISH} "Docker Desktop install failed (exit code $DockerWingetExit). You can install it manually from https://www.docker.com/products/docker-desktop/ or start it later from the Start menu."
+LangString DOCKER_INSTALL_FAIL ${LANG_SIMPCHINESE} "Docker Desktop 安装失败（退出码 $DockerWingetExit）。可手动从 https://www.docker.com/products/docker-desktop/ 安装，或稍后从开始菜单启动 Docker Desktop。"
+LangString DOCKER_NO_WINGET ${LANG_ENGLISH} "winget (App Installer) was not found - install it from the Microsoft Store, or install Docker Desktop manually from https://www.docker.com/products/docker-desktop/."
+LangString DOCKER_NO_WINGET ${LANG_SIMPCHINESE} "未找到 winget（应用安装程序）——请从 Microsoft Store 安装后重新运行本安装程序，或手动从 https://www.docker.com/products/docker-desktop/ 安装 Docker Desktop。"
+LangString DOCKER_MISSING_LAUNCH ${LANG_ENGLISH} "AISC Workbench needs Docker Desktop, which was not found on this PC. Open the Docker Desktop download page? (You can also install it later from the Start menu or Microsoft Store.)"
+LangString DOCKER_MISSING_LAUNCH ${LANG_SIMPCHINESE} "AISC Workbench 需要 Docker Desktop，但未在本机找到。是否打开 Docker Desktop 下载页？（也可以稍后从开始菜单或 Microsoft Store 安装。）"
 
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
@@ -1033,6 +1121,45 @@ Section Install
   ${EndIf}
 SectionEnd
 
+Section Docker
+  ; Host integration: when Docker Desktop is missing, install it via winget so
+  ; the finish-page "Start AISC Workbench" can rely on it being present. Runs
+  ; only for interactive GUI installs - silent/passive installs have no finish
+  ; page and must never invoke winget (the CI smoke installs with /S).
+  ${If} ${Silent}
+    Goto docker_done
+  ${EndIf}
+  ${If} $PassiveMode = 1
+    Goto docker_done
+  ${EndIf}
+
+  Call CheckDocker
+  ${If} $DepsDockerInstalled = 1
+    Goto docker_done
+  ${EndIf}
+  Call CheckWinget
+  ${If} $DepsWingetInstalled = 0
+    DetailPrint "$(DOCKER_NO_WINGET)"
+    Goto docker_done
+  ${EndIf}
+
+  DetailPrint "$(DOCKER_INSTALLING)"
+  ; Hidden console. winget's UTF-8 piped stdout is misdecoded by nsExec as the
+  ; ANSI codepage (mojibake in the log), but its status lines are mostly ASCII
+  ; (URLs / package names), so ExecToLog streams readable live progress into
+  ; the Details pane; the localized lines above/below keep the intent clear.
+  nsExec::ExecToLog '"winget" install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements --disable-interactivity'
+  Pop $0 ; winget exit code
+  StrCpy $DockerWingetExit $0 ; save BEFORE CheckDocker clobbers $0
+  Call CheckDocker
+  ${If} $DepsDockerInstalled = 1
+    DetailPrint "$(DOCKER_INSTALL_OK)"
+  ${Else}
+    DetailPrint "$(DOCKER_INSTALL_FAIL)" ; references $DockerWingetExit
+  ${EndIf}
+docker_done:
+SectionEnd
+
 Function .onInstSuccess
   ; Check for `/R` flag only in silent and passive installers because
   ; GUI installer has a toggle for the user to (re)start the app
@@ -1040,6 +1167,12 @@ Function .onInstSuccess
   ${OrIf} ${Silent}
     ${GetOptions} $CMDLINE "/R" $R0
     ${IfNot} ${Errors}
+      ; /R auto-start: bring Docker Desktop up first if installed (silent
+      ; installs never ran Section Docker, and CI does not pass /R).
+      Call CheckDocker
+      ${If} $DepsDockerInstalled = 1
+        Call StartDockerDesktop
+      ${EndIf}
       ${GetOptions} $CMDLINE "/ARGS" $R0
       nsis_tauri_utils::RunAsUser "$INSTDIR\${MAINBINARYNAME}.exe" "$R0"
     ${EndIf}
