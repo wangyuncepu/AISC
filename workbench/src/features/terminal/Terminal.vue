@@ -31,6 +31,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import { resizeSession, writeSession } from "../../lib/ipc";
 import { resolveRenderer, TERMINAL_THEME } from "./renderer";
+import { findLeaf } from "../../stores/paneTree";
 import type { LaunchAgent } from "../../types";
 
 const { t } = useI18n();
@@ -55,6 +56,10 @@ const sessionLive = computed(() => {
   const st = pane.value?.sessionState;
   return st === "starting" || st === "running" || st === "closing";
 });
+/** G-17: cc-switch panes are a config TUI - no split offered (user feedback). */
+const isCcSwitch = computed(
+  () => (tab.value ? findLeaf(tab.value.tree, props.paneId)?.sessionType === "cc-switch" : false)
+);
 
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
@@ -495,14 +500,17 @@ defineExpose({
       <button :disabled="!sessionLive" @click="pasteFromClipboard">{{ t("terminal.paste") }}</button>
       <button @click="openSearchFromMenu">{{ t("terminal.search") }}</button>
       <button @click="clearScreen">{{ t("terminal.clear") }}</button>
-      <!-- G-17: split this pane (choose a session type next) -->
-      <span class="sep" />
-      <button @click="openSplitPicker('horizontal', ctxMenu.x, ctxMenu.y)">
-        {{ t("tabbar.menu.splitH") }}
-      </button>
-      <button @click="openSplitPicker('vertical', ctxMenu.x, ctxMenu.y)">
-        {{ t("tabbar.menu.splitV") }}
-      </button>
+      <!-- G-17: split this pane (choose a session type next); cc-switch panes
+           are a config TUI and do not offer split -->
+      <template v-if="!isCcSwitch">
+        <span class="sep" />
+        <button @click="openSplitPicker('horizontal', ctxMenu.x, ctxMenu.y)">
+          {{ t("tabbar.menu.splitH") }}
+        </button>
+        <button @click="openSplitPicker('vertical', ctxMenu.x, ctxMenu.y)">
+          {{ t("tabbar.menu.splitV") }}
+        </button>
+      </template>
     </div>
 
     <!-- G-17: choose the session type for the new split pane -->

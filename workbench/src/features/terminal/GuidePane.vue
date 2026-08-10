@@ -12,10 +12,12 @@
  *   "未配置", never reads any secret.
  * No open_session is called for guide tabs (A-G12-1).
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
+import { AGENTS } from "../../stores/tabLayout";
 import { findLeaf } from "../../stores/paneTree";
+import type { LaunchAgent } from "../../types";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
@@ -67,10 +69,35 @@ function openCcSwitch() {
 function loginOfficial() {
   store.openTab(props.tabId);
 }
+
+// --- G-17: guide panes (claude/codex) offer split via right-click too ---
+const menu = ref<{ x: number; y: number } | null>(null);
+const splitPicker = ref<{ x: number; y: number; axis: "horizontal" | "vertical" } | null>(null);
+
+function onContext(e: MouseEvent) {
+  e.preventDefault();
+  const x = Math.min(e.clientX, window.innerWidth - 180);
+  const y = Math.min(e.clientY, window.innerHeight - 150);
+  menu.value = { x, y };
+}
+function openSplit(axis: "horizontal" | "vertical") {
+  if (!menu.value) return;
+  splitPicker.value = { x: menu.value.x, y: menu.value.y, axis };
+  menu.value = null;
+}
+function pickAgent(agent: LaunchAgent) {
+  const axis = splitPicker.value?.axis ?? "horizontal";
+  splitPicker.value = null;
+  store.splitTabPane(props.tabId, axis, agent, true, props.paneId);
+}
+function closeMenus() {
+  menu.value = null;
+  splitPicker.value = null;
+}
 </script>
 
 <template>
-  <div class="guide">
+  <div class="guide" @contextmenu.prevent="onContext">
     <div class="banner" :data-auth="auth">
       <span class="icon" aria-hidden="true">⚠</span>
       <span class="text">{{ title }}</span>
@@ -91,6 +118,28 @@ function loginOfficial() {
       </div>
     </div>
     <div class="hint">{{ desc }}</div>
+
+    <!-- G-17: right-click split (guide panes have no xterm context menu) -->
+    <div
+      v-if="menu"
+      class="ctx-menu"
+      :style="{ left: menu.x + 'px', top: menu.y + 'px' }"
+      @contextmenu.prevent
+      @click.stop
+    >
+      <button @click="openSplit('horizontal')">{{ t("tabbar.menu.splitH") }}</button>
+      <button @click="openSplit('vertical')">{{ t("tabbar.menu.splitV") }}</button>
+    </div>
+    <div
+      v-if="splitPicker"
+      class="ctx-menu"
+      :style="{ left: splitPicker.x + 'px', top: splitPicker.y + 'px' }"
+      @contextmenu.prevent
+      @click.stop
+    >
+      <button v-for="a in AGENTS" :key="a" @click="pickAgent(a)">{{ t(`tabbar.menu.${a}`) }}</button>
+    </div>
+    <div v-if="menu || splitPicker" class="ctx-backdrop" @click="closeMenus" @contextmenu.prevent="closeMenus" />
   </div>
 </template>
 
@@ -126,4 +175,18 @@ button {
 }
 button:hover:not(:disabled) { background: #3c3c3c; }
 button.primary { background: #0e639c; border-color: #0e639c; }
+.ctx-backdrop {
+  position: fixed; inset: 0; z-index: 18;
+}
+.ctx-menu {
+  position: fixed; z-index: 20;
+  display: flex; flex-direction: column; min-width: 140px; padding: 4px;
+  background: #252526; border: 1px solid #3c3c3c; border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+.ctx-menu button {
+  background: transparent; color: #d4d4d4; border: none; border-radius: 2px;
+  text-align: left; padding: 6px 12px; cursor: pointer;
+}
+.ctx-menu button:hover { background: #37373d; }
 </style>

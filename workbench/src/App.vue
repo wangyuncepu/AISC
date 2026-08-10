@@ -206,12 +206,20 @@ function onKeydown(e: KeyboardEvent) {
         }
         return;
       }
-      if (!e.shiftKey && !e.altKey) {
-        const dir = e.key === "ArrowLeft" || key === "h" ? "left"
-          : e.key === "ArrowRight" || key === "l" ? "right"
-          : e.key === "ArrowUp" || key === "k" ? "up"
-          : e.key === "ArrowDown" || key === "j" ? "down"
+      // Ctrl+arrows (page-level, WebView2-safe) OR Ctrl+Shift+hjkl (vim; the
+      // plain Ctrl+hjkl are WebView2 browser accelerators and are swallowed).
+      if (!e.altKey) {
+        const arrow = !e.shiftKey && e.key.startsWith("Arrow")
+          ? (e.key === "ArrowLeft" ? "left"
+            : e.key === "ArrowRight" ? "right"
+            : e.key === "ArrowUp" ? "up" : "down")
           : null;
+        const letter = e.shiftKey && "hjkl".includes(key)
+          ? (key === "h" ? "left"
+            : key === "j" ? "down"
+            : key === "k" ? "up" : "right")
+          : null;
+        const dir = arrow ?? letter;
         if (dir && store.navigatePane(store.activeTabId, dir)) {
           e.preventDefault();
           return;
