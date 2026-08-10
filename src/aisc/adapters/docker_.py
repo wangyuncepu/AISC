@@ -421,22 +421,13 @@ class RealDockerExecutor:
         """
         import docker  # lazy: every other path stays dependency-free
 
-        # The container's Linux pty emits UTF-8. On zh-CN Windows the ConPTY
-        # output codepage defaults to GBK (CP936). SetConsoleOutputCP(65001)
-        # sets it to UTF-8 so the drain thread's raw os.write(1, chunk)
-        # renders UTF-8 correctly (verified by diagnostic: 936 -> 65001).
-        # This is preferred over WriteConsoleW, which uses the console's
-        # Unicode width tables (box-drawing = 2 cols on zh-CN -> misaligned
-        # TUI). os.write uses the codepage width tables; ENABLE_LVB_GRID_
-        # WORLDWIDE (set in drain) makes box-drawing narrow (1 col).
-        # (G-02 regression 2026-08-10: cc-switch TUI garbled + misaligned
-        # after the SDK switch from docker exec -it.)
-        if os.name == "nt":
-            try:
-                import ctypes
-                ctypes.windll.kernel32.SetConsoleOutputCP(65001)
-            except Exception:  # noqa: BLE001
-                pass
+        # The container's Linux pty emits UTF-8. The ConPTY output codepage
+        # is fixed at the system default (GBK/CP936 on zh-CN) and cannot be
+        # changed at runtime (SetConsoleOutputCP is ignored by ConPTY).
+        # The drain thread transcodes: decode UTF-8 -> re-encode to the
+        # console's actual codepage -> os.write. WriteConsoleW was rejected:
+        # it uses Unicode width tables that treat box-drawing as 2 columns
+        # on zh-CN, causing TUI misalignment. (G-02, 2026-08-10.)
 
         try:
             client = docker.from_env()
@@ -469,48 +460,44 @@ class RealDockerExecutor:
         errors: List[Exception] = []
 
         def drain() -> None:
-            """Socket -> stdout (raw bytes).
+            """Socket -> stdout (transcoded to the console's codepage).
 
-            Windows: SetConsoleOutputCP(65001) is called at the start of
-            open_interactive to set the ConPTY output codepage to UTF-8.
-            With the codepage set, raw ``os.write(1, chunk)`` correctly
-            renders UTF-8 bytes - verified by diagnostic (CP 936 -> 65001,
-            box-drawing chars render correctly).
-
-            This replaces the earlier WriteConsoleW approach. WriteConsoleW
-            uses the console's **Unicode** width tables, which on zh-CN
-            Windows treat box-drawing chars (U+2500-U+257F) as
-            Ambiguous=wide (2 columns), stretching TUI borders and causing
-            progressive misalignment. os.write uses the **codepage** width
-            tables; with ENABLE_LVB_GRID_WORLDWIDE set, box-drawing chars
-            are narrow (1 column) in all locales.
+            Windows: The ConPTY output codepage is fixed (GBK/CP936 on
+            zh-CN) and SetConsoleOutputCP is ignored. Rather than writing
+            raw UTF-8 bytes (garbled) or WriteConsoleW (Unicode width
+            tables -> box-drawing = 2 cols -> misaligned), we **transcode**:
+            decode the container's UTF-8 to Unicode, re-encode to the
+            console's actual codepage (queried via GetConsoleOutputCP),
+            and write via os.write. The console decodes the transcoded
+            bytes correctly, and the codepage width tables (with
+            ENABLE_LVB_GRID_WORLDWIDE) treat box-drawing as 1 column.
 
             Bare ``\\n`` is replaced with ``ESC D`` (IND) at the byte level
             to prevent ENABLE_PROCESSED_OUTPUT from translating it to
-            ``\\r\\n`` (which would shift the cursor to column 1). ESC D
-            is a VT sequence that the VT parser executes as "index" (move
-            cursor down one line, same column). In UTF-8, 0x0A only
-            appears as a standalone LF, never inside a multi-byte sequence,
-            so the byte-level replacement is safe.
+            ``\\r\\n``. Safe because 0x0A never appears inside multi-byte
+            sequences of any East-Asian codepage.
 
             POSIX: raw os.write (no codepage on pty).
             """
             try:
                 if os.name == "nt":
                     import ctypes
+                    import codecs
                     from ctypes import wintypes
                     k32 = ctypes.windll.kernel32
+                    k32.GetConsoleOutputCP.restype = ctypes.c_uint32
+                    console_cp = k32.GetConsoleOutputCP()
+                    # Python codec name for the console's codepage.
+                    out_encoding = "cp%d" % console_cp if console_cp else "gbk"
+                    # Set ENABLE_LVB_GRID_WORLDWIDE on the output handle so
+                    # the codepage width tables treat box-drawing as 1 col.
                     k32.GetStdHandle.restype = wintypes.HANDLE
                     k32.GetStdHandle.argtypes = [wintypes.DWORD]
-                    oh = k32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+                    oh = k32.GetStdHandle(-11)
                     omode = wintypes.DWORD()
                     if oh and k32.GetConsoleMode(
                         wintypes.HANDLE(oh), ctypes.byref(omode)
                     ):
-                        # Add ENABLE_LVB_GRID_WORLDWIDE (0x0010): makes the
-                        # console treat box-drawing chars as narrow (1 col)
-                        # via the codepage width tables. All default flags
-                        # (PROCESSED_OUTPUT, WRAP, VT_PROCESSING) preserved.
                         k32.SetConsoleMode.argtypes = [
                             wintypes.HANDLE, wintypes.DWORD,
                         ]
@@ -519,13 +506,31 @@ class RealDockerExecutor:
                             wintypes.HANDLE(oh),
                             wintypes.DWORD(omode.value | 0x0010),
                         )
-                while True:
-                    chunk = sock.recv(65536)
-                    if not chunk:
-                        break
-                    if os.name == "nt":
-                        chunk = chunk.replace(b"\n", b"\x1bD")
-                    os.write(sys.stdout.fileno(), chunk)
+                    decoder = codecs.getincrementaldecoder("utf-8")(
+                        errors="replace"
+                    )
+                    while True:
+                        chunk = sock.recv(65536)
+                        if not chunk:
+                            text = decoder.decode(b"", final=True)
+                            if text:
+                                data = text.encode(
+                                    out_encoding, errors="replace"
+                                ).replace(b"\n", b"\x1bD")
+                                os.write(sys.stdout.fileno(), data)
+                            break
+                        text = decoder.decode(chunk)
+                        if text:
+                            data = text.encode(
+                                out_encoding, errors="replace"
+                            ).replace(b"\n", b"\x1bD")
+                            os.write(sys.stdout.fileno(), data)
+                else:
+                    while True:
+                        chunk = sock.recv(65536)
+                        if not chunk:
+                            break
+                        os.write(sys.stdout.fileno(), chunk)
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
