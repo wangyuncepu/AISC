@@ -5,6 +5,7 @@ import type {
   BuildEvent,
   CapabilityReport,
   DiscoveryReport,
+  DoctorReport,
   HistoryPatch,
   PreflightReport,
   ProviderStatus,
@@ -138,3 +139,7 @@ export const saveHistory = (expectedRevision: number, patch: HistoryPatch) =>
 // --- G-10: window geometry save/restore (02 §A-G10) ---
 
 export const captureWindowGeometry = () => invoke<boolean>("capture_window_geometry");
+
+// --- G-13: one-click diagnosis (05 §六, Step 12) ---
+
+export const runDoctor = () => invoke<DoctorReport>("run_doctor");
