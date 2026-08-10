@@ -891,6 +891,25 @@ mod tests {
     }
 
     #[test]
+    fn theme_invalid_falls_back_to_system_valid_accepted() {
+        let dir = tempdir().unwrap();
+        let mut doc = raw_doc();
+        doc["ui"]["theme"] = Value::String("neon".into());
+        write(dir.path(), &doc);
+        let s = Settings::load(dir.path()).unwrap();
+        let d = s.document();
+        assert_eq!(d.ui.theme, "system");
+        assert!(d.issues.iter().any(|i| i.field == "ui.theme"));
+
+        let mut ok = raw_doc();
+        ok["ui"]["theme"] = Value::String("light".into());
+        write(dir.path(), &ok);
+        let s2 = Settings::load(dir.path()).unwrap();
+        assert_eq!(s2.document().ui.theme, "light");
+        assert!(s2.document().issues.is_empty());
+    }
+
+    #[test]
     fn invalid_fields_fall_back_per_field_others_kept() {
         let dir = tempdir().unwrap();
         let mut doc = raw_doc();

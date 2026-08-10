@@ -15,7 +15,7 @@
   --surface-active: #37373d;     /* menu-item hover / active rows */
   --text: #e6e6e6;               /* primary text */
   --text-2: #d0d0d0;             /* secondary text (buttons, values) */
-  --text-muted: #888;            /* muted / hint text */
+  --text-muted: #9a9a9a;         /* muted / hint text (>=4.5:1 on --surface) */
   --text-faint: #6a6a6a;         /* disabled / idle */
   --border: #333;                /* subtle dividers */
   --border-2: #3c3c3c;           /* menu/dialog edges */
@@ -73,7 +73,7 @@
   --warn-bg: #f5e9c9;
   --warn-border: #d9c287;
   --warn-fg: #6b4d00;
-  --error: #c62828;
+  --error: #b3261e;              /* >=4.5:1 on --error-bg (light) */
   --error-bg: #f6d2d2;
   --error-hover: #efbdbd;
   --error-border: #d9a5a5;
