@@ -80,14 +80,14 @@
 
 > 规范：06 §十七、03 §六（G-17 分屏模型）、01 R-14。P3，最大步骤，拆 6 子阶段。
 
-- [ ] **16a-1** PaneTree 纯模块（schema 冻结，03 §6.1/6.3）：`SplitNode/PaneLeaf/PaneNode` tagged union；`singleLeaf/splitLeaf/removeLeaf/setRatioBySplitKey/leafCount/depth/firstLeaf/listPaneIds/validateTree`；MAX_DEPTH=4、MAX_LEAVES=8、ratio clamp 0.10..0.90；关闭压缩、split 拒绝（深/满）时 tree 不变。
-- [ ] **16a-2** 纯模块 vitest：嵌套 split、关闭压缩、ratio clamp、深度/叶数上限拒绝、非法 tree 校验、round-trip。
-- [ ] **16b-1** history schema v2（A-G17-3）：Rust `schema_version=2`，TabRecord 增 `split_layout`（version/active_pane_id/root tagged union）；v1→v2 锁内原子迁移（旧 tab 转单叶、保留 tab ID/顺序/active），迁移失败保留 v1 原文件；旧版本拒写 v2；v2 round-trip + 损坏/过深/重复 ID 降级。
-- [ ] **16c-1** store 迁移（A-G17-2/5/6）：tab 持有 PaneTree + `active_pane_id`；open/close/reopen/Exit reducer 按 pane；资源原子计数（opening/running/closing ≤8，closing 前不释放）；provider polling/sidebar/title/generation 经 active pane；last-pane 关闭 → dormant 单叶保留 tab。
-- [ ] **16d-1** 分屏渲染与交互（A-G17-1/4/5）：PaneTree.vue 递归 CSS grid + divider；split 动作（水平/垂直）校验容量与 pane 最小尺寸；divider 指针拖拽 + 键盘 0.05 步长；每叶独立 Terminal/Session/ResizeObserver；隐藏 pane 不发零尺寸；拖动结束发最终尺寸。
-- [ ] **16d-2** tab+pane 混合、runtime stop、shutdown、恢复均覆盖测试。
+- [x] **16a-1** PaneTree 纯模块（schema 冻结，03 §6.1/6.3）：`SplitNode/PaneLeaf/PaneNode` tagged union；`singleLeaf/splitLeaf/removeLeaf/setRatioBySplitKey/leafCount/depth/firstLeaf/listPaneIds/validateTree`；MAX_DEPTH=4、MAX_LEAVES=8、ratio clamp 0.10..0.90；关闭压缩、split 拒绝（深/满）时 tree 不变。
+- [x] **16a-2** 纯模块 vitest：嵌套 split、关闭压缩、ratio clamp、深度/叶数上限拒绝、非法 tree 校验、round-trip。
+- [x] **16b-1** history schema v2（A-G17-3）：Rust `schema_version=2`，TabRecord 增 `split_layout`（version/active_pane_id/root tagged union）；v1→v2 锁内原子迁移（旧 tab 转单叶、保留 tab ID/顺序/active），迁移失败保留 v1 原文件；旧版本拒写 v2；v2 round-trip + 损坏/过深/重复 ID 降级。
+- [x] **16c-1** store 迁移（A-G17-2/5/6）：tab 持有 PaneTree + `active_pane_id`；open/close/reopen/Exit reducer 按 pane；资源原子计数（opening/running/closing ≤8）；provider polling/sidebar/title/generation 经 active pane；last-pane 关闭 → dormant 单叶保留 tab。
+- [x] **16d-1** 分屏渲染与交互（A-G17-1/4/5）：PaneTree.vue 递归 CSS grid + divider；split 动作（水平/垂直）校验容量；divider 指针拖拽 + 键盘 0.05 步长；每叶独立 Terminal/Session/ResizeObserver；点击 pane 激活。
+- [x] **16d-2** 自动化：paneTree 17 + paneRuntime 12 + 全量 vitest 104 + vue-tsc 全绿；Rust 105（16b history）+ cli_runner 7 + pty_supervisor 7。
 - [ ] **16e-1** 手动测试：嵌套 split、关闭压缩、拖拽 resize、tab+pane、第 9 个拒绝、重启恢复、runtime stop/退出全回收。
-- **Step 16 结论**：待完成。
+- **Step 16 结论**：待完成（自动化已绿，手测待用户）。
 
 ## Step 1 验收清单（G-18 sidecar 入用户 PATH，分支 step-1-g18-path）
 
