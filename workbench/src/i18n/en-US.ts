@@ -190,6 +190,10 @@ export const enUS: Record<string, string> = {
   "doctor.status.warn": "Warn",
   "doctor.status.fail": "Fail",
   "doctor.status.skip": "Skip",
+  // --- build completion notification (G-14, Step 13) ---
+  "notification.title": "AISC Workbench",
+  "notification.buildComplete": "Image build complete ({duration}s)",
+  "notification.buildFailed": "Image build failed",
 
   // --- settings dialog (SettingsDialog.vue) ---
   "settings.title": "Settings",

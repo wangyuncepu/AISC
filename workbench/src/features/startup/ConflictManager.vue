@@ -38,7 +38,7 @@ function short(id: string): string {
             @click="store.removeConflictRuntime(r.runtime_id, true)"
           >{{ t("conflict.forceRemove") }}</button>
           <button
-            v-else-if="r.state === 'stopped' || r.state === 'stopping'"
+            v-else-if="r.state === 'stopped' || r.state === 'stopping' || r.state === 'not_found'"
             class="danger"
             @click="store.removeConflictRuntime(r.runtime_id, false)"
           >{{ t("conflict.remove") }}</button>

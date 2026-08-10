@@ -35,6 +35,21 @@
 - [x] **12b-4** 手动测试（通过，2026-08-10）：用户确认 1-6 全过——ready 详情入口弹诊断自动运行、check 状态/summary/hint 展示正常；连点运行按钮只跑一次（在途禁用）；退出 Docker Desktop 后 docker check 显示失败 + hint、页面不卡、可重试；关闭后 startup 状态不变。
 - **Step 12 结论（2026-08-10）**：Rust 101 + cli_runner 7 + pty_supervisor 7 + vitest 49 + vue-tsc + cargo build 全绿；手测 1-6 通过。**Step 12 完成。**
 
+## Step 13 验收清单（G-14 构建最终耗时与通知，分支 step-13-build-notify）
+
+> 规范：06 §十四、02 §七（F-6）、01 R-11。
+
+- [x] **13a-1** 依赖与插件（06 §十四）：npm `@tauri-apps/plugin-notification` + Rust `tauri-plugin-notification`，`.plugin(init())`；capability 仅 `notification:allow-is-permission-granted`/`allow-request-permission`/`allow-notify` + `core:window:allow-is-focused`/`allow-is-minimized`。
+- [x] **13b-1** store 计时（A-G14-1/4）：`buildStartedAt/buildFinishedAt/buildDurationMs` 入 store；`startBuild` stamp started；首次 Promise settle 冻结 finished/duration 一次；cancelled 同样冻结；离开再返回显示冻结值不增长。
+- [x] **13b-2** 单一终态（A-G14-2）：terminal 结果仅由 `buildImage()` Promise settle 写入（Channel 只流 build.output）；单调 op 计数 guard，被取代 build 的迟到 settle 忽略（duration/状态/通知不重复）。
+- [x] **13b-3** 通知（A-G14-1/3）：仅窗口后台（失焦或最小化）且 complete/failed 通知一次；cancelled 不通知；前台 0 条。权限每 launch 至多请求一次；denied/unavailable/勿扰静默降级不改变 build 事实。
+- [x] **13b-4** BuildProgress 显示：building 时活计时（tick 停止于 settle，A-G14-4），settle 后显示冻结耗时；终态耗时始终显示。
+- [x] **13c-1** i18n：notification.title/buildComplete/buildFailed zh-CN/en-US + key-parity。
+- [x] **13c-2** 自动化：vitest 59（+10 build/notify，含 A-G14-2 乱序/被取代、A-G14-1 前台 0 条/后台恰好 1 条、A-G14-3 权限降级不循环）；Rust 101 + cli_runner 7 + pty_supervisor 7 + vue-tsc + cargo build 全绿。
+- [x] **13b-5** 手动测试（通过，2026-08-10）：后台 build 完成收到恰好 1 条系统通知；前台 build 0 条；终态耗时冻结不增长；权限拒绝降级、cancelled 不通知。
+- [x] **13d-1** 手测中发现并修复的 bug：① 镜像缺失时若 action=reuse（工作区有匹配 runtime），构建按钮被 `imageMissing` 隐藏 → 死路；改为 `imageNotFound`（fail + `AISC_ERR_IMAGE_NOT_FOUND`，与 action 无关）驱动按钮与提示。② stale registry 记录（container 被手动删除）被 preflight 判为 reuse → session open 打不存在 container → RUNTIME_NOT_FOUND 死循环；CLI `_get_container_state` 区分 `not_found`，matching 分支对 stale 记录报 conflict（resolve_conflict → ConflictManager），ConflictManager 对 not_found 状态补「移除」按钮。均带 vitest/Python 测试锁定（vitest 65、Python 392）。
+- **Step 13 结论（2026-08-10）**：vitest 65 + Python 392 + Rust 101/cli_runner 7/pty_supervisor 7 + vue-tsc + cargo build 全绿；G-14 手测 1-6 通过；手测暴露的镜像缺失按钮、stale runtime 两个 bug 已修复并验证。**Step 13 完成。**
+
 ## Step 1 验收清单（G-18 sidecar 入用户 PATH，分支 step-1-g18-path）
 
 > 规范：05-cli-gui-contract.md §五（PATH 安全算法）、06 §二；门禁 A-G18-1..4。

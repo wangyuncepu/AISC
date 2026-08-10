@@ -33,6 +33,17 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/core", () => ({ Channel: class {} }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: vi.fn(() => ({
+    isFocused: vi.fn().mockResolvedValue(true),
+    isMinimized: vi.fn().mockResolvedValue(false),
+  })),
+}));
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: vi.fn().mockResolvedValue(false),
+  requestPermission: vi.fn().mockResolvedValue("denied"),
+  sendNotification: vi.fn().mockResolvedValue(undefined),
+}));
 
 const SNAP: RuntimeSnapshot = {
   runtime_id: "11111111-1111-4111-8111-111111111111",
