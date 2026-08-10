@@ -660,6 +660,18 @@ export const useRuntimeStore = defineStore("runtime", () => {
     }, 300);
   }
 
+  /** Flush a pending debounced save immediately (used on quit - a split or
+   * pane-close inside the 300ms window must survive "立即关窗口 → 恢复布局",
+   * G-17 feedback 2026-08-10). Best-effort: conflict retries stay fire-and-forget. */
+  function flushSave(): Promise<void> {
+    if (saveTimer !== null) {
+      window.clearTimeout(saveTimer);
+      saveTimer = null;
+      return doSave(3);
+    }
+    return Promise.resolve();
+  }
+
   async function doSave(retries: number) {
     if (!workspace.value.trim()) return;
     const patch = buildPatch();
@@ -1469,6 +1481,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     userRefreshInFlight,
     loadProviderStatus,
     clearProviderStatuses,
+    flushSave,
     loadHistory,
     selectRecentWorkspace,
     loadConflicts,

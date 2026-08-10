@@ -265,6 +265,9 @@ async function runExitFlow(): Promise<void> {
   void ipc.trayRemove().catch(() => undefined);
   // G-10: flush geometry before shutdown (A-G10-5).
   void ipc.captureWindowGeometry().catch(() => undefined);
+  // G-17: flush the debounced history save so a split/pane-close inside the
+  // 300ms window survives 恢复布局 on the next launch (feedback 2026-08-10).
+  await store.flushSave();
   void ipc.shutdownWorkbench().catch((e) => {
     console.error("shutdown_workbench failed, destroying window:", e);
     void win.destroy().catch(() => undefined);
@@ -344,13 +347,12 @@ function isStartingView(s: string): boolean {
 // G-17 (Step 16): render each non-idle tab as a PaneTree (single-leaf for a
 // flat tab, recursive splits for a split tab). v-show keeps hidden tabs (and
 // their PTYs) alive so switching back preserves scrollback (03 §六.8).
-// A split tab always has content to show even when its PROJECTION is briefly
-// "idle" (a freshly split claude/codex pane is idle until the provider gate
-// resolves) - hiding it made the whole page vanish mid-split (G-17 feedback
-// 2026-08-10). Flat idle tabs (never opened) stay hidden as before.
-const paneTabs = computed(() =>
-  store.tabs.filter((t) => t.sessionState !== "idle" || leafCount(t.tree) > 1)
-);
+// Render EVERY tab's PaneTree. Each leaf already shows the right content
+// (Terminal / GuidePane / dormant start view), so a tab is never black - not
+// mid-split, not while a claude/codex provider gate is pending, not after a
+// layout restore (G-17 feedback 2026-08-10). v-show keeps only the active tab
+// visible; the projection filter was the source of the whole-page vanish.
+const paneTabs = computed(() => store.tabs);
 
 // S3.3: expose each tab's PaneTree so switching moves keyboard focus to the
 // active pane's terminal.

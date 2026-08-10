@@ -242,3 +242,45 @@ describe("newPaneTab / conversions (03 §6.3)", () => {
     expect(tab.activePaneId).toBe("p2");
   });
 });
+
+describe("restore of unconfigured claude|codex panes (G-17 feedback 2026-08-10)", () => {
+  it("initTabs routes every split leaf through the guide gate - none stays idle", async () => {
+    mockIpc.getProviderStatus.mockResolvedValue({
+      provider_name: null,
+      route_mode: "unknown",
+      auth_status: "not_configured",
+      observed_at: "x",
+    });
+    const s = useRuntimeStore();
+    s.runtimeState = "running";
+    s.runtimeId = "rid";
+    s.workspace = "/ws";
+    // Persisted split: claude | codex (both unconfigured), active = claude leaf.
+    const tree = splitLeaf(singleLeaf("p1", "claude"), "p1", "p2", "horizontal", "codex", 0.5)!;
+    s.initTabs(
+      [
+        {
+          tab_id: "saved1",
+          agent: "claude",
+          title: "Claude",
+          position: 0,
+          split_layout: { version: 2, active_pane_id: "p1", root: internalToPersisted(tree) },
+        },
+      ],
+      {}
+    );
+    await tick();
+    await tick();
+    const tab = s.tabs[0];
+    expect(tab).toBeDefined();
+    // Every leaf is gated to guide (no session), never left idle.
+    expect(tab.panes["p1"].sessionState).toBe("guide");
+    expect(tab.panes["p2"].sessionState).toBe("guide");
+    expect(tab.panes["p1"].sessionId).toBeNull();
+    expect(tab.panes["p2"].sessionId).toBeNull();
+    // Projection mirrors the ACTIVE (claude) pane - tab bar label too.
+    expect(tab.sessionState).toBe("guide");
+    expect(tab.agent).toBe("claude");
+    expect(tab.title).toBe("Claude");
+  });
+});
