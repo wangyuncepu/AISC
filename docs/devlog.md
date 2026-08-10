@@ -50,6 +50,18 @@
 - [x] **13d-1** 手测中发现并修复的 bug：① 镜像缺失时若 action=reuse（工作区有匹配 runtime），构建按钮被 `imageMissing` 隐藏 → 死路；改为 `imageNotFound`（fail + `AISC_ERR_IMAGE_NOT_FOUND`，与 action 无关）驱动按钮与提示。② stale registry 记录（container 被手动删除）被 preflight 判为 reuse → session open 打不存在 container → RUNTIME_NOT_FOUND 死循环；CLI `_get_container_state` 区分 `not_found`，matching 分支对 stale 记录报 conflict（resolve_conflict → ConflictManager），ConflictManager 对 not_found 状态补「移除」按钮。均带 vitest/Python 测试锁定（vitest 65、Python 392）。
 - **Step 13 结论（2026-08-10）**：vitest 65 + Python 392 + Rust 101/cli_runner 7/pty_supervisor 7 + vue-tsc + cargo build 全绿；G-14 手测 1-6 通过；手测暴露的镜像缺失按钮、stale runtime 两个 bug 已修复并验证。**Step 13 完成。**
 
+## Step 14 验收清单（G-15 动态窗口标题，分支 step-14-dynamic-title）
+
+> 规范：06 §十五、02 §六（F-5）、01 R-12。
+
+- [x] **14a-1** 标题纯函数（A-G15-2）：`computeWindowTitle` 优先级——活动 tab 有 Session type → `<workspace> · <Session type> · AISC Workbench`；有 workspace 无 session → `<workspace> · AISC Workbench`；无 workspace → `AISC Workbench`；idle tab（空 tree）不残留旧 type。
+- [x] **14a-2** basename（A-G15-1）：跨 `/` 与 `\`、去尾分隔符、drive root 保留。
+- [x] **14a-3** 截断（A-G15-3）：workspace basename >40 grapheme 保留首尾各 18 + `…`；`Intl.Segmenter` grapheme 级，CJK/emoji/组合字符不截断 cluster。
+- [x] **14a-4** 接线：App.vue watch 活动上下文（workspace + activeTab + session state）→ `getCurrentWindow().setTitle()`；无轮询；setTitle 失败仅 console.warn 不影响主流程。仅新增 `core:window:allow-set-title` capability。
+- [x] **14a-5** 自动化：vitest 75（+10 title，含 basename/优先级/grapheme 截断）+ vue-tsc + cargo build + Rust 101/7/7 全绿。
+- [x] **14b-1** 手动测试（通过，2026-08-10）：无 workspace → `AISC Workbench`；选 workspace → `test · AISC Workbench`；开 Bash → `test · Bash · AISC Workbench`；切 Claude/Codex tab 标题跟随；关全部 tab 回落 `test · AISC Workbench`。
+- **Step 14 结论（2026-08-10）**：vitest 75 + Rust 101/cli_runner 7/pty_supervisor 7 + vue-tsc + cargo build 全绿；手测通过。**Step 14 完成。**
+
 ## Step 1 验收清单（G-18 sidecar 入用户 PATH，分支 step-1-g18-path）
 
 > 规范：05-cli-gui-contract.md §五（PATH 安全算法）、06 §二；门禁 A-G18-1..4。
