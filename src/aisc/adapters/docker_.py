@@ -421,6 +421,20 @@ class RealDockerExecutor:
         """
         import docker  # lazy: every other path stays dependency-free
 
+        # The container's Linux pty emits UTF-8. On zh-CN Windows the ConPTY
+        # output codepage defaults to GBK (CP936), so the drain thread's raw
+        # ``os.write(1, chunk)`` is mis-decoded: multi-byte UTF-8 sequences
+        # turn to mojibake (``─`` -> ``鈧``) AND their lead bytes
+        # eat the following ESC, breaking ANSI escapes. The docker CLI sets
+        # CP_UTF8 itself; the SDK path must too. (G-02 regression 2026-08-10:
+        # cc-switch TUI rendered as ``鈧?`` garbage after the SDK switch.)
+        if os.name == "nt":
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+            except Exception:  # noqa: BLE001
+                pass
+
         try:
             client = docker.from_env()
         except docker.errors.DockerException as exc:

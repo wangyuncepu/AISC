@@ -124,8 +124,9 @@
 - [x] **9a-2** 根因记录（A-G02-2，提交 62cb985）：`docker exec -it` 的 exec pty 创建时定尺寸，docker CLI 无 resize 命令 → ConPTY resize 到不了容器（stty 恒为 spawn 尺寸）。
 - [x] **9a-3** CLI 修复（A-G02-3）：交互会话改走 Docker SDK（`open_interactive`：exec_create(tty) + exec_start(socket) + 尺寸 watcher → `exec_resize`）；docker-py 成为首个运行时依赖。Windows 特有问题三连：os.read 在两种 console 模式都丢 CR/LF（cooked 等 Enter 吃 CR、raw 丢终止符）→ 改 `ReadConsoleInputW` 读 KEY_EVENT（Enter 自带 CR），resize 风暴期控制台 API 瞬断重试 ~1s；`os.get_terminal_size` 对输入句柄失败 → stdout `GetConsoleScreenBufferInfo`；exec 初始 0×0 → watcher 首轮即 resize。
 - [x] **9a-4** 端到端（A-G02-4）：外部探针（`stty size < /proc/<agent-pid>/fd/0`，与会话 stdin 解耦——ConPTY 在 resize 风暴下周期性丢输入事件属平台限制，已在测试注释记录）3 尺寸 × 20 次全过；输入路径单测 echo 验证。
-- [ ] **9b-1** 手动测试（待）：cc-switch TUI 连续 20 次 resize 无残留旧区域、光标可见；应用内窗口拖拽 resize 终端跟随。
-- **Step 9 结论（2026-08-10）**：python 390 绿；A-G02-1..3 证据齐，A-G02-4 待手测。
+- [x] **9a-5** TUI 输出编码修复（SDK 切换回归，2026-08-10 手测暴露）：cc-switch TUI 全屏乱码（`鈹?` = GBK 解 UTF-8 的 `─`，`E2 94 80` 中 `80` 作 GBK lead byte 还吞掉后续 `ESC` -> ANSI 转义也断）。根因：SDK 路径 drain 线程 `os.write(1, chunk)` 写容器 UTF-8 裸字节到 ConPTY，而 zh-CN Windows ConPTY 输出代码页默认 GBK（CP936）；之前 `docker exec -it` 的 Go CLI 自行 `SetConsoleOutputCP(65001)`，SDK 路径没有。`entrypoint.py` 的 `_configure_frozen_io()`（`sys.stdout.reconfigure(encoding="utf-8")`）只管 Python 文本模式 `print()`（且对 pipe 有效，pipe 无代码页），管不到 `os.write` 裸字节。修复：`open_interactive` 起始处 `SetConsoleOutputCP(65001)`（Windows only，try/except 兜底），设 ConPTY 输出代码页为 UTF-8。输入路径不受影响（`ReadConsoleInputW` 返回 Unicode WCHAR，与代码页无关）。sidecar 重建 + 三处同步（dist/binaries/target/debug）。
+- [ ] **9b-1** 手动测试（待）：cc-switch TUI 连续 20 次 resize 无残留旧区域、光标可见；应用内窗口拖拽 resize 终端跟随；**cc-switch/任意 TUI 无乱码**（9a-5 编码回归）。
+- **Step 9 结论（2026-08-10）**：python 390 绿（9a-5 后 session/runtime/streaming 97 绿复跑）；A-G02-1..4 证据齐 + 9a-5 编码修复；A-G02-4 + 9a-5 待手测。
 
 ## v2.3.0-dev (2026-08-06 ~ 2026-08-09) - Workbench Phase 1 + Phase 2（S2.1/S2.2.a/S2.2.b/S2.3.a/S2.3.b/S2.4.a/S2.4.b）+ Phase 3（S3.1/S3.2/S3.3）+ Phase 4（S4.1.a/S4.1.b）+ S4.2 发布门（CI+文档）
 
