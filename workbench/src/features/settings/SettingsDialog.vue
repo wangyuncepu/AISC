@@ -21,8 +21,12 @@ type EffectKind = "immediate" | "rebuild" | "restart";
 interface FieldDef {
   key: string;
   labelKey: string;
-  control: "select" | "number" | "text" | "checkbox";
+  control: "select" | "number" | "text" | "checkbox" | "range";
   options?: { value: string; labelKey: string }[];
+  /** Range slider bounds (control: "range"). Values match the Rust schema. */
+  min?: number;
+  max?: number;
+  step?: number;
   effect: EffectKind;
   helpKey?: string;
 }
@@ -33,7 +37,7 @@ const FIELDS: FieldDef[] = [
     { value: "zh-CN", labelKey: "settings.ui.language.zh" },
     { value: "en-US", labelKey: "settings.ui.language.en" },
   ], effect: "immediate" },
-  { key: "ui.font_scale", labelKey: "settings.ui.fontScale", control: "number", effect: "immediate" },
+  { key: "ui.font_scale", labelKey: "settings.ui.fontScale", control: "range", min: 0.8, max: 1.5, step: 0.05, effect: "immediate" },
   { key: "ui.theme", labelKey: "settings.ui.theme", control: "select", options: [
     { value: "system", labelKey: "settings.ui.theme.system" },
     { value: "dark", labelKey: "settings.ui.theme.dark" },
@@ -41,16 +45,16 @@ const FIELDS: FieldDef[] = [
   ], effect: "immediate" },
   { key: "terminal.font_family", labelKey: "settings.term.fontFamily", control: "text",
     effect: "rebuild", helpKey: "settings.term.fontFamily.help" },
-  { key: "terminal.font_size", labelKey: "settings.term.fontSize", control: "number", effect: "immediate" },
-  { key: "terminal.line_height", labelKey: "settings.term.lineHeight", control: "number", effect: "immediate" },
-  { key: "terminal.letter_spacing", labelKey: "settings.term.letterSpacing", control: "number", effect: "immediate" },
-  { key: "terminal.scrollback", labelKey: "settings.term.scrollback", control: "number", effect: "immediate" },
+  { key: "terminal.font_size", labelKey: "settings.term.fontSize", control: "range", min: 10, max: 24, step: 1, effect: "immediate" },
+  { key: "terminal.line_height", labelKey: "settings.term.lineHeight", control: "range", min: 1.0, max: 1.6, step: 0.05, effect: "immediate" },
+  { key: "terminal.letter_spacing", labelKey: "settings.term.letterSpacing", control: "range", min: -1, max: 3, step: 1, effect: "immediate" },
+  { key: "terminal.scrollback", labelKey: "settings.term.scrollback", control: "range", min: 1000, max: 50000, step: 1000, effect: "immediate" },
   { key: "terminal.renderer", labelKey: "settings.term.renderer", control: "select", options: [
     { value: "auto", labelKey: "settings.term.renderer.auto" },
     { value: "default", labelKey: "settings.term.renderer.default" },
     { value: "webgl", labelKey: "settings.term.renderer.webgl" },
   ], effect: "rebuild" },
-  { key: "terminal.smooth_scroll_duration", labelKey: "settings.term.smoothScroll", control: "number", effect: "immediate" },
+  { key: "terminal.smooth_scroll_duration", labelKey: "settings.term.smoothScroll", control: "range", min: 0, max: 500, step: 10, effect: "immediate" },
   { key: "window.remember_geometry", labelKey: "settings.window.rememberGeometry", control: "checkbox", effect: "restart" },
   { key: "window.close_behavior", labelKey: "settings.window.closeBehavior", control: "select", options: [
     { value: "quit", labelKey: "settings.window.closeBehavior.quit" },
@@ -156,7 +160,8 @@ function onCancel() {
                 <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
               </select>
               <input v-else-if="f.key === 'ui.font_scale'" :id="f.key" v-model="ui.font_scale"
-                type="number" min="0.8" max="1.5" step="0.05" :disabled="store.readOnly" />
+                type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
+              <span v-if="f.control === 'range'" class="val">{{ f.key === 'ui.font_scale' ? ui.font_scale.toFixed(2) : '' }}</span>
               <select v-else-if="f.key === 'ui.theme'" :id="f.key" v-model="ui.theme" :disabled="store.readOnly">
                 <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
               </select>
@@ -170,14 +175,27 @@ function onCancel() {
             <div v-for="f in FIELDS.filter((x) => x.key.startsWith('terminal.'))" :key="f.key" class="field">
               <label :for="f.key" class="label">{{ t(f.labelKey) }}</label>
               <input v-if="f.control === 'text'" :id="f.key" v-model="terminal.font_family" type="text" :disabled="store.readOnly" />
-              <input v-else-if="f.key === 'terminal.font_size'" :id="f.key" v-model="terminal.font_size" type="number" min="10" max="24" step="1" :disabled="store.readOnly" />
-              <input v-else-if="f.key === 'terminal.line_height'" :id="f.key" v-model="terminal.line_height" type="number" min="1.0" max="1.6" step="0.05" :disabled="store.readOnly" />
-              <input v-else-if="f.key === 'terminal.letter_spacing'" :id="f.key" v-model="terminal.letter_spacing" type="number" min="-1" max="3" step="1" :disabled="store.readOnly" />
-              <input v-else-if="f.key === 'terminal.scrollback'" :id="f.key" v-model="terminal.scrollback" type="number" min="1000" max="50000" step="1000" :disabled="store.readOnly" />
+              <input v-else-if="f.key === 'terminal.font_size'" :id="f.key" v-model="terminal.font_size"
+                type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
+              <input v-else-if="f.key === 'terminal.line_height'" :id="f.key" v-model="terminal.line_height"
+                type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
+              <input v-else-if="f.key === 'terminal.letter_spacing'" :id="f.key" v-model="terminal.letter_spacing"
+                type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
+              <input v-else-if="f.key === 'terminal.scrollback'" :id="f.key" v-model="terminal.scrollback"
+                type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
               <select v-else-if="f.key === 'terminal.renderer'" :id="f.key" v-model="terminal.renderer" :disabled="store.readOnly">
                 <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
               </select>
-              <input v-else-if="f.key === 'terminal.smooth_scroll_duration'" :id="f.key" v-model="terminal.smooth_scroll_duration" type="number" min="0" max="500" step="10" :disabled="store.readOnly" />
+              <input v-else-if="f.key === 'terminal.smooth_scroll_duration'" :id="f.key" v-model="terminal.smooth_scroll_duration"
+                type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
+              <span v-if="f.control === 'range'" class="val">{{
+                f.key === 'terminal.font_size' ? terminal.font_size + 'px'
+                : f.key === 'terminal.line_height' ? terminal.line_height.toFixed(2)
+                : f.key === 'terminal.letter_spacing' ? terminal.letter_spacing
+                : f.key === 'terminal.scrollback' ? terminal.scrollback
+                : f.key === 'terminal.smooth_scroll_duration' ? terminal.smooth_scroll_duration + 'ms'
+                : ''
+              }}</span>
               <span class="effect">{{ t(EFFECT_KEY[f.effect]) }}</span>
               <span v-if="f.helpKey" class="help">{{ t(f.helpKey) }}</span>
               <span v-if="issuesByField[f.key]" class="err-text">{{ issuesByField[f.key] }}</span>
@@ -248,7 +266,14 @@ input[type="text"], input[type="number"], select {
   background: #1e1e1e; color: #ddd; border: 1px solid #444; border-radius: 4px;
   padding: 4px 6px; font-size: 13px; flex: 1; min-width: 120px;
 }
+input[type="range"] {
+  flex: 1; min-width: 120px; accent-color: #0e639c; cursor: pointer;
+}
 input:disabled, select:disabled { opacity: 0.5; }
+.val {
+  font-size: 12px; color: #9cc4e0; min-width: 46px; text-align: right;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
 .effect { font-size: 11px; color: #888; white-space: nowrap; }
 .help { font-size: 11px; color: #6a6a6a; width: 100%; }
 .err-text { font-size: 11px; color: #e57373; width: 100%; }
