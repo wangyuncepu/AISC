@@ -932,15 +932,16 @@ export const useRuntimeStore = defineStore("runtime", () => {
     tabId: string,
     axis: SplitAxis,
     sessionType: LaunchAgent,
-    sizeOk = true
+    sizeOk = true,
+    targetPaneId?: string
   ): string | null {
     const tab = findTab(tabId);
     if (!tab || !sizeOk) return null;
     // A-G17-6: leaf cap + resource cap (the new pane will hold a session).
     if (totalLeaves() >= MAX_PANES || totalResources() >= MAX_PANES) return null;
-    const targetPaneId = tab.activePaneId;
+    const target = targetPaneId ?? tab.activePaneId;
     const newPaneId = uuid();
-    const tree = splitLeaf(tab.tree, targetPaneId, newPaneId, axis, sessionType, DEFAULT_RATIO);
+    const tree = splitLeaf(tab.tree, target, newPaneId, axis, sessionType, DEFAULT_RATIO);
     if (!tree) return null;
     tab.tree = tree;
     tab.panes[newPaneId] = { sessionId: null, sessionState: "idle", exit: null };

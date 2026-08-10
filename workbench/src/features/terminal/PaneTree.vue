@@ -13,7 +13,7 @@
 import { computed, nextTick, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
-import { RATIO_STEP, splitKey } from "../../stores/paneTree";
+import { RATIO_STEP, leafCount, splitKey } from "../../stores/paneTree";
 import Terminal from "./Terminal.vue";
 import GuidePane from "./GuidePane.vue";
 import type { PaneNode, PaneSplitNode } from "../../types";
@@ -29,6 +29,8 @@ const pane = computed(() => (props.tree.kind === "pane" ? props.tree : null));
 const paneRuntime = computed(() =>
   pane.value ? (tab.value?.panes[pane.value.paneId] ?? null) : null
 );
+/** Only panes of a multi-leaf tree get a close button (single pane: none). */
+const canClosePane = computed(() => (tab.value ? leafCount(tab.value.tree) > 1 : false));
 const showTerminal = computed(
   () =>
     paneRuntime.value &&
@@ -140,6 +142,7 @@ defineExpose({ focusActivePane });
     @pointerdown.self="activatePane"
   >
     <button
+      v-if="canClosePane"
       class="pane-close"
       :title="t('pane.close')"
       :aria-label="t('pane.close')"

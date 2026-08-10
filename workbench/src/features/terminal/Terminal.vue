@@ -28,8 +28,10 @@ import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import "@xterm/xterm/css/xterm.css";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useSettingsStore } from "../../stores/settings";
+import { AGENTS } from "../../stores/tabLayout";
 import { resizeSession, writeSession } from "../../lib/ipc";
 import { resolveRenderer, TERMINAL_THEME } from "./renderer";
+import type { LaunchAgent } from "../../types";
 
 const { t } = useI18n();
 const props = defineProps<{ tabId: string; paneId: string }>();
@@ -68,6 +70,8 @@ const caseSensitive = ref(false);
 const searchResult = ref<{ current: number; total: number } | null>(null);
 // G-11 context menu state.
 const ctxMenu = ref<{ x: number; y: number } | null>(null);
+/** G-17: after picking a split axis, choose which session type to open. */
+const splitPicker = ref<{ x: number; y: number; axis: "horizontal" | "vertical" } | null>(null);
 const hasSelection = ref(false);
 
 /** G-06: build the Terminal from the typed settings (02 §三.4 table). Values
@@ -242,6 +246,19 @@ function closeMenu() {
   term?.focus(); // A-G11-1: menu close returns focus to the terminal
 }
 
+// --- G-17: split via the pane context menu + session-type picker ---
+function openSplitPicker(axis: "horizontal" | "vertical", x: number, y: number) {
+  splitPicker.value = { x, y, axis };
+  ctxMenu.value = null;
+}
+function chooseSplitAgent(agent: LaunchAgent) {
+  const p = splitPicker.value;
+  splitPicker.value = null;
+  term?.focus();
+  if (!p) return;
+  store.splitTabPane(props.tabId, p.axis, agent, true, props.paneId);
+}
+
 /** A-G03-2/A-G11-3: copy the current selection (keyboard + menu share this). */
 async function doCopy() {
   const sel = term?.getSelection();
@@ -322,6 +339,7 @@ function onTermCustomKey(e: KeyboardEvent): boolean {
 
 function onTerminalClick() {
   if (ctxMenu.value) ctxMenu.value = null;
+  if (splitPicker.value) splitPicker.value = null;
 }
 
 onMounted(() => {
@@ -474,6 +492,28 @@ defineExpose({
       <button :disabled="!sessionLive" @click="pasteFromClipboard">{{ t("terminal.paste") }}</button>
       <button @click="openSearchFromMenu">{{ t("terminal.search") }}</button>
       <button @click="clearScreen">{{ t("terminal.clear") }}</button>
+      <!-- G-17: split this pane (choose a session type next) -->
+      <span class="sep" />
+      <button @click="openSplitPicker('horizontal', ctxMenu.x, ctxMenu.y)">
+        {{ t("tabbar.menu.splitH") }}
+      </button>
+      <button @click="openSplitPicker('vertical', ctxMenu.x, ctxMenu.y)">
+        {{ t("tabbar.menu.splitV") }}
+      </button>
+    </div>
+
+    <!-- G-17: choose the session type for the new split pane -->
+    <div
+      v-if="splitPicker"
+      class="ctx-menu split-picker"
+      :style="{ left: splitPicker.x + 'px', top: splitPicker.y + 'px' }"
+      @contextmenu.prevent
+      @click.stop
+    >
+      <span class="sep" />
+      <button v-for="a in AGENTS" :key="a" @click="chooseSplitAgent(a)">
+        {{ t(`tabbar.menu.${a}`) }}
+      </button>
     </div>
   </div>
 </template>
@@ -562,5 +602,10 @@ defineExpose({
 .ctx-menu button:disabled {
   color: #6e6e6e;
   cursor: default;
+}
+.ctx-menu .sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: #3c3c3c;
 }
 </style>
