@@ -116,6 +116,15 @@
 - [x] **8c-1** 手动测试（2026-08-10）：侧栏分层/详情/复制/双语、banner 三动作、cc-switch 配置后启动会话、官方登录进 TUI 可直输、恢复布局 gate、外部 stop stale 样式。全部通过。
 - **Step 8 结论（2026-08-10）**：vitest 44 绿（sidebar 5 + restore-gate 1 新增）；A-G05-1..4、A-G12-1/2 证据齐。
 
+## Step 10 验收清单（G-10 窗口尺寸/位置记忆，分支 step-10-geometry）
+
+> 规范：06 §十一、02 §A-G10-1..5。
+
+- [x] **10a-1** Rust 命令（A-G10-1/2/3）：`window.rs` 新模块：`restore_window_geometry`（启动时读 `window.geometry`，clamp 到显示器至少 64×64 可见、最小 800×600，应用位置/尺寸/最大化）+ `capture_window_geometry`（写当前 logical 位置/尺寸/最大化到 settings，`save_with_replay` 冲突安全；跳过 fullscreen/minimized）。physical->logical 转换 via scale_factor。离屏检测回退 OS 默认。
+- [x] **10a-2** 生命周期接线（A-G10-5）：`lib.rs` setup hook 启动时调 restore（窗口显示前）；`App.vue` 窗口 resize 后 300ms 防抖调 capture；关闭前 `onCloseRequested` 中 `shutdownWorkbench` 之前 flush。
+- [x] **10b-1** 手动测试（通过，2026-08-10）：NSIS 安装器实测--移动/调整窗口大小 -> 关闭 -> 重开 -> 位置/尺寸恢复；最大化 -> 关闭 -> 重开 -> 恢复最大化；`remember_geometry=false` 不记忆。用户确认"没有问题，测试通过"。
+- **Step 10 结论（2026-08-10）**：Rust 91 绿 + vue-tsc + vite build 零错误；settings schema（`window.geometry`）Step 3 已定义，Step 10 只加命令 + 生命周期钩子。**Step 10 完成。**
+
 ## Step 9 验收清单（G-02 Resize 根因定位与修复，分支 step-9-resize）
 
 > 规范：06 §十（先诊断后修改）、05 A-G02-1..4。

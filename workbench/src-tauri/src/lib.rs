@@ -14,6 +14,7 @@ pub mod runtime;
 pub mod session;
 pub mod settings;
 pub mod storage;
+pub mod window;
 
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use history::{load_history, save_history};
@@ -28,6 +29,7 @@ use session::{
     write_session, SessionRegistry,
 };
 use settings::{load_settings, reset_gui_settings, save_settings};
+use window::{capture_window_geometry, restore_window_geometry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(cli_arg: Option<String>) {
@@ -68,7 +70,18 @@ pub fn run(cli_arg: Option<String>) {
             save_settings,
             reset_gui_settings,
             resolve_locale,
+            restore_window_geometry,
+            capture_window_geometry,
         ])
+        .setup(|app| {
+            // G-10: restore window geometry on startup (before the window
+            // is shown, so the user sees the saved position immediately).
+            let app_handle = app.handle().clone();
+            if let Err(e) = restore_window_geometry(app_handle) {
+                eprintln!("[geometry] restore failed: {:?}", e);
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
