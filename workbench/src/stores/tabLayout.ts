@@ -6,7 +6,17 @@
  * with a saved tab_id → new tab_id map for the active-tab mapping. No
  * agent-based `.find()` dedup.
  */
-import type { LaunchAgent, Tab, TabRecord } from "../types";
+import type {
+  LaunchAgent,
+  PaneLeafNode,
+  PaneNode,
+  PaneRuntime,
+  PersistedPaneNode,
+  SplitLayout,
+  Tab,
+  TabRecord,
+} from "../types";
+import { singleLeaf } from "./paneTree";
 
 /** Platform check evaluated per call so unit tests can stub `navigator`. */
 function isWin(): boolean {
@@ -55,10 +65,97 @@ function newTabId(): string {
   return crypto.randomUUID();
 }
 
+// --- G-17 (Step 16): persisted (snake_case) <-> in-memory (camelCase) trees ---
+
+/** Convert a persisted split_layout tree to the in-memory PaneNode. */
+export function persistedToInternal(node: PersistedPaneNode): PaneNode {
+  if (node.kind === "pane") {
+    return { kind: "pane", paneId: node.pane_id, sessionType: node.session_type };
+  }
+  return {
+    kind: "split",
+    axis: node.axis,
+    ratio: node.ratio,
+    first: persistedToInternal(node.first),
+    second: persistedToInternal(node.second),
+  };
+}
+
+/** Convert an in-memory PaneNode to the persisted snake_case form. */
+export function internalToPersisted(node: PaneNode): PersistedPaneNode {
+  if (node.kind === "pane") {
+    return { kind: "pane", pane_id: node.paneId, session_type: node.sessionType };
+  }
+  return {
+    kind: "split",
+    axis: node.axis,
+    ratio: node.ratio,
+    first: internalToPersisted(node.first),
+    second: internalToPersisted(node.second),
+  };
+}
+
+function emptyPanes(tree: PaneNode): Record<string, PaneRuntime> {
+  const panes: Record<string, PaneRuntime> = {};
+  const walk = (n: PaneNode): void => {
+    if (n.kind === "pane") panes[n.paneId] = { sessionId: null, sessionState: "idle", exit: null };
+    else {
+      walk(n.first);
+      walk(n.second);
+    }
+  };
+  walk(tree);
+  return panes;
+}
+
+/** Build a fresh Tab with the pane model. `splitLayout` (persisted, history
+ * v2) is restored into an in-memory tree; absent -> a single-leaf tree whose
+ * pane shares the tab's UUID (a G-08 flat tab). */
+export function newPaneTab(
+  tabId: string,
+  agent: LaunchAgent,
+  title: string,
+  savedTabId: string | null,
+  splitLayout?: SplitLayout | null
+): Tab {
+  const tree = splitLayout ? persistedToInternal(splitLayout.root) : singleLeaf(tabId, agent);
+  // Active pane: the persisted id when it is a leaf, else the DFS-first leaf.
+  const savedActive = splitLayout?.active_pane_id ?? null;
+  const activePaneId =
+    savedActive && findPane(tree, savedActive)
+      ? savedActive
+      : tree.kind === "pane"
+        ? tree.paneId
+        : firstPane(tree).paneId;
+  return {
+    tabId,
+    agent: findPane(tree, activePaneId)?.sessionType ?? agent,
+    title,
+    sessionId: null,
+    sessionState: "idle",
+    exit: null,
+    savedTabId,
+    tree,
+    activePaneId,
+    panes: emptyPanes(tree),
+  };
+}
+
+function firstPane(n: PaneNode): PaneLeafNode {
+  if (n.kind === "pane") return n;
+  return firstPane(n.first);
+}
+
+function findPane(n: PaneNode, paneId: string): PaneLeafNode | null {
+  if (n.kind === "pane") return n.paneId === paneId ? n : null;
+  return findPane(n.first, paneId) ?? findPane(n.second, paneId);
+}
+
 /**
  * Build per-record tabs. Every record produces exactly one tab; duplicate
  * session types are kept (A-INFRA-1 regression: the old restore deduped via
- * `tabs.find(t => t.agent === agent)`).
+ * `tabs.find(t => t.agent === agent)`). G-17: each tab carries its restored
+ * split tree (single leaf when the record has no split_layout).
  */
 export function tabsFromRecords(
   records: TabRecord[]
@@ -67,15 +164,9 @@ export function tabsFromRecords(
   const bySavedId = new Map<string, string>();
   for (const rec of records) {
     const tabId = newTabId();
-    tabs.push({
-      tabId,
-      agent: rec.agent,
-      title: rec.title || AGENT_TITLE[rec.agent],
-      sessionId: null,
-      sessionState: "idle",
-      exit: null,
-      savedTabId: rec.tab_id ?? null,
-    });
+    tabs.push(
+      newPaneTab(tabId, rec.agent, rec.title || AGENT_TITLE[rec.agent], rec.tab_id ?? null, rec.split_layout)
+    );
     if (rec.tab_id) bySavedId.set(rec.tab_id, tabId);
   }
   return { tabs, bySavedId };

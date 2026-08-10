@@ -263,16 +263,34 @@ export interface Layout {
   tabs: TabRecord[];
 }
 
-// --- G-17 (Step 16): PaneTree persistence schema v2 (03 §6.3) ---
+// --- G-17 (Step 16): PaneTree model (03 §6.1/6.3) ---
 
-/** Persisted tagged union (snake_case, mirrors the Rust PaneNode exactly). */
-export type PaneNode =
+export type SplitAxis = "horizontal" | "vertical";
+
+/** In-memory PaneTree tagged union (camelCase; see stores/paneTree.ts ops). */
+export interface PaneSplitNode {
+  kind: "split";
+  axis: SplitAxis;
+  ratio: number;
+  first: PaneNode;
+  second: PaneNode;
+}
+export interface PaneLeafNode {
+  kind: "pane";
+  paneId: string;
+  sessionType: LaunchAgent;
+}
+export type PaneNode = PaneSplitNode | PaneLeafNode;
+
+/** Persisted PaneTree tagged union (snake_case, mirrors the Rust PaneNode).
+ * History schema v2. */
+export type PersistedPaneNode =
   | {
       kind: "split";
-      axis: "horizontal" | "vertical";
+      axis: SplitAxis;
       ratio: number;
-      first: PaneNode;
-      second: PaneNode;
+      first: PersistedPaneNode;
+      second: PersistedPaneNode;
     }
   | { kind: "pane"; pane_id: string; session_type: LaunchAgent };
 
@@ -280,7 +298,15 @@ export type PaneNode =
 export interface SplitLayout {
   version: number;
   active_pane_id: string;
-  root: PaneNode;
+  root: PersistedPaneNode;
+}
+
+/** Live per-pane session state (pane tree leaf runtime; the pane's static
+ * session type lives in the leaf, not here). */
+export interface PaneRuntime {
+  sessionId: string | null;
+  sessionState: TabSessionState;
+  exit: TabExit | null;
 }
 
 export interface WorkspaceRecord {
@@ -346,6 +372,11 @@ export interface TabExit {
  * the session state machine drives the binding (idle -> starting -> running ->
  * exited/disconnected/failed). Tab identity persists for the workspace session;
  * history persistence lands in S2.4.
+ *
+ * G-17 (Step 16): a tab owns a PaneTree. `agent`/`sessionId`/`sessionState`/
+ * `exit` remain the ACTIVE pane projection (so TabBar/sidebar/title keep
+ * working); `tree`/`activePaneId`/`panes` hold the pane model. A G-08 flat tab
+ * is a single-leaf tree.
  */
 export interface Tab {
   tabId: string;
@@ -357,6 +388,12 @@ export interface Tab {
   /** Saved history tab_id when restored (02 §2.3 saved→new mapping); null for
    * freshly created tabs. */
   savedTabId: string | null;
+  /** G-17: the tab's split tree (camelCase in-memory PaneNode). */
+  tree: PaneNode;
+  /** G-17: active pane id (the session projection mirrors this pane). */
+  activePaneId: string;
+  /** G-17: per-pane live state keyed by pane id (always holds the active pane). */
+  panes: Record<string, PaneRuntime>;
 }
 
 // --- Step 3: typed settings (02 §三.4; wire sections are snake_case, the

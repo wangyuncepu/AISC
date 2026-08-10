@@ -17,6 +17,7 @@ import type {
   LaunchAgent,
   LaunchConfig,
   Layout,
+  PaneRuntime,
   PreflightReport,
   ProviderStatus,
   RuntimeRef,
@@ -34,11 +35,14 @@ import * as ipc from "../lib/ipc";
 import { i18n } from "../i18n";
 import {
   AGENT_TITLE,
+  internalToPersisted,
+  newPaneTab,
   normalizePath,
   resolveActiveTabId,
   sameWorkspace,
   tabsFromRecords,
 } from "./tabLayout";
+import { findLeaf, firstLeaf } from "./paneTree";
 
 /** S2.1.a/b startup state machine (02-startup-flow.md §三). S2.2.b adds `conflict`. */
 export type WorkbenchStatus =
@@ -589,6 +593,17 @@ export const useRuntimeStore = defineStore("runtime", () => {
       agent: t.agent,
       title: t.title,
       position: i,
+      // G-17: persist the split tree; `agent` stays as the flat fallback
+      // (03 §6.3 - the v2 writer keeps it in sync via syncProjection).
+      ...(t.tree
+        ? {
+            split_layout: {
+              version: 1,
+              active_pane_id: t.activePaneId,
+              root: internalToPersisted(t.tree),
+            },
+          }
+        : {}),
     }));
     const activeAgent =
       tabs.value.find((t) => t.tabId === activeTabId.value)?.agent ?? tabs.value[0]?.agent ?? "bash";
@@ -731,8 +746,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
   }
 
   async function confirmExit(): Promise<boolean> {
-    const live = tabs.value.filter(
-      (t) => t.sessionState === "running" || t.sessionState === "starting"
+    // G-17: count live panes across all tabs (a split tab may have several).
+    const live = tabs.value.flatMap((t) => Object.values(t.panes)).filter(
+      (p) => p.sessionState === "running" || p.sessionState === "starting"
     );
     if (live.length === 0) return true;
     const ok = await confirm(
@@ -790,16 +806,51 @@ export const useRuntimeStore = defineStore("runtime", () => {
     return tabs.value.find((t) => t.tabId === tabId);
   }
 
+  // --- G-17 (Step 16): pane-aware session ops ---
+
+  /** The active pane's live runtime (created on demand). */
+  function activePane(tab: Tab): PaneRuntime {
+    let p = tab.panes[tab.activePaneId];
+    if (!p) {
+      p = { sessionId: null, sessionState: "idle", exit: null };
+      tab.panes[tab.activePaneId] = p;
+    }
+    return p;
+  }
+
+  /** Mirror the active pane onto the tab-level projection (sessionId/state/exit
+   * + agent from the active leaf), so TabBar/sidebar/title/Terminal keep working
+   * unchanged. Single-pane tabs are exact; split tabs show the active pane. */
+  function syncProjection(tab: Tab) {
+    const leaf = findLeaf(tab.tree, tab.activePaneId) ?? firstLeaf(tab.tree);
+    if (leaf) tab.agent = leaf.sessionType;
+    const p = tab.panes[tab.activePaneId];
+    if (p) {
+      tab.sessionId = p.sessionId;
+      tab.sessionState = p.sessionState;
+      tab.exit = p.exit;
+    }
+  }
+
+  /** Set the active pane's session state and re-sync the projection. */
+  function setActivePaneState(tab: Tab, patch: Partial<PaneRuntime>): void {
+    Object.assign(activePane(tab), patch);
+    syncProjection(tab);
+  }
+
   /** Open (or reopen) a tab's session: assigns a fresh session_id and enters
    * `starting`. The mounted Terminal watches the session_id and calls
-   * `open_session`; it reports back via onTabOpenOk/onTabOpenFail. */
+   * `open_session`; it reports back via onTabOpenOk/onTabOpenFail. G-17: the
+   * operation binds the tab's ACTIVE pane. */
   function openTab(tabId: string) {
     const tab = findTab(tabId);
     if (!tab) return;
-    if (tab.sessionState === "starting" || tab.sessionState === "running") return;
-    tab.sessionId = uuid();
-    tab.sessionState = "starting";
-    tab.exit = null;
+    const p = activePane(tab);
+    if (p.sessionState === "starting" || p.sessionState === "running") return;
+    p.sessionId = uuid();
+    p.sessionState = "starting";
+    p.exit = null;
+    syncProjection(tab);
     activeTabId.value = tabId;
     scheduleSave();
   }
@@ -809,7 +860,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     const tab = findTab(tabId);
     if (!tab) return;
     activeTabId.value = tabId;
-    if (tab.sessionState === "idle") openTab(tabId);
+    if (activePane(tab).sessionState === "idle") openTab(tabId);
     scheduleSave();
   }
 
@@ -824,15 +875,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
   function createTab(agent: LaunchAgent): string | null {
     if (tabs.value.length >= MAX_TABS) return null;
     const tabId = uuid();
-    tabs.value.push({
-      tabId,
-      agent,
-      title: AGENT_TITLE[agent],
-      sessionId: null,
-      sessionState: "idle",
-      exit: null,
-      savedTabId: null,
-    });
+    tabs.value.push(newPaneTab(tabId, agent, AGENT_TITLE[agent], null));
     activeTabId.value = tabId;
     void maybeOpenCreated(tabId, agent);
     scheduleSave();
@@ -851,9 +894,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
       await loadProviderStatus(agent);
       const st = providerStatuses.value[agent];
       const tab = findTab(tabId);
-      if (!tab || tab.sessionState !== "idle") return;
+      if (!tab || activePane(tab).sessionState !== "idle") return;
       if (!st || ["not_configured", "login_required", "unknown"].includes(st.auth_status)) {
-        tab.sessionState = "guide";
+        setActivePaneState(tab, { sessionState: "guide" });
         return;
       }
     }
@@ -872,17 +915,26 @@ export const useRuntimeStore = defineStore("runtime", () => {
    * best-effort (the PTY Exit event finalizes; Rust reaps); guide/idle tabs
    * have nothing to terminate. Active-tab focus falls to the right neighbor,
    * then the left, then the empty state (A-G08-6). */
+  /** Close every live session in a tab's tree (tab × button; A-G17-6 full-path
+   * recycle). Best-effort: the PTY Exit event finalizes; Rust reaps. */
+  function closeTabSessions(tab: Tab) {
+    for (const p of Object.values(tab.panes)) {
+      if (
+        p.sessionId &&
+        !TERMINAL_STATES.includes(p.sessionState) &&
+        p.sessionState !== "closing"
+      ) {
+        p.sessionState = "closing";
+        void ipc.closeSession(p.sessionId).catch(() => null);
+      }
+    }
+    syncProjection(tab);
+  }
+
   async function removeTab(tabId: string) {
     const tab = findTab(tabId);
     if (!tab) return;
-    if (
-      tab.sessionId &&
-      !TERMINAL_STATES.includes(tab.sessionState) &&
-      tab.sessionState !== "closing"
-    ) {
-      tab.sessionState = "closing";
-      void ipc.closeSession(tab.sessionId).catch(() => null);
-    }
+    closeTabSessions(tab);
     const idx = tabs.value.indexOf(tab);
     tabs.value.splice(idx, 1);
     if (activeTabId.value === tabId) {
@@ -891,16 +943,19 @@ export const useRuntimeStore = defineStore("runtime", () => {
     scheduleSave();
   }
 
-  /** Close a running/starting tab: terminate the session. The PTY Exit event
-   * (single authoritative signal, 03 §五.2) finalizes the state via
+  /** Close a running/starting tab: terminate the active pane's session. The PTY
+   * Exit event (single authoritative signal, 03 §五.2) finalizes the state via
    * onTabSessionExit; close_session guarantees the child is reaped. */
   async function closeTab(tabId: string) {
     const tab = findTab(tabId);
-    if (!tab || !tab.sessionId) return;
-    if (TERMINAL_STATES.includes(tab.sessionState) || tab.sessionState === "closing") return;
-    tab.sessionState = "closing";
+    if (!tab) return;
+    const p = activePane(tab);
+    if (!p.sessionId) return;
+    if (TERMINAL_STATES.includes(p.sessionState) || p.sessionState === "closing") return;
+    p.sessionState = "closing";
+    syncProjection(tab);
     try {
-      await ipc.closeSession(tab.sessionId);
+      await ipc.closeSession(p.sessionId);
     } catch {
       /* best-effort; Exit event still finalizes if the child is reaped */
     }
@@ -909,29 +964,35 @@ export const useRuntimeStore = defineStore("runtime", () => {
   function onTabOpenOk(tabId: string) {
     const tab = findTab(tabId);
     if (!tab) return;
-    if (tab.sessionState === "starting") tab.sessionState = "running";
+    if (activePane(tab).sessionState === "starting") {
+      setActivePaneState(tab, { sessionState: "running" });
+    }
   }
 
   function onTabOpenFail(tabId: string) {
     const tab = findTab(tabId);
     if (!tab) return;
-    if (TERMINAL_STATES.includes(tab.sessionState)) return; // already finalized
-    tab.sessionState = "failed";
+    const p = activePane(tab);
+    if (TERMINAL_STATES.includes(p.sessionState)) return; // already finalized
+    setActivePaneState(tab, { sessionState: "failed" });
     // exit stays null; the Terminal writes the open error inline.
   }
 
   /** PTY Exit event (process_exit / user_close / transport_error). Applied
-   * once per tab (idempotent) - duplicate Exit/terminate results merge. After
-   * the pane state is committed, ack the backend so the terminal registry
-   * entry can be evicted (03 §3.3.2; idempotent on both sides). */
+   * once per tab/pane (idempotent) - duplicate Exit/terminate results merge.
+   * After the pane state is committed, ack the backend so the terminal
+   * registry entry can be evicted (03 §3.3.2; idempotent on both sides). */
   function onTabSessionExit(tabId: string, reason: string, exitCode: number | null) {
     const tab = findTab(tabId);
-    if (!tab || tab.exit) return; // first writer wins (03 §五.2)
+    if (!tab) return;
+    const p = activePane(tab);
+    if (p.exit) return; // first writer wins (03 §五.2)
     const exit: TabExit = { reason, exitCode };
-    tab.exit = exit;
-    tab.sessionState = reason === "transport_error" ? "disconnected" : "exited";
-    if (tab.sessionId) {
-      void ipc.ackSessionExit(tab.sessionId).catch(() => null); // TTL sweeps if lost
+    p.exit = exit;
+    p.sessionState = reason === "transport_error" ? "disconnected" : "exited";
+    syncProjection(tab);
+    if (p.sessionId) {
+      void ipc.ackSessionExit(p.sessionId).catch(() => null); // TTL sweeps if lost
     }
   }
 

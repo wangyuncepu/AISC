@@ -15,25 +15,13 @@
  * Limits (03 §6.1): MAX_DEPTH=4 (root at depth 1, leaves at depth <=4), leaf
  * count <=8 per tree, ratio clamped 0.10..0.90 (default 0.50).
  */
-import type { LaunchAgent } from "../types";
+import type { LaunchAgent, PaneLeafNode, PaneNode, PaneSplitNode, SplitAxis } from "../types";
 
-export type SplitAxis = "horizontal" | "vertical";
+export type { PaneLeafNode, PaneNode, PaneSplitNode, SplitAxis } from "../types";
 
-export interface SplitNode {
-  kind: "split";
-  axis: SplitAxis;
-  ratio: number; // first's share, clamped 0.10..0.90
-  first: PaneNode;
-  second: PaneNode;
-}
-
-export interface PaneLeaf {
-  kind: "pane";
-  paneId: string;
-  sessionType: LaunchAgent;
-}
-
-export type PaneNode = SplitNode | PaneLeaf;
+/** Back-compat aliases (module originally defined these). */
+export type SplitNode = PaneSplitNode;
+export type PaneLeaf = PaneLeafNode;
 
 export const MAX_DEPTH = 4;
 export const MAX_LEAVES = 8;
