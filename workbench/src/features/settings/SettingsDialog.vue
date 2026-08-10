@@ -159,7 +159,7 @@ function onCancel() {
               <select v-if="f.key === 'ui.language'" :id="f.key" v-model="ui.language" :disabled="store.readOnly">
                 <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
               </select>
-              <input v-else-if="f.key === 'ui.font_scale'" :id="f.key" v-model="ui.font_scale"
+              <input v-else-if="f.key === 'ui.font_scale'" :id="f.key" v-model.number="ui.font_scale"
                 type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
               <span v-if="f.control === 'range'" class="val">{{ f.key === 'ui.font_scale' ? ui.font_scale.toFixed(2) : '' }}</span>
               <select v-else-if="f.key === 'ui.theme'" :id="f.key" v-model="ui.theme" :disabled="store.readOnly">
@@ -175,18 +175,18 @@ function onCancel() {
             <div v-for="f in FIELDS.filter((x) => x.key.startsWith('terminal.'))" :key="f.key" class="field">
               <label :for="f.key" class="label">{{ t(f.labelKey) }}</label>
               <input v-if="f.control === 'text'" :id="f.key" v-model="terminal.font_family" type="text" :disabled="store.readOnly" />
-              <input v-else-if="f.key === 'terminal.font_size'" :id="f.key" v-model="terminal.font_size"
+              <input v-else-if="f.key === 'terminal.font_size'" :id="f.key" v-model.number="terminal.font_size"
                 type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
-              <input v-else-if="f.key === 'terminal.line_height'" :id="f.key" v-model="terminal.line_height"
+              <input v-else-if="f.key === 'terminal.line_height'" :id="f.key" v-model.number="terminal.line_height"
                 type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
-              <input v-else-if="f.key === 'terminal.letter_spacing'" :id="f.key" v-model="terminal.letter_spacing"
+              <input v-else-if="f.key === 'terminal.letter_spacing'" :id="f.key" v-model.number="terminal.letter_spacing"
                 type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
-              <input v-else-if="f.key === 'terminal.scrollback'" :id="f.key" v-model="terminal.scrollback"
+              <input v-else-if="f.key === 'terminal.scrollback'" :id="f.key" v-model.number="terminal.scrollback"
                 type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
               <select v-else-if="f.key === 'terminal.renderer'" :id="f.key" v-model="terminal.renderer" :disabled="store.readOnly">
                 <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
               </select>
-              <input v-else-if="f.key === 'terminal.smooth_scroll_duration'" :id="f.key" v-model="terminal.smooth_scroll_duration"
+              <input v-else-if="f.key === 'terminal.smooth_scroll_duration'" :id="f.key" v-model.number="terminal.smooth_scroll_duration"
                 type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
               <span v-if="f.control === 'range'" class="val">{{
                 f.key === 'terminal.font_size' ? terminal.font_size + 'px'
