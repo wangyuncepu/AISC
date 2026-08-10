@@ -79,11 +79,11 @@ class TestOpenSession(unittest.TestCase):
     def test_open_constructs_controlled_argv(self, _resolve):
         exec_ = FakeDockerExecutor()
         proc = open_session(RT, SID, "claude", exec_, REG)
-        expected = ["exec", "-it", CONTAINER, WRAP, "open",
+        expected = [WRAP, "open",
                     "--session-id", SID, "--runtime-id", RT, "--agent", "claude"]
-        assert exec_.streaming_calls[0] == expected
+        assert exec_.interactive_calls[0] == (CONTAINER, expected)
         # No shell token anywhere; agent is a single controlled argv token.
-        assert "claude --dangerously-skip-permissions" not in exec_.streaming_calls[0]
+        assert "claude --dangerously-skip-permissions" not in exec_.interactive_calls[0][1]
         assert proc.exit_code == 0
 
     @patch("aisc.application.session._resolve_running_container", return_value=CONTAINER)
@@ -91,7 +91,7 @@ class TestOpenSession(unittest.TestCase):
         for agent in SessionAgent.ALL:
             exec_ = FakeDockerExecutor()
             open_session(RT, SID, agent, exec_, REG)
-            argv = exec_.streaming_calls[-1]
+            argv = exec_.interactive_calls[-1][1]
             assert argv[-2] == "--agent"
             assert argv[-1] == agent
 
@@ -108,21 +108,21 @@ class TestOpenSession(unittest.TestCase):
             open_session(RT, "not-a-uuid", "claude", exec_, REG)
         assert cm.exception.error_code == RuntimeErrorCode.INVALID_SESSION_ID
         assert cm.exception.exit_code == RuntimeExitCode.USAGE_ERROR  # not 15 (INVALID_RUNTIME_ID)
-        assert exec_.streaming_calls == []
+        assert exec_.interactive_calls == []
 
     def test_open_invalid_agent_short_circuits(self):
         exec_ = FakeDockerExecutor()
         with self.assertRaises(CliError) as cm:
             open_session(RT, SID, "evil", exec_, REG)
         assert cm.exception.error_code == RuntimeErrorCode.INVALID_AGENT
-        assert exec_.streaming_calls == []
+        assert exec_.interactive_calls == []
 
     def test_open_invalid_runtime_id_short_circuits(self):
         exec_ = FakeDockerExecutor()
         with self.assertRaises(CliError) as cm:
             open_session("not-a-uuid", SID, "claude", exec_, REG)
         assert cm.exception.error_code == RuntimeErrorCode.INVALID_RUNTIME_ID
-        assert exec_.streaming_calls == []
+        assert exec_.interactive_calls == []
 
 
 # ---------------------------------------------------------------------------

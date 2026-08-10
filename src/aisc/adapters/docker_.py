@@ -19,6 +19,8 @@ from __future__ import annotations
 import os
 import queue
 import select
+import socket
+import time
 import shlex
 import signal
 import shutil
@@ -67,6 +69,13 @@ class DockerExecutor(Protocol):
                       *, timeout: Optional[float] = None) -> ProcessResult:
         """Execute ``docker <argv>`` with inherited stdin / stdout / stderr.
         Returns a ``ProcessResult`` with exit code captured, stderr empty."""
+
+    def open_interactive(self, container: str, argv: List[str]) -> ProcessResult:
+        """Open an interactive TTY session via the Docker SDK so the exec pty
+        can be resized with ``exec_resize`` (G-02: the docker CLI's exec pty is
+        frozen at the spawn size). Raw tty stream: stdout forwarded to fd 1,
+        stdin forwarded to the socket, terminal-size watcher forwards changes.
+        Returns the agent's exit code from exec_inspect."""
 
     def run_non_interactive(self, docker_argv: List[str],
                             *, timeout: Optional[float] = None) -> ProcessResult:
@@ -398,6 +407,146 @@ class RealDockerExecutor:
             )
 
     # ------------------------------------------------------------------
+    # open_interactive (G-02 resize chain)
+    # ------------------------------------------------------------------
+
+    def open_interactive(self, container: str, argv: List[str]) -> ProcessResult:
+        """Interactive TTY session via the Docker SDK (see protocol doc).
+
+        The sidecar is spawned with **pipes** (not a ConPTY) by the Rust
+        pty supervisor. stdin/stdout are raw byte streams - no console
+        processing, no codepage, no Unicode width tables. The container's
+        UTF-8 / VT sequences pass through directly to xterm.js.
+
+        Terminal size is passed via the ``AISC_RESIZE_FILE`` env var: Rust
+        writes ``"<cols> <rows>\\n"`` on resize, this sidecar polls it
+        (100ms) and calls ``exec_resize``. (G-02, 2026-08-10.)
+        """
+        import docker  # lazy: every other path stays dependency-free
+
+        try:
+            client = docker.from_env()
+        except docker.errors.DockerException as exc:
+            return ProcessResult(
+                stdout="", stderr=f"docker daemon unreachable: {exc}",
+                exit_code=-1, command_not_found=True,
+            )
+        try:
+            exec_id = client.api.exec_create(container, list(argv), tty=True, stdin=True)["Id"]
+        except docker.errors.NotFound:
+            return ProcessResult(
+                stdout="", stderr="container not found",
+                exit_code=-1, command_not_found=True,
+            )
+        except docker.errors.APIError as exc:
+            return ProcessResult(
+                stdout="", stderr=f"exec create failed: {exc}",
+                exit_code=-1, command_not_found=True,
+            )
+        try:
+            sock = client.api.exec_start(exec_id, socket=True, tty=True)
+        except docker.errors.APIError as exc:
+            return ProcessResult(
+                stdout="", stderr=f"exec start failed: {exc}",
+                exit_code=-1, command_not_found=True,
+            )
+
+        stop = threading.Event()
+        errors: List[Exception] = []
+
+        # Initial resize from the resize file (set by Rust before spawn).
+        resize_file = os.environ.get("AISC_RESIZE_FILE")
+        last_size: Optional[tuple] = None
+        if resize_file:
+            try:
+                content = open(resize_file).read().strip().split()
+                if len(content) == 2:
+                    last_size = (int(content[0]), int(content[1]))
+                    client.api.exec_resize(
+                        exec_id, height=last_size[1], width=last_size[0]
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
+        def drain() -> None:
+            """Socket -> stdout (raw bytes, no processing)."""
+            try:
+                while True:
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        break
+                    os.write(sys.stdout.fileno(), chunk)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        def forward() -> None:
+            """stdin -> socket; on EOF, close the write side."""
+            try:
+                while True:
+                    chunk = os.read(sys.stdin.fileno(), 4096)
+                    if not chunk:
+                        break
+                    sock.sendall(chunk)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+            finally:
+                try:
+                    sock.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+
+        def watch_resize() -> None:
+            """Poll the resize file; forward size changes to exec_resize."""
+            if not resize_file:
+                return
+            while not stop.is_set():
+                try:
+                    content = open(resize_file).read().strip().split()
+                    if len(content) == 2:
+                        cur = (int(content[0]), int(content[1]))
+                        if cur != last_size:
+                            last_size = cur  # type: ignore[misc]
+                            client.api.exec_resize(
+                                exec_id, height=cur[1], width=cur[0]
+                            )
+                except Exception:  # noqa: BLE001
+                    pass
+                stop.wait(0.1)
+
+        t_drain = threading.Thread(target=drain, daemon=True)
+        t_fwd = threading.Thread(target=forward, daemon=True)
+        t_resize = threading.Thread(target=watch_resize, daemon=True)
+        t_drain.start()
+        t_fwd.start()
+        t_resize.start()
+
+        exit_code = -1
+        try:
+            while True:
+                info = client.api.exec_inspect(exec_id)
+                if not info.get("Running"):
+                    exit_code = int(info.get("ExitCode", 0))
+                    break
+                time.sleep(0.2)
+        except docker.errors.APIError as exc:
+            errors.append(exc)
+        finally:
+            stop.set()
+            t_drain.join(timeout=5)
+            t_fwd.join(timeout=5)
+
+        if errors:
+            try:
+                os.write(2, ("[open_interactive] thread error: %r\n" % (errors[0],)).encode())
+            except OSError:
+                pass
+            return ProcessResult(
+                stdout="", stderr=f"exec stream error: {errors[0]}",
+                exit_code=-1,
+            )
+        return ProcessResult(stdout="", stderr="", exit_code=exit_code)
+
+    # ------------------------------------------------------------------
     # run_non_interactive
     # ------------------------------------------------------------------
 
@@ -634,6 +783,7 @@ class FakeDockerExecutor:
         # Call tracking
         self.calls: List[List[str]] = []           # run_captured argv
         self.streaming_calls: List[List[str]] = []  # run_streaming argv
+        self.interactive_calls: List[tuple] = []    # (container, argv) for open_interactive
         self.preflight_calls: int = 0
         self.inspect_calls: List[str] = []          # image names inspected
 
@@ -707,25 +857,12 @@ class FakeDockerExecutor:
         )
 
     # ------------------------------------------------------------------
-    # run_non_interactive
+    # open_interactive (G-02 resize chain)
     # ------------------------------------------------------------------
-
-    def run_non_interactive(self, docker_argv: List[str],
-                            *, timeout: Optional[float] = None) -> ProcessResult:
-        """Fake non-interactive — tracks call, returns streaming exit code."""
-        self.streaming_calls.append(list(docker_argv))
-        return ProcessResult(
-            stdout="", stderr="",
-            exit_code=self._streaming_exit_code if self._streaming_exit_code >= 0 else -1,
-            command_not_found=(self._streaming_exit_code < 0),
-        )
 
     def set_streaming_exit(self, code: int) -> None:
+        """Configure the exit code returned by run_streaming / open_interactive."""
         self._streaming_exit_code = code
-
-    # ------------------------------------------------------------------
-    # run_streaming_captured (build --events)
-    # ------------------------------------------------------------------
 
     def run_streaming_captured(self, docker_argv: List[str],
                                on_chunk: "Callable[[str, str], None]",
@@ -745,13 +882,23 @@ class FakeDockerExecutor:
         """Configure ``[(stream, chunk), ...]`` replayed by run_streaming_captured."""
         self._streaming_chunks = list(chunks)
 
+    def open_interactive(self, container: str, argv: List[str]) -> ProcessResult:
+        """Fake interactive session: record (container, argv), return the
+        configured streaming exit code."""
+        self.interactive_calls.append((container, list(argv)))
+        return ProcessResult(
+            stdout="", stderr="",
+            exit_code=self._streaming_exit_code if self._streaming_exit_code >= 0 else -1,
+            command_not_found=(self._streaming_exit_code < 0),
+        )
+
     # ------------------------------------------------------------------
     # Zero-call assertion
     # ------------------------------------------------------------------
 
     @property
     def total_calls(self) -> int:
-        return len(self.calls) + len(self.streaming_calls)
+        return len(self.calls) + len(self.streaming_calls) + len(self.interactive_calls)
 
     def assert_zero_docker_calls(self, msg: str = "") -> None:
         """Fail if any docker subprocess call was made."""

@@ -8,8 +8,8 @@
 //!   §七.1 (close: terminate -> close PTY -> wait/reap -> single exit)
 
 use std::io::{Read, Write};
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -109,12 +109,13 @@ impl ExitSignal {
     }
 }
 
-/// Handle to a live PTY session. Cheap to clone for the writer sender; the
-/// master/killer are shared via `Arc<Mutex<...>>`.
+/// Handle to a live session (PTY or pipe). Cheap to clone for the writer
+/// sender; the master/kill are shared via `Arc`.
 pub struct PtySession {
     writer_tx: mpsc::Sender<Vec<u8>>,
-    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    master: Option<Arc<Mutex<Box<dyn MasterPty + Send>>>>,
+    resize_file: Option<PathBuf>,
+    kill_fn: Arc<dyn Fn() + Send + Sync>,
     cancel: CancellationToken,
 }
 
@@ -166,6 +167,14 @@ pub fn spawn_pty_session(
     let reader_errored = Arc::new(AtomicBool::new(false));
     let signal = ExitSignal::new();
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(WRITE_CHANNEL_CAP);
+
+    // kill_fn wraps the portable-pty killer for force_kill().
+    let killer_for_fn = Arc::clone(&killer);
+    let kill_fn: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        if let Ok(mut k) = killer_for_fn.lock() {
+            let _ = k.kill();
+        }
+    });
 
     // write task
     tokio::task::spawn_blocking(move || {
@@ -250,8 +259,187 @@ pub fn spawn_pty_session(
 
     let session = PtySession {
         writer_tx,
-        master,
-        killer,
+        master: Some(master),
+        resize_file: None,
+        kill_fn,
+        cancel,
+    };
+    Ok((session, signal))
+}
+
+/// Spawn `executable argv` with **pipes** (no ConPTY). Used for interactive
+/// sessions where the sidecar relays container pty I/O. The container's
+/// raw UTF-8 / VT sequences pass through directly to xterm.js with zero
+/// console processing - no codepage translation, no Unicode width tables,
+/// no VT regeneration. This fixes the encoding/alignment/performance/
+/// refresh issues inherent to the ConPTY layer on zh-CN Windows.
+///
+/// Resize is file-based: the frontend resizes the xterm, Rust writes
+/// `<cols> <rows>\n` to a temp file, and the sidecar polls it (100ms) and
+/// calls `exec_resize`. The file path is passed via the `AISC_RESIZE_FILE`
+/// env var.
+pub fn spawn_pipe_session(
+    executable: &Path,
+    argv: Vec<String>,
+    cols: u16,
+    rows: u16,
+    event_tx: mpsc::Sender<PtyEvent>,
+) -> Result<(PtySession, ExitSignal), WorkbenchError> {
+    use std::process::{Command, Stdio};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let resize_file = std::env::temp_dir().join(format!(
+        "aisc-resize-{}-{}.txt",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    std::fs::write(&resize_file, format!("{} {}\n", cols, rows))
+        .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("resize file: {e}")))?;
+
+    let mut cmd = Command::new(executable);
+    cmd.args(&argv)
+        .env("AISC_RESIZE_FILE", &resize_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    // Windows: prevent a console window from flashing. The sidecar is a
+    // console subsystem app; without this flag a brief window appears.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("pipe spawn: {e}")))?;
+    let pid = child.id();
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| WorkbenchError::cli_protocol().with_detail("no stdin"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| WorkbenchError::cli_protocol().with_detail("no stdout"))?;
+
+    let cancel = CancellationToken::new();
+    let reader_errored = Arc::new(AtomicBool::new(false));
+    let signal = ExitSignal::new();
+    let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(WRITE_CHANNEL_CAP);
+
+    // kill_fn: taskkill /PID /T /F on Windows, kill -9 on Unix.
+    let kill_fn: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            let _ = std::process::Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .creation_flags(0x08000000)
+                .output();
+        }
+        #[cfg(unix)]
+        {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = pid;
+        }
+    });
+
+    // write task: drain mpsc -> stdin pipe.
+    tokio::task::spawn_blocking(move || {
+        let mut stdin = stdin;
+        while let Some(bytes) = writer_rx.blocking_recv() {
+            if stdin.write_all(&bytes).is_err() {
+                break;
+            }
+            let _ = stdin.flush();
+        }
+        // writer_rx closed -> drop stdin -> EOF to child
+    });
+
+    // reader task: stdout pipe -> base64 -> PtyEvent::Output.
+    let event_tx_r = event_tx.clone();
+    let killer_r = Arc::clone(&kill_fn);
+    let reader_errored_r = Arc::clone(&reader_errored);
+    tokio::task::spawn_blocking(move || {
+        let mut stdout = stdout;
+        let mut buf = vec![0u8; READ_BUF];
+        let mut seq = 0u64;
+        loop {
+            match stdout.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    seq += 1;
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
+                    if event_tx_r
+                        .blocking_send(PtyEvent::Output { seq, bytes: b64 })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    #[cfg(unix)]
+                    let is_eof = e.raw_os_error() == Some(libc::EIO);
+                    #[cfg(not(unix))]
+                    let is_eof = false;
+                    if is_eof {
+                        break;
+                    }
+                    reader_errored_r.store(true, Ordering::SeqCst);
+                    // Can't call kill_fn (moved into closure). Use taskkill/kill directly.
+                    (killer_r)();
+                    break;
+                }
+            }
+        }
+    });
+
+    // wait task: own the child, block on wait(), set exit signal.
+    let event_tx_w = event_tx.clone();
+    let cancel_w = cancel.clone();
+    let reader_errored_w = Arc::clone(&reader_errored);
+    let signal_w = signal.clone();
+    let resize_file_w = resize_file.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut child = child;
+        let status = child.wait();
+        // Clean up the resize file (best-effort).
+        let _ = std::fs::remove_file(&resize_file_w);
+        let exit = SessionExit {
+            exit_code: match &status {
+                Ok(s) => s.code(),
+                Err(_) => None,
+            },
+            reason: if cancel_w.is_cancelled() {
+                REASON_USER_CLOSE
+            } else if reader_errored_w.load(Ordering::SeqCst) {
+                REASON_TRANSPORT_ERROR
+            } else {
+                REASON_PROCESS_EXIT
+            }
+            .to_string(),
+            finished_at_ms: now_ms(),
+        };
+        let _ = event_tx_w.blocking_send(PtyEvent::Exit {
+            reason: exit.reason.clone(),
+            exit_code: exit.exit_code,
+        });
+        signal_w.set(exit);
+    });
+
+    let session = PtySession {
+        writer_tx,
+        master: None,
+        resize_file: Some(resize_file),
+        kill_fn,
         cancel,
     };
     Ok((session, signal))
@@ -272,8 +460,17 @@ impl PtySession {
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), WorkbenchError> {
+        // Pipe mode: write size to the resize file (sidecar polls it).
+        if let Some(path) = &self.resize_file {
+            std::fs::write(path, format!("{} {}\n", cols, rows))
+                .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("resize file: {e}")))?;
+            return Ok(());
+        }
+        // PTY mode: resize the ConPTY directly.
         let master = self
             .master
+            .as_ref()
+            .ok_or_else(|| WorkbenchError::cli_protocol().with_detail("no master"))?
             .lock()
             .map_err(|_| WorkbenchError::cli_protocol().with_detail("master lock poisoned"))?;
         master
@@ -293,9 +490,7 @@ impl PtySession {
 
     /// Force-kill the child; used when close times out waiting for reaping.
     pub fn force_kill(&self) {
-        if let Ok(mut k) = self.killer.lock() {
-            let _ = k.kill();
-        }
+        (self.kill_fn)();
     }
 }
 
