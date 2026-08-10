@@ -8,9 +8,11 @@ import {
   clampRatio,
   depth,
   firstLeaf,
+  hjklToDir,
   leafCount,
   leafDepth,
   listLeaves,
+  navigateLeaf,
   removeLeaf,
   setRatioBySplitKey,
   singleLeaf,
@@ -187,6 +189,43 @@ describe("validateTree (A-G17-3)", () => {
       second: { kind: "pane", paneId: "b", sessionType: "bash" },
     } as const;
     expect(validateTree(bad as never).ok).toBe(false);
+  });
+});
+
+describe("navigateLeaf (Ctrl+arrows / hjkl)", () => {
+  it("moves across a horizontal split with left/right", () => {
+    const s = splitLeaf(singleLeaf("p1", "bash"), "p1", "p2", "horizontal", "claude", 0.5)!;
+    expect(navigateLeaf(s, "p1", "right")).toBe("p2");
+    expect(navigateLeaf(s, "p2", "left")).toBe("p1");
+    expect(navigateLeaf(s, "p1", "left")).toBeNull(); // edge
+    expect(navigateLeaf(s, "p2", "right")).toBeNull(); // edge
+  });
+
+  it("moves across a vertical split with up/down", () => {
+    const s = splitLeaf(singleLeaf("p1", "bash"), "p1", "p2", "vertical", "claude", 0.5)!;
+    expect(navigateLeaf(s, "p1", "down")).toBe("p2");
+    expect(navigateLeaf(s, "p2", "up")).toBe("p1");
+    expect(navigateLeaf(s, "p1", "up")).toBeNull();
+  });
+
+  it("nested: spatial navigation respects the split axes", () => {
+    // root = split{p1, split{p2, p3}}  (p1 left; p2 top-right, p3 bottom-right)
+    const s = splitLeaf(singleLeaf("p1", "bash"), "p1", "p2", "horizontal", "claude", 0.5)!;
+    const n = splitLeaf(s, "p2", "p3", "vertical", "codex", 0.5)!;
+    expect(navigateLeaf(n, "p2", "left")).toBe("p1"); // cross the outer horizontal
+    expect(navigateLeaf(n, "p2", "down")).toBe("p3"); // within the inner vertical
+    expect(navigateLeaf(n, "p3", "up")).toBe("p2");
+    expect(navigateLeaf(n, "p1", "right")).toBe("p2"); // first leaf of the right column
+    expect(navigateLeaf(n, "p2", "right")).toBeNull(); // already rightmost
+    expect(navigateLeaf(n, "p3", "down")).toBeNull(); // already bottom
+  });
+
+  it("hjkl maps vim-style", () => {
+    expect(hjklToDir("h")).toBe("left");
+    expect(hjklToDir("j")).toBe("down");
+    expect(hjklToDir("k")).toBe("up");
+    expect(hjklToDir("l")).toBe("right");
+    expect(hjklToDir("x")).toBeNull();
   });
 });
 

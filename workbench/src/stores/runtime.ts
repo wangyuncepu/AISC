@@ -51,11 +51,13 @@ import {
   firstLeaf,
   leafCount,
   listLeaves,
+  navigateLeaf,
   removeLeaf,
   setRatioBySplitKey,
   singleLeaf,
   splitLeaf,
 } from "./paneTree";
+import type { NavDir } from "./paneTree";
 
 /** S2.1.a/b startup state machine (02-startup-flow.md §三). S2.2.b adds `conflict`. */
 export type WorkbenchStatus =
@@ -979,6 +981,18 @@ export const useRuntimeStore = defineStore("runtime", () => {
     scheduleSave();
   }
 
+  /** G-17: move keyboard focus to the spatial neighbor (Ctrl+arrows/hjkl).
+   * Returns whether focus moved (no move = the caller lets the key fall through
+   * to the terminal, e.g. Ctrl+h stays a backspace at a pane edge). */
+  function navigatePane(tabId: string, dir: NavDir): boolean {
+    const tab = findTab(tabId);
+    if (!tab) return false;
+    const target = navigateLeaf(tab.tree, tab.activePaneId, dir);
+    if (!target) return false;
+    setActivePane(tabId, target);
+    return true;
+  }
+
   /** Set a split's ratio by its key (divider drag/keyboard, A-G17-4). */
   function setSplitRatio(tabId: string, splitKeyId: string, ratio: number) {
     const tab = findTab(tabId);
@@ -1431,6 +1445,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     splitTabPane,
     closePane,
     setActivePane,
+    navigatePane,
     setSplitRatio,
     paneStreams,
     activateTab,

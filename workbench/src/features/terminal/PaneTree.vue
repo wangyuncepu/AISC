@@ -114,8 +114,8 @@ defineExpose({ focusActivePane });
     :data-axis="split.axis"
     :style="
       split.axis === 'horizontal'
-        ? { gridTemplateColumns: `${tracks(split).r1} 4px ${tracks(split).r2}` }
-        : { gridTemplateRows: `${tracks(split).r1} 4px ${tracks(split).r2}` }
+        ? { gridTemplateColumns: `${tracks(split).r1} 6px ${tracks(split).r2}` }
+        : { gridTemplateRows: `${tracks(split).r1} 6px ${tracks(split).r2}` }
     "
   >
     <div class="child">

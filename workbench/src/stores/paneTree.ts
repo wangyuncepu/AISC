@@ -159,6 +159,63 @@ export function listSplitKeys(node: PaneNode): string[] {
   return [splitKey(node), ...listSplitKeys(node.first), ...listSplitKeys(node.second)];
 }
 
+// --- G-17 (Step 16): spatial pane navigation (Ctrl+arrows / hjkl) ---
+
+export type NavDir = "left" | "right" | "up" | "down";
+
+/** Map hjkl to a direction (vim: h left, j down, k up, l right). */
+export function hjklToDir(key: string): NavDir | null {
+  switch (key) {
+    case "h":
+      return "left";
+    case "j":
+      return "down";
+    case "k":
+      return "up";
+    case "l":
+      return "right";
+    default:
+      return null;
+  }
+}
+
+/**
+ * The pane to move focus to from `paneId` in `dir`, or null when there is no
+ * neighbor (the focus stays). Walks from the leaf up: the first ancestor split
+ * whose axis matches the direction and whose sibling contains a target subtree
+ * yields that subtree's first leaf (depth-first).
+ */
+export function navigateLeaf(node: PaneNode, paneId: string, dir: NavDir): string | null {
+  const horizontal = dir === "left" || dir === "right";
+  const moveFromSecond = dir === "left" || dir === "up";
+  let found: string | null = null;
+  const walk = (n: PaneNode): "found" | "stop" | "none" => {
+    if (n.kind === "pane") {
+      return n.paneId === paneId ? "found" : "none";
+    }
+    const axisOk = horizontal ? n.axis === "horizontal" : n.axis === "vertical";
+    const inFirst = contains(n.first, paneId);
+    const inSecond = contains(n.second, paneId);
+    if (inFirst) {
+      if (axisOk && !moveFromSecond) {
+        found = firstLeaf(n.second)?.paneId ?? null;
+        return "stop";
+      }
+      return walk(n.first);
+    }
+    if (inSecond) {
+      if (axisOk && moveFromSecond) {
+        found = firstLeaf(n.first)?.paneId ?? null;
+        return "stop";
+      }
+      return walk(n.second);
+    }
+    return "none";
+  };
+  walk(node);
+  return found;
+}
+
 export interface ValidationResult {
   ok: boolean;
   reasons: string[];

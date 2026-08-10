@@ -31,6 +31,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import { resizeSession, writeSession } from "../../lib/ipc";
 import { resolveRenderer, TERMINAL_THEME } from "./renderer";
+import { leafCount } from "../../stores/paneTree";
 import type { LaunchAgent } from "../../types";
 
 const { t } = useI18n();
@@ -327,6 +328,29 @@ function onTermCustomKey(e: KeyboardEvent): boolean {
     e.preventDefault();
     openSearch();
     return false;
+  }
+  // G-17: Ctrl+Shift+W closes the focused pane (only when the tab has >1 leaf).
+  if (mod && e.shiftKey && key === "w") {
+    const t = tab.value;
+    const paneId = t?.activePaneId;
+    if (t && paneId && leafCount(t.tree) > 1) {
+      e.preventDefault();
+      void store.closePane(props.tabId, paneId);
+      return false;
+    }
+  }
+  // G-17: pane focus navigation (Ctrl+arrows / Ctrl+hjkl vim-style). When no
+  // neighbor exists the key falls through so e.g. Ctrl+h still backspaces.
+  if (mod && !e.shiftKey && !e.altKey) {
+    const dir = e.key === "ArrowLeft" || key === "h" ? "left"
+      : e.key === "ArrowRight" || key === "l" ? "right"
+      : e.key === "ArrowUp" || key === "k" ? "up"
+      : e.key === "ArrowDown" || key === "j" ? "down"
+      : null;
+    if (dir && store.navigatePane(props.tabId, dir)) {
+      e.preventDefault();
+      return false;
+    }
   }
   // Esc closes the search overlay.
   if (e.key === "Escape" && searchOpen.value) {
