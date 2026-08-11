@@ -326,10 +326,13 @@ if command -v cc-switch >/dev/null 2>&1; then
         )"; then
             case "$CC_SWITCH_PRESET_RESULT" in
                 added)
-                    echo "✅ cc-switch 已为 Claude 预配置 DeepSeek、Codex Claude、火山引擎、智谱、Kimi"
+                    echo "✅ cc-switch 已为 Claude 预配置 DeepSeek、火山引擎、智谱、Kimi"
+                    ;;
+                refreshed)
+                    echo "✅ cc-switch 已为 Claude 刷新预置 provider（已保留你的 API Key 与当前选择）"
                     ;;
                 current)
-                    echo "ℹ️  cc-switch Claude 预设 provider 已配置，跳过。"
+                    echo "ℹ️  cc-switch Claude 预设 provider 已是最新，跳过。"
                     ;;
                 off)
                     echo "ℹ️  AISC_PRESET_PROVIDERS=off，已跳过 provider 预配置。"
@@ -350,10 +353,13 @@ if command -v cc-switch >/dev/null 2>&1; then
         )"; then
             case "$CC_SWITCH_PRESET_CODEX_RESULT" in
                 added)
-                    echo "✅ cc-switch 已为 Codex 预配置 DeepSeek、Codex Claude、火山引擎、智谱、Kimi"
+                    echo "✅ cc-switch 已为 Codex 预配置 DeepSeek、火山引擎、智谱、Kimi"
+                    ;;
+                refreshed)
+                    echo "✅ cc-switch 已为 Codex 刷新预置 provider（已保留你的 API Key 与当前选择）"
                     ;;
                 current)
-                    echo "ℹ️  cc-switch Codex 预设 provider 已配置，跳过。"
+                    echo "ℹ️  cc-switch Codex 预设 provider 已是最新，跳过。"
                     ;;
                 off)
                     # 已在 Claude agent 部分输出
