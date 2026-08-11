@@ -18,15 +18,9 @@ PRESET_PROVIDERS = [
         "id": "deepseek",
         "name": "DeepSeek",
         "base_url": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
-        "description": "DeepSeek high-value AI model service",
-    },
-    {
-        "id": "codex-claude",
-        "name": "Codex Claude",
-        "base_url": "https://api.codex.so/v1",
-        "model": "claude-opus-5",
-        "description": "Access Claude models through a Codex subscription",
+        "anthropic_base_url": "https://api.deepseek.com/anthropic",
+        "model": "deepseek-v4-flash",
+        "description": "DeepSeek V4 series; flash default, switch to v4-pro for peak reasoning",
     },
     {
         "id": "volcengine-ark",
@@ -39,21 +33,23 @@ PRESET_PROVIDERS = [
         "id": "zhipu",
         "name": "Zhipu GLM",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "model": "glm-4-plus",
-        "description": "Zhipu AI GLM model service",
+        "anthropic_base_url": "https://open.bigmodel.cn/api/anthropic",
+        "model": "glm-5.2",
+        "description": "Zhipu GLM-5.2 flagship model service",
     },
     {
         "id": "kimi",
         "name": "Kimi",
         "base_url": "https://api.moonshot.cn/v1",
-        "model": "moonshot-v1-128k",
-        "description": "Moonshot Kimi long-context model service",
+        "anthropic_base_url": "https://api.moonshot.cn/anthropic",
+        "model": "kimi-k3",
+        "description": "Moonshot Kimi K3 model service",
     },
 ]
 
 SUPPORTED_AGENTS = ("claude", "codex")
 MARKER_TEMPLATE = ".aisc-preset-providers-{agent}.sha256"
-PRESET_FORMAT_VERSION = 2
+PRESET_FORMAT_VERSION = 3
 REQUIRED_PROVIDER_COLUMNS = {
     "id",
     "app_type",
@@ -101,7 +97,11 @@ def _toml_string(value: str) -> str:
 
 def _settings_config(agent: str, provider: dict[str, str]) -> dict[str, Any]:
     if agent == "claude":
-        env = {"ANTHROPIC_BASE_URL": provider["base_url"]}
+        # Third-party providers expose a separate Anthropic-compatible endpoint
+        # (e.g. /anthropic) distinct from their OpenAI base_url. Prefer it when
+        # present so Claude Code speaks the Messages API to the right URL.
+        base_url = provider.get("anthropic_base_url") or provider["base_url"]
+        env = {"ANTHROPIC_BASE_URL": base_url}
         if provider["model"]:
             env["ANTHROPIC_MODEL"] = provider["model"]
         return {"env": env}
@@ -116,12 +116,13 @@ def _settings_config(agent: str, provider: dict[str, str]) -> dict[str, Any]:
         lines.extend(
             [
                 'model_reasoning_effort = "high"',
-                "disable_response_storage = true",
                 "",
                 f"[model_providers.{provider_id}]",
                 f"name = {_toml_string(provider_id)}",
                 f"base_url = {_toml_string(provider['base_url'])}",
-                'wire_api = "responses"',
+                # Third-party OpenAI-compatible providers implement Chat
+                # Completions, not OpenAI's proprietary Responses API.
+                'wire_api = "chat"',
                 "requires_openai_auth = true",
                 "",
             ]

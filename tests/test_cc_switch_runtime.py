@@ -419,9 +419,52 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
         self.assertTrue(all("env" in settings for settings in claude_settings))
         self.assertTrue(all("auth" not in settings for settings in codex_settings))
         self.assertTrue(
-            all("wire_api = \"responses\"" in settings["config"]
+            all("wire_api = \"chat\"" in settings["config"]
                 for settings in codex_settings)
         )
+        self.assertTrue(
+            all("disable_response_storage" not in settings["config"]
+                for settings in codex_settings)
+        )
+
+    def test_claude_presets_point_at_anthropic_endpoints(self):
+        # DeepSeek/Zhipu/Kimi expose a dedicated /anthropic endpoint distinct
+        # from their OpenAI base_url; the claude preset must prefer it so
+        # Claude Code speaks the Messages API to the right URL.
+        expected = {
+            "deepseek": "https://api.deepseek.com/anthropic",
+            "zhipu": "https://open.bigmodel.cn/api/anthropic",
+            "kimi": "https://api.moonshot.cn/anthropic",
+        }
+        by_id = {p["id"]: p for p in PROVIDER_HELPER.PRESET_PROVIDERS}
+        for provider_id, anthropic_url in expected.items():
+            settings = PROVIDER_HELPER._settings_config("claude", by_id[provider_id])
+            self.assertEqual(settings["env"]["ANTHROPIC_BASE_URL"], anthropic_url)
+
+        # Volcengine has no confirmed Anthropic endpoint -> falls back to base_url
+        # (no regression versus the previous single-URL behavior).
+        volc = by_id["volcengine-ark"]
+        settings = PROVIDER_HELPER._settings_config("claude", volc)
+        self.assertEqual(settings["env"]["ANTHROPIC_BASE_URL"], volc["base_url"])
+
+    def test_codex_presets_use_openai_chat_completions(self):
+        # Third-party OpenAI-compatible providers implement Chat Completions,
+        # not OpenAI's proprietary Responses API.
+        for provider in PROVIDER_HELPER.PRESET_PROVIDERS:
+            settings = PROVIDER_HELPER._settings_config("codex", provider)
+            self.assertIn('wire_api = "chat"', settings["config"])
+            self.assertNotIn('wire_api = "responses"', settings["config"])
+            self.assertNotIn("disable_response_storage", settings["config"])
+            # codex keeps using the OpenAI base_url, never the anthropic one.
+            if provider.get("anthropic_base_url"):
+                self.assertNotIn(
+                    provider["anthropic_base_url"], settings["config"]
+                )
+
+    def test_codex_claude_preset_is_removed(self):
+        ids = {p["id"] for p in PROVIDER_HELPER.PRESET_PROVIDERS}
+        self.assertNotIn("codex-claude", ids)
+        self.assertEqual(len(PROVIDER_HELPER.PRESET_PROVIDERS), 4)
 
     def test_incompatible_provider_schema_fails_without_marker(self):
         with tempfile.TemporaryDirectory() as temp_dir:
