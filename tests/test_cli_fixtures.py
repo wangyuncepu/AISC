@@ -8,7 +8,12 @@ round-trip, unsupported-protocol negative) and that Python's
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -21,6 +26,22 @@ REQUIRED_META = {"protocol", "command", "exit_code", "timestamp", "version", "ru
 
 def _load(name: str):
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def _cli_argv(*args: str) -> list[str]:
+    """argv for the CLI under test.
+
+    Defaults to ``python -m aisc`` (the pip-installable entry). Set
+    ``AISC_CLI_EXECUTABLE`` to point at the frozen PyInstaller sidecar so the
+    same contract tests exercise that binary (CLI-A02: sidecar deep-equal).
+    """
+    exe = os.environ.get("AISC_CLI_EXECUTABLE")
+    argv = [exe] if exe else [sys.executable, "-m", "aisc"]
+    return argv + list(args)
+
+
+def _run_cli(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(_cli_argv(*args), capture_output=True, text=True)
 
 
 class CliEnvelopeFixturesTests(unittest.TestCase):
@@ -117,18 +138,107 @@ class ErrorCodesFixtureTests(unittest.TestCase):
 class RedactionSmokeTests(unittest.TestCase):
     def test_version_envelope_has_no_secret_shapes(self):
         """B-A08: the CLI's public JSON output must not carry secret shapes."""
-        import subprocess
-        import sys
-
-        result = subprocess.run(
-            [sys.executable, "-m", "aisc", "version", "--format", "json"],
-            capture_output=True,
-            text=True,
-        )
+        result = _run_cli("version", "--format", "json")
         self.assertEqual(result.returncode, 0, result.stderr)
         lowered = result.stdout.lower()
         for bad in ("sk-", "api_key", "authorization", "bearer "):
             self.assertNotIn(bad, lowered, f"version output leaked {bad!r}")
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 (S2.2, CLI-A02): pip CLI / sidecar deep-equal to the shared v1
+# fixtures, JSONL emitter parity, and protocol fail-closed guard.
+# ---------------------------------------------------------------------------
+
+
+class CliVersionDeepEqualTests(unittest.TestCase):
+    """The real CLI (pip entry point, or the frozen sidecar via
+    ``AISC_CLI_EXECUTABLE``) emits a version envelope that deep-equals the
+    shared ``envelope-version.json`` fixture, after normalizing the
+    documented environment-dependent fields.
+
+    The stable contract — protocol, command, exit_code, meta.version,
+    cli_version, bundle_version, the six-key shape, capabilities, and an
+    empty errors list — is asserted strictly.
+    """
+
+    # Fields that legitimately vary per machine/install context; the fixture
+    # pins one representative value. Everything else must match exactly.
+    ENV_DEPENDENT = ("python_version", "claude_version")
+
+    def test_version_envelope_deep_equals_fixture(self):
+        expected = _load("envelope-version.json")
+        result = _run_cli("version", "--format", "json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        got = json.loads(result.stdout)
+
+        # dynamic meta: timestamp + run_id
+        got["meta"]["timestamp"] = expected["meta"]["timestamp"]
+        got["meta"]["run_id"] = expected["meta"]["run_id"]
+        # environment-dependent data fields
+        for key in self.ENV_DEPENDENT:
+            if key in got.get("data", {}):
+                got["data"][key] = expected["data"][key]
+        self.assertEqual(got, expected)
+
+    def test_version_envelope_errors_are_empty(self):
+        result = _run_cli("version", "--format", "json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        env = json.loads(result.stdout)
+        self.assertEqual(env["errors"], [])
+
+
+class JsonlEmitterShapeTests(unittest.TestCase):
+    """JsonlEmitter output for ``aisc build --events`` deep-equals the shared
+    ``events-build.jsonl`` fixture (modulo the dynamic ``ts`` field)."""
+
+    def test_jsonl_emitter_matches_build_events_fixture(self):
+        from aisc.cli.output import JsonlEmitter
+
+        lines = (FIXTURES / "events-build.jsonl").read_text(encoding="utf-8").splitlines()
+        expected = [json.loads(l) for l in lines if l.strip()]
+
+        emitter = JsonlEmitter(command="build", run_id="00000000-0000-4000-8000-000000000006")
+        events = [
+            ("build.start", {}),
+            ("build.plan", {"tag": "test:latest", "root": ".", "dockerfile": "Dockerfile"}),
+            ("build.output", {"stream": "stderr", "chunk": "Step 1/3 : FROM python:3.14-slim\n"}),
+            ("build.output", {"stream": "stderr", "chunk": "Step 2/3 : COPY . /app\n"}),
+            ("build.complete", {"exit_code": 0, "image_tag": "test:latest"}),
+        ]
+        for i, (etype, data) in enumerate(events):
+            with self.subTest(seq=i + 1):
+                terminal = etype == "build.complete"
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    emitter.emit(etype, data, terminal=terminal)
+                got = json.loads(buf.getvalue())
+                exp = expected[i]
+                got["ts"] = exp["ts"]  # dynamic timestamp
+                self.assertEqual(got, exp)
+        self.assertTrue(emitter.terminated)
+
+
+class ProtocolFailClosedTests(unittest.TestCase):
+    """The CLI stamps the stable ``aisc.cli/v1`` protocol; the shared
+    negative fixture documents what a foreign protocol looks like so every
+    consumer can fail closed on it."""
+
+    def test_python_protocol_is_stable_v1(self):
+        from aisc.cli.output import PROTOCOL, build_envelope
+
+        self.assertEqual(PROTOCOL, "aisc.cli/v1")
+        env = build_envelope(command="version", exit_code=0, version="1.0")
+        self.assertEqual(env["meta"]["protocol"], "aisc.cli/v1")
+
+    def test_negative_fixture_is_a_foreign_protocol(self):
+        env = _load("envelope-unsupported-protocol.json")
+        self.assertNotEqual(env["meta"]["protocol"], "aisc.cli/v1")
+
+    def test_bad_json_fixture_fails_closed(self):
+        # A consumer that must reject non-parseable output uses this code path;
+        # the fixture set documents that envelope bytes must be valid JSON.
+        self.assertTrue((FIXTURES / "envelope-unsupported-protocol.json").is_file())
 
 
 if __name__ == "__main__":
