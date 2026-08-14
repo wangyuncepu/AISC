@@ -8,6 +8,7 @@ on:
       - 'src/aisc/**'
       - 'packaging/**'
       - 'scripts/build-cli.*'
+      - 'scripts/verify-*.py'
       - 'VERSION'
       - 'pyproject.toml'
 
