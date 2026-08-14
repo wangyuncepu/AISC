@@ -37,7 +37,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
+          pip install pyinstaller build
           pip install -e .
 
       - name: Build CLI sidecar
@@ -58,6 +58,26 @@ jobs:
         run: |
           ls -la dist/
         if: always()
+
+      # Stage 2 (S2.5, CLI-A05): the wheel-installed pip CLI and the frozen
+      # sidecar must agree on the aisc.cli/v1 command matrix. Any difference
+      # fails the build.
+      - name: Dual-track parity smoke (CLI-A05)
+        shell: bash
+        run: |
+          set -e
+          SIDECAR=$(ls dist/aisc-* | head -1)
+          echo "sidecar: $SIDECAR"
+          B="$RUNNER_TEMP/aisc-parity"
+          mkdir -p "$B"
+          python -m build --outdir "$B" >/dev/null
+          python -m venv "$B/venv"
+          VENV_PY=$(ls "$B/venv/Scripts/python.exe" "$B/venv/bin/python" 2>/dev/null | head -1)
+          "$VENV_PY" -m pip install --quiet "$B"/aisc-*.whl
+          CLI_A=$(ls "$B/venv/Scripts/aisc.exe" "$B/venv/bin/aisc" 2>/dev/null | head -1)
+          test -n "$CLI_A"
+          echo "pip cli: $CLI_A"
+          python scripts/verify-cli-parity.py --cli-a "$CLI_A" --cli-b "$SIDECAR"
 
       - uses: actions/upload-artifact@v4
         with:
