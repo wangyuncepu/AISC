@@ -241,5 +241,21 @@ class ProtocolFailClosedTests(unittest.TestCase):
         self.assertTrue((FIXTURES / "envelope-unsupported-protocol.json").is_file())
 
 
+class RuntimeSubcommandJsonUsageTests(unittest.TestCase):
+    """CLI-A02/A05: every runtime subcommand that supports --format json must
+    emit a JSON usage error on a missing required argument, not fall back to
+    argparse text (regression for the main.py propagation gap)."""
+
+    def test_missing_required_arg_emits_json_usage_error(self):
+        for sub in ("inspect", "stop", "restart", "remove"):
+            with self.subTest(sub=sub):
+                result = _run_cli("runtime", sub, "--format", "json")
+                self.assertEqual(result.returncode, 2, result.stderr)
+                env = json.loads(result.stdout)
+                self.assertEqual(env["meta"]["protocol"], "aisc.cli/v1")
+                self.assertEqual(env["meta"]["exit_code"], 2)
+                self.assertEqual(env["errors"][0]["code"], "AISC_ERR_USAGE")
+
+
 if __name__ == "__main__":
     unittest.main()

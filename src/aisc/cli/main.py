@@ -1158,15 +1158,19 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             runtime_parser._aisc_format = "json" if json_requested else None
             runtime_parser._aisc_command = "runtime"
 
-            # Also propagate to runtime preflight subparser
-            if "preflight" in args_list:
-                try:
-                    preflight_parser = [a for a in runtime_parser._subparsers._group_actions
-                                       if a.dest == "runtime_command"][0].choices["preflight"]
-                    preflight_parser._aisc_format = "json" if json_requested else None
-                    preflight_parser._aisc_command = "runtime preflight"
-                except (AttributeError, IndexError, KeyError):
-                    pass
+            # Also propagate to every runtime sub-subparser (CLI-A02/A05: any
+            # command that supports --format json must emit a JSON usage error,
+            # not fall back to argparse text — matches the session propagation).
+            for _sub in ("preflight", "start", "list", "inspect", "stop",
+                         "restart", "remove"):
+                if _sub in args_list:
+                    try:
+                        _sp = [a for a in runtime_parser._subparsers._group_actions
+                               if a.dest == "runtime_command"][0].choices[_sub]
+                        _sp._aisc_format = "json" if json_requested else None
+                        _sp._aisc_command = f"runtime {_sub}"
+                    except (AttributeError, IndexError, KeyError):
+                        pass
         except (AttributeError, IndexError, KeyError):
             pass
 
