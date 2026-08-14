@@ -2,6 +2,17 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+# Stage 0 (2026-08-14) — Baseline Gates（AISC Next，分支 stage-0-baseline-gates）
+
+> 规划入口：`docs/plans/aisc-next/`。本阶段固定可重复基线、契约 fixture、CI 触发、资源预算和 redaction 门禁，不交付终端新功能。
+
+- **S0.1 基线清单（B-01）**：`scripts/baseline/`（probe/manifest/run_baseline）——确定性 BaselineManifest（仅 `generated_at` 可变）、fixture SHA-256、`--strict` fail-closed 不覆盖上次 PASS；`tests/test_baseline.py` 10 通过。Windows 11 手测 `complete`（python/node/npm/rustc/cargo/docker/git 全绿）；WSL fail-closed 验证（缺关键工具 exit 1、无 latest.json）。
+- **S0.2 契约 fixture（B-02）**：`tests/fixtures/cli/` 7 个 `aisc.cli/v1` 共享 fixture（envelope 正例/错误/JSONL/unknown/unsupported/错误码清单），Python(9)/Rust(7)/TS(6) 三端消费同一文件。
+- **S0.3 CI 门禁（B-03）**：workbench-ci cli job 增加 Unix baseline `--strict` + artifact 上传；path filters 覆盖 `scripts/baseline`、`tests/fixtures`、契约测试；`test_workflow_contract.py` 9 通过。
+- **S0.4 资源基线（B-04）**：`scripts/soak/soak.py`（p50/p95/max + hard deadline，可注入 runner）与 8 个测试；Rust `read_capped` truncation + 控制面预算冻结（stdout 8MB / stderr 64KB）。
+- **S0.5 redaction（B-05）**：`tests/fixtures/redaction/denylist.txt` denylist 矩阵（Rust 不泄漏 + marker 存在）；redact 新增 `Bearer <jwt>` OAuth 形状；Python 冒烟断言 CLI 输出无 secret。
+- **本地门**：pytest 428 / vitest 128 / cargo lib 112 全绿。CI 实跑与 merge 待用户确认（B-A11/B-A12）。
+
 # v2.1.5-dev (2026-08-09 ~ 2026-08-10) — GUI Fine-Tune：G-01..G-18 全部完成
 
 > **阶段总结（2026-08-09 ~ 2026-08-10）**：GUI Fine-Tune 18 个目标（G-01..G-18）全部完成并合并回 develop。覆盖：契约/测试基础设施（A-INFRA）、sidecar 入 PATH、停止/关闭/退出性能、typed settings、i18n、动态多 tab、终端渲染升级、设置页交付、侧边栏分层 + Provider 引导、Resize 根因修复、窗口记忆、终端基础 + 右键菜单、一键诊断、构建通知、动态标题、托盘、Tab 内分屏、明暗主题。
