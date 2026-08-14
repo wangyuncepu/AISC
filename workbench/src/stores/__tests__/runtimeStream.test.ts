@@ -77,11 +77,13 @@ describe("S1.8 IPC fake → store buffer", () => {
 
     const paneId = tab.activePaneId;
     expect(s.paneStreams[paneId]).toContain("aGVsbG8=");
+    expect(s.streamCursor[paneId]).toBe(1);
     // Batching: two more chunks in one flush land together, order preserved.
     channel.onmessage({ type: "output", bytes: "IHdvcmxk" }); // " world"
     channel.onmessage({ type: "output", bytes: "IQ==" }); // "!"
     await flushFrame();
     expect(s.paneStreams[paneId]).toEqual(["aGVsbG8=", "IHdvcmxk", "IQ=="]);
+    expect(s.streamCursor[paneId]).toBe(3);
   });
 
   it("drops events from a stale session after the pane sessionId moves", async () => {

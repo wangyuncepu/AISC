@@ -184,6 +184,10 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const pendingChunks: Record<string, string[]> = {};
   const paneByteCounts: Record<string, number> = {};
   const paneStreamMeta = ref<Record<string, { truncated: boolean; truncatedBytes: number }>>({});
+  // Monotonic per-pane count of chunks ever appended to the buffer. The rolling
+  // window drops the HEAD, so Terminal cannot advance by array length (it never
+  // changes once full); it advances by this cursor instead (S1.3 hand-test fix).
+  const streamCursor = ref<Record<string, number>>({});
   let flushFrame: number | null = null;
   function scheduleStreamFlush(): void {
     if (flushFrame !== null) return;
@@ -206,6 +210,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
         );
         paneStreams.value[id] = state.chunks;
         paneByteCounts[id] = state.bytes;
+        streamCursor.value[id] = (streamCursor.value[id] ?? 0) + incoming.length;
         paneStreamMeta.value[id] = {
           truncated: state.truncated,
           truncatedBytes: state.truncatedBytes,
@@ -975,6 +980,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     p.exit = null;
     paneStreams.value[paneId] = []; // reset the per-pane output buffer
     paneByteCounts[paneId] = 0;
+    streamCursor.value[paneId] = 0;
     paneStreamMeta.value[paneId] = { truncated: false, truncatedBytes: 0 };
     pendingChunks[paneId] = [];
     syncProjection(tab);
@@ -1550,6 +1556,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     setSplitRatio,
     paneStreams,
     paneStreamMeta,
+    streamCursor,
     activateTab,
     closeTab,
     reopenTab,

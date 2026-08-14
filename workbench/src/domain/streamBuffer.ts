@@ -81,3 +81,19 @@ export function appendWithBudget(
 export function hasBudget(state: StreamBufferState, chunk: string, byteBudget = OUTPUT_BYTE_BUDGET): boolean {
   return !state.truncated && state.bytes + chunk.length <= byteBudget;
 }
+
+/**
+ * Where to start displaying inside a rolling window.
+ *
+ * The window holds the most recent `bufLen` of `totalLen` emitted chunks
+ * (`arr[0]` is global index `totalLen - bufLen`). A consumer that already
+ * displayed `consumed` chunks starts at `max(consumed, startGlobal)`, mapped
+ * back to an array index. Handles head-dropping without re-displaying old
+ * chunks and without a length-based watch (which never fires once the window
+ * is full).
+ */
+export function computeDisplayFrom(consumed: number, totalLen: number, bufLen: number): number {
+  if (bufLen <= 0) return 0;
+  const startGlobal = Math.max(0, totalLen - bufLen);
+  return Math.max(consumed, startGlobal) - startGlobal;
+}

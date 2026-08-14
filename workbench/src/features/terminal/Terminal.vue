@@ -27,6 +27,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import "@xterm/xterm/css/xterm.css";
 import { useRuntimeStore } from "../../stores/runtime";
+import { computeDisplayFrom } from "../../domain/streamBuffer";
 import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import { resizeSession, writeSession } from "../../lib/ipc";
@@ -389,17 +390,21 @@ onMounted(() => {
     term.refresh(0, term.rows - 1);
   });
 
-  // G-17: stream the store-owned output buffer (replay what is already there,
-  // then append live). The store PUSHES into the array (in-place), so a shallow
-  // watch on the array reference would never fire - watch its LENGTH instead
-  // (a push changes the length). Remounts never re-open the session.
-  let streamLen = 0;
+  // G-17 / S1.3: stream the store-owned output buffer (replay what is already
+  // there, then append live). The store now uses a ROLLING window (oldest
+  // chunks dropped to stay within budget), so advancing by array length breaks:
+  // once the window is full the length never changes and the terminal would
+  // freeze. Advance by the monotonic streamCursor instead; computeDisplayFrom
+  // re-anchors past any dropped head. Remounts never re-open the session.
+  let consumed = 0;
   watch(
-    () => store.paneStreams[props.paneId]?.length ?? 0,
+    () => store.streamCursor[props.paneId] ?? 0,
     () => {
       const arr = store.paneStreams[props.paneId] ?? [];
-      for (let i = streamLen; i < arr.length; i++) writeChunk(arr[i]);
-      streamLen = arr.length;
+      const total = store.streamCursor[props.paneId] ?? 0;
+      const from = computeDisplayFrom(consumed, total, arr.length);
+      for (let i = from; i < arr.length; i++) writeChunk(arr[i]);
+      consumed = Math.max(consumed, total);
     },
     { immediate: true }
   );

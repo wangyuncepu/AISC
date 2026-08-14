@@ -6,6 +6,7 @@ import {
   OUTPUT_BYTE_BUDGET,
   OUTPUT_CHUNK_BUDGET,
   appendWithBudget,
+  computeDisplayFrom,
   emptyStream,
 } from "../streamBuffer";
 
@@ -65,5 +66,32 @@ describe("appendWithBudget", () => {
     expect(OUTPUT_CHUNK_BUDGET).toBeGreaterThan(0);
     const ok = appendWithBudget(state, ["x"], {});
     expect(ok.truncated).toBe(false);
+  });
+});
+
+describe("computeDisplayFrom", () => {
+  it("starts at 0 for a fresh window", () => {
+    expect(computeDisplayFrom(0, 4096, 4096)).toBe(0);
+  });
+
+  it("advances from the consumer cursor when nothing was dropped", () => {
+    // 4096 chunks emitted, 4096 kept, consumed 2048 -> continue at index 2048.
+    expect(computeDisplayFrom(2048, 4096, 4096)).toBe(2048);
+  });
+
+  it("re-anchors when the head was dropped (rolling window)", () => {
+    // 5000 emitted, 4096 kept (oldest 904 dropped), consumed 4096 -> arr[0]
+    // is global 904, so the next new chunk (global 4096) is at index 3192.
+    expect(computeDisplayFrom(4096, 5000, 4096)).toBe(3192);
+  });
+
+  it("skips dropped chunks a slow consumer has not seen", () => {
+    // Consumer only displayed 3000 of 5000 emitted; 904 were dropped from the
+    // head, so it must start at global 3000 -> index 3000 - (5000-4096).
+    expect(computeDisplayFrom(3000, 5000, 4096)).toBe(3000 - 904);
+  });
+
+  it("empty buffer yields 0", () => {
+    expect(computeDisplayFrom(0, 0, 0)).toBe(0);
   });
 });
