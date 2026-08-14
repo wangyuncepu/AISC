@@ -62,3 +62,41 @@ def test_workflow_has_required_triggers(name):
     assert "push" in triggers, f"{name} must have a push trigger"
     if name == "workbench-ci.yml":
         assert "pull_request" in triggers, "workbench-ci.yml must run on PRs"
+
+
+# --- Stage 0 (S0.3, B-A04): baseline tooling / fixtures trigger workbench CI ---
+
+WORKBENCH_ONLY_PATHS = [
+    "scripts/baseline/**",
+    "tests/fixtures/**",
+    "tests/test_baseline.py",
+    "tests/test_cli_fixtures.py",
+    "tests/test_workflow_contract.py",
+]
+
+
+def test_workbench_ci_covers_baseline_and_fixture_paths():
+    """Changes to baseline tooling / contract fixtures must trigger CI."""
+    paths = _push_paths("workbench-ci.yml")
+    missing = [p for p in WORKBENCH_ONLY_PATHS if p not in paths]
+    assert not missing, f"workbench-ci.yml push.paths missing: {missing}"
+
+
+def test_workbench_cli_job_runs_baseline_probe():
+    """The cli job must run the Unix baseline (B-A02/B-A04) and keep artifacts."""
+    data = yaml.safe_load((WORKFLOW_DIR / "workbench-ci.yml").read_text(encoding="utf-8"))
+    steps = data["jobs"]["cli"]["steps"]
+    run_lines = [s["run"] for s in steps if isinstance(s, dict) and "run" in s]
+    joined = "\n".join(run_lines)
+    assert "scripts/baseline/run_baseline.py" in joined
+    assert "--strict" in joined
+    names = [s.get("name", "") for s in steps if isinstance(s, dict)]
+    assert any("Upload baseline artifact" in n for n in names)
+
+
+def test_all_workflows_are_valid_yaml():
+    """Every workflow file must parse and declare jobs (fail early on typos)."""
+    for path in sorted(WORKFLOW_DIR.glob("*.yml")):
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert isinstance(data, dict), f"{path.name} must parse to a mapping"
+        assert "jobs" in data, f"{path.name} must define jobs"

@@ -19,6 +19,11 @@ on:
       - 'workbench/src-tauri/**'
       - 'src/aisc/**'
       - '.github/workflows/workbench-ci.yml'
+      - 'tests/fixtures/**'
+      - 'tests/test_baseline.py'
+      - 'tests/test_cli_fixtures.py'
+      - 'tests/test_workflow_contract.py'
+      - 'scripts/baseline/**'
   pull_request:
     branches: [develop, main]
     paths:
@@ -30,6 +35,11 @@ on:
       - 'workbench/src-tauri/**'
       - 'src/aisc/**'
       - '.github/workflows/workbench-ci.yml'
+      - 'tests/fixtures/**'
+      - 'tests/test_baseline.py'
+      - 'tests/test_cli_fixtures.py'
+      - 'tests/test_workflow_contract.py'
+      - 'scripts/baseline/**'
 
 jobs:
   frontend:
@@ -105,3 +115,19 @@ jobs:
 
       - name: Python tests
         run: python -m pytest tests -q
+
+      # Stage 0 (S0.3, B-A02/B-A04): Unix-side baseline probe. A missing
+      # critical tool fails the job (--strict); latest.json is kept as an
+      # artifact so the fixture_hashes / toolchain are auditable after the run.
+      - name: Baseline probe (Unix)
+        run: |
+          python scripts/baseline/run_baseline.py \
+            --out baseline-out \
+            --fixtures tests/fixtures \
+            --strict
+
+      - name: Upload baseline artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-manifest
+          path: baseline-out/
