@@ -7,7 +7,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
-import * as ipc from "./lib/ipc";
+import {
+  captureWindowGeometry,
+  resolveLocale,
+  shutdownWorkbench,
+  trayAvailable as trayAvailableIpc,
+  trayRemove,
+} from "./lib/ipc";
 import { applyLocale } from "./i18n";
 import { applyTheme, createSystemListener } from "./theme";
 import { computeWindowTitle } from "./lib/title";
@@ -67,7 +73,7 @@ function onViewportResize() {
   if (geometryTimer !== null) window.clearTimeout(geometryTimer);
   geometryTimer = window.setTimeout(() => {
     geometryTimer = null;
-    void ipc.captureWindowGeometry().catch(() => undefined);
+    void captureWindowGeometry().catch(() => undefined);
   }, 300);
 }
 onMounted(() => window.addEventListener("resize", onViewportResize));
@@ -276,13 +282,13 @@ async function runExitFlow(): Promise<void> {
   void win.hide().catch(() => undefined);
   // G-16: hide the tray icon instantly too (window close already feels instant;
   // cleanup runs in the background, A-G16-3).
-  void ipc.trayRemove().catch(() => undefined);
+  void trayRemove().catch(() => undefined);
   // G-10: flush geometry before shutdown (A-G10-5).
-  void ipc.captureWindowGeometry().catch(() => undefined);
+  void captureWindowGeometry().catch(() => undefined);
   // G-17: flush the debounced history save so a split/pane-close inside the
   // 300ms window survives 恢复布局 on the next launch (feedback 2026-08-10).
   await store.flushSave();
-  void ipc.shutdownWorkbench().catch((e) => {
+  void shutdownWorkbench().catch((e) => {
     console.error("shutdown_workbench failed, destroying window:", e);
     void win.destroy().catch(() => undefined);
   });
@@ -294,13 +300,12 @@ onMounted(() => {
   // negotiation - language resolution never blocks it.
   void (async () => {
     if (!settingsStore.loaded) await settingsStore.load();
-    const locale = await ipc.resolveLocale(settingsStore.doc?.ui.language ?? "auto");
+    const locale = await resolveLocale(settingsStore.doc?.ui.language ?? "auto");
     applyLocale(locale);
   })();
   // G-16: query tray availability once (Rust setup already ran).
-  void ipc
-    .trayAvailable()
-    .then((ok) => (trayAvailable.value = ok))
+  void trayAvailableIpc()
+    .then((ok: boolean) => (trayAvailable.value = ok))
     .catch(() => undefined);
   // Exit gate (03 §4.3): always prevent the default close. G-07 refinement
   // (2026-08-09): the close feels instant - the window hides and the Rust
