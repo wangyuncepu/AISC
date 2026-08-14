@@ -106,9 +106,7 @@ def run_baseline(
             json.dumps(manifest, ensure_ascii=True, indent=2) + "\n", encoding="utf-8"
         )
     elif strict:
-        raise BaselineIncomplete(
-            "baseline incomplete: " + ", ".join(missing) if missing else "git unavailable"
-        )
+        raise BaselineIncomplete(", ".join(missing) if missing else "git unavailable")
 
     return manifest
 
