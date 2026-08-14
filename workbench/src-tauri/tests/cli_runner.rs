@@ -20,6 +20,11 @@ fn python3() -> Option<PathBuf> {
 }
 
 /// Minimal PATH lookup so the test does not pull in a `which` crate.
+///
+/// Skips 0-byte files: on Windows the Store-installed launcher aliases
+/// (`%LOCALAPPDATA%\Microsoft\WindowsApps\<name>.exe`) are 0-byte reparse
+/// points that emit nothing when spawned detached — picking one made these
+/// tests see empty stdout on Windows while `python3` on CI (Linux) is real.
 fn which_lookup(name: &str) -> Result<PathBuf, ()> {
     let path = std::env::var("PATH").map_err(|_| ())?;
     let sep = if cfg!(windows) { ';' } else { ':' };
@@ -29,7 +34,11 @@ fn which_lookup(name: &str) -> Result<PathBuf, ()> {
             continue;
         }
         let p = Path::new(dir).join(format!("{name}{cand_ext}"));
-        if p.is_file() {
+        if !p.is_file() {
+            continue;
+        }
+        let non_empty = p.metadata().map(|m| m.len() > 0).unwrap_or(true);
+        if non_empty {
             return Ok(p);
         }
     }
