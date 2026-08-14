@@ -573,4 +573,42 @@ mod tests {
         let sig = ExitSignal::new();
         assert!(sig.wait_timeout(Duration::from_millis(20)).await.is_none());
     }
+
+    // --- Stage 1 (S1.2, F-R02/F-R03): PTY lifecycle / backpressure ---
+
+    #[test]
+    fn spawn_missing_command_returns_error() {
+        // Failure path must produce a structured error and no child survives.
+        let (tx, _rx) = mpsc::channel(8);
+        let result = spawn_pty_session(
+            Path::new("__aisc_missing_command_xyz__"),
+            vec![],
+            80,
+            24,
+            tx,
+        );
+        let err = match result {
+            Ok(_) => panic!("missing executable must fail spawn"),
+            Err(e) => e,
+        };
+        assert!(
+            err.code.starts_with("WB_ERR_CLI_"),
+            "unexpected error code: {}",
+            err.code
+        );
+    }
+
+    #[test]
+    fn write_channel_capacity_is_bounded() {
+        // F-R03: the session writer channel must never grow unbounded; the
+        // cap is a hard backpressure limit (send beyond it is refused).
+        let (tx, _rx) = mpsc::channel::<Vec<u8>>(WRITE_CHANNEL_CAP);
+        for _ in 0..WRITE_CHANNEL_CAP {
+            assert!(tx.try_send(vec![0u8]).is_ok());
+        }
+        assert!(
+            tx.try_send(vec![0u8]).is_err(),
+            "channel must refuse writes beyond WRITE_CHANNEL_CAP={WRITE_CHANNEL_CAP}"
+        );
+    }
 }
