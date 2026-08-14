@@ -79,8 +79,19 @@ jobs:
           echo "pip cli: $CLI_A"
           python scripts/verify-cli-parity.py --cli-a "$CLI_A" --cli-b "$SIDECAR"
 
+      # Stage 2 (S2.6, CLI-A07): clean-room smoke + manifest (sha256/arch/version).
+      - name: Sidecar clean-room smoke + manifest (CLI-A07)
+        shell: bash
+        run: |
+          SIDECAR=$(ls dist/aisc-* | head -1)
+          python scripts/verify-sidecar.py smoke "$SIDECAR" --triple "${{ matrix.triple }}" \
+            > dist/aisc-sidecar-manifest.json
+          cat dist/aisc-sidecar-manifest.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: aisc-sidecar-${{ matrix.triple }}
-          path: dist/aisc-${{ matrix.triple }}*
+          path: |
+            dist/aisc-${{ matrix.triple }}*
+            dist/aisc-sidecar-manifest.json
           if-no-files-found: error
