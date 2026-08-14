@@ -31,8 +31,12 @@ base64 = "0.22"
 libc = "0.2"
 fs4 = "0.13"
 sys-locale = "0.3"
-winreg = "0.55"
 tauri-plugin-notification = "2"
+
+# winreg is Windows-only (locale.rs reads the HKCU locale); it must not compile
+# on Linux/macOS where the CI rust job builds the workbench lib.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
 
 [dev-dependencies]
 tempfile = "3"
