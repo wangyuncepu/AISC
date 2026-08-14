@@ -9,7 +9,7 @@
 
 ## Step 0 验收清单（契约与测试基础设施 A-INFRA-1..5，分支 step-0-*）
 
-> 规范入口：`docs/plans/gui-fine-tune-planning/`（00-06 + decisions）。Step 0 按 06-implementation-plan §0.1-0.4 执行。
+> 规范入口：`docs/archive/completed/gui-fine-tune-planning/`（00-06 + decisions）。Step 0 按 06-implementation-plan §0.1-0.4 执行。
 
 ### Step 0 实施（2026-08-09，提交 32811b1/c0f6ede/056194a/f020460/efcfc5e/49ddd2a）
 
