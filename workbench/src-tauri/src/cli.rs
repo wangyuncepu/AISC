@@ -1035,4 +1035,39 @@ mod tests {
         assert_eq!(path_candidate_in(Some("")), None);
         assert_eq!(path_candidate_in(None), None);
     }
+
+    // --- Stage 0 (S0.4, B-R04): resource budgets and truncation semantics ---
+
+    #[tokio::test]
+    async fn read_capped_truncates_at_cap_and_drains() {
+        let data: Vec<u8> = (0u8..=255).collect();
+        let mut reader = &data[..];
+        let (buf, truncated) = read_capped(&mut reader, 8).await;
+        assert_eq!(buf.len(), 8);
+        assert!(truncated, "overflow must be observable");
+    }
+
+    #[tokio::test]
+    async fn read_capped_passes_through_under_cap() {
+        let mut reader = &b"hello"[..];
+        let (buf, truncated) = read_capped(&mut reader, 64).await;
+        assert_eq!(buf, b"hello");
+        assert!(!truncated);
+    }
+
+    #[tokio::test]
+    async fn read_capped_empty_input() {
+        let mut reader = &b""[..];
+        let (buf, truncated) = read_capped(&mut reader, 8).await;
+        assert!(buf.is_empty());
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn control_plane_budget_is_stable() {
+        // S0.4 (B-R04): freeze control-plane caps so a future change is a
+        // deliberate, reviewed adjustment rather than a silent growth.
+        assert_eq!(MAX_STDOUT, 8 * 1024 * 1024);
+        assert_eq!(MAX_STDERR, 64 * 1024);
+    }
 }

@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "protocol": "aisc.cli/v1",
+    "command": "runtime preflight",
+    "exit_code": 2,
+    "timestamp": "2026-08-14T00:00:00Z",
+    "version": "2.1.5-dev",
+    "run_id": "00000000-0000-4000-8000-000000000003"
+  },
+  "data": null,
+  "errors": [
+    {
+      "code": "AISC_ERR_USAGE",
+      "message": "the following arguments are required: --runtime-id",
+      "hint": null
+    }
+  ]
+}

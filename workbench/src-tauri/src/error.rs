@@ -263,6 +263,21 @@ fn redact_line(line: &str) -> String {
                 continue;
             }
         }
+        // `Bearer <jwt>` OAuth tokens (B-A08). Only long opaque shapes are
+        // redacted so `Bearer test` in a log stays readable.
+        if bytes[i..].starts_with(b"Bearer ") {
+            let mut j = i + 7;
+            while j < bytes.len() && !bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j - (i + 7) >= 20 {
+                flush_verbatim!();
+                out.push_str("Bearer <redacted>");
+                i = j;
+                verbatim_from = i;
+                continue;
+            }
+        }
         // env-like `IDENT=VALUE`: redact value when IDENT looks like a secret.
         if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
             let id_start = i;
@@ -377,5 +392,38 @@ mod tests {
         let r = redact("token: sk-ant-verylongtokenvalue123");
         assert!(r.contains("sk-<redacted>"));
         assert!(!r.contains("verylongtokenvalue123"));
+    }
+
+    #[test]
+    fn redact_bearer_token_inline() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+        let r = redact(&format!("Authorization: Bearer {jwt}"));
+        assert!(r.contains("Bearer <redacted>"));
+        assert!(!r.contains(jwt));
+    }
+
+    #[test]
+    fn redact_denylist_fixture_never_leaks() {
+        // B-A08: every denylist shape must be redacted (marker present) and the
+        // raw line must never appear intact in the output.
+        use std::path::PathBuf;
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/redaction/denylist.txt");
+        let content = std::fs::read_to_string(&fixture)
+            .unwrap_or_else(|e| panic!("denylist fixture missing: {e}"));
+        for line in content.lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let out = redact(line);
+            assert!(
+                out.contains("<redacted>"),
+                "no redaction marker for: {line}\n  -> {out}"
+            );
+            assert!(
+                !out.contains(line),
+                "denylist line leaked through redaction: {line}\n  -> {out}"
+            );
+        }
     }
 }
