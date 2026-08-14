@@ -237,7 +237,7 @@ def _build_parser() -> _AiscArgumentParser:
     )
     _add_global_args(prsk, is_subparser=True)
     prsk.add_argument("provider_id", type=str,
-                      help="Provider ID (e.g., deepseek, codex-claude)")
+                      help="Provider ID (e.g., deepseek, zhipu, kimi)")
     prsk.add_argument("--name", type=str, default=None,
                       help="Container name (overrides registry discovery)")
     prsk.add_argument("--label", type=str, default=None,

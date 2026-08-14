@@ -246,17 +246,16 @@ cc-switch proxy -a codex enable
 
 ## Provider 快速配置
 
-AISC **v2.1.4+ 已在镜像中预配置常见 AI 供应商**，用户只需设置 API Key 即可使用。支持快速配置和切换多个 AI 供应商。详细的配置指南请参考 [Provider 快速配置文档](docs/provider-quick-setup.md)。
+AISC **v2.1.4+ 已在镜像中预配置常见 AI 供应商**，用户只需设置 API Key 即可使用。支持快速配置和切换多个 AI 供应商。详细的配置指南请参考 [Provider 快速配置文档](docs/archive/provider-quick-setup.md)。
 
 ### 预配置的供应商
 
 容器启动后，以下 provider 已自动添加（除 API Key 外的所有参数）：
 
-- **DeepSeek** (`deepseek`)：高性价比对话和代码模型
-- **Claude via Codex 订阅** (`codex-claude`)：通过 Codex 服务访问 Claude 官方模型
-- **火山引擎 Ark** (`volcengine-ark`)：兼容 OpenAI/Anthropic 格式的模型服务
-- **智谱 Z.ai** (`zhipu`)：GLM 系列大语言模型
-- **Kimi** (`kimi`)：月之暗面长文本处理 AI 模型
+- **DeepSeek** (`deepseek`)：DeepSeek V4 系列对话与代码模型（默认 `deepseek-v4-flash`，可切 `deepseek-v4-pro`）
+- **火山引擎 Ark** (`volcengine-ark`)：兼容 OpenAI 格式的模型服务，需配置接入点 ID（endpoint ID）
+- **智谱 Z.ai** (`zhipu`)：GLM-5.2 旗舰大语言模型
+- **Kimi** (`kimi`)：月之暗面 Kimi K3 模型
 
 ### 快速开始
 
@@ -285,9 +284,6 @@ aisc provider set-key deepseek
 
 # 快速切换到 DeepSeek
 aisc switch --quick deepseek
-
-# 快速切换到 Codex Claude
-aisc switch --quick codex-claude
 
 # 快速切换到其他已配置的 provider
 aisc switch --quick <provider-id>
