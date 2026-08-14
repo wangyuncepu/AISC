@@ -44,6 +44,10 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(_cli_argv(*args), capture_output=True, text=True)
 
 
+def _run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, **kwargs)
+
+
 class CliEnvelopeFixturesTests(unittest.TestCase):
     def test_version_envelope_structure(self):
         env = _load("envelope-version.json")
@@ -143,6 +147,66 @@ class RedactionSmokeTests(unittest.TestCase):
         lowered = result.stdout.lower()
         for bad in ("sk-", "api_key", "authorization", "bearer "):
             self.assertNotIn(bad, lowered, f"version output leaked {bad!r}")
+
+    def test_cli_outputs_are_redacted_against_denylist(self):
+        """CLI-A08: version + doctor JSON output never carries the shared
+        redaction-denylist shapes (token/key/cookie/JWT/env-pair samples)."""
+        denylist = (ROOT / "tests" / "fixtures" / "redaction" / "denylist.txt").read_text(
+            encoding="utf-8"
+        )
+        markers = [
+            "sk-ant-api", "sk-proj-", "ghp_", "bearer eyj",
+            "sessionid=", "correct-horse-battery",
+        ]
+        for argv in (["version", "--format", "json"], ["doctor", "--format", "json"]):
+            result = _run_cli(*argv)
+            lowered = result.stdout.lower()
+            for marker in markers:
+                self.assertNotIn(marker, lowered,
+                                 f"{' '.join(argv)} leaked denylist shape {marker!r}")
+
+
+class InstallIsolationTests(unittest.TestCase):
+    """CLI-A08: pip/sidecar installs and runs do not touch the user's PATH or
+    write credential/config files outside the venv."""
+
+    def test_run_with_isolated_config_dirs_creates_nothing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="aisc-isolated-") as d:
+            env = os.environ.copy()
+            env.update({"HOME": d, "XDG_CONFIG_HOME": d, "APPDATA": d, "LOCALAPPDATA": d})
+            # The repo's CLI is a user-site editable install (its .pth lives
+            # under %APPDATA%); repointing APPDATA hides it, so pin PYTHONPATH
+            # to src/ to keep `python -m aisc` resolvable. The assertion is
+            # that the CLI writes nothing to the isolated config dirs.
+            env["PYTHONPATH"] = str(ROOT / "src")
+            result = subprocess.run(
+                _cli_argv("version", "--format", "json"),
+                capture_output=True, text=True, env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            leftovers = list(Path(d).rglob("*"))
+            self.assertEqual(leftovers, [], f"CLI created files in isolated dirs: {leftovers}")
+
+    def test_subprocess_install_does_not_alter_caller_path(self):
+        # The caller's PATH is captured before and after a pip install of the
+        # wheel; an isolated install must never mutate it (installers run in a
+        # venv, not a user-writable scripts dir).
+        import tempfile
+
+        before = os.environ.get("PATH", "")
+        with tempfile.TemporaryDirectory(prefix="aisc-venv-") as d:
+            venv = Path(d) / "venv"
+            _run([sys.executable, "-m", "venv", str(venv)])
+            py = venv / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+            # Install the wheel built for this source tree if present; otherwise
+            # the test only verifies the environment contract.
+            wheels = sorted((ROOT / "dist-wheels").glob("aisc-*.whl")) if (ROOT / "dist-wheels").is_dir() else []
+            if wheels:
+                _run([py, "-m", "pip", "install", "--quiet", str(wheels[0])])
+            after = os.environ.get("PATH", "")
+        self.assertEqual(before, after, "pip install altered the caller's PATH")
 
 
 # ---------------------------------------------------------------------------

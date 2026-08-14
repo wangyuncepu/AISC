@@ -88,10 +88,22 @@ jobs:
             > dist/aisc-sidecar-manifest.json
           cat dist/aisc-sidecar-manifest.json
 
+      # Stage 2 (S2.7, CLI-A08): dependency SBOM + pip-check integrity audit,
+      # reusing the parity step's wheel + venv from RUNNER_TEMP.
+      - name: Dependency SBOM + integrity audit (CLI-A08)
+        shell: bash
+        run: |
+          B="$RUNNER_TEMP/aisc-parity"
+          VENV_PY=$(ls "$B/venv/Scripts/python.exe" "$B/venv/bin/python" 2>/dev/null | head -1)
+          python scripts/verify-sbom.py --wheel "$B"/aisc-*.whl --venv-python "$VENV_PY" \
+            --out dist/aisc-sbom.json
+          head -c 300 dist/aisc-sbom.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: aisc-sidecar-${{ matrix.triple }}
           path: |
             dist/aisc-${{ matrix.triple }}*
             dist/aisc-sidecar-manifest.json
+            dist/aisc-sbom.json
           if-no-files-found: error
