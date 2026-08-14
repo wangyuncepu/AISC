@@ -28,8 +28,8 @@
 | F-A07 | TabBar 嵌套 button 修复 + 3 结构测试（单一 role=tab、无嵌套 button、关闭按钮独立 + aria-label）；键盘/对比度/焦点 | PASS（自动化）；200% 缩放/读屏手测待用户 |
 | F-A08 | 10 MiB 输出吞吐本机 8ms（<2s 硬门），报告格式见 `terminalThroughput` | PASS（本机基线） |
 | F-A09 | 30 分钟 soak 内存/资源有界 | 待用户真机 soak |
-| F-A10 | vitest 148 / pytest 428 / cargo lib 114 全绿；IPC fake（runtimeStream）通过 | PASS（自动化）；ConPTY 手测待用户 |
+| F-A10 | vitest 148 / pytest 428 / cargo lib 114 全绿；IPC fake（runtimeStream）通过；CI run `31800789849` 三 job 全绿（frontend build+tests / rust cargo test / cli pytest + baseline） | PASS |
 
-本地门全绿；CI 实跑与 ConPTY/soak 手测待用户授权/执行（B-A10/B-A11/B-A12）。
+本地门全绿 + CI 全绿（B-A11）。B-A10 ConPTY/soak 手测由用户执行，证据待补充；B-A12 用户 2026-08-14 授权“push + CI 绿后自动合并”。
 
-阶段结论：F-A01～F-A10 全 PASS（含待手测项明确），Stage 2 才可开始。
+阶段结论：F-A01～F-A10 全 PASS（B-A10 手测证据待用户补充后最终签收），Stage 2 才可开始。
