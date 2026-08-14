@@ -19,17 +19,17 @@
 
 | 验收 | 状态 |
 |---|---|
-| B-A09 每个最小单元独立 commit + trailer | 本阶段 7 个 commit（0dfb473→4dcd211），全部含 `Co-Authored-By`，信息关联 B-*/B-R* |
-| B-A10 用户手测清单执行 | 待用户按下方清单确认后填证据 |
-| B-A11 本地全绿 + CI 全绿 | 本地：pytest 428 / vitest 128 / cargo lib 112。CI 实跑需 push 分支触发 GitHub Actions，见 B-A12 |
-| B-A12 用户确认后才 merge | 未 push、未 merge、未删分支，等待用户确认 |
+| B-A09 每个最小单元独立 commit + trailer | PASS — 本阶段 9 个 commit（0dfb473→48fb6b4），全部含 `Co-Authored-By`，信息关联 B-*/B-R* |
+| B-A10 用户手测清单执行 | PASS — Windows 11 `complete`（用户执行）+ WSL fail-closed（用户执行），见下方清单 |
+| B-A11 本地全绿 + CI 全绿 | PASS — 本地 pytest 428 / vitest 128 / cargo lib 112；CI run `31799032346` 三 job 全绿（frontend build+tests / rust cargo test / cli pytest + Unix baseline probe + artifact） |
+| B-A12 用户确认后才 merge | PASS — 用户 2026-08-14 授权“push + CI 绿后自动合并”；合并 `--no-ff` 回 develop 执行中 |
 
 ## 用户手测清单（B-A10）
 
 1. Windows 11（已完成，用户执行 `run_baseline.py --strict` → `complete`，latest.json 已展示）。
-2. WSL/Linux（已完成 fail-closed 分支；如需完整工具链 `complete` 可在具备 docker/cargo 的 Unix 上复跑）。
-3. 提交审计：`git log --oneline stage-0-baseline-gates` 应有 7 个本阶段 commit，工作区干净（`git status --short` 无输出）。
+2. WSL/Linux（已完成 fail-closed 分支：缺 node/npm/rustc/cargo → `--strict` exit 1、无 latest.json）。
+3. 提交审计：`git log --oneline stage-0-baseline-gates` 应有 9 个本阶段 commit，工作区干净。
 
 ## 阶段结论
 
-B-A01～B-A08 全 PASS；B-A09～B-A12 待 CI 实跑（需 push 授权）与用户最终确认后才可写 PASS 并进入 Stage 1。
+B-A01～B-A12 全 PASS。CI 全绿（含 Unix baseline probe 与 artifact），用户已确认合并，进入 Stage 1。
