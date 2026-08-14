@@ -148,9 +148,19 @@ function b64ToUint8(b64: string): Uint8Array {
   return u8;
 }
 
-/** Write one store-buffered output chunk to the xterm. */
-function writeChunk(b64: string): void {
-  if (term) term.write(b64ToUint8(b64));
+/** Write a batch of base64 chunks in a SINGLE term.write (fewer xterm parses;
+ * per-chunk writes make high-throughput output render slowly). */
+function writeChunks(chunks: string[]): void {
+  if (!term || chunks.length === 0) return;
+  const totalB64 = chunks.reduce((n, c) => n + c.length, 0);
+  const decoded = new Uint8Array(((totalB64 / 4) | 0) * 3);
+  let off = 0;
+  for (const b64 of chunks) {
+    const u8 = b64ToUint8(b64);
+    decoded.set(u8, off);
+    off += u8.length;
+  }
+  term.write(decoded.subarray(0, off));
 }
 
 /** G-06 (A-G06-3): rebuild the Terminal view in place for renderer/font-family
@@ -173,7 +183,8 @@ function rebuildTerminal() {
   term.onSelectionChange(onSelectionChange);
   mountWebgl();
   mountSearch();
-  for (const chunk of store.paneStreams[props.paneId] ?? []) writeChunk(chunk);
+  writeChunks(store.paneStreams[props.paneId] ?? []);
+  consumed = store.streamCursor[props.paneId] ?? 0;
   if (visible.value) term.refresh(0, term.rows - 1);
   setTimeout(doResize, 0);
 }
@@ -352,6 +363,17 @@ function onTerminalClick() {
   if (splitPicker.value) splitPicker.value = null;
 }
 
+// S1.3: persistent truncation notice (setup-top-level so the template can see
+// it; the terminal-flow note below marks the point in the scrollback).
+const streamTruncated = computed(() => store.paneStreamMeta[props.paneId]?.truncated ?? false);
+const streamTruncatedBytes = computed(
+  () => store.paneStreamMeta[props.paneId]?.truncatedBytes ?? 0
+);
+// Number of chunks this Terminal has written to the xterm; advances by
+// streamCursor (not array length, which freezes once the rolling window is
+// full). Shared by the stream watcher and rebuildTerminal.
+let consumed = 0;
+
 onMounted(() => {
   term = new Terminal(terminalOptions());
   fit = new FitAddon();
@@ -395,15 +417,15 @@ onMounted(() => {
   // chunks dropped to stay within budget), so advancing by array length breaks:
   // once the window is full the length never changes and the terminal would
   // freeze. Advance by the monotonic streamCursor instead; computeDisplayFrom
-  // re-anchors past any dropped head. Remounts never re-open the session.
-  let consumed = 0;
+  // re-anchors past any dropped head. New chunks are written as ONE batch per
+  // flush. Remounts never re-open the session.
   watch(
     () => store.streamCursor[props.paneId] ?? 0,
     () => {
       const arr = store.paneStreams[props.paneId] ?? [];
       const total = store.streamCursor[props.paneId] ?? 0;
       const from = computeDisplayFrom(consumed, total, arr.length);
-      for (let i = from; i < arr.length; i++) writeChunk(arr[i]);
+      if (from < arr.length) writeChunks(arr.slice(from));
       consumed = Math.max(consumed, total);
     },
     { immediate: true }
@@ -427,7 +449,8 @@ onMounted(() => {
 
   // S1.3 (F-A04): output truncation is observable - once the per-pane budget
   // is exceeded the store keeps dropping; surface it instead of pretending the
-  // output is complete.
+  // output is complete. The terminal-flow note marks the point; the fixed
+  // banner stays visible because the note scrolls out of view under output.
   watch(
     () => store.paneStreamMeta[props.paneId]?.truncated,
     (truncated) => {
@@ -494,6 +517,11 @@ defineExpose({
     @contextmenu="onContextMenu"
     @click="onTerminalClick"
   >
+    <!-- S1.3: fixed, persistent truncation notice (the terminal-flow note
+         scrolls away under sustained output). -->
+    <div v-if="streamTruncated" class="truncation-banner" role="status">
+      {{ t("terminal.outputTruncated", { bytes: formatBytes(streamTruncatedBytes) }) }}
+    </div>
     <!-- G-03 search overlay -->
     <div v-if="searchOpen" class="search-overlay" @click.stop>
       <input
@@ -569,6 +597,21 @@ defineExpose({
   height: 100%;
   width: 100%;
   position: relative;
+}
+
+/* S1.3: persistent truncation notice pinned to the top edge (does not consume
+ * terminal scrollback, so it cannot be pushed out of view). */
+.truncation-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-border);
 }
 
 /* --- search overlay (top-right, above the terminal) --- */
