@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "AISC contributors" }]
+keywords = ["ai", "claude", "docker", "workstation", "cli", "container"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -24,6 +25,11 @@ classifiers = [
 # can be resized via exec_resize (docker CLI exec ptys are frozen at spawn).
 dependencies = ["docker>=7.1"]
 
+[project.urls]
+Homepage = "https://github.com/wangyuncepu/AISC"
+Source = "https://github.com/wangyuncepu/AISC"
+Releases = "https://github.com/wangyuncepu/AISC/releases"
+
 [project.scripts]
 aisc = "aisc.cli.main:main"
 
@@ -33,6 +39,12 @@ dev = ["pytest>=8", "PyInstaller>=6", "PyYAML>=6"]
 [tool.setuptools]
 package-dir = { "" = "src" }
 include-package-data = false
+
+# Explicit discovery: only the `aisc` package tree from src/. Guards against
+# accidental namespace drift or stray top-level packages sneaking into the sdist.
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["aisc", "aisc.*"]
 
 [tool.setuptools.data-files]
 aisc = ["VERSION"]
