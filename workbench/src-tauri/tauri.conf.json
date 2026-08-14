@@ -5,7 +5,7 @@
   "identifier": "cn.aisc.workbench",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:9000",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -18,7 +18,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; script-src 'self'"
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:9000 http://localhost:9000; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; script-src 'self'"
     }
   },
   "bundle": {

@@ -6,6 +6,7 @@ import {
   OUTPUT_BYTE_BUDGET,
   OUTPUT_CHUNK_BUDGET,
   appendWithBudget,
+  computeDisplayFrom,
   emptyStream,
 } from "../streamBuffer";
 
@@ -24,27 +25,32 @@ describe("appendWithBudget", () => {
     expect(state.chunks).toEqual([]); // caller's old array is untouched
   });
 
-  it("truncates when the byte budget is exceeded and counts bytes", () => {
+  it("drops the OLDEST when the byte budget is exceeded, keeping newest", () => {
     const state = appendWithBudget(emptyStream(), ["aaaa", "bbbb"], { byteBudget: 6 });
-    expect(state.chunks).toEqual(["aaaa"]);
+    // "bbbb" is the newest and stays; "aaaa" is dropped from the head.
+    expect(state.chunks).toEqual(["bbbb"]);
     expect(state.bytes).toBe(4);
     expect(state.truncated).toBe(true);
-    expect(state.truncatedBytes).toBe(4); // "bbbb" dropped
+    expect(state.truncatedBytes).toBe(4); // "aaaa" dropped
   });
 
-  it("truncates at the chunk budget", () => {
+  it("drops the OLDEST at the chunk budget, keeping newest", () => {
     const state = appendWithBudget(emptyStream(), ["a", "b", "c"], { chunkBudget: 2 });
-    expect(state.chunks).toEqual(["a", "b"]);
+    expect(state.chunks).toEqual(["b", "c"]);
     expect(state.truncated).toBe(true);
-    expect(state.truncatedBytes).toBe(1); // "c" dropped
+    expect(state.truncatedBytes).toBe(1); // "a" dropped
   });
 
-  it("keeps dropping after truncation (no silent re-entry)", () => {
+  it("keeps rendering after truncation (rolling window, not frozen)", () => {
     const first = appendWithBudget(emptyStream(), ["aaaa"], { byteBudget: 3 });
+    expect(first.chunks).toEqual([]);
+    expect(first.truncatedBytes).toBe(4);
+
+    // New output still renders; oldest is dropped to stay within budget.
     const second = appendWithBudget(first, ["b"], { byteBudget: 3 });
-    expect(second.chunks).toEqual([]);
+    expect(second.chunks).toEqual(["b"]);
     expect(second.truncated).toBe(true);
-    expect(second.truncatedBytes).toBe(4 + 1);
+    expect(second.truncatedBytes).toBe(4); // "b" fits, nothing new dropped
   });
 
   it("no-op for empty incoming keeps the same array reference", () => {
@@ -60,5 +66,32 @@ describe("appendWithBudget", () => {
     expect(OUTPUT_CHUNK_BUDGET).toBeGreaterThan(0);
     const ok = appendWithBudget(state, ["x"], {});
     expect(ok.truncated).toBe(false);
+  });
+});
+
+describe("computeDisplayFrom", () => {
+  it("starts at 0 for a fresh window", () => {
+    expect(computeDisplayFrom(0, 4096, 4096)).toBe(0);
+  });
+
+  it("advances from the consumer cursor when nothing was dropped", () => {
+    // 4096 chunks emitted, 4096 kept, consumed 2048 -> continue at index 2048.
+    expect(computeDisplayFrom(2048, 4096, 4096)).toBe(2048);
+  });
+
+  it("re-anchors when the head was dropped (rolling window)", () => {
+    // 5000 emitted, 4096 kept (oldest 904 dropped), consumed 4096 -> arr[0]
+    // is global 904, so the next new chunk (global 4096) is at index 3192.
+    expect(computeDisplayFrom(4096, 5000, 4096)).toBe(3192);
+  });
+
+  it("skips dropped chunks a slow consumer has not seen", () => {
+    // Consumer only displayed 3000 of 5000 emitted; 904 were dropped from the
+    // head, so it must start at global 3000 -> index 3000 - (5000-4096).
+    expect(computeDisplayFrom(3000, 5000, 4096)).toBe(3000 - 904);
+  });
+
+  it("empty buffer yields 0", () => {
+    expect(computeDisplayFrom(0, 0, 0)).toBe(0);
   });
 });

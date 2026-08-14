@@ -99,4 +99,27 @@ describe("S1.6 TabBar structure (no nested buttons)", () => {
     expect(s.activeTabId).toBe("t2");
     wrapper.unmount();
   });
+
+  it("arrows move focus within the tablist WITHOUT activating; Enter activates", async () => {
+    const s = setupStore();
+    // attachTo: focus()/document.activeElement only work on an attached tree.
+    const wrapper = mount(TabBar, {
+      global: { plugins: [i18n] },
+      attachTo: document.body,
+    });
+    const mains = wrapper.findAll(".tab-main");
+    const tabbar = wrapper.find(".tabbar");
+
+    // Focus the first tab, then ArrowRight moves focus to the second but does
+    // not activate (the app-wide activeTabId watcher would move focus away).
+    (mains[0]!.element as HTMLElement).focus();
+    await tabbar.trigger("keydown", { key: "ArrowRight" });
+    expect(document.activeElement).toBe(mains[1]!.element);
+    expect(s.activeTabId).toBe("t1");
+
+    // Enter on the focused tab activates it.
+    await tabbar.trigger("keydown", { key: "Enter" });
+    expect(s.activeTabId).toBe("t2");
+    wrapper.unmount();
+  });
 });

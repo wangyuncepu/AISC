@@ -61,9 +61,14 @@ function onDocMousedown(e: MouseEvent) {
 onMounted(() => document.addEventListener("mousedown", onDocMousedown));
 onBeforeUnmount(() => document.removeEventListener("mousedown", onDocMousedown));
 
-// S3.3: ARIA tabs keyboard navigation (Left/Right/Up/Down move + activate,
-// Home/End first/last, wrap-around).
+// S3.3 / S1.6: ARIA tabs keyboard navigation (APG tabs pattern).
+// Arrow/Home/End move FOCUS within the tablist (roving tabindex) WITHOUT
+// activating - activation happens on Enter/Space, which is what sends the
+// focus to the terminal. (Directly activateTab-ing on Arrow made the app-wide
+// activeTabId watcher move keyboard focus to the terminal, so the next Arrow
+// landed in the terminal and navigation appeared broken.)
 const tabRefs = ref<(HTMLButtonElement | null)[]>([]);
+const roving = ref(-1); // -1 = no manual roving; follow the active tab
 
 function setTabRef(i: number) {
   return (el: unknown) => {
@@ -71,19 +76,41 @@ function setTabRef(i: number) {
   };
 }
 
+function tabIndex(tab: Tab, i: number): string {
+  if (roving.value >= 0) return roving.value === i ? "0" : "-1";
+  return tab.tabId === store.activeTabId ? "0" : "-1";
+}
+
+function onTabClick(tabId: string) {
+  roving.value = -1;
+  store.activateTab(tabId);
+}
+
 function onTablistKeydown(e: KeyboardEvent) {
   const count = store.tabs.length;
   if (count === 0) return;
-  const currentIdx = store.tabs.findIndex((t) => t.tabId === store.activeTabId);
+  const activeIdx = store.tabs.findIndex((t) => t.tabId === store.activeTabId);
+  const base = roving.value >= 0 ? roving.value : activeIdx;
+
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    const pick = roving.value >= 0 ? roving.value : activeIdx;
+    if (pick >= 0) {
+      store.activateTab(store.tabs[pick].tabId);
+      roving.value = -1;
+    }
+    return;
+  }
+
   let target = -1;
   switch (e.key) {
     case "ArrowLeft":
     case "ArrowUp":
-      target = currentIdx <= 0 ? count - 1 : currentIdx - 1;
+      target = base <= 0 ? count - 1 : base - 1;
       break;
     case "ArrowRight":
     case "ArrowDown":
-      target = currentIdx < 0 ? 0 : (currentIdx + 1) % count;
+      target = base < 0 ? 0 : (base + 1) % count;
       break;
     case "Home":
       target = 0;
@@ -94,12 +121,10 @@ function onTablistKeydown(e: KeyboardEvent) {
     default:
       return;
   }
+  // Move focus only; activation waits for Enter/Space.
   e.preventDefault();
-  const tab = store.tabs[target];
-  if (tab) {
-    store.activateTab(tab.tabId);
-    tabRefs.value[target]?.focus();
-  }
+  roving.value = target;
+  tabRefs.value[target]?.focus();
 }
 
 function stateLabel(tab: Tab): string {
@@ -138,7 +163,7 @@ function canReopen(s: TabSessionState): boolean {
 </script>
 
 <template>
-  <div class="tabbar" role="tablist" @keydown="onTablistKeydown">
+  <div class="tabbar" role="tablist" aria-orientation="horizontal" @keydown="onTablistKeydown">
     <!-- S1.6 (F-A06): the tab is a NON-interactive wrapper; the tab activation
          and the close/reopen actions are sibling buttons (no nested button,
          which was invalid and broke focus semantics). The wrapper keeps the
@@ -153,10 +178,11 @@ function canReopen(s: TabSessionState): boolean {
         :ref="setTabRef(i)"
         role="tab"
         class="tab-main"
+        :tabindex="tabIndex(tab, i)"
         :aria-selected="tab.tabId === store.activeTabId"
         :aria-controls="`terminal-${tab.tabId}`"
         :title="tab.title"
-        @click="store.activateTab(tab.tabId)"
+        @click="onTabClick(tab.tabId)"
       >
         <span class="title">{{ tab.title }}</span>
         <span v-if="stateLabel(tab)" class="state">{{ stateLabel(tab) }}</span>

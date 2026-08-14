@@ -17,16 +17,18 @@ export default defineConfig(async () => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
+  // 2. tauri expects a fixed port, fail if that port is not available.
+  //    9000/9001 avoid the Windows excluded-port ranges (observed 2026-08-14:
+  //    the default 1420/1421 fall inside 1335-1434 and fail with EACCES).
   server: {
-    port: 1420,
+    port: 9000,
     strictPort: true,
     host: host || false,
     hmr: host
       ? {
           protocol: "ws",
           host,
-          port: 1421,
+          port: 9001,
         }
       : undefined,
     watch: {
