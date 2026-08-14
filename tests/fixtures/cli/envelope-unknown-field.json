@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "protocol": "aisc.cli/v1",
+    "command": "version",
+    "exit_code": 0,
+    "timestamp": "2026-08-14T00:00:00Z",
+    "version": "2.1.5-dev",
+    "run_id": "00000000-0000-4000-8000-000000000004"
+  },
+  "data": {
+    "cli_version": "2.1.5-dev",
+    "capabilities": {
+      "runtime": "aisc.runtime/v1",
+      "session": "aisc.session/v1",
+      "providerStatus": "aisc.provider-status/v1",
+      "buildEvents": "aisc.build-events/v1"
+    }
+  },
+  "errors": [],
+  "x_future_top_level": {
+    "kept": true
+  },
+  "x_data_future_note": "consumers must preserve unknown fields on round-trip"
+}

@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "protocol": "aisc.cli/v2",
+    "command": "version",
+    "exit_code": 0,
+    "timestamp": "2026-08-14T00:00:00Z",
+    "version": "3.0.0",
+    "run_id": "00000000-0000-4000-8000-000000000005"
+  },
+  "data": null,
+  "errors": []
+}
