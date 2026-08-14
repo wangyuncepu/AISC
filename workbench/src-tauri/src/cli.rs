@@ -910,6 +910,75 @@ mod tests {
         assert!(!ok);
     }
 
+    // --- Stage 2 (S2.3, CLI-A03): systematic capability matrix ---
+
+    /// (runtime, session, provider, build, required_ok, missing_required, missing_optional)
+    const CAP_MATRIX: [(&str, Option<&str>, Option<&str>, Option<&str>, Option<&str>, bool, &[&str], &[&str]); 8] = [
+        // all present at v1
+        ("all-v1", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), true, &[], &[]),
+        // each required missing blocks
+        ("no-runtime", None, Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["runtime"], &[]),
+        ("no-session", Some(EXPECTED_RUNTIME), None, Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["session"], &[]),
+        // old version counts as missing (fail closed, no guessing)
+        ("old-runtime", Some("aisc.runtime/v2"), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["runtime"], &[]),
+        ("old-session", Some(EXPECTED_RUNTIME), Some("aisc.session/v2"), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["session"], &[]),
+        // optional missing does not block
+        ("no-provider", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), None, Some(EXPECTED_BUILD), true, &[], &["providerStatus"]),
+        ("no-build", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), None, true, &[], &["buildEvents"]),
+        // everything absent
+        ("all-absent", None, None, None, None, false, &["runtime", "session"], &["providerStatus", "buildEvents"]),
+    ];
+
+    #[test]
+    fn capability_matrix_is_systematic() {
+        for (name, runtime, session, provider, build, ok, mr, mo) in CAP_MATRIX {
+            let caps = caps(runtime, session, provider, build);
+            let (got_ok, got_mr, got_mo) = classify(&caps);
+            assert_eq!(got_ok, ok, "[{name}] required_ok");
+            assert_eq!(got_mr, mr, "[{name}] missing_required");
+            assert_eq!(got_mo, mo, "[{name}] missing_optional");
+        }
+    }
+
+    #[test]
+    fn missing_required_capability_yields_stable_error_and_action() {
+        // CLI-A03: a missing required capability must surface the stable
+        // unsupported code + upgrade action so callers never proceed into a
+        // command the CLI cannot serve (fail closed, no silent downgrade).
+        use crate::error::Action;
+        let body = json!({
+            "meta": {"protocol": "aisc.cli/v1", "command": "version", "exit_code": 0},
+            "data": {"capabilities": {"session": EXPECTED_SESSION}},
+            "errors": []
+        });
+        let env: Envelope = serde_json::from_value(body).unwrap();
+        let report = report_from_envelope(env);
+        assert!(!report.required_ok, "missing runtime must not be required_ok");
+        let e = report.error.expect("missing required must carry an error");
+        assert_eq!(e.code, "WB_ERR_CAPABILITY_UNSUPPORTED");
+        assert!(matches!(e.action, Action::UpgradeCli), "action must be UpgradeCli");
+        assert!(!e.retryable);
+    }
+
+    #[test]
+    fn full_capability_report_has_no_error() {
+        let body = json!({
+            "meta": {"protocol": "aisc.cli/v1", "command": "version", "exit_code": 0},
+            "data": {"capabilities": {
+                "runtime": EXPECTED_RUNTIME,
+                "session": EXPECTED_SESSION,
+                "providerStatus": EXPECTED_PROVIDER,
+                "buildEvents": EXPECTED_BUILD,
+            }},
+            "errors": []
+        });
+        let env: Envelope = serde_json::from_value(body).unwrap();
+        let report = report_from_envelope(env);
+        assert!(report.required_ok);
+        assert!(report.error.is_none());
+        assert!(report.missing_required.is_empty());
+    }
+
     #[test]
     fn parse_valid_envelope() {
         let body = json!({
