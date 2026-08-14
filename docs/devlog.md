@@ -2,6 +2,20 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+# Stage 1 (2026-08-14) — Frontend Data Plane（AISC Next，分支 stage-1-frontend-data-plane）
+
+> 规划入口：`docs/plans/aisc-next/stage-1-frontend-data-plane/`。将前端从单体协调器拆为可测投影，建立有界高频终端数据面。
+
+- **S1.1 分层（F-01）**：`domain/__tests__/layerContract` 依赖边界契约（组件禁引 runtime/provider/docker/history/settings IPC）；App.vue 收紧为按名 import。
+- **S1.2 PTY 数据面（F-02）**：pty spawn 失败返回结构化错误且无 child 泄漏；writer 通道硬上限 bounded（cargo lib 114）。
+- **S1.3 输出批处理（F-03）**：`domain/streamBuffer`（appendWithBudget，4 MiB/4096 chunk 预算，截断终态）+ 非响应式 pending 队列 + rAF 批量 flush（单次数组替换）；Terminal 显示“输出已截断”提示。
+- **S1.4 生命周期（F-04）**：openPane channel 事件按 sessionId 归属校验，reopen 后旧 channel 迟到事件丢弃。
+- **S1.5 状态投影（F-05）**：runtimeFreshness 测试（迟到低 seq 丢弃、stale 保留快照、fresh 恢复）。
+- **S1.6 a11y（F-06）**：TabBar 嵌套 button 修复（tab 容器 + 单一 role=tab 激活按钮 + 独立关闭/重开按钮）+ 3 结构测试。
+- **S1.7 基准（F-07）**：10 MiB 输出 fixture 吞吐（本机 8ms < 2s 硬门）、字节/chunk 预算、逐字节计数完整。
+- **S1.8 harness（F-08）**：Fake Channel 驱动 store 的 channel→pending→rAF→paneStreams 链路 + sessionId guard（runtimeStream）。
+- **本地门**：vitest 148 / pytest 428 / cargo lib 114 全绿。ConPTY/soak 手测与 CI 实跑待用户（B-A10/B-A11/B-A12）。
+
 # Stage 0 (2026-08-14) — Baseline Gates（AISC Next，分支 stage-0-baseline-gates）
 
 > 规划入口：`docs/plans/aisc-next/`。本阶段固定可重复基线、契约 fixture、CI 触发、资源预算和 redaction 门禁，不交付终端新功能。

@@ -419,7 +419,28 @@ onMounted(() => {
       }
     }
   );
+
+  // S1.3 (F-A04): output truncation is observable - once the per-pane budget
+  // is exceeded the store keeps dropping; surface it instead of pretending the
+  // output is complete.
+  watch(
+    () => store.paneStreamMeta[props.paneId]?.truncated,
+    (truncated) => {
+      if (!truncated) return;
+      const bytes = store.paneStreamMeta[props.paneId]?.truncatedBytes ?? 0;
+      term?.write(
+        `\r\n\x1b[33m${t("terminal.outputTruncated", { bytes: formatBytes(bytes) })}\x1b[0m\r\n`
+      );
+    },
+    { immediate: true }
+  );
 });
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
+}
 
 // G-06 (A-G06-3): settings-driven updates. renderer/font_family rebuild the
 // view in place (session_id/PTY untouched); the other terminal options apply

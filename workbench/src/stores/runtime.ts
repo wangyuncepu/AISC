@@ -58,6 +58,7 @@ import {
   splitLeaf,
 } from "./paneTree";
 import type { NavDir } from "./paneTree";
+import { appendWithBudget } from "../domain/streamBuffer";
 
 /** S2.1.a/b startup state machine (02-startup-flow.md §三). S2.2.b adds `conflict`. */
 export type WorkbenchStatus =
@@ -175,6 +176,43 @@ export const useRuntimeStore = defineStore("runtime", () => {
    * session channel; Terminals replay + stream from here, so remounts never
    * drop output or re-open the session. */
   const paneStreams = ref<Record<string, string[]>>({});
+  // S1.3 (F-03): non-reactive pending queue + per-pane byte counters. Chunks
+  // land in `pendingChunks` and are flushed once per animation frame through
+  // appendWithBudget (bounded, truncation observable) into `paneStreams` as a
+  // single array replacement - high-frequency writes never hit the reactive
+  // tree per chunk.
+  const pendingChunks: Record<string, string[]> = {};
+  const paneByteCounts: Record<string, number> = {};
+  const paneStreamMeta = ref<Record<string, { truncated: boolean; truncatedBytes: number }>>({});
+  let flushFrame: number | null = null;
+  function scheduleStreamFlush(): void {
+    if (flushFrame !== null) return;
+    flushFrame = window.requestAnimationFrame(() => {
+      flushFrame = null;
+      const ids = Object.keys(pendingChunks);
+      for (const id of ids) {
+        const incoming = pendingChunks[id];
+        if (!incoming || incoming.length === 0) continue;
+        pendingChunks[id] = [];
+        const meta = paneStreamMeta.value[id] ?? { truncated: false, truncatedBytes: 0 };
+        const state = appendWithBudget(
+          {
+            chunks: paneStreams.value[id] ?? [],
+            bytes: paneByteCounts[id] ?? 0,
+            truncated: meta.truncated,
+            truncatedBytes: meta.truncatedBytes,
+          },
+          incoming,
+        );
+        paneStreams.value[id] = state.chunks;
+        paneByteCounts[id] = state.bytes;
+        paneStreamMeta.value[id] = {
+          truncated: state.truncated,
+          truncatedBytes: state.truncatedBytes,
+        };
+      }
+    });
+  }
   const buildStartedAt = ref<number | null>(null);
   const buildFinishedAt = ref<number | null>(null);
   const buildDurationMs = ref<number | null>(null);
@@ -936,16 +974,27 @@ export const useRuntimeStore = defineStore("runtime", () => {
     p.sessionState = "starting";
     p.exit = null;
     paneStreams.value[paneId] = []; // reset the per-pane output buffer
+    paneByteCounts[paneId] = 0;
+    paneStreamMeta.value[paneId] = { truncated: false, truncatedBytes: 0 };
+    pendingChunks[paneId] = [];
     syncProjection(tab);
     const ch = new Channel<PtyEvent>();
     ch.onmessage = (ev) => {
+      // S1.4 (F-R04): a stale channel from a closed/reopened session must not
+      // mutate the current pane. The pane's sessionId moves on reopen; events
+      // belonging to an older session are dropped (and not counted as output
+      // proving liveness).
+      if (p.sessionId !== sid) return;
       if (ev.type === "output") {
         // First output proves the PTY is live: promote a `starting` pane to
         // running. The invoke response can lag the channel delivery, leaving
         // the tab bar on 启动中 while bash is already showing output
         // (G-17 feedback 2026-08-10).
         onTabOpenOk(paneId);
-        paneStreams.value[paneId]?.push(ev.bytes);
+        // S1.3: buffer into the non-reactive pending queue; a single rAF flush
+        // applies budget + emits one reactive replacement.
+        (pendingChunks[paneId] ??= []).push(ev.bytes);
+        scheduleStreamFlush();
       } else if (ev.type === "exit") {
         if (!p.exit) {
           p.exit = { reason: ev.reason, exitCode: ev.exitCode };
@@ -1500,6 +1549,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     navigatePane,
     setSplitRatio,
     paneStreams,
+    paneStreamMeta,
     activateTab,
     closeTab,
     reopenTab,
