@@ -24,27 +24,32 @@ describe("appendWithBudget", () => {
     expect(state.chunks).toEqual([]); // caller's old array is untouched
   });
 
-  it("truncates when the byte budget is exceeded and counts bytes", () => {
+  it("drops the OLDEST when the byte budget is exceeded, keeping newest", () => {
     const state = appendWithBudget(emptyStream(), ["aaaa", "bbbb"], { byteBudget: 6 });
-    expect(state.chunks).toEqual(["aaaa"]);
+    // "bbbb" is the newest and stays; "aaaa" is dropped from the head.
+    expect(state.chunks).toEqual(["bbbb"]);
     expect(state.bytes).toBe(4);
     expect(state.truncated).toBe(true);
-    expect(state.truncatedBytes).toBe(4); // "bbbb" dropped
+    expect(state.truncatedBytes).toBe(4); // "aaaa" dropped
   });
 
-  it("truncates at the chunk budget", () => {
+  it("drops the OLDEST at the chunk budget, keeping newest", () => {
     const state = appendWithBudget(emptyStream(), ["a", "b", "c"], { chunkBudget: 2 });
-    expect(state.chunks).toEqual(["a", "b"]);
+    expect(state.chunks).toEqual(["b", "c"]);
     expect(state.truncated).toBe(true);
-    expect(state.truncatedBytes).toBe(1); // "c" dropped
+    expect(state.truncatedBytes).toBe(1); // "a" dropped
   });
 
-  it("keeps dropping after truncation (no silent re-entry)", () => {
+  it("keeps rendering after truncation (rolling window, not frozen)", () => {
     const first = appendWithBudget(emptyStream(), ["aaaa"], { byteBudget: 3 });
+    expect(first.chunks).toEqual([]);
+    expect(first.truncatedBytes).toBe(4);
+
+    // New output still renders; oldest is dropped to stay within budget.
     const second = appendWithBudget(first, ["b"], { byteBudget: 3 });
-    expect(second.chunks).toEqual([]);
+    expect(second.chunks).toEqual(["b"]);
     expect(second.truncated).toBe(true);
-    expect(second.truncatedBytes).toBe(4 + 1);
+    expect(second.truncatedBytes).toBe(4); // "b" fits, nothing new dropped
   });
 
   it("no-op for empty incoming keeps the same array reference", () => {

@@ -6,6 +6,11 @@
  * flush runs through `appendWithBudget`, which returns a NEW chunks array so a
  * single reactive replacement fires (not one per chunk). Budgets make overflow
  * observable (`truncated` + `truncatedBytes`) instead of silent growth.
+ *
+ * The buffer is a ROLLING window: when the byte/chunk budget is exceeded the
+ * OLDEST chunks are dropped so the terminal keeps rendering the newest output
+ * (a terminal that freezes after truncation is a bug, not a budget). Dropped
+ * bytes are always counted in `truncatedBytes`.
  */
 
 export const OUTPUT_BYTE_BUDGET = 4 * 1024 * 1024; // per-pane, base64 bytes
@@ -30,10 +35,11 @@ export function emptyStream(): StreamBufferState {
 /**
  * Append `incoming` chunks under the given budgets, returning a new state.
  *
- * A chunk is kept only if the chunk-count budget and the byte budget both have
- * room; otherwise it is counted as truncated. Ordering is preserved up to the
- * truncation point. The returned `chunks` is a fresh array (callers assign it
- * to a ref to fire exactly one reactive update per flush).
+ * New chunks are appended, then the OLDEST are dropped from the head until the
+ * buffer fits the budgets — a rolling window that keeps the newest output. The
+ * returned `chunks` is a fresh array (callers assign it to a ref to fire
+ * exactly one reactive update per flush). `truncatedBytes` counts every byte
+ * dropped over time.
  */
 export function appendWithBudget(
   state: StreamBufferState,
@@ -43,39 +49,32 @@ export function appendWithBudget(
   const byteBudget = opts.byteBudget ?? OUTPUT_BYTE_BUDGET;
   const chunkBudget = opts.chunkBudget ?? OUTPUT_CHUNK_BUDGET;
 
-  let chunks = state.chunks;
-  let bytes = state.bytes;
-  let truncatedBytes = state.truncatedBytes;
-  let truncated = state.truncated;
-
   if (incoming.length === 0) {
-    return { chunks, bytes, truncated, truncatedBytes };
+    return state;
   }
 
-  // Truncation is terminal: once the budget is exceeded, every later chunk is
-  // counted as dropped so the buffer can never resume silently.
-  if (truncated) {
-    for (const chunk of incoming) {
-      truncatedBytes += chunk.length;
-    }
-    return { chunks, bytes, truncated, truncatedBytes };
-  }
+  let chunks = state.chunks.slice(); // copy-on-write: single reactive replacement
+  let bytes = state.bytes;
+  let truncated = state.truncated;
+  let dropped = 0;
 
-  let dirty = false;
   for (const chunk of incoming) {
-    if (chunks.length >= chunkBudget || bytes + chunk.length > byteBudget) {
-      truncated = true;
-      truncatedBytes += chunk.length;
-      continue;
-    }
-    if (!dirty) {
-      chunks = chunks.slice(); // copy-on-first-write
-      dirty = true;
-    }
     chunks.push(chunk);
     bytes += chunk.length;
   }
-  return { chunks, bytes, truncated, truncatedBytes };
+  // Drop from the HEAD until within budgets so the newest output stays visible.
+  while ((chunks.length > chunkBudget || bytes > byteBudget) && chunks.length > 0) {
+    const removed = chunks.shift()!;
+    bytes -= removed.length;
+    dropped += removed.length;
+    truncated = true;
+  }
+  return {
+    chunks,
+    bytes,
+    truncated,
+    truncatedBytes: state.truncatedBytes + dropped,
+  };
 }
 
 /** True when the byte budget has any room left for the given chunk. */
