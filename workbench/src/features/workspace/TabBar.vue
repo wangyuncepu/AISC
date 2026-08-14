@@ -139,35 +139,45 @@ function canReopen(s: TabSessionState): boolean {
 
 <template>
   <div class="tabbar" role="tablist" @keydown="onTablistKeydown">
-    <button
+    <!-- S1.6 (F-A06): the tab is a NON-interactive wrapper; the tab activation
+         and the close/reopen actions are sibling buttons (no nested button,
+         which was invalid and broke focus semantics). The wrapper keeps the
+         visual active/hover state; tab-main carries role=tab. -->
+    <div
       v-for="(tab, i) in store.tabs"
       :key="tab.tabId"
-      :ref="setTabRef(i)"
-      role="tab"
       class="tab"
       :class="[tab.sessionState, { active: tab.tabId === store.activeTabId }]"
-      :aria-selected="tab.tabId === store.activeTabId"
-      :aria-controls="`terminal-${tab.tabId}`"
-      :title="tab.title"
-      @click="store.activateTab(tab.tabId)"
     >
-      <span class="title">{{ tab.title }}</span>
-      <span v-if="stateLabel(tab)" class="state">{{ stateLabel(tab) }}</span>
+      <button
+        :ref="setTabRef(i)"
+        role="tab"
+        class="tab-main"
+        :aria-selected="tab.tabId === store.activeTabId"
+        :aria-controls="`terminal-${tab.tabId}`"
+        :title="tab.title"
+        @click="store.activateTab(tab.tabId)"
+      >
+        <span class="title">{{ tab.title }}</span>
+        <span v-if="stateLabel(tab)" class="state">{{ stateLabel(tab) }}</span>
+      </button>
       <span class="actions" v-if="canClose(tab.sessionState) || canReopen(tab.sessionState)">
         <button
           v-if="canClose(tab.sessionState)"
           class="icon x"
           :title="t('tabbar.closeTitle')"
-          @click.stop="store.removeTab(tab.tabId)"
+          :aria-label="t('tabbar.closeTitle')"
+          @click="store.removeTab(tab.tabId)"
         >×</button>
         <button
           v-if="canReopen(tab.sessionState)"
           class="icon reopen"
           :title="t('tabbar.reopenTitle')"
-          @click.stop="store.reopenTab(tab.tabId)"
+          :aria-label="t('tabbar.reopenTitle')"
+          @click="store.reopenTab(tab.tabId)"
         >↻</button>
       </span>
-    </button>
+    </div>
 
     <!-- G-08: + menu (duplicates allowed; cap enforced by the store) -->
     <div class="menu-wrap">
@@ -207,18 +217,25 @@ function canReopen(s: TabSessionState): boolean {
 .tab {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  gap: 4px;
+  padding: 6px 8px 6px 10px;
   background: transparent;
   color: var(--text-muted);
-  border: none;
   border-bottom: 2px solid transparent;
-  border-radius: 0;
-  font-size: 13px;
-  cursor: pointer;
 }
 .tab:hover { background: var(--surface-2); color: var(--text-2); }
 .tab.active { color: var(--text-2); border-bottom-color: var(--accent); background: var(--bg); }
+.tab-main {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .tab .title { font-weight: 500; }
 .tab .state { font-size: 11px; color: var(--text-muted); }
 .tab.idle { color: var(--text-faint); }

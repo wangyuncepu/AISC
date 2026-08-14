@@ -980,6 +980,11 @@ export const useRuntimeStore = defineStore("runtime", () => {
     syncProjection(tab);
     const ch = new Channel<PtyEvent>();
     ch.onmessage = (ev) => {
+      // S1.4 (F-R04): a stale channel from a closed/reopened session must not
+      // mutate the current pane. The pane's sessionId moves on reopen; events
+      // belonging to an older session are dropped (and not counted as output
+      // proving liveness).
+      if (p.sessionId !== sid) return;
       if (ev.type === "output") {
         // First output proves the PTY is live: promote a `starting` pane to
         // running. The invoke response can lag the channel delivery, leaving
