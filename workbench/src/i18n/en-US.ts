@@ -163,6 +163,7 @@ export const enUS: Record<string, string> = {
   "terminal.exited": "Session exited",
   "terminal.sessionError": "[Session error: {code} {message}]",
   "terminal.openFailed": "[open_session failed: {code}]",
+  "terminal.outputTruncated": "[output truncated: budget exceeded, {bytes} dropped]",
   // --- search overlay (G-03/A-G03-1) ---
   "terminal.search": "Search",
   "terminal.searchPlaceholder": "Search terminal…",

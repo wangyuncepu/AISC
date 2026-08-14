@@ -163,6 +163,7 @@ export const zhCN = {
   "terminal.exited": "Session exited",
   "terminal.sessionError": "[Session error: {code} {message}]",
   "terminal.openFailed": "[open_session failed: {code}]",
+  "terminal.outputTruncated": "[输出已截断：超出预算，已丢弃 {bytes}]",
   // --- search overlay (G-03/A-G03-1) ---
   "terminal.search": "搜索",
   "terminal.searchPlaceholder": "搜索终端…",

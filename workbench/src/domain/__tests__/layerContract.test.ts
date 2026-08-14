@@ -80,7 +80,8 @@ function directIpcImports(source: string): Set<string> {
     for (const part of match[1].split(",")) {
       const cleaned = part.trim();
       if (!cleaned) continue;
-      names.add(cleaned.split(" as ").pop()!.trim());
+      // Contract keys on the underlying ipc command name, not a local alias.
+      names.add(cleaned.split(" as ")[0].trim());
     }
   }
   const wildcard = /import\s*\*\s*as\s+(\w+)\s*from\s*["'][^"']*lib\/ipc["']/g;
