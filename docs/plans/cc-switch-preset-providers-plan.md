@@ -67,10 +67,15 @@
 - A-7：README / main.py 无 `codex-claude` 残留
 - A-8：手动测试——在干净 cc-switch.db 上跑预置脚本，确认 4 条 provider 正确写入（claude + codex 各 4 条），claude 端点正确
 
-## 已知限制（本计划不解决）
+## 验收结果（2026-08-14）
 
-- `add_preset_providers` 是 add-only：已装老预置的现有用户不会被自动更新（旧 model/base_url 保留）。format version bump 只保证新装正确。如需"刷新已存在预置项的 model/base_url 同时保留用户 is_current/key"，是更深的改动，留待后续。
-- Volcengine Ark 的 Anthropic 端点未确认：当前回退到 OpenAI base_url（与现状一致，不退步）。若你确认 Ark 有 Anthropic 端点，我再补 `anthropic_base_url`。
+- A-1～A-7：PASS。`python -m pytest tests/test_cc_switch_runtime.py tests/test_provider_inspect.py`：53 passed、1 skipped。
+- A-8：PASS。`CcSwitchProviderPresetTests` 在隔离的临时 cc-switch v5 数据库上 9/9 通过，覆盖 Claude/Codex 各 4 条预置、Anthropic endpoint、Codex chat wire API、既有配置刷新、API Key/当前选择保留及退休 provider 清理。
+
+## 已知限制
+
+- ~~`add_preset_providers` 是 add-only，现有用户不会自动更新。~~ 已由 `d571103` 解决：现有预置会原地刷新，同时保留 API Key、`is_current`、`in_failover_queue` 及非预置顶层字段；被用户复用的退休 ID 不会误删。
+- Volcengine Ark 的 Anthropic 端点未确认：当前回退到 OpenAI base_url（与现状一致，不退步）。若后续确认 Ark 有 Anthropic 端点，再补 `anthropic_base_url`。
 
 ## commit 粒度
 
