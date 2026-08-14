@@ -251,6 +251,25 @@ function onKeydown(e: KeyboardEvent) {
       }
     }
   }
+  // S1.6: Ctrl/Cmd+Tab cycles to the next tab, Ctrl/Cmd+Shift+Tab backwards
+  // (browser-style). If a WebView2 build swallows the combo, the TabBar roving
+  // focus remains the keyboard fallback.
+  if (e.key === "Tab") {
+    if (store.status !== "ready") return;
+    const tabs = store.tabs;
+    if (tabs.length === 0) return;
+    e.preventDefault();
+    const current = tabs.findIndex((t) => t.tabId === store.activeTabId);
+    const dir = e.shiftKey ? -1 : 1;
+    const base = current < 0 ? 0 : current;
+    const next = (base + dir + tabs.length) % tabs.length;
+    const tab = tabs[next];
+    if (tab) {
+      store.activateTab(tab.tabId);
+      focusTabTerminal(tab.tabId);
+    }
+    return;
+  }
   // G-08 (A-G08-6): Ctrl/Cmd+1..9 map the current committed tab order; the
   // 10th tab and beyond use the tablist arrow/Home/End navigation.
   if (e.key >= "1" && e.key <= "9") {
