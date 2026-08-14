@@ -50,7 +50,7 @@ class _Proc:
 
 AISC_VERSION_JSON = (
     '{"meta":{"protocol":"aisc.cli/v1","command":"version","exit_code":0,'
-    '"timestamp":"t","version":"2.1.5-dev","run_id":"r"},"data":null,"errors":[]}'
+    '"timestamp":"t","version":"2.1.5.dev0","run_id":"r"},"data":null,"errors":[]}'
 )
 
 

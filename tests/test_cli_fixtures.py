@@ -79,8 +79,8 @@ class CliEnvelopeFixturesTests(unittest.TestCase):
         env = build_envelope(
             command="version",
             exit_code=0,
-            version="2.1.5-dev",
-            data={"cli_version": "2.1.5-dev"},
+            version="2.1.5.dev0",
+            data={"cli_version": "2.1.5.dev0"},
         )
         self.assertEqual(set(env.keys()), {"meta", "data", "errors"})
         self.assertTrue(REQUIRED_META.issubset(env["meta"].keys()))
