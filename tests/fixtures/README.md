@@ -22,6 +22,12 @@ Consumed by all three layers against the same files:
 | `events-build.jsonl` | `build --events` JSONL, seq 1..5, terminal `build.complete` |
 | `error-codes.json` | Stable error-code manifest (code → exit/retryable/action) |
 
-Do not store secrets, terminal scrollback, or machine-specific absolute paths
-here; fixtures must be deterministic across environments. When changing a
-fixture, update the baseline `fixture_hashes` and all three consumers together.
+## `redaction/` — denylist shapes (S0.5, B-A08)
+
+`denylist.txt` holds realistic-but-not-real secret shapes (Anthropic/OpenAI
+keys, OAuth JWTs, env-pair values). Rust `redact()` must never emit a raw
+line; the matrix test is `error::tests::redact_denylist_fixture_never_leaks`.
+
+Do not store real secrets, terminal scrollback, or machine-specific absolute
+paths here; fixtures must be deterministic across environments. When changing
+a fixture, update the baseline `fixture_hashes` and all consumers together.

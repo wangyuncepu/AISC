@@ -114,5 +114,22 @@ class ErrorCodesFixtureTests(unittest.TestCase):
                 self.assertIn("action", spec)
 
 
+class RedactionSmokeTests(unittest.TestCase):
+    def test_version_envelope_has_no_secret_shapes(self):
+        """B-A08: the CLI's public JSON output must not carry secret shapes."""
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "-m", "aisc", "version", "--format", "json"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lowered = result.stdout.lower()
+        for bad in ("sk-", "api_key", "authorization", "bearer "):
+            self.assertNotIn(bad, lowered, f"version output leaked {bad!r}")
+
+
 if __name__ == "__main__":
     unittest.main()
