@@ -256,4 +256,20 @@ export const enUS: Record<string, string> = {
   "runtime.dockerTimeout": "Docker engine start timed out; please open Docker Desktop manually",
   "runtime.pickCli": "Choose the AISC CLI executable",
   "runtime.pickWorkspace": "Choose a workspace directory",
+
+  // --- workspace explorer (Stage 3, 3c) ---
+  "explorer.tab.files": "Files",
+  "explorer.tab.artifacts": "Artifacts",
+  "explorer.refresh": "Refresh",
+  "explorer.stale": "File state may be stale; a bounded rescan was performed.",
+  "explorer.empty.workspace": "Select a workspace first.",
+  "explorer.empty.artifacts": "Artifacts the agent generates will appear here.",
+  "explorer.loading": "Loading…",
+  "explorer.artifacts.deliverables": "Deliverables",
+  "explorer.artifacts.workspaceChanges": "Workspace changes (unattributed)",
+  "explorer.open": "Open",
+  "explorer.reveal": "Show in file manager",
+  "explorer.copy": "Copy path",
+  "explorer.preview.truncated": "preview truncated",
+  "explorer.preview.unsupported": "Preview is not supported for this file type; open with the system app.",
 };

@@ -5,5 +5,7 @@
   "AISC_ERR_CLI_NOT_FOUND": { "exit_code": 70, "retryable": false, "action": "choose_cli" },
   "AISC_ERR_DOCKER_UNAVAILABLE": { "exit_code": 3, "retryable": true, "action": "start_docker" },
   "AISC_ERR_IMAGE_MISSING": { "exit_code": 3, "retryable": false, "action": "build_image" },
-  "AISC_ERR_BUILD_FAILED": { "exit_code": 4, "retryable": true, "action": "retry" }
+  "AISC_ERR_BUILD_FAILED": { "exit_code": 4, "retryable": true, "action": "retry" },
+  "AISC_ERR_ARTIFACT_INVALID": { "exit_code": 2, "retryable": false, "action": "fix_input" },
+  "AISC_ERR_ARTIFACT_NOT_FOUND": { "exit_code": 1, "retryable": false, "action": "fix_input" }
 }

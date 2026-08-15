@@ -26,6 +26,7 @@ from aisc.cli.output import (
 from aisc.domain.models import CheckStatus, CliError, DoctorReport, VersionInfo
 from aisc.domain.models import SessionAgent
 from aisc.domain.models import RuntimeErrorCode
+from aisc.domain.artifacts import ArtifactAction, ArtifactKind, ArtifactOpenWith
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +386,61 @@ def _build_parser() -> _AiscArgumentParser:
     sst.add_argument("--grace", type=float, default=5.0,
                      help="Grace period in seconds before SIGKILL (default: 5.0)")
 
+    # --- artifact (Stage 3, ART-02) ---
+    arp = sub.add_parser("artifact", help="Agent Artifact fact protocol (Stage 3)",
+                         allow_abbrev=False)
+    _add_global_args(arp, is_subparser=True)
+    arsub = arp.add_subparsers(dest="artifact_command", title="artifact commands",
+                               parser_class=_AiscArgumentParser)
+
+    arrec = arsub.add_parser("record", help="Record an agent artifact fact",
+                             allow_abbrev=False)
+    _add_global_args(arrec, is_subparser=True)
+    arrec.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    arrec.add_argument("--session-id", type=str, required=True, help="Session ID (UUID v4)")
+    arrec.add_argument("--agent", type=str, required=True,
+                       choices=["claude", "codex", "bash", "cc-switch"],
+                       help="Producer agent")
+    arrec.add_argument("--path", type=str, required=True,
+                       help="Workspace-relative path of the artifact")
+    arrec.add_argument("--action", type=str, choices=ArtifactAction.ALL, default="created",
+                       help="created|modified|deleted|renamed")
+    arrec.add_argument("--kind", type=str, choices=ArtifactKind.ALL, default="deliverable",
+                       help="deliverable|source_change|generated_output")
+    arrec.add_argument("--media-type", type=str, default=None,
+                       help="media type, e.g. text/markdown")
+    arrec.add_argument("--label", type=str, default="", help="Human label (<=256 chars)")
+    arrec.add_argument("--open-with", type=str, choices=ArtifactOpenWith.ALL,
+                       default="preview", help="preview|system|reveal|none")
+    arrec.add_argument("--previous-path", type=str, default=None,
+                       help="previous relative path (required for renamed)")
+    arrec.add_argument("--workspace", type=str, default=None,
+                       help="Workspace path (default: current directory)")
+
+    arlist = arsub.add_parser("list", help="List artifact records", allow_abbrev=False)
+    _add_global_args(arlist, is_subparser=True)
+    arlist.add_argument("--workspace", type=str, default=None,
+                        help="Workspace path (default: current directory)")
+    arlist.add_argument("--session-id", type=str, default=None,
+                        help="Filter by session id")
+    arlist.add_argument("--kind", type=str, choices=ArtifactKind.ALL, default=None,
+                        help="Filter by kind")
+
+    arinsp = arsub.add_parser("inspect", help="Inspect one artifact by id",
+                              allow_abbrev=False)
+    _add_global_args(arinsp, is_subparser=True)
+    arinsp.add_argument("--artifact-id", type=str, required=True, help="Artifact ID (UUID)")
+    arinsp.add_argument("--workspace", type=str, default=None,
+                        help="Workspace path (default: current directory)")
+
+    arclear = arsub.add_parser("clear-session", help="Remove a session's registry",
+                               allow_abbrev=False)
+    _add_global_args(arclear, is_subparser=True)
+    arclear.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    arclear.add_argument("--session-id", type=str, required=True, help="Session ID (UUID v4)")
+    arclear.add_argument("--workspace", type=str, default=None,
+                         help="Workspace path (default: current directory)")
+
     return parser
 
 
@@ -408,7 +464,7 @@ def _detect_events(argv: List[str]) -> bool:
 def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "profile",
              "status", "stop", "restart", "shell", "switch", "provider",
-             "ps", "runtime", "session"}
+             "ps", "runtime", "session", "artifact"}
     for arg in argv:
         if arg in known:
             return arg
@@ -1086,6 +1142,66 @@ def _cmd_session(
             "AISC_ERR_USAGE",
             f"Unknown session subcommand: {sub}"
         )]
+
+
+def _cmd_artifact(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Any, int, List[Dict[str, Any]]]:
+    """Execute ``aisc artifact`` subcommands.  Supports --format json.
+
+    ``record``/``list``/``inspect``/``clear-session`` are non-interactive and
+    return JSON-serializable data under the aisc.cli/v1 envelope.
+    """
+    from aisc.cli.commands.artifact import (
+        cmd_artifact_record,
+        cmd_artifact_list,
+        cmd_artifact_inspect,
+        cmd_artifact_clear_session,
+    )
+
+    sub = args.artifact_command
+
+    if sub == "record":
+        data = cmd_artifact_record(
+            runtime_id=args.runtime_id,
+            session_id=args.session_id,
+            agent=args.agent,
+            path=args.path,
+            action=args.action,
+            kind=args.kind,
+            media_type=args.media_type,
+            label=args.label,
+            open_with=args.open_with,
+            previous_path=args.previous_path,
+            workspace=args.workspace,
+        )
+        return data, 0, []
+    elif sub == "list":
+        data = cmd_artifact_list(
+            workspace=args.workspace,
+            session_id=args.session_id,
+            kind=args.kind,
+        )
+        return data, 0, []
+    elif sub == "inspect":
+        data = cmd_artifact_inspect(
+            artifact_id=args.artifact_id,
+            workspace=args.workspace,
+        )
+        return data, 0, []
+    elif sub == "clear-session":
+        data = cmd_artifact_clear_session(
+            runtime_id=args.runtime_id,
+            session_id=args.session_id,
+            workspace=args.workspace,
+        )
+        return data, 0, []
+    else:
+        return None, 2, [build_error(
+            "AISC_ERR_USAGE",
+            f"Unknown artifact subcommand: {sub}"
+        )]
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -1194,6 +1310,25 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         except (AttributeError, IndexError, KeyError):
             pass
 
+    # Propagate JSON format to artifact subparser for parse-time errors.
+    if "artifact" in args_list:
+        try:
+            artifact_parser = [a for a in parser._subparsers._group_actions
+                               if a.dest == "command"][0].choices["artifact"]
+            artifact_parser._aisc_format = "json" if json_requested else None
+            artifact_parser._aisc_command = "artifact"
+            for _sub in ("record", "list", "inspect", "clear-session"):
+                if _sub in args_list:
+                    try:
+                        _sp = [a for a in artifact_parser._subparsers._group_actions
+                               if a.dest == "artifact_command"][0].choices[_sub]
+                        _sp._aisc_format = "json" if json_requested else None
+                        _sp._aisc_command = f"artifact {_sub}"
+                    except (AttributeError, IndexError, KeyError):
+                        pass
+        except (AttributeError, IndexError, KeyError):
+            pass
+
     try:
         args = parser.parse_args(args_list)
     except SystemExit:
@@ -1243,6 +1378,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         "provider": "provider_command",
         "runtime": "runtime_command",
         "session": "session_command",
+        "artifact": "artifact_command",
     }
     if args.command in _grouped_dests:
         if getattr(args, _grouped_dests[args.command], None) is None:
@@ -1278,7 +1414,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         emitter = JsonlEmitter(command=args.command)
     elif args_events and args.command in ("version", "doctor", "config", "profile",
                                            "status", "stop", "restart", "shell", "switch",
-                                           "provider", "ps", "session"):
+                                           "provider", "ps", "session", "artifact"):
         if effective_format == "json":
             emit_json_usage_error(
                 command=args.command, version=__version__,
@@ -1332,6 +1468,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_runtime(args, effective_format)
         elif args.command == "session":
             data, exit_code, errors = _cmd_session(args, effective_format)
+        elif args.command == "artifact":
+            data, exit_code, errors = _cmd_artifact(args, effective_format)
         else:
             if effective_format == "json":
                 emit_json_usage_error(
@@ -1474,6 +1612,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         elif args.command == "session":
             from aisc.cli.commands.session import print_session_text
             print_session_text(getattr(args, "session_command", ""), data, errors)
+        elif args.command == "artifact":
+            from aisc.cli.commands.artifact import print_artifact_text
+            print_artifact_text(getattr(args, "artifact_command", ""), data, errors)
 
     sys.exit(exit_code)
 

@@ -40,6 +40,9 @@ class RuntimeErrorCode:
     INVALID_AGENT = "AISC_ERR_INVALID_AGENT"
     # Provider status codes (S0.4)
     PROVIDER_STATUS_FAILED = "AISC_ERR_PROVIDER_STATUS_FAILED"
+    # Agent Artifact codes (Stage 3, ART-02)
+    ARTIFACT_INVALID = "AISC_ERR_ARTIFACT_INVALID"
+    ARTIFACT_NOT_FOUND = "AISC_ERR_ARTIFACT_NOT_FOUND"
     # Extended codes: STATE_LOCK_TIMEOUT is registered in RFC §4.1 (exit 17);
     # the rest are extended codes not in the RFC exit-code table.
     RUNTIME_NOT_FOUND = "AISC_ERR_RUNTIME_NOT_FOUND"
