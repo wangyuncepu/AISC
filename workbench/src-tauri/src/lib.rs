@@ -14,10 +14,13 @@ pub mod pty;
 pub mod runtime;
 pub mod session;
 pub mod settings;
+pub mod artifact;
 pub mod storage;
 pub mod tray;
 pub mod window;
+pub mod workspace;
 
+use artifact::{artifact_inspect, artifact_list, artifact_refresh};
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use doctor::run_doctor;
 use history::{load_history, save_history};
@@ -81,6 +84,9 @@ pub fn run(cli_arg: Option<String>) {
             run_doctor,
             tray_available,
             tray_remove,
+            artifact_list,
+            artifact_inspect,
+            artifact_refresh,
         ])
         .on_window_event(|window, event| {
             // G-16: intercept CloseRequested on the main window. Both behaviors

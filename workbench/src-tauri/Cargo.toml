@@ -30,6 +30,7 @@ portable-pty = "0.9"
 base64 = "0.22"
 libc = "0.2"
 fs4 = "0.13"
+sha2 = "0.10"
 sys-locale = "0.3"
 tauri-plugin-notification = "2"
 

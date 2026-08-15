@@ -98,6 +98,15 @@ impl WorkbenchError {
         )
     }
 
+    pub fn workspace_invalid() -> Self {
+        Self::new(
+            "WB_ERR_WORKSPACE_INVALID",
+            "工作区路径无效",
+            false,
+            Action::None,
+        )
+    }
+
     pub fn settings_error() -> Self {
         Self::new(
             "WB_ERR_SETTINGS",
