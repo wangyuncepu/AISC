@@ -70,8 +70,11 @@ MATRIX: list[tuple[list[str], Optional[int], bool]] = [
     (["runtime", "preflight", "--runtime-id", "not-a-uuid", "--format", "json"], 15, True),
     (["provider", "current", "--runtime-id", "not-a-uuid", "--agent", "claude", "--format", "json"], 15, True),
     (["session", "terminate", "--runtime-id", "not-a-uuid", "--session-id", "not-a-uuid", "--format", "json"], 15, True),
-    # --- docker-dependent: compare the two CLIs only ---
-    (["doctor", "--format", "json"], 0, True),
+    # --- host-dependent diagnostics: compare the two CLIs only ---
+    # doctor's exit code reflects host checks (docker presence etc.) and differs
+    # by platform (0 with docker, non-zero on runners without a live daemon);
+    # the parity contract is that pip and sidecar AGREE, not a pinned value.
+    (["doctor", "--format", "json"], None, True),
     (["runtime", "list", "--format", "json"], None, True),
     (["ps", "--format", "json"], None, True),
 ]
