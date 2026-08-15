@@ -60,22 +60,26 @@ jobs:
           ls -la dist/
         if: always()
 
-      # Stage 2 (S2.5, CLI-A05): the wheel-installed pip CLI and the frozen
-      # sidecar must agree on the aisc.cli/v1 command matrix. Any difference
-      # fails the build.
+      # Stage 2 (S2.5, CLI-A05): the pip-installed CLI (editable console
+      # script from `pip install -e .`) and the frozen sidecar must agree on
+      # the aisc.cli/v1 command matrix. Any difference fails the build. The
+      # wheel clean-room install is covered by workbench-ci's install smoke, so
+      # we do not rebuild the wheel here.
       - name: Dual-track parity smoke (CLI-A05)
         shell: bash
         run: |
           set -e
           SIDECAR=$(ls dist/aisc-* | head -1)
           echo "sidecar: $SIDECAR"
-          B="$RUNNER_TEMP/aisc-parity"
-          mkdir -p "$B"
-          python -m build --outdir "$B" >/dev/null
-          python -m venv "$B/venv"
-          VENV_PY=$(ls "$B/venv/Scripts/python.exe" "$B/venv/bin/python" 2>/dev/null | head -1)
-          "$VENV_PY" -m pip install --quiet "$B"/aisc-*.whl
-          CLI_A=$(ls "$B/venv/Scripts/aisc.exe" "$B/venv/bin/aisc" 2>/dev/null | head -1)
+          # Resolve the pip-installed console script. `command -v` first: pip
+          # install -e . puts the script on PATH via setup-python. Each lookup
+          # is `|| true` so a miss does not trip `set -e` before the fallback.
+          CLI_A=$(command -v aisc 2>/dev/null || true)
+          [ -z "$CLI_A" ] && CLI_A=$(command -v aisc.exe 2>/dev/null || true)
+          if [ -z "$CLI_A" ]; then
+            SCRIPTS=$(python -c "import sysconfig; print(sysconfig.get_path('scripts'))" 2>/dev/null || true)
+            CLI_A=$(ls "$SCRIPTS"/aisc "$SCRIPTS"/aisc.exe 2>/dev/null | head -1 || true)
+          fi
           test -n "$CLI_A"
           echo "pip cli: $CLI_A"
           python scripts/verify-cli-parity.py --cli-a "$CLI_A" --cli-b "$SIDECAR"
@@ -89,14 +93,12 @@ jobs:
             > dist/aisc-sidecar-manifest.json
           cat dist/aisc-sidecar-manifest.json
 
-      # Stage 2 (S2.7, CLI-A08): dependency SBOM + pip-check integrity audit,
-      # reusing the parity step's wheel + venv from RUNNER_TEMP.
+      # Stage 2 (S2.7, CLI-A08): dependency SBOM + pip-check integrity audit
+      # from the installed environment (`pip install -e .` above).
       - name: Dependency SBOM + integrity audit (CLI-A08)
         shell: bash
         run: |
-          B="$RUNNER_TEMP/aisc-parity"
-          VENV_PY=$(ls "$B/venv/Scripts/python.exe" "$B/venv/bin/python" 2>/dev/null | head -1)
-          python scripts/verify-sbom.py --wheel "$B"/aisc-*.whl --venv-python "$VENV_PY" \
+          python scripts/verify-sbom.py --venv-python "$(python -c 'import sys; print(sys.executable)')" \
             --out dist/aisc-sbom.json
           head -c 300 dist/aisc-sbom.json
 
