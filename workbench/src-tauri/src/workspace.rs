@@ -335,6 +335,25 @@ mod explorer_tests {
     }
 
     #[test]
+    fn listing_root_does_not_recurse() {
+        // A-WX01-1: listing the root must only read the root directory; deeply
+        // nested children are NOT scanned until their parent is listed.
+        let dir = tempdir().unwrap();
+        for i in 0..200 {
+            let path = dir.path().join(format!("d{i:03}"));
+            fs::create_dir_all(path.join("a/b/c/deep")).unwrap();
+            for j in 0..50 {
+                fs::write(path.join("a/b/c/deep").join(format!("f{j:02}.txt")), "x").unwrap();
+            }
+        }
+        let res = list_workspace(dir.path(), "", 0, false).unwrap();
+        assert_eq!(res.nodes.len(), 200); // exactly the top-level dirs
+        assert!(res.nodes.iter().all(|n| n.kind == "dir"));
+        // No child of any top-level dir appears.
+        assert!(res.nodes.iter().all(|n| !n.relative_path.contains('/')));
+    }
+
+    #[test]
     fn listing_paginates() {
         let dir = tempdir().unwrap();
         for i in 0..250 {

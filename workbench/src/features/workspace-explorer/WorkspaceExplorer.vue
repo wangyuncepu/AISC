@@ -21,8 +21,20 @@ const runtime = useRuntimeStore();
 const selected = ref<string | null>(null);
 const menuFor = ref<string | null>(null);
 const copied = ref<string | null>(null);
+/** Roving focus index into `visibleNodes` (APG tree pattern). */
+const focusIndex = ref(-1);
 
-const nodes = computed(() => explorer.rootNodes);
+/** Flatten the visible tree (root + expanded children, one level) for keyboard. */
+const visibleNodes = computed<WorkspaceNode[]>(() => {
+  const out: WorkspaceNode[] = [];
+  for (const n of explorer.rootNodes) {
+    out.push(n);
+    if (n.kind === "dir" && explorer.isExpanded(n.relative_path)) {
+      out.push(...explorer.nodeChildren(n.relative_path));
+    }
+  }
+  return out;
+});
 
 const artifactFilter = computed(() => explorer.activeKind);
 
@@ -42,8 +54,11 @@ async function onToggle(node: WorkspaceNode) {
   await explorer.toggleDir(node.relative_path);
 }
 
-function childNodes(node: WorkspaceNode): WorkspaceNode[] {
-  return explorer.nodeChildren(node.relative_path);
+/** Tree depth for indentation: 0 = root, 1 = child of an expanded dir. */
+function depthOf(node: WorkspaceNode): number {
+  const idx = node.relative_path.lastIndexOf("/");
+  if (idx < 0) return 0;
+  return explorer.isExpanded(node.relative_path.slice(0, idx)) ? 1 : 0;
 }
 
 async function onSelect(node: WorkspaceNode) {
@@ -89,6 +104,50 @@ function nodeOf(rel: string): WorkspaceNode | null {
   }
   return null;
 }
+
+function focusNode(index: number) {
+  const total = visibleNodes.value.length;
+  if (total === 0) {
+    focusIndex.value = -1;
+    return;
+  }
+  focusIndex.value = (index + total) % total;
+}
+
+/** APG tree keyboard: Arrow/Home/End move focus, Enter/Space activate. */
+function onTreeKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    menuFor.value = null;
+    return;
+  }
+  if (e.key === "F10" && e.shiftKey) {
+    const node = visibleNodes.value[focusIndex.value];
+    if (node) {
+      e.preventDefault();
+      menuFor.value = node.relative_path;
+    }
+    return;
+  }
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    focusNode((focusIndex.value < 0 ? -1 : focusIndex.value) + 1);
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    focusNode(focusIndex.value < 0 ? -1 : focusIndex.value - 1);
+  } else if (e.key === "Home") {
+    e.preventDefault();
+    focusNode(0);
+  } else if (e.key === "End") {
+    e.preventDefault();
+    focusNode(visibleNodes.value.length - 1);
+  } else if (e.key === "Enter" || e.key === " ") {
+    const node = visibleNodes.value[focusIndex.value];
+    if (node) {
+      e.preventDefault();
+      void onSelect(node);
+    }
+  }
+}
 </script>
 
 <template>
@@ -124,19 +183,28 @@ function nodeOf(rel: string): WorkspaceNode | null {
     </div>
 
     <!-- Explorer tree -->
-    <div v-if="artifactFilter === 'explorer'" class="explorer-body" role="tree">
+    <div
+      v-if="artifactFilter === 'explorer'"
+      class="explorer-body"
+      role="tree"
+      aria-orientation="vertical"
+      @keydown="onTreeKeydown"
+    >
       <p v-if="!runtime.workspace" class="explorer-empty">{{ t("explorer.empty.workspace") }}</p>
       <template v-else>
         <div
-          v-for="node in nodes"
+          v-for="(node, i) in visibleNodes"
           :key="node.relative_path"
           :class="['explorer-row', { selected: selected === node.relative_path }]"
           role="treeitem"
+          :aria-selected="selected === node.relative_path"
           :aria-expanded="node.kind === 'dir' ? isExpanded(node) : undefined"
-          :tabindex="selected === node.relative_path ? 0 : -1"
+          :tabindex="i === focusIndex ? 0 : -1"
+          :style="{ paddingLeft: `${8 + depthOf(node) * 16}px` }"
           @click="onSelect(node)"
           @dblclick="node.kind === 'file' && onOpen(node)"
           @contextmenu.prevent="menuFor = node.relative_path"
+          @focus="focusIndex = i"
         >
           <span class="explorer-icon" aria-hidden="true">
             {{ node.kind === "dir" ? (isExpanded(node) ? "▾" : "▸") : "·" }}
@@ -149,41 +217,6 @@ function nodeOf(rel: string): WorkspaceNode | null {
             >{{ badge }}</span
           >
         </div>
-
-        <!-- Recursive children for expanded dirs -->
-        <template v-for="node in nodes" :key="`c-${node.relative_path}`">
-          <div
-            v-if="node.kind === 'dir' && isExpanded(node)"
-            class="explorer-children"
-            role="group"
-          >
-            <div
-              v-for="child in childNodes(node)"
-              :key="child.relative_path"
-              :class="['explorer-row explorer-child', { selected: selected === child.relative_path }]"
-              role="treeitem"
-              :aria-expanded="child.kind === 'dir' ? isExpanded(child) : undefined"
-              @click="onSelect(child)"
-              @dblclick="child.kind === 'file' && onOpen(child)"
-              @contextmenu.prevent="menuFor = child.relative_path"
-            >
-              <span class="explorer-icon" aria-hidden="true">
-                {{ child.kind === "dir" ? (isExpanded(child) ? "▾" : "▸") : "·" }}
-              </span>
-              <span class="explorer-name">{{ child.name }}</span>
-              <span
-                v-for="badge in child.artifact_badges"
-                :key="badge"
-                class="explorer-badge"
-                >{{ badge }}</span
-              >
-            </div>
-            <p v-if="explorer.errors[node.relative_path]" class="explorer-error">
-              {{ explorer.errors[node.relative_path] }}
-            </p>
-          </div>
-        </template>
-
         <p v-if="explorer.errors['']" class="explorer-error">{{ explorer.errors[""] }}</p>
       </template>
     </div>
