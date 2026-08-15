@@ -71,12 +71,15 @@ jobs:
           set -e
           SIDECAR=$(ls dist/aisc-* | head -1)
           echo "sidecar: $SIDECAR"
-          # Resolve the pip-installed console script: sysconfig scripts dir
-          # first, then PATH lookup (setup-python puts the scripts dir on PATH).
-          SCRIPTS=$(python -c "import sysconfig; print(sysconfig.get_path('scripts'))" 2>/dev/null || true)
-          CLI_A=$(ls "$SCRIPTS/aisc" "$SCRIPTS/aisc.exe" 2>/dev/null | head -1)
-          [ -z "$CLI_A" ] && CLI_A=$(command -v aisc 2>/dev/null || true)
+          # Resolve the pip-installed console script. `command -v` first: pip
+          # install -e . puts the script on PATH via setup-python. Each lookup
+          # is `|| true` so a miss does not trip `set -e` before the fallback.
+          CLI_A=$(command -v aisc 2>/dev/null || true)
           [ -z "$CLI_A" ] && CLI_A=$(command -v aisc.exe 2>/dev/null || true)
+          if [ -z "$CLI_A" ]; then
+            SCRIPTS=$(python -c "import sysconfig; print(sysconfig.get_path('scripts'))" 2>/dev/null || true)
+            CLI_A=$(ls "$SCRIPTS"/aisc "$SCRIPTS"/aisc.exe 2>/dev/null | head -1 || true)
+          fi
           test -n "$CLI_A"
           echo "pip cli: $CLI_A"
           python scripts/verify-cli-parity.py --cli-a "$CLI_A" --cli-b "$SIDECAR"
