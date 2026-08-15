@@ -266,6 +266,7 @@ export const enUS: Record<string, string> = {
   "explorer.empty.artifacts": "Artifacts the agent generates will appear here.",
   "explorer.loading": "Loading…",
   "explorer.artifacts.deliverables": "Deliverables",
+  "explorer.artifacts.workspaceChanges": "Workspace changes (unattributed)",
   "explorer.open": "Open",
   "explorer.reveal": "Show in file manager",
   "explorer.copy": "Copy path",

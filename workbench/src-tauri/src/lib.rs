@@ -17,11 +17,13 @@ pub mod settings;
 pub mod artifact;
 pub mod storage;
 pub mod tray;
+pub mod watcher;
 pub mod window;
 pub mod workspace;
 
 use artifact::{artifact_inspect, artifact_list, artifact_refresh};
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
+use watcher::{workspace_rescan, workspace_watch_start, workspace_watch_stop, WatcherState};
 use workspace::{workspace_copy_path, workspace_list, workspace_open, workspace_preview, workspace_reveal};
 use doctor::run_doctor;
 use history::{load_history, save_history};
@@ -43,6 +45,7 @@ use window::{capture_window_geometry, restore_window_geometry};
 pub fn run(cli_arg: Option<String>) {
     let cli_arg_state = CliArg(std::sync::Arc::new(std::sync::Mutex::new(cli_arg)));
     tauri::Builder::default()
+        .manage(WatcherState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
@@ -93,6 +96,9 @@ pub fn run(cli_arg: Option<String>) {
             workspace_preview,
             workspace_reveal,
             workspace_copy_path,
+            workspace_rescan,
+            workspace_watch_start,
+            workspace_watch_stop,
         ])
         .on_window_event(|window, event| {
             // G-16: intercept CloseRequested on the main window. Both behaviors

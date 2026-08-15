@@ -193,3 +193,13 @@ export const workspaceCopyPath = (workspace: string, relativePath: string) =>
     workspace,
     relativePath,
   });
+
+// --- Stage 3 (3d): workspace watcher ---
+
+export const workspaceWatchStart = (workspace: string) =>
+  invoke<void>("workspace_watch_start", { workspace });
+
+export const workspaceWatchStop = () => invoke<void>("workspace_watch_stop");
+
+export const workspaceRescan = (workspace: string) =>
+  invoke<void>("workspace_rescan", { workspace });

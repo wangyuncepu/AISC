@@ -266,6 +266,7 @@ export const zhCN = {
   "explorer.empty.artifacts": "Agent 生成可交付文件后会显示在这里。",
   "explorer.loading": "加载中…",
   "explorer.artifacts.deliverables": "可交付文件",
+  "explorer.artifacts.workspaceChanges": "工作区变化（未归因）",
   "explorer.open": "打开",
   "explorer.reveal": "在文件管理器中显示",
   "explorer.copy": "复制路径",

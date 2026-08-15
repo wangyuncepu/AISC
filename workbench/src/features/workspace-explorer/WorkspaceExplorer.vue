@@ -211,6 +211,19 @@ function nodeOf(rel: string): WorkspaceNode | null {
             </button>
           </div>
         </template>
+
+        <h4 v-if="explorer.unattributedEntries.length" class="artifacts-group">
+          {{ t("explorer.artifacts.workspaceChanges") }}
+        </h4>
+        <div
+          v-for="u in explorer.unattributedEntries"
+          :key="u.relative_path"
+          class="explorer-row unattributed"
+          @click="selected = u.relative_path"
+        >
+          <span class="explorer-name" :title="u.relative_path">{{ u.relative_path }}</span>
+          <span class="explorer-badge unattributed-badge">{{ u.change_type }}</span>
+        </div>
       </template>
     </div>
 
@@ -317,6 +330,12 @@ function nodeOf(rel: string): WorkspaceNode | null {
   padding: 0 4px;
   border-radius: 4px;
   background: var(--accent-dim, rgba(74, 158, 255, 0.15));
+}
+.unattributed {
+  opacity: 0.75;
+}
+.unattributed-badge {
+  background: var(--warn-dim, rgba(217, 164, 65, 0.15));
 }
 .explorer-stale,
 .explorer-error {
