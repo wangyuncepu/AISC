@@ -4,11 +4,11 @@
     "command": "version",
     "exit_code": 0,
     "timestamp": "2026-08-14T00:00:00Z",
-    "version": "2.1.5-dev",
+    "version": "2.1.5.dev0",
     "run_id": "00000000-0000-4000-8000-000000000004"
   },
   "data": {
-    "cli_version": "2.1.5-dev",
+    "cli_version": "2.1.5.dev0",
     "capabilities": {
       "runtime": "aisc.runtime/v1",
       "session": "aisc.session/v1",

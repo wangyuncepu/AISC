@@ -424,6 +424,34 @@ pub fn is_executable(path: &Path) -> bool {
     }
 }
 
+/// Extract a validated `Candidate` from a `version --format json` envelope.
+/// Pure (no IO) so discovery result semantics are unit-testable without
+/// spawning a real CLI (CLI-A04: source / absolute path / version / caps).
+fn candidate_from_envelope(path: String, source: CandidateSource, env: Envelope) -> Candidate {
+    if let Some(err) = env.errors.first() {
+        return Candidate {
+            path,
+            source,
+            valid: false,
+            version_info: None,
+            capabilities: None,
+            error: Some(err.code.clone()),
+        };
+    }
+    let data = env.data.unwrap_or(Value::Null);
+    let caps: Capabilities = serde_json::from_value(data.get("capabilities").cloned().unwrap_or(Value::Null))
+        .unwrap_or_default();
+    let vi: VersionInfo = serde_json::from_value(data).unwrap_or_default();
+    Candidate {
+        path,
+        source,
+        valid: true,
+        version_info: Some(vi),
+        capabilities: Some(caps),
+        error: None,
+    }
+}
+
 /// Validate a candidate: executable check + `version --format json`. IO.
 pub async fn validate_candidate(path: PathBuf, source: CandidateSource) -> Candidate {
     let path_str = path.to_string_lossy().into_owned();
@@ -440,30 +468,7 @@ pub async fn validate_candidate(path: PathBuf, source: CandidateSource) -> Candi
     let argv = vec!["version".into(), "--format".into(), "json".into()];
     let cancel = CancellationToken::new();
     match run_control(&path, argv, VERSION_TIMEOUT, cancel).await {
-        Ok(env) => {
-            if let Some(err) = env.errors.first() {
-                return Candidate {
-                    path: path_str,
-                    source,
-                    valid: false,
-                    version_info: None,
-                    capabilities: None,
-                    error: Some(err.code.clone()),
-                };
-            }
-            let data = env.data.unwrap_or(Value::Null);
-            let caps: Capabilities = serde_json::from_value(data.get("capabilities").cloned().unwrap_or(Value::Null))
-                .unwrap_or_default();
-            let vi: VersionInfo = serde_json::from_value(data).unwrap_or_default();
-            Candidate {
-                path: path_str,
-                source,
-                valid: true,
-                version_info: Some(vi),
-                capabilities: Some(caps),
-                error: None,
-            }
-        }
+        Ok(env) => candidate_from_envelope(path_str, source, env),
         Err(e) => Candidate {
             path: path_str,
             source,
@@ -910,6 +915,75 @@ mod tests {
         assert!(!ok);
     }
 
+    // --- Stage 2 (S2.3, CLI-A03): systematic capability matrix ---
+
+    /// (runtime, session, provider, build, required_ok, missing_required, missing_optional)
+    const CAP_MATRIX: [(&str, Option<&str>, Option<&str>, Option<&str>, Option<&str>, bool, &[&str], &[&str]); 8] = [
+        // all present at v1
+        ("all-v1", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), true, &[], &[]),
+        // each required missing blocks
+        ("no-runtime", None, Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["runtime"], &[]),
+        ("no-session", Some(EXPECTED_RUNTIME), None, Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["session"], &[]),
+        // old version counts as missing (fail closed, no guessing)
+        ("old-runtime", Some("aisc.runtime/v2"), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["runtime"], &[]),
+        ("old-session", Some(EXPECTED_RUNTIME), Some("aisc.session/v2"), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["session"], &[]),
+        // optional missing does not block
+        ("no-provider", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), None, Some(EXPECTED_BUILD), true, &[], &["providerStatus"]),
+        ("no-build", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), None, true, &[], &["buildEvents"]),
+        // everything absent
+        ("all-absent", None, None, None, None, false, &["runtime", "session"], &["providerStatus", "buildEvents"]),
+    ];
+
+    #[test]
+    fn capability_matrix_is_systematic() {
+        for (name, runtime, session, provider, build, ok, mr, mo) in CAP_MATRIX {
+            let caps = caps(runtime, session, provider, build);
+            let (got_ok, got_mr, got_mo) = classify(&caps);
+            assert_eq!(got_ok, ok, "[{name}] required_ok");
+            assert_eq!(got_mr, mr, "[{name}] missing_required");
+            assert_eq!(got_mo, mo, "[{name}] missing_optional");
+        }
+    }
+
+    #[test]
+    fn missing_required_capability_yields_stable_error_and_action() {
+        // CLI-A03: a missing required capability must surface the stable
+        // unsupported code + upgrade action so callers never proceed into a
+        // command the CLI cannot serve (fail closed, no silent downgrade).
+        use crate::error::Action;
+        let body = json!({
+            "meta": {"protocol": "aisc.cli/v1", "command": "version", "exit_code": 0},
+            "data": {"capabilities": {"session": EXPECTED_SESSION}},
+            "errors": []
+        });
+        let env: Envelope = serde_json::from_value(body).unwrap();
+        let report = report_from_envelope(env);
+        assert!(!report.required_ok, "missing runtime must not be required_ok");
+        let e = report.error.expect("missing required must carry an error");
+        assert_eq!(e.code, "WB_ERR_CAPABILITY_UNSUPPORTED");
+        assert!(matches!(e.action, Action::UpgradeCli), "action must be UpgradeCli");
+        assert!(!e.retryable);
+    }
+
+    #[test]
+    fn full_capability_report_has_no_error() {
+        let body = json!({
+            "meta": {"protocol": "aisc.cli/v1", "command": "version", "exit_code": 0},
+            "data": {"capabilities": {
+                "runtime": EXPECTED_RUNTIME,
+                "session": EXPECTED_SESSION,
+                "providerStatus": EXPECTED_PROVIDER,
+                "buildEvents": EXPECTED_BUILD,
+            }},
+            "errors": []
+        });
+        let env: Envelope = serde_json::from_value(body).unwrap();
+        let report = report_from_envelope(env);
+        assert!(report.required_ok);
+        assert!(report.error.is_none());
+        assert!(report.missing_required.is_empty());
+    }
+
     #[test]
     fn parse_valid_envelope() {
         let body = json!({
@@ -981,6 +1055,72 @@ mod tests {
         assert_eq!(r[1].1, CandidateSource::Saved);
         assert_eq!(r[2].1, CandidateSource::Sidecar);
         assert_eq!(r[3].1, CandidateSource::PathEnv);
+    }
+
+    #[test]
+    fn five_source_priority_is_strict_and_deduped() {
+        // CLI-A04: explicit > saved > sidecar > PATH > platform, dedup by path.
+        let explicit = PathBuf::from("/explicit/aisc");
+        let saved = PathBuf::from("/saved/aisc");
+        let extra = vec![
+            (PathBuf::from("/sidecar/aisc"), CandidateSource::Sidecar),
+            (PathBuf::from("/path/aisc"), CandidateSource::PathEnv),
+            (PathBuf::from("/platform/aisc"), CandidateSource::Platform),
+        ];
+        let r = enumerate_with(Some(&explicit), Some(&saved), &extra);
+        assert_eq!(r.len(), 5);
+        assert_eq!(r[0].1, CandidateSource::Explicit);
+        assert_eq!(r[1].1, CandidateSource::Saved);
+        assert_eq!(r[2].1, CandidateSource::Sidecar);
+        assert_eq!(r[3].1, CandidateSource::PathEnv);
+        assert_eq!(r[4].1, CandidateSource::Platform);
+        // Same path offered as both explicit and saved collapses to the
+        // higher-priority source (Explicit) — dedup keeps the first.
+        let r2 = enumerate_with(Some(&explicit), Some(&explicit), &extra);
+        assert_eq!(r2.len(), 4); // explicit (+3 extras), saved deduped away
+        assert_eq!(r2[0].1, CandidateSource::Explicit);
+    }
+
+    #[test]
+    fn candidate_from_envelope_carries_source_path_version_caps() {
+        // CLI-A04: the discovery result exposes absolute path, source, version
+        // and capabilities so the UI can render where the CLI came from.
+        let body = json!({
+            "meta": {"protocol": "aisc.cli/v1", "command": "version", "exit_code": 0},
+            "data": {"cli_version": "2.1.5.dev0", "capabilities": {
+                "runtime": EXPECTED_RUNTIME,
+                "session": EXPECTED_SESSION,
+                "providerStatus": EXPECTED_PROVIDER,
+                "buildEvents": EXPECTED_BUILD,
+            }},
+            "errors": []
+        });
+        let env: Envelope = serde_json::from_value(body).unwrap();
+        let c = candidate_from_envelope("/abs/aisc".into(), CandidateSource::Explicit, env);
+        assert!(c.valid);
+        assert_eq!(c.path, "/abs/aisc");
+        assert_eq!(c.source, CandidateSource::Explicit);
+        assert_eq!(c.version_info.unwrap().cli_version.as_deref(), Some("2.1.5.dev0"));
+        let caps = c.capabilities.unwrap();
+        assert_eq!(caps.runtime.as_deref(), Some(EXPECTED_RUNTIME));
+        assert_eq!(c.error, None);
+    }
+
+    #[test]
+    fn candidate_from_envelope_surfaces_error_code() {
+        // A CLI that answers with a stable error code is invalid + surfaced,
+        // never silently treated as OK (fail closed).
+        let body = json!({
+            "meta": {"protocol": "aisc.cli/v1", "command": "version", "exit_code": 1},
+            "data": null,
+            "errors": [{"code": "AISC_ERR_CAPABILITY_UNSUPPORTED", "message": "x"}]
+        });
+        let env: Envelope = serde_json::from_value(body).unwrap();
+        let c = candidate_from_envelope("/abs/aisc".into(), CandidateSource::PathEnv, env);
+        assert!(!c.valid);
+        assert_eq!(c.error.as_deref(), Some("AISC_ERR_CAPABILITY_UNSUPPORTED"));
+        assert!(c.version_info.is_none());
+        assert!(c.capabilities.is_none());
     }
 
     #[test]

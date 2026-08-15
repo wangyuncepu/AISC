@@ -24,6 +24,8 @@ on:
       - 'tests/test_cli_fixtures.py'
       - 'tests/test_workflow_contract.py'
       - 'scripts/baseline/**'
+      - 'scripts/verify-cli-install.py'
+      - 'pyproject.toml'
   pull_request:
     branches: [develop, main]
     paths:
@@ -40,6 +42,8 @@ on:
       - 'tests/test_cli_fixtures.py'
       - 'tests/test_workflow_contract.py'
       - 'scripts/baseline/**'
+      - 'scripts/verify-cli-install.py'
+      - 'pyproject.toml'
 
 jobs:
   frontend:
@@ -115,6 +119,14 @@ jobs:
 
       - name: Python tests
         run: python -m pytest tests -q
+
+      # Stage 2 (S2.1, CLI-A01): clean-room install smoke. Builds wheel+sdist,
+      # installs each into fresh venvs (repeat-install + uninstall round-trip),
+      # and runs a pipx smoke when pipx is available.
+      - name: CLI clean-room install smoke (CLI-A01)
+        run: |
+          pip install --quiet build pipx
+          python scripts/verify-cli-install.py
 
       # Stage 0 (S0.3, B-A02/B-A04): Unix-side baseline probe. A missing
       # critical tool fails the job (--strict); latest.json is kept as an

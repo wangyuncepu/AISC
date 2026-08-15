@@ -51,7 +51,7 @@ describe("aisc.cli/v1 fixture set (TS consumer)", () => {
     expect(env.errors).toEqual([]);
 
     const vi = env.data as VersionInfo & { capabilities: Capabilities };
-    expect(vi.cli_version).toBe("2.1.5-dev");
+    expect(vi.cli_version).toBe("2.1.5.dev0");
     expect(vi.capabilities.runtime).toBe("aisc.runtime/v1");
     expect(vi.capabilities.session).toBe("aisc.session/v1");
     expect(vi.capabilities.providerStatus).toBe("aisc.provider-status/v1");

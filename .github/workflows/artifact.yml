@@ -355,9 +355,9 @@ jobs:
         with:
           draft: false
           tag_name: ${{ github.ref_name }}
-          name: AISC ${{ github.ref_name }}${{ contains(github.ref_name, '-dev') && ' Preview' || '' }}
+          name: AISC ${{ github.ref_name }}${{ contains(github.ref_name, '-dev') || contains(github.ref_name, '.dev') && ' Preview' || '' }}
           body_path: docs/releases/${{ github.ref_name }}.md
-          prerelease: ${{ contains(github.ref_name, '-dev') }}
+          prerelease: ${{ contains(github.ref_name, '-dev') || contains(github.ref_name, '.dev') }}
           files: |
             artifacts/archives/AISC-*.tar.gz
             artifacts/archives/AISC-*.tar.gz.sha256
