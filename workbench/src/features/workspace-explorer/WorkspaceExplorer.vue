@@ -8,7 +8,7 @@
  * come from the merged manifest index; unattributed changes are a separate
  * "workspace changes" projection (never labelled as agent provenance, D3-03).
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspaceExplorerStore } from "../../stores/workspaceExplorer";
 import { useRuntimeStore } from "../../stores/runtime";
@@ -45,6 +45,18 @@ onMounted(() => {
   }
 });
 
+// The workspace may arrive asynchronously after mount (startup negotiation);
+// initialize as soon as it is set so the Explorer never shows an empty tree.
+watch(
+  () => runtime.workspace,
+  (ws) => {
+    if (ws && explorer.workspace !== ws) {
+      explorer.setWorkspace(ws);
+      void explorer.refreshRoot();
+    }
+  },
+);
+
 function isExpanded(node: WorkspaceNode): boolean {
   return explorer.isExpanded(node.relative_path);
 }
@@ -72,13 +84,15 @@ async function onSelect(node: WorkspaceNode) {
 }
 
 async function onOpen(node: WorkspaceNode) {
-  if (node.kind !== "file") return;
+  if (node.kind === "dir") {
+    await explorer.toggleDir(node.relative_path);
+    return;
+  }
   await explorer.openFile(node.relative_path);
 }
 
 async function onReveal(node: WorkspaceNode) {
-  if (node.kind !== "file") return;
-  await explorer.revealFile(node.relative_path);
+  await explorer.revealFile(node.relative_path); // works for dirs and files
 }
 
 async function onCopy(node: WorkspaceNode) {

@@ -77,6 +77,30 @@ impl ChangeBatcher {
     }
 }
 
+/// Directories whose changes are NOT surfaced to the Explorer (dependency /
+/// cache / build — mirrors the listing ignore; otherwise dev-server writes
+/// would fire the watcher constantly and re-load the tree (observed sluggish).
+const WATCH_IGNORE: &[&str] = &[
+    ".git",
+    ".aisc",
+    "node_modules",
+    "target",
+    "build",
+    "dist",
+    "__pycache__",
+    ".venv",
+    "venv",
+];
+
+/// True when a workspace-relative path is under a WATCH_IGNORE directory.
+fn is_watch_ignored(relative: &str) -> bool {
+    relative
+        .split('/')
+        .next()
+        .map(|top| WATCH_IGNORE.contains(&top))
+        .unwrap_or(false)
+}
+
 /// Classify a notify event kind into a stable change type.
 fn change_type_of(kind: &EventKind) -> &'static str {
     use notify::event::*;
@@ -146,6 +170,9 @@ impl WorkspaceWatcher {
                 let Some(rel) = relative_of(&ws_closure, &path) else {
                     continue;
                 };
+                if is_watch_ignored(&rel) {
+                    continue; // dependency/build noise must not reload the tree
+                }
                 if raw_tx.try_send((rel, change_type.clone())).is_err() {
                     // Channel full: overflow. Send a sentinel so the batcher
                     // marks stale (bounded rescan) instead of dropping silently.

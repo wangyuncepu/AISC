@@ -56,7 +56,11 @@ aisc artifact record \
 
 ## Output in your final answer
 
-Always list deliverable paths as **relative** paths (e.g. `reports/result.md`)
-so the Workbench can resolve them against the host workspace. Never print the
-host absolute path. Keep the list human-readable — the GUI does not parse this
-as a fact source.
+Always list deliverable paths as **workspace-relative** paths (e.g.
+`reports/result.md`), NOT container-absolute (`/root/app/reports/result.md`)
+and NOT host-absolute. The workspace is bind-mounted with the same relative
+structure in the container and on the host, so a relative path resolves
+correctly on both — the Workbench turns it into the host absolute path when
+the user opens/copies it. Never print a container absolute path: it cannot be
+resolved on the host. Keep the list human-readable — the GUI does not parse
+this as a fact source.

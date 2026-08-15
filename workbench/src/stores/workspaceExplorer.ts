@@ -87,12 +87,21 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
         // watcher is best-effort; Explorer still works via manual refresh
       }
       await listen<WorkspaceChangeBatch>("workspace://changed", (ev) => {
+        const parents = new Set<string>();
         for (const c of ev.payload.changes) {
           this.unattributed[c.relative_path] = c.change_type;
-          // Drop the parent dir from the loaded tree so the next expand reloads.
           const idx = c.relative_path.lastIndexOf("/");
           const parent = idx >= 0 ? c.relative_path.slice(0, idx) : "";
-          delete this.tree[parent];
+          parents.add(parent);
+        }
+        // Immediately re-list expanded+loaded parent dirs so new files appear
+        // without a manual refresh; unexpanded dirs just drop their cache.
+        for (const parent of parents) {
+          if (this.expanded.has(parent) && this.tree[parent]) {
+            void this.loadDir(parent, true);
+          } else {
+            delete this.tree[parent];
+          }
         }
       });
       await listen("workspace://stale", () => {

@@ -157,20 +157,20 @@ pub fn list_workspace(
     })
 }
 
-/// Resolve a contained target, requiring it to be a real file (for open).
-fn resolve_file(workspace: &Path, relative: &str) -> Result<PathBuf, WorkbenchError> {
+/// Resolve a contained target, requiring it to exist (file or dir).
+fn resolve_existing(workspace: &Path, relative: &str) -> Result<PathBuf, WorkbenchError> {
     let target = resolve_contained(workspace, relative)?;
-    if !target.is_file() {
+    if !target.exists() {
         return Err(
-            WorkbenchError::workspace_invalid().with_detail("not a file")
+            WorkbenchError::workspace_invalid().with_detail("target does not exist")
         );
     }
     Ok(target)
 }
 
-/// Open a file with the system default app (after containment).
+/// Open a file/dir with the system default app (after containment).
 pub fn open_path(workspace: &Path, relative: &str) -> Result<(), WorkbenchError> {
-    let target = resolve_file(workspace, relative)?;
+    let target = resolve_existing(workspace, relative)?;
     #[cfg(target_os = "windows")]
     let status = std::process::Command::new("cmd")
         .args(["/C", "start", "", &target.to_string_lossy()])
@@ -190,9 +190,9 @@ pub fn open_path(workspace: &Path, relative: &str) -> Result<(), WorkbenchError>
     }
 }
 
-/// Reveal a file in the OS file manager (after containment).
+/// Reveal a file/dir in the OS file manager (after containment).
 pub fn reveal_path(workspace: &Path, relative: &str) -> Result<(), WorkbenchError> {
-    let target = resolve_file(workspace, relative)?;
+    let target = resolve_existing(workspace, relative)?;
     #[cfg(target_os = "windows")]
     let status = std::process::Command::new("explorer")
         .arg("/select,")
@@ -214,7 +214,12 @@ pub fn reveal_path(workspace: &Path, relative: &str) -> Result<(), WorkbenchErro
 
 /// Read a file for preview, bounded by PREVIEW_BUDGET (R3-11).
 pub fn preview_path(workspace: &Path, relative: &str) -> Result<WorkspacePreviewResult, WorkbenchError> {
-    let target = resolve_file(workspace, relative)?;
+    let target = resolve_contained(workspace, relative)?;
+    if !target.is_file() {
+        return Err(
+            WorkbenchError::workspace_invalid().with_detail("preview requires a file")
+        );
+    }
     let metadata = fs::metadata(&target)
         .map_err(|e| WorkbenchError::workspace_invalid().with_detail(format!("stat: {e}")))?;
     let size = metadata.len();
