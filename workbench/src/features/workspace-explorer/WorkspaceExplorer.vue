@@ -8,8 +8,9 @@
  * come from the merged manifest index; unattributed changes are a separate
  * "workspace changes" projection (never labelled as agent provenance, D3-03).
  */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useWorkspaceExplorerStore } from "../../stores/workspaceExplorer";
 import { useRuntimeStore } from "../../stores/runtime";
 import type { WorkspaceNode } from "../../types";
@@ -20,28 +21,46 @@ const runtime = useRuntimeStore();
 
 const selected = ref<string | null>(null);
 const menuFor = ref<string | null>(null);
+const menuPos = ref({ x: 0, y: 0 });
 const copied = ref<string | null>(null);
 /** Roving focus index into `visibleNodes` (APG tree pattern). */
 const focusIndex = ref(-1);
 
-/** Flatten the visible tree (root + expanded children, one level) for keyboard. */
-const visibleNodes = computed<WorkspaceNode[]>(() => {
-  const out: WorkspaceNode[] = [];
-  for (const n of explorer.rootNodes) {
-    out.push(n);
-    if (n.kind === "dir" && explorer.isExpanded(n.relative_path)) {
-      out.push(...explorer.nodeChildren(n.relative_path));
-    }
-  }
-  return out;
-});
-
 const artifactFilter = computed(() => explorer.activeKind);
 
+async function switchKind(kind: "explorer" | "artifacts") {
+  explorer.activeKind = kind;
+  if (kind === "artifacts") {
+    await explorer.refreshArtifacts();
+  }
+}
+
+let pollTimer: number | null = null;
+
 onMounted(() => {
-  if (runtime.workspace && explorer.workspace !== runtime.workspace) {
-    explorer.setWorkspace(runtime.workspace);
+  if (runtime.workspace) {
+    if (explorer.workspace !== runtime.workspace) {
+      explorer.setWorkspace(runtime.workspace);
+    }
+    // Always refresh on open: the Explorer may have been hidden while the
+    // agent created files, so cached tree/artifacts can be stale.
     void explorer.refreshRoot();
+  }
+
+  // Native watcher is the primary realtime path. Polling is a fallback for
+  // platforms where notify events are delayed or not delivered reliably; the
+  // directory diff in loadDir makes this a cheap no-op when nothing changed.
+  pollTimer = window.setInterval(() => {
+    if (document.visibilityState === "visible") {
+      void explorer.pollLoadedDirs();
+    }
+  }, 1500);
+});
+
+onBeforeUnmount(() => {
+  if (pollTimer !== null) {
+    window.clearInterval(pollTimer);
+    pollTimer = null;
   }
 });
 
@@ -57,6 +76,7 @@ watch(
   },
 );
 
+
 function isExpanded(node: WorkspaceNode): boolean {
   return explorer.isExpanded(node.relative_path);
 }
@@ -66,11 +86,10 @@ async function onToggle(node: WorkspaceNode) {
   await explorer.toggleDir(node.relative_path);
 }
 
-/** Tree depth for indentation: 0 = root, 1 = child of an expanded dir. */
+/** Tree depth for indentation: number of path segments below the workspace root. */
 function depthOf(node: WorkspaceNode): number {
-  const idx = node.relative_path.lastIndexOf("/");
-  if (idx < 0) return 0;
-  return explorer.isExpanded(node.relative_path.slice(0, idx)) ? 1 : 0;
+  if (!node.relative_path) return 0;
+  return node.relative_path.split("/").length - 1;
 }
 
 async function onSelect(node: WorkspaceNode) {
@@ -95,19 +114,64 @@ async function onReveal(node: WorkspaceNode) {
   await explorer.revealFile(node.relative_path); // works for dirs and files
 }
 
-async function onCopy(node: WorkspaceNode) {
-  const abs = await explorer.copyPath(node.relative_path);
+async function copyRelativePath(relativePath: string) {
+  const abs = await explorer.copyPath(relativePath);
   if (abs) {
-    await navigator.clipboard?.writeText(abs).catch(() => {});
-    copied.value = node.relative_path;
+    try {
+      await writeText(abs);
+    } catch {
+      // clipboard unavailable; keep the copied feedback but do not crash
+    }
+    copied.value = relativePath;
     setTimeout(() => (copied.value = null), 1500);
   }
+}
+
+async function onCopy(node: WorkspaceNode) {
+  await copyRelativePath(node.relative_path);
+}
+
+async function onMenuOpen(relativePath: string) {
+  const node = nodeOf(relativePath);
+  menuFor.value = null;
+  if (node) await onOpen(node);
+}
+
+async function onMenuReveal(relativePath: string) {
+  const node = nodeOf(relativePath);
+  menuFor.value = null;
+  if (node) await onReveal(node);
+}
+
+async function onMenuCopy(relativePath: string) {
+  const node = nodeOf(relativePath);
+  menuFor.value = null;
+  if (node) await onCopy(node);
+}
+
+function openMenu(node: WorkspaceNode, event: MouseEvent) {
+  menuFor.value = node.relative_path;
+  menuPos.value = { x: event.clientX, y: event.clientY };
 }
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Display a host absolute path for a workspace-relative path. */
+function hostPath(relativePath: string): string {
+  if (!runtime.workspace) return relativePath;
+  const base = runtime.workspace.replace(/\\/g, "/").replace(/\/+$/, "");
+  return `${base}/${relativePath}`;
+}
+
+/** Artifact rows show only the basename; the full host path is the title. */
+function fileName(relativePath: string): string {
+  const normalized = relativePath.replace(/\\/g, "/");
+  const idx = normalized.lastIndexOf("/");
+  return idx >= 0 ? normalized.slice(idx + 1) : normalized;
 }
 
 /** Resolve a node by relative path across loaded tree levels. */
@@ -120,7 +184,7 @@ function nodeOf(rel: string): WorkspaceNode | null {
 }
 
 function focusNode(index: number) {
-  const total = visibleNodes.value.length;
+  const total = explorer.visibleNodes.length;
   if (total === 0) {
     focusIndex.value = -1;
     return;
@@ -135,7 +199,7 @@ function onTreeKeydown(e: KeyboardEvent) {
     return;
   }
   if (e.key === "F10" && e.shiftKey) {
-    const node = visibleNodes.value[focusIndex.value];
+    const node = explorer.visibleNodes[focusIndex.value];
     if (node) {
       e.preventDefault();
       menuFor.value = node.relative_path;
@@ -153,9 +217,9 @@ function onTreeKeydown(e: KeyboardEvent) {
     focusNode(0);
   } else if (e.key === "End") {
     e.preventDefault();
-    focusNode(visibleNodes.value.length - 1);
+    focusNode(explorer.visibleNodes.length - 1);
   } else if (e.key === "Enter" || e.key === " ") {
-    const node = visibleNodes.value[focusIndex.value];
+    const node = explorer.visibleNodes[focusIndex.value];
     if (node) {
       e.preventDefault();
       void onSelect(node);
@@ -173,7 +237,7 @@ function onTreeKeydown(e: KeyboardEvent) {
           :aria-selected="explorer.activeKind === 'explorer'"
           class="explorer-tab"
           :class="{ active: explorer.activeKind === 'explorer' }"
-          @click="explorer.activeKind = 'explorer'"
+          @click="switchKind('explorer')"
         >
           {{ t("explorer.tab.files") }}
         </button>
@@ -182,7 +246,7 @@ function onTreeKeydown(e: KeyboardEvent) {
           :aria-selected="explorer.activeKind === 'artifacts'"
           class="explorer-tab"
           :class="{ active: explorer.activeKind === 'artifacts' }"
-          @click="explorer.activeKind = 'artifacts'"
+          @click="switchKind('artifacts')"
         >
           {{ t("explorer.tab.artifacts") }}
         </button>
@@ -205,32 +269,57 @@ function onTreeKeydown(e: KeyboardEvent) {
       @keydown="onTreeKeydown"
     >
       <p v-if="!runtime.workspace" class="explorer-empty">{{ t("explorer.empty.workspace") }}</p>
+      <p
+        v-else-if="explorer.visibleNodes.length === 0 && !explorer.isLoading('') && !explorer.errors['']"
+        class="explorer-empty"
+      >
+        {{ t("explorer.empty.files") }}
+      </p>
       <template v-else>
         <div
-          v-for="(node, i) in visibleNodes"
+          v-for="(node, i) in explorer.visibleNodes"
           :key="node.relative_path"
           :class="['explorer-row', { selected: selected === node.relative_path }]"
           role="treeitem"
           :aria-selected="selected === node.relative_path"
           :aria-expanded="node.kind === 'dir' ? isExpanded(node) : undefined"
+          :aria-level="depthOf(node) + 1"
           :tabindex="i === focusIndex ? 0 : -1"
           :style="{ paddingLeft: `${8 + depthOf(node) * 16}px` }"
           @click="onSelect(node)"
           @dblclick="node.kind === 'file' && onOpen(node)"
-          @contextmenu.prevent="menuFor = node.relative_path"
+          @contextmenu.prevent="openMenu(node, $event)"
           @focus="focusIndex = i"
         >
           <span class="explorer-icon" aria-hidden="true">
             {{ node.kind === "dir" ? (isExpanded(node) ? "▾" : "▸") : "·" }}
           </span>
-          <span class="explorer-name">{{ node.name }}</span>
+          <span class="explorer-name" :title="hostPath(node.relative_path)">{{ node.name }}</span>
           <span
             v-for="badge in node.artifact_badges"
             :key="badge"
             class="explorer-badge"
             >{{ badge }}</span
           >
+          <span
+            v-if="node.change_state && node.change_state !== 'unknown' && node.change_state !== 'artifact'"
+            class="explorer-badge change-badge"
+            >{{ node.change_state }}</span
+          >
         </div>
+
+        <div v-if="explorer.truncatedExpandedDirs.length" class="explorer-more">
+          <button
+            v-for="dir in explorer.truncatedExpandedDirs"
+            :key="dir"
+            class="explorer-mini"
+            :disabled="explorer.isLoadingMore(dir)"
+            @click="explorer.loadMore(dir)"
+          >
+            {{ explorer.isLoadingMore(dir) ? t("explorer.loading") : (dir ? t("explorer.loadMore", { dir }) : t("explorer.loadMoreRoot")) }}
+          </button>
+        </div>
+
         <p v-if="explorer.errors['']" class="explorer-error">{{ explorer.errors[""] }}</p>
       </template>
     </div>
@@ -239,25 +328,92 @@ function onTreeKeydown(e: KeyboardEvent) {
     <div v-else class="explorer-body artifacts-panel">
       <p v-if="explorer.artifactsLoading">{{ t("explorer.loading") }}</p>
       <template v-else>
-        <p v-if="explorer.artifactDeliverables.length === 0" class="explorer-empty">
+        <p
+          v-if="explorer.artifacts.length === 0 && explorer.unattributedEntries.length === 0"
+          class="explorer-empty"
+        >
           {{ t("explorer.empty.artifacts") }}
         </p>
-        <template v-else>
+
+        <template v-if="explorer.artifactDeliverables.length">
           <h4 class="artifacts-group">{{ t("explorer.artifacts.deliverables") }}</h4>
           <div
             v-for="a in explorer.artifactDeliverables"
             :key="a.artifact_id"
-            class="explorer-row"
+            class="explorer-row artifact-row"
             @click="selected = a.workspace_relative_path"
           >
-            <span class="explorer-name" :title="a.workspace_relative_path">
-              {{ a.workspace_relative_path }}
+            <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
+              {{ fileName(a.workspace_relative_path) }}
+            </span>
+            <span v-if="a.label" class="explorer-label">{{ a.label }}</span>
+            <button class="explorer-mini" @click="explorer.openFile(a.workspace_relative_path)">
+              {{ t("explorer.open") }}
+            </button>
+            <button class="explorer-mini" @click="explorer.revealFile(a.workspace_relative_path)">
+              {{ t("explorer.reveal") }}
+            </button>
+            <button class="explorer-mini" @click="copyRelativePath(a.workspace_relative_path)">
+              {{ copied === a.workspace_relative_path ? t("explorer.copied") : t("explorer.copy") }}
+            </button>
+          </div>
+        </template>
+
+        <template v-if="explorer.artifactSourceChanges.length">
+          <h4 class="artifacts-group">{{ t("explorer.artifacts.sourceChanges") }}</h4>
+          <div
+            v-for="a in explorer.artifactSourceChanges"
+            :key="a.artifact_id"
+            class="explorer-row artifact-row"
+            @click="selected = a.workspace_relative_path"
+          >
+            <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
+              {{ fileName(a.workspace_relative_path) }}
             </span>
             <button class="explorer-mini" @click="explorer.openFile(a.workspace_relative_path)">
               {{ t("explorer.open") }}
             </button>
+            <button class="explorer-mini" @click="explorer.revealFile(a.workspace_relative_path)">
+              {{ t("explorer.reveal") }}
+            </button>
+            <button class="explorer-mini" @click="copyRelativePath(a.workspace_relative_path)">
+              {{ copied === a.workspace_relative_path ? t("explorer.copied") : t("explorer.copy") }}
+            </button>
           </div>
         </template>
+
+        <template v-if="explorer.artifactGenerated.length">
+          <h4 class="artifacts-group">{{ t("explorer.artifacts.generatedOutputs") }}</h4>
+          <div
+            v-for="a in explorer.artifactGenerated"
+            :key="a.artifact_id"
+            class="explorer-row artifact-row"
+            @click="selected = a.workspace_relative_path"
+          >
+            <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
+              {{ fileName(a.workspace_relative_path) }}
+            </span>
+            <button class="explorer-mini" @click="explorer.openFile(a.workspace_relative_path)">
+              {{ t("explorer.open") }}
+            </button>
+            <button class="explorer-mini" @click="explorer.revealFile(a.workspace_relative_path)">
+              {{ t("explorer.reveal") }}
+            </button>
+            <button class="explorer-mini" @click="copyRelativePath(a.workspace_relative_path)">
+              {{ copied === a.workspace_relative_path ? t("explorer.copied") : t("explorer.copy") }}
+            </button>
+          </div>
+        </template>
+
+        <div v-if="explorer.artifactsNextCursor !== null" class="explorer-more">
+          <button
+            class="explorer-mini"
+            :disabled="explorer.artifactsLoadingMore"
+            @click="explorer.loadMoreArtifacts()"
+          >
+            {{ explorer.artifactsLoadingMore ? t("explorer.loading") : t("explorer.loadMoreArtifacts") }}
+          </button>
+        </div>
 
         <h4 v-if="explorer.unattributedEntries.length" class="artifacts-group">
           {{ t("explorer.artifacts.workspaceChanges") }}
@@ -268,26 +424,37 @@ function onTreeKeydown(e: KeyboardEvent) {
           class="explorer-row unattributed"
           @click="selected = u.relative_path"
         >
-          <span class="explorer-name" :title="u.relative_path">{{ u.relative_path }}</span>
+          <span class="explorer-name" :title="hostPath(u.relative_path)">{{ fileName(u.relative_path) }}</span>
           <span class="explorer-badge unattributed-badge">{{ u.change_type }}</span>
+          <button class="explorer-mini" @click="explorer.openFile(u.relative_path)">
+            {{ t("explorer.open") }}
+          </button>
+          <button class="explorer-mini" @click="explorer.revealFile(u.relative_path)">
+            {{ t("explorer.reveal") }}
+          </button>
         </div>
       </template>
     </div>
 
     <!-- Context menu -->
-    <div v-if="menuFor" class="explorer-menu" role="menu">
-      <button role="menuitem" @click="onOpen(nodeOf(menuFor)!)">{{ t("explorer.open") }}</button>
-      <button role="menuitem" @click="onReveal(nodeOf(menuFor)!)">
+    <div
+      v-if="menuFor"
+      class="explorer-menu"
+      role="menu"
+      :style="{ left: `${menuPos.x}px`, top: `${menuPos.y}px` }"
+    >
+      <button role="menuitem" @click="onMenuOpen(menuFor!)">{{ t("explorer.open") }}</button>
+      <button role="menuitem" @click="onMenuReveal(menuFor!)">
         {{ t("explorer.reveal") }}
       </button>
-      <button role="menuitem" @click="onCopy(nodeOf(menuFor)!)">{{ t("explorer.copy") }}</button>
+      <button role="menuitem" @click="onMenuCopy(menuFor!)">{{ t("explorer.copy") }}</button>
       <button class="menu-close" role="menuitem" @click="menuFor = null">✕</button>
     </div>
 
     <!-- Preview pane -->
     <div v-if="explorer.preview" class="explorer-preview">
       <div class="preview-head">
-        <span class="preview-path">{{ explorer.preview.relative_path }}</span>
+        <span class="preview-path">{{ hostPath(explorer.preview.relative_path) }}</span>
         <span class="preview-meta">
           {{ explorer.preview.media_type }} · {{ formatBytes(explorer.preview.size) }}
           <template v-if="explorer.preview.truncated"> · {{ t("explorer.preview.truncated") }}</template>
@@ -378,10 +545,18 @@ function onTreeKeydown(e: KeyboardEvent) {
   border-radius: 4px;
   background: var(--accent-dim, rgba(74, 158, 255, 0.15));
 }
+.explorer-label {
+  font-size: 10px;
+  color: var(--muted, #888);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .unattributed {
   opacity: 0.75;
 }
-.unattributed-badge {
+.unattributed-badge,
+.change-badge {
   background: var(--warn-dim, rgba(217, 164, 65, 0.15));
 }
 .explorer-stale,
@@ -394,8 +569,11 @@ function onTreeKeydown(e: KeyboardEvent) {
   padding: 8px;
   color: var(--muted, #888);
 }
+.explorer-more {
+  padding: 4px 8px;
+}
 .explorer-menu {
-  position: absolute;
+  position: fixed;
   z-index: 20;
   background: var(--surface, #1e1e1e);
   border: 1px solid var(--border, #333);

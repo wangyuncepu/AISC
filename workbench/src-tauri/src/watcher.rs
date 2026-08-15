@@ -7,6 +7,7 @@
 //! events silently (R3-08). `dispose` stops everything.
 
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::Path;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -28,6 +29,7 @@ const RAW_CHANNEL_CAP: usize = 1024;
 pub struct WorkspaceChange {
     pub relative_path: String,
     pub change_type: String,
+    pub kind: String,
     pub revision: u64,
 }
 
@@ -43,14 +45,14 @@ pub struct WorkspaceChangeBatch {
 /// Dedup + order changes within a debounce window.
 #[derive(Debug, Default)]
 struct ChangeBatcher {
-    // BTreeMap path -> type (last write wins for a path within the window).
-    by_path: std::collections::BTreeMap<String, String>,
+    // BTreeMap path -> (type, kind); last write wins within the window.
+    by_path: std::collections::BTreeMap<String, (String, String)>,
     overflow: bool,
 }
 
 impl ChangeBatcher {
-    fn push(&mut self, path: String, change_type: String) {
-        self.by_path.insert(path, change_type);
+    fn push(&mut self, path: String, change_type: String, kind: String) {
+        self.by_path.insert(path, (change_type, kind));
     }
 
     fn mark_overflow(&mut self) {
@@ -60,9 +62,10 @@ impl ChangeBatcher {
     fn drain(&mut self, revision: u64) -> WorkspaceChangeBatch {
         let changes = std::mem::take(&mut self.by_path)
             .into_iter()
-            .map(|(relative_path, change_type)| WorkspaceChange {
+            .map(|(relative_path, (change_type, kind))| WorkspaceChange {
                 relative_path,
                 change_type,
+                kind,
                 revision,
             })
             .collect();
@@ -93,12 +96,11 @@ const WATCH_IGNORE: &[&str] = &[
 ];
 
 /// True when a workspace-relative path is under a WATCH_IGNORE directory.
+/// Mirrors the Explorer listing ignore: any path component may be a
+/// dependency/cache/build directory, so nested `src/node_modules/...` is
+/// also suppressed instead of reloading the tree on every dev-server write.
 fn is_watch_ignored(relative: &str) -> bool {
-    relative
-        .split('/')
-        .next()
-        .map(|top| WATCH_IGNORE.contains(&top))
-        .unwrap_or(false)
+    relative.split('/').any(|part| WATCH_IGNORE.contains(&part))
 }
 
 /// Classify a notify event kind into a stable change type.
@@ -113,9 +115,31 @@ fn change_type_of(kind: &EventKind) -> &'static str {
     }
 }
 
+/// Best-effort target kind. We only need this reliably for newly-created
+/// directories so the frontend can list their children immediately.
+fn change_kind_of(kind: &EventKind) -> &'static str {
+    use notify::event::*;
+    match kind {
+        EventKind::Create(CreateKind::Folder) => "dir",
+        EventKind::Create(_) => "file",
+        EventKind::Modify(ModifyKind::Name(_)) | EventKind::Modify(_) => "file",
+        EventKind::Remove(_) => "file",
+        _ => "unknown",
+    }
+}
+
 /// Compute the workspace-relative path of a changed path.
+///
+/// notify may report extended-length Windows verbatim paths, or paths
+/// with different case/prefixes than the workspace string. Prefer the lexical
+/// component diff; if the prefixes do not match, retry with both sides
+/// canonicalized (the changed target usually still exists at event time).
 fn relative_of(workspace: &Path, path: &Path) -> Option<String> {
-    let ws = pathdiff(workspace, path)?;
+    let ws = pathdiff(workspace, path).or_else(|| {
+        let cws = fs::canonicalize(workspace).ok()?;
+        let cpath = fs::canonicalize(path).ok()?;
+        pathdiff(&cws, &cpath)
+    })?;
     if ws.is_empty() {
         return None; // the workspace root itself
     }
@@ -158,7 +182,7 @@ impl WorkspaceWatcher {
         let ws = workspace.to_path_buf();
         let ws_closure = ws.clone();
         let app_clone = app.clone();
-        let (raw_tx, raw_rx) = mpsc::sync_channel::<(String, String)>(RAW_CHANNEL_CAP);
+        let (raw_tx, raw_rx) = mpsc::sync_channel::<(String, String, String)>(RAW_CHANNEL_CAP);
 
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
             let event = match res {
@@ -166,6 +190,7 @@ impl WorkspaceWatcher {
                 Err(_) => return,
             };
             let change_type = change_type_of(&event.kind).to_string();
+            let change_kind = change_kind_of(&event.kind).to_string();
             for path in event.paths {
                 let Some(rel) = relative_of(&ws_closure, &path) else {
                     continue;
@@ -173,10 +198,17 @@ impl WorkspaceWatcher {
                 if is_watch_ignored(&rel) {
                     continue; // dependency/build noise must not reload the tree
                 }
-                if raw_tx.try_send((rel, change_type.clone())).is_err() {
+                if raw_tx
+                    .try_send((rel, change_type.clone(), change_kind.clone()))
+                    .is_err()
+                {
                     // Channel full: overflow. Send a sentinel so the batcher
                     // marks stale (bounded rescan) instead of dropping silently.
-                    let _ = raw_tx.try_send(("\0overflow".to_string(), "overflow".to_string()));
+                    let _ = raw_tx.try_send((
+                        "\0overflow".to_string(),
+                        "overflow".to_string(),
+                        String::new(),
+                    ));
                 }
             }
         })
@@ -209,7 +241,11 @@ impl WorkspaceWatcher {
     }
 }
 
-fn debounce_loop(app: AppHandle, rx: mpsc::Receiver<(String, String)>, stop: Arc<Mutex<bool>>) {
+fn debounce_loop(
+    app: AppHandle,
+    rx: mpsc::Receiver<(String, String, String)>,
+    stop: Arc<Mutex<bool>>,
+) {
     let mut batcher = ChangeBatcher::default();
     let mut revision: u64 = 0;
     let mut pending: Option<std::time::Instant> = None;
@@ -220,12 +256,12 @@ fn debounce_loop(app: AppHandle, rx: mpsc::Receiver<(String, String)>, stop: Arc
         }
         // Non-blocking drain of the raw channel.
         let mut received = 0;
-        while let Ok((path, change_type)) = rx.try_recv() {
+        while let Ok((path, change_type, change_kind)) = rx.try_recv() {
             received += 1;
             if path == "\0overflow" {
                 batcher.mark_overflow();
             } else {
-                batcher.push(path, change_type);
+                batcher.push(path, change_type, change_kind);
             }
             if received >= MAX_BATCH {
                 break;
@@ -305,9 +341,9 @@ mod tests {
     #[test]
     fn batcher_dedups_and_reports_overflow() {
         let mut b = ChangeBatcher::default();
-        b.push("a.md".into(), "created".into());
-        b.push("a.md".into(), "modified".into()); // last wins
-        b.push("b.md".into(), "deleted".into());
+        b.push("a.md".into(), "created".into(), "file".into());
+        b.push("a.md".into(), "modified".into(), "file".into()); // last wins
+        b.push("b.md".into(), "deleted".into(), "file".into());
         b.mark_overflow();
         let batch = b.drain(1);
         assert_eq!(batch.revision, 1);
@@ -316,10 +352,19 @@ mod tests {
         assert_eq!(batch.changes.len(), 2);
         assert_eq!(batch.changes[0].relative_path, "a.md");
         assert_eq!(batch.changes[0].change_type, "modified");
+        assert_eq!(batch.changes[0].kind, "file");
         // drain clears; next drain is empty and no longer stale.
         let next = b.drain(2);
         assert!(next.changes.is_empty());
         assert!(!next.stale);
+    }
+
+    #[test]
+    fn watch_ignore_matches_nested_components() {
+        assert!(is_watch_ignored("node_modules/x"));
+        assert!(is_watch_ignored("src/node_modules/x"));
+        assert!(is_watch_ignored("a/b/target/c"));
+        assert!(!is_watch_ignored("src/lib/main.ts"));
     }
 
     #[test]
@@ -337,5 +382,13 @@ mod tests {
         assert_eq!(change_type_of(&EventKind::Modify(ModifyKind::Name(RenameMode::To))), "renamed");
         assert_eq!(change_type_of(&EventKind::Modify(ModifyKind::Data(DataChange::Any))), "modified");
         assert_eq!(change_type_of(&EventKind::Remove(RemoveKind::File)), "deleted");
+    }
+
+    #[test]
+    fn change_kind_classification() {
+        use notify::event::*;
+        assert_eq!(change_kind_of(&EventKind::Create(CreateKind::Folder)), "dir");
+        assert_eq!(change_kind_of(&EventKind::Create(CreateKind::File)), "file");
+        assert_eq!(change_kind_of(&EventKind::Modify(ModifyKind::Data(DataChange::Any))), "file");
     }
 }

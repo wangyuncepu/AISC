@@ -33,17 +33,31 @@ import ConflictManager from "./features/startup/ConflictManager.vue";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import DoctorDialog from "./features/doctor/DoctorDialog.vue";
 import WorkspaceExplorer from "./features/workspace-explorer/WorkspaceExplorer.vue";
+import { useWorkspaceExplorerStore } from "./stores/workspaceExplorer";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
 const settingsStore = useSettingsStore();
 const doctorStore = useDoctorStore();
+const explorerStore = useWorkspaceExplorerStore();
 const polling = useRuntimePolling();
 const providerPolling = useProviderPolling();
 
+// Stage 3: keep the workspace watcher alive even when the Explorer rail is
+// hidden, so agent-created files are captured while the panel is closed.
+watch(
+  [() => store.workspace, () => store.status],
+  ([ws, status]) => {
+    if (ws && status === "ready") {
+      explorerStore.setWorkspace(ws);
+    }
+  },
+  { immediate: true }
+);
+
 // Step 3: settings dialog entry (keyboard-reachable topbar button).
 const settingsOpen = ref(false);
-const showExplorer = ref(false);
+const showExplorer = ref(true);
 
 // G-01 (Step 7, A-G01-3): ui.font_scale is immediate-effect. Applied as CSS
 // zoom on the UI chrome (topbar/picker/summary/sidebar/tabbar/dialog); the
@@ -535,8 +549,11 @@ function selectRecent(path: string): void {
           </div>
         </main>
       </div>
-      <!-- Stage 3 (3c): Workspace Explorer + Agent Artifacts rail -->
-      <WorkspaceExplorer v-if="showExplorer" class="explorer-rail" />
+      <!-- Stage 3 (3c): Workspace Explorer + Agent Artifacts overlay drawer.
+           Overlay means opening/closing it never resizes the terminal area. -->
+      <div v-show="showExplorer" class="explorer-drawer">
+        <WorkspaceExplorer />
+      </div>
     </div>
 
     <!-- Error -->
@@ -623,7 +640,7 @@ function selectRecent(path: string): void {
   flex: 1; min-width: 0; background: var(--surface); color: var(--text-2);
   border: 1px solid var(--border-2); border-radius: 4px; padding: 6px 8px; font-size: 13px;
 }
-.ready { flex: 1; display: flex; min-height: 0; }
+.ready { flex: 1; display: flex; min-height: 0; position: relative; }
 .main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 button {
   background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
@@ -650,13 +667,22 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
   cursor: pointer;
   font-size: 12px;
 }
-.explorer-rail {
-  width: 300px;
-  flex: none;
-  min-height: 0;
-  border-left: 1px solid var(--border-strong);
-  background: var(--surface);
+.explorer-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  z-index: 30;
   display: flex;
+  background: var(--surface);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+}
+.explorer-drawer > * {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
 }
 .empty-tabs {
   /* fill the terminal-area row so internal centering is global, not the

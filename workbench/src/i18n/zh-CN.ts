@@ -263,10 +263,20 @@ export const zhCN = {
   "explorer.refresh": "刷新",
   "explorer.stale": "文件状态可能已过期，已执行受限重扫。",
   "explorer.empty.workspace": "请先选择工作区。",
+
+  "explorer.empty.files": "此目录中没有文件。",
   "explorer.empty.artifacts": "Agent 生成可交付文件后会显示在这里。",
   "explorer.loading": "加载中…",
   "explorer.artifacts.deliverables": "可交付文件",
   "explorer.artifacts.workspaceChanges": "工作区变化（未归因）",
+
+  "explorer.artifacts.sourceChanges": "源码变更",
+  "explorer.artifacts.generatedOutputs": "生成输出",
+  "explorer.loadMore": "加载更多：{dir}",
+
+  "explorer.loadMoreRoot": "加载更多文件",
+  "explorer.loadMoreArtifacts": "加载更多产物",
+  "explorer.copied": "已复制",
   "explorer.open": "打开",
   "explorer.reveal": "在文件管理器中显示",
   "explorer.copy": "复制路径",

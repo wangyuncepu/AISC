@@ -353,21 +353,20 @@ pub struct ArtifactInspectResult {
     pub artifact: ArtifactRecord,
 }
 
-/// List artifacts from the merged index, filtered by kind, paginated.
-pub fn list_artifacts(app: &AppHandle, kind: Option<String>, cursor: Option<usize>) -> ArtifactListResult {
-    let dir = match config_dir(app) {
-        Ok(d) => d,
-        Err(_) => return empty_list(),
-    };
-    let index = load_index(&dir);
-    let mut filtered: Vec<ArtifactRecord> = index
-        .artifacts
+/// Pure pagination/filter helper (unit-testable without a Tauri AppHandle).
+fn paginate_artifacts(
+    artifacts: Vec<ArtifactRecord>,
+    kind: Option<String>,
+    cursor: Option<usize>,
+) -> ArtifactListResult {
+    let filtered: Vec<ArtifactRecord> = artifacts
         .into_iter()
         .filter(|a| kind.as_deref().map(|k| a.kind == k).unwrap_or(true))
         .collect();
-    let start = cursor.unwrap_or(0).min(filtered.len());
-    let page: Vec<ArtifactRecord> = filtered.drain(start..).take(200).collect();
-    let next = if start + page.len() < filtered.len() + start {
+    let total = filtered.len();
+    let start = cursor.unwrap_or(0).min(total);
+    let page: Vec<ArtifactRecord> = filtered.into_iter().skip(start).take(200).collect();
+    let next = if start + page.len() < total {
         Some(start + page.len())
     } else {
         None
@@ -377,6 +376,16 @@ pub fn list_artifacts(app: &AppHandle, kind: Option<String>, cursor: Option<usiz
         artifacts: page,
         next_cursor: next,
     }
+}
+
+/// List artifacts from the merged index, filtered by kind, paginated.
+pub fn list_artifacts(app: &AppHandle, kind: Option<String>, cursor: Option<usize>) -> ArtifactListResult {
+    let dir = match config_dir(app) {
+        Ok(d) => d,
+        Err(_) => return empty_list(),
+    };
+    let index = load_index(&dir);
+    paginate_artifacts(index.artifacts, kind, cursor)
 }
 
 fn empty_list() -> ArtifactListResult {
@@ -475,6 +484,33 @@ mod tests {
         assert!(index.artifacts.is_empty());
         // The corrupt file is renamed, not deleted.
         assert!(idx_path.with_extension("json.corrupt").exists());
+    }
+
+    #[test]
+    fn artifact_pagination_returns_next_cursor_only_while_pages_remain() {
+        let make = |i: usize| ArtifactRecord {
+            schema_version: 1,
+            artifact_id: format!("aaaaaaaa-0000-4000-8000-{i:012}"),
+            workspace_relative_path: format!("f{i:03}.md"),
+            action: "created".into(),
+            kind: "deliverable".into(),
+            media_type: Some("text/markdown".into()),
+            label: String::new(),
+            open_with: "preview".into(),
+            producer: serde_json::json!({"agent":"claude","session_id":"s","runtime_id":"r"}),
+            state: "present".into(),
+            provenance: "manifest".into(),
+            recorded_at: "t".into(),
+            previous_path: None,
+            extra: serde_json::json!({}),
+        };
+        let all: Vec<ArtifactRecord> = (0..250).map(make).collect();
+        let page1 = paginate_artifacts(all.clone(), None, None);
+        assert_eq!(page1.artifacts.len(), 200);
+        assert_eq!(page1.next_cursor, Some(200));
+        let page2 = paginate_artifacts(all, None, page1.next_cursor);
+        assert_eq!(page2.artifacts.len(), 50);
+        assert_eq!(page2.next_cursor, None);
     }
 
     #[test]

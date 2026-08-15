@@ -7,6 +7,7 @@ registries in the host data dir; the workspace is never touched (A-ART04-1).
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,25 @@ def _resolve_workspace(workspace: Optional[str]) -> Path:
 def _record_to_dict(rec: ArtifactRecord) -> Dict[str, Any]:
     return rec.to_dict()
 
+def _normalize_record_path(raw: str, workspace: Path) -> str:
+    """Accept a container/host absolute path when it is inside the workspace.
+
+    Agents sometimes ignore the Skill instruction and pass `/root/app/...`
+    (the container mount). The host cannot resolve that path, but it maps
+    directly to a workspace-relative path, which is what the registry stores.
+    Anything outside the workspace is still rejected by ``validate_relative_path``.
+    """
+    path = Path(raw)
+    if not path.is_absolute():
+        return raw
+    try:
+        rel = os.path.relpath(raw, workspace)
+    except ValueError:
+        return raw
+    if rel == "." or rel.startswith("..") or Path(rel).is_absolute():
+        return raw
+    return rel.replace("\\", "/")
+
 
 # ---------------------------------------------------------------------------
 # Commands
@@ -59,10 +79,14 @@ def cmd_artifact_record(
     ws = _resolve_workspace(workspace)
     try:
         mt = normalize_media_type(media_type)
+        normalized_path = _normalize_record_path(path, ws)
+        normalized_previous_path = (
+            _normalize_record_path(previous_path, ws) if previous_path else None
+        )
         rec = ArtifactRecord(
             schema_version=1,
             artifact_id=str(uuid.uuid4()),
-            workspace_relative_path=path,
+            workspace_relative_path=normalized_path,
             action=action,
             kind=kind,
             media_type=mt,
@@ -76,7 +100,7 @@ def cmd_artifact_record(
             state="present",
             provenance=ArtifactProvenance.MANIFEST,
             recorded_at=_iso_now(),
-            previous_path=previous_path,
+            previous_path=normalized_previous_path,
             extra={},
         ).validate()
         saved = _record(ws, rec, session_id=session_id)

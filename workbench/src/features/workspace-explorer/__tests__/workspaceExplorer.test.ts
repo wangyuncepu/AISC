@@ -10,6 +10,9 @@ import { useWorkspaceExplorerStore } from "../../../stores/workspaceExplorer";
 import WorkspaceExplorer from "../WorkspaceExplorer.vue";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn().mockResolvedValue(() => {}) }));
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+  writeText: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("../../../lib/ipc", () => ({
   workspaceList: vi.fn(async (_ws: string, dir: string) => ({
     schema_version: 1,

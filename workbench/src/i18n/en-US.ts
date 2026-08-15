@@ -263,10 +263,20 @@ export const enUS: Record<string, string> = {
   "explorer.refresh": "Refresh",
   "explorer.stale": "File state may be stale; a bounded rescan was performed.",
   "explorer.empty.workspace": "Select a workspace first.",
+
+  "explorer.empty.files": "No files in this directory.",
   "explorer.empty.artifacts": "Artifacts the agent generates will appear here.",
   "explorer.loading": "Loading…",
   "explorer.artifacts.deliverables": "Deliverables",
   "explorer.artifacts.workspaceChanges": "Workspace changes (unattributed)",
+
+  "explorer.artifacts.sourceChanges": "Source changes",
+  "explorer.artifacts.generatedOutputs": "Generated outputs",
+  "explorer.loadMore": "Load more in {dir}",
+
+  "explorer.loadMoreRoot": "Load more files",
+  "explorer.loadMoreArtifacts": "Load more artifacts",
+  "explorer.copied": "Copied",
   "explorer.open": "Open",
   "explorer.reveal": "Show in file manager",
   "explorer.copy": "Copy path",

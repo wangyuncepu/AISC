@@ -238,6 +238,18 @@ class ArtifactCliTests(unittest.TestCase):
                     "--path", "doc.md", "--workspace", str(ws), "--format", "json")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         # Nothing created inside the workspace.
+
+    def test_record_accepts_absolute_path_inside_workspace(self):
+        """Agents may pass container absolute paths; convert to workspace-relative."""
+        ws = self.root / "ws"
+        ws.mkdir()
+        abs_path = ws / "doc.md"
+        proc = _run(self.root, "artifact", "record", "--runtime-id", RUNTIME_ID,
+                    "--session-id", SESSION_ID, "--agent", "claude",
+                    "--path", str(abs_path), "--workspace", str(ws), "--format", "json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        data = _json(proc)["data"]["artifact"]
+        self.assertEqual(data["workspace_relative_path"], "doc.md")
         self.assertEqual(sorted(p.name for p in ws.iterdir()), [])
 
     def test_envelope_and_stable_errors(self):

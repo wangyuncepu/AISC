@@ -10,10 +10,12 @@
 //! (which must be inside the workspace) and append the remaining components,
 //! so a missing file cannot smuggle `..` or a symlink escape either.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
+use tauri::AppHandle;
 
 use crate::error::WorkbenchError;
 
@@ -271,17 +273,42 @@ pub fn copy_path(workspace: &Path, relative: &str) -> Result<WorkspaceCopyResult
 
 #[tauri::command]
 pub async fn workspace_list(
+    app: AppHandle,
     workspace: String,
     relative_dir: String,
     cursor: Option<usize>,
     include_ignored: Option<bool>,
 ) -> Result<WorkspaceListResult, WorkbenchError> {
-    list_workspace(
+    let mut result = list_workspace(
         Path::new(&workspace),
         &relative_dir,
         cursor.unwrap_or(0),
         include_ignored.unwrap_or(false),
-    )
+    )?;
+
+    // Annotate listed nodes with manifest artifact badges (Stage 3, WX-01):
+    // the Explorer tree shows which files are known Agent deliverables /
+    // source changes / generated outputs. This is only a display projection;
+    // the CLI registry remains the authoritative fact.
+    if let Ok(dir) = crate::session::config_dir(&app) {
+        let index = crate::artifact::load_index(&dir);
+        let present: HashMap<&str, &crate::artifact::ArtifactRecord> = index
+            .artifacts
+            .iter()
+            .filter(|a| a.state == "present")
+            .map(|a| (a.workspace_relative_path.as_str(), a))
+            .collect();
+        for node in &mut result.nodes {
+            if let Some(rec) = present.get(node.relative_path.as_str()) {
+                if !node.artifact_badges.iter().any(|b| b.as_str() == rec.kind.as_str()) {
+                    node.artifact_badges.push(rec.kind.clone());
+                }
+                node.change_state = "artifact".to_string();
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 #[tauri::command]

@@ -10,6 +10,7 @@ import { defineStore } from "pinia";
 import { listen } from "@tauri-apps/api/event";
 import {
   artifactList,
+  artifactRefresh,
   workspaceCopyPath,
   workspaceList,
   workspaceOpen,
@@ -21,12 +22,20 @@ import {
 import type { ArtifactRecord, WorkspaceNode, WorkspacePreviewResult } from "../types";
 
 interface WorkspaceChangeBatch {
-  changes: Array<{ relative_path: string; change_type: string; revision: number }>;
+  changes: Array<{
+    relative_path: string;
+    change_type: string;
+    kind: string;
+    revision: number;
+  }>;
   overflow: boolean;
   stale: boolean;
 }
 
 export type ExplorerKind = "explorer" | "artifacts";
+
+/** Non-reactive module-level cleanup handles for Tauri event subscriptions. */
+let watcherUnlisteners: Array<() => void> = [];
 
 export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
   state: () => ({
@@ -37,12 +46,21 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
     expanded: new Set<string>(),
     /** Per-directory loading flag. */
     loading: {} as Record<string, boolean>,
+    /** Per-directory "load more" flag. */
+    loadingMore: {} as Record<string, boolean>,
     /** Per-directory error message. */
     errors: {} as Record<string, string>,
+    /** Per-directory pagination cursor. */
+    nextCursors: {} as Record<string, string | null>,
+    /** Per-directory truncated flag (more pages available). */
+    truncatedDirs: {} as Record<string, boolean>,
     /** The merged artifact index (manifest facts). */
     artifacts: [] as ArtifactRecord[],
     artifactsLoading: false,
+    artifactsLoadingMore: false,
     artifactsError: null as string | null,
+    /** Artifact list pagination. */
+    artifactsNextCursor: null as number | null,
     /** Watcher overflow: Explorer may be stale until a bounded rescan. */
     stale: false,
     /** Unattributed changes (watcher projection, never agent provenance). */
@@ -61,59 +79,100 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
     nodeChildren: (s) => (dir: string) => s.tree[dir] ?? [],
     isExpanded: (s) => (dir: string) => s.expanded.has(dir),
     isLoading: (s) => (dir: string) => !!s.loading[dir],
+    isLoadingMore: (s) => (dir: string) => !!s.loadingMore[dir],
+    isTruncated: (s) => (dir: string) => !!s.truncatedDirs[dir] && !!s.nextCursors[dir],
     unattributedEntries: (s) =>
       Object.entries(s.unattributed)
         .map(([relative_path, change_type]) => ({ relative_path, change_type }))
         .sort((a, b) => a.relative_path.localeCompare(b.relative_path)),
+    /** Flatten the currently expanded tree for APG keyboard navigation.
+     *  Only expanded directories are descended into; unexpanded subtrees stay lazy. */
+    visibleNodes: (s) => {
+      const out: WorkspaceNode[] = [];
+      const visit = (nodes: WorkspaceNode[]) => {
+        for (const n of nodes) {
+          out.push(n);
+          if (n.kind === "dir" && s.expanded.has(n.relative_path)) {
+            visit(s.tree[n.relative_path] ?? []);
+          }
+        }
+      };
+      visit(s.tree[""] ?? []);
+      return out;
+    },
+    /** Directories that have more pages to load and are currently expanded. */
+    truncatedExpandedDirs: (s) => {
+      const dirs: string[] = [];
+      if (s.truncatedDirs[""] && s.nextCursors[""]) {
+        dirs.push("");
+      }
+      const visit = (nodes: WorkspaceNode[]) => {
+        for (const n of nodes) {
+          if (n.kind === "dir" && s.expanded.has(n.relative_path)) {
+            if (s.truncatedDirs[n.relative_path] && s.nextCursors[n.relative_path]) {
+              dirs.push(n.relative_path);
+            }
+            visit(s.tree[n.relative_path] ?? []);
+          }
+        }
+      };
+      visit(s.tree[""] ?? []);
+      return dirs;
+    },
   },
 
   actions: {
     setWorkspace(workspace: string) {
       if (this.workspace !== workspace) {
+        void this.stopWatching();
         this.workspace = workspace;
         this.tree = {};
         this.expanded = new Set();
+        this.loading = {};
+        this.loadingMore = {};
+        this.errors = {};
+        this.nextCursors = {};
+        this.truncatedDirs = {};
         this.artifacts = [];
+        this.artifactsNextCursor = null;
         this.unattributed = {};
+        this.preview = null;
         void this.startWatching(workspace);
       }
     },
 
     /** Start the backend watcher and subscribe to change/stale events. */
     async startWatching(workspace: string) {
+      await this.stopWatching();
       try {
         await workspaceWatchStart(workspace);
       } catch {
         // watcher is best-effort; Explorer still works via manual refresh
       }
-      await listen<WorkspaceChangeBatch>("workspace://changed", (ev) => {
-        const parents = new Set<string>();
-        for (const c of ev.payload.changes) {
-          this.unattributed[c.relative_path] = c.change_type;
-          const idx = c.relative_path.lastIndexOf("/");
-          const parent = idx >= 0 ? c.relative_path.slice(0, idx) : "";
-          parents.add(parent);
-        }
-        // Immediately re-list expanded+loaded parent dirs so new files appear
-        // without a manual refresh; unexpanded dirs just drop their cache.
-        for (const parent of parents) {
-          if (this.expanded.has(parent) && this.tree[parent]) {
-            void this.loadDir(parent, true);
-          } else {
-            delete this.tree[parent];
-          }
-        }
+      const unlisteners: Array<() => void> = [];
+      const unlistenChanged = await listen<WorkspaceChangeBatch>("workspace://changed", (ev) => {
+        this.handleWorkspaceChanges(ev.payload.changes);
       });
-      await listen("workspace://stale", () => {
+      unlisteners.push(unlistenChanged);
+      const unlistenStale = await listen("workspace://stale", () => {
         this.stale = true;
         // Bounded rescan: re-list the root; clear stale once loaded.
         void this.loadDir("", true).then(() => {
           this.stale = false;
         });
       });
+      unlisteners.push(unlistenStale);
+      watcherUnlisteners = unlisteners;
     },
 
     async stopWatching() {
+      for (const unlisten of watcherUnlisteners.splice(0)) {
+        try {
+          unlisten();
+        } catch {
+          // noop
+        }
+      }
       try {
         await workspaceWatchStop();
       } catch {
@@ -121,20 +180,114 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
       }
     },
 
+    /** Update unattributed state and refresh/drop affected directory caches. */
+    handleWorkspaceChanges(changes: WorkspaceChangeBatch["changes"]) {
+      const parents = new Set<string>();
+      for (const c of changes) {
+        this.unattributed[c.relative_path] = c.change_type;
+        const idx = c.relative_path.lastIndexOf("/");
+        const parent = idx >= 0 ? c.relative_path.slice(0, idx) : "";
+        parents.add(parent);
+      }
+      this.applyChangeStates();
+      // Immediately re-list loaded parent dirs so new files appear without
+      // a manual refresh; unexpanded dirs just drop their cache. The root
+      // ("") is always loaded and must never be deleted by a change event.
+      const reloadTasks: Promise<void>[] = [];
+      for (const parent of parents) {
+        if (this.tree[parent] && (parent === "" || this.expanded.has(parent))) {
+          reloadTasks.push(this.loadDir(parent, true));
+        } else if (parent !== "") {
+          delete this.tree[parent];
+          delete this.nextCursors[parent];
+          delete this.truncatedDirs[parent];
+        }
+      }
+      // A newly-created folder may not be watched recursively on all
+      // platforms. List it once immediately after its parent reloaded so
+      // files created inside it also become visible without manual refresh.
+      void Promise.all(reloadTasks).then(() => this.loadNewCreatedDirs());
+    },
+
+    /** Re-apply watcher-derived change_state to every loaded tree node. */
+    applyChangeStates() {
+      for (const list of Object.values(this.tree)) {
+        for (const node of list) {
+          const change = this.unattributed[node.relative_path];
+          if (change) {
+            node.change_state = change;
+          }
+        }
+      }
+    },
+
     /** Lazily load a directory's children. No-op if already loaded or loading. */
-    async loadDir(dir: string, force = false) {
+    async loadDir(dir: string, force = false, markCreated = false) {
       if (!this.workspace) return;
       if (this.loading[dir]) return;
       if (!force && this.tree[dir]) return;
+      const previous = this.tree[dir] ?? [];
+      const previousPaths = new Set(previous.map((n) => n.relative_path));
       this.loading[dir] = true;
       this.errors[dir] = "";
       try {
-        const result = await workspaceList(this.workspace, dir);
+        const result = await workspaceList(this.workspace, dir, null);
         this.tree[dir] = result.nodes;
+        this.nextCursors[dir] = result.next_cursor;
+        this.truncatedDirs[dir] = result.truncated;
+        // When this is a forced refresh of an already-loaded directory, mark
+        // paths that appeared/disappeared since the last listing so the
+        // Artifacts panel can surface them even if the live watcher missed the
+        // event (e.g. the Explorer was hidden or the app just started).
+        if (force && previous.length > 0) {
+          const currentPaths = new Set(result.nodes.map((n) => n.relative_path));
+          for (const path of currentPaths) {
+            if (!previousPaths.has(path) && !this.unattributed[path]) {
+              this.unattributed[path] = "created";
+            }
+          }
+          for (const path of previousPaths) {
+            if (!currentPaths.has(path) && !this.unattributed[path]) {
+              this.unattributed[path] = "deleted";
+            }
+          }
+        } else if (markCreated && previous.length === 0) {
+          // This directory itself is newly created: its immediate children are
+          // new to the user too, so surface them as unattributed immediately.
+          for (const node of result.nodes) {
+            if (!this.unattributed[node.relative_path]) {
+              this.unattributed[node.relative_path] = "created";
+            }
+          }
+        }
+        this.applyChangeStates();
       } catch (e) {
         this.errors[dir] = String(e);
       } finally {
         this.loading[dir] = false;
+      }
+    },
+
+    /** Load the next page for an already-listed directory. */
+    async loadMore(dir: string) {
+      if (!this.workspace) return;
+      if (this.loadingMore[dir]) return;
+      const cursor = this.nextCursors[dir];
+      if (!cursor) return;
+      this.loadingMore[dir] = true;
+      try {
+        const result = await workspaceList(this.workspace, dir, cursor);
+        const existing = this.tree[dir] ?? [];
+        const seen = new Set(existing.map((n) => n.relative_path));
+        const fresh = result.nodes.filter((n) => !seen.has(n.relative_path));
+        this.tree[dir] = [...existing, ...fresh];
+        this.nextCursors[dir] = result.next_cursor;
+        this.truncatedDirs[dir] = result.truncated;
+        this.applyChangeStates();
+      } catch (e) {
+        this.errors[dir] = String(e);
+      } finally {
+        this.loadingMore[dir] = false;
       }
     },
 
@@ -149,22 +302,102 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
       }
     },
 
-    async refreshRoot() {
-      await this.loadDir("", true);
-      await this.loadArtifacts();
+    async refreshArtifacts() {
+      if (this.workspace) {
+        try {
+          await artifactRefresh(this.workspace);
+        } catch {
+          // refresh is best-effort; the existing index may still be usable
+        }
+      }
+      await this.loadArtifacts(true);
     },
 
-    async loadArtifacts() {
+    async refreshRoot() {
+      // Run artifact refresh and the root listing concurrently so the tree is
+      // not blocked behind index import (large registries can be slow).
+      await Promise.all([
+        this.refreshArtifacts(),
+        this.loadDir("", true),
+      ]);
+    },
+
+    /** Poll loaded/expanded directories as a realtime fallback when the
+     *  native watcher is not delivering events reliably. The directory
+     *  diff logic keeps this cheap: only changed dirs produce UI work. */
+    async pollLoadedDirs() {
+      if (!this.workspace || this.stale) return;
+      const dirs = new Set<string>([""]);
+      for (const dir of this.expanded) {
+        dirs.add(dir);
+      }
+      const tasks: Promise<void>[] = [];
+      for (const dir of dirs) {
+        if (this.tree[dir] && !this.loading[dir]) {
+          tasks.push(this.loadDir(dir, true));
+        }
+      }
+      await Promise.all(tasks);
+      await this.loadNewCreatedDirs();
+    },
+
+    /** Recursively list newly-created directories (bounded depth) so files
+     *  created inside a just-created folder appear without manual refresh. */
+    async loadNewCreatedDirs() {
       if (!this.workspace) return;
+      for (let round = 0; round < 8; round += 1) {
+        const pending: string[] = [];
+        for (const list of Object.values(this.tree)) {
+          for (const node of list) {
+            if (
+              node.kind === "dir" &&
+              this.unattributed[node.relative_path] === "created" &&
+              !this.tree[node.relative_path] &&
+              !this.loading[node.relative_path]
+            ) {
+              pending.push(node.relative_path);
+            }
+          }
+        }
+        if (pending.length === 0) break;
+        await Promise.all(
+          pending.map((dir) => this.loadDir(dir, false, true)),
+        );
+      }
+    },
+
+    async loadArtifacts(force = false) {
+      if (!this.workspace) return;
+      if (this.artifactsLoading) return;
+      if (!force && this.artifacts.length > 0 && this.artifactsNextCursor === null) return;
       this.artifactsLoading = true;
       this.artifactsError = null;
       try {
         const result = await artifactList();
         this.artifacts = result.artifacts;
+        this.artifactsNextCursor = result.next_cursor;
       } catch (e) {
         this.artifactsError = String(e);
       } finally {
         this.artifactsLoading = false;
+      }
+    },
+
+    async loadMoreArtifacts() {
+      if (!this.workspace) return;
+      if (this.artifactsLoadingMore) return;
+      if (this.artifactsNextCursor === null) return;
+      this.artifactsLoadingMore = true;
+      try {
+        const result = await artifactList(null, this.artifactsNextCursor);
+        const seen = new Set(this.artifacts.map((a) => a.artifact_id));
+        const fresh = result.artifacts.filter((a) => !seen.has(a.artifact_id));
+        this.artifacts = [...this.artifacts, ...fresh];
+        this.artifactsNextCursor = result.next_cursor;
+      } catch (e) {
+        this.artifactsError = String(e);
+      } finally {
+        this.artifactsLoadingMore = false;
       }
     },
 
