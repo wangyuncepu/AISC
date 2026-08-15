@@ -536,7 +536,7 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
                 claude_env["ANTHROPIC_BASE_URL"],
                 "https://api.deepseek.com/anthropic",
             )
-            self.assertEqual(claude_env["ANTHROPIC_MODEL"], "deepseek-v4-flash")
+            self.assertEqual(claude_env["ANTHROPIC_MODEL"], "deepseek-v4-pro[1m]")
             self.assertEqual(
                 claude_env["ANTHROPIC_API_KEY"], "sk-user-claude-secret"
             )
@@ -546,7 +546,7 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
             # Codex: new model + wire_api=chat, old responses gone, api_key +
             # auth mirror preserved, is_current preserved.
             codex_sc = json.loads(rows["codex"][0])
-            self.assertIn('model = "deepseek-v4-flash"', codex_sc["config"])
+            self.assertIn('model = "deepseek-v4-pro"', codex_sc["config"])
             self.assertIn('wire_api = "chat"', codex_sc["config"])
             self.assertNotIn('wire_api = "responses"', codex_sc["config"])
             self.assertIn(

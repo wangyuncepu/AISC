@@ -18,10 +18,18 @@ PRESET_PROVIDERS = [
     {
         "id": "deepseek",
         "name": "DeepSeek",
-        "base_url": "https://api.deepseek.com/v1",
+        # Per api-docs.deepseek.com (2026-08): the OpenAI-compatible base URL is
+        # https://api.deepseek.com (the legacy /v1 alias also works); the
+        # Anthropic-compatible endpoint is https://api.deepseek.com/anthropic.
+        "base_url": "https://api.deepseek.com",
         "anthropic_base_url": "https://api.deepseek.com/anthropic",
-        "model": "deepseek-v4-flash",
-        "description": "DeepSeek V4 series; flash default, switch to v4-pro for peak reasoning",
+        # Primary model for both the OpenAI and Anthropic endpoints.
+        "model": "deepseek-v4-pro",
+        # Claude Code's ANTHROPIC_MODEL per the docs (opus-equivalent; the
+        # [1m] context variant is what the docs recommend for Claude Code).
+        "anthropic_model": "deepseek-v4-pro[1m]",
+        "description": "DeepSeek V4; deepseek-v4-pro primary (Claude Code opus-equivalent), "
+                       "deepseek-v4-flash for fast/cheap reasoning",
     },
     {
         "id": "volcengine-ark",
@@ -111,8 +119,12 @@ def _settings_config(
         # present so Claude Code speaks the Messages API to the right URL.
         base_url = provider.get("anthropic_base_url") or provider["base_url"]
         env = {"ANTHROPIC_BASE_URL": base_url}
-        if provider["model"]:
-            env["ANTHROPIC_MODEL"] = provider["model"]
+        # A provider may expose a Claude-specific model name (e.g. DeepSeek's
+        # docs recommend deepseek-v4-pro[1m] for Claude Code) distinct from the
+        # OpenAI model used by codex; prefer it when present.
+        claude_model = provider.get("anthropic_model") or provider["model"]
+        if claude_model:
+            env["ANTHROPIC_MODEL"] = claude_model
         return {"env": env}
 
     if agent == "codex":
