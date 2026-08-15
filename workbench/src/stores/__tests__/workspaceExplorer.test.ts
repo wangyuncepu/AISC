@@ -5,6 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useWorkspaceExplorerStore } from "../workspaceExplorer";
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
 vi.mock("../../lib/ipc", () => ({
   workspaceList: vi.fn(async (_ws: string, dir: string) => ({
     schema_version: 1,
@@ -31,6 +34,8 @@ vi.mock("../../lib/ipc", () => ({
   }),
   workspaceReveal: vi.fn().mockResolvedValue(undefined),
   workspaceCopyPath: vi.fn().mockResolvedValue({ relative_path: "a.md", absolute_path: "/ws/a.md" }),
+  workspaceWatchStart: vi.fn().mockResolvedValue(undefined),
+  workspaceWatchStop: vi.fn().mockResolvedValue(undefined),
   artifactList: vi.fn().mockResolvedValue({
     schema_version: 1,
     artifacts: [
