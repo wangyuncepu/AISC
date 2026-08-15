@@ -31,3 +31,21 @@
 
 Sidecar 三平台构建/manifest/parity/SBOM 已接入 `cli-sidecar.yml`；真实 Workbench GUI 集成手测由用户在 PR CI 绿后执行。
 
+## GUI 手测证据（2026-08-15，Windows 11 x86_64）
+
+前置：`binaries/` 与 `target/debug/` 的 sidecar 替换为新构建 `2.1.5.dev0`（PEP 440）；关闭旧 Workbench 释放文件锁后 `npm run tauri dev`。
+
+| 步骤 | 期望 | 结果 |
+|---|---|---|
+| 应用启动不阻塞（sidecar 能力协商） | 进入主界面，无阻塞页 | ✅ PASS |
+| Bash tab 终端就绪、命令回显 | `echo gui_ok_$((6*7))` → `gui_ok_42` | ✅ PASS |
+| 容器内命令执行 | 输出正常 | ✅ PASS |
+| Ctrl+C 中断 / `seq 1 1000000` 截断提示条 | 不冻结、提示条可见 | ✅ PASS |
+| Claude/Codex tab provider 状态 | 正确显示，不误报 | ✅ PASS |
+| Runtime 启动/停止 | preflight 通过、停止干净 | ✅ PASS |
+| 运行中 sidecar 版本 | `target/debug/aisc.exe` = `2.1.5.dev0` | ✅ PASS |
+
+注：容器内 `aisc` 命令不存在属预期（aisc 为宿主 sidecar，容器仅含 `aisc-session-wrapper`/`aisc-provider-inspect`）。
+
+**阶段结论：CLI-A01～CLI-A08 全 PASS + GUI 手测 PASS + develop 全 workflow CI 绿（workbench-ci / cli-sidecar 三平台 / bundle / nsis），Stage 2 完整收口。**
+
