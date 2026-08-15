@@ -32,6 +32,7 @@ import BuildProgress from "./features/startup/BuildProgress.vue";
 import ConflictManager from "./features/startup/ConflictManager.vue";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import DoctorDialog from "./features/doctor/DoctorDialog.vue";
+import WorkspaceExplorer from "./features/workspace-explorer/WorkspaceExplorer.vue";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
@@ -42,6 +43,7 @@ const providerPolling = useProviderPolling();
 
 // Step 3: settings dialog entry (keyboard-reachable topbar button).
 const settingsOpen = ref(false);
+const showExplorer = ref(false);
 
 // G-01 (Step 7, A-G01-3): ui.font_scale is immediate-effect. Applied as CSS
 // zoom on the UI chrome (topbar/picker/summary/sidebar/tabbar/dialog); the
@@ -503,6 +505,14 @@ function selectRecent(path: string): void {
     <!-- Terminal workspace -->
     <div v-else-if="store.status === 'ready'" class="ready">
       <RuntimeSidebar />
+      <button
+        class="explorer-toggle"
+        :title="t('explorer.tab.files')"
+        :aria-pressed="showExplorer"
+        @click="showExplorer = !showExplorer"
+      >
+        ☰
+      </button>
       <div class="main">
         <TabBar />
         <main class="terminal-area">
@@ -525,6 +535,8 @@ function selectRecent(path: string): void {
           </div>
         </main>
       </div>
+      <!-- Stage 3 (3c): Workspace Explorer + Agent Artifacts rail -->
+      <WorkspaceExplorer v-if="showExplorer" class="explorer-rail" />
     </div>
 
     <!-- Error -->
@@ -627,6 +639,25 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
 .diagnose { background: var(--info-bg); border-color: var(--info-border); }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: var(--bg); display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
+.explorer-toggle {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 12px;
+}
+.explorer-rail {
+  width: 300px;
+  flex: none;
+  min-height: 0;
+  border-left: 1px solid var(--border-strong);
+  background: var(--surface);
+  display: flex;
+}
 .empty-tabs {
   /* fill the terminal-area row so internal centering is global, not the
      content-width box anchored at the left edge (G-17 feedback 2026-08-10) */

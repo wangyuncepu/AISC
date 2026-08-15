@@ -256,6 +256,21 @@ export const zhCN = {
   "runtime.dockerTimeout": "Docker 引擎启动超时，请手动打开 Docker Desktop",
   "runtime.pickCli": "选择 AISC CLI 可执行文件",
   "runtime.pickWorkspace": "选择工作区目录",
+
+  // --- workspace explorer (Stage 3, 3c) ---
+  "explorer.tab.files": "文件",
+  "explorer.tab.artifacts": "产物",
+  "explorer.refresh": "刷新",
+  "explorer.stale": "文件状态可能已过期，已执行受限重扫。",
+  "explorer.empty.workspace": "请先选择工作区。",
+  "explorer.empty.artifacts": "Agent 生成可交付文件后会显示在这里。",
+  "explorer.loading": "加载中…",
+  "explorer.artifacts.deliverables": "可交付文件",
+  "explorer.open": "打开",
+  "explorer.reveal": "在文件管理器中显示",
+  "explorer.copy": "复制路径",
+  "explorer.preview.truncated": "预览已截断",
+  "explorer.preview.unsupported": "此文件类型不支持预览，可用系统应用打开。",
 } as const;
 
 export type ZhKey = keyof typeof zhCN;

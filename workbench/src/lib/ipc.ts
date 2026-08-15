@@ -151,3 +151,45 @@ export const trayAvailable = () => invoke<boolean>("tray_available");
 /** Hide the tray icon immediately after the exit confirm passes (the window
  * already hides instantly; cleanup continues in the background). */
 export const trayRemove = () => invoke<void>("tray_remove");
+
+// --- Stage 3 (3c): Workspace Explorer + Agent Artifacts ---
+
+export const artifactList = (kind: string | null = null, cursor: number | null = null) =>
+  invoke<import("../types").ArtifactListResult>("artifact_list", { kind, cursor });
+
+export const artifactInspect = (artifactId: string) =>
+  invoke<import("../types").ArtifactInspectResult>("artifact_inspect", { artifactId });
+
+export const artifactRefresh = (workspace: string) =>
+  invoke<unknown>("artifact_refresh", { workspace });
+
+export const workspaceList = (
+  workspace: string,
+  relativeDir: string,
+  cursor: string | null = null,
+  includeIgnored = false,
+) =>
+  invoke<import("../types").WorkspaceListResult>("workspace_list", {
+    workspace,
+    relativeDir,
+    cursor: cursor ? Number(cursor) : null,
+    includeIgnored,
+  });
+
+export const workspaceOpen = (workspace: string, relativePath: string) =>
+  invoke<void>("workspace_open", { workspace, relativePath });
+
+export const workspacePreview = (workspace: string, relativePath: string) =>
+  invoke<import("../types").WorkspacePreviewResult>("workspace_preview", {
+    workspace,
+    relativePath,
+  });
+
+export const workspaceReveal = (workspace: string, relativePath: string) =>
+  invoke<void>("workspace_reveal", { workspace, relativePath });
+
+export const workspaceCopyPath = (workspace: string, relativePath: string) =>
+  invoke<import("../types").WorkspaceCopyResult>("workspace_copy_path", {
+    workspace,
+    relativePath,
+  });

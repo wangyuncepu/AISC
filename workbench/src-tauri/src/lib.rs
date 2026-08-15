@@ -22,6 +22,7 @@ pub mod workspace;
 
 use artifact::{artifact_inspect, artifact_list, artifact_refresh};
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
+use workspace::{workspace_copy_path, workspace_list, workspace_open, workspace_preview, workspace_reveal};
 use doctor::run_doctor;
 use history::{load_history, save_history};
 use locale::resolve_locale;
@@ -87,6 +88,11 @@ pub fn run(cli_arg: Option<String>) {
             artifact_list,
             artifact_inspect,
             artifact_refresh,
+            workspace_list,
+            workspace_open,
+            workspace_preview,
+            workspace_reveal,
+            workspace_copy_path,
         ])
         .on_window_event(|window, event| {
             // G-16: intercept CloseRequested on the main window. Both behaviors

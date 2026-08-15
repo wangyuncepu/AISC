@@ -459,3 +459,62 @@ export interface SaveOutcome {
   revision: number;
   issues: ValidationIssue[];
 }
+
+// --- Stage 3 (3c): Workspace Explorer + Agent Artifacts ---
+
+export interface ArtifactRecord {
+  schema_version: number;
+  artifact_id: string;
+  workspace_relative_path: string;
+  action: "created" | "modified" | "deleted" | "renamed";
+  kind: "deliverable" | "source_change" | "generated_output";
+  media_type: string | null;
+  label: string;
+  open_with: "preview" | "system" | "reveal" | "none";
+  producer: { agent: string; session_id: string; runtime_id: string };
+  state: "present" | "deleted" | "moved" | "missing";
+  provenance: "manifest" | "workspace_change";
+  recorded_at: string;
+  previous_path: string | null;
+  extra: Record<string, unknown>;
+}
+
+export interface ArtifactListResult {
+  schema_version: number;
+  artifacts: ArtifactRecord[];
+  next_cursor: number | null;
+}
+
+export interface ArtifactInspectResult {
+  artifact: ArtifactRecord;
+}
+
+export interface WorkspaceNode {
+  relative_path: string;
+  name: string;
+  kind: "dir" | "file";
+  expandable: boolean;
+  artifact_badges: string[];
+  change_state: string;
+}
+
+export interface WorkspaceListResult {
+  schema_version: number;
+  nodes: WorkspaceNode[];
+  next_cursor: string | null;
+  truncated: boolean;
+}
+
+export interface WorkspacePreviewResult {
+  relative_path: string;
+  media_type: string;
+  size: number;
+  text: string | null;
+  base64: string | null;
+  truncated: boolean;
+}
+
+export interface WorkspaceCopyResult {
+  relative_path: string;
+  absolute_path: string;
+}
