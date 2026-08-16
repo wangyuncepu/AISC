@@ -1,7 +1,22 @@
 # Stage 4 验收台账
 
-- `A-DG01-1` 新旧 Protocol/alias 注入和 Fake API 兼容。
-- `A-DG02-1` operation/result/error/timeout/cancel/cleanup 字段稳定。
+> 平台：Windows 11 / x86_64，Python 3.14，docker SDK 7.2.0。分支 `stage-4-docker-gateway`。
+
+## 4a-contract（进行中）
+
+- `A-DG01-1` **PASS**
+  - Commit：`<4a commit>`（`docker_gateway.py` + `domain/gateway.py` + `test_docker_gateway_contract.py`）
+  - 证据：`DockerGateway` runtime Protocol（`preflight/inspect_image/list_containers/inspect_container/start/stop/remove/wait/open_interactive/build_image`）；`DockerExecutor = DockerGateway` 兼容别名（`GatewayAliasTests.test_docker_executor_is_docker_gateway_alias`）；Fake/注入沿用 `client`/`executor` 参数。
+  - 步骤：import gateway；`create_docker_gateway('cli'|'sdk'|'auto')` 各返回正确 backend；`DockerExecutor is DockerGateway`。
+  - 结果：11 passed（`tests/test_docker_gateway_contract.py`）；全库 pytest 474 passed。
+  - 结论：PASS
+
+- `A-DG02-1` **PASS**
+  - Commit：`<4a commit>`
+  - 证据：`domain/gateway.py` 的 `GatewayOperation`（operation_id/backend/exit_code/duration_ms/error_code/error_message/cleanup_status/timed_out）+ `GatewayResult`/`PreflightResult`/`ImageInspectGatewayResult`/`ContainerListResult`/`ContainerInspectResult`/`LifecycleResult`/`InteractiveResult`/`BuildResult`；`OperationEnvelopeTests` 验证字段与 `ok`/`timed_out` 语义。
+  - 步骤：构造带 error/duration/cleanup 的 operation，断言字段存在且 `ok` 语义正确。
+  - 结果：通过。
+  - 结论：PASS
 - `A-DG03-1` query/lifecycle SDK 与 CLI 结果等价。
 - `A-DG04-1` interactive resize/input/output/cancel/reap 无资源泄漏。
 - `A-DG05-1` Build CLI baseline 有 p50/p95/max；SDK 迁移有明确 GO/NO-GO。
