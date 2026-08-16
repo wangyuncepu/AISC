@@ -53,6 +53,19 @@ const showOnboarding = computed(
   () => onboardingStore.loaded && !onboardingStore.isFinished,
 );
 
+// Stage 5 (ONB-07): once the wizard finishes, negotiate the main app (it was
+// deferred during onboarding so the fresh-install gate never flashes).
+watch(
+  () => onboardingStore.isFinished,
+  (finished) => {
+    // Deferred during onboarding; negotiate once the wizard completes and the
+    // app has not already negotiated.
+    if (finished && store.status === "idle") {
+      store.negotiate();
+    }
+  },
+);
+
 // Stage 3: keep the workspace watcher alive even when the Explorer rail is
 // hidden, so agent-created files are captured while the panel is closed.
 watch(
@@ -340,9 +353,16 @@ async function runExitFlow(): Promise<void> {
 }
 
 onMounted(() => {
-  store.negotiate();
-  // Stage 5 (ONB-01): load onboarding state to decide the first-run gate.
-  void onboardingStore.load();
+  // Stage 5 (ONB-07): decide the first-run gate BEFORE negotiating the main
+  // app, so a fresh install does not flash the blocked/error gate while the
+  // wizard is about to cover it (observed 2026-08-16: first launch showed
+  // "启动失败" for a frame; restart was fine). When onboarding is active, the
+  // wizard is the only surface — the main app negotiates after it finishes.
+  void (async () => {
+    await onboardingStore.load();
+    if (!onboardingStore.isFinished) return; // wizard handles startup
+    store.negotiate();
+  })();
   // G-09 (02 §3.1): resolve + apply the locale in parallel with capability
   // negotiation - language resolution never blocks it.
   void (async () => {

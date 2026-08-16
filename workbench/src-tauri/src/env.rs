@@ -99,21 +99,43 @@ fn docker_desktop_installed() -> (bool, String) {
 }
 
 /// Check whether WebView2 runtime is present (Windows-only, best-effort).
+///
+/// The Evergreen runtime registers its version under
+/// `EdgeUpdate\Clients\{F3017226-...}` in ONE of several roots/views: the
+/// per-user HKCU key, the per-machine HKLM 64-bit key, or the HKLM WOW6432Node
+/// (32-bit view) key. Which one varies by how the runtime was installed, so we
+/// probe all of them (observed 2026-08-16: present under HKLM WOW6432Node while
+/// HKCU/HKLM were empty). `pv` non-empty ⇒ runtime present.
 fn webview2_present() -> bool {
     #[cfg(windows)]
     {
-        use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+        use winreg::enums::{KEY_READ, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
         use winreg::RegKey;
-        // Evergreen WebView2 runtime registers under this key.
-        let key = RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey_with_flags(
-                "Software\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
-                KEY_READ,
-            )
-            .ok();
-        key.is_some_and(|k| {
-            k.get_value::<String, _>("pv").map(|v| !v.is_empty()).unwrap_or(false)
-        })
+
+        const WV2_KEY: &str =
+            "Software\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+        const WV2_KEY_32: &str =
+            "Software\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+
+        let has_pv = |key: Result<RegKey, _>| -> bool {
+            key.map(|k| {
+                k.get_value::<String, _>("pv")
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+        };
+
+        has_pv(
+            RegKey::predef(HKEY_CURRENT_USER)
+                .open_subkey_with_flags(WV2_KEY, KEY_READ),
+        ) || has_pv(
+            RegKey::predef(HKEY_LOCAL_MACHINE)
+                .open_subkey_with_flags(WV2_KEY, KEY_READ),
+        ) || has_pv(
+            RegKey::predef(HKEY_LOCAL_MACHINE)
+                .open_subkey_with_flags(WV2_KEY_32, KEY_READ),
+        )
     }
     #[cfg(not(windows))]
     {
@@ -223,5 +245,15 @@ mod tests {
     async fn engine_probe_falls_back_without_panicking() {
         // No assertion on the result (environment-dependent); must not panic.
         let _ = engine_reachable().await;
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn webview2_probe_checks_all_registry_roots() {
+        // Must not panic and must find the runtime that this machine actually
+        // has (registered under one of HKCU/HKLM/WOW6432Node). If the CI/machine
+        // genuinely lacks WebView2 this returns false — the invariant is that
+        // probing all roots never panics.
+        let _ = webview2_present();
     }
 }

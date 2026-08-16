@@ -59,11 +59,14 @@ describe("environment store (A-ONB02)", () => {
     expect(s.allReady).toBe(false);
   });
 
-  it("startDocker delegates and surfacing errors", async () => {
+  it("startDocker delegates and clears installing after success", async () => {
     vi.mocked(startDocker).mockResolvedValue(undefined);
     const s = useEnvironmentStore();
-    await s.startDocker();
+    const p = s.startDocker();
+    expect(s.installing).toBe(true); // shows "Installing Docker Desktop…"
+    await p;
     expect(startDocker).toHaveBeenCalledTimes(1);
+    expect(s.installing).toBe(false);
     expect(s.error).toBeNull();
   });
 

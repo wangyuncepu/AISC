@@ -539,10 +539,11 @@ pub async fn start_docker() -> Result<(), WorkbenchError> {
                 return Ok(());
             }
         }
-        // Missing → silently install via winget (Stage 5, A-ONB02/B):
-        // the first-run wizard's "Start Docker" must also cover install, not
-        // just launch. Only for interactive sessions; no shell=True anywhere.
-        match install_docker_desktop_winget() {
+        // Missing → install via winget (awaited, bounded; Stage 5 A-ONB02/B):
+        // the first-run wizard's "Start Docker" must cover install, not just
+        // launch. No shell=True anywhere. Returns a real error on failure so
+        // the wizard can show it instead of silently timing out.
+        match install_docker_desktop_winget().await {
             Ok(()) => Ok(()),
             Err(e) => Err(WorkbenchError::cli_protocol().with_detail(format!(
                 "Docker Desktop not found and automatic install failed: {e}"
@@ -595,16 +596,20 @@ fn winget_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Silently install Docker Desktop via winget (Stage 5, A-ONB02/B). Non-blocking:
-/// spawns the installer detached so the wizard's readiness poll can watch the
-/// install progress (installed → starting → ready). Returns Ok once the install
-/// process has been started; errors when winget is unavailable or cannot spawn.
+/// Timeout for the winget Docker Desktop install (can be a large download).
+const DOCKER_INSTALL_TIMEOUT: Duration = Duration::from_secs(600); // 10 min
+
+/// Install Docker Desktop via winget (Stage 5, A-ONB02/B). **Awaits completion**
+/// (bounded by `DOCKER_INSTALL_TIMEOUT`) so the caller can report a real
+/// result instead of fire-and-forget — the wizard shows "installing" while
+/// awaiting and a clear failure on error. Console window is hidden. Returns
+/// Ok only when Docker Desktop.exe exists afterward.
 #[cfg(windows)]
-fn install_docker_desktop_winget() -> Result<(), String> {
+async fn install_docker_desktop_winget() -> Result<(), String> {
     if !winget_available() {
         return Err("winget (App Installer) not available".into());
     }
-    let mut cmd = std::process::Command::new("winget");
+    let mut cmd = tokio::process::Command::new("winget");
     cmd.args([
         "install",
         "--id", "Docker.DockerDesktop",
@@ -615,14 +620,27 @@ fn install_docker_desktop_winget() -> Result<(), String> {
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());
     cmd.stdin(std::process::Stdio::null());
-    // Detached: the installer runs in its own process; we return immediately
-    // so the UI can poll. The child is not a child of our process group.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x00000008 /* DETACHED_PROCESS */);
+    // Hide the console window entirely: `CREATE_NO_WINDOW` (0x08000000) stops
+    // winget (a console app) from flashing a terminal box when spawned from the
+    // GUI process (observed 2026-08-16). `DETACHED_PROCESS` alone can still
+    // open a console. tokio's Command exposes creation_flags inherently.
+    cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let result = tokio::time::timeout(DOCKER_INSTALL_TIMEOUT, child.wait()).await;
+    match result {
+        Ok(Ok(status)) if status.success() => {
+            // Confirm the exe appeared (install success even if the post-step
+            // launch is not immediate).
+            if docker_desktop_candidates().iter().any(|p| p.exists()) {
+                Ok(())
+            } else {
+                Err("winget reported success but Docker Desktop.exe was not found".into())
+            }
+        }
+        Ok(Ok(status)) => Err(format!("winget install failed (exit {:?})", status.code())),
+        Ok(Err(e)) => Err(format!("winget install error: {e}")),
+        Err(_) => Err("winget install timed out after 10 minutes".into()),
     }
-    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

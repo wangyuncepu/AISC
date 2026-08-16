@@ -207,14 +207,16 @@ async function finish() {
         <button
           v-if="environment.dockerInstalling"
           class="ob-btn primary"
-          :disabled="environment.polling"
+          :disabled="environment.polling || environment.installing"
           @click="startDocker"
         >
-          {{ environment.polling
-            ? t("onboarding.env.starting")
-            : environment.readiness.docker === "not_installed"
-              ? t("onboarding.env.installDocker")
-              : t("onboarding.env.startDocker") }}
+          {{ environment.installing
+            ? t("onboarding.env.installingDocker")
+            : environment.polling
+              ? t("onboarding.env.starting")
+              : environment.readiness.docker === "not_installed"
+                ? t("onboarding.env.installDocker")
+                : t("onboarding.env.startDocker") }}
         </button>
         <button class="ob-btn ghost" :disabled="environment.loading" @click="retryEnv">
           {{ t("onboarding.env.retry") }}

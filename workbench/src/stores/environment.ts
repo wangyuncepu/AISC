@@ -24,6 +24,9 @@ export const useEnvironmentStore = defineStore("environment", () => {
   const readiness = ref<EnvReadiness>(EMPTY);
   const loading = ref(false);
   const polling = ref(false);
+  /** True while start_docker is actually installing Docker Desktop (winget
+   *  download) — distinct from `polling` (which waits for the engine). */
+  const installing = ref(false);
   const error = ref<string | null>(null);
 
   const engineReady = computed(() => readiness.value.engine === "ready");
@@ -54,10 +57,16 @@ export const useEnvironmentStore = defineStore("environment", () => {
   }
 
   async function startDocker() {
+    installing.value = true;
+    error.value = null;
     try {
+      // start_docker awaits the winget install (bounded ~10 min) and returns
+      // a real error on failure; success means Docker Desktop.exe exists.
       await ipc.startDocker();
     } catch (e) {
       error.value = (e as { message?: string })?.message ?? String(e);
+    } finally {
+      installing.value = false;
     }
   }
 
@@ -80,6 +89,7 @@ export const useEnvironmentStore = defineStore("environment", () => {
     readiness,
     loading,
     polling,
+    installing,
     error,
     engineReady,
     cliReady,
