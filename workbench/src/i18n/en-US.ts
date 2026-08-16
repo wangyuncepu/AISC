@@ -300,6 +300,7 @@ export const enUS: Record<string, string> = {
   "onboarding.env.engine": "Docker Engine",
   "onboarding.env.webview2": "WebView2",
   "onboarding.env.startDocker": "Start Docker",
+  "onboarding.env.installDocker": "Install and start Docker",
   "onboarding.env.starting": "Waiting for Engine…",
   "onboarding.env.retry": "Re-check",
 

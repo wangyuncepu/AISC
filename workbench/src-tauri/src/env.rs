@@ -52,19 +52,17 @@ impl EnvReadiness {
     }
 }
 
-/// Candidate paths for the Docker Desktop executable (same set as `start_docker`).
-fn docker_desktop_candidates() -> Vec<PathBuf> {
-    let mut out = Vec::new();
+/// Candidate paths for the Docker Desktop executable. Single source lives in
+/// `runtime::docker_desktop_candidates` (shared with `start_docker`).
+pub(crate) fn docker_desktop_candidates() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
-        if let Ok(base) = std::env::var("LOCALAPPDATA") {
-            out.push(PathBuf::from(base).join("Docker\\Docker Desktop\\Docker Desktop.exe"));
-        }
-        if let Ok(pf) = std::env::var("ProgramFiles") {
-            out.push(PathBuf::from(pf).join("Docker\\Docker\\Docker Desktop.exe"));
-        }
+        crate::runtime::docker_desktop_candidates()
     }
-    out
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
 }
 
 /// Probe whether the Docker Engine is reachable, with a bounded timeout.

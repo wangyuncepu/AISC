@@ -30,10 +30,13 @@ export const useEnvironmentStore = defineStore("environment", () => {
   const cliReady = computed(() => readiness.value.cli === "ready");
   /** Everything the onboarding needs is ready. */
   const allReady = computed(() => cliReady.value && engineReady.value);
-  /** Docker Desktop present but Engine not answering yet. */
+  /** Docker Desktop missing or installed but Engine not answering yet — the
+   *  "Start Docker" action should offer to install (winget) and/or launch. */
   const dockerInstalling = computed(
     () =>
-      readiness.value.docker === "installed" && readiness.value.engine !== "ready",
+      (readiness.value.docker === "installed" ||
+        readiness.value.docker === "not_installed") &&
+      readiness.value.engine !== "ready",
   );
 
   async function refresh(): Promise<EnvReadiness> {

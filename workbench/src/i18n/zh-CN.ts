@@ -300,6 +300,7 @@ export const zhCN = {
   "onboarding.env.engine": "Docker 引擎",
   "onboarding.env.webview2": "WebView2",
   "onboarding.env.startDocker": "启动 Docker",
+  "onboarding.env.installDocker": "安装并启动 Docker",
   "onboarding.env.starting": "等待引擎…",
   "onboarding.env.retry": "重新检查",
 

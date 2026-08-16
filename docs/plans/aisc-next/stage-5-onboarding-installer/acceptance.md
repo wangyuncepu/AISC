@@ -22,6 +22,7 @@
   - 步骤：env 就绪探测；Docker 未装→not_installed、装而未起→starting、起来→ready；Start Docker 后 30s 轮询；超时保留 retry。
   - 结果：Rust 4 + TS store 5 + wizard 2 相关测试；全库 Rust 183 / TS 191。
   - 结论：PASS
+  - 增强（B，A-ONB02）：`start_docker` 在 exe 缺失时经 winget 静默安装 Docker Desktop（`--accept-* --disable-interactivity`，DETACHED_PROCESS 不阻塞 UI）再启动；向导"Start Docker"在 not_installed 时文案变"安装并启动 Docker"。候选路径与 env 单一来源（`runtime::docker_desktop_candidates`）。Rust 185 / TS 203。
 - `A-ONB03-1` 新建/选择/最近/workspace 恢复与 Stage 3 Explorer 接通。
   - Commit：`7d12f2d`
   - 证据：wizard workspace step 复用 runtime store 的 `recentWorkspaces`（最近列表）、`pickWorkspace`（目录选择）、`selectRecentWorkspace`（恢复），选择后 checkpoint completeStep=workspace → agent；Stage 3 Explorer 在完成向导后由 App.vue 的 workspace watch 接通。

@@ -49,6 +49,16 @@ describe("environment store (A-ONB02)", () => {
     expect(s.allReady).toBe(false);
   });
 
+  it("not_installed docker also triggers install-and-start (A-ONB02/B)", async () => {
+    vi.mocked(envReadiness).mockResolvedValue(
+      ready({ docker: "not_installed", engine: "unavailable" }) as never,
+    );
+    const s = useEnvironmentStore();
+    await s.refresh();
+    expect(s.dockerInstalling).toBe(true);
+    expect(s.allReady).toBe(false);
+  });
+
   it("startDocker delegates and surfacing errors", async () => {
     vi.mocked(startDocker).mockResolvedValue(undefined);
     const s = useEnvironmentStore();

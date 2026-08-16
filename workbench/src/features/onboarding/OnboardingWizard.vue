@@ -210,7 +210,11 @@ async function finish() {
           :disabled="environment.polling"
           @click="startDocker"
         >
-          {{ environment.polling ? t("onboarding.env.starting") : t("onboarding.env.startDocker") }}
+          {{ environment.polling
+            ? t("onboarding.env.starting")
+            : environment.readiness.docker === "not_installed"
+              ? t("onboarding.env.installDocker")
+              : t("onboarding.env.startDocker") }}
         </button>
         <button class="ob-btn ghost" :disabled="environment.loading" @click="retryEnv">
           {{ t("onboarding.env.retry") }}
