@@ -19,15 +19,23 @@ use tauri::AppHandle;
 
 use crate::error::WorkbenchError;
 
-/// Directories skipped by default in the Explorer (dependency/cache/build —
-/// R3-04: a 100k-file fixture must not scan these eagerly).
+/// Directories skipped by default in the Explorer (dependency/cache/build +
+/// container-injected state — R3-04: a 100k-file fixture must not scan these
+/// eagerly; workspace init copies `.claude`/`.codex`/`.cc-switch` into the
+/// mount, and they must not flood the tree or the unattributed projection).
 const DEFAULT_IGNORE: &[&str] = &[
     ".git",
     ".aisc",
+    ".claude",
+    ".codex",
+    ".cc-switch",
+    ".local",
     "node_modules",
     "target",
     "build",
     "dist",
+    "tmp",
+    "temp",
     "__pycache__",
     ".venv",
     "venv",
@@ -73,8 +81,32 @@ pub struct WorkspaceCopyResult {
 
 const LIST_PAGE: usize = 200;
 
-fn is_ignored(name: &str) -> bool {
-    DEFAULT_IGNORE.contains(&name)
+/// True when a name is in the default ignore set OR a user-configured extra
+/// ignore set (the `ui.explorer_ignore` setting). The user set complements the
+/// built-ins: e.g. a workspace that keeps `vendor/` or a scratch dir hidden.
+fn is_ignored(name: &str, extra_ignore: &[String]) -> bool {
+    is_temp_file(name)
+        || DEFAULT_IGNORE.contains(&name)
+        || extra_ignore.iter().any(|n| n == name)
+}
+
+/// Detect atomic-write / editor temp files (`report.md.tmp.1234`, `foo.tmp`,
+/// `foo.temp`, `file~`, `.swp`, `.#file`, `~$lock`). These are transient
+/// writes that tools rename over the real file; they must not pollute the tree
+/// or the unattributed projection. Mirrors the watcher's `is_temp_file`.
+fn is_temp_file(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    if lower.contains(".tmp.") || lower.ends_with(".tmp") || lower.ends_with(".temp") {
+        return true;
+    }
+    name.ends_with('~')
+        || name.ends_with(".swp")
+        || name.ends_with(".swo")
+        || name.starts_with(".#")
+        || name.starts_with("~$")
 }
 
 /// Best-effort media type from the extension (text vs binary).
@@ -97,11 +129,14 @@ fn media_type_for(path: &Path) -> &'static str {
 
 /// Lazy directory listing: one directory at a time, dirs first, stable sort,
 /// paginated, ignoring common dependency/build dirs. Never recurses (R3-04).
+/// `extra_ignore` is the user-configured `ui.explorer_ignore` set, merged with
+/// the built-in defaults so both hide a path at any depth.
 pub fn list_workspace(
     workspace: &Path,
     relative_dir: &str,
     cursor: usize,
     include_ignored: bool,
+    extra_ignore: &[String],
 ) -> Result<WorkspaceListResult, WorkbenchError> {
     let dir = resolve_contained(workspace, relative_dir)?;
     if !dir.is_dir() {
@@ -115,7 +150,7 @@ pub fn list_workspace(
     let mut nodes: Vec<WorkspaceNode> = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !include_ignored && is_ignored(&name) {
+        if !include_ignored && is_ignored(&name, extra_ignore) {
             continue;
         }
         let path = entry.path();
@@ -271,6 +306,19 @@ pub fn copy_path(workspace: &Path, relative: &str) -> Result<WorkspaceCopyResult
 // Tauri commands
 // ---------------------------------------------------------------------------
 
+/// User-configured explorer ignores from the persisted settings document
+/// (`ui.explorer_ignore`). Missing/corrupt settings fall back to empty so the
+/// listing still works; the built-in dependency/build ignore always applies.
+fn explorer_extra_ignore(app: &AppHandle) -> Vec<String> {
+    let Ok(dir) = crate::session::config_dir(app) else {
+        return Vec::new();
+    };
+    match crate::settings::load_settings_document(&dir) {
+        Ok(doc) => doc.ui.explorer_ignore,
+        Err(_) => Vec::new(),
+    }
+}
+
 #[tauri::command]
 pub async fn workspace_list(
     app: AppHandle,
@@ -279,11 +327,15 @@ pub async fn workspace_list(
     cursor: Option<usize>,
     include_ignored: Option<bool>,
 ) -> Result<WorkspaceListResult, WorkbenchError> {
+    // User-configured explorer ignores (`ui.explorer_ignore`) complement the
+    // built-in dependency/build list; read from the persisted settings.
+    let extra_ignore = explorer_extra_ignore(&app);
     let mut result = list_workspace(
         Path::new(&workspace),
         &relative_dir,
         cursor.unwrap_or(0),
         include_ignored.unwrap_or(false),
+        &extra_ignore,
     )?;
 
     // Annotate listed nodes with manifest artifact badges (Stage 3, WX-01):
@@ -358,7 +410,7 @@ mod explorer_tests {
         fs::write(dir.path().join("z_file.txt"), "z").unwrap();
         fs::write(dir.path().join("a_file.txt"), "a").unwrap();
 
-        let res = list_workspace(dir.path(), "", 0, false).unwrap();
+        let res = list_workspace(dir.path(), "", 0, false, &[]).unwrap();
         let names: Vec<&str> = res.nodes.iter().map(|n| n.name.as_str()).collect();
         // dirs first (src), then files sorted; .git and node_modules ignored.
         assert_eq!(names, vec!["src", "a_file.txt", "z_file.txt"]);
@@ -378,7 +430,7 @@ mod explorer_tests {
                 fs::write(path.join("a/b/c/deep").join(format!("f{j:02}.txt")), "x").unwrap();
             }
         }
-        let res = list_workspace(dir.path(), "", 0, false).unwrap();
+        let res = list_workspace(dir.path(), "", 0, false, &[]).unwrap();
         assert_eq!(res.nodes.len(), 200); // exactly the top-level dirs
         assert!(res.nodes.iter().all(|n| n.kind == "dir"));
         // No child of any top-level dir appears.
@@ -391,10 +443,10 @@ mod explorer_tests {
         for i in 0..250 {
             fs::write(dir.path().join(format!("f{i:03}.txt")), "x").unwrap();
         }
-        let page1 = list_workspace(dir.path(), "", 0, false).unwrap();
+        let page1 = list_workspace(dir.path(), "", 0, false, &[]).unwrap();
         assert_eq!(page1.nodes.len(), 200);
         assert!(page1.next_cursor.is_some());
-        let page2 = list_workspace(dir.path(), "", page1.next_cursor.unwrap().parse().unwrap(), false).unwrap();
+        let page2 = list_workspace(dir.path(), "", page1.next_cursor.unwrap().parse().unwrap(), false, &[]).unwrap();
         assert_eq!(page2.nodes.len(), 50);
         assert!(page2.next_cursor.is_none());
     }
@@ -404,9 +456,32 @@ mod explorer_tests {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join("src/sub")).unwrap();
         fs::write(dir.path().join("src/sub/out.txt"), "x").unwrap();
-        let res = list_workspace(dir.path(), "src/sub", 0, false).unwrap();
+        let res = list_workspace(dir.path(), "src/sub", 0, false, &[]).unwrap();
         assert_eq!(res.nodes.len(), 1);
         assert_eq!(res.nodes[0].relative_path, "src/sub/out.txt");
+    }
+
+    #[test]
+    fn listing_hides_transient_temp_files() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("report.md"), "x").unwrap();
+        fs::write(dir.path().join("report.md.tmp.1234"), "x").unwrap();
+        fs::write(dir.path().join("report.md.tmp"), "x").unwrap();
+        fs::write(dir.path().join("notes.md~"), "x").unwrap();
+        let res = list_workspace(dir.path(), "", 0, false, &[]).unwrap();
+        let names: Vec<&str> = res.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["report.md"]);
+    }
+
+    #[test]
+    fn listing_merges_user_exclusions() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("scratch")).unwrap();
+        fs::write(dir.path().join("keep.md"), "x").unwrap();
+        let extra = vec!["scratch".to_string()];
+        let res = list_workspace(dir.path(), "", 0, false, &extra).unwrap();
+        assert_eq!(res.nodes.len(), 1);
+        assert_eq!(res.nodes[0].name, "keep.md");
     }
 
     #[test]

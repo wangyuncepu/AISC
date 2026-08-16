@@ -86,21 +86,56 @@ impl ChangeBatcher {
 const WATCH_IGNORE: &[&str] = &[
     ".git",
     ".aisc",
+    ".claude",
+    ".codex",
+    ".cc-switch",
+    ".local",
     "node_modules",
     "target",
     "build",
     "dist",
+    "tmp",
+    "temp",
     "__pycache__",
     ".venv",
     "venv",
 ];
 
-/// True when a workspace-relative path is under a WATCH_IGNORE directory.
-/// Mirrors the Explorer listing ignore: any path component may be a
-/// dependency/cache/build directory, so nested `src/node_modules/...` is
-/// also suppressed instead of reloading the tree on every dev-server write.
-fn is_watch_ignored(relative: &str) -> bool {
-    relative.split('/').any(|part| WATCH_IGNORE.contains(&part))
+/// True when a workspace-relative path is under a WATCH_IGNORE directory
+/// (or a user-configured `ui.explorer_ignore` name). Mirrors the Explorer
+/// listing ignore: any path component may be a dependency/cache/build/state
+/// directory, so nested `src/node_modules/...` is also suppressed instead of
+/// reloading the tree on every dev-server write.
+fn is_watch_ignored(relative: &str, extra_ignore: &[String]) -> bool {
+    relative
+        .split('/')
+        .any(|part| WATCH_IGNORE.contains(&part) || extra_ignore.iter().any(|n| n == part))
+        || is_temp_file(relative)
+}
+
+/// Detect atomic-write / editor temp files. Tools write `report.md.tmp.1234`
+/// (or `report.md.tmp`, `report.md~`, `.#report.md`, `report.md.swp`) and then
+/// rename over the real file; without this the watcher would surface every
+/// transient temp as an unattributed change in the Artifacts panel even though
+/// the file never persists in the tree. Matches the Explorer listing ignore so
+/// both stay in sync.
+fn is_temp_file(relative: &str) -> bool {
+    let name = relative.rsplit('/').next().unwrap_or(relative);
+    if name.is_empty() {
+        return false;
+    }
+    // `foo.tmp.1234` / `foo.tmp` / `foo.temp` (and case variants).
+    let lower = name.to_ascii_lowercase();
+    if lower.contains(".tmp.") || lower.ends_with(".tmp") || lower.ends_with(".temp") {
+        return true;
+    }
+    // Editor/backup artifacts: vim `file~`/`.swp`, emacs `.#file`, atomic writer
+    // `.#foo`, `~$foo` (Office lock files).
+    name.ends_with('~')
+        || name.ends_with(".swp")
+        || name.ends_with(".swo")
+        || name.starts_with(".#")
+        || name.starts_with("~$")
 }
 
 /// Classify a notify event kind into a stable change type.
@@ -178,10 +213,12 @@ pub struct WorkspaceWatcher {
 impl WorkspaceWatcher {
     /// Start watching `workspace`. Change batches are emitted to the frontend
     /// as `workspace://changed`; overflow marks `workspace://stale`.
-    pub fn start(app: AppHandle, workspace: &Path) -> Result<Self, WorkbenchError> {
+    /// `extra_ignore` is the user-configured `ui.explorer_ignore` set.
+    pub fn start(app: AppHandle, workspace: &Path, extra_ignore: Vec<String>) -> Result<Self, WorkbenchError> {
         let ws = workspace.to_path_buf();
         let ws_closure = ws.clone();
         let app_clone = app.clone();
+        let extra_closure = extra_ignore;
         let (raw_tx, raw_rx) = mpsc::sync_channel::<(String, String, String)>(RAW_CHANNEL_CAP);
 
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
@@ -195,7 +232,7 @@ impl WorkspaceWatcher {
                 let Some(rel) = relative_of(&ws_closure, &path) else {
                     continue;
                 };
-                if is_watch_ignored(&rel) {
+                if is_watch_ignored(&rel, &extra_closure) {
                     continue; // dependency/build noise must not reload the tree
                 }
                 if raw_tx
@@ -312,8 +349,17 @@ pub async fn workspace_watch_start(
     app: AppHandle,
     workspace: String,
 ) -> Result<(), WorkbenchError> {
+    // Read the user-configured explorer ignores so the watcher does not emit
+    // noise under them (mirrors the Explorer listing ignore set).
+    let extra_ignore = match crate::session::config_dir(&app) {
+        Ok(dir) => match crate::settings::load_settings_document(&dir) {
+            Ok(doc) => doc.ui.explorer_ignore,
+            Err(_) => Vec::new(),
+        },
+        Err(_) => Vec::new(),
+    };
     // Start first (moves a clone); the original app is used for state below.
-    let watcher = WorkspaceWatcher::start(app.clone(), Path::new(&workspace))?;
+    let watcher = WorkspaceWatcher::start(app.clone(), Path::new(&workspace), extra_ignore)?;
     let state = app.state::<WatcherState>();
     let mut guard = state.0.lock().unwrap();
     if let Some(old) = guard.take() {
@@ -361,10 +407,40 @@ mod tests {
 
     #[test]
     fn watch_ignore_matches_nested_components() {
-        assert!(is_watch_ignored("node_modules/x"));
-        assert!(is_watch_ignored("src/node_modules/x"));
-        assert!(is_watch_ignored("a/b/target/c"));
-        assert!(!is_watch_ignored("src/lib/main.ts"));
+        let extra: Vec<String> = Vec::new();
+        assert!(is_watch_ignored("node_modules/x", &extra));
+        assert!(is_watch_ignored("src/node_modules/x", &extra));
+        assert!(is_watch_ignored("a/b/target/c", &extra));
+        assert!(is_watch_ignored(".claude/settings.json", &extra));
+        assert!(is_watch_ignored("a/.codex/x", &extra));
+        assert!(!is_watch_ignored("src/lib/main.ts", &extra));
+    }
+
+    #[test]
+    fn watch_ignore_merges_user_exclusions() {
+        let extra = vec!["scratch".to_string(), "vendor".to_string()];
+        assert!(is_watch_ignored("scratch/out.bin", &extra));
+        assert!(is_watch_ignored("src/vendor/lib.js", &extra));
+        assert!(!is_watch_ignored("src/lib/main.ts", &extra));
+        assert!(is_watch_ignored("node_modules", &extra)); // built-in applies even when extra lacks it
+    }
+
+    #[test]
+    fn watch_ignores_transient_temp_files() {
+        let extra: Vec<String> = Vec::new();
+        // Atomic-write temps the agent renames over the real file.
+        assert!(is_watch_ignored("reports/result.md.tmp.1234", &extra));
+        assert!(is_watch_ignored("reports/result.md.tmp", &extra));
+        assert!(is_watch_ignored("src/app.py.temp", &extra));
+        // Editor/backup artifacts.
+        assert!(is_watch_ignored("src/main.ts~", &extra));
+        assert!(is_watch_ignored("src/main.ts.swp", &extra));
+        assert!(is_watch_ignored("src/.#main.ts", &extra));
+        assert!(is_watch_ignored("~$report.docx", &extra));
+        // Real files are NOT ignored.
+        assert!(!is_watch_ignored("reports/result.md", &extra));
+        assert!(!is_watch_ignored("src/templates/main.rs", &extra)); // dir name is fine
+        assert!(!is_watch_ignored("src/important.template", &extra));
     }
 
     #[test]

@@ -61,6 +61,9 @@ pub struct UiSettings {
     pub font_scale: f64,
     /// system | dark | light (G-04)
     pub theme: String,
+    /// User-configured Explorer ignore names (WX-01). Complements the built-in
+    /// dependency/build list; matched against a directory/file name at any depth.
+    pub explorer_ignore: Vec<String>,
 }
 
 impl Default for UiSettings {
@@ -69,6 +72,7 @@ impl Default for UiSettings {
             language: "auto".into(),
             font_scale: 1.0,
             theme: "system".into(),
+            explorer_ignore: Vec::new(),
         }
     }
 }
@@ -309,8 +313,37 @@ fn validate_ui(raw: &Value) -> (UiSettings, Vec<ValidationIssue>) {
         } else if sec.get("theme").is_some() {
             issues.push(issue("ui.theme", "非法值，回退 system（合法：system|dark|light）"));
         }
+        if let Some(list) = sec.get("explorer_ignore") {
+            if let Some(names) = list.as_array() {
+                for item in names {
+                    if let Some(name) = item.as_str() {
+                        let name = name.trim();
+                        if valid_ignore_name(name) && !out.explorer_ignore.iter().any(|x| x == name) {
+                            out.explorer_ignore.push(name.to_string());
+                        }
+                    }
+                    // invalid entries (empty, path-like, NUL, too long, dupes)
+                    // are silently dropped — the safe fallback is "not ignored".
+                }
+            } else {
+                issues.push(issue("ui.explorer_ignore", "非法类型，回退空列表"));
+            }
+        }
     }
     (out, issues)
+}
+
+/// A valid Explorer ignore entry: a bare name — no `/`, `\`, NUL, leading
+/// dot-empty, `.`/`..`, and bounded length. Path-like entries are rejected so
+/// the ignore can never hide a whole subtree by accident (R3-04).
+fn valid_ignore_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
 }
 
 fn validate_terminal(raw: &Value) -> (TerminalSettings, Vec<ValidationIssue>) {
@@ -907,6 +940,43 @@ mod tests {
         let s2 = Settings::load(dir.path()).unwrap();
         assert_eq!(s2.document().ui.theme, "light");
         assert!(s2.document().issues.is_empty());
+    }
+
+    #[test]
+    fn explorer_ignore_parses_valid_names_and_drops_path_like_ones() {
+        let dir = tempdir().unwrap();
+        let mut doc = raw_doc();
+        doc["ui"]["explorer_ignore"] = serde_json::json!([
+            "scratch",
+            "vendor/out",   // path-like -> dropped silently
+            "",
+            "..",
+            "build",        // built-in name is still accepted (dup harmless)
+            "scratch",      // dup -> deduped
+            "a/b",
+            "cache",
+        ]);
+        write(dir.path(), &doc);
+        let s = Settings::load(dir.path()).unwrap();
+        let d = s.document();
+        assert_eq!(
+            d.ui.explorer_ignore,
+            vec!["scratch", "build", "cache"]
+        );
+        // Path-like/empty/dot entries are silently dropped, no issue noise.
+        assert!(d.issues.iter().all(|i| i.field != "ui.explorer_ignore"));
+    }
+
+    #[test]
+    fn explorer_ignore_wrong_type_falls_back_empty_with_issue() {
+        let dir = tempdir().unwrap();
+        let mut doc = raw_doc();
+        doc["ui"]["explorer_ignore"] = Value::String("scratch".into());
+        write(dir.path(), &doc);
+        let s = Settings::load(dir.path()).unwrap();
+        let d = s.document();
+        assert!(d.ui.explorer_ignore.is_empty());
+        assert!(d.issues.iter().any(|i| i.field == "ui.explorer_ignore"));
     }
 
     #[test]

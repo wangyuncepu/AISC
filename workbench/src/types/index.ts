@@ -403,6 +403,8 @@ export interface UiSettings {
   language: string; // auto | zh-CN | en-US
   font_scale: number; // 0.80..=1.50
   theme: string; // system | dark | light
+  /** User-configured Explorer ignore names (WX-01); complements built-ins. */
+  explorer_ignore: string[];
 }
 
 export interface TerminalSettings {

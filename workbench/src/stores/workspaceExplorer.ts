@@ -19,6 +19,7 @@ import {
   workspaceWatchStart,
   workspaceWatchStop,
 } from "../lib/ipc";
+import { useSettingsStore } from "./settings";
 import type { ArtifactRecord, WorkspaceNode, WorkspacePreviewResult } from "../types";
 
 interface WorkspaceChangeBatch {
@@ -33,6 +34,43 @@ interface WorkspaceChangeBatch {
 }
 
 export type ExplorerKind = "explorer" | "artifacts";
+
+/** User-configured Explorer ignore names (`ui.explorer_ignore`). Matched
+ *  against any path component (mirrors the Rust listing/watcher ignore). */
+function explorerIgnoreSet(): Set<string> {
+  const settings = useSettingsStore();
+  return new Set(settings.doc?.ui.explorer_ignore ?? []);
+}
+
+/** Atomic-write / editor temp files (`report.md.tmp.1234`, `foo.tmp`,
+ *  `foo.temp`, `file~`, `.swp`, `.#file`, `~$lock`). These are transient
+ *  writes the agent renames over the real file; they must not surface as
+ *  unattributed changes even if the watcher already emitted them. Mirrors the
+ *  Rust watcher/listing `is_temp_file`. */
+function isTempFile(relative: string): boolean {
+  const name = relative.split("/").pop() ?? relative;
+  if (!name) return false;
+  const lower = name.toLowerCase();
+  if (lower.includes(".tmp.") || lower.endsWith(".tmp") || lower.endsWith(".temp")) {
+    return true;
+  }
+  return (
+    name.endsWith("~") ||
+    name.endsWith(".swp") ||
+    name.endsWith(".swo") ||
+    name.startsWith(".#") ||
+    name.startsWith("~$")
+  );
+}
+
+/** True when a workspace-relative path sits under an ignored name (or is
+ *  itself a transient temp file). */
+function isIgnoredPath(relative: string): boolean {
+  if (isTempFile(relative)) return true;
+  const ignore = explorerIgnoreSet();
+  if (ignore.size === 0) return false;
+  return relative.split("/").some((part) => ignore.has(part));
+}
 
 /** Non-reactive module-level cleanup handles for Tauri event subscriptions. */
 let watcherUnlisteners: Array<() => void> = [];
@@ -81,10 +119,26 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
     isLoading: (s) => (dir: string) => !!s.loading[dir],
     isLoadingMore: (s) => (dir: string) => !!s.loadingMore[dir],
     isTruncated: (s) => (dir: string) => !!s.truncatedDirs[dir] && !!s.nextCursors[dir],
-    unattributedEntries: (s) =>
-      Object.entries(s.unattributed)
+    unattributedEntries: (s) => {
+      // Directories are structural containers, not artifacts: a newly-created
+      // (possibly empty) folder must not appear in the Artifacts panel even
+      // though the watcher reports it as an unattributed change. Only files
+      // (and their descendants) surface. We still keep dirs in `unattributed`
+      // so `loadNewCreatedDirs` can list their children.
+      const dirPaths = new Set<string>();
+      for (const list of Object.values(s.tree)) {
+        for (const n of list) {
+          if (n.kind === "dir") dirPaths.add(n.relative_path);
+        }
+      }
+      return Object.entries(s.unattributed)
+        .filter(
+          ([relative_path]) =>
+            !isIgnoredPath(relative_path) && !dirPaths.has(relative_path),
+        )
         .map(([relative_path, change_type]) => ({ relative_path, change_type }))
-        .sort((a, b) => a.relative_path.localeCompare(b.relative_path)),
+        .sort((a, b) => a.relative_path.localeCompare(b.relative_path));
+    },
     /** Flatten the currently expanded tree for APG keyboard navigation.
      *  Only expanded directories are descended into; unexpanded subtrees stay lazy. */
     visibleNodes: (s) => {
@@ -184,6 +238,11 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
     handleWorkspaceChanges(changes: WorkspaceChangeBatch["changes"]) {
       const parents = new Set<string>();
       for (const c of changes) {
+        if (isIgnoredPath(c.relative_path)) {
+          // User-configured ignores hide dependency/build/state noise from the
+          // Artifacts panel even when the watcher already emitted it.
+          continue;
+        }
         this.unattributed[c.relative_path] = c.change_type;
         const idx = c.relative_path.lastIndexOf("/");
         const parent = idx >= 0 ? c.relative_path.slice(0, idx) : "";
@@ -242,12 +301,12 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
         if (force && previous.length > 0) {
           const currentPaths = new Set(result.nodes.map((n) => n.relative_path));
           for (const path of currentPaths) {
-            if (!previousPaths.has(path) && !this.unattributed[path]) {
+            if (!previousPaths.has(path) && !this.unattributed[path] && !isIgnoredPath(path)) {
               this.unattributed[path] = "created";
             }
           }
           for (const path of previousPaths) {
-            if (!currentPaths.has(path) && !this.unattributed[path]) {
+            if (!currentPaths.has(path) && !this.unattributed[path] && !isIgnoredPath(path)) {
               this.unattributed[path] = "deleted";
             }
           }
@@ -255,7 +314,7 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
           // This directory itself is newly created: its immediate children are
           // new to the user too, so surface them as unattributed immediately.
           for (const node of result.nodes) {
-            if (!this.unattributed[node.relative_path]) {
+            if (!this.unattributed[node.relative_path] && !isIgnoredPath(node.relative_path)) {
               this.unattributed[node.relative_path] = "created";
             }
           }

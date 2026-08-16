@@ -131,27 +131,59 @@ async function onCopy(node: WorkspaceNode) {
   await copyRelativePath(node.relative_path);
 }
 
+/** Open a path from the context menu. Works for tree nodes and artifact rows
+ *  (which may not be in the loaded tree): a dir toggles, a file opens. */
 async function onMenuOpen(relativePath: string) {
   const node = nodeOf(relativePath);
   menuFor.value = null;
-  if (node) await onOpen(node);
+  if (node && node.kind === "dir") {
+    await explorer.toggleDir(relativePath);
+    return;
+  }
+  await explorer.openFile(relativePath);
 }
 
 async function onMenuReveal(relativePath: string) {
   const node = nodeOf(relativePath);
   menuFor.value = null;
   if (node) await onReveal(node);
+  else await explorer.revealFile(relativePath);
 }
 
 async function onMenuCopy(relativePath: string) {
   const node = nodeOf(relativePath);
   menuFor.value = null;
   if (node) await onCopy(node);
+  else await copyRelativePath(relativePath);
+}
+
+/**
+ * The app chrome is CSS-zoomed (`ui.font_scale` → `.app { zoom }`). Under a
+ * non-1 zoom, `position: fixed`'s containing block becomes the zoomed ancestor,
+ * so `clientX/clientY` (1:1 viewport px) must be divided by the live zoom to
+ * land at the pointer. Measure it from the `.app` box (rect.width/offsetWidth
+ * is the standard way to read CSS zoom in Chromium) rather than re-deriving
+ * the settings formula. Falls back to 1 when the app root is not measurable.
+ */
+function appZoom(): number {
+  const app = document.querySelector<HTMLElement>(".app");
+  if (!app) return 1;
+  const w = app.offsetWidth || 0;
+  return w > 0 ? app.getBoundingClientRect().width / w : 1;
 }
 
 function openMenu(node: WorkspaceNode, event: MouseEvent) {
   menuFor.value = node.relative_path;
-  menuPos.value = { x: event.clientX, y: event.clientY };
+  const zoom = appZoom();
+  // Clamp to the viewport in the menu's own (zoom-adjusted) coordinate space:
+  // the Explorer drawer sits at the window's right edge, so an unclamped
+  // clientX would push the fixed-position menu off-screen.
+  const menuWidth = 160;
+  const menuHeight = 160;
+  menuPos.value = {
+    x: Math.max(4, Math.min(event.clientX / zoom, window.innerWidth / zoom - menuWidth)),
+    y: Math.max(4, Math.min(event.clientY / zoom, window.innerHeight / zoom - menuHeight)),
+  };
 }
 
 function formatBytes(n: number): string {
@@ -172,6 +204,60 @@ function fileName(relativePath: string): string {
   const normalized = relativePath.replace(/\\/g, "/");
   const idx = normalized.lastIndexOf("/");
   return idx >= 0 ? normalized.slice(idx + 1) : normalized;
+}
+
+/** Basenames that appear more than once across ALL rows in the Artifacts
+ *  panel — manifest artifacts AND unattributed watcher changes (the container
+ *  agent's writes usually land here, not in the manifest). When a basename
+ *  collides, every row for it shows the workspace-relative path so the user can
+ *  tell them apart (e.g. `a/result.md` vs `b/result.md`, or a `created` vs a
+ *  `modified` of the same name in different folders). */
+const collidingBasenames = computed(() => {
+  const seen = new Map<string, number>();
+  const count = (relativePath: string) => {
+    const base = fileName(relativePath);
+    seen.set(base, (seen.get(base) ?? 0) + 1);
+  };
+  for (const a of explorer.artifacts) {
+    count(a.workspace_relative_path);
+  }
+  for (const u of explorer.unattributedEntries) {
+    count(u.relative_path);
+  }
+  const colliding = new Set<string>();
+  for (const [base, count] of seen) {
+    if (count > 1) colliding.add(base);
+  }
+  return colliding;
+});
+
+/** Display label for an artifact/unattributed row: basename normally, full
+ *  workspace-relative path when the basename is ambiguous across the panel. */
+function artifactLabel(relativePath: string): string {
+  const base = fileName(relativePath);
+  return collidingBasenames.value.has(base) ? relativePath : base;
+}
+
+/** Adapter so the shared tree context menu (which consumes a WorkspaceNode)
+ *  can open over an artifact/unattributed row without the file being loaded
+ *  into the lazy tree. Only `relative_path`/`kind` matter to the menu. */
+function pseudoNode(relativePath: string): WorkspaceNode {
+  return {
+    relative_path: relativePath,
+    name: fileName(relativePath),
+    kind: "file",
+    expandable: false,
+    artifact_badges: [],
+    change_state: "unknown",
+  };
+}
+
+/** Select + preview a file from an artifact/unattributed row (mirrors the
+ *  file tree's single-click: preview; double-click opens). */
+async function onArtifactSelect(relativePath: string) {
+  selected.value = relativePath;
+  menuFor.value = null;
+  await explorer.previewFile(relativePath);
 }
 
 /** Resolve a node by relative path across loaded tree levels. */
@@ -341,21 +427,15 @@ function onTreeKeydown(e: KeyboardEvent) {
             v-for="a in explorer.artifactDeliverables"
             :key="a.artifact_id"
             class="explorer-row artifact-row"
-            @click="selected = a.workspace_relative_path"
+            :class="{ selected: selected === a.workspace_relative_path }"
+            @click="onArtifactSelect(a.workspace_relative_path)"
+            @dblclick="explorer.openFile(a.workspace_relative_path)"
+            @contextmenu.prevent="openMenu(pseudoNode(a.workspace_relative_path), $event)"
           >
             <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
-              {{ fileName(a.workspace_relative_path) }}
+              {{ artifactLabel(a.workspace_relative_path) }}
             </span>
             <span v-if="a.label" class="explorer-label">{{ a.label }}</span>
-            <button class="explorer-mini" @click="explorer.openFile(a.workspace_relative_path)">
-              {{ t("explorer.open") }}
-            </button>
-            <button class="explorer-mini" @click="explorer.revealFile(a.workspace_relative_path)">
-              {{ t("explorer.reveal") }}
-            </button>
-            <button class="explorer-mini" @click="copyRelativePath(a.workspace_relative_path)">
-              {{ copied === a.workspace_relative_path ? t("explorer.copied") : t("explorer.copy") }}
-            </button>
           </div>
         </template>
 
@@ -365,20 +445,14 @@ function onTreeKeydown(e: KeyboardEvent) {
             v-for="a in explorer.artifactSourceChanges"
             :key="a.artifact_id"
             class="explorer-row artifact-row"
-            @click="selected = a.workspace_relative_path"
+            :class="{ selected: selected === a.workspace_relative_path }"
+            @click="onArtifactSelect(a.workspace_relative_path)"
+            @dblclick="explorer.openFile(a.workspace_relative_path)"
+            @contextmenu.prevent="openMenu(pseudoNode(a.workspace_relative_path), $event)"
           >
             <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
-              {{ fileName(a.workspace_relative_path) }}
+              {{ artifactLabel(a.workspace_relative_path) }}
             </span>
-            <button class="explorer-mini" @click="explorer.openFile(a.workspace_relative_path)">
-              {{ t("explorer.open") }}
-            </button>
-            <button class="explorer-mini" @click="explorer.revealFile(a.workspace_relative_path)">
-              {{ t("explorer.reveal") }}
-            </button>
-            <button class="explorer-mini" @click="copyRelativePath(a.workspace_relative_path)">
-              {{ copied === a.workspace_relative_path ? t("explorer.copied") : t("explorer.copy") }}
-            </button>
           </div>
         </template>
 
@@ -388,20 +462,14 @@ function onTreeKeydown(e: KeyboardEvent) {
             v-for="a in explorer.artifactGenerated"
             :key="a.artifact_id"
             class="explorer-row artifact-row"
-            @click="selected = a.workspace_relative_path"
+            :class="{ selected: selected === a.workspace_relative_path }"
+            @click="onArtifactSelect(a.workspace_relative_path)"
+            @dblclick="explorer.openFile(a.workspace_relative_path)"
+            @contextmenu.prevent="openMenu(pseudoNode(a.workspace_relative_path), $event)"
           >
             <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
-              {{ fileName(a.workspace_relative_path) }}
+              {{ artifactLabel(a.workspace_relative_path) }}
             </span>
-            <button class="explorer-mini" @click="explorer.openFile(a.workspace_relative_path)">
-              {{ t("explorer.open") }}
-            </button>
-            <button class="explorer-mini" @click="explorer.revealFile(a.workspace_relative_path)">
-              {{ t("explorer.reveal") }}
-            </button>
-            <button class="explorer-mini" @click="copyRelativePath(a.workspace_relative_path)">
-              {{ copied === a.workspace_relative_path ? t("explorer.copied") : t("explorer.copy") }}
-            </button>
           </div>
         </template>
 
@@ -422,16 +490,13 @@ function onTreeKeydown(e: KeyboardEvent) {
           v-for="u in explorer.unattributedEntries"
           :key="u.relative_path"
           class="explorer-row unattributed"
-          @click="selected = u.relative_path"
+          :class="{ selected: selected === u.relative_path }"
+          @click="onArtifactSelect(u.relative_path)"
+          @dblclick="explorer.openFile(u.relative_path)"
+          @contextmenu.prevent="openMenu(pseudoNode(u.relative_path), $event)"
         >
-          <span class="explorer-name" :title="hostPath(u.relative_path)">{{ fileName(u.relative_path) }}</span>
+          <span class="explorer-name" :title="hostPath(u.relative_path)">{{ artifactLabel(u.relative_path) }}</span>
           <span class="explorer-badge unattributed-badge">{{ u.change_type }}</span>
-          <button class="explorer-mini" @click="explorer.openFile(u.relative_path)">
-            {{ t("explorer.open") }}
-          </button>
-          <button class="explorer-mini" @click="explorer.revealFile(u.relative_path)">
-            {{ t("explorer.reveal") }}
-          </button>
         </div>
       </template>
     </div>
@@ -442,6 +507,8 @@ function onTreeKeydown(e: KeyboardEvent) {
       class="explorer-menu"
       role="menu"
       :style="{ left: `${menuPos.x}px`, top: `${menuPos.y}px` }"
+      @mousedown.stop
+      @contextmenu.prevent
     >
       <button role="menuitem" @click="onMenuOpen(menuFor!)">{{ t("explorer.open") }}</button>
       <button role="menuitem" @click="onMenuReveal(menuFor!)">
@@ -450,6 +517,9 @@ function onTreeKeydown(e: KeyboardEvent) {
       <button role="menuitem" @click="onMenuCopy(menuFor!)">{{ t("explorer.copy") }}</button>
       <button class="menu-close" role="menuitem" @click="menuFor = null">✕</button>
     </div>
+
+    <!-- Click-away backdrop: closes the menu without selecting a tree row. -->
+    <div v-if="menuFor" class="explorer-menu-backdrop" @mousedown="menuFor = null" @contextmenu.prevent="menuFor = null" />
 
     <!-- Preview pane -->
     <div v-if="explorer.preview" class="explorer-preview">
@@ -571,6 +641,11 @@ function onTreeKeydown(e: KeyboardEvent) {
 }
 .explorer-more {
   padding: 4px 8px;
+}
+.explorer-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
 }
 .explorer-menu {
   position: fixed;

@@ -43,6 +43,8 @@ const FIELDS: FieldDef[] = [
     { value: "dark", labelKey: "settings.ui.theme.dark" },
     { value: "light", labelKey: "settings.ui.theme.light" },
   ], effect: "immediate" },
+  { key: "ui.explorer_ignore", labelKey: "settings.ui.explorerIgnore", control: "text",
+    effect: "immediate", helpKey: "settings.ui.explorerIgnore.help" },
   { key: "terminal.font_family", labelKey: "settings.term.fontFamily", control: "text",
     effect: "rebuild", helpKey: "settings.term.fontFamily.help" },
   { key: "terminal.font_size", labelKey: "settings.term.fontSize", control: "range", min: 10, max: 24, step: 1, effect: "immediate" },
@@ -79,6 +81,17 @@ const GROUP_KEY: Record<string, string> = {
 const ui = computed<UiSettings>(() => store.doc?.ui ?? ({} as UiSettings));
 const terminal = computed<TerminalSettings>(() => store.doc?.terminal ?? ({} as TerminalSettings));
 const windowS = computed<WindowSettings>(() => store.doc?.window ?? ({} as WindowSettings));
+
+/** Explorer ignore names as a comma-separated string for the text input. */
+const explorerIgnoreText = computed<string>({
+  get: () => (ui.value.explorer_ignore ?? []).join(", "),
+  set: (v: string) => {
+    ui.value.explorer_ignore = v
+      .split(/[,，]/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  },
+});
 
 const issuesByField = computed(() => {
   const m: Record<string, string> = {};
@@ -165,7 +178,10 @@ function onCancel() {
               <select v-else-if="f.key === 'ui.theme'" :id="f.key" v-model="ui.theme" :disabled="store.readOnly">
                 <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
               </select>
+              <input v-else-if="f.key === 'ui.explorer_ignore'" :id="f.key" v-model="explorerIgnoreText"
+                type="text" :disabled="store.readOnly" />
               <span class="effect">{{ t(EFFECT_KEY[f.effect]) }}</span>
+              <span v-if="f.helpKey" class="help">{{ t(f.helpKey) }}</span>
               <span v-if="issuesByField[f.key]" class="err-text">{{ issuesByField[f.key] }}</span>
             </div>
           </template>

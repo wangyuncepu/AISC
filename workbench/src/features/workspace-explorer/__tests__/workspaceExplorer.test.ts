@@ -93,4 +93,225 @@ describe("WorkspaceExplorer keyboard (3f, A-WX05-1)", () => {
     expect(wrapper.find("[role=menu]").exists()).toBe(false);
     wrapper.unmount();
   });
+
+  it("mouse right-click opens the context menu at the pointer", async () => {
+    await setup();
+    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+    const rows = wrapper.findAll("[role=treeitem]");
+    expect(rows.length).toBe(2);
+
+    // jsdom has no real layout: stub the viewport so the clamp stays positive.
+    Object.defineProperty(window, "innerWidth", { value: 1200, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+    await rows[0].trigger("contextmenu", { clientX: 1100, clientY: 300 });
+
+    const menu = wrapper.find("[role=menu]");
+    expect(menu.exists()).toBe(true);
+    // Clamped into the viewport (drawer sits at the right edge).
+    expect(menu.attributes("style")).toContain("left: 1040px");
+    expect(menu.attributes("style")).toContain("top: 300px");
+    wrapper.unmount();
+  });
+
+  it("divides pointer coords by the app CSS zoom (font_scale != 1)", async () => {
+    // Regression (2026-08-16): the app chrome applies `zoom: 1.35` when
+    // ui.font_scale is raised. Under a non-1 zoom, `position: fixed` resolves
+    // against the zoomed ancestor, so clientX must be divided by the zoom or
+    // the menu lands at clientX * 1.35 (off the viewport) and never shows.
+    await setup();
+    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+    const app = document.createElement("div");
+    app.className = "app";
+    document.body.appendChild(app);
+    // Simulate zoom 1.35: rect is 1.35x the offsetWidth.
+    Object.defineProperty(app, "offsetWidth", { value: 800, configurable: true });
+    Object.defineProperty(app, "getBoundingClientRect", {
+      value: () => ({ width: 1080 }),
+      configurable: true,
+    });
+    Object.defineProperty(window, "innerWidth", { value: 1200, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+
+    const rows = wrapper.findAll("[role=treeitem]");
+    await rows[0].trigger("contextmenu", { clientX: 540, clientY: 405 });
+
+    const menu = wrapper.find("[role=menu]");
+    expect(menu.exists()).toBe(true);
+    // 540 / 1.35 = 400px in the menu's local space.
+    expect(menu.attributes("style")).toContain("left: 400px");
+    expect(menu.attributes("style")).toContain("top: 300px");
+    app.remove();
+    wrapper.unmount();
+  });
+
+  it("clicking the backdrop closes the menu", async () => {
+    await setup();
+    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+    const rows = wrapper.findAll("[role=treeitem]");
+    await rows[0].trigger("contextmenu", { clientX: 100, clientY: 100 });
+    expect(wrapper.find("[role=menu]").exists()).toBe(true);
+    await wrapper.find(".explorer-menu-backdrop").trigger("mousedown");
+    expect(wrapper.find("[role=menu]").exists()).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+describe("WorkspaceExplorer artifacts panel (WX-04)", () => {
+  it("artifact rows have no open/reveal buttons; dblclick opens and right-click shows the menu", async () => {
+    const { artifactList, workspaceOpen } = await import("../../../lib/ipc");
+    vi.mocked(artifactList).mockResolvedValue({
+      schema_version: 1,
+      artifacts: [
+        {
+          schema_version: 1,
+          artifact_id: "aaaaaaaa-0000-4000-8000-000000000001",
+          workspace_relative_path: "reports/result.md",
+          action: "created",
+          kind: "deliverable",
+          media_type: "text/markdown",
+          label: "报告",
+          open_with: "preview",
+          producer: { agent: "claude", session_id: "s", runtime_id: "r" },
+          state: "present",
+          provenance: "manifest",
+          recorded_at: "t",
+          previous_path: null,
+          extra: {},
+        },
+      ],
+      next_cursor: null,
+    });
+
+    await setup();
+    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+    // Switch to the Artifacts tab.
+    await wrapper.findAll("[role=tab]")[1].trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const row = wrapper.find(".artifact-row");
+    expect(row.exists()).toBe(true);
+    // No Open / Reveal / Copy buttons in the artifacts panel.
+    expect(wrapper.findAll(".artifact-row .explorer-mini").length).toBe(0);
+    // Single-click previews; double-click opens.
+    await row.trigger("dblclick");
+    expect(workspaceOpen).toHaveBeenCalledWith("/ws", "reports/result.md");
+    // Right-click opens the shared context menu.
+    Object.defineProperty(window, "innerWidth", { value: 1200, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+    await row.trigger("contextmenu", { clientX: 300, clientY: 300 });
+    expect(wrapper.find("[role=menu]").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("shows the workspace-relative path when basenames collide", async () => {
+    const { artifactList } = await import("../../../lib/ipc");
+    vi.mocked(artifactList).mockResolvedValue({
+      schema_version: 1,
+      artifacts: [
+        {
+          schema_version: 1,
+          artifact_id: "aaaaaaaa-0000-4000-8000-000000000001",
+          workspace_relative_path: "a/result.md",
+          action: "created",
+          kind: "deliverable",
+          media_type: "text/markdown",
+          label: "",
+          open_with: "preview",
+          producer: { agent: "claude", session_id: "s", runtime_id: "r" },
+          state: "present",
+          provenance: "manifest",
+          recorded_at: "t",
+          previous_path: null,
+          extra: {},
+        },
+        {
+          schema_version: 1,
+          artifact_id: "aaaaaaaa-0000-4000-8000-000000000002",
+          workspace_relative_path: "b/result.md",
+          action: "created",
+          kind: "deliverable",
+          media_type: "text/markdown",
+          label: "",
+          open_with: "preview",
+          producer: { agent: "claude", session_id: "s", runtime_id: "r" },
+          state: "present",
+          provenance: "manifest",
+          recorded_at: "t",
+          previous_path: null,
+          extra: {},
+        },
+      ],
+      next_cursor: null,
+    });
+
+    await setup();
+    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+    await wrapper.findAll("[role=tab]")[1].trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const names = wrapper.findAll(".artifact-row .explorer-name").map((n) => n.text());
+    // Ambiguous basename `result.md` → show the full relative path to disambiguate.
+    expect(names).toEqual(["a/result.md", "b/result.md"]);
+    wrapper.unmount();
+  });
+
+  it("shows relative paths for colliding unattributed entries (created + modified)", async () => {
+    await setup();
+    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+    const explorer = useWorkspaceExplorerStore();
+    // Watcher projection: same basename, different folders, one created one modified.
+    explorer.handleWorkspaceChanges([
+      { relative_path: "a/result.md", change_type: "created", kind: "file", revision: 1 },
+      { relative_path: "b/result.md", change_type: "modified", kind: "file", revision: 2 },
+    ]);
+    await wrapper.findAll("[role=tab]")[1].trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const names = wrapper.findAll(".unattributed .explorer-name").map((n) => n.text());
+    // Ambiguous basename across the panel → full relative path on BOTH rows.
+    expect(names).toEqual(["a/result.md", "b/result.md"]);
+    wrapper.unmount();
+  });
+
+  it("shows relative paths when a manifest artifact collides with an unattributed entry", async () => {
+    const { artifactList } = await import("../../../lib/ipc");
+    vi.mocked(artifactList).mockResolvedValue({
+      schema_version: 1,
+      artifacts: [
+        {
+          schema_version: 1,
+          artifact_id: "aaaaaaaa-0000-4000-8000-000000000001",
+          workspace_relative_path: "reports/result.md",
+          action: "created",
+          kind: "deliverable",
+          media_type: "text/markdown",
+          label: "",
+          open_with: "preview",
+          producer: { agent: "claude", session_id: "s", runtime_id: "r" },
+          state: "present",
+          provenance: "manifest",
+          recorded_at: "t",
+          previous_path: null,
+          extra: {},
+        },
+      ],
+      next_cursor: null,
+    });
+
+    await setup();
+    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+    const explorer = useWorkspaceExplorerStore();
+    explorer.handleWorkspaceChanges([
+      { relative_path: "scratch/result.md", change_type: "created", kind: "file", revision: 1 },
+    ]);
+    await wrapper.findAll("[role=tab]")[1].trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const artifactName = wrapper.find(".artifact-row .explorer-name").text();
+    const unattributedName = wrapper.find(".unattributed .explorer-name").text();
+    // Both rows show the relative path because the basename is ambiguous.
+    expect(artifactName).toBe("reports/result.md");
+    expect(unattributedName).toBe("scratch/result.md");
+    wrapper.unmount();
+  });
 });

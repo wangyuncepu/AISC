@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { useWorkspaceExplorerStore } from "../workspaceExplorer";
+import { useSettingsStore } from "../settings";
 import { artifactRefresh, workspaceList } from "../../lib/ipc";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -61,6 +62,20 @@ vi.mock("../../lib/ipc", () => ({
   }),
   artifactInspect: vi.fn(),
   artifactRefresh: vi.fn(),
+  loadSettings: vi.fn().mockResolvedValue({
+    schemaVersion: 1,
+    revision: 0,
+    aiscCliPath: null,
+    ui: { language: "auto", font_scale: 1.0, theme: "system", explorer_ignore: [] },
+    terminal: { font_family: "", font_size: 14, line_height: 1.2, letter_spacing: 0, scrollback: 5000, renderer: "auto", smooth_scroll_duration: 100 },
+    window: { remember_geometry: true, close_behavior: "quit" },
+    issues: [],
+    corrupted: false,
+    readOnly: false,
+  }),
+  saveSettings: vi.fn(),
+  resetGuiSettings: vi.fn(),
+  resolveLocale: vi.fn().mockResolvedValue("en-US"),
 }));
 
 beforeEach(() => {
@@ -137,6 +152,93 @@ describe("workspaceExplorer refresh", () => {
 
     expect(s.rootNodes.length).toBeGreaterThan(0);
     expect(s.unattributed["new.md"]).toBe("created");
+  });
+
+  it("directories (incl. empty folders) never surface as unattributed", async () => {
+    // Root listing includes the new empty folder so the tree knows it is a dir.
+    vi.mocked(workspaceList).mockImplementation(async (_ws: string, dir: string) => {
+      if (dir === "") {
+        return {
+          schema_version: 1,
+          nodes: [
+            { relative_path: "newdir", name: "newdir", kind: "dir", expandable: true, artifact_badges: [], change_state: "unknown" },
+          ],
+          next_cursor: null,
+          truncated: false,
+        };
+      }
+      return { schema_version: 1, nodes: [], next_cursor: null, truncated: false };
+    });
+
+    const s = useWorkspaceExplorerStore();
+    s.setWorkspace("/ws");
+    await s.loadDir("");
+
+    // The watcher reports the new folder itself; with no children it is an
+    // empty folder and must NOT appear in the Artifacts panel.
+    s.handleWorkspaceChanges([
+      { relative_path: "newdir", change_type: "created", kind: "dir", revision: 1 },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 10)); // root reload
+    await s.loadNewCreatedDirs(); // list its children (none)
+
+    // Still tracked for recursion, but hidden from the display projection.
+    expect(s.unattributed["newdir"]).toBe("created");
+    expect(s.unattributedEntries.map((e) => e.relative_path)).toEqual([]);
+  });
+});
+
+describe("workspaceExplorer user ignore (ui.explorer_ignore)", () => {
+  it("drops ignored paths from the unattributed projection", async () => {
+    const { loadSettings } = await import("../../lib/ipc");
+    vi.mocked(loadSettings).mockResolvedValue({
+      schemaVersion: 1,
+      revision: 0,
+      aiscCliPath: null,
+      ui: { language: "auto", font_scale: 1.0, theme: "system", explorer_ignore: ["scratch", "logs"] },
+      terminal: { font_family: "", font_size: 14, line_height: 1.2, letter_spacing: 0, scrollback: 5000, renderer: "auto", smooth_scroll_duration: 100 },
+      window: { remember_geometry: true, close_behavior: "quit" },
+      issues: [],
+      corrupted: false,
+      readOnly: false,
+    });
+    const settings = useSettingsStore();
+    await settings.load();
+
+    const s = useWorkspaceExplorerStore();
+    s.setWorkspace("/ws");
+    s.handleWorkspaceChanges([
+      { relative_path: "keep.md", change_type: "created", kind: "file", revision: 1 },
+      { relative_path: "scratch/out.bin", change_type: "created", kind: "file", revision: 1 },
+      { relative_path: "src/logs/x.log", change_type: "created", kind: "file", revision: 1 },
+    ]);
+
+    // Ignored paths are never ingested into the unattributed map at all.
+    expect(s.unattributed["keep.md"]).toBe("created");
+    expect(s.unattributed["scratch/out.bin"]).toBeUndefined();
+    expect(s.unattributed["src/logs/x.log"]).toBeUndefined();
+    expect(s.unattributedEntries.map((e) => e.relative_path)).toEqual(["keep.md"]);
+  });
+});
+
+describe("workspaceExplorer transient temp files", () => {
+  it("drops atomic-write temp files from the unattributed projection", async () => {
+    const s = useWorkspaceExplorerStore();
+    s.setWorkspace("/ws");
+    s.handleWorkspaceChanges([
+      { relative_path: "reports/result.md", change_type: "created", kind: "file", revision: 1 },
+      { relative_path: "reports/result.md.tmp.1234", change_type: "created", kind: "file", revision: 1 },
+      { relative_path: "reports/result.md.tmp", change_type: "created", kind: "file", revision: 1 },
+      { relative_path: "src/notes.md~", change_type: "created", kind: "file", revision: 1 },
+      { relative_path: "src/.#main.ts", change_type: "created", kind: "file", revision: 1 },
+    ]);
+
+    expect(s.unattributed["reports/result.md"]).toBe("created");
+    expect(s.unattributed["reports/result.md.tmp.1234"]).toBeUndefined();
+    expect(s.unattributed["reports/result.md.tmp"]).toBeUndefined();
+    expect(s.unattributed["src/notes.md~"]).toBeUndefined();
+    expect(s.unattributed["src/.#main.ts"]).toBeUndefined();
+    expect(s.unattributedEntries.map((e) => e.relative_path)).toEqual(["reports/result.md"]);
   });
 });
 

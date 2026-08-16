@@ -227,6 +227,8 @@ export const enUS: Record<string, string> = {
   "settings.ui.theme.system": "Follow system",
   "settings.ui.theme.dark": "Dark",
   "settings.ui.theme.light": "Light",
+  "settings.ui.explorerIgnore": "Explorer ignore names",
+  "settings.ui.explorerIgnore.help": "Comma-separated names hidden from the Explorer tree and Artifacts panel (e.g. vendor, logs).",
   "settings.term.fontFamily": "Terminal font",
   "settings.term.fontFamily.help": "Non-empty, ≤256 chars",
   "settings.term.fontSize": "Terminal font size",
