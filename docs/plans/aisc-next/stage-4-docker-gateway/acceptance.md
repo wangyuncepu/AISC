@@ -5,14 +5,14 @@
 ## 4a-contract（进行中）
 
 - `A-DG01-1` **PASS**
-  - Commit：`<4a commit>`（`docker_gateway.py` + `domain/gateway.py` + `test_docker_gateway_contract.py`）
+  - Commit：`dd64617`（`docker_gateway.py` + `domain/gateway.py` + `test_docker_gateway_contract.py`）
   - 证据：`DockerGateway` runtime Protocol（`preflight/inspect_image/list_containers/inspect_container/start/stop/remove/wait/open_interactive/build_image`）；`DockerExecutor = DockerGateway` 兼容别名（`GatewayAliasTests.test_docker_executor_is_docker_gateway_alias`）；Fake/注入沿用 `client`/`executor` 参数。
   - 步骤：import gateway；`create_docker_gateway('cli'|'sdk'|'auto')` 各返回正确 backend；`DockerExecutor is DockerGateway`。
   - 结果：11 passed（`tests/test_docker_gateway_contract.py`）；全库 pytest 474 passed。
   - 结论：PASS
 
 - `A-DG02-1` **PASS**
-  - Commit：`<4a commit>`
+  - Commit：`dd64617`
   - 证据：`domain/gateway.py` 的 `GatewayOperation`（operation_id/backend/exit_code/duration_ms/error_code/error_message/cleanup_status/timed_out）+ `GatewayResult`/`PreflightResult`/`ImageInspectGatewayResult`/`ContainerListResult`/`ContainerInspectResult`/`LifecycleResult`/`InteractiveResult`/`BuildResult`；`OperationEnvelopeTests` 验证字段与 `ok`/`timed_out` 语义。
   - 步骤：构造带 error/duration/cleanup 的 operation，断言字段存在且 `ok` 语义正确。
   - 结果：通过。
