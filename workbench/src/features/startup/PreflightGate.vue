@@ -60,26 +60,26 @@ function statusText(c: PreflightCheck): string {
   padding: 8px 10px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 }
 .check {
   display: grid;
   grid-template-columns: 12px 110px 90px 60px 1fr;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--text-2);
 }
 .dot {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--text-muted);
 }
 .check[data-status="pass"] .dot { background: var(--success); }
 .check[data-status="warn"] .dot { background: var(--warn); }
 .check[data-status="fail"] .dot { background: var(--error); }
-.cat { color: var(--text-muted); font-size: 11px; }
+.cat { color: var(--text-muted); font-size: var(--font-xs); }
 .state { color: var(--text-2); }
-.code { color: var(--error); font-size: 11px; }
+.code { color: var(--error); font-size: var(--font-xs); }
 </style>

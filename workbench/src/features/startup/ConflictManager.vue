@@ -68,7 +68,7 @@ function short(id: string): string {
   color: var(--text-2);
 }
 .conflict h2 { color: var(--text-2); margin: 0; }
-.hint { font-size: 12px; color: var(--text-muted); max-width: 480px; text-align: center; margin: 0; }
+.hint { font-size: var(--font-sm); color: var(--text-muted); max-width: 480px; text-align: center; margin: 0; }
 .list {
   list-style: none;
   padding: 0;
@@ -86,22 +86,22 @@ function short(id: string): string {
   padding: 8px 10px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 13px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-md);
 }
 .rid { font-family: monospace; color: var(--info); }
-.state { font-size: 11px; color: var(--text-muted); min-width: 70px; }
+.state { font-size: var(--font-xs); color: var(--text-muted); min-width: 70px; }
 .state[data-state="running"] { color: var(--success); }
 .state[data-state="stopped"] { color: var(--warn); }
 .state[data-state="unknown"] { color: var(--text-muted); }
-.cfg { flex: 1; color: var(--text-muted); font-size: 12px; }
+.cfg { flex: 1; color: var(--text-muted); font-size: var(--font-sm); }
 .act { display: flex; gap: 4px; }
-.empty { color: var(--text-muted); font-size: 12px; justify-content: center; }
-.err { color: var(--error); font-size: 12px; }
+.empty { color: var(--text-muted); font-size: var(--font-sm); justify-content: center; }
+.err { color: var(--error); font-size: var(--font-sm); }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
 }
 button:hover:not(:disabled) { background: var(--surface-hover); }
 button.primary { background: var(--accent); border-color: var(--accent); }

@@ -34,6 +34,7 @@ import { resizeSession, writeSession } from "../../lib/ipc";
 import { resolveRenderer, terminalTheme } from "./renderer";
 import { effectiveTheme } from "../../theme";
 import { findLeaf } from "../../stores/paneTree";
+import { prefersReducedMotion } from "../../lib/accessibility";
 import type { LaunchAgent } from "../../types";
 
 const { t } = useI18n();
@@ -93,7 +94,8 @@ function terminalOptions(): ITerminalOptions {
     lineHeight: s?.line_height,
     letterSpacing: s?.letter_spacing,
     scrollback: s?.scrollback,
-    smoothScrollDuration: s?.smooth_scroll_duration,
+    // Stage 6 (UX-03): reduced motion zeroes the terminal smooth scroll too.
+    smoothScrollDuration: prefersReducedMotion() ? 0 : s?.smooth_scroll_duration,
     convertEol: false,
     cursorBlink: true,
     theme: terminalTheme(effectiveTheme.value),
@@ -257,6 +259,23 @@ function onContextMenu(e: MouseEvent) {
   const x = Math.min(e.clientX, window.innerWidth - 180);
   const y = Math.min(e.clientY, window.innerHeight - 150);
   ctxMenu.value = { x, y };
+}
+
+/** Stage 6 (UX-03): open the context menu from the keyboard (Menu key or
+ *  Shift+F10) at the terminal centre, then move focus to the first item so
+ *  arrows/Tab navigate immediately. Other keys pass through to xterm. */
+function onTerminalKeydown(e: KeyboardEvent) {
+  if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
+  e.preventDefault();
+  const el = container.value;
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const x = Math.min(r.left + r.width / 2, window.innerWidth - 180);
+  const y = Math.min(r.top + r.height / 2, window.innerHeight - 150);
+  ctxMenu.value = { x, y };
+  window.setTimeout(() => {
+    el.querySelector<HTMLElement>(".ctx-menu button:not([disabled])")?.focus();
+  }, 0);
 }
 
 function closeMenu() {
@@ -515,6 +534,7 @@ defineExpose({
     ref="container"
     class="terminal"
     @contextmenu="onContextMenu"
+    @keydown="onTerminalKeydown"
     @click="onTerminalClick"
   >
     <!-- S1.3: fixed, persistent truncation notice (the terminal-flow note
@@ -606,9 +626,9 @@ defineExpose({
   top: 0;
   left: 0;
   right: 0;
-  z-index: 20;
+  z-index: var(--z-overlay);
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--warn-fg);
   background: var(--warn-bg);
   border-bottom: 1px solid var(--warn-border);
@@ -619,16 +639,16 @@ defineExpose({
   position: absolute;
   top: 8px;
   right: 12px;
-  z-index: 10;
+  z-index: var(--z-menu);
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 6px 8px;
   background: var(--surface);
   border: 1px solid var(--border-2);
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  font-size: 12px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  font-size: var(--font-sm);
 }
 .search-overlay input {
   width: 140px;
@@ -636,7 +656,7 @@ defineExpose({
   background: var(--surface-hover);
   color: var(--text-2);
   border: none;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   outline: none;
 }
 .search-overlay button {
@@ -644,7 +664,7 @@ defineExpose({
   background: transparent;
   color: var(--text-2);
   border: none;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .search-overlay button:hover {
@@ -665,15 +685,15 @@ defineExpose({
 /* --- context menu --- */
 .ctx-menu {
   position: fixed;
-  z-index: 20;
+  z-index: var(--z-overlay);
   display: flex;
   flex-direction: column;
   min-width: 140px;
   padding: 4px;
   background: var(--surface);
   border: 1px solid var(--border-2);
-  border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
 }
 .ctx-menu button {
   padding: 6px 12px;
@@ -681,9 +701,9 @@ defineExpose({
   background: transparent;
   color: var(--text-2);
   border: none;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 .ctx-menu button:hover:not(:disabled) {
   background: var(--surface-active);

@@ -343,6 +343,32 @@ mod tests {
         assert_eq!(load(&dir).unwrap().current_step, "environment");
     }
 
+    /// REL-03: an onboarding.json written by a PREVIOUS release (same schema 1,
+    /// missing newer optional fields source/last_error_code/completed_steps)
+    /// loads with defaults and upgrades without losing the in-progress step.
+    #[test]
+    fn previous_version_onboarding_loads_with_defaults() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join(ONBOARDING_FILE),
+            r#"{"schema_version":1,"flow_version":1,"status":"in_progress","current_step":"workspace"}"#,
+        )
+        .unwrap();
+        let s = load(dir.path()).unwrap();
+        assert_eq!(s.status, OnboardingStatus::InProgress);
+        assert_eq!(s.current_step, "workspace");
+        assert!(s.completed_steps.is_empty());
+        assert_eq!(s.source, "");
+        assert_eq!(s.last_error_code, "");
+
+        // Upgrade path: a later patch on the previous-version file works and
+        // round-trips.
+        let updated = update(dir.path(), |st| st.completed_steps.push("workspace".into())).unwrap();
+        assert!(updated.is_step_complete("workspace"));
+        let reloaded = load(dir.path()).unwrap();
+        assert!(reloaded.is_step_complete("workspace"));
+    }
+
     #[test]
     fn missing_file_yields_not_started() {
         let dir = tempdir().unwrap();

@@ -35,6 +35,7 @@ function envReady(over: Record<string, string> = {}) {
     webview2: "ready",
     dockerDesktopPath: "",
     cliPath: "",
+    engineDetail: "",
     ...over,
   };
 }

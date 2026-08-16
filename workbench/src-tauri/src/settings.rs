@@ -898,6 +898,41 @@ mod tests {
         assert!(doc.issues.is_empty());
     }
 
+    /// REL-03: a settings.json written by a PREVIOUS release (same schema 1,
+    /// missing the newer optional fields) must load with defaults and round-trip
+    /// the unknowns — upgrade keeps the user's pin and any future fields.
+    #[test]
+    fn previous_version_settings_load_with_defaults_and_keep_pin() {
+        let dir = tempdir().unwrap();
+        // "Previous" shape: no ui.explorer_ignore / ui.theme / window.geometry,
+        // but carries the pinned CLI path and an unknown future field.
+        let prev = serde_json::json!({
+            "schema_version": 1,
+            "revision": 3,
+            "aisc_cli_path": "C:\\prev\\aisc.exe",
+            "ui": { "language": "zh-CN", "font_scale": 1.2 },
+            "terminal": { "font_size": 16 },
+            "window": { "remember_geometry": true, "close_behavior": "quit" },
+            "future_top_field": "kept"
+        });
+        write(dir.path(), &prev);
+
+        let s = Settings::load(dir.path()).unwrap();
+        // Newer optional fields default in.
+        assert_eq!(s.aisc_cli_path(), Some("C:\\prev\\aisc.exe"));
+        assert_eq!(s.document().ui.explorer_ignore, Vec::<String>::new());
+        assert_eq!(s.document().ui.theme, UiSettings::default().theme);
+        assert!(s.document().window.geometry.is_none());
+        // Unknowns survive a save (round-trip keeps them for a future rollback).
+        let mut s = s;
+        s.save(dir.path()).unwrap();
+        let reloaded = Settings::load(dir.path()).unwrap();
+        assert_eq!(reloaded.document().ui.language, "zh-CN");
+        assert_eq!(reloaded.document().terminal.font_size, 16);
+        assert_eq!(reloaded.aisc_cli_path(), Some("C:\\prev\\aisc.exe"));
+        assert!(reloaded.raw.get("future_top_field").is_some());
+    }
+
     #[test]
     fn unknown_fields_preserved_through_patch_and_pin_saves() {
         let dir = tempdir().unwrap();

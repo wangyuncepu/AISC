@@ -38,6 +38,7 @@ describe("network store (A-ONB05)", () => {
       webview2: "ready",
       dockerDesktopPath: "",
       cliPath: "",
+      engineDetail: "",
     } as never);
     const s = useNetworkStore();
     await s.probe();
@@ -53,6 +54,7 @@ describe("network store (A-ONB05)", () => {
       webview2: "ready",
       dockerDesktopPath: "",
       cliPath: "",
+      engineDetail: "",
     } as never);
     const s = useNetworkStore();
     await s.probe();

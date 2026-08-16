@@ -239,6 +239,9 @@ function canReopen(s: TabSessionState): boolean {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  /* UX-02: many tabs at a narrow tier scroll instead of squishing */
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .tab {
   display: flex;
@@ -248,6 +251,8 @@ function canReopen(s: TabSessionState): boolean {
   background: transparent;
   color: var(--text-muted);
   border-bottom: 2px solid transparent;
+  flex-shrink: 0; /* UX-02: keep tab content, let the bar scroll */
+  white-space: nowrap;
 }
 .tab:hover { background: var(--surface-2); color: var(--text-2); }
 .tab.active { color: var(--text-2); border-bottom-color: var(--accent); background: var(--bg); }
@@ -256,14 +261,14 @@ function canReopen(s: TabSessionState): boolean {
   border: none;
   padding: 0;
   color: inherit;
-  font-size: 13px;
+  font-size: var(--font-md);
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 6px;
 }
 .tab .title { font-weight: 500; }
-.tab .state { font-size: 11px; color: var(--text-muted); }
+.tab .state { font-size: var(--font-xs); color: var(--text-muted); }
 .tab.idle { color: var(--text-faint); }
 .tab.starting .state, .tab.closing .state { color: var(--warn); }
 .tab.exited .state { color: var(--text-muted); }
@@ -275,23 +280,23 @@ function canReopen(s: TabSessionState): boolean {
   border: none;
   color: inherit;
   padding: 0 4px;
-  font-size: 14px;
+  font-size: var(--font-base);
   line-height: 1;
   cursor: pointer;
   border-radius: 3px;
 }
 .icon:hover { background: var(--surface-hover); color: var(--text); }
 .icon.reopen { color: var(--success); }
-.icon.add { color: var(--info); font-size: 16px; margin-left: 4px; }
+.icon.add { color: var(--info); font-size: var(--font-lg); margin-left: 4px; }
 .menu-wrap { position: relative; display: flex; align-items: center; }
 .menu {
-  position: absolute; top: 100%; left: 0; z-index: 30;
+  position: absolute; top: 100%; left: 0; z-index: var(--z-drawer);
   list-style: none; margin: 2px 0 0; padding: 4px 0;
-  background: var(--surface-2); border: 1px solid var(--border-2); border-radius: 4px;
+  background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--radius-md);
   min-width: 140px;
 }
 .menu li {
-  padding: 6px 12px; font-size: 13px; color: var(--text-2); cursor: pointer;
+  padding: 6px 12px; font-size: var(--font-md); color: var(--text-2); cursor: pointer;
   outline: none;
 }
 .menu li:hover, .menu li:focus { background: var(--surface-hover); color: var(--text); }

@@ -4,9 +4,11 @@ import type {
   AckResult,
   BuildEvent,
   CapabilityReport,
+  DiagnosticBundle,
   DiscoveryReport,
   DoctorReport,
   EnvReadiness,
+  OpTrace,
   HistoryPatch,
   InstallerHandoff,
   OnboardingPatch,
@@ -165,6 +167,12 @@ export const captureWindowGeometry = () => invoke<boolean>("capture_window_geome
 // --- G-13: one-click diagnosis (05 §六, Step 12) ---
 
 export const runDoctor = () => invoke<DoctorReport>("run_doctor");
+
+// --- Stage 6 (REL-01): op-trace ring + redacted diagnostic bundle ---
+
+export const opTraces = () => invoke<OpTrace[]>("op_traces");
+export const diagnosticBundle = (writePath?: string) =>
+  invoke<DiagnosticBundle>("diagnostic_bundle", { writePath: writePath ?? null });
 
 // --- G-16: tray availability (03 §A-G16-4, Step 15) ---
 

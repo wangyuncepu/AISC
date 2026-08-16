@@ -455,6 +455,31 @@ mod tests {
         assert_eq!(rec.extra, serde_json::json!({}));
     }
 
+    /// REL-03: a record written by a PREVIOUS release (same schema 1, missing
+    /// newer optional fields media_type/previous_path/label) loads with the
+    /// contract defaults and keeps unknown fields in `extra` for a rollback.
+    #[test]
+    fn previous_version_record_loads_with_defaults() {
+        let line = r#"{
+            "schema_version": 1,
+            "artifact_id": "aaaaaaaa-0000-4000-8000-000000000001",
+            "workspace_relative_path": "docs/guide.md",
+            "action": "created",
+            "kind": "deliverable",
+            "producer": {"agent": "claude"},
+            "state": "present",
+            "recorded_at": "2026-08-01T00:00:00Z",
+            "old_field": "kept"
+        }"#;
+        let rec = parse_record_line(line).expect("parses previous-version record");
+        assert_eq!(rec.media_type, None);
+        assert_eq!(rec.previous_path, None);
+        assert_eq!(rec.open_with, "preview");
+        assert_eq!(rec.label, "");
+        // Unknown field from the previous version survives into `extra`.
+        assert_eq!(rec.extra.get("old_field").and_then(|v| v.as_str()), Some("kept"));
+    }
+
     #[test]
     fn unsupported_schema_line_fails_closed() {
         let line = r#"{"schema_version":99,"artifact_id":"x","workspace_relative_path":"a.md"}"#;

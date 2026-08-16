@@ -185,6 +185,31 @@ export interface DoctorReport {
   summary: DoctorSummary;
 }
 
+/** Stage 6 (REL-01): one bounded operation trace. */
+export interface OpTrace {
+  operationId: string;
+  source: string; // rust | cli | docker | ui
+  phase: string;
+  durationMs: number;
+  outcome: string; // ok | error | cancel
+  errorCode: string | null;
+  retryable: boolean;
+  action: string | null;
+  detail: string | null;
+}
+
+/** Stage 6 (REL-01): allowlisted redacted diagnostic bundle (D6-05/06). */
+export interface DiagnosticBundle {
+  generatedAtMs: number;
+  appVersion: string;
+  platform: string;
+  settings: unknown;
+  envReadiness: EnvReadiness;
+  doctor: DoctorReport | null;
+  recentOperations: OpTrace[];
+  path: string | null;
+}
+
 export type CheckStatus = "pass" | "warn" | "fail";
 
 export interface PreflightCheck {
@@ -379,6 +404,9 @@ export interface EnvReadiness {
   webview2: string;   // unknown | ready | missing
   dockerDesktopPath: string;
   cliPath: string;
+  /** Redacted reason the engine probe is not ready (spawn err / exit / timeout /
+   *  docker CLI missing). "" when ready. Surfaced for diagnostics (Stage 6 KI-1). */
+  engineDetail: string;
 }
 
 export type LaunchAgent = "claude" | "codex" | "bash" | "cc-switch";

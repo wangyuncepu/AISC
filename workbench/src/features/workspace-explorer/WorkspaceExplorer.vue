@@ -550,7 +550,7 @@ function onTreeKeydown(e: KeyboardEvent) {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 .explorer-header {
   display: flex;
@@ -612,7 +612,7 @@ function onTreeKeydown(e: KeyboardEvent) {
 .explorer-badge {
   font-size: 10px;
   padding: 0 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background: var(--accent-dim, rgba(74, 158, 255, 0.15));
 }
 .explorer-label {
@@ -633,7 +633,7 @@ function onTreeKeydown(e: KeyboardEvent) {
 .explorer-error {
   padding: 4px 8px;
   color: var(--warn, #d9a441);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 .explorer-empty {
   padding: 8px;
@@ -645,11 +645,11 @@ function onTreeKeydown(e: KeyboardEvent) {
 .explorer-menu-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 19;
+  z-index: calc(var(--z-overlay) - 1);
 }
 .explorer-menu {
   position: fixed;
-  z-index: 20;
+  z-index: var(--z-overlay);
   background: var(--surface, #1e1e1e);
   border: 1px solid var(--border, #333);
   display: flex;
@@ -683,13 +683,13 @@ function onTreeKeydown(e: KeyboardEvent) {
 }
 .preview-meta {
   color: var(--muted, #888);
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 .preview-text {
   padding: 8px;
   white-space: pre-wrap;
   word-break: break-all;
-  font-size: 12px;
+  font-size: var(--font-sm);
   margin: 0;
 }
 .preview-image {
@@ -703,12 +703,12 @@ function onTreeKeydown(e: KeyboardEvent) {
   border: none;
   color: inherit;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 .artifacts-group {
   margin: 6px 8px 2px;
   color: var(--muted, #888);
-  font-size: 11px;
+  font-size: var(--font-xs);
   text-transform: uppercase;
 }
 </style>

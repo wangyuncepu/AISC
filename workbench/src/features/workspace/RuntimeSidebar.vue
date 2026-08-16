@@ -74,6 +74,18 @@ const STATE_LABEL_KEY: Record<RuntimeState, string> = {
   removing: "app.removing",
 };
 
+/** Stage 6 (UX-04): session-state label in the mini list (never a raw enum). */
+const SESSION_LABEL_KEY: Record<string, string> = {
+  idle: "session.state.idle",
+  guide: "session.state.guide",
+  starting: "session.state.starting",
+  running: "session.state.running",
+  closing: "session.state.closing",
+  exited: "session.state.exited",
+  failed: "session.state.failed",
+  disconnected: "session.state.disconnected",
+};
+
 /** Semantic keys (04 §4.2): stable key -> untouched DOM subtree. */
 const runtimeKey = computed(
   () => `${snap.value?.state ?? "none"}|${store.freshness}|${store.runtimeState}`
@@ -213,7 +225,7 @@ function copyDone(key: string): boolean {
           @click="store.activateTab(x.tabId)"
         >
           <span class="t-title">{{ x.title }}</span>
-          <span class="t-state" :data-state="x.sessionState">{{ x.sessionState }}</span>
+          <span class="t-state" :data-state="x.sessionState">{{ t(SESSION_LABEL_KEY[x.sessionState] ?? "session.state.idle") }}</span>
         </li>
       </ul>
     </section>
@@ -252,25 +264,26 @@ function copyDone(key: string): boolean {
 <style scoped>
 .sidebar {
   width: 232px;
+  min-width: 200px; /* UX-02: explicit min so compact never collapses it */
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px;
+  gap: var(--space-3);
+  padding: var(--space-3);
   background: var(--surface);
   border-right: 1px solid var(--border);
   color: var(--text-2);
-  font-size: 12px;
+  font-size: var(--font-sm);
   overflow-y: auto;
 }
 .block { display: flex; flex-direction: column; gap: 3px; }
 .label { color: var(--text-faint); text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
-.value { color: var(--text-2); font-size: 13px; word-break: break-all; }
+.value { color: var(--text-2); font-size: var(--font-md); word-break: break-all; }
 .muted { color: var(--text-muted); }
-.copyable { cursor: pointer; transition: color 0.1s; }
+.copyable { cursor: pointer; transition: color var(--duration-fast); }
 .copyable:hover { color: var(--text); }
 .copied { color: var(--success); margin-left: 4px; }
-.mono { font-family: monospace; color: var(--info); font-size: 11px; }
+.mono { font-family: monospace; color: var(--info); font-size: var(--font-xs); }
 .kv { color: var(--text-muted); display: flex; gap: 6px; flex-wrap: wrap; }
 .kv span { color: var(--text-2); word-break: break-all; }
 .runtime-row { display: flex; align-items: center; gap: 6px; }
@@ -284,14 +297,14 @@ function copyDone(key: string): boolean {
 .last-known { font-size: 10px; color: var(--warn); }
 .actions-row { display: flex; gap: 6px; margin-top: 2px; }
 .auth-row { display: flex; align-items: center; gap: 8px; }
-.auth { font-size: 12px; }
+.auth { font-size: var(--font-sm); }
 .auth[data-auth="configured"] { color: var(--success); }
 .auth[data-auth="login_required"], .auth[data-auth="not_configured"] { color: var(--warn-fg); }
 .auth[data-auth="unknown"] { color: var(--text-muted); }
-.link { background: none; border: none; color: var(--info); padding: 0; font-size: 11px; cursor: pointer; text-decoration: underline; }
+.link { background: none; border: none; color: var(--info); padding: 0; font-size: var(--font-xs); cursor: pointer; text-decoration: underline; }
 .sessions-btn {
   background: none; border: none; color: var(--text-2); padding: 0; text-align: left;
-  font-size: 13px; cursor: pointer;
+  font-size: var(--font-md); cursor: pointer;
 }
 .sessions-btn:hover { color: var(--text); }
 .mini { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -308,11 +321,11 @@ function copyDone(key: string): boolean {
 .diagnose { background: var(--info-bg); border-color: var(--info-border); margin-top: 8px; }
 .dev { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 4px 10px; font-size: 12px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 4px 10px; font-size: var(--font-sm); cursor: pointer;
 }
 button:hover:not(:disabled) { background: var(--surface-hover); }
 button:disabled { opacity: 0.45; cursor: default; }
 button.danger { background: var(--error-bg); border-color: var(--error-border); }
-.err { font-size: 11px; color: var(--error); }
+.err { font-size: var(--font-xs); color: var(--error); }
 </style>

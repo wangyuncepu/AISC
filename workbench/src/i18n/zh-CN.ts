@@ -21,6 +21,26 @@ export const zhCN = {
   "app.starting": "启动中",
   "app.removing": "移除中",
 
+  // Stage 6 (UX-04): topbar app-status labels (store.status, no raw enum).
+  "app.status.idle": "空闲",
+  "app.status.picker": "选择工作区",
+  "app.status.summary": "预检完成",
+  "app.status.cancelled": "已取消",
+  "app.status.building": "构建镜像",
+  "app.status.conflict": "冲突",
+  "app.status.ready": "就绪",
+  "app.status.blocked": "阻塞",
+
+  // Stage 6 (UX-04): session-state labels (sidebar mini list).
+  "session.state.idle": "空闲",
+  "session.state.guide": "引导",
+  "session.state.starting": "启动中",
+  "session.state.running": "运行中",
+  "session.state.closing": "关闭中",
+  "session.state.exited": "已退出",
+  "session.state.failed": "失败",
+  "session.state.disconnected": "已断开",
+
   // --- workspace picker (App.vue) ---
   "picker.title": "选择工作区",
   "picker.placeholder": "工作区路径（如 /home/user/project）",
@@ -194,6 +214,11 @@ export const zhCN = {
   "doctor.status.warn": "警告",
   "doctor.status.fail": "失败",
   "doctor.status.skip": "跳过",
+  "doctor.traces": "最近操作耗时",
+  "doctor.export": "导出诊断包",
+  "doctor.exportConfirm": "诊断包仅包含以下内容：应用版本、平台、脱敏后的设置、环境就绪信息、诊断报告、最近操作耗时。不含密钥、提示词或终端内容。确认导出？",
+  "doctor.exported": "已导出：{path}",
+  "doctor.exportFailed": "导出失败。",
   // --- 构建完成通知 (G-14, Step 13) ---
   "notification.title": "AISC Workbench",
   "notification.buildComplete": "镜像构建完成（{duration} 秒）",
@@ -306,6 +331,7 @@ export const zhCN = {
   "onboarding.env.starting": "等待引擎…",
   "onboarding.env.startingHint": "正在启动 Docker 引擎…若弹出 Docker Desktop 首次设置（许可协议 / WSL），请先完成，本页会自动检测就绪。",
   "onboarding.env.retry": "重新检查",
+  "onboarding.env.engineDetail": "引擎探测详情",
 
   "onboarding.ws.title": "选择工作区",
   "onboarding.ws.pick": "浏览…",

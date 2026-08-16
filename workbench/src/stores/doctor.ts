@@ -9,7 +9,7 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import * as ipc from "../lib/ipc";
-import type { DoctorReport, WorkbenchError } from "../types";
+import type { DoctorReport, OpTrace, WorkbenchError } from "../types";
 
 export type DoctorRunState = "idle" | "running" | "done" | "error";
 
@@ -19,6 +19,8 @@ export const useDoctorStore = defineStore("doctor", () => {
   const status = ref<DoctorRunState>("idle");
   const report = ref<DoctorReport | null>(null);
   const error = ref<WorkbenchError | null>(null);
+  /** Stage 6 (REL-01): recent operation traces (Doctor dialog dev layer). */
+  const traces = ref<OpTrace[]>([]);
 
   const running = computed(() => status.value === "running");
   /** Non-zero failed checks / any warning - drives the summary styling. */
@@ -58,16 +60,35 @@ export const useDoctorStore = defineStore("doctor", () => {
     open.value = false;
   }
 
+  /** Stage 6 (REL-01): refresh the recent-operation trace ring. */
+  async function loadTraces(): Promise<void> {
+    traces.value = await ipc.opTraces().catch(() => []);
+  }
+
+  /** Stage 6 (REL-01): export the redacted diagnostic bundle to `path`.
+   *  Returns the final path (null on failure); the UI builds the message. */
+  async function exportDiagnostic(path: string): Promise<string | null> {
+    try {
+      const bundle = await ipc.diagnosticBundle(path);
+      return bundle.path;
+    } catch {
+      return null;
+    }
+  }
+
   return {
     open,
     status,
     report,
     error,
+    traces,
     running,
     hasFailures,
     hasWarnings,
     run,
     openDialog,
     closeDialog,
+    loadTraces,
+    exportDiagnostic,
   };
 });

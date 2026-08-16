@@ -223,6 +223,13 @@ async function finish() {
       <p v-else-if="environment.readiness.engine === 'starting'" class="ob-note" role="status">
         {{ t("onboarding.env.startingHint") }}
       </p>
+      <!-- KI-1 diagnostic: redacted probe detail so a still-not-ready engine is
+           explainable in-place (docker CLI missing / spawn err / exit / timeout). -->
+      <p
+        v-if="environment.readiness.engine !== 'ready' && environment.readiness.engineDetail"
+        class="ob-note ob-engine-detail"
+        role="status"
+      >{{ t("onboarding.env.engineDetail") }}: {{ environment.readiness.engineDetail }}</p>
 
       <div class="ob-actions">
         <button
@@ -417,29 +424,30 @@ async function finish() {
   padding: 24px;
   text-align: center;
 }
-.ob-title { font-size: 20px; margin: 0; }
+.ob-title { font-size: var(--font-xl); margin: 0; }
 .ob-subtitle { color: var(--muted, #888); margin: 0; }
-.ob-step { color: var(--text-2); font-size: 13px; margin: 0; }
-.ob-error { color: var(--error, #e5534b); font-size: 13px; }
+.ob-step { color: var(--text-2); font-size: var(--font-md); margin: 0; }
+.ob-error { color: var(--error, var(--status-err)); font-size: var(--font-md); }
 .ob-finished { color: var(--muted, #888); }
 .ob-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; justify-content: center; }
-.ob-btn { padding: 6px 16px; border-radius: 4px; border: 1px solid var(--border-strong, #444); background: var(--surface-3, #262626); color: inherit; cursor: pointer; }
-.ob-btn.primary { background: var(--accent, #4a9eff); border-color: var(--accent, #4a9eff); color: #fff; }
+.ob-btn { padding: 6px 16px; border-radius: var(--radius-md); border: 1px solid var(--border-strong, #444); background: var(--surface-3, #262626); color: inherit; cursor: pointer; }
+.ob-btn.primary { background: var(--accent, #4a9eff); border-color: var(--accent, #4a9eff); color: var(--accent-fg); }
 .ob-btn.ghost { background: none; }
 .ob-btn:disabled { opacity: 0.5; cursor: default; }
-.ob-check-list { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; text-align: left; font-size: 13px; }
+.ob-check-list { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; text-align: left; font-size: var(--font-md); }
 .ob-recents { display: flex; flex-direction: column; gap: 4px; max-width: 420px; width: 100%; }
 .ws-recent { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ob-net-options { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .ob-btn.active { border-color: var(--accent, #4a9eff); color: var(--accent, #4a9eff); }
-.ob-note { color: var(--muted, #888); font-size: 12px; max-width: 420px; }
-.ob-probe[data-result="ok"] { color: #4caf50; font-size: 12px; }
-.ob-probe[data-result="failed"] { color: #e5534b; font-size: 12px; }
-.ob-btn.confirm { border-color: #ffb300; color: #ffb300; }
+.ob-note { color: var(--muted, #888); font-size: var(--font-sm); max-width: 420px; }
+.ob-engine-detail { font-family: monospace; font-size: var(--font-xs); color: var(--warn); }
+.ob-probe[data-result="ok"] { color: var(--status-ok); font-size: var(--font-sm); }
+.ob-probe[data-result="failed"] { color: var(--status-err); font-size: var(--font-sm); }
+.ob-btn.confirm { border-color: var(--status-pending); color: var(--status-pending); }
 .ob-conflicts { max-width: 420px; }
-.ob-conflict-row { color: var(--muted, #888); font-size: 12px; margin: 2px 0; }
-.ob-check-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: var(--muted, #888); }
-.ob-check-dot[data-state="ready"] { background: #4caf50; }
-.ob-check-dot[data-state="starting"], .ob-check-dot[data-state="installing"] { background: #ffb300; }
-.ob-check-dot[data-state="unavailable"], .ob-check-dot[data-state="not_installed"], .ob-check-dot[data-state="missing"], .ob-check-dot[data-state="blocked"] { background: #e5534b; }
+.ob-conflict-row { color: var(--muted, #888); font-size: var(--font-sm); margin: 2px 0; }
+.ob-check-dot { display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-full); margin-right: 8px; background: var(--muted, #888); }
+.ob-check-dot[data-state="ready"] { background: var(--status-ok); }
+.ob-check-dot[data-state="starting"], .ob-check-dot[data-state="installing"] { background: var(--status-pending); }
+.ob-check-dot[data-state="unavailable"], .ob-check-dot[data-state="not_installed"], .ob-check-dot[data-state="missing"], .ob-check-dot[data-state="blocked"] { background: var(--status-err); }
 </style>

@@ -32,6 +32,11 @@ pub struct EnvReadiness {
     pub docker_desktop_path: String,
     /// CLI path resolved for readiness ("" if unavailable).
     pub cli_path: String,
+    /// Redacted engine-probe detail — WHY the engine is not ready (spawn err /
+    /// non-zero exit / timeout / docker CLI missing). "" when ready. Surfaced
+    /// in the wizard + Doctor for diagnostics (Stage 6 KI-1). Never secret.
+    #[serde(default)]
+    pub engine_detail: String,
 }
 
 impl EnvReadiness {
@@ -43,6 +48,7 @@ impl EnvReadiness {
             webview2: "unknown".into(),
             docker_desktop_path: String::new(),
             cli_path: String::new(),
+            engine_detail: String::new(),
         }
     }
 
@@ -65,11 +71,51 @@ pub(crate) fn docker_desktop_candidates() -> Vec<PathBuf> {
     }
 }
 
+/// Candidate paths for the `docker` CLI binary next to Docker Desktop
+/// (`resources\bin\docker.exe`). The GUI process may not have Docker's bin on
+/// PATH even when Docker Desktop is installed (launch-time env snapshot), so
+/// the probe falls back to these known locations instead of only PATH.
+#[cfg(windows)]
+fn docker_cli_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        out.push(PathBuf::from(pf).join("Docker\\Docker\\resources\\bin\\docker.exe"));
+    }
+    if let Ok(base) = std::env::var("LOCALAPPDATA") {
+        out.push(PathBuf::from(base).join("Docker\\Docker Desktop\\resources\\bin\\docker.exe"));
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn docker_cli_candidates() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// Resolve a `docker` CLI executable: prefer the known Docker Desktop resource
+/// paths (authoritative for the Desktop engine, and independent of the GUI's
+/// launch-time PATH), then fall back to the bare name resolved via PATH.
+/// Returns "" only when neither a candidate file nor a PATH fallback exists.
+fn resolve_docker_cli() -> PathBuf {
+    for p in docker_cli_candidates() {
+        if p.is_file() {
+            return p;
+        }
+    }
+    PathBuf::from("docker") // PATH resolution at spawn; caller probes the failure
+}
+
 /// Probe whether the Docker Engine is reachable, with a bounded timeout.
 /// Uses `docker version --format {{.Server.Version}}` (the CLI is a hard
 /// dependency) with a tokio deadline so a hung daemon never blocks onboarding.
-async fn engine_reachable() -> bool {
-    let mut cmd = tokio::process::Command::new("docker");
+/// Returns (reachable, redacted-detail) — the detail explains WHY not ready
+/// (spawn failed / non-zero exit / timeout) for the wizard + Doctor (KI-1).
+async fn engine_reachable_detail() -> (bool, String) {
+    let cli = resolve_docker_cli();
+    if cli.as_os_str().is_empty() {
+        return (false, "docker CLI not found (not on PATH or Docker Desktop bin)".into());
+    }
+    let mut cmd = tokio::process::Command::new(&cli);
     cmd.args(["version", "--format", "{{.Server.Version}}"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -82,13 +128,15 @@ async fn engine_reachable() -> bool {
     cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(_) => return false, // docker CLI not on PATH
+        Err(e) => return (false, format!("docker spawn failed: {e}")),
     };
     match tokio::time::timeout(ENGINE_PROBE_TIMEOUT, child.wait()).await {
-        Ok(Ok(status)) => status.success(),
-        _ => {
+        Ok(Ok(status)) if status.success() => (true, String::new()),
+        Ok(Ok(status)) => (false, format!("docker version exited {:?}", status.code())),
+        Ok(Err(e)) => (false, format!("docker run error: {e}")),
+        Err(_) => {
             let _ = child.kill().await; // reap on timeout
-            false
+            (false, format!("docker probe timed out after {}s", ENGINE_PROBE_TIMEOUT.as_secs()))
         }
     }
 }
@@ -183,8 +231,11 @@ pub async fn compute_readiness(app: tauri::AppHandle) -> EnvReadiness {
     r.docker = if installed { "installed".into() } else { "not_installed".into() };
     r.docker_desktop_path = exe;
 
-    // Engine reachability (separate from install — the contract)
-    if engine_reachable().await {
+    // Engine reachability (separate from install — the contract). The detail
+    // (why not ready) rides along for the wizard/Doctor when not ready.
+    let (reachable, detail) = engine_reachable_detail().await;
+    r.engine_detail = detail;
+    if reachable {
         r.engine = "ready".into();
     } else if installed {
         r.engine = "starting".into(); // Desktop present but daemon not answering yet
@@ -219,10 +270,11 @@ pub async fn poll_engine_ready(app: tauri::AppHandle, deadline_ms: u64) -> EnvRe
     r
 }
 
-/// Tauri command: one-shot environment readiness (ONB-02 entry).
+/// Tauri command: one-shot environment readiness (ONB-02 entry). Timed so the
+/// Docker probe latency lands in the op-trace ring (REL-01 / KI-1 diagnosis).
 #[tauri::command]
 pub async fn env_readiness(app: tauri::AppHandle) -> EnvReadiness {
-    compute_readiness(app).await
+    crate::trace::timed_ok("docker", "env_readiness", compute_readiness(app)).await
 }
 
 /// Tauri command: poll Engine until ready or deadline (used after the user
@@ -266,7 +318,24 @@ mod tests {
     #[tokio::test]
     async fn engine_probe_falls_back_without_panicking() {
         // No assertion on the result (environment-dependent); must not panic.
-        let _ = engine_reachable().await;
+        let _ = engine_reachable_detail().await;
+    }
+
+    /// KI-1 diagnostic (Stage 6, 6a): on this machine Docker is running and
+    /// `docker version` succeeds from a shell, so the probe MUST be true. This
+    /// is a temporary reproduction test — remove once KI-1 is root-caused.
+    #[tokio::test]
+    async fn diag_engine_reachable_true_with_running_docker() {
+        let (ok, detail) = engine_reachable_detail().await;
+        eprintln!("[diag] engine_reachable = {ok} detail = {detail:?}");
+        assert!(ok, "Docker is running; engine_reachable_detail() must be true (detail: {detail})");
+    }
+
+    #[test]
+    fn diag_docker_cli_candidates_are_well_formed() {
+        for c in docker_cli_candidates() {
+            assert!(c.to_string_lossy().ends_with("docker.exe"));
+        }
     }
 
     #[cfg(windows)]

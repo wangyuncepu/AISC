@@ -500,7 +500,19 @@ fn same_path(a: &str, b: &Path) -> bool {
 /// - timeout + cancellation both kill + reap the child (05 §九.1).
 /// - stdout capped at `MAX_STDOUT`; overflow -> protocol error.
 /// - `meta.exit_code` must equal the process exit code (05 §八).
+/// Timed entry point for every CLI operation: records duration + outcome in
+/// the bounded op-trace ring (REL-01) then returns the envelope.
 pub async fn run_control(
+    executable: &Path,
+    argv: Vec<String>,
+    timeout: Duration,
+    cancel: CancellationToken,
+) -> Result<Envelope, WorkbenchError> {
+    let phase = argv.first().map(|s| s.as_str()).unwrap_or("cli").to_owned();
+    crate::trace::timed("cli", &phase, run_control_inner(executable, argv, timeout, cancel)).await
+}
+
+async fn run_control_inner(
     executable: &Path,
     argv: Vec<String>,
     timeout: Duration,

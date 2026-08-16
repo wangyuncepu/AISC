@@ -7,10 +7,11 @@
  * (A-G01-1). Defaults and bounds live in Rust - this view renders whatever
  * `load_settings` returns.
  */
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../../stores/settings";
+import { useDialogA11y } from "../../composables/useDialogA11y";
 import type { TerminalSettings, UiSettings, WindowSettings } from "../../types";
 
 const { t } = useI18n();
@@ -103,20 +104,16 @@ const saving = computed(() => store.saveState === "saving");
 const savedFlash = ref(false);
 const panel = ref<HTMLElement | null>(null);
 
+// Stage 6 (UX-03): focus trap + Escape + opener restore.
+useDialogA11y(panel, () => emit("close"));
+
 onMounted(async () => {
   if (!store.loaded) await store.load();
   await nextTick();
   // Initial focus into the dialog (keyboard reachable, A-G01-1); Tab then
   // walks the controls.
   panel.value?.focus();
-  window.addEventListener("keydown", onKeydown);
 });
-
-onUnmounted(() => window.removeEventListener("keydown", onKeydown));
-
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") emit("close");
-}
 
 function onOverlayDown(e: MouseEvent) {
   if (e.target === e.currentTarget) emit("close");
@@ -265,11 +262,11 @@ function onCancel() {
 <style scoped>
 .overlay {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
-  display: flex; align-items: center; justify-content: center; z-index: 50;
+  display: flex; align-items: center; justify-content: center; z-index: var(--z-dialog);
 }
 .panel {
   width: 560px; max-width: 92vw; max-height: 84vh; overflow: auto;
-  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-2); border-radius: 6px;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-2); border-radius: var(--radius-lg);
   outline: none; display: flex; flex-direction: column;
 }
 .head {
@@ -280,42 +277,42 @@ function onCancel() {
   position: sticky; top: 0; z-index: 2; background: var(--surface);
 }
 .head h2 { margin: 0; font-size: 15px; color: var(--text-2); }
-.chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+.chip { font-size: var(--font-xs); padding: 2px 8px; border-radius: 10px; }
 .chip.dirty { background: var(--warn-bg); color: var(--warn-fg); }
 .chip.saved { background: var(--success-bg); color: var(--success); }
-.banner { margin: 8px 14px 0; padding: 6px 10px; border-radius: 4px; font-size: 12px; }
+.banner { margin: 8px 14px 0; padding: 6px 10px; border-radius: var(--radius-md); font-size: var(--font-sm); }
 .banner.warn { background: var(--warn-bg); color: var(--warn-fg); }
 .banner.err { background: var(--error-bg); color: var(--error-fg); }
 .link { background: none; border: none; color: var(--info); padding: 0; margin-left: 8px; cursor: pointer; text-decoration: underline; }
 .body { padding: 6px 14px 12px; flex: 1; }
-.group { margin: 12px 0 4px; font-size: 12px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
+.group { margin: 12px 0 4px; font-size: var(--font-sm); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
 .field { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
-.label { width: 150px; font-size: 13px; color: var(--text-2); }
+.label { width: 150px; font-size: var(--font-md); color: var(--text-2); }
 input[type="text"], input[type="number"], select {
-  background: var(--bg); color: var(--text-2); border: 1px solid var(--border-2); border-radius: 4px;
-  padding: 4px 6px; font-size: 13px; flex: 1; min-width: 120px;
+  background: var(--bg); color: var(--text-2); border: 1px solid var(--border-2); border-radius: var(--radius-md);
+  padding: 4px 6px; font-size: var(--font-md); flex: 1; min-width: 120px;
 }
 input[type="range"] {
   flex: 1; min-width: 120px; accent-color: var(--accent); cursor: pointer;
 }
 input:disabled, select:disabled { opacity: 0.5; }
 .val {
-  font-size: 12px; color: var(--info); min-width: 46px; text-align: right;
+  font-size: var(--font-sm); color: var(--info); min-width: 46px; text-align: right;
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.effect { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
-.help { font-size: 11px; color: var(--text-faint); width: 100%; }
-.err-text { font-size: 11px; color: var(--error); width: 100%; }
-.note { font-size: 11px; color: var(--text-faint); margin-top: 8px; }
-.loading { color: var(--text-muted); font-size: 13px; }
+.effect { font-size: var(--font-xs); color: var(--text-muted); white-space: nowrap; }
+.help { font-size: var(--font-xs); color: var(--text-faint); width: 100%; }
+.err-text { font-size: var(--font-xs); color: var(--error); width: 100%; }
+.note { font-size: var(--font-xs); color: var(--text-faint); margin-top: 8px; }
+.loading { color: var(--text-muted); font-size: var(--font-md); }
 .foot {
   display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border);
   /* Sticky bottom so Save is reachable in a small window (see .head). */
   position: sticky; bottom: 0; z-index: 2; background: var(--surface);
 }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
 }
 button:hover:not(:disabled) { background: var(--surface-hover); }
 button:disabled { opacity: 0.45; cursor: default; }

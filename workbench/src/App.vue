@@ -16,6 +16,7 @@ import {
 } from "./lib/ipc";
 import { applyLocale } from "./i18n";
 import { applyTheme, createSystemListener } from "./theme";
+import { layoutTierFor, type LayoutTier } from "./lib/layout";
 import { computeWindowTitle } from "./lib/title";
 import { leafCount } from "./stores/paneTree";
 import { useRuntimeStore } from "./stores/runtime";
@@ -128,6 +129,15 @@ const uiZoom = computed(() => ({
   height: `calc(100vh / ${effectiveScale.value})`,
   width: `calc(100vw / ${effectiveScale.value})`,
 }));
+
+// Stage 6 (UX-02): layout tier by the EFFECTIVE layout width (the zoomed app
+// box = viewport / scale), NOT the raw viewport — the zoom system scales the
+// 800px baseline, so a 320px window still lays out at ~800px. Compact <640,
+// Standard 640-1100, Wide >1100 (02-domain-contract.md). Exposed as data-tier
+// on the app root; components react via .app[data-tier="..."] selectors.
+const layoutTier = computed<LayoutTier>(
+  () => layoutTierFor(window.innerWidth / (effectiveScale.value || 1)),
+);
 const terminalZoom = computed(() => ({ zoom: String(1 / effectiveScale.value) }));
 // G-11 (2026-08-10): the counter-zoom keeps the terminal visually 1:1 when
 // the UI scale changes, preventing the canvas re-fit flicker observed when it
@@ -165,6 +175,23 @@ const RUNTIME_LABEL_KEY: Record<string, string> = {
   starting: "app.starting",
   stopping: "app.stopping",
   removing: "app.removing",
+};
+
+// Stage 6 (UX-04): topbar status label (store.status, never a raw enum).
+const STATUS_KEY: Record<string, string> = {
+  idle: "app.status.idle",
+  negotiating: "app.negotiating",
+  preflight: "app.preflight",
+  picker: "app.status.picker",
+  summary: "app.status.summary",
+  starting: "app.starting",
+  cancelled: "app.status.cancelled",
+  building: "app.status.building",
+  conflict: "app.status.conflict",
+  ready: "app.status.ready",
+  stopping: "app.stopping",
+  blocked: "app.status.blocked",
+  error: "app.error.title",
 };
 
 // Announce runtime-state transitions (not every poll - only when the state
@@ -462,10 +489,10 @@ function selectRecent(path: string): void {
 </script>
 
 <template>
-  <div class="app" :style="uiZoom">
+  <div class="app" :style="uiZoom" :data-tier="layoutTier">
     <header class="topbar">
       <span class="brand">AISC Workbench</span>
-      <span class="status" :data-status="store.status">{{ store.status }}</span>
+      <span class="status" :data-status="store.status">{{ t(STATUS_KEY[store.status] ?? "app.unknown") }}</span>
       <span class="spacer" />
       <button class="settings-btn" @click="settingsOpen = true">{{ t("app.settings") }}</button>
     </header>
@@ -637,15 +664,15 @@ function selectRecent(path: string): void {
   padding: 6px 12px;
   background: var(--surface);
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--font-md);
   border-bottom: 1px solid var(--border);
 }
 .brand { font-weight: 600; }
 .spacer { flex: 1; }
-.status { font-size: 12px; color: var(--text-muted); }
+.status { font-size: var(--font-sm); color: var(--text-muted); }
 .status[data-status="ready"] { color: var(--success); }
 .status[data-status="error"], .status[data-status="blocked"] { color: var(--error); }
-.settings-btn { padding: 3px 10px; font-size: 12px; }
+.settings-btn { padding: 3px 10px; font-size: var(--font-sm); }
 .gate.blocked, .gate.error, .center, .picker {
   flex: 1;
   display: flex;
@@ -656,40 +683,40 @@ function selectRecent(path: string): void {
   color: var(--text-2);
 }
 .gate .err, .picker h2 { color: var(--text-2); }
-.gate .detail { font-size: 12px; color: var(--text-muted); }
+.gate .detail { font-size: var(--font-sm); color: var(--text-muted); }
 .center .msg { color: var(--text-muted); }
 .picker { gap: 12px; }
 .onboarding-gate {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--z-onboarding);
   background: var(--surface, #1e1e1e);
   display: flex;
 }
 .picker .row { display: flex; gap: 8px; width: 560px; max-width: 90vw; }
-.picker .hint { font-size: 12px; color: var(--text-muted); }
+.picker .hint { font-size: var(--font-sm); color: var(--text-muted); }
 .recents { width: 560px; max-width: 90vw; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
-.recents-label { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
+.recents-label { font-size: var(--font-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
 .recents ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .recents li { width: 100%; }
 .recent {
   width: 100%; display: flex; align-items: center; gap: 8px; text-align: left;
-  background: var(--surface); color: var(--text-2); border: 1px solid var(--border); border-radius: 4px;
-  padding: 6px 10px; font-size: 12px; cursor: pointer;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: 6px 10px; font-size: var(--font-sm); cursor: pointer;
 }
 .recent:hover { background: var(--surface-2); border-color: var(--border-2); }
 .r-name { color: var(--text-2); font-weight: 500; min-width: 80px; }
-.r-path { flex: 1; color: var(--text-muted); font-family: monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.r-agent { color: var(--info); font-size: 11px; }
+.r-path { flex: 1; color: var(--text-muted); font-family: monospace; font-size: var(--font-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-agent { color: var(--info); font-size: var(--font-xs); }
 .workspace {
   flex: 1; min-width: 0; background: var(--surface); color: var(--text-2);
-  border: 1px solid var(--border-2); border-radius: 4px; padding: 6px 8px; font-size: 13px;
+  border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 6px 8px; font-size: var(--font-md);
 }
 .ready { flex: 1; display: flex; min-height: 0; position: relative; }
 .main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
 }
 button:hover:not(:disabled) { background: var(--surface-hover); }
 button:disabled { opacity: 0.45; cursor: default; }
@@ -707,10 +734,10 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
   padding: 4px 6px;
   background: var(--surface-3);
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-2);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 .explorer-drawer {
   position: absolute;
@@ -718,7 +745,8 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
   right: 0;
   bottom: 0;
   width: 320px;
-  z-index: 30;
+  max-width: 100%; /* never exceed the window at narrow tiers (UX-02) */
+  z-index: var(--z-drawer);
   display: flex;
   background: var(--surface);
   border-left: 1px solid var(--border-strong);
@@ -733,6 +761,13 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
   /* fill the terminal-area row so internal centering is global, not the
      content-width box anchored at the left edge (G-17 feedback 2026-08-10) */
   flex: 1; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 10px; color: var(--text-muted); font-size: 13px;
+  justify-content: center; gap: 10px; color: var(--text-muted); font-size: var(--font-md);
 }
+
+/* Stage 6 (UX-02): layout tiers driven by the effective app-box width
+ * (data-tier on .app; see layoutTier). Compact < 640px box. */
+.app[data-tier="compact"] .topbar { gap: var(--space-2); padding: 4px var(--space-2); }
+.app[data-tier="compact"] .topbar .status { display: none; } /* keep brand + settings */
+.app[data-tier="compact"] .sidebar { width: 200px; min-width: 200px; padding: var(--space-2); }
+.app[data-tier="compact"] .explorer-drawer { width: min(320px, 100%); }
 </style>

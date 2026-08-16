@@ -157,7 +157,7 @@ function closeMenus() {
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   background: var(--warn-bg);
   color: var(--warn-fg);
   border: 1px solid var(--warn-border);
@@ -165,27 +165,27 @@ function closeMenus() {
 .banner[data-auth="login_required"] { background: var(--warn-bg); color: var(--warn-fg); }
 .banner[data-auth="not_configured"] { background: var(--error-bg); color: var(--error-fg); }
 .banner[data-auth="unknown"] { background: var(--info-bg); color: var(--info); }
-.icon { font-size: 14px; }
-.text { font-size: 13px; font-weight: 500; }
+.icon { font-size: var(--font-base); }
+.text { font-size: var(--font-md); font-weight: 500; }
 .actions { margin-left: auto; display: flex; gap: 8px; }
-.hint { font-size: 12px; color: var(--text-muted); }
+.hint { font-size: var(--font-sm); color: var(--text-muted); }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 4px 12px; font-size: 12px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 4px 12px; font-size: var(--font-sm); cursor: pointer;
 }
 button:hover:not(:disabled) { background: var(--surface-hover); }
 button.primary { background: var(--accent); border-color: var(--accent); }
 .ctx-backdrop {
-  position: fixed; inset: 0; z-index: 18;
+  position: fixed; inset: 0; z-index: calc(var(--z-overlay) - 2);
 }
 .ctx-menu {
-  position: fixed; z-index: 20;
+  position: fixed; z-index: var(--z-overlay);
   display: flex; flex-direction: column; min-width: 140px; padding: 4px;
-  background: var(--surface); border: 1px solid var(--border-2); border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
 }
 .ctx-menu button {
-  background: transparent; color: var(--text-2); border: none; border-radius: 2px;
+  background: transparent; color: var(--text-2); border: none; border-radius: var(--radius-sm);
   text-align: left; padding: 6px 12px; cursor: pointer;
 }
 .ctx-menu button:hover { background: var(--surface-active); }

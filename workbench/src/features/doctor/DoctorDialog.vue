@@ -9,9 +9,11 @@
  * WorkbenchError with a retry (A-G13-1/A-G13-2). The run button is disabled
  * while a doctor is in flight (A-G13-3).
  */
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { confirm, save } from "@tauri-apps/plugin-dialog";
 import { useDoctorStore } from "../../stores/doctor";
+import { useDialogA11y } from "../../composables/useDialogA11y";
 import type { DoctorStatus } from "../../types";
 
 const { t } = useI18n();
@@ -25,16 +27,38 @@ const STATUS_LABEL_KEY: Record<DoctorStatus, string> = {
   skip: "doctor.status.skip",
 };
 
-onMounted(() => {
-  panel.value?.focus();
-  window.addEventListener("keydown", onKeydown);
-});
+// Stage 6 (UX-03): focus trap + Escape + opener restore.
+useDialogA11y(panel, () => store.closeDialog());
 
-onUnmounted(() => window.removeEventListener("keydown", onKeydown));
+// --- Stage 6 (REL-01): recent op traces + redacted diagnostic bundle ---
+// The IPC lives in the doctor store (F-A01: components never import fact
+// commands directly); this view only builds the messages.
+const traces = computed(() => store.traces);
+const exporting = ref(false);
+const exportMsg = ref<string | null>(null);
+const exportOk = ref(true);
 
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") store.closeDialog();
+async function exportBundle() {
+  // D6-06: manifest (allowlist) shown before writing.
+  const ok = await confirm(t("doctor.exportConfirm"));
+  if (!ok) return;
+  const path = await save({
+    defaultPath: `aisc-diagnostic-${Date.now()}.json`,
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  });
+  if (!path) return;
+  exporting.value = true;
+  exportMsg.value = null;
+  const result = await store.exportDiagnostic(path);
+  exportOk.value = result !== null;
+  exportMsg.value = result ? t("doctor.exported", { path: result }) : t("doctor.exportFailed");
+  exporting.value = false;
 }
+
+onMounted(async () => {
+  panel.value?.focus();
+  await store.loadTraces();
+});
 
 function onOverlayDown(e: MouseEvent) {
   if (e.target === e.currentTarget) store.closeDialog();
@@ -89,10 +113,26 @@ function onOverlayDown(e: MouseEvent) {
         <p class="muted">{{ t("doctor.idle") }}</p>
       </div>
 
+      <!-- Stage 6 (REL-01): recent operation timings (dev layer) -->
+      <details v-if="traces.length" class="traces">
+        <summary>{{ t("doctor.traces") }}</summary>
+        <ul>
+          <li v-for="op in traces.slice(-12).reverse()" :key="op.operationId" class="trace-row">
+            <span class="t-phase">{{ op.phase }}</span>
+            <span class="t-dur">{{ op.durationMs }}ms</span>
+            <span class="t-out" :data-out="op.outcome">{{ op.outcome }}</span>
+            <span v-if="op.errorCode" class="t-code">{{ op.errorCode }}</span>
+          </li>
+        </ul>
+      </details>
+
+      <p v-if="exportMsg" class="export-msg" :data-err="!exportOk">{{ exportMsg }}</p>
+
       <footer class="foot">
         <button class="primary" :disabled="store.running" @click="store.run()">
           {{ store.status === "error" ? t("doctor.retry") : t("doctor.run") }}
         </button>
+        <button :disabled="exporting" @click="exportBundle">{{ t("doctor.export") }}</button>
         <button :disabled="store.running" @click="store.closeDialog()">{{ t("doctor.close") }}</button>
       </footer>
     </section>
@@ -102,11 +142,11 @@ function onOverlayDown(e: MouseEvent) {
 <style scoped>
 .overlay {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
-  display: flex; align-items: center; justify-content: center; z-index: 50;
+  display: flex; align-items: center; justify-content: center; z-index: var(--z-dialog);
 }
 .panel {
   width: 620px; max-width: 92vw; max-height: 84vh; overflow: auto;
-  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-2); border-radius: 6px;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-2); border-radius: var(--radius-lg);
   outline: none; display: flex; flex-direction: column;
 }
 .head {
@@ -118,18 +158,30 @@ function onOverlayDown(e: MouseEvent) {
 .foot {
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 12px 16px; border-top: 1px solid var(--border);
+  flex-wrap: wrap;
 }
+.traces { border-top: 1px solid var(--border); padding-top: 8px; }
+.traces summary { cursor: pointer; color: var(--text-muted); font-size: var(--font-sm); user-select: none; }
+.traces ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: var(--font-xs); }
+.trace-row { display: flex; gap: 8px; align-items: center; color: var(--text-muted); }
+.t-phase { color: var(--text-2); min-width: 120px; }
+.t-dur { color: var(--info); min-width: 48px; text-align: right; }
+.t-out[data-out="ok"] { color: var(--success); }
+.t-out[data-out="error"] { color: var(--error); }
+.t-code { color: var(--warn); font-family: monospace; }
+.export-msg { font-size: var(--font-xs); color: var(--success); word-break: break-all; }
+.export-msg[data-err="true"] { color: var(--error); }
 .running { color: var(--warn); }
 .muted { color: var(--text-muted); }
 .err-title { color: var(--error); font-weight: 600; }
 .err { color: var(--text-2); }
-.code { color: var(--text-muted); font-family: monospace; font-size: 11px; }
-.detail { color: var(--text-muted); font-size: 12px; word-break: break-all; }
-.hint-text { color: var(--text-muted); font-size: 12px; }
+.code { color: var(--text-muted); font-family: monospace; font-size: var(--font-xs); }
+.detail { color: var(--text-muted); font-size: var(--font-sm); word-break: break-all; }
+.hint-text { color: var(--text-muted); font-size: var(--font-sm); }
 
-.summary { display: flex; gap: 12px; font-size: 13px; flex-wrap: wrap; }
-.summary[data-fail="true"] { padding: 8px 10px; background: var(--error-bg); border: 1px solid var(--error-border); border-radius: 4px; }
-.summary[data-fail="false"][data-warn="true"] { padding: 8px 10px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 4px; }
+.summary { display: flex; gap: 12px; font-size: var(--font-md); flex-wrap: wrap; }
+.summary[data-fail="true"] { padding: 8px 10px; background: var(--error-bg); border: 1px solid var(--error-border); border-radius: var(--radius-md); }
+.summary[data-fail="false"][data-warn="true"] { padding: 8px 10px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: var(--radius-md); }
 .sum-item.fail { color: var(--error); }
 .sum-item.warn { color: var(--warn-fg); }
 .sum-item.skip { color: var(--text-muted); }
@@ -137,8 +189,8 @@ function onOverlayDown(e: MouseEvent) {
 
 .checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .check {
-  border: 1px solid var(--border-2); border-radius: 4px; padding: 8px 10px;
-  display: flex; flex-direction: column; gap: 2px; font-size: 12px;
+  border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 2px; font-size: var(--font-sm);
 }
 .check[data-status="fail"] { border-left: 3px solid var(--error); }
 .check[data-status="warn"] { border-left: 3px solid var(--warn-fg); }
@@ -155,8 +207,8 @@ function onOverlayDown(e: MouseEvent) {
 .c-detail { color: var(--text-muted); word-break: break-all; }
 .c-hint { color: var(--info); }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
 }
 button:hover:not(:disabled) { background: var(--surface-hover); }
 button:disabled { opacity: 0.45; cursor: default; }

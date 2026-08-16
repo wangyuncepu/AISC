@@ -19,6 +19,7 @@ pub mod session;
 pub mod settings;
 pub mod artifact;
 pub mod storage;
+pub mod trace;
 pub mod tray;
 pub mod watcher;
 pub mod window;
@@ -28,8 +29,9 @@ use artifact::{artifact_inspect, artifact_list, artifact_refresh};
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use watcher::{workspace_rescan, workspace_watch_start, workspace_watch_stop, WatcherState};
 use workspace::{workspace_copy_path, workspace_list, workspace_open, workspace_preview, workspace_reveal};
-use doctor::run_doctor;
+use doctor::{diagnostic_bundle, run_doctor};
 use history::{load_history, save_history};
+use trace::op_traces;
 use locale::resolve_locale;
 use env::{env_poll_engine, env_readiness};
 use installer::installer_handoff;
@@ -92,6 +94,8 @@ pub fn run(cli_arg: Option<String>) {
             restore_window_geometry,
             capture_window_geometry,
             run_doctor,
+            diagnostic_bundle,
+            op_traces,
             tray_available,
             tray_remove,
             artifact_list,
