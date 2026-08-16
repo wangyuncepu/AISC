@@ -23,8 +23,15 @@
 ## 待办（6h 收口）
 
 - 推送分支 → `--no-ff` 合并 develop → 监视 CI（Workbench CI / Bundle Linux·macOS / NSIS）。
-- 手测矩阵（暗/亮、中英、320/600/800/1280、100/150%、键盘/读屏、Docker、Agent、Explorer、网络 skip/TUN、升级恢复）实机执行。
 - devlog / release notes / 归档规则补齐；用户确认后合入发布。
+
+## 手测（2026-08-16）
+
+- **用户确认：当前部分（6a–6g 的 UI/功能）PASS，无问题。**
+- **遗留 KI-2**：初始化引导界面有问题，需重新实机手测确认具体症状——**暂不处理**，
+  已记录 `../todo.md` KI-2，待 Stage 6 收口后单独安排一轮复检（可能归属 Stage 5
+  onboarding 回归或与 6b/6c 交互）。
+- 6h 收口继续：合并 → CI → 最终发布文档。
 
 ## 验收清单（A-*）
 
