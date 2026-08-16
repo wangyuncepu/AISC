@@ -7,6 +7,8 @@ import type {
   DiscoveryReport,
   DoctorReport,
   HistoryPatch,
+  OnboardingPatch,
+  OnboardingState,
   PreflightReport,
   ProviderStatus,
   PtyEvent,
@@ -135,6 +137,13 @@ export const loadHistory = () => invoke<WorkbenchHistory>("load_history");
 
 export const saveHistory = (expectedRevision: number, patch: HistoryPatch) =>
   invoke<number>("save_history", { expectedRevision, patch });
+
+// --- Stage 5 (ONB-01): onboarding state (schema-versioned, no secrets) ---
+
+export const onboardingLoad = () => invoke<OnboardingState>("onboarding_load");
+
+export const onboardingUpdate = (patch: OnboardingPatch) =>
+  invoke<OnboardingState>("onboarding_update", { patch });
 
 // --- G-10: window geometry save/restore (02 §A-G10) ---
 

@@ -284,6 +284,14 @@ export const zhCN = {
   "explorer.copy": "复制路径",
   "explorer.preview.truncated": "预览已截断",
   "explorer.preview.unsupported": "此文件类型不支持预览，可用系统应用打开。",
+
+  "onboarding.title": "欢迎使用 AISC Workbench",
+  "onboarding.subtitle": "配置你的工作区、Agent 与运行环境。",
+  "onboarding.currentStep": "当前步骤：{step}",
+  "onboarding.begin": "开始设置",
+  "onboarding.continue": "继续设置",
+  "onboarding.skip": "稍后再说",
+  "onboarding.finished": "设置已完成——随时可在设置中重新打开。",
 } as const;
 
 export type ZhKey = keyof typeof zhCN;

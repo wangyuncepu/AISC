@@ -33,15 +33,25 @@ import ConflictManager from "./features/startup/ConflictManager.vue";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import DoctorDialog from "./features/doctor/DoctorDialog.vue";
 import WorkspaceExplorer from "./features/workspace-explorer/WorkspaceExplorer.vue";
+import OnboardingWizard from "./features/onboarding/OnboardingWizard.vue";
 import { useWorkspaceExplorerStore } from "./stores/workspaceExplorer";
+import { useOnboardingStore } from "./stores/onboarding";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
 const settingsStore = useSettingsStore();
 const doctorStore = useDoctorStore();
 const explorerStore = useWorkspaceExplorerStore();
+const onboardingStore = useOnboardingStore();
 const polling = useRuntimePolling();
 const providerPolling = useProviderPolling();
+
+// Stage 5 (ONB-01/07): show the first-run wizard until onboarding finishes.
+// Loaded async at startup; fail-closed (corrupt/high-version) still shows the
+// main app rather than trapping the user in a broken wizard.
+const showOnboarding = computed(
+  () => onboardingStore.loaded && !onboardingStore.isFinished,
+);
 
 // Stage 3: keep the workspace watcher alive even when the Explorer rail is
 // hidden, so agent-created files are captured while the panel is closed.
@@ -331,6 +341,8 @@ async function runExitFlow(): Promise<void> {
 
 onMounted(() => {
   store.negotiate();
+  // Stage 5 (ONB-01): load onboarding state to decide the first-run gate.
+  void onboardingStore.load();
   // G-09 (02 §3.1): resolve + apply the locale in parallel with capability
   // negotiation - language resolution never blocks it.
   void (async () => {
@@ -437,6 +449,12 @@ function selectRecent(path: string): void {
       <span class="spacer" />
       <button class="settings-btn" @click="settingsOpen = true">{{ t("app.settings") }}</button>
     </header>
+
+    <!-- Stage 5 (ONB-01): first-run wizard overlay. Covers the app until
+         onboarding finishes; SettingsDialog (opened via topbar) renders above. -->
+    <div v-if="showOnboarding" class="onboarding-gate">
+      <OnboardingWizard />
+    </div>
 
     <!-- Step 3: typed settings dialog (keyboard-accessible modal, A-G01-1) -->
     <SettingsDialog v-if="settingsOpen" @close="settingsOpen = false" />
@@ -621,6 +639,13 @@ function selectRecent(path: string): void {
 .gate .detail { font-size: 12px; color: var(--text-muted); }
 .center .msg { color: var(--text-muted); }
 .picker { gap: 12px; }
+.onboarding-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: var(--surface, #1e1e1e);
+  display: flex;
+}
 .picker .row { display: flex; gap: 8px; width: 560px; max-width: 90vw; }
 .picker .hint { font-size: 12px; color: var(--text-muted); }
 .recents { width: 560px; max-width: 90vw; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }

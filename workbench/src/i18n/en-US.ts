@@ -284,4 +284,12 @@ export const enUS: Record<string, string> = {
   "explorer.copy": "Copy path",
   "explorer.preview.truncated": "preview truncated",
   "explorer.preview.unsupported": "Preview is not supported for this file type; open with the system app.",
+
+  "onboarding.title": "Welcome to AISC Workbench",
+  "onboarding.subtitle": "Let's set up your workspace, agents and runtime.",
+  "onboarding.currentStep": "Current step: {step}",
+  "onboarding.begin": "Begin setup",
+  "onboarding.continue": "Continue setup",
+  "onboarding.skip": "Skip for now",
+  "onboarding.finished": "Setup complete — open Settings anytime to revisit.",
 };
