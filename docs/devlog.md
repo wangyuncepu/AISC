@@ -2,6 +2,21 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+# Stage 5 (2026-08-16) — Installer 与首次启动引导（AISC Next，分支 stage-5-onboarding-installer）
+
+> 规划入口：`docs/plans/aisc-next/stage-5-onboarding-installer/`。专业、简洁、失败可恢复的首次使用体验：NSIS 安装器 + schema 版本化的 Tauri 首次向导（环境/工作区/Agent/可选网络/Runtime/完成）。证据台账：`stage-5-onboarding-installer/acceptance.md`。
+
+- **5a onboarding state（ONB-01）**：`onboarding.json`（status/current/completed/skipped/last_error_code/source）跨进程锁 + atomic replace；corrupt 隔离、高版本 fail-closed、升级保留完成态。
+- **5b NSIS handoff（INS-01）**：安装器只做文件/PATH/sidecar/WebView2/Docker 引导，写非敏感 handoff（`InstallerSource/InstalledVersion/FirstRun/DockerHint`），不配置 workspace/provider/runtime。
+- **5c 环境就绪（ONB-02）**：CLI / Docker installed / Engine ready 分离；Docker 缺失时向导一键 winget 安装（await 完成 + 真实错误 + `CREATE_NO_WINDOW`）；WebView2 三根注册表探测；`env_readiness`/`env_poll_engine`。
+- **5d workspace/agent（ONB-03/04）**：新建/选择/最近恢复 + Agent readiness 语义映射（不暴露 secret）。
+- **5e 网络（ONB-05）**：direct/host proxy/container TUN + 显式确认 + skip/revoke。
+- **5f runtime（ONB-06）**：preflight/冲突审查/可恢复。
+- **5g 完成 + 重开（ONB-07/08）**：完成进入工作区；Settings 可重开向导；handoff 非事实（Workbench 二次验证）。
+- **两轮手测修复**：`3383dbb`（第 1 轮：Docker 安装 UX/WebView2 检测/首启竞态）+ `641bc67`/`bae03fc`（第 2 轮：欢迎页配置读取恢复、CLI 全发现、实时轮询、**离线安装包**（内置 Docker Desktop 安装器，mihomo 式）、**Windows toast**（安装完成/引擎就绪））。
+- **遗留 KI-1**：向导环境步骤仍可能无法实时识别 Docker ready（引擎可达却显示 starting）→ 记录 `aisc-next/todo.md`，Stage 6 优先查因（已加探测详情诊断）。
+- **本地门**：pytest 508 / vitest 205 / cargo 186 全绿；CI 对 develop `4c0d60a`/`bae03fc` 全绿（Workbench CI / Bundle / NSIS）。
+
 # Stage 4 (2026-08-16) — Python DockerGateway（AISC Next，分支 stage-4-docker-gateway）
 
 > 规划入口：`docs/plans/aisc-next/stage-4-docker-gateway/`。在不改变 Python 控制面所有权的前提下统一 Docker 结果、错误与 backend，逐步减少 subprocess 文本解析。证据台账：`stage-4-docker-gateway/acceptance.md`。
