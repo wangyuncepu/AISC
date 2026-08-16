@@ -7,6 +7,7 @@ import type {
   DiscoveryReport,
   DoctorReport,
   HistoryPatch,
+  InstallerHandoff,
   OnboardingPatch,
   OnboardingState,
   PreflightReport,
@@ -144,6 +145,10 @@ export const onboardingLoad = () => invoke<OnboardingState>("onboarding_load");
 
 export const onboardingUpdate = (patch: OnboardingPatch) =>
   invoke<OnboardingState>("onboarding_update", { patch });
+
+// --- Stage 5 (A-INS01/A-ONB08): installer handoff (non-sensitive, D5-07) ---
+
+export const installerHandoff = () => invoke<InstallerHandoff>("installer_handoff");
 
 // --- G-10: window geometry save/restore (02 §A-G10) ---
 

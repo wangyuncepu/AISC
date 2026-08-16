@@ -1059,6 +1059,17 @@ Section Install
   ; Save $INSTDIR in registry for future installations
   WriteRegStr SHCTX "${MANUPRODUCTKEY}" "" $INSTDIR
 
+  ; Stage 5 (A-INS01/A-ONB08): installer → Workbench non-sensitive handoff.
+  ; Only facts the Workbench re-checks anyway (D5-07): source, installed
+  ; version, first-run marker, Docker hint. NEVER secrets or the installer
+  ; locale-dependent path beyond $INSTDIR. The Workbench reads these to decide
+  ; whether to show first-run onboarding and to surface dependency hints, but
+  ; re-queries CLI/Docker itself (handoff is not a fact).
+  WriteRegStr SHCTX "${MANUPRODUCTKEY}" "InstallerSource" "nsis"
+  WriteRegStr SHCTX "${MANUPRODUCTKEY}" "InstalledVersion" "${VERSION}"
+  WriteRegDWORD SHCTX "${MANUPRODUCTKEY}" "FirstRun" 1
+  WriteRegStr SHCTX "${MANUPRODUCTKEY}" "DockerHint" "installer_checked"
+
   ; G-18: expose the sidecar to user terminals via the user PATH (05 §5.2).
   Call AddInstDirToPath
 

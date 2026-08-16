@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { mount } from "@vue/test-utils";
 import { i18n } from "../../../i18n";
-import { useOnboardingStore } from "../../../stores/onboarding";
 import { onboardingLoad, onboardingUpdate } from "../../../lib/ipc";
 import OnboardingWizard from "../OnboardingWizard.vue";
 

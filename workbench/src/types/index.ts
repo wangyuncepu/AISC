@@ -360,6 +360,16 @@ export interface OnboardingPatch {
   source?: string;
 }
 
+/** Installer handoff facts (NSIS → Workbench, non-sensitive, never a fact — D5-07). */
+export interface InstallerHandoff {
+  installer_source: string;
+  installed_version: string;
+  first_run: boolean;
+  docker_hint: string;
+  present: boolean;
+  product_name: string;
+}
+
 export type LaunchAgent = "claude" | "codex" | "bash" | "cc-switch";
 
 export interface LaunchConfig {
