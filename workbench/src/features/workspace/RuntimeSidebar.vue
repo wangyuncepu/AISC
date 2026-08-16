@@ -74,6 +74,18 @@ const STATE_LABEL_KEY: Record<RuntimeState, string> = {
   removing: "app.removing",
 };
 
+/** Stage 6 (UX-04): session-state label in the mini list (never a raw enum). */
+const SESSION_LABEL_KEY: Record<string, string> = {
+  idle: "session.state.idle",
+  guide: "session.state.guide",
+  starting: "session.state.starting",
+  running: "session.state.running",
+  closing: "session.state.closing",
+  exited: "session.state.exited",
+  failed: "session.state.failed",
+  disconnected: "session.state.disconnected",
+};
+
 /** Semantic keys (04 §4.2): stable key -> untouched DOM subtree. */
 const runtimeKey = computed(
   () => `${snap.value?.state ?? "none"}|${store.freshness}|${store.runtimeState}`
@@ -213,7 +225,7 @@ function copyDone(key: string): boolean {
           @click="store.activateTab(x.tabId)"
         >
           <span class="t-title">{{ x.title }}</span>
-          <span class="t-state" :data-state="x.sessionState">{{ x.sessionState }}</span>
+          <span class="t-state" :data-state="x.sessionState">{{ t(SESSION_LABEL_KEY[x.sessionState] ?? "session.state.idle") }}</span>
         </li>
       </ul>
     </section>

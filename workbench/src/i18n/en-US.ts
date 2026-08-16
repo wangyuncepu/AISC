@@ -21,6 +21,26 @@ export const enUS: Record<string, string> = {
   "app.starting": "Starting",
   "app.removing": "Removing",
 
+  // Stage 6 (UX-04): topbar app-status labels (store.status, no raw enum).
+  "app.status.idle": "Idle",
+  "app.status.picker": "Pick workspace",
+  "app.status.summary": "Preflight done",
+  "app.status.cancelled": "Cancelled",
+  "app.status.building": "Building image",
+  "app.status.conflict": "Conflict",
+  "app.status.ready": "Ready",
+  "app.status.blocked": "Blocked",
+
+  // Stage 6 (UX-04): session-state labels (sidebar mini list).
+  "session.state.idle": "Idle",
+  "session.state.guide": "Guide",
+  "session.state.starting": "Starting",
+  "session.state.running": "Running",
+  "session.state.closing": "Closing",
+  "session.state.exited": "Exited",
+  "session.state.failed": "Failed",
+  "session.state.disconnected": "Disconnected",
+
   // --- workspace picker (App.vue) ---
   "picker.title": "Choose workspace",
   "picker.placeholder": "Workspace path (e.g. /home/user/project)",

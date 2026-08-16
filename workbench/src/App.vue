@@ -177,6 +177,23 @@ const RUNTIME_LABEL_KEY: Record<string, string> = {
   removing: "app.removing",
 };
 
+// Stage 6 (UX-04): topbar status label (store.status, never a raw enum).
+const STATUS_KEY: Record<string, string> = {
+  idle: "app.status.idle",
+  negotiating: "app.negotiating",
+  preflight: "app.preflight",
+  picker: "app.status.picker",
+  summary: "app.status.summary",
+  starting: "app.starting",
+  cancelled: "app.status.cancelled",
+  building: "app.status.building",
+  conflict: "app.status.conflict",
+  ready: "app.status.ready",
+  stopping: "app.stopping",
+  blocked: "app.status.blocked",
+  error: "app.error.title",
+};
+
 // Announce runtime-state transitions (not every poll - only when the state
 // value actually changes).
 let lastAnnouncedState: string | null = null;
@@ -475,7 +492,7 @@ function selectRecent(path: string): void {
   <div class="app" :style="uiZoom" :data-tier="layoutTier">
     <header class="topbar">
       <span class="brand">AISC Workbench</span>
-      <span class="status" :data-status="store.status">{{ store.status }}</span>
+      <span class="status" :data-status="store.status">{{ t(STATUS_KEY[store.status] ?? "app.unknown") }}</span>
       <span class="spacer" />
       <button class="settings-btn" @click="settingsOpen = true">{{ t("app.settings") }}</button>
     </header>

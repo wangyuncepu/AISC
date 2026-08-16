@@ -21,6 +21,26 @@ export const zhCN = {
   "app.starting": "启动中",
   "app.removing": "移除中",
 
+  // Stage 6 (UX-04): topbar app-status labels (store.status, no raw enum).
+  "app.status.idle": "空闲",
+  "app.status.picker": "选择工作区",
+  "app.status.summary": "预检完成",
+  "app.status.cancelled": "已取消",
+  "app.status.building": "构建镜像",
+  "app.status.conflict": "冲突",
+  "app.status.ready": "就绪",
+  "app.status.blocked": "阻塞",
+
+  // Stage 6 (UX-04): session-state labels (sidebar mini list).
+  "session.state.idle": "空闲",
+  "session.state.guide": "引导",
+  "session.state.starting": "启动中",
+  "session.state.running": "运行中",
+  "session.state.closing": "关闭中",
+  "session.state.exited": "已退出",
+  "session.state.failed": "失败",
+  "session.state.disconnected": "已断开",
+
   // --- workspace picker (App.vue) ---
   "picker.title": "选择工作区",
   "picker.placeholder": "工作区路径（如 /home/user/project）",
