@@ -2,6 +2,23 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+# Stage 3 (2026-08-15 ~ 2026-08-16) — Workspace Explorer 与 Agent Artifact（AISC Next，分支 stage-3-workspace-artifacts）
+
+> 规划入口：`docs/plans/aisc-next/stage-3-workspace-artifacts/`。让用户能浏览当前工作区，并可靠发现、打开、Reveal、复制 Agent 交付物路径。证据台账：`stage-3-workspace-artifacts/acceptance.md`。
+
+- **3a `aisc.artifact/v1`（ART-01/02）**：Python domain schema + `aisc artifact record/list/inspect/clear-session`；session-scoped JSONL registry 在宿主数据目录（`%LOCALAPPDATA%/aisc/artifacts`），不污染 workspace（A-ART04）；relative/create/modify/delete/rename/missing/duplicate 矩阵。
+- **3b Rust 索引与 containment（ART-05/06）**：`artifact.rs` versioned index（revision/lock/atomic replace/corrupt isolation）、`workspace.rs` canonical containment（symlink/junction/UNC/case 越界拒绝）、preview budget 与 secret redaction；IPC `workspace_list/open/preview/reveal/copy`。
+- **3c lazy 树 + Artifact 面板（WX-01/02/04）**：懒加载树（分页 200、dirs-first、ignore 默认集）、文件动作、Artifacts 面板按 Deliverable/Source change/Generated/Unattributed 分组。
+- **3d watcher（WX-03）**：notify 递归 watch + debounce/coalesce/overflow→bounded rescan；只报告 unattributed 投影，不伪造 Agent provenance。
+- **3e Artifact Skill（ART-03）**：内置 Skill 约束分类、登记、最终人类可读清单；明确"不是事实数据库"；Agent 只提交 workspace-relative path。
+- **3f 键盘/APG（WX-05）**：递归可见树 + Arrow/Home/End/Enter/Space/Shift+F10 roving 键盘。
+- **手测修复轮**：
+  - `c390b1a` watcher 噪音忽略（任意层级 node_modules/target）、实时树、文件夹右键、初始化竞态、Skill 相对路径。
+  - `dce222a` overlay drawer（不挤压终端）、artifact_refresh 修复（面板长期为空）、分页计算修正、watcher 携带 kind、容器绝对路径归一化、Tauri 剪贴板右键。
+  - `8b4c9f1` **右键菜单在 `ui.font_scale≠1`（CSS zoom）下移出视口的根因修复**（除以 live .app zoom）；`.claude/.codex/.cc-switch/.local/tmp` 默认排除 + `ui.explorer_ignore` 设置贯穿 Rust listing/watcher/前端；临时文件（`foo.tmp.1234`/`file~`/`.swp` 等）三层过滤；空目录不进产物面板；同名 basename（created+modified / 不同路径 / manifest×unattributed）显示相对路径；产物行去按钮（单击预览/双击打开/右键菜单）。
+- **本地门**：pytest 463 / vitest 176 / cargo 170 全绿；Windows 实机手测 PASS（右键/排除/临时文件/同名路径）。
+- **注意**：容器内不安装 `aisc`（拒绝嵌套）；容器侧靠 watcher 的 unattributed 投影兜底，manifest 事实来源是宿主侧 `aisc artifact record`。
+
 # Stage 1 (2026-08-14) — Frontend Data Plane（AISC Next，分支 stage-1-frontend-data-plane）
 
 > 规划入口：`docs/plans/aisc-next/stage-1-frontend-data-plane/`。将前端从单体协调器拆为可测投影，建立有界高频终端数据面。
