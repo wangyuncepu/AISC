@@ -301,6 +301,17 @@ export const zhCN = {
   "onboarding.env.startDocker": "启动 Docker",
   "onboarding.env.starting": "等待引擎…",
   "onboarding.env.retry": "重新检查",
+
+  "onboarding.ws.title": "选择工作区",
+  "onboarding.ws.pick": "浏览…",
+
+  "onboarding.agent.title": "Agent",
+  "onboarding.agent.claude": "Claude",
+  "onboarding.agent.codex": "Codex",
+  "onboarding.agent.state.ready": "就绪",
+  "onboarding.agent.state.needs_login": "需要登录",
+  "onboarding.agent.state.needs_configuration": "需要配置",
+  "onboarding.agent.state.unsupported": "不支持",
 } as const;
 
 export type ZhKey = keyof typeof zhCN;

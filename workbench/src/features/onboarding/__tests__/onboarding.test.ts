@@ -12,6 +12,7 @@ import {
   onboardingUpdate,
   startDocker,
 } from "../../../lib/ipc";
+import { useRuntimeStore } from "../../../stores/runtime";
 import OnboardingWizard from "../OnboardingWizard.vue";
 
 vi.mock("../../../lib/ipc", () => ({
@@ -126,6 +127,43 @@ describe("OnboardingWizard (ONB-01/07)", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     const continueBtn = wrapper.findAll(".ob-btn.primary").find((b) => b.text() === "继续设置");
     expect(continueBtn?.attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it("workspace step shows recents and continues to agent (ONB-03)", async () => {
+    vi.mocked(onboardingLoad).mockResolvedValue(
+      baseState({ status: "in_progress", current_step: "workspace" }) as never,
+    );
+    const runtime = useRuntimeStore();
+    runtime.workspace = "/ws/proj";
+    const wrapper = mount(OnboardingWizard, { global: { plugins: [i18n] } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(wrapper.find(".ob-subtitle").text()).toBe("选择工作区");
+    // Continue is present once a workspace is chosen.
+    const continueBtn = wrapper.findAll(".ob-btn.primary").find((b) => b.text() === "继续设置");
+    await continueBtn!.trigger("click");
+    expect(onboardingUpdate).toHaveBeenCalledWith({
+      completeStep: "workspace",
+      currentStep: "agent",
+    });
+    wrapper.unmount();
+  });
+
+  it("agent step maps readiness without a runtime to needs_configuration (ONB-04)", async () => {
+    vi.mocked(onboardingLoad).mockResolvedValue(
+      baseState({ status: "in_progress", current_step: "agent" }) as never,
+    );
+    const wrapper = mount(OnboardingWizard, { global: { plugins: [i18n] } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const list = wrapper.find(".ob-check-list");
+    expect(list.text()).toContain("Claude");
+    expect(list.text()).toContain("需要配置"); // needs_configuration mapping
+    const continueBtn = wrapper.findAll(".ob-btn.primary").find((b) => b.text() === "继续设置");
+    await continueBtn!.trigger("click");
+    expect(onboardingUpdate).toHaveBeenCalledWith({
+      completeStep: "agent",
+      currentStep: "network",
+    });
     wrapper.unmount();
   });
 });

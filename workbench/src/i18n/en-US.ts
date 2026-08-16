@@ -301,4 +301,15 @@ export const enUS: Record<string, string> = {
   "onboarding.env.startDocker": "Start Docker",
   "onboarding.env.starting": "Waiting for Engine…",
   "onboarding.env.retry": "Re-check",
+
+  "onboarding.ws.title": "Choose a workspace",
+  "onboarding.ws.pick": "Browse…",
+
+  "onboarding.agent.title": "Agents",
+  "onboarding.agent.claude": "Claude",
+  "onboarding.agent.codex": "Codex",
+  "onboarding.agent.state.ready": "Ready",
+  "onboarding.agent.state.needs_login": "Needs login",
+  "onboarding.agent.state.needs_configuration": "Needs configuration",
+  "onboarding.agent.state.unsupported": "Unsupported",
 };

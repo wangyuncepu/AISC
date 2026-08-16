@@ -1,20 +1,23 @@
 <script setup lang="ts">
 /**
- * Stage 5 (ONB-01/02): first-run wizard route shell + environment step.
+ * Stage 5 (ONB-01/02/03/04): first-run wizard route shell + environment +
+ * workspace + agent steps.
  *
- * Renders the current step from the store. 5a provides the shell (begin/skip/
- * finished); 5c fills in the environment step: CLI / Docker Desktop / Engine /
- * WebView2 readiness with "Start Docker" + deadline poll + retry. Later steps
- * (workspace, agent, network, runtime, complete) are added by 5d-5g.
+ * 5a shell (begin/skip/finished); 5c environment readiness; 5d workspace
+ * selection/recents (reusing the runtime store) and Agent readiness mapping
+ * (ready / needs_login / needs_configuration / unsupported, never secrets).
+ * Network / runtime / complete steps are added by 5e-5g.
  */
 import { computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useOnboardingStore } from "../../stores/onboarding";
 import { useEnvironmentStore } from "../../stores/environment";
+import { useRuntimeStore } from "../../stores/runtime";
 
 const { t } = useI18n();
 const onboarding = useOnboardingStore();
 const environment = useEnvironmentStore();
+const runtime = useRuntimeStore();
 
 onMounted(() => {
   if (!onboarding.loaded) void onboarding.load();
@@ -32,6 +35,7 @@ watch(
 );
 
 const step = computed(() => onboarding.state?.current_step || "welcome");
+const chosenWorkspace = computed(() => runtime.workspace || "");
 
 async function begin() {
   await onboarding.patch({ status: "in_progress", currentStep: "environment" });
@@ -42,9 +46,10 @@ async function skip() {
   await onboarding.patch({ status: "skipped" });
 }
 
+// --- environment step (5c) ---
+
 async function startDocker() {
   await environment.startDocker();
-  // Deadline poll: installed ≠ ready; never treat a stale snapshot as ready.
   await environment.pollEngineReady(30_000);
 }
 
@@ -54,6 +59,45 @@ async function retryEnv() {
 
 async function continueFromEnv() {
   await onboarding.patch({ completeStep: "environment", currentStep: "workspace" });
+}
+
+// --- workspace step (5d, ONB-03) ---
+
+async function pickWorkspace() {
+  await runtime.pickWorkspace();
+  if (runtime.workspace) await continueFromWorkspace();
+}
+
+async function selectRecent(path: string) {
+  runtime.selectRecentWorkspace(path);
+  await continueFromWorkspace();
+}
+
+async function continueFromWorkspace() {
+  await onboarding.patch({ completeStep: "workspace", currentStep: "agent" });
+}
+
+// --- agent step (5d, ONB-04) ---
+
+/** Map an agent's provider status to a user-facing readiness state. When no
+ *  runtime is running (fresh onboarding) the agent is needs_configuration. */
+function agentReadiness(agent: "claude" | "codex"): string {
+  const st = runtime.providerStatuses?.[agent];
+  if (!st) return "needs_configuration";
+  switch (st.auth_status) {
+    case "configured":
+      return "ready";
+    case "login_required":
+      return "needs_login";
+    case "not_configured":
+      return "needs_configuration";
+    default:
+      return "unsupported";
+  }
+}
+
+async function continueFromAgent() {
+  await onboarding.patch({ completeStep: "agent", currentStep: "network" });
 }
 </script>
 
@@ -121,7 +165,57 @@ async function continueFromEnv() {
       </div>
     </template>
 
-    <!-- Later steps (5d-5g) placeholder -->
+    <!-- Workspace selection (5d, ONB-03) -->
+    <template v-else-if="step === 'workspace'">
+      <p class="ob-subtitle">{{ t("onboarding.ws.title") }}</p>
+
+      <div v-if="runtime.recentWorkspaces.length" class="ob-recents">
+        <button
+          v-for="rec in runtime.recentWorkspaces.slice(0, 5)"
+          :key="rec.path"
+          class="ob-btn ws-recent"
+          @click="selectRecent(rec.path)"
+        >
+          {{ rec.path }}
+        </button>
+      </div>
+
+      <div class="ob-actions">
+        <button class="ob-btn primary" @click="pickWorkspace">{{ t("onboarding.ws.pick") }}</button>
+        <button
+          v-if="chosenWorkspace"
+          class="ob-btn primary"
+          :disabled="!chosenWorkspace"
+          @click="continueFromWorkspace"
+        >
+          {{ t("onboarding.continue") }}
+        </button>
+        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+      </div>
+    </template>
+
+    <!-- Agent readiness (5d, ONB-04) -->
+    <template v-else-if="step === 'agent'">
+      <p class="ob-subtitle">{{ t("onboarding.agent.title") }}</p>
+
+      <ul class="ob-check-list">
+        <li>
+          <span class="ob-check-dot" :data-state="agentReadiness('claude')" />
+          {{ t("onboarding.agent.claude") }}: {{ t(`onboarding.agent.state.${agentReadiness('claude')}`) }}
+        </li>
+        <li>
+          <span class="ob-check-dot" :data-state="agentReadiness('codex')" />
+          {{ t("onboarding.agent.codex") }}: {{ t(`onboarding.agent.state.${agentReadiness('codex')}`) }}
+        </li>
+      </ul>
+
+      <div class="ob-actions">
+        <button class="ob-btn primary" @click="continueFromAgent">{{ t("onboarding.continue") }}</button>
+        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+      </div>
+    </template>
+
+    <!-- Later steps (5e-5g) placeholder -->
     <template v-else>
       <p class="ob-step" role="status">{{ t("onboarding.currentStep", { step }) }}</p>
       <div class="ob-actions">
@@ -154,6 +248,8 @@ async function continueFromEnv() {
 .ob-btn.ghost { background: none; }
 .ob-btn:disabled { opacity: 0.5; cursor: default; }
 .ob-check-list { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; text-align: left; font-size: 13px; }
+.ob-recents { display: flex; flex-direction: column; gap: 4px; max-width: 420px; width: 100%; }
+.ws-recent { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ob-check-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: var(--muted, #888); }
 .ob-check-dot[data-state="ready"] { background: #4caf50; }
 .ob-check-dot[data-state="starting"], .ob-check-dot[data-state="installing"] { background: #ffb300; }
