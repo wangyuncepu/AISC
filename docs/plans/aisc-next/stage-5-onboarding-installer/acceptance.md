@@ -5,7 +5,7 @@
 ## 5a-state（进行中）
 
 - `A-ONB01-1` onboarding schema 首次/进行中/完成/跳过/中断恢复/高版本/损坏通过。
-  - Commit：`<5a commit>`
+  - Commit：`e371ea3`
   - 证据：Rust `onboarding.rs`——schema-versioned `onboarding.json`（status/current/completed/skipped/last_error_code/source）、fs4 跨进程锁 + atomic replace、corrupt 隔离到 `.corrupt`、高版本 fail-closed；6 个单测（missing→not_started、roundtrip、corrupt、unsupported、patch complete/skip、finished states）。TS store 5 测试 + wizard 3 测试覆盖 load/patch/skip/finished。
   - 步骤：首次启动 load→not_started；begin→in_progress；skip→skipped；corrupt/high-version fail-closed；升级后完成状态保留。
   - 结果：Rust 6 + TS 8 相关测试通过；全库 Rust 176 / TS 184。
