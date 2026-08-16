@@ -21,6 +21,7 @@ function ready(over: Partial<ReturnType<typeof Object> & Record<string, string>>
     webview2: "ready",
     dockerDesktopPath: "C:\\Docker Desktop.exe",
     cliPath: "C:\\aisc.exe",
+    engineDetail: "",
     ...over,
   };
 }

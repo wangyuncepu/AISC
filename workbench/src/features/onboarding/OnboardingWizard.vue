@@ -223,6 +223,13 @@ async function finish() {
       <p v-else-if="environment.readiness.engine === 'starting'" class="ob-note" role="status">
         {{ t("onboarding.env.startingHint") }}
       </p>
+      <!-- KI-1 diagnostic: redacted probe detail so a still-not-ready engine is
+           explainable in-place (docker CLI missing / spawn err / exit / timeout). -->
+      <p
+        v-if="environment.readiness.engine !== 'ready' && environment.readiness.engineDetail"
+        class="ob-note ob-engine-detail"
+        role="status"
+      >{{ t("onboarding.env.engineDetail") }}: {{ environment.readiness.engineDetail }}</p>
 
       <div class="ob-actions">
         <button
@@ -433,6 +440,7 @@ async function finish() {
 .ob-net-options { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .ob-btn.active { border-color: var(--accent, #4a9eff); color: var(--accent, #4a9eff); }
 .ob-note { color: var(--muted, #888); font-size: 12px; max-width: 420px; }
+.ob-engine-detail { font-family: monospace; font-size: 11px; color: #c8a24a; }
 .ob-probe[data-result="ok"] { color: #4caf50; font-size: 12px; }
 .ob-probe[data-result="failed"] { color: #e5534b; font-size: 12px; }
 .ob-btn.confirm { border-color: #ffb300; color: #ffb300; }

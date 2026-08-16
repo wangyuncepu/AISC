@@ -22,6 +22,7 @@ const EMPTY: EnvReadiness = {
   webview2: "unknown",
   dockerDesktopPath: "",
   cliPath: "",
+  engineDetail: "",
 };
 
 export const useEnvironmentStore = defineStore("environment", () => {

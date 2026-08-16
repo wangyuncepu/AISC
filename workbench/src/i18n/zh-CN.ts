@@ -306,6 +306,7 @@ export const zhCN = {
   "onboarding.env.starting": "等待引擎…",
   "onboarding.env.startingHint": "正在启动 Docker 引擎…若弹出 Docker Desktop 首次设置（许可协议 / WSL），请先完成，本页会自动检测就绪。",
   "onboarding.env.retry": "重新检查",
+  "onboarding.env.engineDetail": "引擎探测详情",
 
   "onboarding.ws.title": "选择工作区",
   "onboarding.ws.pick": "浏览…",

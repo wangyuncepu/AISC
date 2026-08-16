@@ -379,6 +379,9 @@ export interface EnvReadiness {
   webview2: string;   // unknown | ready | missing
   dockerDesktopPath: string;
   cliPath: string;
+  /** Redacted reason the engine probe is not ready (spawn err / exit / timeout /
+   *  docker CLI missing). "" when ready. Surfaced for diagnostics (Stage 6 KI-1). */
+  engineDetail: string;
 }
 
 export type LaunchAgent = "claude" | "codex" | "bash" | "cc-switch";

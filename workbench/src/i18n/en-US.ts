@@ -306,6 +306,7 @@ export const enUS: Record<string, string> = {
   "onboarding.env.starting": "Waiting for Engine…",
   "onboarding.env.startingHint": "Starting the Docker engine… If the Docker Desktop first-run dialog appears (license / WSL), complete it — this page detects readiness automatically.",
   "onboarding.env.retry": "Re-check",
+  "onboarding.env.engineDetail": "Engine probe detail",
 
   "onboarding.ws.title": "Choose a workspace",
   "onboarding.ws.pick": "Browse…",
