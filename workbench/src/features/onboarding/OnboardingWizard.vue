@@ -13,11 +13,13 @@ import { useI18n } from "vue-i18n";
 import { useOnboardingStore } from "../../stores/onboarding";
 import { useEnvironmentStore } from "../../stores/environment";
 import { useRuntimeStore } from "../../stores/runtime";
+import { useNetworkStore } from "../../stores/network";
 
 const { t } = useI18n();
 const onboarding = useOnboardingStore();
 const environment = useEnvironmentStore();
 const runtime = useRuntimeStore();
+const network = useNetworkStore();
 
 onMounted(() => {
   if (!onboarding.loaded) void onboarding.load();
@@ -98,6 +100,34 @@ function agentReadiness(agent: "claude" | "codex"): string {
 
 async function continueFromAgent() {
   await onboarding.patch({ completeStep: "agent", currentStep: "network" });
+}
+
+// --- network step (5e, A-ONB05) ---
+
+function pickNetwork(choice: "direct" | "host_proxy" | "container_tun") {
+  network.setChoice(choice);
+}
+
+async function probeNetwork() {
+  await network.probe();
+}
+
+/** Save the confirmed choice to the runtime launch config (container-TUN maps
+ *  to the existing `network: "proxy"` setting; host-proxy keeps "direct" and
+ *  only affects how the agent reaches the host proxy — no TUN). */
+async function confirmNetwork() {
+  network.confirm();
+  // The runtime's launch.network is "direct" | "proxy"; container-TUN = proxy.
+  if (network.choice === "container_tun") {
+    runtime.launch.network = "proxy";
+  } else {
+    runtime.launch.network = "direct";
+  }
+  await continueFromNetwork();
+}
+
+async function continueFromNetwork() {
+  await onboarding.patch({ completeStep: "network", currentStep: "runtime" });
 }
 </script>
 
@@ -215,7 +245,57 @@ async function continueFromAgent() {
       </div>
     </template>
 
-    <!-- Later steps (5e-5g) placeholder -->
+    <!-- Network (5e, A-ONB05) -->
+    <template v-else-if="step === 'network'">
+      <p class="ob-subtitle">{{ t("onboarding.net.title") }}</p>
+
+      <div class="ob-net-options">
+        <button
+          class="ob-btn"
+          :class="{ active: network.choice === 'direct' }"
+          @click="pickNetwork('direct')"
+        >{{ t("onboarding.net.direct") }}</button>
+        <button
+          class="ob-btn"
+          :class="{ active: network.choice === 'host_proxy' }"
+          @click="pickNetwork('host_proxy')"
+        >{{ t("onboarding.net.hostProxy") }}</button>
+        <button
+          class="ob-btn"
+          :class="{ active: network.choice === 'container_tun' }"
+          @click="pickNetwork('container_tun')"
+        >{{ t("onboarding.net.containerTun") }}</button>
+      </div>
+
+      <p class="ob-note">{{ t("onboarding.net.impact") }}</p>
+      <p v-if="network.error" class="ob-error" role="alert">{{ network.error }}</p>
+
+      <div class="ob-actions">
+        <button class="ob-btn ghost" :disabled="network.probing" @click="probeNetwork">
+          {{ network.probing ? t("onboarding.net.probing") : t("onboarding.net.probe") }}
+        </button>
+        <span v-if="network.probeResult" class="ob-probe" :data-result="network.probeResult">
+          {{ network.probeResult === "ok" ? t("onboarding.net.probeOk") : t("onboarding.net.probeFail") }}
+        </span>
+        <button
+          class="ob-btn primary"
+          :disabled="network.choice === 'direct' ? false : !network.confirmed"
+          @click="confirmNetwork"
+        >{{ t("onboarding.continue") }}</button>
+        <button class="ob-btn ghost" @click="network.revoke(); continueFromNetwork()">
+          {{ t("onboarding.net.skip") }}
+        </button>
+      </div>
+
+      <!-- Explicit confirm before applying a non-direct choice -->
+      <button
+        v-if="network.choice !== 'direct' && !network.confirmed"
+        class="ob-btn confirm"
+        @click="network.confirm()"
+      >{{ t("onboarding.net.confirm") }}</button>
+    </template>
+
+    <!-- Later steps (5f-5g) placeholder -->
     <template v-else>
       <p class="ob-step" role="status">{{ t("onboarding.currentStep", { step }) }}</p>
       <div class="ob-actions">
@@ -250,6 +330,12 @@ async function continueFromAgent() {
 .ob-check-list { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; text-align: left; font-size: 13px; }
 .ob-recents { display: flex; flex-direction: column; gap: 4px; max-width: 420px; width: 100%; }
 .ws-recent { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ob-net-options { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.ob-btn.active { border-color: var(--accent, #4a9eff); color: var(--accent, #4a9eff); }
+.ob-note { color: var(--muted, #888); font-size: 12px; max-width: 420px; }
+.ob-probe[data-result="ok"] { color: #4caf50; font-size: 12px; }
+.ob-probe[data-result="failed"] { color: #e5534b; font-size: 12px; }
+.ob-btn.confirm { border-color: #ffb300; color: #ffb300; }
 .ob-check-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: var(--muted, #888); }
 .ob-check-dot[data-state="ready"] { background: #4caf50; }
 .ob-check-dot[data-state="starting"], .ob-check-dot[data-state="installing"] { background: #ffb300; }

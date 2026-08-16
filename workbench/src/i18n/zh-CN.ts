@@ -312,6 +312,18 @@ export const zhCN = {
   "onboarding.agent.state.needs_login": "需要登录",
   "onboarding.agent.state.needs_configuration": "需要配置",
   "onboarding.agent.state.unsupported": "不支持",
+
+  "onboarding.net.title": "网络",
+  "onboarding.net.direct": "直连",
+  "onboarding.net.hostProxy": "使用宿主代理",
+  "onboarding.net.containerTun": "容器 TUN",
+  "onboarding.net.impact": "选择仅应用于运行环境，不会改动宿主的代理设置。",
+  "onboarding.net.probe": "检查连通性",
+  "onboarding.net.probing": "检查中…",
+  "onboarding.net.probeOk": "可达",
+  "onboarding.net.probeFail": "不可达",
+  "onboarding.net.confirm": "确认——应用于运行环境",
+  "onboarding.net.skip": "跳过",
 } as const;
 
 export type ZhKey = keyof typeof zhCN;

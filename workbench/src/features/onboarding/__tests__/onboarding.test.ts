@@ -166,4 +166,29 @@ describe("OnboardingWizard (ONB-01/07)", () => {
     });
     wrapper.unmount();
   });
+
+  it("network step requires confirm for non-direct then continues to runtime (ONB-05)", async () => {
+    vi.mocked(onboardingLoad).mockResolvedValue(
+      baseState({ status: "in_progress", current_step: "network" }) as never,
+    );
+    const runtime = useRuntimeStore();
+    const wrapper = mount(OnboardingWizard, { global: { plugins: [i18n] } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Choose container TUN: continue is disabled until confirmed.
+    await wrapper.findAll(".ob-net-options .ob-btn")[2].trigger("click");
+    const continueBtn = () =>
+      wrapper.findAll(".ob-btn.primary").find((b) => b.text() === "继续设置");
+    expect(continueBtn()?.attributes("disabled")).toBeDefined();
+
+    // Confirm, then continue applies network=proxy and advances.
+    await wrapper.find(".ob-btn.confirm").trigger("click");
+    await continueBtn()!.trigger("click");
+    expect(runtime.launch.network).toBe("proxy");
+    expect(onboardingUpdate).toHaveBeenCalledWith({
+      completeStep: "network",
+      currentStep: "runtime",
+    });
+    wrapper.unmount();
+  });
 });

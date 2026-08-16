@@ -312,4 +312,16 @@ export const enUS: Record<string, string> = {
   "onboarding.agent.state.needs_login": "Needs login",
   "onboarding.agent.state.needs_configuration": "Needs configuration",
   "onboarding.agent.state.unsupported": "Unsupported",
+
+  "onboarding.net.title": "Network",
+  "onboarding.net.direct": "Direct",
+  "onboarding.net.hostProxy": "Use host proxy",
+  "onboarding.net.containerTun": "Container TUN",
+  "onboarding.net.impact": "Your choice is applied to the runtime only; your host's proxy settings are never changed.",
+  "onboarding.net.probe": "Check connectivity",
+  "onboarding.net.probing": "Checking…",
+  "onboarding.net.probeOk": "Reachable",
+  "onboarding.net.probeFail": "Not reachable",
+  "onboarding.net.confirm": "Confirm — apply to runtime",
+  "onboarding.net.skip": "Skip",
 };
