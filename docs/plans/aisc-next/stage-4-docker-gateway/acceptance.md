@@ -35,6 +35,11 @@
   - 结果：28 passed（interactive 并入 query 文件）；全库 pytest 502 passed。
   - 结论：PASS
 - `A-DG05-1` Build CLI baseline 有 p50/p95/max；SDK 迁移有明确 GO/NO-GO。
+  - Commit：`<4e commit>`
+  - 证据：`scripts/bench/build-bench.py` 真实 daemon 基准（离线，`python:3.12-slim` 本地缓存基镜像）；结果写入 `build-benchmark-decision.md`——CLI p50 578 / p95 1192 / max 1260（exit 0）；SDK spike p50 92 / p95 1844 / max 2039。
+  - 步骤：`python scripts/bench/build-bench.py --backend both --samples 3`；解析 JSON manifest 的 p50/p95/max。
+  - 结果：**NO-GO**（Build 保持 CLI backend）：SDK 尾部风险劣于 CLI，流式/取消语义已在 CLI 验证，D4-08 未满足前不移除 CLI。
+  - 结论：PASS（决策已产出并记录）
 - `A-DG06-1` application 不感知 backend；auto/sdk/cli flag 可回滚。
 - `A-DG07-1` Fake/recording/fault injection 覆盖 daemon/permission/timeout/partial cleanup。
   - Commit：`7aa27d3`
