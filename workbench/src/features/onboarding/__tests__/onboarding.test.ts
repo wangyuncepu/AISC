@@ -219,6 +219,27 @@ describe("OnboardingWizard (ONB-01/07)", () => {
     wrapper.unmount();
   });
 
+  it("complete step finishes: marks completed and starts the runtime (ONB-07)", async () => {
+    vi.mocked(onboardingLoad).mockResolvedValue(
+      baseState({ status: "in_progress", current_step: "complete" }) as never,
+    );
+    const runtime = useRuntimeStore();
+    runtime.workspace = "/ws/proj";
+    const wrapper = mount(OnboardingWizard, { global: { plugins: [i18n] } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const enterBtn = wrapper.findAll(".ob-btn.primary").find((b) => b.text() === "进入工作区");
+    await enterBtn!.trigger("click");
+    expect(onboardingUpdate).toHaveBeenCalledWith({
+      status: "completed",
+      completeStep: "complete",
+    });
+    // finish() also calls startFromSummary() (best-effort runtime start);
+    // preflight may be unset in this unit context, so we only assert the
+    // completion checkpoint that drives the App.vue gate.
+    wrapper.unmount();
+  });
+
   it("network step requires confirm for non-direct then continues to runtime (ONB-05)", async () => {
     vi.mocked(onboardingLoad).mockResolvedValue(
       baseState({ status: "in_progress", current_step: "network" }) as never,

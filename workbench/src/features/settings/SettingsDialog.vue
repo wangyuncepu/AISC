@@ -135,6 +135,15 @@ async function onReset() {
   await store.reset();
 }
 
+/** Stage 5 (A-ONB07): reopen the setup wizard. Marks onboarding in_progress
+ *  at the environment step; the App.vue gate re-shows the overlay. */
+async function reopenOnboarding() {
+  const { useOnboardingStore } = await import("../../stores/onboarding");
+  const onboarding = useOnboardingStore();
+  await onboarding.patch({ status: "in_progress", currentStep: "environment" });
+  emit("close");
+}
+
 function onCancel() {
   store.cancel();
   emit("close");
@@ -246,6 +255,7 @@ function onCancel() {
           {{ saving ? t("settings.saving") : t("settings.save") }}
         </button>
         <button :disabled="saving || store.readOnly || !store.loaded" @click="onReset">{{ t("settings.reset") }}</button>
+        <button :disabled="saving" @click="reopenOnboarding">{{ t("settings.reopenOnboarding") }}</button>
         <button :disabled="saving" @click="onCancel">{{ t("settings.close") }}</button>
       </footer>
     </section>

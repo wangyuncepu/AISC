@@ -210,6 +210,7 @@ export const enUS: Record<string, string> = {
   "settings.save": "Save",
   "settings.saving": "Saving…",
   "settings.reset": "Reset to defaults",
+  "settings.reopenOnboarding": "Reopen setup wizard",
   "settings.close": "Close",
   "settings.resetConfirm": "Reset all GUI settings to defaults? aisc_cli_path (CLI pin), history, workspaces and Runtime are not affected.",
   "settings.effect.immediate": "Applies immediately",
@@ -332,4 +333,9 @@ export const enUS: Record<string, string> = {
   "onboarding.runtime.action.resolve_conflict": "A runtime conflict was detected.",
   "onboarding.runtime.conflicts": "Conflicting runtimes:",
   "onboarding.runtime.retry": "Re-check",
+
+  "onboarding.complete.title": "You're all set",
+  "onboarding.complete.note": "Your workspace, agents and runtime are configured. You can reopen this wizard anytime from Settings.",
+  "onboarding.complete.enter": "Enter workspace",
+  "onboarding.complete.later": "Not now",
 };

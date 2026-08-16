@@ -210,6 +210,7 @@ export const zhCN = {
   "settings.save": "保存",
   "settings.saving": "保存中…",
   "settings.reset": "重置为默认",
+  "settings.reopenOnboarding": "重新打开设置向导",
   "settings.close": "关闭",
   "settings.resetConfirm": "重置所有 GUI 设置为默认值？aisc_cli_path（CLI 固定）、历史记录、工作区与 Runtime 不受影响。",
   "settings.effect.immediate": "即时生效",
@@ -332,6 +333,11 @@ export const zhCN = {
   "onboarding.runtime.action.resolve_conflict": "检测到运行环境冲突。",
   "onboarding.runtime.conflicts": "冲突的运行环境：",
   "onboarding.runtime.retry": "重新检查",
+
+  "onboarding.complete.title": "一切就绪",
+  "onboarding.complete.note": "工作区、Agent 与运行环境已配置完成。随时可在设置中重新打开本向导。",
+  "onboarding.complete.enter": "进入工作区",
+  "onboarding.complete.later": "稍后再说",
 } as const;
 
 export type ZhKey = keyof typeof zhCN;

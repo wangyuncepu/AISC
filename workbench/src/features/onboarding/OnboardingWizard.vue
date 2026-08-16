@@ -149,6 +149,17 @@ watch(
 async function continueFromRuntime() {
   await onboarding.patch({ completeStep: "runtime", currentStep: "complete" });
 }
+
+// --- complete step (5g, A-ONB07) ---
+
+/** Finish onboarding: start the runtime (opens the workspace) and mark
+ *  completed. The App.vue gate watches `isFinished` and removes the overlay. */
+async function finish() {
+  await onboarding.patch({ status: "completed", completeStep: "complete" });
+  // Start the runtime into the workspace (opens the first tab). Best-effort:
+  // if it fails, onboarding is still complete — the user can use Settings.
+  await runtime.startFromSummary();
+}
 </script>
 
 <template>
@@ -345,12 +356,21 @@ async function continueFromRuntime() {
       </div>
     </template>
 
-    <!-- Later steps (5g) placeholder -->
+    <!-- Complete (5g, A-ONB07) -->
+    <template v-else-if="step === 'complete'">
+      <p class="ob-subtitle">{{ t("onboarding.complete.title") }}</p>
+      <p class="ob-note">{{ t("onboarding.complete.note") }}</p>
+      <div class="ob-actions">
+        <button class="ob-btn primary" @click="finish">{{ t("onboarding.complete.enter") }}</button>
+        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.complete.later") }}</button>
+      </div>
+    </template>
+
+    <!-- Unknown step fallback -->
     <template v-else>
       <p class="ob-step" role="status">{{ t("onboarding.currentStep", { step }) }}</p>
       <div class="ob-actions">
-        <button class="ob-btn primary" disabled>{{ t("onboarding.continue") }}</button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+        <button class="ob-btn primary" @click="skip">{{ t("onboarding.complete.later") }}</button>
       </div>
     </template>
   </div>
