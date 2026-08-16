@@ -7,10 +7,11 @@
  * (A-G01-1). Defaults and bounds live in Rust - this view renders whatever
  * `load_settings` returns.
  */
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../../stores/settings";
+import { useDialogA11y } from "../../composables/useDialogA11y";
 import type { TerminalSettings, UiSettings, WindowSettings } from "../../types";
 
 const { t } = useI18n();
@@ -103,20 +104,16 @@ const saving = computed(() => store.saveState === "saving");
 const savedFlash = ref(false);
 const panel = ref<HTMLElement | null>(null);
 
+// Stage 6 (UX-03): focus trap + Escape + opener restore.
+useDialogA11y(panel, () => emit("close"));
+
 onMounted(async () => {
   if (!store.loaded) await store.load();
   await nextTick();
   // Initial focus into the dialog (keyboard reachable, A-G01-1); Tab then
   // walks the controls.
   panel.value?.focus();
-  window.addEventListener("keydown", onKeydown);
 });
-
-onUnmounted(() => window.removeEventListener("keydown", onKeydown));
-
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") emit("close");
-}
 
 function onOverlayDown(e: MouseEvent) {
   if (e.target === e.currentTarget) emit("close");

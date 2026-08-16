@@ -9,9 +9,10 @@
  * WorkbenchError with a retry (A-G13-1/A-G13-2). The run button is disabled
  * while a doctor is in flight (A-G13-3).
  */
-import { onMounted, onUnmounted, ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useDoctorStore } from "../../stores/doctor";
+import { useDialogA11y } from "../../composables/useDialogA11y";
 import type { DoctorStatus } from "../../types";
 
 const { t } = useI18n();
@@ -25,16 +26,12 @@ const STATUS_LABEL_KEY: Record<DoctorStatus, string> = {
   skip: "doctor.status.skip",
 };
 
+// Stage 6 (UX-03): focus trap + Escape + opener restore.
+useDialogA11y(panel, () => store.closeDialog());
+
 onMounted(() => {
   panel.value?.focus();
-  window.addEventListener("keydown", onKeydown);
 });
-
-onUnmounted(() => window.removeEventListener("keydown", onKeydown));
-
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape") store.closeDialog();
-}
 
 function onOverlayDown(e: MouseEvent) {
   if (e.target === e.currentTarget) store.closeDialog();

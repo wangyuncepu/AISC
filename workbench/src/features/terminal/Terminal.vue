@@ -34,6 +34,7 @@ import { resizeSession, writeSession } from "../../lib/ipc";
 import { resolveRenderer, terminalTheme } from "./renderer";
 import { effectiveTheme } from "../../theme";
 import { findLeaf } from "../../stores/paneTree";
+import { prefersReducedMotion } from "../../lib/accessibility";
 import type { LaunchAgent } from "../../types";
 
 const { t } = useI18n();
@@ -93,7 +94,8 @@ function terminalOptions(): ITerminalOptions {
     lineHeight: s?.line_height,
     letterSpacing: s?.letter_spacing,
     scrollback: s?.scrollback,
-    smoothScrollDuration: s?.smooth_scroll_duration,
+    // Stage 6 (UX-03): reduced motion zeroes the terminal smooth scroll too.
+    smoothScrollDuration: prefersReducedMotion() ? 0 : s?.smooth_scroll_duration,
     convertEol: false,
     cursorBlink: true,
     theme: terminalTheme(effectiveTheme.value),
@@ -257,6 +259,23 @@ function onContextMenu(e: MouseEvent) {
   const x = Math.min(e.clientX, window.innerWidth - 180);
   const y = Math.min(e.clientY, window.innerHeight - 150);
   ctxMenu.value = { x, y };
+}
+
+/** Stage 6 (UX-03): open the context menu from the keyboard (Menu key or
+ *  Shift+F10) at the terminal centre, then move focus to the first item so
+ *  arrows/Tab navigate immediately. Other keys pass through to xterm. */
+function onTerminalKeydown(e: KeyboardEvent) {
+  if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;
+  e.preventDefault();
+  const el = container.value;
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const x = Math.min(r.left + r.width / 2, window.innerWidth - 180);
+  const y = Math.min(r.top + r.height / 2, window.innerHeight - 150);
+  ctxMenu.value = { x, y };
+  window.setTimeout(() => {
+    el.querySelector<HTMLElement>(".ctx-menu button:not([disabled])")?.focus();
+  }, 0);
 }
 
 function closeMenu() {
@@ -515,6 +534,7 @@ defineExpose({
     ref="container"
     class="terminal"
     @contextmenu="onContextMenu"
+    @keydown="onTerminalKeydown"
     @click="onTerminalClick"
   >
     <!-- S1.3: fixed, persistent truncation notice (the terminal-flow note
