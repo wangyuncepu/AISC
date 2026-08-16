@@ -563,14 +563,10 @@ FunctionEnd
 
 LangString DEP_FINISH_RUN ${LANG_ENGLISH} "Start AISC Workbench"
 LangString DEP_FINISH_RUN ${LANG_SIMPCHINESE} "启动 AISC Workbench"
-LangString DOCKER_INSTALLING ${LANG_ENGLISH} "Installing Docker Desktop via winget (this may take a few minutes)..."
-LangString DOCKER_INSTALLING ${LANG_SIMPCHINESE} "正在通过 winget 下载并安装 Docker Desktop（可能需要几分钟）……"
-LangString DOCKER_INSTALL_OK ${LANG_ENGLISH} "Docker Desktop installed."
-LangString DOCKER_INSTALL_OK ${LANG_SIMPCHINESE} "Docker Desktop 已安装。"
-LangString DOCKER_INSTALL_FAIL ${LANG_ENGLISH} "Docker Desktop install failed (exit code $DockerWingetExit). You can install it manually from https://www.docker.com/products/docker-desktop/ or start it later from the Start menu."
-LangString DOCKER_INSTALL_FAIL ${LANG_SIMPCHINESE} "Docker Desktop 安装失败（退出码 $DockerWingetExit）。可手动从 https://www.docker.com/products/docker-desktop/ 安装，或稍后从开始菜单启动 Docker Desktop。"
-LangString DOCKER_NO_WINGET ${LANG_ENGLISH} "winget (App Installer) was not found - install it from the Microsoft Store, or install Docker Desktop manually from https://www.docker.com/products/docker-desktop/."
-LangString DOCKER_NO_WINGET ${LANG_SIMPCHINESE} "未找到 winget（应用安装程序）——请从 Microsoft Store 安装后重新运行本安装程序，或手动从 https://www.docker.com/products/docker-desktop/ 安装 Docker Desktop。"
+LangString DOCKER_PRESENT ${LANG_ENGLISH} "Docker Desktop detected."
+LangString DOCKER_PRESENT ${LANG_SIMPCHINESE} "已检测到 Docker Desktop。"
+LangString DOCKER_MISSING_DEFERRED ${LANG_ENGLISH} "Docker Desktop not found - it will be offered for installation in the Workbench first-run wizard."
+LangString DOCKER_MISSING_DEFERRED ${LANG_SIMPCHINESE} "未检测到 Docker Desktop——将在 Workbench 首次引导中提示安装。"
 LangString DOCKER_MISSING_LAUNCH ${LANG_ENGLISH} "AISC Workbench needs Docker Desktop, which was not found on this PC. Open the Docker Desktop download page? (You can also install it later from the Start menu or Microsoft Store.)"
 LangString DOCKER_MISSING_LAUNCH ${LANG_SIMPCHINESE} "AISC Workbench 需要 Docker Desktop，但未在本机找到。是否打开 Docker Desktop 下载页？（也可以稍后从开始菜单或 Microsoft Store 安装。）"
 
@@ -1133,10 +1129,11 @@ Section Install
 SectionEnd
 
 Section Docker
-  ; Host integration: when Docker Desktop is missing, install it via winget so
-  ; the finish-page "Start AISC Workbench" can rely on it being present. Runs
-  ; only for interactive GUI installs - silent/passive installs have no finish
-  ; page and must never invoke winget (the CI smoke installs with /S).
+  ; Host integration: detect Docker Desktop so the finish-page launcher can
+  ; start it when present. Install is DEFERRED to the Workbench first-run
+  ; wizard ("Install and start Docker", A-ONB02/B) — the installer must stay
+  ; fast and light, and the user decides in-app when Docker is needed. Never
+  ; auto-installs via winget here (silent/passive installs skip anyway).
   ${If} ${Silent}
     Goto docker_done
   ${EndIf}
@@ -1146,29 +1143,9 @@ Section Docker
 
   Call CheckDocker
   ${If} $DepsDockerInstalled = 1
-    Goto docker_done
-  ${EndIf}
-  Call CheckWinget
-  ${If} $DepsWingetInstalled = 0
-    DetailPrint "$(DOCKER_NO_WINGET)"
-    Goto docker_done
-  ${EndIf}
-
-  DetailPrint "$(DOCKER_INSTALLING)"
-  ; Run winget through the bundled transcode helper: winget emits UTF-8 to a
-  ; pipe but nsExec decodes stdout as the ANSI codepage, so raw output shows
-  ; mojibake in the Details pane. wg-transcode.ps1 (installed via
-  ; bundle.resources) re-encodes each chunk to the system ANSI codepage,
-  ; keeping the live progress readable. PowerShell is present on all
-  ; supported Windows (WebView2 already requires a modern OS).
-  nsExec::ExecToLog 'powershell -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\wg-transcode.ps1" install -e --id Docker.DockerDesktop --accept-source-agreements --accept-package-agreements --disable-interactivity'
-  Pop $0 ; winget exit code
-  StrCpy $DockerWingetExit $0 ; save BEFORE CheckDocker clobbers $0
-  Call CheckDocker
-  ${If} $DepsDockerInstalled = 1
-    DetailPrint "$(DOCKER_INSTALL_OK)"
+    DetailPrint "$(DOCKER_PRESENT)"
   ${Else}
-    DetailPrint "$(DOCKER_INSTALL_FAIL)" ; references $DockerWingetExit
+    DetailPrint "$(DOCKER_MISSING_DEFERRED)"
   ${EndIf}
 docker_done:
 SectionEnd
