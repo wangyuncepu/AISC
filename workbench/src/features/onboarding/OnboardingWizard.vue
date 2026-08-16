@@ -129,6 +129,26 @@ async function confirmNetwork() {
 async function continueFromNetwork() {
   await onboarding.patch({ completeStep: "network", currentStep: "runtime" });
 }
+
+// --- runtime step (5f, A-ONB06) ---
+
+watch(
+  () => onboarding.state?.current_step,
+  async (step) => {
+    if (step === "runtime" && runtime.preflight === null) {
+      await runtime.runPreflight();
+    }
+  },
+  { immediate: true },
+);
+
+/** Continue past the runtime step. The actual runtime start happens in the
+ *  completion flow (5g) via the runtime store; here we only checkpoint that the
+ *  user reviewed preflight/reuse/restart/conflict state. A resolve_conflict is
+ *  not completeable until the user re-runs preflight (button disabled). */
+async function continueFromRuntime() {
+  await onboarding.patch({ completeStep: "runtime", currentStep: "complete" });
+}
 </script>
 
 <template>
@@ -295,7 +315,37 @@ async function continueFromNetwork() {
       >{{ t("onboarding.net.confirm") }}</button>
     </template>
 
-    <!-- Later steps (5f-5g) placeholder -->
+    <!-- Runtime (5f, A-ONB06) -->
+    <template v-else-if="step === 'runtime'">
+      <p class="ob-subtitle">{{ t("onboarding.runtime.title") }}</p>
+      <p v-if="runtime.error" class="ob-error" role="alert">{{ runtime.error }}</p>
+
+      <template v-if="runtime.preflight">
+        <p class="ob-step" role="status">
+          {{ t(`onboarding.runtime.action.${runtime.preflight.recommended_action}`) }}
+        </p>
+        <div v-if="runtime.conflicts.length" class="ob-conflicts">
+          <p class="ob-note">{{ t("onboarding.runtime.conflicts") }}</p>
+          <p
+            v-for="c in runtime.conflicts.slice(0, 3)"
+            :key="c.runtime_id"
+            class="ob-conflict-row"
+          >{{ c.container_name || c.runtime_id }}</p>
+        </div>
+      </template>
+
+      <div class="ob-actions">
+        <button
+          class="ob-btn primary"
+          :disabled="runtime.status === 'preflight' || runtime.status === 'starting' || runtime.preflight?.recommended_action === 'resolve_conflict'"
+          @click="continueFromRuntime"
+        >{{ t("onboarding.continue") }}</button>
+        <button class="ob-btn ghost" @click="runtime.runPreflight()">{{ t("onboarding.runtime.retry") }}</button>
+        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+      </div>
+    </template>
+
+    <!-- Later steps (5g) placeholder -->
     <template v-else>
       <p class="ob-step" role="status">{{ t("onboarding.currentStep", { step }) }}</p>
       <div class="ob-actions">
@@ -336,6 +386,8 @@ async function continueFromNetwork() {
 .ob-probe[data-result="ok"] { color: #4caf50; font-size: 12px; }
 .ob-probe[data-result="failed"] { color: #e5534b; font-size: 12px; }
 .ob-btn.confirm { border-color: #ffb300; color: #ffb300; }
+.ob-conflicts { max-width: 420px; }
+.ob-conflict-row { color: var(--muted, #888); font-size: 12px; margin: 2px 0; }
 .ob-check-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: var(--muted, #888); }
 .ob-check-dot[data-state="ready"] { background: #4caf50; }
 .ob-check-dot[data-state="starting"], .ob-check-dot[data-state="installing"] { background: #ffb300; }

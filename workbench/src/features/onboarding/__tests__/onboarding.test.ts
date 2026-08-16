@@ -21,6 +21,10 @@ vi.mock("../../../lib/ipc", () => ({
   envReadiness: vi.fn(),
   envPollEngine: vi.fn(),
   startDocker: vi.fn(),
+  listRuntimes: vi.fn().mockResolvedValue({ schema_version: 1, runtimes: [] }),
+  runtimePreflight: vi.fn(),
+  startRuntime: vi.fn().mockResolvedValue(undefined),
+  runtimeRestart: vi.fn(),
 }));
 
 function envReady(over: Record<string, string> = {}) {
@@ -164,6 +168,54 @@ describe("OnboardingWizard (ONB-01/07)", () => {
       completeStep: "agent",
       currentStep: "network",
     });
+    wrapper.unmount();
+  });
+
+  it("runtime step runs preflight and continues to complete on start (ONB-06)", async () => {
+    vi.mocked(onboardingLoad).mockResolvedValue(
+      baseState({ status: "in_progress", current_step: "runtime" }) as never,
+    );
+    const { runtimePreflight } = await import("../../../lib/ipc");
+    vi.mocked(runtimePreflight).mockResolvedValue({
+      schema_version: 1,
+      recommended_action: "start",
+      matching_runtime_id: null,
+      checks: [],
+      issues: [],
+    } as never);
+    const runtime = useRuntimeStore();
+    runtime.workspace = "/ws/proj";
+    const wrapper = mount(OnboardingWizard, { global: { plugins: [i18n] } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(runtimePreflight).toHaveBeenCalled();
+    const continueBtn = wrapper.findAll(".ob-btn.primary").find((b) => b.text() === "继续设置");
+    await continueBtn!.trigger("click");
+    expect(onboardingUpdate).toHaveBeenCalledWith({
+      completeStep: "runtime",
+      currentStep: "complete",
+    });
+    wrapper.unmount();
+  });
+
+  it("runtime step disables continue on resolve_conflict (ONB-06)", async () => {
+    vi.mocked(onboardingLoad).mockResolvedValue(
+      baseState({ status: "in_progress", current_step: "runtime" }) as never,
+    );
+    const { runtimePreflight } = await import("../../../lib/ipc");
+    vi.mocked(runtimePreflight).mockResolvedValue({
+      schema_version: 1,
+      recommended_action: "resolve_conflict",
+      matching_runtime_id: null,
+      checks: [],
+      issues: [],
+    } as never);
+    const runtime = useRuntimeStore();
+    runtime.workspace = "/ws/proj";
+    const wrapper = mount(OnboardingWizard, { global: { plugins: [i18n] } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const continueBtn = wrapper.findAll(".ob-btn.primary").find((b) => b.text() === "继续设置");
+    expect(continueBtn?.attributes("disabled")).toBeDefined();
     wrapper.unmount();
   });
 

@@ -324,6 +324,14 @@ export const zhCN = {
   "onboarding.net.probeFail": "不可达",
   "onboarding.net.confirm": "确认——应用于运行环境",
   "onboarding.net.skip": "跳过",
+
+  "onboarding.runtime.title": "运行环境",
+  "onboarding.runtime.action.start": "将创建新的运行环境。",
+  "onboarding.runtime.action.reuse": "将复用现有运行环境。",
+  "onboarding.runtime.action.restart": "将重启现有运行环境。",
+  "onboarding.runtime.action.resolve_conflict": "检测到运行环境冲突。",
+  "onboarding.runtime.conflicts": "冲突的运行环境：",
+  "onboarding.runtime.retry": "重新检查",
 } as const;
 
 export type ZhKey = keyof typeof zhCN;

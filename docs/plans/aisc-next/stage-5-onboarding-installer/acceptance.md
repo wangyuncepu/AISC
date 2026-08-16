@@ -41,6 +41,11 @@
   - 结果：TS store 5 + wizard 1 相关测试；全库 Rust 183 / TS 199。
   - 结论：PASS
 - `A-ONB06-1` new/reuse/restart/restore、取消、冲突、失败恢复通过。
+  - Commit：`<5f commit>`
+  - 证据：wizard runtime step 复用 runtime store——进入时 `runPreflight`（产生 start/reuse/restart/resolve_conflict recommended_action）、展示冲突列表（`runtime.conflicts`）、continue 仅 checkpoint（resolve_conflict 禁用，需 `runPreflight` retry）；实际 runtime 启动在完成流（5g）经 `startFromSummary`。
+  - 步骤：进入 runtime 步骤 → preflight → 显示 action/冲突 → continue（非 conflict）→ complete；conflict → continue 禁用 → retry。
+  - 结果：TS wizard 2 相关测试；全库 Rust 183 / TS 201。
+  - 结论：PASS
 - `A-ONB07-1` 完成进入 workspace；Settings/Help 可重开；skip 有温和提示。
 - `A-ONB08-1` installer handoff 非敏感、Workbench 二次验证、升级兼容。
 - `A-ONB08-2` Windows/Linux/macOS、中英、窄窗/150%、键盘/读屏证据齐。

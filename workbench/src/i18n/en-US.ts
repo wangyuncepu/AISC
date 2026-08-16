@@ -324,4 +324,12 @@ export const enUS: Record<string, string> = {
   "onboarding.net.probeFail": "Not reachable",
   "onboarding.net.confirm": "Confirm — apply to runtime",
   "onboarding.net.skip": "Skip",
+
+  "onboarding.runtime.title": "Runtime",
+  "onboarding.runtime.action.start": "A new runtime will be created.",
+  "onboarding.runtime.action.reuse": "An existing runtime will be reused.",
+  "onboarding.runtime.action.restart": "The existing runtime will be restarted.",
+  "onboarding.runtime.action.resolve_conflict": "A runtime conflict was detected.",
+  "onboarding.runtime.conflicts": "Conflicting runtimes:",
+  "onboarding.runtime.retry": "Re-check",
 };
