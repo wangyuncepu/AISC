@@ -29,7 +29,7 @@
   - 结果：通过。
   - 结论：PASS（lifecycle fault 部分随 4c 补）
 - `A-DG04-1` interactive resize/input/output/cancel/reap 无资源泄漏。
-  - Commit：`<4d commit>`
+  - Commit：`ba48eaf`
   - 证据：`SdkGateway.open_interactive` 从委托 `RealDockerExecutor` 改为自持完整 SDK 生命周期（exec_create→exec_start(socket)→AISC_RESIZE_FILE 初始+轮询 resize→stdout/stdin 原始流→exec_inspect 轮询→stop 事件+全部线程 join 收尾）；`SdkInteractiveTests` 验证 lifecycle 顺序、resize 转发、exec_create/start/inspect 错误路径、`InteractiveResult.exit_code` 属性（`GatewayResult` 便捷别名）。
   - 步骤：Fake exec API 驱动 open_interactive；断言 exit code/session_id/waited/线程无泄漏。
   - 结果：28 passed（interactive 并入 query 文件）；全库 pytest 502 passed。
