@@ -47,13 +47,13 @@
   - 结果：TS wizard 2 相关测试；全库 Rust 183 / TS 201。
   - 结论：PASS
 - `A-ONB07-1` 完成进入 workspace；Settings/Help 可重开；skip 有温和提示。
-  - Commit：`<5g commit>`
+  - Commit：`70ee159`
   - 证据：wizard complete step——`finish()` 标记 `status=completed` + `completeStep=complete`（App.vue 门 `isFinished` 关闭覆盖层）+ 调用 `startFromSummary` 启动 runtime（best-effort）；complete 页有"进入工作区 / 稍后再说"；SettingsDialog footer 新增"重新打开设置向导"（`reopenOnboarding` → patch in_progress/environment，App.vue 门重新显示覆盖层）；skip 按钮全流程存在（温和，可重开）。
   - 步骤：complete → 进入工作区 → 覆盖层关闭 + runtime 启动；Settings → 重开向导 → 覆盖层重现。
   - 结果：TS wizard 1 相关测试；全库 Rust 183 / TS 202。
   - 结论：PASS
 - `A-ONB08-1` installer handoff 非敏感、Workbench 二次验证、升级兼容。
-  - Commit：`73c39cf`（handoff 写入）+ `<5g commit>`
+  - Commit：`73c39cf`（handoff 写入）+ `70ee159`
   - 证据：installer 写非敏感 handoff（5b）；Workbench `installer_handoff` 只读不信任（D5-07，env/doctor 二次验证在 5c）；升级保留 completed 状态（onboarding schema 版本化，高版本 fail-closed）。
   - 结论：PASS（升级实机兼容随总门）
 - `A-ONB08-1` installer handoff 非敏感、Workbench 二次验证、升级兼容。
