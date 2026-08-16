@@ -18,6 +18,16 @@
   - 结果：通过。
   - 结论：PASS
 - `A-DG03-1` query/lifecycle SDK 与 CLI 结果等价。
+  - Commit：`<4b commit>`（`docker_gateway.py` SdkGateway query 路径 + `test_docker_gateway_query.py`）
+  - 证据：Fake docker-py client（recording + fault injection：daemon_down/permission）驱动 `SdkGateway.preflight/inspect_image/list_containers/inspect_container`；`SdkCliEquivalenceTests` 断言 SDK 与 CLI 对同一输入产出相同 status/exit code（EXISTS→0、MISSING→5）。
+  - 步骤：Fake daemon 正常/不可达/权限 → 断言 PreflightResult/ImageInspectGatewayResult/ContainerListResult/ContainerInspectResult 字段与 error code。
+  - 结果：11 passed；全库 pytest 485 passed。
+  - 结论：PASS
+- `A-DG07-1`（query 部分）Fake/recording/fault injection 覆盖 daemon/permission/timeout。
+  - Commit：`<4b commit>`
+  - 证据：`FakeClient(fault="daemon_down")` / `permission` 注入，断言 `DOCKER_ERR_DAEMON_UNREACHABLE` / `DOCKER_ERR_PERMISSION_DENIED` 映射。
+  - 结果：通过。
+  - 结论：PASS（lifecycle fault 部分随 4c 补）
 - `A-DG04-1` interactive resize/input/output/cancel/reap 无资源泄漏。
 - `A-DG05-1` Build CLI baseline 有 p50/p95/max；SDK 迁移有明确 GO/NO-GO。
 - `A-DG06-1` application 不感知 backend；auto/sdk/cli flag 可回滚。
