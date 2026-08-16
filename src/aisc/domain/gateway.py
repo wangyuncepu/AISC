@@ -55,6 +55,11 @@ class GatewayResult:
     def timed_out(self) -> bool:
         return self.operation.timed_out
 
+    @property
+    def exit_code(self) -> int:
+        """Convenience alias for ``operation.exit_code``."""
+        return self.operation.exit_code
+
 
 # ---------------------------------------------------------------------------
 # Query results

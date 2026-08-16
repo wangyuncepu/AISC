@@ -25,6 +25,10 @@ Backends
 
 from __future__ import annotations
 
+import os
+import socket
+import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -481,18 +485,192 @@ class SdkGateway:
                 target=container,
             )
 
-    # -- interactive / build (SDK-first; 4d wires the full lifecycle) -------
+    # -- interactive (SDK-first; D4-03 owns create/start/resize/stream/reap) --
 
     def open_interactive(self, container: str, argv: List[str]) -> InteractiveResult:
-        # 4d: unify exec socket/resize/cancel/reap here. For now, delegate to the
-        # CLI executor's SDK exec path so interactive behavior is unchanged, then
-        # surface as an InteractiveResult.
-        from aisc.adapters.docker_ import RealDockerExecutor
-        exec_result: ProcessResult = RealDockerExecutor().open_interactive(container, argv)
+        """Interactive TTY session via the Docker SDK, using the injected client.
+
+        Lifecycle (D4-03/A-DG04-1): ``exec_create`` → ``exec_start`` (socket) →
+        terminal-size watcher forwards ``exec_resize`` → raw stdout/stdin stream →
+        ``exec_inspect`` poll for exit → join/reap all threads. No resource is
+        left behind on error: the stop event is always set and threads joined.
+        """
+        import docker
+
+        start = time.monotonic()
+        try:
+            client = self._client()
+            exec_id = client.api.exec_create(container, list(argv), tty=True, stdin=True)["Id"]
+        except docker.errors.NotFound:
+            return InteractiveResult(
+                operation=_new_operation(
+                    "sdk", exit_code=1, duration_ms=_elapsed(start),
+                    error_code=DockerErrorCode.NOT_FOUND,
+                    error_message=f"container {container} not found",
+                ),
+                session_id="",
+            )
+        except docker.errors.DockerException as exc:
+            return InteractiveResult(
+                operation=_new_operation(
+                    "sdk", exit_code=3, duration_ms=_elapsed(start),
+                    error_code=DockerErrorCode.DAEMON_UNREACHABLE,
+                    error_message=str(exc),
+                ),
+                session_id="",
+            )
+
+        try:
+            sock = client.api.exec_start(exec_id, socket=True, tty=True)
+        except docker.errors.APIError as exc:
+            return InteractiveResult(
+                operation=_new_operation(
+                    "sdk", exit_code=3, duration_ms=_elapsed(start),
+                    error_code=DockerErrorCode.UNKNOWN,
+                    error_message=f"exec start failed: {exc}",
+                ),
+                session_id=exec_id,
+            )
+
+        stop = threading.Event()
+        errors: List[Exception] = []
+
+        # Initial resize from the resize file (set by the pty supervisor before
+        # spawn; AISC_RESIZE_FILE = "<cols> <rows>\n").
+        resize_file = os.environ.get("AISC_RESIZE_FILE")
+        last_size: Optional[tuple] = None
+        if resize_file:
+            try:
+                content = open(resize_file).read().strip().split()
+                if len(content) == 2:
+                    last_size = (int(content[0]), int(content[1]))
+                    client.api.exec_resize(exec_id, height=last_size[1], width=last_size[0])
+            except Exception:  # noqa: BLE001
+                pass
+
+        def read_sock(size: int) -> bytes:
+            """Raw read from the docker-py exec socket (recv | read | os.read)."""
+            if hasattr(sock, "recv"):
+                return sock.recv(size)
+            if hasattr(sock, "read"):
+                return sock.read(size)
+            return os.read(sock.fileno(), size)
+
+        def send_all(data: bytes) -> None:
+            """Send every byte (sendall | _sock.sendall | write | os.write)."""
+            if hasattr(sock, "sendall"):
+                sock.sendall(data)
+                return
+            raw = getattr(sock, "_sock", None)
+            if raw is not None and hasattr(raw, "sendall"):
+                raw.sendall(data)
+                return
+            view = memoryview(data)
+            while view:
+                if hasattr(sock, "write") and getattr(sock, "writable", lambda: False)():
+                    sent = sock.write(view)
+                else:
+                    sent = os.write(sock.fileno(), view)
+                if sent is None:
+                    raise OSError("socket write would block")
+                if sent <= 0:
+                    raise OSError("socket write failed")
+                view = view[sent:]
+
+        def shutdown_write() -> None:
+            """Half-close the write side on stdin EOF (shutdown | _sock.shutdown)."""
+            raw = getattr(sock, "_sock", None)
+            targets = [raw, sock] if raw is not None else [sock]
+            for target in targets:
+                if hasattr(target, "shutdown"):
+                    try:
+                        target.shutdown(socket.SHUT_WR)
+                        return
+                    except OSError:
+                        pass
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+        def drain() -> None:
+            """Socket → stdout (raw bytes)."""
+            try:
+                while True:
+                    chunk = read_sock(65536)
+                    if not chunk:
+                        break
+                    os.write(sys.stdout.fileno(), chunk)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        def forward() -> None:
+            """stdin → socket; on EOF close the write side."""
+            try:
+                while True:
+                    chunk = os.read(sys.stdin.fileno(), 4096)
+                    if not chunk:
+                        break
+                    send_all(chunk)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+            finally:
+                shutdown_write()
+
+        def watch_resize() -> None:
+            """Poll the resize file; forward changes to exec_resize."""
+            if not resize_file:
+                return
+            while not stop.is_set():
+                try:
+                    content = open(resize_file).read().strip().split()
+                    if len(content) == 2:
+                        cur = (int(content[0]), int(content[1]))
+                        if cur != last_size:
+                            last_size = cur  # type: ignore[misc]
+                            client.api.exec_resize(exec_id, height=cur[1], width=cur[0])
+                except Exception:  # noqa: BLE001
+                    pass
+                stop.wait(0.1)
+
+        t_drain = threading.Thread(target=drain, daemon=True)
+        t_fwd = threading.Thread(target=forward, daemon=True)
+        t_resize = threading.Thread(target=watch_resize, daemon=True)
+        t_drain.start()
+        t_fwd.start()
+        t_resize.start()
+
+        exit_code = -1
+        waited = False
+        try:
+            while True:
+                info = client.api.exec_inspect(exec_id)
+                if not info.get("Running"):
+                    exit_code = int(info.get("ExitCode", 0))
+                    waited = True
+                    break
+                time.sleep(0.2)
+        except docker.errors.APIError as exc:
+            errors.append(exc)
+        finally:
+            stop.set()
+            t_drain.join(timeout=5)
+            t_fwd.join(timeout=5)
+            t_resize.join(timeout=5)
+
+        if errors:
+            return InteractiveResult(
+                operation=_new_operation(
+                    "sdk", exit_code=-1, duration_ms=_elapsed(start),
+                    error_code=DockerErrorCode.UNKNOWN,
+                    error_message=f"exec stream error: {errors[0]}",
+                ),
+                session_id=exec_id,
+            )
         return InteractiveResult(
-            operation=_new_operation("sdk", exit_code=exec_result.exit_code, duration_ms=0),
-            exit_code=exec_result.exit_code,
-            session_id="",
+            operation=_new_operation("sdk", exit_code=exit_code, duration_ms=_elapsed(start)),
+            session_id=exec_id,
+            waited=waited,
         )
 
     def build_image(
@@ -625,7 +803,6 @@ class CliGateway:
         r: ProcessResult = self._exec().open_interactive(container, argv)
         return InteractiveResult(
             operation=_new_operation("cli", exit_code=r.exit_code, duration_ms=_elapsed(start)),
-            exit_code=r.exit_code,
         )
 
     def build_image(

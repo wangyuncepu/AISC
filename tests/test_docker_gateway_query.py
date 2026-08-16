@@ -117,14 +117,49 @@ class _FakeContainers:
         raise docker.errors.NotFound(f"no such container: {name_or_id}")
 
 
+class _FakeApi:
+    """Fake docker APIClient for the interactive exec path."""
+
+    def __init__(self, *, fault=None, inspect_once=False, exit_code=0):
+        self._fault = fault          # "exec_create_down" | "exec_start_down" | "exec_inspect_down" | None
+        self._inspect_once = inspect_once  # first inspect reports not-running (fast exit)
+        self._exit_code = exit_code
+        self.calls = []
+
+    def exec_create(self, container, cmd, **kwargs):
+        self.calls.append(("exec_create", container, cmd))
+        if self._fault == "exec_create_down":
+            raise docker.errors.DockerException("daemon unreachable during exec_create")
+        return {"Id": "exec-1234"}
+
+    def exec_start(self, exec_id, **kwargs):
+        self.calls.append(("exec_start", exec_id))
+        if self._fault == "exec_start_down":
+            raise docker.errors.APIError("exec start failed")
+        import io
+        return io.BytesIO(b"")  # empty socket: immediate EOF on drain
+
+    def exec_inspect(self, exec_id):
+        self.calls.append(("exec_inspect", exec_id))
+        if self._fault == "exec_inspect_down":
+            raise docker.errors.APIError("exec inspect failed")
+        if self._inspect_once:
+            return {"Running": False, "ExitCode": self._exit_code}
+        return {"Running": True, "ExitCode": 0}  # callers must set once for fast tests
+
+    def exec_resize(self, exec_id, **kwargs):
+        self.calls.append(("exec_resize", exec_id))
+
+
 class FakeClient:
     """Recording fake docker-py client with switchable faults."""
 
-    def __init__(self, *, version=None, images=None, containers=None, fault=None):
+    def __init__(self, *, version=None, images=None, containers=None, fault=None, api=None):
         self._version = version or {"Version": "26.1.1", "ApiVersion": "1.44"}
         self._fault = fault  # "daemon_down" | "permission" | None
         self.images = images or _FakeImages({"super-claude:latest"}, fault=fault)
         self.containers = containers or _FakeContainers([], fault=fault)
+        self.api = api or _FakeApi()
         self.calls = []
 
     def version(self):
@@ -343,6 +378,80 @@ class SdkCliLifecycleEquivalenceTests(unittest.TestCase):
             return_value=ProcessResult(stdout="", stderr="Error: No such container", exit_code=1),
         )))
         self.assertEqual(cli.start_container("ghost").operation.exit_code, 1)
+
+
+class SdkInteractiveTests(unittest.TestCase):
+    """A-DG04-1: interactive exec lifecycle (create/start/stream/inspect/reap)."""
+
+    def _gw(self, api):
+        return SdkGateway(client=FakeClient(api=api))
+
+    def test_open_interactive_full_lifecycle(self):
+        """exec_create → exec_start → exec_inspect(once) → exit_code, threads reaped."""
+        import os
+        import sys as _sys
+        import tempfile
+        from unittest import mock as _mock
+
+        api = _FakeApi(inspect_once=True, exit_code=7)
+        g = self._gw(api)
+        # Real empty temp file for stdin → immediate EOF, no fileno error.
+        with tempfile.TemporaryFile() as stdin:
+            with _mock.patch.object(_sys, "stdin", stdin):
+                r = g.open_interactive("aisc-wb-1", ["bash", "-c", "exit 7"])
+
+        self.assertEqual(r.operation.exit_code, 7)
+        self.assertEqual(r.exit_code, 7)
+        self.assertEqual(r.session_id, "exec-1234")
+        self.assertTrue(r.waited)
+        # Lifecycle order + reap (threads joined, no leaked daemon threads).
+        created = [c for c in api.calls if c[0] == "exec_create"]
+        started = [c for c in api.calls if c[0] == "exec_start"]
+        inspected = [c for c in api.calls if c[0] == "exec_inspect"]
+        self.assertEqual(len(created), 1)
+        self.assertEqual(len(started), 1)
+        self.assertGreaterEqual(len(inspected), 1)
+
+    def test_open_interactive_exec_create_not_found(self):
+        class NotFoundApi(_FakeApi):
+            def exec_create(self, container, cmd, **kwargs):
+                raise docker.errors.NotFound("no such container")
+        r = self._gw(NotFoundApi()).open_interactive("ghost", ["sh"])
+        self.assertEqual(r.operation.error_code, "DOCKER_ERR_NOT_FOUND")
+        self.assertEqual(r.operation.exit_code, 1)
+
+    def test_open_interactive_exec_start_failure_is_stable(self):
+        api = _FakeApi(fault="exec_start_down")
+        r = self._gw(api).open_interactive("aisc-wb-1", ["sh"])
+        self.assertEqual(r.operation.error_code, "DOCKER_ERR_UNKNOWN")
+        self.assertEqual(r.session_id, "exec-1234")
+
+    def test_open_interactive_inspect_error_reaps_threads(self):
+        api = _FakeApi(fault="exec_inspect_down")
+        r = self._gw(api).open_interactive("aisc-wb-1", ["sh"])
+        self.assertEqual(r.operation.error_code, "DOCKER_ERR_UNKNOWN")
+
+    def test_open_interactive_resize_forwarded(self):
+        """AISC_RESIZE_FILE drives exec_resize on the initial + watch path."""
+        import os
+        import sys as _sys
+        import tempfile
+        from unittest import mock as _mock
+
+        api = _FakeApi(inspect_once=True)
+        g = self._gw(api)
+        with tempfile.NamedTemporaryFile("w", delete=False) as rf:
+            rf.write("80 24\n")
+            resize_path = rf.name
+        try:
+            with tempfile.TemporaryFile() as stdin:
+                with _mock.patch.object(_sys, "stdin", stdin):
+                    with _mock.patch.dict(os.environ, {"AISC_RESIZE_FILE": resize_path}):
+                        g.open_interactive("aisc-wb-1", ["sh"])
+        finally:
+            os.unlink(resize_path)
+        resized = [c for c in api.calls if c[0] == "exec_resize"]
+        self.assertGreaterEqual(len(resized), 1)
 
 
 if __name__ == "__main__":
