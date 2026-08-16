@@ -56,5 +56,4 @@
   - Commit：`73c39cf`（handoff 写入）+ `70ee159`
   - 证据：installer 写非敏感 handoff（5b）；Workbench `installer_handoff` 只读不信任（D5-07，env/doctor 二次验证在 5c）；升级保留 completed 状态（onboarding schema 版本化，高版本 fail-closed）。
   - 结论：PASS（升级实机兼容随总门）
-- `A-ONB08-1` installer handoff 非敏感、Workbench 二次验证、升级兼容。
 - `A-ONB08-2` Windows/Linux/macOS、中英、窄窗/150%、键盘/读屏证据齐。
