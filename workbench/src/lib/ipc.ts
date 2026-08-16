@@ -6,7 +6,11 @@ import type {
   CapabilityReport,
   DiscoveryReport,
   DoctorReport,
+  EnvReadiness,
   HistoryPatch,
+  InstallerHandoff,
+  OnboardingPatch,
+  OnboardingState,
   PreflightReport,
   ProviderStatus,
   PtyEvent,
@@ -129,12 +133,30 @@ export const cancelBuild = () => invoke<void>("cancel_build");
 
 export const startDocker = () => invoke<void>("start_docker");
 
+// --- Stage 5 (A-ONB02): environment readiness (installed ≠ engine ready) ---
+
+export const envReadiness = () => invoke<EnvReadiness>("env_readiness");
+
+export const envPollEngine = (deadlineMs: number) =>
+  invoke<EnvReadiness>("env_poll_engine", { deadlineMs });
+
 // --- S2.4.a: history persistence (02 §九) ---
 
 export const loadHistory = () => invoke<WorkbenchHistory>("load_history");
 
 export const saveHistory = (expectedRevision: number, patch: HistoryPatch) =>
   invoke<number>("save_history", { expectedRevision, patch });
+
+// --- Stage 5 (ONB-01): onboarding state (schema-versioned, no secrets) ---
+
+export const onboardingLoad = () => invoke<OnboardingState>("onboarding_load");
+
+export const onboardingUpdate = (patch: OnboardingPatch) =>
+  invoke<OnboardingState>("onboarding_update", { patch });
+
+// --- Stage 5 (A-INS01/A-ONB08): installer handoff (non-sensitive, D5-07) ---
+
+export const installerHandoff = () => invoke<InstallerHandoff>("installer_handoff");
 
 // --- G-10: window geometry save/restore (02 §A-G10) ---
 

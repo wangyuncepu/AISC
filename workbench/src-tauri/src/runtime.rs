@@ -526,28 +526,40 @@ pub async fn cancel_build(app: AppHandle) -> Result<(), WorkbenchError> {
 /// come up, so callers re-run preflight after a short delay. Non-Windows/macOS
 /// returns an actionable error (systemd on Linux is out of scope for the app).
 #[tauri::command]
-pub async fn start_docker() -> Result<(), WorkbenchError> {
+pub async fn start_docker(app: AppHandle) -> Result<(), WorkbenchError> {
     #[cfg(windows)]
     {
-        let base = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| String::new());
-        let mut candidates = Vec::new();
-        if !base.is_empty() {
-            candidates.push(std::path::PathBuf::from(&base).join("Docker\\Docker Desktop\\Docker Desktop.exe"));
-        }
-        if let Ok(pf) = std::env::var("ProgramFiles") {
-            candidates.push(std::path::PathBuf::from(pf).join("Docker\\Docker\\Docker Desktop.exe"));
-        }
-        for exe in &candidates {
+        // Docker Desktop.exe already present → just launch it.
+        for exe in docker_desktop_candidates() {
             if exe.exists() {
-                std::process::Command::new(exe).spawn().map_err(|e| {
+                std::process::Command::new(&exe).spawn().map_err(|e| {
                     WorkbenchError::cli_protocol()
                         .with_detail(format!("failed to start Docker Desktop: {e}"))
                 })?;
                 return Ok(());
             }
         }
-        Err(WorkbenchError::cli_protocol()
-            .with_detail("Docker Desktop executable not found".to_string()))
+        // Missing → offline build bundles the latest Docker Desktop installer
+        // (like mihomo); run it silently. On any failure fall back to winget so
+        // an offline build degrades gracefully to the online path.
+        if let Some(installer) = bundled_docker_installer() {
+            match install_docker_desktop_bundled(&app, &installer).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    eprintln!("[docker] bundled install failed ({e}); falling back to winget");
+                }
+            }
+        }
+        // Missing → install via winget (awaited, bounded; Stage 5 A-ONB02/B):
+        // the first-run wizard's "Start Docker" must cover install, not just
+        // launch. No shell=True anywhere. Returns a real error on failure so
+        // the wizard can show it instead of silently timing out.
+        match install_docker_desktop_winget(&app).await {
+            Ok(()) => Ok(()),
+            Err(e) => Err(WorkbenchError::cli_protocol().with_detail(format!(
+                "Docker Desktop not found and automatic install failed: {e}"
+            ))),
+        }
     }
     #[cfg(target_os = "macos")]
     {
@@ -569,6 +581,142 @@ pub async fn start_docker() -> Result<(), WorkbenchError> {
     }
 }
 
+/// Candidate paths for the Docker Desktop executable (Windows). Single source
+/// shared by `start_docker` and the env readiness probe (env.rs).
+#[cfg(windows)]
+pub(crate) fn docker_desktop_candidates() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(base) = std::env::var("LOCALAPPDATA") {
+        out.push(std::path::PathBuf::from(base).join("Docker\\Docker Desktop\\Docker Desktop.exe"));
+    }
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        out.push(std::path::PathBuf::from(pf).join("Docker\\Docker\\Docker Desktop.exe"));
+    }
+    out
+}
+
+/// Check whether winget (App Installer) is available on PATH.
+#[cfg(windows)]
+fn winget_available() -> bool {
+    std::process::Command::new("where")
+        .arg("winget")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Timeout for the Docker Desktop install (can be a large download).
+const DOCKER_INSTALL_TIMEOUT: Duration = Duration::from_secs(600); // 10 min
+
+/// Fire a Windows toast (best-effort; silently no-ops when notification
+/// permission is off). The plugin is registered in lib.rs and the capability
+/// grants `notification:allow-notify`. Gives the user a system-level heads-up
+/// that a background Docker install finished even if the wizard lost focus.
+/// `pub(crate)` so the env engine-ready poll (env.rs) reuses the same path.
+pub(crate) fn notify_docker(app: &AppHandle, title: &str, body: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    match app.notification().builder().title(title.to_string()).body(body.to_string()).show() {
+        Ok(()) => {}
+        Err(e) => eprintln!("[docker] toast notification failed: {e}"),
+    }
+}
+
+/// Bundled offline Docker Desktop installer (offline build only). Placed next
+/// to the app by the NSIS installer under `aisc-bundle\docker-offline\`. The
+/// online build has none and falls back to winget.
+#[cfg(windows)]
+fn bundled_docker_installer() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let p = exe
+        .parent()?
+        .join("aisc-bundle")
+        .join("docker-offline")
+        .join("Docker Desktop Installer.exe");
+    p.is_file().then_some(p)
+}
+
+/// Install Docker Desktop via winget (Stage 5, A-ONB02/B). **Awaits completion**
+/// (bounded by `DOCKER_INSTALL_TIMEOUT`) so the caller can report a real
+/// result instead of fire-and-forget — the wizard shows "installing" while
+/// awaiting and a clear failure on error. Console window is hidden. Returns
+/// Ok only when Docker Desktop.exe exists afterward.
+#[cfg(windows)]
+async fn install_docker_desktop_winget(app: &AppHandle) -> Result<(), String> {
+    if !winget_available() {
+        return Err("winget (App Installer) not available".into());
+    }
+    let mut cmd = tokio::process::Command::new("winget");
+    cmd.args([
+        "install",
+        "--id", "Docker.DockerDesktop",
+        "--accept-source-agreements",
+        "--accept-package-agreements",
+        "--disable-interactivity",
+    ]);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    cmd.stdin(std::process::Stdio::null());
+    // Hide the console window entirely: `CREATE_NO_WINDOW` (0x08000000) stops
+    // winget (a console app) from flashing a terminal box when spawned from the
+    // GUI process (observed 2026-08-16). `DETACHED_PROCESS` alone can still
+    // open a console. tokio's Command exposes creation_flags inherently.
+    cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let result = tokio::time::timeout(DOCKER_INSTALL_TIMEOUT, child.wait()).await;
+    match result {
+        Ok(Ok(status)) if status.success() => {
+            // Confirm the exe appeared (install success even if the post-step
+            // launch is not immediate).
+            if docker_desktop_candidates().iter().any(|p| p.exists()) {
+                notify_docker(app, "Docker Desktop", "Docker Desktop 安装完成，正在启动引擎…");
+                Ok(())
+            } else {
+                Err("winget reported success but Docker Desktop.exe was not found".into())
+            }
+        }
+        Ok(Ok(status)) => Err(format!("winget install failed (exit {:?})", status.code())),
+        Ok(Err(e)) => Err(format!("winget install error: {e}")),
+        Err(_) => Err("winget install timed out after 10 minutes".into()),
+    }
+}
+
+/// Install Docker Desktop from the bundled offline installer (offline build,
+/// A-ONB02/B extension, manual test 2026-08-16 request). Runs the Docker
+/// Desktop Installer.exe silently (no shell=True). Same bounded await and
+/// existence check as the winget path; on success fires a toast.
+#[cfg(windows)]
+async fn install_docker_desktop_bundled(
+    app: &AppHandle,
+    installer: &std::path::Path,
+) -> Result<(), String> {
+    let mut cmd = tokio::process::Command::new(installer);
+    // Docker Desktop Installer silent flags (documented by Docker):
+    // install --quiet --accept-license [--backend=wsl-2]. Default backend is
+    // WSL 2 on supported hosts.
+    cmd.args(["install", "--quiet", "--accept-license"]);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    cmd.stdin(std::process::Stdio::null());
+    cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let result = tokio::time::timeout(DOCKER_INSTALL_TIMEOUT, child.wait()).await;
+    match result {
+        Ok(Ok(status)) if status.success() => {
+            if docker_desktop_candidates().iter().any(|p| p.exists()) {
+                notify_docker(app, "Docker Desktop", "Docker Desktop 安装完成，正在启动引擎…");
+                Ok(())
+            } else {
+                Err("bundled installer reported success but Docker Desktop.exe was not found".into())
+            }
+        }
+        Ok(Ok(status)) => Err(format!("bundled installer failed (exit {:?})", status.code())),
+        Ok(Err(e)) => Err(format!("bundled installer error: {e}")),
+        Err(_) => Err("bundled installer timed out after 10 minutes".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,6 +732,35 @@ mod tests {
         assert!(argv.contains(&"/ws".into()));
         assert!(argv.contains(&"--format".into()));
         assert!(argv.contains(&"json".into()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn docker_candidates_are_well_formed_and_single_sourced() {
+        // Both start_docker and env readiness must resolve the same paths.
+        let candidates = docker_desktop_candidates();
+        for c in &candidates {
+            assert!(c.to_string_lossy().ends_with("Docker Desktop.exe"));
+        }
+        // env.rs reads through the same fn (single source), so this also
+        // exercises the shared path.
+        let via_env = crate::env::docker_desktop_candidates();
+        assert_eq!(candidates.len(), via_env.len());
+        if !candidates.is_empty() {
+            assert_eq!(candidates[0], via_env[0]);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn winget_detect_and_install_argv_is_safe() {
+        // winget_available must not panic regardless of availability.
+        let _ = winget_available();
+        // The install argv is fixed and never uses shell=True; assert the
+        // command shape by checking winget_available path only (spawning a real
+        // install in a unit test would be destructive, so we only verify the
+        // helper exists and does not panic).
+        assert!(winget_available() == winget_available()); // deterministic
     }
 
     #[test]

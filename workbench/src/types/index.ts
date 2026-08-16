@@ -329,6 +329,58 @@ export interface WorkbenchHistory {
   workspaces: WorkspaceRecord[];
 }
 
+// --- Stage 5 (ONB-01): onboarding state (schema-versioned, no secrets) ---
+
+export type OnboardingStatus =
+  | "not_started"
+  | "in_progress"
+  | "skipped"
+  | "blocked"
+  | "completed"
+  | "abandoned";
+
+export interface OnboardingState {
+  schema_version: number;
+  flow_version: number;
+  status: OnboardingStatus;
+  current_step: string;
+  completed_steps: string[];
+  skipped_steps: string[];
+  last_error_code: string;
+  source: string;
+}
+
+/** Frontend patch to onboarding_update; all fields optional, never secrets. */
+export interface OnboardingPatch {
+  status?: OnboardingStatus;
+  currentStep?: string;
+  completeStep?: string;
+  skipStep?: string;
+  lastErrorCode?: string;
+  source?: string;
+}
+
+/** Installer handoff facts (NSIS → Workbench, non-sensitive, never a fact — D5-07). */
+export interface InstallerHandoff {
+  installer_source: string;
+  installed_version: string;
+  first_run: boolean;
+  docker_hint: string;
+  present: boolean;
+  product_name: string;
+}
+
+// --- Stage 5 (A-ONB02): environment readiness (installed ≠ engine ready) ---
+
+export interface EnvReadiness {
+  cli: string;        // unknown | checking | ready | unavailable
+  docker: string;     // unknown | not_installed | installing | installed | starting | ready | blocked
+  engine: string;     // unknown | unavailable | starting | ready | permission_denied
+  webview2: string;   // unknown | ready | missing
+  dockerDesktopPath: string;
+  cliPath: string;
+}
+
 export type LaunchAgent = "claude" | "codex" | "bash" | "cc-switch";
 
 export interface LaunchConfig {
