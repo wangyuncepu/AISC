@@ -17,7 +17,7 @@
   - 结果：Rust 179 / TS 184。
   - 结论：PASS（实机 fresh/upgrade/uninstall 随 5g）
 - `A-ONB02-1` Docker installed 与 Engine ready 分离；starting/timeout/retry/doctor/continue 正确。
-  - Commit：`<5c commit>`
+  - Commit：`1de0505`
   - 证据：Rust `env.rs`——`EnvReadiness`（cli/docker/engine/webview2 + desktop path + cli path），`engine_reachable` 用 tokio deadline（4s）+ reap 探测 `docker version`，`compute_readiness` 区分 installed vs engine ready（installed 且 daemon 不答 → "starting"），`poll_engine_ready` deadline+jitter 轮询；`start_docker` 复用启动 Docker Desktop。TS `environment` store（refresh/startDocker/pollEngineReady + allReady/dockerInstalling），wizard environment step 显示状态 + Start Docker + Retry + Continue（allReady 才启用）。
   - 步骤：env 就绪探测；Docker 未装→not_installed、装而未起→starting、起来→ready；Start Docker 后 30s 轮询；超时保留 retry。
   - 结果：Rust 4 + TS store 5 + wizard 2 相关测试；全库 Rust 183 / TS 191。
