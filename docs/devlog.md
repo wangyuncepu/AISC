@@ -2,6 +2,33 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+# Stage 6 (2026-08-16) — UI / a11y / 可观测性 / 发布收口（AISC Next，分支 stage-6-ui-release-convergence）
+
+> 规划入口：`docs/plans/aisc-next/stage-6-ui-release-convergence/`。在新增工作流稳定后统一
+> 视觉/响应式/a11y/诊断并完成跨阶段发布门。证据台账：`stage-6-ui-release-convergence/acceptance.md`。
+> **此为上一步之后的 aisc-next 七阶段收尾阶段。**
+
+- **6a KI-1 查因**：`engine_reachable` 改经 Docker Desktop 自带 CLI 路径（ProgramFiles/
+  LOCALAPPDATA `resources\bin`）解析，回退 PATH；失败返回 redacted `engineDetail`，
+  向导就地显示"引擎探测详情"（不再静默 starting）。
+- **6b tokens（UX-01）**：`--space-*/--font-*/--radius-*/--shadow-*/--z-*/--duration-*`
+  设计 token 集 + 状态色；全组件精确迁移（零视觉变化）；`tokens.test.ts` 门禁。
+- **6c responsive（UX-02）**：Compact<640/Standard/Wide>1100 按有效 box 宽度
+  （viewport/zoom）；`data-tier` 驱动 compact 规则；TabBar 横向滚动。
+- **6d a11y（UX-03）**：`useDialogA11y` focus trap + opener restore；全局
+  prefers-reduced-motion + xterm smooth-scroll 归零；右键菜单 Menu/Shift+F10 键盘开启。
+- **6e i18n（UX-04/05）**：顶栏 status + sidebar sessionState 裸 enum → i18n 映射；
+  CSS zoom rem 迁移 **NO-GO**（D6-09，保留 zoom）。
+- **6f observability（REL-01）**：有界 op 耗时环（run_control/env/start_docker 喂入）+
+  `op_traces`；`diagnostic_bundle` allowlist 脱敏包（导出前展示清单）；DoctorDialog 最近
+  操作 + 导出按钮。
+- **6g migration（REL-03）**：settings/onboarding/artifact previous-version fixture
+  测试；history v1→v2 已有覆盖；unsupported schema fail-closed。
+- **遗留**：KI-1（Docker ready 检测，待用户最终确认探测详情）、KI-2（初始化引导界面需
+  重新手测，暂不处理）、ISO-1（离线安装包做 ISO，未实现）——见 `aisc-next/todo.md`。
+- **本地门**：pytest 508 / cargo 194 / vitest 213 / vue-tsc 干净；CI 对 `e8cb233`（`--no-ff`
+  合并）全绿（Workbench CI / Bundle Linux·macOS / NSIS）。
+
 # Stage 5 (2026-08-16) — Installer 与首次启动引导（AISC Next，分支 stage-5-onboarding-installer）
 
 > 规划入口：`docs/plans/aisc-next/stage-5-onboarding-installer/`。专业、简洁、失败可恢复的首次使用体验：NSIS 安装器 + schema 版本化的 Tauri 首次向导（环境/工作区/Agent/可选网络/Runtime/完成）。证据台账：`stage-5-onboarding-installer/acceptance.md`。

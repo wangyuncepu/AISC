@@ -1,6 +1,12 @@
 # Stage 6 验收台账
 
-> 分支 `stage-6-ui-release-convergence`。实施中：6a–6g 已提交（见下），6h（总门禁/发布文档/合入）进行中。
+> 分支 `stage-6-ui-release-convergence`。
+>
+> **总门（2026-08-16）**：本地 pytest 508 / cargo 194 / vitest 213 / vue-tsc 干净；CI 对
+> develop `e8cb233`（`--no-ff` 合并）全绿（Workbench CI / Bundle Linux·macOS / NSIS
+> installer）；用户手测当前部分（6a–6g）PASS。**结论：PASS，Stage 6 收口。**
+> 遗留：KI-1（Docker ready 检测，已加探测详情诊断待用户最终确认）、KI-2（初始化引导
+> 界面需重新手测，暂不处理）——均见 `../todo.md`。
 
 ## 子步证据（commit）
 
