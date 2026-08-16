@@ -292,6 +292,15 @@ export const zhCN = {
   "onboarding.continue": "继续设置",
   "onboarding.skip": "稍后再说",
   "onboarding.finished": "设置已完成——随时可在设置中重新打开。",
+
+  "onboarding.env.title": "环境就绪检查",
+  "onboarding.env.cli": "CLI",
+  "onboarding.env.docker": "Docker Desktop",
+  "onboarding.env.engine": "Docker 引擎",
+  "onboarding.env.webview2": "WebView2",
+  "onboarding.env.startDocker": "启动 Docker",
+  "onboarding.env.starting": "等待引擎…",
+  "onboarding.env.retry": "重新检查",
 } as const;
 
 export type ZhKey = keyof typeof zhCN;

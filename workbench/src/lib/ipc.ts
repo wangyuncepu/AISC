@@ -6,6 +6,7 @@ import type {
   CapabilityReport,
   DiscoveryReport,
   DoctorReport,
+  EnvReadiness,
   HistoryPatch,
   InstallerHandoff,
   OnboardingPatch,
@@ -131,6 +132,13 @@ export const cancelBuild = () => invoke<void>("cancel_build");
 // --- S4.1.b fix: start the Docker engine (Docker Desktop) ---
 
 export const startDocker = () => invoke<void>("start_docker");
+
+// --- Stage 5 (A-ONB02): environment readiness (installed ≠ engine ready) ---
+
+export const envReadiness = () => invoke<EnvReadiness>("env_readiness");
+
+export const envPollEngine = (deadlineMs: number) =>
+  invoke<EnvReadiness>("env_poll_engine", { deadlineMs });
 
 // --- S2.4.a: history persistence (02 §九) ---
 

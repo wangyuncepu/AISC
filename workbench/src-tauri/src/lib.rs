@@ -6,6 +6,7 @@
 
 pub mod cli;
 pub mod doctor;
+pub mod env;
 pub mod error;
 pub mod history;
 pub mod identity;
@@ -30,6 +31,7 @@ use workspace::{workspace_copy_path, workspace_list, workspace_open, workspace_p
 use doctor::run_doctor;
 use history::{load_history, save_history};
 use locale::resolve_locale;
+use env::{env_poll_engine, env_readiness};
 use installer::installer_handoff;
 use onboarding::{onboarding_load, onboarding_update};
 use runtime::{
@@ -106,6 +108,8 @@ pub fn run(cli_arg: Option<String>) {
             onboarding_load,
             onboarding_update,
             installer_handoff,
+            env_readiness,
+            env_poll_engine,
         ])
         .on_window_event(|window, event| {
             // G-16: intercept CloseRequested on the main window. Both behaviors

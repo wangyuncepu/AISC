@@ -292,4 +292,13 @@ export const enUS: Record<string, string> = {
   "onboarding.continue": "Continue setup",
   "onboarding.skip": "Skip for now",
   "onboarding.finished": "Setup complete — open Settings anytime to revisit.",
+
+  "onboarding.env.title": "Environment readiness",
+  "onboarding.env.cli": "CLI",
+  "onboarding.env.docker": "Docker Desktop",
+  "onboarding.env.engine": "Docker Engine",
+  "onboarding.env.webview2": "WebView2",
+  "onboarding.env.startDocker": "Start Docker",
+  "onboarding.env.starting": "Waiting for Engine…",
+  "onboarding.env.retry": "Re-check",
 };

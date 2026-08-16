@@ -370,6 +370,17 @@ export interface InstallerHandoff {
   product_name: string;
 }
 
+// --- Stage 5 (A-ONB02): environment readiness (installed ≠ engine ready) ---
+
+export interface EnvReadiness {
+  cli: string;        // unknown | checking | ready | unavailable
+  docker: string;     // unknown | not_installed | installing | installed | starting | ready | blocked
+  engine: string;     // unknown | unavailable | starting | ready | permission_denied
+  webview2: string;   // unknown | ready | missing
+  dockerDesktopPath: string;
+  cliPath: string;
+}
+
 export type LaunchAgent = "claude" | "codex" | "bash" | "cc-switch";
 
 export interface LaunchConfig {
