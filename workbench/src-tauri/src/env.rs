@@ -74,6 +74,10 @@ async fn engine_reachable() -> bool {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null())
+        // `docker` is a console subsystem binary; without CREATE_NO_WINDOW a GUI
+        // process flashing a console per probe — every 500ms during the engine
+        // poll and every 5s during auto-poll (observed 2026-08-16 as a flicker).
+        .creation_flags(0x08000000 /* CREATE_NO_WINDOW */)
         .spawn()
     {
         Ok(c) => c,
@@ -143,9 +147,20 @@ fn webview2_present() -> bool {
     }
 }
 
-/// Resolve the pinned CLI path (best-effort; errors → empty).
+/// Resolve a CLI path for readiness. Uses the full discovery order
+/// (explicit > saved pin > bundled sidecar > PATH > platform-known) but
+/// presence-only — no subprocess, no version probe. During onboarding the pin
+/// may be stale or empty while the bundled sidecar is right next to the exe, so
+/// pin-only lookup falsely reported "unavailable" on a fresh install (manual
+/// test 2026-08-16). The real negotiate (cli.rs) validates version/capability.
 fn resolve_cli_path(app: &tauri::AppHandle) -> PathBuf {
-    crate::session::resolve_pin(app).unwrap_or_default()
+    let saved = crate::session::resolve_pin(app).ok();
+    for (path, _src) in crate::cli::enumerate_candidates(None, saved.as_deref()) {
+        if path.is_file() {
+            return path;
+        }
+    }
+    PathBuf::new()
 }
 
 /// Compute a fresh environment readiness snapshot. Bounded: never blocks longer
@@ -188,11 +203,17 @@ pub async fn compute_readiness(app: tauri::AppHandle) -> EnvReadiness {
 pub async fn poll_engine_ready(app: tauri::AppHandle, deadline_ms: u64) -> EnvReadiness {
     let start = Instant::now();
     let mut r = compute_readiness(app.clone()).await;
+    let was_ready = r.engine == "ready";
     while !r.engine.eq("ready") && start.elapsed().as_millis() < deadline_ms as u128 {
         // Bounded jitter (5% of 500ms base) so concurrent apps don't stampede.
         let jitter_ms = 500 + (std::process::id() as u64 % 25) * 4;
         tokio::time::sleep(Duration::from_millis(jitter_ms)).await;
         r = compute_readiness(app.clone()).await;
+    }
+    // One-shot Windows toast when the engine comes up mid-poll (manual test
+    // 2026-08-16: after Docker starts the wizard had no real-time feedback).
+    if !was_ready && r.engine == "ready" {
+        crate::runtime::notify_docker(&app, "Docker 已就绪", "Docker 引擎已启动，可以继续完成首次设置。");
     }
     r
 }

@@ -1,6 +1,10 @@
 # Dependencies
 node_modules/
 
+# Downloaded Docker Desktop installer for the offline NSIS build (~600 MB,
+# fetched by scripts/fetch-docker-installer.ps1; never committed).
+workbench/src-tauri/docker-offline/
+
 # IDE
 .vscode/
 .idea/

@@ -302,7 +302,9 @@ export const zhCN = {
   "onboarding.env.startDocker": "启动 Docker",
   "onboarding.env.installDocker": "安装并启动 Docker",
   "onboarding.env.installingDocker": "正在安装 Docker Desktop…",
+  "onboarding.env.installingHint": "正在下载并安装 Docker Desktop，可能需要几分钟，请稍候。",
   "onboarding.env.starting": "等待引擎…",
+  "onboarding.env.startingHint": "正在启动 Docker 引擎…若弹出 Docker Desktop 首次设置（许可协议 / WSL），请先完成，本页会自动检测就绪。",
   "onboarding.env.retry": "重新检查",
 
   "onboarding.ws.title": "选择工作区",

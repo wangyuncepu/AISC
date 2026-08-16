@@ -1,0 +1,8 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "docker-offline/Docker Desktop Installer.exe": "aisc-bundle/docker-offline/Docker Desktop Installer.exe"
+    }
+  }
+}

@@ -8,7 +8,7 @@
  * (ready / needs_login / needs_configuration / unsupported, never secrets).
  * Network / runtime / complete steps are added by 5e-5g.
  */
-import { computed, onMounted, watch } from "vue";
+import { computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useOnboardingStore } from "../../stores/onboarding";
 import { useEnvironmentStore } from "../../stores/environment";
@@ -25,12 +25,19 @@ onMounted(() => {
   if (!onboarding.loaded) void onboarding.load();
 });
 
-// Load readiness once when the wizard reaches the environment step.
+onUnmounted(() => environment.stopAutoPoll());
+
+// Load readiness once when the wizard reaches the environment step, and keep
+// live auto-polling while it is visible (real-time detection — manual test
+// 2026-08-16: after Docker starts the step was static).
 watch(
   () => onboarding.state?.current_step,
   (step) => {
-    if (step === "environment" && environment.readiness.cli === "unknown") {
-      void environment.refresh();
+    if (step === "environment") {
+      if (environment.readiness.cli === "unknown") void environment.refresh();
+      environment.startAutoPoll();
+    } else {
+      environment.stopAutoPoll();
     }
   },
   { immediate: true },
@@ -51,8 +58,12 @@ async function skip() {
 // --- environment step (5c) ---
 
 async function startDocker() {
+  // Launch (or install, if missing) — awaited so failures surface. Then hand
+  // detection to the live auto-poll (5s): first launch of Docker Desktop needs
+  // time (WSL 2 init + first-run dialog), and the env step updates the moment
+  // the engine answers. No long blocking poll that disables the buttons.
   await environment.startDocker();
-  await environment.pollEngineReady(30_000);
+  environment.startAutoPoll();
 }
 
 async function retryEnv() {
@@ -165,8 +176,11 @@ async function finish() {
 <template>
   <div class="onboarding" data-testid="onboarding-wizard">
     <h1 class="ob-title">{{ t("onboarding.title") }}</h1>
+    <!-- The error is a banner, NOT a dead end: a transient backend failure
+         must not brick the wizard by hiding the begin/skip buttons (manual
+         test 2026-08-16: "Workbench 配置读取失败" trapped the welcome step). -->
     <p v-if="onboarding.error" class="ob-error" role="alert">{{ onboarding.error }}</p>
-    <p v-else-if="onboarding.isFinished" class="ob-finished" role="status">
+    <p v-if="onboarding.isFinished" class="ob-finished" role="status">
       {{ t("onboarding.finished") }}
     </p>
 
@@ -203,6 +217,13 @@ async function finish() {
         </li>
       </ul>
 
+      <p v-if="environment.installing" class="ob-note" role="status">
+        {{ t("onboarding.env.installingHint") }}
+      </p>
+      <p v-else-if="environment.readiness.engine === 'starting'" class="ob-note" role="status">
+        {{ t("onboarding.env.startingHint") }}
+      </p>
+
       <div class="ob-actions">
         <button
           v-if="environment.dockerInstalling"
@@ -218,7 +239,10 @@ async function finish() {
                 ? t("onboarding.env.installDocker")
                 : t("onboarding.env.startDocker") }}
         </button>
-        <button class="ob-btn ghost" :disabled="environment.loading" @click="retryEnv">
+        <!-- Never disabled: envReadiness is a cheap idempotent read, and the
+             auto-poll already keeps this live. Disabling on `loading` made
+             "Re-check" dead ~4s of every 5s (manual test 2026-08-16). -->
+        <button class="ob-btn ghost" @click="retryEnv">
           {{ t("onboarding.env.retry") }}
         </button>
         <button

@@ -209,6 +209,13 @@ fn acquire_lock(dir: &Path) -> Result<fs::File, OnboardingError> {
 /// Persist `state` to `dir/onboarding.json` under the cross-process lock with
 /// an atomic replace (02 §九: no lockless write; a failed write never truncates).
 pub fn save(dir: &Path, state: &OnboardingState) -> Result<(), OnboardingError> {
+    // Ensure the config dir exists BEFORE opening the lock file — `acquire_lock`
+    // uses `create(true)` which creates the file but NOT parent directories, so
+    // a fresh install (dir absent until something writes it) failed the first
+    // `onboarding_update` with NotFound → WB_ERR_SETTINGS stuck the wizard on
+    // the welcome screen ("Workbench 配置读取失败", manual test 2026-08-16).
+    // settings.rs already mirrors this (create_dir_all before the locked write).
+    fs::create_dir_all(dir).map_err(|e| OnboardingError::Io(e.to_string()))?;
     let path = dir.join(ONBOARDING_FILE);
     let lock_file = acquire_lock(dir)?;
     let bytes = serde_json::to_vec(state)
@@ -317,6 +324,24 @@ fn map_error(e: OnboardingError) -> WorkbenchError {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn save_creates_missing_config_dir() {
+        // Fresh install: the config dir may not exist yet. `save` must create it
+        // before opening the lock file, or the first patch bricks the wizard
+        // with WB_ERR_SETTINGS (manual test 2026-08-16).
+        let parent = tempdir().unwrap();
+        let dir = parent.path().join("deep/nested/cn.aisc.workbench");
+        let s = update(&dir, |s| {
+            s.status = OnboardingStatus::InProgress;
+            s.current_step = "environment".into();
+        })
+        .unwrap();
+        assert_eq!(s.status, OnboardingStatus::InProgress);
+        assert!(dir.join(ONBOARDING_FILE).exists());
+        // Reloadable from the created dir.
+        assert_eq!(load(&dir).unwrap().current_step, "environment");
+    }
 
     #[test]
     fn missing_file_yields_not_started() {

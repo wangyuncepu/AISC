@@ -87,4 +87,48 @@ describe("environment store (A-ONB02)", () => {
     expect(result.engine).toBe("ready");
     expect(s.polling).toBe(false);
   });
+
+  it("auto-poll refreshes while Docker is starting and self-stops when ready", async () => {
+    vi.useFakeTimers();
+    try {
+      // refresh #1 (manual, starting) · #2 (auto tick, starting) ·
+      // #3 (auto tick, ready) → dockerInstalling flips false → next tick stops.
+      let n = 0;
+      vi.mocked(envReadiness).mockImplementation(async () => {
+        n += 1;
+        return ready({ engine: n >= 3 ? "ready" : "starting" }) as never;
+      });
+      const s = useEnvironmentStore();
+      await s.refresh();
+      expect(s.allReady).toBe(false);
+
+      s.startAutoPoll();
+      await vi.advanceTimersByTimeAsync(5000);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(s.allReady).toBe(true);
+
+      // Engine ready → auto-poll self-stops; further ticks do nothing.
+      const calls = n;
+      await vi.advanceTimersByTimeAsync(5000 * 5);
+      expect(n).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stopAutoPoll clears the interval", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(envReadiness).mockResolvedValue(ready({ engine: "starting" }) as never);
+      const s = useEnvironmentStore();
+      await s.refresh();
+      s.startAutoPoll();
+      s.stopAutoPoll();
+      const calls = vi.mocked(envReadiness).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(5000 * 3);
+      expect(vi.mocked(envReadiness).mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -526,7 +526,7 @@ pub async fn cancel_build(app: AppHandle) -> Result<(), WorkbenchError> {
 /// come up, so callers re-run preflight after a short delay. Non-Windows/macOS
 /// returns an actionable error (systemd on Linux is out of scope for the app).
 #[tauri::command]
-pub async fn start_docker() -> Result<(), WorkbenchError> {
+pub async fn start_docker(app: AppHandle) -> Result<(), WorkbenchError> {
     #[cfg(windows)]
     {
         // Docker Desktop.exe already present → just launch it.
@@ -539,11 +539,22 @@ pub async fn start_docker() -> Result<(), WorkbenchError> {
                 return Ok(());
             }
         }
+        // Missing → offline build bundles the latest Docker Desktop installer
+        // (like mihomo); run it silently. On any failure fall back to winget so
+        // an offline build degrades gracefully to the online path.
+        if let Some(installer) = bundled_docker_installer() {
+            match install_docker_desktop_bundled(&app, &installer).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    eprintln!("[docker] bundled install failed ({e}); falling back to winget");
+                }
+            }
+        }
         // Missing → install via winget (awaited, bounded; Stage 5 A-ONB02/B):
         // the first-run wizard's "Start Docker" must cover install, not just
         // launch. No shell=True anywhere. Returns a real error on failure so
         // the wizard can show it instead of silently timing out.
-        match install_docker_desktop_winget().await {
+        match install_docker_desktop_winget(&app).await {
             Ok(()) => Ok(()),
             Err(e) => Err(WorkbenchError::cli_protocol().with_detail(format!(
                 "Docker Desktop not found and automatic install failed: {e}"
@@ -596,8 +607,35 @@ fn winget_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Timeout for the winget Docker Desktop install (can be a large download).
+/// Timeout for the Docker Desktop install (can be a large download).
 const DOCKER_INSTALL_TIMEOUT: Duration = Duration::from_secs(600); // 10 min
+
+/// Fire a Windows toast (best-effort; silently no-ops when notification
+/// permission is off). The plugin is registered in lib.rs and the capability
+/// grants `notification:allow-notify`. Gives the user a system-level heads-up
+/// that a background Docker install finished even if the wizard lost focus.
+/// `pub(crate)` so the env engine-ready poll (env.rs) reuses the same path.
+pub(crate) fn notify_docker(app: &AppHandle, title: &str, body: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    match app.notification().builder().title(title.to_string()).body(body.to_string()).show() {
+        Ok(()) => {}
+        Err(e) => eprintln!("[docker] toast notification failed: {e}"),
+    }
+}
+
+/// Bundled offline Docker Desktop installer (offline build only). Placed next
+/// to the app by the NSIS installer under `aisc-bundle\docker-offline\`. The
+/// online build has none and falls back to winget.
+#[cfg(windows)]
+fn bundled_docker_installer() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let p = exe
+        .parent()?
+        .join("aisc-bundle")
+        .join("docker-offline")
+        .join("Docker Desktop Installer.exe");
+    p.is_file().then_some(p)
+}
 
 /// Install Docker Desktop via winget (Stage 5, A-ONB02/B). **Awaits completion**
 /// (bounded by `DOCKER_INSTALL_TIMEOUT`) so the caller can report a real
@@ -605,7 +643,7 @@ const DOCKER_INSTALL_TIMEOUT: Duration = Duration::from_secs(600); // 10 min
 /// awaiting and a clear failure on error. Console window is hidden. Returns
 /// Ok only when Docker Desktop.exe exists afterward.
 #[cfg(windows)]
-async fn install_docker_desktop_winget() -> Result<(), String> {
+async fn install_docker_desktop_winget(app: &AppHandle) -> Result<(), String> {
     if !winget_available() {
         return Err("winget (App Installer) not available".into());
     }
@@ -632,6 +670,7 @@ async fn install_docker_desktop_winget() -> Result<(), String> {
             // Confirm the exe appeared (install success even if the post-step
             // launch is not immediate).
             if docker_desktop_candidates().iter().any(|p| p.exists()) {
+                notify_docker(app, "Docker Desktop", "Docker Desktop 安装完成，正在启动引擎…");
                 Ok(())
             } else {
                 Err("winget reported success but Docker Desktop.exe was not found".into())
@@ -640,6 +679,41 @@ async fn install_docker_desktop_winget() -> Result<(), String> {
         Ok(Ok(status)) => Err(format!("winget install failed (exit {:?})", status.code())),
         Ok(Err(e)) => Err(format!("winget install error: {e}")),
         Err(_) => Err("winget install timed out after 10 minutes".into()),
+    }
+}
+
+/// Install Docker Desktop from the bundled offline installer (offline build,
+/// A-ONB02/B extension, manual test 2026-08-16 request). Runs the Docker
+/// Desktop Installer.exe silently (no shell=True). Same bounded await and
+/// existence check as the winget path; on success fires a toast.
+#[cfg(windows)]
+async fn install_docker_desktop_bundled(
+    app: &AppHandle,
+    installer: &std::path::Path,
+) -> Result<(), String> {
+    let mut cmd = tokio::process::Command::new(installer);
+    // Docker Desktop Installer silent flags (documented by Docker):
+    // install --quiet --accept-license [--backend=wsl-2]. Default backend is
+    // WSL 2 on supported hosts.
+    cmd.args(["install", "--quiet", "--accept-license"]);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    cmd.stdin(std::process::Stdio::null());
+    cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let result = tokio::time::timeout(DOCKER_INSTALL_TIMEOUT, child.wait()).await;
+    match result {
+        Ok(Ok(status)) if status.success() => {
+            if docker_desktop_candidates().iter().any(|p| p.exists()) {
+                notify_docker(app, "Docker Desktop", "Docker Desktop 安装完成，正在启动引擎…");
+                Ok(())
+            } else {
+                Err("bundled installer reported success but Docker Desktop.exe was not found".into())
+            }
+        }
+        Ok(Ok(status)) => Err(format!("bundled installer failed (exit {:?})", status.code())),
+        Ok(Err(e)) => Err(format!("bundled installer error: {e}")),
+        Err(_) => Err("bundled installer timed out after 10 minutes".into()),
     }
 }
 
