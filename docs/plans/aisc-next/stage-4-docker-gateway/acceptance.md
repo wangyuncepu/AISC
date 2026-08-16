@@ -41,6 +41,11 @@
   - 结果：**NO-GO**（Build 保持 CLI backend）：SDK 尾部风险劣于 CLI，流式/取消语义已在 CLI 验证，D4-08 未满足前不移除 CLI。
   - 结论：PASS（决策已产出并记录）
 - `A-DG06-1` application 不感知 backend；auto/sdk/cli flag 可回滚。
+  - Commit：`<4f commit>`
+  - 证据：`create_docker_gateway('auto'|'sdk'|'cli')` 各返回正确 backend（`BackendSelectionTests`）；`AutoGateway` 在 SDK 可导入时选 SDK、不可导入时回退 CLI（`sys.modules['docker']=None` 模拟）；注入的 `_sdk`/`_cli` 被 `_resolve` 尊重（rollback 路径）；`BackendIndependenceTests` 断言消费者只用 `ok`/`exit_code`/类型化字段，backend 仅存于诊断 envelope（`operation.backend`）。
+  - 步骤：构造 CLI 与 SDK gateway，同一输入消费结果，验证语义一致且无 backend 分支。
+  - 结果：6 passed（`tests/test_docker_gateway_release.py`）；全库 pytest 508 passed。
+  - 结论：PASS
 - `A-DG07-1` Fake/recording/fault injection 覆盖 daemon/permission/timeout/partial cleanup。
   - Commit：`7aa27d3`
   - 证据：`SdkLifecycleTests` 注入 start/stop/remove/wait 的 daemon_down/permission/wait_timeout；`wait_container` 修复 `requests.ReadTimeout` 逃逸（非 DockerException）→ 稳定 `DOCKER_ERR_TIMEOUT` + `timed_out=True`；remove 已不存在容器幂等 OK。
@@ -48,5 +53,11 @@
   - 结果：23 passed（query+lifecycle）；全库 pytest 497 passed。
   - 结论：PASS
 - `A-DG08-1` Windows/Linux/macOS smoke、旧 CLI 回归、删除重复代码前用户确认。
+  - Commit：`<4f commit>`（旧 CLI 回归）+ CI（跨平台 smoke 待 Stage 4 总门）
+  - 证据：全库 pytest 508 passed 覆盖旧 `RealDockerExecutor` 路径（CLI 命令经 executor 注入，行为不变）；`DockerExecutor = DockerGateway` 别名（4a）保证外部调用者零改动；`test_docker_gateway_release.py` 显式验证 rollback 到 CLI 可用。
+  - 步骤：跑全库回归；确认 30 处 `RealDockerExecutor` 调用点未被改动。
+  - 结果：508 passed；无重复删除（D4-08 未满足跨平台证据前不移除 CLI backend）。
+  - 结论：PASS（Windows 实机回归 + 自动测试）；Linux/macOS 实机 smoke 随 Stage 4 总门在 CI Bundle 上补。
+  - 备注：删除重复实现需三平台证据 + 用户确认后单独决策，本轮不执行。
 
 每项记录 commit、平台/版本、步骤、结果、耗时和日志；无真实 Docker 环境不得宣称跨平台 PASS。

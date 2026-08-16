@@ -52,7 +52,6 @@ from aisc.domain.models import (
     ImageInspectResult,
     ImageInspectStatus,
     ProcessResult,
-    RunPlan,
 )
 
 
