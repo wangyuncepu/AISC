@@ -2,6 +2,17 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+# Stage 4 (2026-08-16) — Python DockerGateway（AISC Next，分支 stage-4-docker-gateway）
+
+> 规划入口：`docs/plans/aisc-next/stage-4-docker-gateway/`。在不改变 Python 控制面所有权的前提下统一 Docker 结果、错误与 backend，逐步减少 subprocess 文本解析。证据台账：`stage-4-docker-gateway/acceptance.md`。
+
+- **4a 契约（DG-01/02）**：`DockerGateway` runtime Protocol + `domain/gateway.py` operation envelope（operation_id/backend/exit_code/duration/stable error/cleanup/timed_out）+ 8 个类型化结果；`DockerExecutor = DockerGateway` 兼容别名（D4-02）；`create_docker_gateway('auto'|'sdk'|'cli')` 工厂。
+- **4b/4c query+lifecycle SDK 化（DG-03/07）**：Fake docker-py client（recording + fault injection）驱动 `SdkGateway` 的 preflight/inspect/list/start/stop/remove/wait；`wait_container` 修复 `requests.ReadTimeout`（非 `DockerException`）逃逸 → 稳定 `DOCKER_ERR_TIMEOUT`；remove 已不存在容器幂等。
+- **4d interactive（DG-04）**：`open_interactive` 从委托改为自持完整 SDK 生命周期（exec_create→start→AISC_RESIZE_FILE 初始+轮询 resize→原始流→inspect→join 收尾），无资源泄漏。
+- **4e Build 基准 + NO-GO（DG-05）**：`scripts/bench/build-bench.py` 真实 daemon 离线基准——CLI p50 578/p95 1192/max 1260 vs SDK p50 92/p95 1844/max 2039；SDK 中位数优势来自缓存层复用、尾部更差 → **Build 保持 CLI backend**（决策文档 `build-benchmark-decision.md`）。
+- **4f release gates（DG-06/08）**：auto/sdk/cli flag 可回滚、application 不感知 backend（backend 仅存诊断 envelope）；全库回归 508 passed；D4-08 未满足（无三平台实机 + 未删除重复实现）前保留 CLI backend，30 处 `RealDockerExecutor` 调用点零改动。
+- **本地门**：pytest 508 / vitest 176 / cargo 170 全绿；CI 对 `989f297`（`--no-ff` 合并）全绿（Workbench CI / Bundle / NSIS / cli-sidecar）。
+
 # Stage 3 (2026-08-15 ~ 2026-08-16) — Workspace Explorer 与 Agent Artifact（AISC Next，分支 stage-3-workspace-artifacts）
 
 > 规划入口：`docs/plans/aisc-next/stage-3-workspace-artifacts/`。让用户能浏览当前工作区，并可靠发现、打开、Reveal、复制 Agent 交付物路径。证据台账：`stage-3-workspace-artifacts/acceptance.md`。
