@@ -214,6 +214,11 @@ export const zhCN = {
   "doctor.status.warn": "警告",
   "doctor.status.fail": "失败",
   "doctor.status.skip": "跳过",
+  "doctor.traces": "最近操作耗时",
+  "doctor.export": "导出诊断包",
+  "doctor.exportConfirm": "诊断包仅包含以下内容：应用版本、平台、脱敏后的设置、环境就绪信息、诊断报告、最近操作耗时。不含密钥、提示词或终端内容。确认导出？",
+  "doctor.exported": "已导出：{path}",
+  "doctor.exportFailed": "导出失败。",
   // --- 构建完成通知 (G-14, Step 13) ---
   "notification.title": "AISC Workbench",
   "notification.buildComplete": "镜像构建完成（{duration} 秒）",

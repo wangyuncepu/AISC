@@ -214,6 +214,11 @@ export const enUS: Record<string, string> = {
   "doctor.status.warn": "Warn",
   "doctor.status.fail": "Fail",
   "doctor.status.skip": "Skip",
+  "doctor.traces": "Recent operations",
+  "doctor.export": "Export diagnostic bundle",
+  "doctor.exportConfirm": "The bundle contains ONLY: app version, platform, redacted settings, environment readiness, the diagnosis report, and recent operation timings. No secrets, prompts or terminal content. Export?",
+  "doctor.exported": "Exported to {path}",
+  "doctor.exportFailed": "Export failed.",
   // --- build completion notification (G-14, Step 13) ---
   "notification.title": "AISC Workbench",
   "notification.buildComplete": "Image build complete ({duration}s)",

@@ -270,10 +270,11 @@ pub async fn poll_engine_ready(app: tauri::AppHandle, deadline_ms: u64) -> EnvRe
     r
 }
 
-/// Tauri command: one-shot environment readiness (ONB-02 entry).
+/// Tauri command: one-shot environment readiness (ONB-02 entry). Timed so the
+/// Docker probe latency lands in the op-trace ring (REL-01 / KI-1 diagnosis).
 #[tauri::command]
 pub async fn env_readiness(app: tauri::AppHandle) -> EnvReadiness {
-    compute_readiness(app).await
+    crate::trace::timed_ok("docker", "env_readiness", compute_readiness(app)).await
 }
 
 /// Tauri command: poll Engine until ready or deadline (used after the user

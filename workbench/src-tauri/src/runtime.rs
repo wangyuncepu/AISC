@@ -525,8 +525,13 @@ pub async fn cancel_build(app: AppHandle) -> Result<(), WorkbenchError> {
 /// Returns Ok(()) if the launch was attempted; the daemon still needs time to
 /// come up, so callers re-run preflight after a short delay. Non-Windows/macOS
 /// returns an actionable error (systemd on Linux is out of scope for the app).
+/// Timed into the op-trace ring (REL-01).
 #[tauri::command]
 pub async fn start_docker(app: AppHandle) -> Result<(), WorkbenchError> {
+    crate::trace::timed("docker", "start_docker", start_docker_inner(app)).await
+}
+
+async fn start_docker_inner(app: AppHandle) -> Result<(), WorkbenchError> {
     #[cfg(windows)]
     {
         // Docker Desktop.exe already present → just launch it.

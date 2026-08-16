@@ -121,6 +121,67 @@ pub async fn run_doctor(app: AppHandle) -> Result<DoctorReport, WorkbenchError> 
     doctor_report_from_envelope(env)
 }
 
+// --- Stage 6 (REL-01): redacted diagnostic bundle (D6-05/06) ---
+
+/// The allowlisted diagnostic bundle. ONLY: app version / platform /
+/// redacted settings / env readiness / stable doctor report / recent op
+/// timings. Never prompts, PTY content, full env, or secrets (D6-06: the
+/// frontend shows the manifest before writing).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticBundle {
+    pub generated_at_ms: u128,
+    pub app_version: String,
+    pub platform: String,
+    pub settings: serde_json::Value,
+    pub env_readiness: crate::env::EnvReadiness,
+    pub doctor: Option<DoctorReport>,
+    pub recent_operations: Vec<crate::trace::OpTrace>,
+    /// Set when the bundle was written to disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+fn rfc3339_now() -> String {
+    // No chrono dependency; a readable local-time approximation via SystemTime.
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis().to_string())
+        .unwrap_or_else(|_| "0".into())
+}
+
+#[tauri::command]
+pub async fn diagnostic_bundle(
+    app: AppHandle,
+    write_path: Option<String>,
+) -> Result<DiagnosticBundle, WorkbenchError> {
+    let env = crate::env::compute_readiness(app.clone()).await;
+    let doctor = run_doctor(app.clone()).await.ok();
+    let settings = crate::settings::load_settings(app.clone())
+        .await
+        .ok()
+        .and_then(|doc| serde_json::to_value(&doc).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let mut bundle = DiagnosticBundle {
+        generated_at_ms: rfc3339_now().parse().unwrap_or(0),
+        app_version: app.package_info().version.to_string(),
+        platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        settings,
+        env_readiness: env,
+        doctor,
+        recent_operations: crate::trace::snapshot(),
+        path: None,
+    };
+    if let Some(p) = write_path {
+        let bytes = serde_json::to_vec_pretty(&bundle)
+            .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("bundle encode: {e}")))?;
+        std::fs::write(&p, bytes)
+            .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("bundle write: {e}")))?;
+        bundle.path = Some(p);
+    }
+    Ok(bundle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
