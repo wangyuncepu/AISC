@@ -35,7 +35,7 @@
   - 结果：通过。
   - 结论：PASS
 - `A-ONB05-1` direct/host proxy/TUN/failed/skip/revoke 网络矩阵通过。
-  - Commit：`<5e commit>`
+  - Commit：`613ebb0`
   - 证据：`network` store（choice/probe/confirm/revoke，含 direct/host_proxy/container_tun/skipped）——显式确认后才应用、revoke 重置回 direct、不触碰宿主代理；wizard network step 展示选项 + impact 提示 + 连通性探针（engine ready 判定）+ confirm gate（非 direct 需先确认）+ skip/revoke；保存时 container_tun→`runtime.launch.network="proxy"`、否则 `"direct"`。
   - 步骤：选 host_proxy/TUN → continue 禁用 → confirm → continue；revoke → 回 direct；skip → 直接进入 runtime 步骤。
   - 结果：TS store 5 + wizard 1 相关测试；全库 Rust 183 / TS 199。
