@@ -1,6 +1,11 @@
 # Stage 5 验收台账
 
 > 平台：Windows 11 / x86_64，Rust 176 / TS 184 / pytest 508 基线。分支 `stage-5-onboarding-installer`。
+>
+> **总门（2026-08-16）**：本地 Rust lib 166 / TS 205 / pytest 508 全绿；CI 对 develop
+> `4c0d60a`（merge）+ `bae03fc`（cfg 修复）全绿（Workbench CI / Bundle Linux·macOS /
+> NSIS installer）；实机安装/卸载/升级/引导随两轮手测（第 1 轮 5 项已 PASS，第 2 轮
+> 修复已验收、KI-1 记录移交 Stage 6）。**结论：PASS，Stage 5 收口。**
 
 ## 5a-state（进行中）
 
@@ -25,6 +30,7 @@
   - 增强（B，A-ONB02）：`start_docker` 在 exe 缺失时经 winget 安装 Docker Desktop（`--accept-* --disable-interactivity`）再启动；向导"Start Docker"在 not_installed 时文案变"安装并启动 Docker"。候选路径与 env 单一来源（`runtime::docker_desktop_candidates`）。Rust 185 / TS 203。
   - 手测修复（2026-08-16，第 1 轮）：`start_docker` 改为 **await winget 到完成**（10min 上限）并返回真实结果——不再 fire-and-forget；winget 用 `CREATE_NO_WINDOW` 隐藏控制台（原 DETACHED 会闪终端框）；向导新增 `installing` 中间态"正在安装 Docker Desktop…"；WebView2 检测改查 **HKCU+HKLM+WOW6432Node** 三个根（原只查 HKCU 误报 missing）；首次启动竞态修复——onboarding 完成前不 `negotiate()`（原首次帧闪"启动失败"，重启才正常）。Rust 186 / TS 203。
   - 手测修复（2026-08-16，第 2 轮）+ 特性（实机复测中）：
+    - Commit：`641bc67`（round-2）+ `bae03fc`（`creation_flags` 改 `cfg(windows)`，修 Linux/macOS CI E0599）。CI 对 develop `4c0d60a`/`bae03fc` 全绿（Workbench CI / Bundle Linux·macOS / NSIS）。
     - **Welcome "Workbench 配置读取失败"**：`onboarding::save` 现在先 `create_dir_all(config_dir)` 再取 fs4 锁——真全新安装（目录尚不存在）时首次 `onboarding_update` 不再因 NotFound 失败（settings.rs 早已如此）；且向导把错误改为**非阻塞横幅**——一次性后端失败不再隐藏 begin/skip 按钮、卡死欢迎页。
     - **CLI: unavailable**：`env::resolve_cli_path` 从"仅 pin"改为全发现顺序（pin > 内置 sidecar > PATH > 平台）的**存在性检查**——onboarding 阶段 negotiate 被推迟、pin 为空/陈旧时，紧挨 exe 的 sidecar 也能被识别为 ready（真实 negotiate 仍负责版本/能力校验）。
     - **实时检测 + 重新检查（部分解决，见 KI-1）**：环境步骤新增**自动轮询**（5s，`environment.startAutoPoll`，随步骤进入/离开与 engine ready 自停）；去掉 180s 阻塞轮询（会锁死按钮）→ 启动后直接持续自动轮询；引擎探测加 `CREATE_NO_WINDOW`（消除黑框闪烁）；「重新检测」**永不禁用**（原被 `loading` 禁用约 4/5 时间无响应）；增加 installing/starting 提示文案。**遗留**：GUI 内引擎探测仍可能返回非 ready，已记入 `todo.md` KI-1 移交 Stage 6。
