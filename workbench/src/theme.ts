@@ -45,7 +45,8 @@ export const effectiveTheme = ref<EffectiveTheme>("dark");
 
 export function readCachedTheme(): EffectiveTheme | null {
   try {
-    const v = localStorage.getItem(CACHE_KEY);
+    if (typeof window === "undefined") return null;
+    const v = window.localStorage.getItem(CACHE_KEY);
     return v === "dark" || v === "light" ? v : null;
   } catch {
     return null;
@@ -54,7 +55,8 @@ export function readCachedTheme(): EffectiveTheme | null {
 
 function writeCache(theme: EffectiveTheme): void {
   try {
-    localStorage.setItem(CACHE_KEY, theme);
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(CACHE_KEY, theme);
   } catch {
     /* storage unavailable (e.g. tests): cache is best-effort */
   }

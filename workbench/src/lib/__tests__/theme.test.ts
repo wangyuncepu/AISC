@@ -5,8 +5,24 @@
  * - applyTheme: sets the DOM data-theme + color-scheme, publishes the reactive
  *   effectiveTheme, and refreshes the localStorage render hint.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { applyTheme, createSystemListener, effectiveTheme, readCachedTheme, resolveTheme } from "../../theme";
+
+// Node 26 can expose a global `localStorage` whose jsdom window does not have
+// `window.localStorage`. Polyfill a tiny synchronous store so the cache
+// assertions test theme.ts logic instead of the host runtime's storage.
+beforeAll(() => {
+  const values = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+      removeItem: (key: string) => void values.delete(key),
+      clear: () => values.clear(),
+    },
+  });
+});
 
 // Token fixtures mirror styles.css (same pattern as the renderer test's
 // TERMINAL_THEME values): the contrast gate stays bound to the real palette.
@@ -80,10 +96,16 @@ describe("applyTheme (A-G04-2)", () => {
   });
 
   it("system mode resolves from the OS via matchMedia (dark-first default)", () => {
-    vi.stubGlobal("window", {
+    const stubbedWindow = {
       ...window,
       matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
+    };
+    // `localStorage` is non-enumerable, so spreading `window` drops it.
+    Object.defineProperty(stubbedWindow, "localStorage", {
+      configurable: true,
+      value: window.localStorage,
     });
+    vi.stubGlobal("window", stubbedWindow);
     applyTheme("system");
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(readCachedTheme()).toBe("light");
