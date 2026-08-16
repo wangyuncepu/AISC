@@ -12,7 +12,7 @@
   - 结论：PASS
 - `A-INS01-1` NSIS fresh/upgrade/uninstall、PATH/sidecar/WebView2/Docker 引导不丢用户数据。
   - Commit：`73c39cf`（NSIS handoff + Rust reader；fresh/upgrade/uninstall 实机随 5g 总门）
-  - 证据：installer.nsi 安装写 handoff（InstallerSource/InstalledVersion/FirstRun/DockerHint）到 `HKCU\Softwareisc\AISC Workbench`，卸载 `DeleteRegKey` 清理；NSIS 边界确认——只做文件/PATH/sidecar/WebView2/Docker 引导，不配置 workspace/provider/runtime；`identity_matches_tauri_config` 固定 key 一致性。
+  - 证据：installer.nsi 安装写 handoff（InstallerSource/InstalledVersion/FirstRun/DockerHint）到 `HKCU\Software\aisc\AISC Workbench`，卸载 `DeleteRegKey` 清理；NSIS 边界确认——只做文件/PATH/sidecar/WebView2/Docker 引导，不配置 workspace/provider/runtime；`identity_matches_tauri_config` 固定 key 一致性。
   - 步骤：安装→registry 写入手off→卸载→key 删除。
   - 结果：Rust 179 / TS 184。
   - 结论：PASS（实机 fresh/upgrade/uninstall 随 5g）
