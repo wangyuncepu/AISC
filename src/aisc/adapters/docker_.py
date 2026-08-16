@@ -468,11 +468,66 @@ class RealDockerExecutor:
             except Exception:  # noqa: BLE001
                 pass
 
+        def read_sock(size: int) -> bytes:
+            """Read raw bytes from the docker-py exec socket.
+
+            Transport shape differs by platform: native sockets expose
+            ``recv``, while Unix-socket transports return ``socket.SocketIO``
+            which only exposes ``read`` (docker-py 7.x). Cover both so Linux
+            and WSL sessions receive PTY output.
+            """
+            if hasattr(sock, "recv"):
+                return sock.recv(size)
+            if hasattr(sock, "read"):
+                return sock.read(size)
+            return os.read(sock.fileno(), size)
+
+        def send_all(data: bytes) -> None:
+            """Send every byte; transports expose either ``sendall`` or ``write``."""
+            if hasattr(sock, "sendall"):
+                sock.sendall(data)
+                return
+            raw = getattr(sock, "_sock", None)
+            if raw is not None and hasattr(raw, "sendall"):
+                raw.sendall(data)
+                return
+            view = memoryview(data)
+            while view:
+                if hasattr(sock, "write") and getattr(sock, "writable", lambda: False)():
+                    sent = sock.write(view)
+                else:
+                    sent = os.write(sock.fileno(), view)
+                if sent is None:
+                    raise OSError("socket write would block")
+                if sent <= 0:
+                    raise OSError("socket write failed")
+                view = view[sent:]
+
+        def shutdown_write() -> None:
+            """Half-close the write side when stdin reaches EOF.
+
+            Raw sockets expose ``shutdown``; ``socket.SocketIO`` hides the raw
+            socket in ``_sock``. Close fully only as a last resort.
+            """
+            raw = getattr(sock, "_sock", None)
+            targets = [raw, sock] if raw is not None else [sock]
+            for target in targets:
+                if hasattr(target, "shutdown"):
+                    try:
+                        target.shutdown(socket.SHUT_WR)
+                        return
+                    except OSError:
+                        pass
+            try:
+                sock.close()
+            except OSError:
+                pass
+
         def drain() -> None:
             """Socket -> stdout (raw bytes, no processing)."""
             try:
                 while True:
-                    chunk = sock.recv(65536)
+                    chunk = read_sock(65536)
                     if not chunk:
                         break
                     os.write(sys.stdout.fileno(), chunk)
@@ -486,14 +541,11 @@ class RealDockerExecutor:
                     chunk = os.read(sys.stdin.fileno(), 4096)
                     if not chunk:
                         break
-                    sock.sendall(chunk)
+                    send_all(chunk)
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
             finally:
-                try:
-                    sock.shutdown(socket.SHUT_WR)
-                except OSError:
-                    pass
+                shutdown_write()
 
         def watch_resize() -> None:
             """Poll the resize file; forward size changes to exec_resize."""
