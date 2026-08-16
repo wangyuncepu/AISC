@@ -23,13 +23,13 @@
   - 结果：Rust 4 + TS store 5 + wizard 2 相关测试；全库 Rust 183 / TS 191。
   - 结论：PASS
 - `A-ONB03-1` 新建/选择/最近/workspace 恢复与 Stage 3 Explorer 接通。
-  - Commit：`<5d commit>`
+  - Commit：`7d12f2d`
   - 证据：wizard workspace step 复用 runtime store 的 `recentWorkspaces`（最近列表）、`pickWorkspace`（目录选择）、`selectRecentWorkspace`（恢复），选择后 checkpoint completeStep=workspace → agent；Stage 3 Explorer 在完成向导后由 App.vue 的 workspace watch 接通。
   - 步骤：最近列表展示 → 点选恢复 → 继续。
   - 结果：TS 相关测试通过；全库 Rust 183 / TS 193。
   - 结论：PASS
 - `A-ONB04-1` Agent readiness 文案和 guide/login/config action 正确且不显示 secret。
-  - Commit：`<5d commit>`
+  - Commit：`7d12f2d`
   - 证据：wizard agent step 映射 `ProviderStatus.auth_status` → 用户语义（configured→ready / login_required→needs_login / not_configured→needs_configuration / else→unsupported）；无 runtime 时默认 needs_configuration；不渲染任何 secret（ProviderStatus 不含 secret，文案仅状态名）。
   - 步骤：agent 步骤渲染 Claude/Codex 状态点 + 文案。
   - 结果：通过。
