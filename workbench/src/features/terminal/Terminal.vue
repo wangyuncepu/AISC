@@ -606,9 +606,9 @@ defineExpose({
   top: 0;
   left: 0;
   right: 0;
-  z-index: 20;
+  z-index: var(--z-overlay);
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--warn-fg);
   background: var(--warn-bg);
   border-bottom: 1px solid var(--warn-border);
@@ -619,16 +619,16 @@ defineExpose({
   position: absolute;
   top: 8px;
   right: 12px;
-  z-index: 10;
+  z-index: var(--z-menu);
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 6px 8px;
   background: var(--surface);
   border: 1px solid var(--border-2);
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  font-size: 12px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  font-size: var(--font-sm);
 }
 .search-overlay input {
   width: 140px;
@@ -636,7 +636,7 @@ defineExpose({
   background: var(--surface-hover);
   color: var(--text-2);
   border: none;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   outline: none;
 }
 .search-overlay button {
@@ -644,7 +644,7 @@ defineExpose({
   background: transparent;
   color: var(--text-2);
   border: none;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .search-overlay button:hover {
@@ -665,15 +665,15 @@ defineExpose({
 /* --- context menu --- */
 .ctx-menu {
   position: fixed;
-  z-index: 20;
+  z-index: var(--z-overlay);
   display: flex;
   flex-direction: column;
   min-width: 140px;
   padding: 4px;
   background: var(--surface);
   border: 1px solid var(--border-2);
-  border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
 }
 .ctx-menu button {
   padding: 6px 12px;
@@ -681,9 +681,9 @@ defineExpose({
   background: transparent;
   color: var(--text-2);
   border: none;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 .ctx-menu button:hover:not(:disabled) {
   background: var(--surface-active);

@@ -265,11 +265,11 @@ function onCancel() {
 <style scoped>
 .overlay {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
-  display: flex; align-items: center; justify-content: center; z-index: 50;
+  display: flex; align-items: center; justify-content: center; z-index: var(--z-dialog);
 }
 .panel {
   width: 560px; max-width: 92vw; max-height: 84vh; overflow: auto;
-  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-2); border-radius: 6px;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-2); border-radius: var(--radius-lg);
   outline: none; display: flex; flex-direction: column;
 }
 .head {
@@ -280,42 +280,42 @@ function onCancel() {
   position: sticky; top: 0; z-index: 2; background: var(--surface);
 }
 .head h2 { margin: 0; font-size: 15px; color: var(--text-2); }
-.chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+.chip { font-size: var(--font-xs); padding: 2px 8px; border-radius: 10px; }
 .chip.dirty { background: var(--warn-bg); color: var(--warn-fg); }
 .chip.saved { background: var(--success-bg); color: var(--success); }
-.banner { margin: 8px 14px 0; padding: 6px 10px; border-radius: 4px; font-size: 12px; }
+.banner { margin: 8px 14px 0; padding: 6px 10px; border-radius: var(--radius-md); font-size: var(--font-sm); }
 .banner.warn { background: var(--warn-bg); color: var(--warn-fg); }
 .banner.err { background: var(--error-bg); color: var(--error-fg); }
 .link { background: none; border: none; color: var(--info); padding: 0; margin-left: 8px; cursor: pointer; text-decoration: underline; }
 .body { padding: 6px 14px 12px; flex: 1; }
-.group { margin: 12px 0 4px; font-size: 12px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
+.group { margin: 12px 0 4px; font-size: var(--font-sm); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
 .field { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
-.label { width: 150px; font-size: 13px; color: var(--text-2); }
+.label { width: 150px; font-size: var(--font-md); color: var(--text-2); }
 input[type="text"], input[type="number"], select {
-  background: var(--bg); color: var(--text-2); border: 1px solid var(--border-2); border-radius: 4px;
-  padding: 4px 6px; font-size: 13px; flex: 1; min-width: 120px;
+  background: var(--bg); color: var(--text-2); border: 1px solid var(--border-2); border-radius: var(--radius-md);
+  padding: 4px 6px; font-size: var(--font-md); flex: 1; min-width: 120px;
 }
 input[type="range"] {
   flex: 1; min-width: 120px; accent-color: var(--accent); cursor: pointer;
 }
 input:disabled, select:disabled { opacity: 0.5; }
 .val {
-  font-size: 12px; color: var(--info); min-width: 46px; text-align: right;
+  font-size: var(--font-sm); color: var(--info); min-width: 46px; text-align: right;
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.effect { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
-.help { font-size: 11px; color: var(--text-faint); width: 100%; }
-.err-text { font-size: 11px; color: var(--error); width: 100%; }
-.note { font-size: 11px; color: var(--text-faint); margin-top: 8px; }
-.loading { color: var(--text-muted); font-size: 13px; }
+.effect { font-size: var(--font-xs); color: var(--text-muted); white-space: nowrap; }
+.help { font-size: var(--font-xs); color: var(--text-faint); width: 100%; }
+.err-text { font-size: var(--font-xs); color: var(--error); width: 100%; }
+.note { font-size: var(--font-xs); color: var(--text-faint); margin-top: 8px; }
+.loading { color: var(--text-muted); font-size: var(--font-md); }
 .foot {
   display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border);
   /* Sticky bottom so Save is reachable in a small window (see .head). */
   position: sticky; bottom: 0; z-index: 2; background: var(--surface);
 }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
 }
 button:hover:not(:disabled) { background: var(--surface-hover); }
 button:disabled { opacity: 0.45; cursor: default; }

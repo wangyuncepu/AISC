@@ -43,12 +43,12 @@ const cancelledSnap = computed(() => store.cancelInspect);
   padding: 32px;
   color: var(--text-2);
 }
-.msg { font-size: 14px; margin: 0; }
-.hint { font-size: 12px; color: var(--text-muted); margin: 0; }
+.msg { font-size: var(--font-base); margin: 0; }
+.hint { font-size: var(--font-sm); color: var(--text-muted); margin: 0; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
 }
 button.primary { background: var(--accent); border-color: var(--accent); }
 button.danger { background: var(--error-bg); border-color: var(--error-border); }

@@ -118,7 +118,7 @@ h2 { margin: 0 0 4px; font-size: 15px; }
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 .k { width: 90px; color: var(--text-muted); }
 .v { color: var(--text-2); word-break: break-all; }
@@ -126,28 +126,28 @@ input, select {
   background: var(--surface);
   color: var(--text-2);
   border: 1px solid var(--border-2);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   padding: 4px 6px;
-  font-size: 13px;
+  font-size: var(--font-md);
   flex: 1;
   min-width: 0;
 }
 .advanced {
   padding: 8px;
   background: var(--surface);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.gate-msg { font-size: 12px; padding: 6px 8px; border-radius: 4px; margin: 0; }
+.gate-msg { font-size: var(--font-sm); padding: 6px 8px; border-radius: var(--radius-md); margin: 0; }
 .gate-msg.config { background: var(--warn-bg); color: var(--warn-fg); }
 .gate-msg.hard { background: var(--error-bg); color: var(--error-fg); }
 .gate-msg.resume { background: var(--info-bg); color: var(--info); }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
 }
 button:hover:not(:disabled) { background: var(--surface-hover); }
 button:disabled { opacity: 0.45; cursor: default; }

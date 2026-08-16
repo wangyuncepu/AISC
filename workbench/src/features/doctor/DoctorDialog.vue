@@ -102,11 +102,11 @@ function onOverlayDown(e: MouseEvent) {
 <style scoped>
 .overlay {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
-  display: flex; align-items: center; justify-content: center; z-index: 50;
+  display: flex; align-items: center; justify-content: center; z-index: var(--z-dialog);
 }
 .panel {
   width: 620px; max-width: 92vw; max-height: 84vh; overflow: auto;
-  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-2); border-radius: 6px;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-2); border-radius: var(--radius-lg);
   outline: none; display: flex; flex-direction: column;
 }
 .head {
@@ -123,13 +123,13 @@ function onOverlayDown(e: MouseEvent) {
 .muted { color: var(--text-muted); }
 .err-title { color: var(--error); font-weight: 600; }
 .err { color: var(--text-2); }
-.code { color: var(--text-muted); font-family: monospace; font-size: 11px; }
-.detail { color: var(--text-muted); font-size: 12px; word-break: break-all; }
-.hint-text { color: var(--text-muted); font-size: 12px; }
+.code { color: var(--text-muted); font-family: monospace; font-size: var(--font-xs); }
+.detail { color: var(--text-muted); font-size: var(--font-sm); word-break: break-all; }
+.hint-text { color: var(--text-muted); font-size: var(--font-sm); }
 
-.summary { display: flex; gap: 12px; font-size: 13px; flex-wrap: wrap; }
-.summary[data-fail="true"] { padding: 8px 10px; background: var(--error-bg); border: 1px solid var(--error-border); border-radius: 4px; }
-.summary[data-fail="false"][data-warn="true"] { padding: 8px 10px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 4px; }
+.summary { display: flex; gap: 12px; font-size: var(--font-md); flex-wrap: wrap; }
+.summary[data-fail="true"] { padding: 8px 10px; background: var(--error-bg); border: 1px solid var(--error-border); border-radius: var(--radius-md); }
+.summary[data-fail="false"][data-warn="true"] { padding: 8px 10px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: var(--radius-md); }
 .sum-item.fail { color: var(--error); }
 .sum-item.warn { color: var(--warn-fg); }
 .sum-item.skip { color: var(--text-muted); }
@@ -137,8 +137,8 @@ function onOverlayDown(e: MouseEvent) {
 
 .checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .check {
-  border: 1px solid var(--border-2); border-radius: 4px; padding: 8px 10px;
-  display: flex; flex-direction: column; gap: 2px; font-size: 12px;
+  border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 2px; font-size: var(--font-sm);
 }
 .check[data-status="fail"] { border-left: 3px solid var(--error); }
 .check[data-status="warn"] { border-left: 3px solid var(--warn-fg); }
@@ -155,8 +155,8 @@ function onOverlayDown(e: MouseEvent) {
 .c-detail { color: var(--text-muted); word-break: break-all; }
 .c-hint { color: var(--info); }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
 }
 button:hover:not(:disabled) { background: var(--surface-hover); }
 button:disabled { opacity: 0.45; cursor: default; }

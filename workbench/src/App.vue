@@ -637,15 +637,15 @@ function selectRecent(path: string): void {
   padding: 6px 12px;
   background: var(--surface);
   color: var(--text-2);
-  font-size: 13px;
+  font-size: var(--font-md);
   border-bottom: 1px solid var(--border);
 }
 .brand { font-weight: 600; }
 .spacer { flex: 1; }
-.status { font-size: 12px; color: var(--text-muted); }
+.status { font-size: var(--font-sm); color: var(--text-muted); }
 .status[data-status="ready"] { color: var(--success); }
 .status[data-status="error"], .status[data-status="blocked"] { color: var(--error); }
-.settings-btn { padding: 3px 10px; font-size: 12px; }
+.settings-btn { padding: 3px 10px; font-size: var(--font-sm); }
 .gate.blocked, .gate.error, .center, .picker {
   flex: 1;
   display: flex;
@@ -656,40 +656,40 @@ function selectRecent(path: string): void {
   color: var(--text-2);
 }
 .gate .err, .picker h2 { color: var(--text-2); }
-.gate .detail { font-size: 12px; color: var(--text-muted); }
+.gate .detail { font-size: var(--font-sm); color: var(--text-muted); }
 .center .msg { color: var(--text-muted); }
 .picker { gap: 12px; }
 .onboarding-gate {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--z-onboarding);
   background: var(--surface, #1e1e1e);
   display: flex;
 }
 .picker .row { display: flex; gap: 8px; width: 560px; max-width: 90vw; }
-.picker .hint { font-size: 12px; color: var(--text-muted); }
+.picker .hint { font-size: var(--font-sm); color: var(--text-muted); }
 .recents { width: 560px; max-width: 90vw; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
-.recents-label { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
+.recents-label { font-size: var(--font-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
 .recents ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .recents li { width: 100%; }
 .recent {
   width: 100%; display: flex; align-items: center; gap: 8px; text-align: left;
-  background: var(--surface); color: var(--text-2); border: 1px solid var(--border); border-radius: 4px;
-  padding: 6px 10px; font-size: 12px; cursor: pointer;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: 6px 10px; font-size: var(--font-sm); cursor: pointer;
 }
 .recent:hover { background: var(--surface-2); border-color: var(--border-2); }
 .r-name { color: var(--text-2); font-weight: 500; min-width: 80px; }
-.r-path { flex: 1; color: var(--text-muted); font-family: monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.r-agent { color: var(--info); font-size: 11px; }
+.r-path { flex: 1; color: var(--text-muted); font-family: monospace; font-size: var(--font-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-agent { color: var(--info); font-size: var(--font-xs); }
 .workspace {
   flex: 1; min-width: 0; background: var(--surface); color: var(--text-2);
-  border: 1px solid var(--border-2); border-radius: 4px; padding: 6px 8px; font-size: 13px;
+  border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 6px 8px; font-size: var(--font-md);
 }
 .ready { flex: 1; display: flex; min-height: 0; position: relative; }
 .main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
 }
 button:hover:not(:disabled) { background: var(--surface-hover); }
 button:disabled { opacity: 0.45; cursor: default; }
@@ -707,10 +707,10 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
   padding: 4px 6px;
   background: var(--surface-3);
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text-2);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 .explorer-drawer {
   position: absolute;
@@ -718,7 +718,7 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
   right: 0;
   bottom: 0;
   width: 320px;
-  z-index: 30;
+  z-index: var(--z-drawer);
   display: flex;
   background: var(--surface);
   border-left: 1px solid var(--border-strong);
@@ -733,6 +733,6 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
   /* fill the terminal-area row so internal centering is global, not the
      content-width box anchored at the left edge (G-17 feedback 2026-08-10) */
   flex: 1; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 10px; color: var(--text-muted); font-size: 13px;
+  justify-content: center; gap: 10px; color: var(--text-muted); font-size: var(--font-md);
 }
 </style>

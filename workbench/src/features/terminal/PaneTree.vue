@@ -217,8 +217,8 @@ defineExpose({ focusActivePane });
 .pane-close {
   position: absolute; top: 4px; right: 4px; z-index: 2;
   background: rgba(30, 30, 30, 0.8); border: 1px solid var(--border-2); color: var(--text-muted);
-  width: 20px; height: 20px; line-height: 1; border-radius: 4px;
-  font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; line-height: 1; border-radius: var(--radius-md);
+  font-size: var(--font-base); cursor: pointer; display: flex; align-items: center; justify-content: center;
 }
 .pane-close:hover { background: var(--error-bg); border-color: var(--error-border); color: var(--error-fg); }
 .dormant {
@@ -231,9 +231,9 @@ defineExpose({ focusActivePane });
   color: var(--text-muted);
   background: var(--bg);
 }
-.dormant .type { font-family: monospace; font-size: 13px; color: var(--text-2); }
+.dormant .type { font-family: monospace; font-size: var(--font-md); color: var(--text-2); }
 button.primary {
   background: var(--accent); color: var(--accent-fg); border: 1px solid var(--accent);
-  border-radius: 4px; padding: 5px 14px; font-size: 12px; cursor: pointer;
+  border-radius: var(--radius-md); padding: 5px 14px; font-size: var(--font-sm); cursor: pointer;
 }
 </style>

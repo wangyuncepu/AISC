@@ -102,11 +102,11 @@ watch(
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 .title { font-weight: 600; }
-.state { font-size: 12px; color: var(--text-muted); }
-.elapsed { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+.state { font-size: var(--font-sm); color: var(--text-muted); }
+.elapsed { font-size: var(--font-sm); color: var(--text-muted); margin-left: auto; }
 .state[data-state="complete"] { color: var(--success); }
 .state[data-state="failed"], .state[data-state="cancelled"] { color: var(--error); }
 .log {
@@ -117,18 +117,18 @@ watch(
   padding: 8px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   font-family: monospace;
-  font-size: 12px;
+  font-size: var(--font-sm);
   white-space: pre-wrap;
   word-break: break-all;
   color: var(--text-2);
 }
-.err { font-size: 12px; color: var(--error); margin: 0; }
+.err { font-size: var(--font-sm); color: var(--error); margin: 0; }
 .actions { display: flex; gap: 8px; }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: 4px;
-  padding: 6px 14px; font-size: 13px; cursor: pointer;
+  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
 }
 button.primary { background: var(--accent); border-color: var(--accent); }
 button.danger { background: var(--error-bg); border-color: var(--error-border); }
