@@ -69,17 +69,18 @@ pub(crate) fn docker_desktop_candidates() -> Vec<PathBuf> {
 /// Uses `docker version --format {{.Server.Version}}` (the CLI is a hard
 /// dependency) with a tokio deadline so a hung daemon never blocks onboarding.
 async fn engine_reachable() -> bool {
-    let mut child = match tokio::process::Command::new("docker")
-        .args(["version", "--format", "{{.Server.Version}}"])
+    let mut cmd = tokio::process::Command::new("docker");
+    cmd.args(["version", "--format", "{{.Server.Version}}"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        // `docker` is a console subsystem binary; without CREATE_NO_WINDOW a GUI
-        // process flashing a console per probe — every 500ms during the engine
-        // poll and every 5s during auto-poll (observed 2026-08-16 as a flicker).
-        .creation_flags(0x08000000 /* CREATE_NO_WINDOW */)
-        .spawn()
-    {
+        .stdin(std::process::Stdio::null());
+    // `docker` is a console-subsystem binary; without CREATE_NO_WINDOW a GUI
+    // process flashes a console per probe — every 500ms during the engine poll
+    // and every 5s during auto-poll (observed 2026-08-16 as a flicker).
+    // `creation_flags` is Windows-only (tokio), so keep it behind cfg(windows).
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return false, // docker CLI not on PATH
     };
