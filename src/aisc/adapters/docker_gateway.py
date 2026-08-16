@@ -421,8 +421,41 @@ class SdkGateway:
         try:
             client = self._client()
             c = client.containers.get(container)
-            c.wait(timeout=timeout)
-            c.reload()
+            try:
+                c.wait(timeout=timeout)
+            except Exception as exc:  # noqa: BLE001
+                # docker-py surfaces wait timeout as requests.ReadTimeout (not a
+                # DockerException); classify by class name so the deadline path
+                # returns a stable TIMEOUT result instead of escaping.
+                if "ReadTimeout" in type(exc).__name__ or "Timeout" in type(exc).__name__:
+                    return LifecycleResult(
+                        operation=_new_operation(
+                            "sdk", exit_code=1, duration_ms=_elapsed(start),
+                            error_code=DockerErrorCode.TIMEOUT,
+                            error_message=f"wait timed out after {timeout}s",
+                            timed_out=True,
+                        ),
+                        target=container,
+                    )
+                if isinstance(exc, docker.errors.DockerException):
+                    raise
+                return LifecycleResult(
+                    operation=_new_operation(
+                        "sdk", exit_code=3, duration_ms=_elapsed(start),
+                        error_code=DockerErrorCode.UNKNOWN,
+                        error_message=str(exc),
+                    ),
+                    target=container,
+                )
+            try:
+                c.reload()
+            except docker.errors.NotFound:
+                # Container removed between wait and reload: report exited.
+                return LifecycleResult(
+                    operation=_new_operation("sdk", exit_code=0, duration_ms=_elapsed(start)),
+                    target=container,
+                    observed_state="exited",
+                )
             return LifecycleResult(
                 operation=_new_operation("sdk", exit_code=0, duration_ms=_elapsed(start)),
                 target=container,

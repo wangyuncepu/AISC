@@ -18,7 +18,7 @@ from aisc.domain.gateway import (
     ImageInspectGatewayResult,
     PreflightResult,
 )
-from aisc.domain.models import ImageInspectResult, ImageInspectStatus
+from aisc.domain.models import ImageInspectResult, ImageInspectStatus, ProcessResult
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +57,43 @@ class _FakeContainer:
             "Config": {"Image": image, "Labels": {"io.aisc.kind": "runtime"}},
             "State": {"Status": status},
         }
+        self._removed = False
+        self._fault = None  # "start_down" | "stop_down" | "remove_down" | "wait_timeout" | None
+
+    # -- lifecycle (mirrors docker-py) -------------------------------------
+
+    def start(self):
+        if self._fault == "start_down":
+            raise docker.errors.DockerException("daemon unreachable during start")
+        self._set_state("running")
+
+    def stop(self, timeout=10):
+        if self._fault == "stop_down":
+            raise docker.errors.DockerException("daemon unreachable during stop")
+        self._set_state("exited")
+
+    def remove(self, force=False):
+        if self._fault == "remove_down":
+            raise docker.errors.DockerException("daemon unreachable during remove")
+        self._removed = True
+        self._set_state("removed")
+
+    def wait(self, timeout=None):
+        if self._fault == "wait_timeout":
+            # docker-py surfaces this as requests.ReadTimeout, which is NOT a
+            # DockerException — the gateway must classify it as TIMEOUT.
+            import requests
+            raise requests.exceptions.ReadTimeout("Connection aborted: timed out")
+        return {"StatusCode": 0}
+
+    def reload(self):
+        if self._removed:
+            raise docker.errors.NotFound("No such container")
+        return None
+
+    def _set_state(self, state):
+        self.status = state
+        self.attrs["State"]["Status"] = state
 
 
 class _FakeContainers:
@@ -212,6 +249,100 @@ class SdkCliEquivalenceTests(unittest.TestCase):
         sdk = SdkGateway(client=FakeClient(images=_FakeImages({"other"})))
         self.assertEqual(cli.inspect_image("img").operation.exit_code, 5)
         self.assertEqual(sdk.inspect_image("img").operation.exit_code, 5)
+
+
+class SdkLifecycleTests(unittest.TestCase):
+    """A-DG03-1 (lifecycle) / A-DG07-1: start/stop/remove/wait + faults."""
+
+    def _gw(self, rows, container_fault=None):
+        rows = rows or [_FakeContainer("abc123def456", "aisc-wb-1", "super-claude:latest", "exited")]
+        if container_fault:
+            rows[0]._fault = container_fault
+        return SdkGateway(client=FakeClient(containers=_FakeContainers(rows)))
+
+    def test_start_ok(self):
+        g = self._gw([])
+        r = g.start_container("aisc-wb-1")
+        self.assertEqual(r.operation.exit_code, 0)
+        self.assertEqual(r.observed_state, "running")
+        self.assertEqual(r.target, "aisc-wb-1")
+
+    def test_start_daemon_down(self):
+        g = self._gw([], container_fault="start_down")
+        r = g.start_container("aisc-wb-1")
+        self.assertEqual(r.operation.error_code, "DOCKER_ERR_DAEMON_UNREACHABLE")
+
+    def test_start_not_found(self):
+        g = SdkGateway(client=FakeClient(containers=_FakeContainers([])))
+        r = g.start_container("ghost")
+        self.assertEqual(r.operation.error_code, "DOCKER_ERR_NOT_FOUND")
+        self.assertEqual(r.operation.exit_code, 1)
+
+    def test_stop_ok(self):
+        g = self._gw([])
+        r = g.stop_container("aisc-wb-1", timeout=7)
+        self.assertEqual(r.operation.exit_code, 0)
+        self.assertEqual(r.observed_state, "stopped")
+
+    def test_stop_daemon_down(self):
+        g = self._gw([], container_fault="stop_down")
+        r = g.stop_container("aisc-wb-1")
+        self.assertEqual(r.operation.error_code, "DOCKER_ERR_DAEMON_UNREACHABLE")
+
+    def test_remove_ok(self):
+        g = self._gw([])
+        r = g.remove_container("aisc-wb-1", force=True)
+        self.assertEqual(r.operation.exit_code, 0)
+        self.assertEqual(r.observed_state, "removed")
+
+    def test_remove_already_absent_is_idempotent_ok(self):
+        # Removing a container that is already gone must NOT error (idempotent).
+        g = SdkGateway(client=FakeClient(containers=_FakeContainers([])))
+        r = g.remove_container("ghost")
+        self.assertEqual(r.operation.exit_code, 0)
+        self.assertEqual(r.observed_state, "removed")
+
+    def test_remove_daemon_down(self):
+        g = self._gw([], container_fault="remove_down")
+        r = g.remove_container("aisc-wb-1")
+        self.assertEqual(r.operation.error_code, "DOCKER_ERR_DAEMON_UNREACHABLE")
+
+    def test_wait_ok(self):
+        g = self._gw([])
+        r = g.wait_container("aisc-wb-1")
+        self.assertEqual(r.operation.exit_code, 0)
+        self.assertEqual(r.observed_state, "exited")
+
+    def test_wait_timeout_is_stable_timed_out(self):
+        g = self._gw([], container_fault="wait_timeout")
+        r = g.wait_container("aisc-wb-1", timeout=2)
+        self.assertTrue(r.timed_out)
+        self.assertEqual(r.operation.error_code, "DOCKER_ERR_TIMEOUT")
+        self.assertEqual(r.operation.exit_code, 1)
+
+
+class SdkCliLifecycleEquivalenceTests(unittest.TestCase):
+    """A-DG03-1: lifecycle semantics identical across backends."""
+
+    def test_stop_exit_codes_match(self):
+        # SDK: normal stop → 0.
+        sdk = SdkGateway(client=FakeClient(
+            containers=_FakeContainers([_FakeContainer("abc123", "wb-1", "i", "exited")]),
+        ))
+        self.assertEqual(sdk.stop_container("wb-1").operation.exit_code, 0)
+        # CLI: `docker stop` success → 0.
+        cli = CliGateway(executor=mock.Mock(run_captured=mock.Mock(
+            return_value=ProcessResult(stdout="", stderr="", exit_code=0),
+        )))
+        self.assertEqual(cli.stop_container("wb-1").operation.exit_code, 0)
+
+    def test_not_found_exit_matches(self):
+        sdk = SdkGateway(client=FakeClient(containers=_FakeContainers([])))
+        self.assertEqual(sdk.start_container("ghost").operation.exit_code, 1)
+        cli = CliGateway(executor=mock.Mock(run_captured=mock.Mock(
+            return_value=ProcessResult(stdout="", stderr="Error: No such container", exit_code=1),
+        )))
+        self.assertEqual(cli.start_container("ghost").operation.exit_code, 1)
 
 
 if __name__ == "__main__":
