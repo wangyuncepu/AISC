@@ -252,11 +252,12 @@ function copyDone(key: string): boolean {
 <style scoped>
 .sidebar {
   width: 232px;
+  min-width: 200px; /* UX-02: explicit min so compact never collapses it */
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px;
+  gap: var(--space-3);
+  padding: var(--space-3);
   background: var(--surface);
   border-right: 1px solid var(--border);
   color: var(--text-2);

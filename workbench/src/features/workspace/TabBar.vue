@@ -239,6 +239,9 @@ function canReopen(s: TabSessionState): boolean {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  /* UX-02: many tabs at a narrow tier scroll instead of squishing */
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .tab {
   display: flex;
@@ -248,6 +251,8 @@ function canReopen(s: TabSessionState): boolean {
   background: transparent;
   color: var(--text-muted);
   border-bottom: 2px solid transparent;
+  flex-shrink: 0; /* UX-02: keep tab content, let the bar scroll */
+  white-space: nowrap;
 }
 .tab:hover { background: var(--surface-2); color: var(--text-2); }
 .tab.active { color: var(--text-2); border-bottom-color: var(--accent); background: var(--bg); }

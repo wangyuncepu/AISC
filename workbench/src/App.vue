@@ -16,6 +16,7 @@ import {
 } from "./lib/ipc";
 import { applyLocale } from "./i18n";
 import { applyTheme, createSystemListener } from "./theme";
+import { layoutTierFor, type LayoutTier } from "./lib/layout";
 import { computeWindowTitle } from "./lib/title";
 import { leafCount } from "./stores/paneTree";
 import { useRuntimeStore } from "./stores/runtime";
@@ -128,6 +129,15 @@ const uiZoom = computed(() => ({
   height: `calc(100vh / ${effectiveScale.value})`,
   width: `calc(100vw / ${effectiveScale.value})`,
 }));
+
+// Stage 6 (UX-02): layout tier by the EFFECTIVE layout width (the zoomed app
+// box = viewport / scale), NOT the raw viewport — the zoom system scales the
+// 800px baseline, so a 320px window still lays out at ~800px. Compact <640,
+// Standard 640-1100, Wide >1100 (02-domain-contract.md). Exposed as data-tier
+// on the app root; components react via .app[data-tier="..."] selectors.
+const layoutTier = computed<LayoutTier>(
+  () => layoutTierFor(window.innerWidth / (effectiveScale.value || 1)),
+);
 const terminalZoom = computed(() => ({ zoom: String(1 / effectiveScale.value) }));
 // G-11 (2026-08-10): the counter-zoom keeps the terminal visually 1:1 when
 // the UI scale changes, preventing the canvas re-fit flicker observed when it
@@ -462,7 +472,7 @@ function selectRecent(path: string): void {
 </script>
 
 <template>
-  <div class="app" :style="uiZoom">
+  <div class="app" :style="uiZoom" :data-tier="layoutTier">
     <header class="topbar">
       <span class="brand">AISC Workbench</span>
       <span class="status" :data-status="store.status">{{ store.status }}</span>
@@ -718,6 +728,7 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
   right: 0;
   bottom: 0;
   width: 320px;
+  max-width: 100%; /* never exceed the window at narrow tiers (UX-02) */
   z-index: var(--z-drawer);
   display: flex;
   background: var(--surface);
@@ -735,4 +746,11 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 10px; color: var(--text-muted); font-size: var(--font-md);
 }
+
+/* Stage 6 (UX-02): layout tiers driven by the effective app-box width
+ * (data-tier on .app; see layoutTier). Compact < 640px box. */
+.app[data-tier="compact"] .topbar { gap: var(--space-2); padding: 4px var(--space-2); }
+.app[data-tier="compact"] .topbar .status { display: none; } /* keep brand + settings */
+.app[data-tier="compact"] .sidebar { width: 200px; min-width: 200px; padding: var(--space-2); }
+.app[data-tier="compact"] .explorer-drawer { width: min(320px, 100%); }
 </style>
