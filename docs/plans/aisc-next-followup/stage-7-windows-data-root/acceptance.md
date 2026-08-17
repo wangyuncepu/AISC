@@ -2,7 +2,11 @@
 
 > **总门：PASS（2026-08-17）**——自动化全绿（Python 621 / cargo 183+7×3 / vitest 213 /
 > vue-tsc 干净）+ Windows 真机 A-DATA01..05 全 PASS + 用户 Workbench GUI 手测 PASS
-> （fresh workspace 全链路零污染，2026-08-17 用户确认）。
+> （fresh workspace 全链路零污染，2026-08-17 用户确认）+ **CI 全绿**（Workbench CI /
+> CLI sidecar / Bundle Linux·macOS / NSIS，develop `ccf5203`；首轮 Bundle/NSIS 因
+> container/ 脚本改动未刷新 `vendor/checksums.txt` 失败——已按 DEVELOP_WIKI §8 用
+> `tools/vendor-refresh.sh` 重新生成并全过；sidecar 首轮的 doctor parity 分歧为偶发，
+> 修复轮未复现，parity 脚本已加双轨输出转储以便下次直接定位）。
 
 | ID | 验收方法 | 结果 |
 |---|---|---|
