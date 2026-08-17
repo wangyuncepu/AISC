@@ -2,6 +2,22 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+# Stage 7 (2026-08-17，进行中) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
+
+> 规划入口：`docs/plans/aisc-next-followup/stage-7-windows-data-root/`。把初始化/运行产生的配置、状态、runtime、日志、缓存、artifact、诊断和迁移文件统一收纳到 `%LOCALAPPDATA%\AISC\data`，workspace 只留用户文件；提供旧布局迁移。证据台账：`stage-7-windows-data-root/acceptance.md`。
+
+- **7a contract**：`aisc.data-root/v1` 纯域契约 + 只读 `DataRootResolver`（Python SSOT
+  `src/aisc/{domain,application}/data_root.py`，Rust mirror `workbench/src-tauri/src/data_root.rs`）：
+  平台默认根（Win `%LOCALAPPDATA%\AISC\data`，跨平台 XDG）、`AISC_DATA_ROOT` override
+  校验（绝对路径/无空白/与 workspace 双向不重叠，fail closed）、reparse segment 拒绝、
+  `sha256-v1` 全量 workspace hash（目录名冒号→连字符，Windows 合法）、契约布局目录映射；
+  Python/Rust 共享向量 fixture `tests/fixtures/data-root/hash-vectors.json`（CJK/emoji/UNC）。
+  未接线——现行为不变（接线在 7e）。本地门：pytest 17+8 subtests / cargo data_root 8 /
+  全量 572 OK + 181+7×3。
+- **启动序列**：followup 计划入库（`5ec13bb`）；`aisc-next` 整体归档
+  `docs/archive/completed/aisc-next`（`e0af206`）；实测 fresh 初始化 workspace 清单
+  （`.aisc/.claude/.codex/.cc-switch/.local`，~3130 文件/~69MB）入 02-domain-contract。
+
 # Stage 6 (2026-08-16) — UI / a11y / 可观测性 / 发布收口（AISC Next，分支 stage-6-ui-release-convergence）
 
 > 规划入口：`docs/plans/aisc-next/stage-6-ui-release-convergence/`。在新增工作流稳定后统一
