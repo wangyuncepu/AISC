@@ -441,6 +441,38 @@ def _build_parser() -> _AiscArgumentParser:
     arclear.add_argument("--workspace", type=str, default=None,
                          help="Workspace path (default: current directory)")
 
+    # --- data-root (Stage 7, 7d) ---
+    drp = sub.add_parser("data-root", help="Data root diagnostics and legacy migration",
+                         allow_abbrev=False)
+    _add_global_args(drp, is_subparser=True)
+    drsub = drp.add_subparsers(dest="data_root_command", title="data-root commands",
+                               parser_class=_AiscArgumentParser)
+
+    drdoc = drsub.add_parser("doctor", help="Resolve + legacy findings + manifest state",
+                             allow_abbrev=False)
+    _add_global_args(drdoc, is_subparser=True)
+    drdoc.add_argument("--workspace", type=str, default=None,
+                       help="Workspace path (default: current directory)")
+
+    drmig = drsub.add_parser("migrate", help="Migrate legacy layout into the data root",
+                             allow_abbrev=False)
+    _add_global_args(drmig, is_subparser=True)
+    drmig.add_argument("--workspace", type=str, default=None,
+                       help="Workspace path (default: current directory)")
+    drmig.add_argument("--dry-run", action="store_true", default=False,
+                       help="Report the plan without touching anything")
+    drmig.add_argument("--quarantine-unknown", action="store_true", default=False,
+                       help="Move unknown files to the migration quarantine "
+                            "(explicit consent; sources kept)")
+
+    drroll = drsub.add_parser("rollback", help="Undo one migration via its manifest",
+                              allow_abbrev=False)
+    _add_global_args(drroll, is_subparser=True)
+    drroll.add_argument("--workspace", type=str, default=None,
+                        help="Workspace path (default: current directory)")
+    drroll.add_argument("manifest", nargs="?", default=None,
+                        help="Manifest path (default: this workspace's manifest)")
+
     return parser
 
 
@@ -464,7 +496,7 @@ def _detect_events(argv: List[str]) -> bool:
 def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "profile",
              "status", "stop", "restart", "shell", "switch", "provider",
-             "ps", "runtime", "session", "artifact"}
+             "ps", "runtime", "session", "artifact", "data-root"}
     for arg in argv:
         if arg in known:
             return arg
@@ -1202,6 +1234,42 @@ def _cmd_artifact(
             "AISC_ERR_USAGE",
             f"Unknown artifact subcommand: {sub}"
         )]
+
+
+def _cmd_data_root(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Any, int, List[Dict[str, Any]]]:
+    """Execute ``aisc data-root`` subcommands (Stage 7, 7d).
+
+    doctor/migrate --dry-run/migrate --apply/rollback are non-interactive;
+    conflicts and unconsented unknowns raise CliError (stable code, non-zero
+    exit) instead of guessing.
+    """
+    from aisc.cli.commands.data_root import (
+        cmd_data_root_doctor,
+        cmd_data_root_migrate,
+        cmd_data_root_rollback,
+    )
+
+    sub = args.data_root_command
+    if sub == "doctor":
+        return cmd_data_root_doctor(workspace=args.workspace), 0, []
+    elif sub == "migrate":
+        return cmd_data_root_migrate(
+            workspace=args.workspace,
+            dry_run=args.dry_run,
+            quarantine_unknown=args.quarantine_unknown,
+        ), 0, []
+    elif sub == "rollback":
+        return cmd_data_root_rollback(
+            workspace=args.workspace, manifest=args.manifest,
+        ), 0, []
+    return None, 2, [build_error(
+        "AISC_ERR_USAGE",
+        f"Unknown data-root subcommand: {sub}"
+    )]
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -1329,6 +1397,25 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         except (AttributeError, IndexError, KeyError):
             pass
 
+    # Propagate JSON format to data-root subparser for parse-time errors.
+    if "data-root" in args_list:
+        try:
+            data_root_parser = [a for a in parser._subparsers._group_actions
+                                if a.dest == "command"][0].choices["data-root"]
+            data_root_parser._aisc_format = "json" if json_requested else None
+            data_root_parser._aisc_command = "data-root"
+            for _sub in ("doctor", "migrate", "rollback"):
+                if _sub in args_list:
+                    try:
+                        _sp = [a for a in data_root_parser._subparsers._group_actions
+                               if a.dest == "data_root_command"][0].choices[_sub]
+                        _sp._aisc_format = "json" if json_requested else None
+                        _sp._aisc_command = f"data-root {_sub}"
+                    except (AttributeError, IndexError, KeyError):
+                        pass
+        except (AttributeError, IndexError, KeyError):
+            pass
+
     try:
         args = parser.parse_args(args_list)
     except SystemExit:
@@ -1414,7 +1501,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         emitter = JsonlEmitter(command=args.command)
     elif args_events and args.command in ("version", "doctor", "config", "profile",
                                            "status", "stop", "restart", "shell", "switch",
-                                           "provider", "ps", "session", "artifact"):
+                                           "provider", "ps", "session", "artifact",
+                                           "data-root"):
         if effective_format == "json":
             emit_json_usage_error(
                 command=args.command, version=__version__,
@@ -1470,6 +1558,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_session(args, effective_format)
         elif args.command == "artifact":
             data, exit_code, errors = _cmd_artifact(args, effective_format)
+        elif args.command == "data-root":
+            data, exit_code, errors = _cmd_data_root(args, effective_format)
         else:
             if effective_format == "json":
                 emit_json_usage_error(
@@ -1550,6 +1640,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                     print(f"Build succeeded: {data.get('image_tag', '')}")
                 else:
                     print("Container finished.")
+        elif args.command == "data-root":
+            from aisc.cli.commands.data_root import print_data_root_text
+            print_data_root_text(data)
         elif args.command == "config":
             from aisc.cli.commands.config import print_validate_text, print_effective_text
             from aisc.application.config_service import ServiceResult
