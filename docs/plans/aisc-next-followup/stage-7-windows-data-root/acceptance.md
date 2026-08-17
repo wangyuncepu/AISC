@@ -28,6 +28,21 @@
   `cargo test --offline` 181+7×3 全过
 - 结论：**PASS**
 
+### 7b-storage — 统一目录/锁/原子写 API（2026-08-17）
+
+- 目标/验收 ID：DATA-03/DATA-05 存储层（lock/atomic/corruption 原语；全量并发与故障注入门在 7f）
+- Commit：`72d1bfd`
+- OS/arch：Windows 11 Pro 10.0.26200 / x64
+- 步骤：`python -m pytest tests/test_data_root_store.py -q`
+- 期望：prepare 幂等创建契约骨架（含 `state/locks`）；rel 路径逃逸（`..`/绝对/反斜杠）拒绝；
+  JSON 双 scope 原子读写、无临时文件残留、覆盖即替换；损坏 JSON 隔离为 `*.corrupt` 且
+  fail closed（读取返回 None，原字节保留）；跨进程锁互斥 + 有界超时 + 稳定错误码
+  `AISC_ERR_DATA_ROOT_LOCK_TIMEOUT`，持有者退出后可重新获取；workspace 域锁带 hash 前缀
+- 结果：**PASS** — 12 passed（含真实子进程持锁的超时/释放用例）；合计 data-root 测试
+  29 passed + 14 subtests
+- 回归：全量 `python -m unittest discover` 584 OK（61 skipped 同前）
+- 结论：**PASS**
+
 证据模板：
 
 ```text

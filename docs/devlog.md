@@ -14,6 +14,12 @@
   Python/Rust 共享向量 fixture `tests/fixtures/data-root/hash-vectors.json`（CJK/emoji/UNC）。
   未接线——现行为不变（接线在 7e）。本地门：pytest 17+8 subtests / cargo data_root 8 /
   全量 572 OK + 181+7×3。
+- **7b storage**：`adapters/data_root_store.py` 统一存储 API：幂等 `prepare` 契约骨架、
+  跨进程 fail-closed `file_lock`（msvcrt/fcntl，error_code 可参数化以便 7e 保留
+  STATE_LOCK_TIMEOUT 语义）、rel 路径校验（artifacts validator）、原子 UTF-8 写
+  （同目录 temp + fsync + replace）、损坏隔离 `*.corrupt`、写前 reparse 链复检（TOCTOU
+  防御）；稳定错误码下沉 domain。未改现有 writer（7e）。本地门：store 12 passed
+  （含子进程持锁超时用例）/ 全量 584 OK。
 - **启动序列**：followup 计划入库（`5ec13bb`）；`aisc-next` 整体归档
   `docs/archive/completed/aisc-next`（`e0af206`）；实测 fresh 初始化 workspace 清单
   （`.aisc/.claude/.codex/.cc-switch/.local`，~3130 文件/~69MB）入 02-domain-contract。
