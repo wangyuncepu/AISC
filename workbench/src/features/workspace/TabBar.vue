@@ -10,7 +10,11 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRuntimeStore, SETTINGS_TAB_ID } from "../../stores/runtime";
+import {
+  CC_SWITCH_UI_TAB_ID,
+  SETTINGS_TAB_ID,
+  useRuntimeStore,
+} from "../../stores/runtime";
 import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import type { LaunchAgent, Tab, TabSessionState } from "../../types";
@@ -92,6 +96,7 @@ function onMenuKeydown(e: KeyboardEvent) {
     if (idx >= 0) {
       // The settings entry carries data-agent="settings"; agents create a tab.
       if (items[idx].dataset.agent === "settings") chooseSettings();
+      else if (items[idx].dataset.agent === "cc-switch-ui") chooseCcSwitchUi();
       else choose(items[idx].dataset.agent as LaunchAgent);
     }
   }
@@ -105,6 +110,11 @@ function choose(agent: LaunchAgent) {
 function chooseSettings() {
   menuOpen.value = false;
   store.openSettingsTab();
+}
+
+function chooseCcSwitchUi() {
+  menuOpen.value = false;
+  store.openCcSwitchUiTab();
 }
 
 function onDocMousedown(e: MouseEvent) {
@@ -128,28 +138,51 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocMousedown))
 // landed in the terminal and navigation appeared broken.)
 const tabRefs = ref<(HTMLButtonElement | null)[]>([]);
 const roving = ref(-1); // -1 = no manual roving; follow the active tab
-/** IDEA-1: the virtual Settings tab chip renders after the session tabs, so
- * the roving/focus model treats it as index `store.tabs.length`. */
-const settingsBtnRef = ref<HTMLButtonElement | null>(null);
+/** IDEA-1 + Stage 8e: virtual (session-less) tabs render after the session
+ * tabs, in this fixed order — the roving/focus model appends them as indexes
+ * `store.tabs.length + n`. */
+const virtualTabs = computed(() => {
+  const out: { id: string; labelKey: string; icon: string }[] = [];
+  if (store.settingsTabOpen)
+    out.push({ id: SETTINGS_TAB_ID, labelKey: "tabbar.settings", icon: "⚙" });
+  if (store.ccSwitchUiTabOpen)
+    out.push({ id: CC_SWITCH_UI_TAB_ID, labelKey: "tabbar.ccSwitchUi", icon: "⇄" });
+  return out;
+});
+const virtualBtnRefs = new Map<string, HTMLButtonElement>();
+function setVirtualRef(id: string) {
+  return (el: unknown) => {
+    if (el) virtualBtnRefs.set(id, el as HTMLButtonElement);
+    else virtualBtnRefs.delete(id);
+  };
+}
 
-/** Rendered tab count: session tabs + the optional virtual Settings tab. */
-const tabCount = computed(
-  () => store.tabs.length + (store.settingsTabOpen ? 1 : 0)
-);
+/** Rendered tab count: session tabs + the open virtual tabs. */
+const tabCount = computed(() => store.tabs.length + virtualTabs.value.length);
 
 /** Index of the active chip in the rendered sequence (-1 = none). */
 function activeIndex(): number {
   const i = store.tabs.findIndex((t) => t.tabId === store.activeTabId);
   if (i >= 0) return i;
-  return store.activeTabId === SETTINGS_TAB_ID && store.settingsTabOpen
-    ? store.tabs.length
-    : -1;
+  const v = virtualTabs.value.findIndex((v) => v.id === store.activeTabId);
+  return v >= 0 ? store.tabs.length + v : -1;
 }
 
-/** Focus chip `i` (session tab or the Settings chip). */
+/** Focus chip `i` (session tab or a virtual chip). */
 function focusChip(i: number): void {
   if (i < store.tabs.length) tabRefs.value[i]?.focus();
-  else settingsBtnRef.value?.focus();
+  else virtualBtnRefs.get(virtualTabs.value[i - store.tabs.length]?.id ?? "")?.focus();
+}
+
+/** Activate a chip index (Enter/Space on the roving focus). */
+function activateChip(i: number): void {
+  if (i < store.tabs.length) {
+    store.activateTab(store.tabs[i].tabId);
+  } else {
+    const id = virtualTabs.value[i - store.tabs.length]?.id;
+    if (id === SETTINGS_TAB_ID) store.openSettingsTab();
+    else if (id === CC_SWITCH_UI_TAB_ID) store.openCcSwitchUiTab();
+  }
 }
 
 function setTabRef(i: number) {
@@ -163,15 +196,16 @@ function tabIndex(tab: Tab, i: number): string {
   return tab.tabId === store.activeTabId ? "0" : "-1";
 }
 
-/** roving tabindex for the virtual Settings chip (index = tabs.length). */
-const settingsTabIndex = computed(() => {
-  if (roving.value >= 0) return roving.value === store.tabs.length ? "0" : "-1";
-  return store.activeTabId === SETTINGS_TAB_ID ? "0" : "-1";
-});
+/** roving tabindex for one virtual chip at rendered index `i`. */
+function virtualTabIndex(i: number): string {
+  if (roving.value >= 0) return roving.value === i ? "0" : "-1";
+  return virtualTabs.value[i - store.tabs.length]?.id === store.activeTabId ? "0" : "-1";
+}
 
-function onSettingsClick() {
+function onVirtualClick(id: string) {
   roving.value = -1;
-  store.openSettingsTab();
+  if (id === SETTINGS_TAB_ID) store.openSettingsTab();
+  else if (id === CC_SWITCH_UI_TAB_ID) store.openCcSwitchUiTab();
 }
 
 /** × on the Settings chip: revert unsaved edits (dialog-Cancel contract),
@@ -179,6 +213,12 @@ function onSettingsClick() {
 function closeSettings() {
   settingsStore.cancel();
   store.closeSettingsTab();
+}
+
+/** × on the cc-switch UI chip (no unsaved-state contract — forms are
+ * per-operation and the key field is transient). */
+function closeCcSwitchUi() {
+  store.closeCcSwitchUiTab();
 }
 
 function onTabClick(tabId: string) {
@@ -195,11 +235,8 @@ function onTablistKeydown(e: KeyboardEvent) {
   if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
     const pick = roving.value >= 0 ? roving.value : activeIdx;
-    if (pick >= 0 && pick < store.tabs.length) {
-      store.activateTab(store.tabs[pick].tabId);
-      roving.value = -1;
-    } else if (pick >= 0) {
-      store.openSettingsTab();
+    if (pick >= 0) {
+      activateChip(pick);
       roving.value = -1;
     }
     return;
@@ -308,28 +345,29 @@ function canReopen(s: TabSessionState): boolean {
       </span>
     </div>
 
-    <!-- IDEA-1: the virtual Settings tab chip (no session; × reverts unsaved
-         form edits and closes). Keyboard model: last chip in the sequence. -->
+    <!-- IDEA-1 + Stage 8e: virtual session-less tabs (Settings, cc-switch
+         Provider UI). Keyboard model: appended after the session tabs. -->
     <div
-      v-if="store.settingsTabOpen"
-      class="tab settings-chip"
-      :class="{ active: store.activeTabId === SETTINGS_TAB_ID }"
+      v-for="(v, vi) in virtualTabs"
+      :key="v.id"
+      class="tab virtual-chip"
+      :class="{ active: store.activeTabId === v.id }"
     >
       <button
-        ref="settingsBtnRef"
+        :ref="setVirtualRef(v.id)"
         role="tab"
         class="tab-main"
-        :tabindex="settingsTabIndex"
-        :aria-selected="store.activeTabId === SETTINGS_TAB_ID"
-        :title="t('settings.title')"
-        @click="onSettingsClick"
-      >⚙ {{ t("tabbar.settings") }}</button>
+        :tabindex="virtualTabIndex(store.tabs.length + vi)"
+        :aria-selected="store.activeTabId === v.id"
+        :title="t(v.labelKey)"
+        @click="onVirtualClick(v.id)"
+      >{{ v.icon }} {{ t(v.labelKey) }}</button>
       <span class="actions">
         <button
           class="icon x"
-          :title="t('tabbar.closeSettings')"
-          :aria-label="t('tabbar.closeSettings')"
-          @click="closeSettings"
+          :title="t('tabbar.closeVirtual')"
+          :aria-label="t('tabbar.closeVirtual')"
+          @click="v.id === 'settings-tab' ? closeSettings() : closeCcSwitchUi()"
         >×</button>
       </span>
     </div>
@@ -381,6 +419,12 @@ function canReopen(s: TabSessionState): boolean {
             data-agent="settings"
             @click="chooseSettings"
           >{{ t("tabbar.settings") }}</li>
+          <li
+            role="menuitem"
+            tabindex="0"
+            data-agent="cc-switch-ui"
+            @click="chooseCcSwitchUi"
+          >{{ t("tabbar.ccSwitchUi") }}</li>
         </ul>
       </Teleport>
     </div>

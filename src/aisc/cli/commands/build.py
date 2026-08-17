@@ -9,6 +9,7 @@ this module never calls ``subprocess.run`` directly.
 
 from __future__ import annotations
 
+import json
 import sys as _sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,8 +52,15 @@ def plan_build(
     no_cache: bool = False,
     pull: bool = False,
     dry_run: bool = False,
+    cc_switch: Optional[Any] = None,
 ) -> BuildPlan:
     """Create an immutable ``BuildPlan`` from user args.
+
+    Args:
+        cc_switch: a ``ResolvedRelease`` (aisc.domain.cc_switch_release) from
+            the resolver — injected as docker build args + image labels (Stage
+            8b, CS-01/CS-02). ``None`` keeps the legacy ARG-fallback path
+            (manual docker builds only; never used by ``aisc build``).
 
     Returns a ``BuildPlan`` with the computed ``docker argv``.
 
@@ -88,6 +96,31 @@ def plan_build(
     if build_env.use_cn_mirror == "1" and build_env.node_image_cn:
         selected_node_image = build_env.node_image_cn
 
+    cc_kwargs: Dict[str, str] = {}
+    if cc_switch is not None:
+        manifest = cc_switch.to_manifest()
+        # Compact label JSON — keep the OCI label small and stable-shaped.
+        label_manifest = json.dumps(
+            {
+                "schema": manifest["schema"],
+                "channel": manifest["channel"],
+                "version": manifest["version"],
+                "commit": manifest["commit"],
+                "asset_sha256": manifest["asset_sha256"],
+                "asset_name": manifest["asset_name"],
+                "source": manifest["source"],
+            },
+            separators=(",", ":"),
+        )
+        cc_kwargs = {
+            "cc_switch_version": cc_switch.tag,
+            "cc_switch_commit": cc_switch.commit,
+            "cc_switch_asset_url": cc_switch.asset_url,
+            "cc_switch_asset_sha256": cc_switch.asset_sha256,
+            "cc_switch_asset_name": cc_switch.asset_name,
+            "cc_switch_manifest": label_manifest,
+        }
+
     return BuildPlan(
         tag=tag,
         root=str(root),
@@ -97,6 +130,7 @@ def plan_build(
         build_arg_use_cn_mirror=build_env.use_cn_mirror,
         build_arg_node_image=selected_node_image,
         dry_run=dry_run,
+        **cc_kwargs,
     )
 
 
@@ -112,6 +146,10 @@ class BuildResult:
     docker_exit_code: Optional[int] = None
     dry_run: bool = False
     executed: bool = False
+    """Stage 8b: resolved cc-switch summary (version/sha256/source/...) and
+    the manifest file path — the reproducibility receipt for the build."""
+    cc_switch: Dict[str, Any] = field(default_factory=dict)
+    cc_switch_manifest_path: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -120,6 +158,8 @@ class BuildResult:
             "executed": self.executed,
             "docker_argv": list(self.docker_argv),
             "docker_exit_code": self.docker_exit_code,
+            "cc_switch": dict(self.cc_switch),
+            "cc_switch_manifest_path": self.cc_switch_manifest_path,
         }
 
 
@@ -133,6 +173,8 @@ def run_build(
     emitter: Optional[JsonlEmitter] = None,
     executor: Optional[DockerExecutor] = None,
     streaming: bool = False,
+    cc_switch_summary: Optional[Dict[str, Any]] = None,
+    cc_switch_manifest_path: str = "",
 ) -> BuildResult:
     """Execute or simulate a build, emitting events as needed.
 
@@ -147,6 +189,8 @@ def run_build(
             stdout/stderr.
             ``False`` (JSON/events mode) — use ``run_captured`` and forward
             docker stdout/stderr to stderr so stdout stays pure envelope/JSONL.
+        cc_switch_summary / cc_switch_manifest_path: Stage 8b resolver facts
+            surfaced in BuildResult (and thus in error payloads too).
 
     Returns:
         BuildResult with outcome data.
@@ -156,11 +200,21 @@ def run_build(
     """
     exec_ = executor or RealDockerExecutor()
 
+    if cc_switch_summary is None and plan.cc_switch_version:
+        # Derive from the plan's label manifest so error payloads still carry
+        # the pin even when the caller passed no explicit summary.
+        try:
+            cc_switch_summary = json.loads(plan.cc_switch_manifest)
+        except json.JSONDecodeError:
+            cc_switch_summary = {"version": plan.cc_switch_version}
+
     result = BuildResult(
         image_tag=plan.tag,
         docker_argv=list(plan.docker_argv),
         dry_run=plan.dry_run,
         executed=False,
+        cc_switch=dict(cc_switch_summary or {}),
+        cc_switch_manifest_path=cc_switch_manifest_path,
     )
 
     # --- emit start event ---
@@ -173,6 +227,7 @@ def run_build(
             emitter.emit("build.plan", data={
                 "docker_argv": result.docker_argv,
                 "dry_run": True,
+                "cc_switch": result.cc_switch,
             })
         return result
 
@@ -202,6 +257,7 @@ def run_build(
         emitter.emit("build.plan", data={
             "docker_argv": result.docker_argv,
             "image_exists": image_exists,
+            "cc_switch": result.cc_switch,
         })
 
     # --- execute docker build ---

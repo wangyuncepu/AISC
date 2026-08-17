@@ -62,8 +62,12 @@ class DockerExecutor(Protocol):
         never returns bare ``bool``."""
 
     def run_captured(self, docker_argv: List[str],
-                     *, timeout: Optional[float] = None) -> ProcessResult:
-        """Execute ``docker <argv>`` with captured stdout / stderr."""
+                     *, timeout: Optional[float] = None,
+                     input_text: Optional[str] = None) -> ProcessResult:
+        """Execute ``docker <argv>`` with captured stdout / stderr.
+
+        ``input_text`` (Stage 8d) pipes a string to the child's stdin — the
+        cc-switch provider data plane's secret channel (never argv)."""
 
     def run_streaming(self, docker_argv: List[str],
                       *, timeout: Optional[float] = None) -> ProcessResult:
@@ -345,7 +349,8 @@ class RealDockerExecutor:
     # ------------------------------------------------------------------
 
     def run_captured(self, docker_argv: List[str],
-                     *, timeout: Optional[float] = None) -> ProcessResult:
+                     *, timeout: Optional[float] = None,
+                     input_text: Optional[str] = None) -> ProcessResult:
         dp = self._resolve_path() or "docker"
         try:
             proc = subprocess.run(
@@ -354,6 +359,7 @@ class RealDockerExecutor:
                 timeout=timeout,
                 encoding="utf-8", errors="replace",
                 env=self._subprocess_env(),
+                input=input_text,
             )
             return ProcessResult(
                 stdout=proc.stdout or "",

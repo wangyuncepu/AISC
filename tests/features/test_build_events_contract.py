@@ -147,13 +147,30 @@ class TestBuildOutputStream(unittest.TestCase):
         assert "build.output" not in types
 
 
+def _resolved_release():
+    """Stage 8b: a fixed resolution so main() tests never hit the network."""
+    from aisc.domain.cc_switch_release import ResolvedRelease
+
+    return ResolvedRelease(
+        channel="stable", tag="v5.10.1", release_id=110, commit="deadbeef",
+        published_at="2026-08-06T00:00:00Z",
+        asset_name="cc-switch-cli-v5.10.1-linux-x64-musl.tar.gz",
+        asset_url="https://x/cc-switch-cli-v5.10.1-linux-x64-musl.tar.gz",
+        asset_sha256="a" * 64, asset_size=1, arch="x64", libc="musl",
+        source="api",
+    )
+
+
 class TestBuildTerminalViaMain(unittest.TestCase):
     """main() emits the build.complete/failed terminal (run_build mocked)."""
 
+    @patch("aisc.cli.main._write_cc_switch_manifest", return_value=None)
+    @patch("aisc.application.cc_switch_resolver.CcSwitchResolver.resolve",
+           return_value=_resolved_release())
     @patch("aisc.application.resources.locate_aisc_root", return_value=Path("/tmp"))
     @patch("aisc.cli.commands.build.plan_build", return_value=_plan())
     @patch("aisc.cli.commands.build.run_build", return_value=BuildResult())
-    def test_main_success_emits_build_complete(self, _run, _plan_p, _root):
+    def test_main_success_emits_build_complete(self, _run, _plan_p, _root, _res, _mf):
         from aisc.cli.main import main
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -165,10 +182,13 @@ class TestBuildTerminalViaMain(unittest.TestCase):
         assert events[-1]["data"]["exit_code"] == 0
         assert events[-1]["seq"] == len(events)
 
+    @patch("aisc.cli.main._write_cc_switch_manifest", return_value=None)
+    @patch("aisc.application.cc_switch_resolver.CcSwitchResolver.resolve",
+           return_value=_resolved_release())
     @patch("aisc.application.resources.locate_aisc_root", return_value=Path("/tmp"))
     @patch("aisc.cli.commands.build.plan_build", return_value=_plan())
     @patch("aisc.cli.commands.build.run_build")
-    def test_main_failure_emits_build_failed(self, _run, _plan_p, _root):
+    def test_main_failure_emits_build_failed(self, _run, _plan_p, _root, _res, _mf):
         from aisc.cli.main import main
         _run.side_effect = CliError(
             message="Docker build failed (exit 1)",

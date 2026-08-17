@@ -9,6 +9,7 @@ All docker operations are injected through a ``DockerExecutor``.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -116,6 +117,20 @@ def _build_parser() -> _AiscArgumentParser:
                     help="Always pull the base image")
     bp.add_argument("--dry-run", action="store_true", default=False,
                     help="Plan the build without executing")
+    # Stage 8b (CS-01/CS-02): cc-switch release resolution. `latest` resolves
+    # the newest stable upstream release live (fail closed, never a silent
+    # pin); an explicit vX.Y.Z is reproducible; --cc-switch-manifest builds
+    # fully offline from a previously written resolution receipt.
+    bp.add_argument("--cc-switch-version", type=str, default=argparse.SUPPRESS,
+                    help="cc-switch version: 'latest' (default) or vX.Y.Z "
+                         "(env: CC_SWITCH_VERSION)")
+    bp.add_argument("--cc-switch-channel", type=str, default=argparse.SUPPRESS,
+                    choices=["stable"],
+                    help="cc-switch release channel (default: stable; "
+                         "env: CC_SWITCH_CHANNEL)")
+    bp.add_argument("--cc-switch-manifest", type=str, default=None, metavar="PATH",
+                    help="Build from a resolver manifest file (offline / "
+                         "reproducible; skips the live resolve)")
 
     # --- run ---
     rp = sub.add_parser("run", help="Run Docker container", allow_abbrev=False)
@@ -260,6 +275,49 @@ def _build_parser() -> _AiscArgumentParser:
                       help="Agent (claude|codex)")
     prpc.add_argument("--workspace", type=str, default=None,
                       help="Workspace path (default: current directory)")
+
+    # --- cc-switch (Stage 8d: provider data plane, aisc.cc-switch-provider/v1) ---
+    csp = sub.add_parser(
+        "cc-switch", help="Manage cc-switch providers (list/add/edit/delete)",
+        allow_abbrev=False,
+    )
+    _add_global_args(csp, is_subparser=True)
+    cssub = csp.add_subparsers(dest="cc_switch_command", title="cc-switch commands",
+                               parser_class=_AiscArgumentParser)
+
+    def _cc_switch_common(p):
+        _add_global_args(p, is_subparser=True)
+        p.add_argument("--runtime-id", type=str, required=True,
+                       help="Runtime ID (UUID v4)")
+        p.add_argument("--agent", type=str, required=True,
+                       choices=["claude", "codex"], help="Agent (claude|codex)")
+        p.add_argument("--workspace", type=str, default=None,
+                       help="Workspace path (default: current directory)")
+
+    csl = cssub.add_parser("list", help="List providers (secret-free snapshot)",
+                           allow_abbrev=False)
+    _cc_switch_common(csl)
+
+    csa = cssub.add_parser("add", help="Add a provider (request JSON on stdin)",
+                           allow_abbrev=False)
+    _cc_switch_common(csa)
+    csa.add_argument("--mode", choices=["simple", "custom"], default="simple",
+                     help="simple = preset provider + api key; custom = full fields")
+    csa.add_argument("--provider", type=str, default=None,
+                     help="Preset provider id (simple mode, e.g. deepseek)")
+    csa.add_argument("--id", dest="new_id", type=str, default=None,
+                     help="Provider id to create (default: preset id / name slug)")
+
+    cse = cssub.add_parser("edit", help="Edit a provider (patch JSON on stdin)",
+                           allow_abbrev=False)
+    _cc_switch_common(cse)
+    cse.add_argument("provider_id", type=str, help="Provider ID to edit")
+
+    csd = cssub.add_parser("delete", help="Delete a provider", allow_abbrev=False)
+    _cc_switch_common(csd)
+    csd.add_argument("provider_id", type=str, help="Provider ID to delete")
+    csd.add_argument("--confirm", action="store_true", default=False,
+                     help="Required confirmation flag")
 
     # --- ps ---
     psp = sub.add_parser("ps", help="List all registered containers", allow_abbrev=False)
@@ -644,6 +702,28 @@ def _cmd_profile(
 # Build / Run command dispatch — all docker through injected executor
 # ---------------------------------------------------------------------------
 
+def _write_cc_switch_manifest(root: Path, resolved: Any) -> Optional[Path]:
+    """Write the resolution receipt next to the build outputs (Stage 8b).
+
+    Best-effort: an unwritable dist/ warns and builds on (the receipt also
+    lives in the image labels + BuildResult). Patched in tests to avoid
+    touching the real filesystem."""
+    manifest_path = root / "dist" / "cc-switch-manifest.json"
+    try:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        from aisc.application.cc_switch_resolver import resolved_at_now
+
+        manifest_path.write_text(
+            json.dumps(resolved.to_manifest(resolved_at=resolved_at_now()), indent=2),
+            encoding="utf-8",
+        )
+        return manifest_path
+    except OSError as exc:
+        sys.stderr.write(f"⚠️  could not write cc-switch manifest ({exc}); "
+                         f"build continues\n")
+        return None
+
+
 def _cmd_build(
     args: argparse.Namespace,
     emitter: Optional[JsonlEmitter],
@@ -689,17 +769,60 @@ def _cmd_build(
             raise CliError(message="Build cancelled by user", exit_code=130,
                            error_code="AISC_ERR_CANCELLED")
 
+    # Stage 8b: resolve the cc-switch release BEFORE planning (D8-02 — the
+    # Dockerfile only consumes resolved facts, never resolves on its own).
+    import platform as _platform
+    from aisc.domain.cc_switch_release import ResolveError, normalize_arch
+    from aisc.application.cc_switch_resolver import CcSwitchResolver
+
+    cs_version = getattr(args, "cc_switch_version", None) or os.environ.get("CC_SWITCH_VERSION", "latest")
+    cs_channel = getattr(args, "cc_switch_channel", None) or os.environ.get("CC_SWITCH_CHANNEL", "stable")
+    cs_manifest = getattr(args, "cc_switch_manifest", None)
+    try:
+        cs_arch = normalize_arch(_platform.machine())
+    except ResolveError:
+        cs_arch = "x64"  # validated again inside the Dockerfile (arch assert)
+    resolver = CcSwitchResolver()
+    try:
+        resolved = resolver.resolve(
+            channel=cs_channel,
+            version=cs_version,
+            arch=cs_arch,
+            libc="musl",
+            manifest_path=Path(cs_manifest) if cs_manifest else None,
+        )
+    except ResolveError as exc:
+        raise CliError(message=f"cc-switch release resolution failed: {exc.message}",
+                       exit_code=1, error_code=exc.code) from exc
+
+    # Reproducibility receipt: always written next to the build outputs.
+    manifest_path = _write_cc_switch_manifest(root, resolved)
+
+    if effective_format == "text" and emitter is None:
+        sys.stderr.write(
+            f"cc-switch: {resolved.tag} ({resolved.asset_name}, "
+            f"sha256 {resolved.asset_sha256[:12]}…, source {resolved.source})\n"
+        )
+        sys.stderr.flush()
+
     plan = plan_build(
         root=root,
         tag=tag,
         no_cache=no_cache,
         pull=pull,
         dry_run=dry_run,
+        cc_switch=resolved,
     )
 
     # text mode → streaming (real-time build log); json/events → captured
     is_streaming = (effective_format == "text" and emitter is None)
-    result = run_build(plan, emitter=emitter, streaming=is_streaming)
+    result = run_build(
+        plan,
+        emitter=emitter,
+        streaming=is_streaming,
+        cc_switch_summary=resolved.to_manifest(),
+        cc_switch_manifest_path=str(manifest_path) if manifest_path else "",
+    )
     return result.to_dict(), 0, []
 
 
@@ -943,6 +1066,35 @@ def _cmd_switch(
         data["provider"] = quick
         data["quick"] = True
     return data, exit_code, errors
+
+
+def _cmd_cc_switch(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc cc-switch`` subcommands (Stage 8d data plane).
+
+    All four ops are non-interactive and support ``--format json``; secrets
+    ride the stdin request document, never argv.
+    """
+    from aisc.cli.commands import cc_switch as cs_cmd
+
+    sub = getattr(args, "cc_switch_command", None)
+    if sub == "list":
+        data = cs_cmd.cmd_cc_switch_list(args)
+    elif sub == "add":
+        data = cs_cmd.cmd_cc_switch_add(args)
+    elif sub == "edit":
+        data = cs_cmd.cmd_cc_switch_edit(args)
+    elif sub == "delete":
+        data = cs_cmd.cmd_cc_switch_delete(args)
+    else:
+        raise CliError(message="unknown cc-switch subcommand",
+                       exit_code=2, error_code="AISC_ERR_USAGE")
+
+    if effective_format == "text":
+        cs_cmd.print_cc_switch_text(data)
+    return data, 0, []
 
 
 def _cmd_provider(
@@ -1554,6 +1706,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_switch(args, effective_format)
         elif args.command == "provider":
             data, exit_code, errors = _cmd_provider(args, effective_format)
+        elif args.command == "cc-switch":
+            data, exit_code, errors = _cmd_cc_switch(args, effective_format)
         elif args.command == "ps":
             data, exit_code, errors = _cmd_ps(args, effective_format)
         elif args.command == "runtime":

@@ -261,6 +261,173 @@ fn provider_current_argv(runtime_id: &str, agent: &str, workspace: &str) -> Vec<
     ]
 }
 
+// --- Stage 8e: cc-switch provider data plane (aisc.cc-switch-provider/v1) ---
+
+/// One provider row of the secret-free adapter snapshot (already masked
+/// in-container; the API key never crosses this boundary in full).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CcSwitchProvider {
+    pub id: String,
+    pub name: String,
+    pub app_type: String,
+    pub base_url: String,
+    pub model: String,
+    pub has_api_key: bool,
+    pub api_key_mask: String,
+    pub is_current: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CcSwitchProvidersResult {
+    pub agent: String,
+    pub providers: Vec<CcSwitchProvider>,
+    pub operation_id: String,
+}
+
+fn cc_switch_argv(op: &str, runtime_id: &str, agent: &str, workspace: &str,
+                  positional: Option<&str>) -> Vec<String> {
+    let mut argv = vec![
+        "cc-switch".into(),
+        op.into(),
+        "--runtime-id".into(),
+        runtime_id.into(),
+        "--agent".into(),
+        agent.into(),
+        "--workspace".into(),
+        workspace.into(),
+        "--format".into(),
+        "json".into(),
+    ];
+    if let Some(pid) = positional {
+        argv.push(pid.into());
+    }
+    argv
+}
+
+async fn cc_switch_call(
+    app: &AppHandle,
+    argv: Vec<String>,
+    input: Option<String>,
+) -> Result<CcSwitchProvidersResult, WorkbenchError> {
+    let pin = crate::session::resolve_pin(app)?;
+    let env = match input {
+        Some(text) => {
+            crate::cli::run_control_input(&pin, argv, text, PROVIDER_TIMEOUT, CancellationToken::new()).await?
+        }
+        None => run_control(&pin, argv, PROVIDER_TIMEOUT, CancellationToken::new()).await?,
+    };
+    if let Some(err) = env.errors.first() {
+        // Stage 8e: the adapter's stable AISC_ERR_CC_SWITCH_PROVIDER_* codes
+        // are unknown to map_aisc's curated table — surface the adapter's own
+        // message (e.g. "provider id already exists: deepseek") instead of
+        // the generic fallback.
+        let mut wb = WorkbenchError::map_aisc(&err.code);
+        if err.code.starts_with("AISC_ERR_CC_SWITCH_PROVIDER_") {
+            wb.message = err.message.clone();
+            wb.retryable = false;
+        }
+        return Err(wb.with_detail(err.message.clone()));
+    }
+    let data = env.data.unwrap_or(Value::Null);
+    serde_json::from_value::<CcSwitchProvidersResult>(data)
+        .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("cc-switch parse: {e}")))
+}
+
+/// Minimal UUID v4 shape check (8-4-4-4-12 hex, version nibble 4, variant
+/// nibble 8..=b) — mirrors the Python CLI's validate_uuid_v4 gate.
+fn uuid_ok(s: &str) -> Option<()> {
+    let b = s.as_bytes();
+    if b.len() != 36 {
+        return None;
+    }
+    for (i, &c) in b.iter().enumerate() {
+        match i {
+            8 | 13 | 18 | 23 => {
+                if c != b'-' {
+                    return None;
+                }
+            }
+            _ => {
+                if !c.is_ascii_hexdigit() {
+                    return None;
+                }
+            }
+        }
+    }
+    if b[14] != b'4' || !matches!(b[19], b'8'..=b'b') {
+        return None;
+    }
+    Some(())
+}
+
+fn cc_switch_validate(runtime_id: &str, agent: &str) -> Result<(), WorkbenchError> {
+    if uuid_ok(runtime_id).is_none() {
+        return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_RUNTIME_ID"));
+    }
+    if agent != "claude" && agent != "codex" {
+        return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_AGENT"));
+    }
+    Ok(())
+}
+
+/// List providers for an agent (secret-free snapshot; Stage 8e).
+#[tauri::command]
+pub async fn cc_switch_providers(
+    app: AppHandle,
+    workspace: String,
+    runtime_id: String,
+    agent: String,
+) -> Result<CcSwitchProvidersResult, WorkbenchError> {
+    cc_switch_validate(&runtime_id, &agent)?;
+    let argv = cc_switch_argv("list", &runtime_id, &agent, &workspace, None);
+    cc_switch_call(&app, argv, None).await
+}
+
+/// Add a provider. The request document (which may carry the API key) rides
+/// the CLI child's STDIN via run_control_input — argv/logs/disk stay clean.
+#[tauri::command]
+pub async fn cc_switch_add(
+    app: AppHandle,
+    workspace: String,
+    runtime_id: String,
+    agent: String,
+    request: Value,
+) -> Result<CcSwitchProvidersResult, WorkbenchError> {
+    cc_switch_validate(&runtime_id, &agent)?;
+    let argv = cc_switch_argv("add", &runtime_id, &agent, &workspace, None);
+    cc_switch_call(&app, argv, Some(request.to_string())).await
+}
+
+/// Edit a provider (patch document on STDIN; optional api_key inside it).
+#[tauri::command]
+pub async fn cc_switch_edit(
+    app: AppHandle,
+    workspace: String,
+    runtime_id: String,
+    agent: String,
+    provider_id: String,
+    request: Value,
+) -> Result<CcSwitchProvidersResult, WorkbenchError> {
+    cc_switch_validate(&runtime_id, &agent)?;
+    let argv = cc_switch_argv("edit", &runtime_id, &agent, &workspace, Some(&provider_id));
+    cc_switch_call(&app, argv, Some(request.to_string())).await
+}
+
+/// Delete a provider (the CLI gates on --confirm internally).
+#[tauri::command]
+pub async fn cc_switch_delete(
+    app: AppHandle,
+    workspace: String,
+    runtime_id: String,
+    agent: String,
+    provider_id: String,
+) -> Result<CcSwitchProvidersResult, WorkbenchError> {
+    cc_switch_validate(&runtime_id, &agent)?;
+    let mut argv = cc_switch_argv("delete", &runtime_id, &agent, &workspace, Some(&provider_id));
+    argv.push("--confirm".into()); // the CLI gates delete on this flag
+    cc_switch_call(&app, argv, None).await
+}
+
 #[tauri::command]
 pub async fn runtime_preflight(
     app: AppHandle,

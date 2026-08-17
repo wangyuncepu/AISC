@@ -23,6 +23,17 @@
   置全局生效，手动启动 Docker 也不再弹 Dashboard；恢复方法 = Docker Desktop
   Settings → General 重新勾选。
 
+### IDEA-4 Provider 一键切换激活（2026-08-17 用户提出，Stage 8 手测发现缺位）
+
+- **内容**：Provider 管理 tab 支持**切换 current provider**——点击条目或行内按钮即切换
+  到该 provider 代理，需有明确 UI 效果提示（当前项高亮/切换成功反馈，可仿照 cc-switch
+  桌面版 UI）。
+- **现状**：Stage 8 的 `aisc.cc-switch-provider/v1` 只冻结了 list/add/edit/delete；切换
+  目前只有 TUI（`aisc switch --quick`）。实现要点：adapter 增加 `switch` 操作（复用官方
+  CLI `provider switch`，非交互已验证可用）+ 协议版本升级（v1→v1.1 或 v2，向后兼容）+
+  面板行点击/按钮 + 切换后快照刷新与视觉反馈（当前行 accent、顶部轻提示）。
+- **归属**：Stage 8 之后的独立小迭代（可与 IDEA-2/3 同轮规划）。
+
 ### IDEA-2 容器 TUN 模式的 mihomo 订阅配置（2026-08-17 用户提出，待规划）
 
 - **内容**：用户在启动配置选择 `network=proxy`（容器 TUN）后，应引导用户配置
@@ -70,11 +81,15 @@
 
 ## Stage 8
 
-- [ ] 预研最新 stable cc-switch 的 daemon/API 和数据库锁行为；
-- [ ] 实现 stable latest resolver、资产架构校验、SHA-256 和 image labels；
-- [ ] 从官方 DeepSeek 文档生成 fixture，确认字段、模型 ID、endpoint 和 `[1m]`；
-- [ ] 冻结 Provider UI protocol，完成 list/add/edit/delete 和 secrets redaction；
-- [ ] 验证 UI/CLI 同库、并发写、preset refresh 用户覆盖和升级迁移。
+- [x] 预研最新 stable cc-switch 的 daemon/API 和数据库锁行为（8a 完成 2026-08-17：
+      latest=v5.10.1/DB schema v16/无 HTTP API→Path B adapter/官方 CLI CRUD 表面+
+      secret stdin+stdout 回显风险全固化；DeepSeek 官方 fixture 落
+      `container/lib/deepseek-official-facts.json`；详见
+      `stage-8-cc-switch-provider-ui/8a-discovery-report.md` + D8-08..D8-12）；
+- [x] 实现 stable latest resolver、资产架构校验、SHA-256 和 image labels（8b：domain 选择+application resolver（分页/限流/TTL cache/manifest 离线）+6 build-arg+OCI labels+21 测试；真机 dry-run 验证 latest→v5.10.1/digest 一致）；
+- [x] 从官方 DeepSeek 文档生成 fixture，确认字段、模型 ID、endpoint 和 `[1m]`（8a 四页取证 + 8c fixture 驱动 preset + ownership 刷新 +13 测试；A-CS03/04 自动化绿）；
+- [x] 冻结 Provider UI protocol，完成 list/add/edit/delete 和 secrets redaction（8d 容器 adapter + 宿主 CLI 23 测试；8e Workbench 虚拟 tab + Rust stdin 通道 + store 分层）；
+- [x] 验证 UI/CLI 同库、并发写、preset refresh 用户覆盖和升级迁移（8f 真机 + 自动化：A-CS01..07 全 PASS，用户手测 PASS 2026-08-17；切换激活记 IDEA-4）。
 
 ## Stage 9
 

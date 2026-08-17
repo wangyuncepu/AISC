@@ -1,0 +1,627 @@
+#!/usr/bin/env python3
+"""AISC cc-switch provider adapter (container-side, Stage 8d).
+
+Implements the ``aisc.cc-switch-provider/v1`` data plane INSIDE the runtime
+container (04-container-ui-protocol.md + 8a decisions D8-08..D8-10):
+
+  list   — read-only SQLite snapshot (never the `provider list` table text)
+  add    — official CLI, non-interactive, secrets ONLY via
+           ``--config-file /dev/stdin`` (argv carries no secret, D8-09)
+  edit   — snapshot merge + switch-away → delete → re-add(same id) dance
+           (provider edit is TUI-only upstream, D8-10), with best-effort
+           restore of the pre-edit state if the re-add fails
+  delete — switch-away first when current (cc-switch refuses current)
+
+Every cc-switch CLI byte of stdout/stderr is treated as UNTRUSTED and
+redacted before it may reach the envelope (the CLI echoes API keys in
+cleartext on add — 8a probe). The envelope never contains full secrets:
+``api_key_mask`` only (``****`` + last 4).
+
+Called by the host CLI via
+``docker exec -i <ct> aisc-scope /proc/1/environ -- aisc-cc-provider <op> ...``
+with ONE JSON request document on stdin (``api_key`` inside that document is
+the secret channel; argv never carries it).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import tomllib
+import uuid
+from pathlib import Path
+from typing import Any, Optional
+
+PROTOCOL = "aisc.cc-switch-provider/v1"
+AGENTS = ("claude", "codex")
+PRESET_MODULE_CANDIDATES = (
+    Path("/usr/local/bin/lib/cc_switch_preset_providers.py"),
+    Path(__file__).parent / "cc_switch_preset_providers.py",
+    Path(__file__).parent / "lib" / "cc_switch_preset_providers.py",
+)
+DB_NAME = "cc-switch.db"
+CLI_TIMEOUT_S = 30.0
+
+ERR_BAD_REQUEST = "AISC_ERR_CC_SWITCH_PROVIDER_BAD_REQUEST"
+ERR_UNSUPPORTED_AGENT = "AISC_ERR_CC_SWITCH_PROVIDER_UNSUPPORTED_AGENT"
+ERR_NOT_FOUND = "AISC_ERR_CC_SWITCH_PROVIDER_NOT_FOUND"
+ERR_ADD_FAILED = "AISC_ERR_CC_SWITCH_PROVIDER_ADD_FAILED"
+ERR_DELETE_FAILED = "AISC_ERR_CC_SWITCH_PROVIDER_DELETE_FAILED"
+ERR_SWITCH_FAILED = "AISC_ERR_CC_SWITCH_PROVIDER_SWITCH_FAILED"
+ERR_RESTORE_FAILED = "AISC_ERR_CC_SWITCH_PROVIDER_RESTORE_FAILED"
+ERR_NO_SWITCH_TARGET = "AISC_ERR_CC_SWITCH_PROVIDER_NO_SWITCH_TARGET"
+ERR_CLI = "AISC_ERR_CC_SWITCH_PROVIDER_CLI_ERROR"
+ERR_SNAPSHOT = "AISC_ERR_CC_SWITCH_PROVIDER_SNAPSHOT_FAILED"
+
+# Claude env keys that hold credentials (never emitted in full).
+_CLAUDE_SECRET_KEYS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+_GENERIC_SECRET_RE = re.compile(r"sk-[A-Za-z0-9_\-]{6,}")
+
+
+class AdapterError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+# ---------------------------------------------------------------------------
+# Secret handling
+# ---------------------------------------------------------------------------
+
+def mask_secret(value: str) -> str:
+    if not value:
+        return ""
+    tail = value[-4:] if len(value) >= 8 else value[:1]
+    return f"****{tail}"
+
+
+def redact(text: str, secrets: list[str]) -> str:
+    out = text
+    for secret in secrets:
+        if secret and len(secret) >= 4:
+            out = out.replace(secret, mask_secret(secret))
+    return _GENERIC_SECRET_RE.sub(lambda m: mask_secret(m.group(0)), out)
+
+
+# ---------------------------------------------------------------------------
+# Snapshot (read-only SQLite; Workbench never touches the DB — this is the
+# in-container boundary per D8-08)
+# ---------------------------------------------------------------------------
+
+def _db_path() -> Path:
+    root = os.environ.get("CC_SWITCH_CONFIG_DIR", "")
+    if not root:
+        raise AdapterError(ERR_BAD_REQUEST, "CC_SWITCH_CONFIG_DIR is not set")
+    return Path(root) / DB_NAME
+
+
+def read_snapshot(agent: str) -> list[dict[str, Any]]:
+    """Raw provider rows (id → full settings_config) for one agent."""
+    path = _db_path()
+    if not path.is_file():
+        return []
+    uri = f"file:{path.as_posix()}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True, timeout=10)
+    except sqlite3.Error as exc:
+        raise AdapterError(ERR_SNAPSHOT, f"cannot open cc-switch.db: {exc}") from exc
+    try:
+        conn.execute("PRAGMA busy_timeout=10000")
+        rows = conn.execute(
+            "SELECT id, name, settings_config, is_current, sort_index "
+            "FROM providers WHERE app_type = ? ORDER BY sort_index, id",
+            (agent,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise AdapterError(ERR_SNAPSHOT, f"snapshot query failed: {exc}") from exc
+    finally:
+        conn.close()
+
+    snapshot: list[dict[str, Any]] = []
+    for pid, name, raw, is_current, sort_index in rows:
+        try:
+            settings = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            settings = {}
+        snapshot.append(
+            {
+                "id": str(pid),
+                "name": str(name or pid),
+                "settings": settings if isinstance(settings, dict) else {},
+                "is_current": bool(is_current),
+                "sort_index": int(sort_index or 0),
+            }
+        )
+    return snapshot
+
+
+def _codex_provider_fields(settings: dict[str, Any], pid: str) -> dict[str, str]:
+    config_text = settings.get("config")
+    fields = {"base_url": "", "model": "", "api_key": ""}
+    if not isinstance(config_text, str) or not config_text:
+        return fields
+    try:
+        toml = tomllib.loads(config_text)
+    except Exception:
+        return fields
+    fields["model"] = str(toml.get("model") or "")
+    providers = toml.get("model_providers")
+    if isinstance(providers, dict):
+        entry = providers.get(pid) or next(iter(providers.values()), None)
+        if isinstance(entry, dict):
+            fields["base_url"] = str(entry.get("base_url") or "")
+            fields["api_key"] = str(entry.get("api_key") or "")
+    return fields
+
+
+def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
+    """The secret-free v1 view of one provider row."""
+    settings = row["settings"]
+    secret = ""
+    if agent == "claude":
+        env = settings.get("env")
+        env = env if isinstance(env, dict) else {}
+        base_url = str(env.get("ANTHROPIC_BASE_URL") or "")
+        model = str(env.get("ANTHROPIC_MODEL") or "")
+        for key in _CLAUDE_SECRET_KEYS:
+            if env.get(key):
+                secret = str(env[key])
+                break
+    else:
+        fields = _codex_provider_fields(settings, row["id"])
+        base_url = fields["base_url"]
+        model = fields["model"]
+        secret = fields["api_key"]
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "app_type": agent,
+        "base_url": base_url,
+        "model": model,
+        "has_api_key": bool(secret),
+        "api_key_mask": mask_secret(secret) if secret else "",
+        "is_current": row["is_current"],
+    }
+
+
+def snapshot_secrets(agent: str, snapshot: list[dict[str, Any]]) -> list[str]:
+    """Raw secret values from a snapshot (for redaction only, never output)."""
+    secrets: list[str] = []
+    for row in snapshot:
+        settings = row["settings"]
+        if agent == "claude":
+            env = settings.get("env")
+            if isinstance(env, dict):
+                for key in _CLAUDE_SECRET_KEYS:
+                    if env.get(key):
+                        secrets.append(str(env[key]))
+        else:
+            key_value = _codex_provider_fields(settings, row["id"]).get("api_key")
+            if key_value:
+                secrets.append(key_value)
+    return [s for s in secrets if s]
+
+
+# ---------------------------------------------------------------------------
+# cc-switch CLI runner (the ONLY write path; stdout is untrusted)
+# ---------------------------------------------------------------------------
+
+def _real_run_cli(
+    args: list[str], stdin_text: str, secrets: list[str]
+) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    completed = subprocess.run(
+        ["cc-switch", *args],
+        input=stdin_text,
+        capture_output=True,
+        text=True,
+        timeout=CLI_TIMEOUT_S,
+        env=env,
+    )
+    # Redact in place: nothing downstream may ever see a raw key, including
+    # diagnostics (the CLI echoes "API Key: sk-…" on add).
+    completed.stdout = redact(completed.stdout or "", secrets)
+    completed.stderr = redact(completed.stderr or "", secrets)
+    return completed
+
+
+# Injectable for tests (records argv instead of spawning the real binary).
+run_cli = _real_run_cli
+
+
+def _cli(args: list[str], *, stdin_text: str = "", secrets: list[str] | None = None,
+         what: str = "cc-switch call") -> None:
+    completed = run_cli(args, stdin_text, secrets or [])
+    if completed.returncode != 0:
+        detail = (completed.stdout + completed.stderr).strip()[:300]
+        raise AdapterError(ERR_CLI, f"{what} failed (exit {completed.returncode}): {detail}")
+
+
+def _preset_module():
+    import importlib.util
+
+    for candidate in PRESET_MODULE_CANDIDATES:
+        if candidate.is_file():
+            spec = importlib.util.spec_from_file_location("aisc_cc_preset", candidate)
+            module = importlib.util.module_from_spec(spec)
+            assert spec.loader
+            spec.loader.exec_module(module)
+            return module
+    raise AdapterError(ERR_BAD_REQUEST, "preset module not found in image")
+
+
+def _preset_provider(provider_id: str) -> dict[str, Any]:
+    module = _preset_module()
+    for provider in module.PRESET_PROVIDERS:
+        if provider["id"] == provider_id:
+            return provider
+    raise AdapterError(
+        ERR_NOT_FOUND,
+        f"unknown preset provider {provider_id!r} (simple mode uses preset ids)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# settings_config builders
+# ---------------------------------------------------------------------------
+
+def build_add_settings(
+    agent: str, request: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Compose the full settings_config for add. Returns (name, settings)."""
+    mode = str(request.get("mode") or "simple")
+    api_key = str(request.get("api_key") or "")
+
+    if agent == "claude":
+        if mode == "simple":
+            provider = _preset_provider(str(request.get("provider") or ""))
+            env = dict(provider.get("claude_env") or {
+                "ANTHROPIC_BASE_URL": provider.get("anthropic_base_url") or provider["base_url"],
+                **({"ANTHROPIC_MODEL": provider["anthropic_model"]} if provider.get("anthropic_model") else {}),
+            })
+            if api_key:
+                env["ANTHROPIC_AUTH_TOKEN"] = api_key
+            return provider["name"], {"env": env}
+        # custom
+        env: dict[str, str] = {}
+        if request.get("base_url"):
+            env["ANTHROPIC_BASE_URL"] = str(request["base_url"])
+        if request.get("model"):
+            env["ANTHROPIC_MODEL"] = str(request["model"])
+        if api_key:
+            env["ANTHROPIC_AUTH_TOKEN"] = api_key
+        extras = request.get("env")
+        if isinstance(extras, dict):
+            for key, value in extras.items():
+                env[str(key)] = str(value)
+        if not env.get("ANTHROPIC_BASE_URL"):
+            raise AdapterError(ERR_BAD_REQUEST, "custom claude add requires base_url")
+        return str(request.get("name") or ""), {"env": env}
+
+    # codex
+    if mode == "simple":
+        provider = _preset_provider(str(request.get("provider") or ""))
+        settings = _preset_module()._settings_config(
+            "codex", provider, api_key=api_key
+        )
+        return provider["name"], settings
+    base_url = str(request.get("base_url") or "")
+    if not base_url:
+        raise AdapterError(ERR_BAD_REQUEST, "custom codex add requires base_url")
+    pid = str(request.get("id") or request.get("name") or "custom")
+    lines = [
+        f'model_provider = "{pid}"',
+    ]
+    if request.get("model"):
+        lines.append(f'model = "{request["model"]}"')
+    lines.extend(
+        [
+            'model_reasoning_effort = "high"',
+            "",
+            f"[model_providers.{pid}]",
+            f'name = "{pid}"',
+            f'base_url = "{base_url}"',
+            'wire_api = "chat"',
+            "requires_openai_auth = true",
+        ]
+    )
+    if api_key:
+        lines.append(f'api_key = "{api_key}"')
+    lines.append("")
+    return str(request.get("name") or pid), {"config": "\n".join(lines)}
+
+
+def _cli_add(
+    agent: str,
+    provider_id: str,
+    name: str,
+    settings: dict[str, Any],
+    secrets: list[str],
+) -> None:
+    stdin_text = json.dumps(settings, ensure_ascii=False)
+    _cli(
+        ["-a", agent, "provider", "add",
+         "--name", name or provider_id,
+         "--id", provider_id,
+         "--config-file", "/dev/stdin"],
+        stdin_text=stdin_text,
+        secrets=secrets,
+        what=f"provider add {provider_id}",
+    )
+
+
+def _db_delete(agent: str, provider_id: str) -> None:
+    """Delete a provider row in ONE transaction (BEGIN IMMEDIATE).
+
+    Upstream `provider delete` demands a real TTY confirmation (probed on
+    v5.10.1 — even piped "y" fails), so the controlled adapter performs the
+    delete itself — same direct-SQLite writer pattern as the preset module
+    (D8-04/D8-05: the in-container adapter owns DB transactions).
+    """
+    path = _db_path()
+    conn = sqlite3.connect(path, timeout=15)
+    try:
+        conn.execute("PRAGMA busy_timeout=15000")
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "DELETE FROM providers WHERE id = ? AND app_type = ?",
+            (provider_id, agent),
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            raise AdapterError(ERR_NOT_FOUND, f"provider not found: {provider_id}")
+        conn.commit()
+    except sqlite3.Error as exc:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        raise AdapterError(ERR_DELETE_FAILED, f"db delete failed: {exc}") from exc
+    finally:
+        conn.close()
+
+
+def _cli_switch(agent: str, provider_id: str, secrets: list[str]) -> None:
+    _cli(
+        ["-a", agent, "provider", "switch", provider_id],
+        secrets=secrets,
+        what=f"provider switch {provider_id}",
+    )
+
+
+def _switch_away_target(agent: str, snapshot: list[dict[str, Any]], exclude_id: str) -> str:
+    """A provider whose settings are real (an empty-config target makes the
+    non-tty switch prompt — 8a probe). Preset ids first, lowest sort_index."""
+    preset_ids = {p["id"] for p in _preset_module().PRESET_PROVIDERS}
+    candidates = [
+        row for row in snapshot
+        if row["id"] != exclude_id and _settings_are_real(agent, row)
+    ]
+    if not candidates:
+        raise AdapterError(
+            ERR_NO_SWITCH_TARGET,
+            "no other configured provider to switch to; cannot touch the "
+            "current provider while it is the only one",
+        )
+    candidates.sort(key=lambda r: (r["id"] not in preset_ids, r["sort_index"], r["id"]))
+    return candidates[0]["id"]
+
+
+def _settings_are_real(agent: str, row: dict[str, Any]) -> bool:
+    settings = row["settings"]
+    if agent == "claude":
+        env = settings.get("env")
+        return isinstance(env, dict) and bool(env.get("ANTHROPIC_BASE_URL"))
+    fields = _codex_provider_fields(settings, row["id"])
+    return bool(fields["base_url"])
+
+
+# ---------------------------------------------------------------------------
+# Operations
+# ---------------------------------------------------------------------------
+
+def op_list(agent: str) -> list[dict[str, Any]]:
+    return [provider_view(agent, row) for row in read_snapshot(agent)]
+
+
+def op_add(agent: str, request: dict[str, Any]) -> list[dict[str, Any]]:
+    provider_id = str(request.get("id") or "").strip()
+    if not provider_id or not re.match(r"^[a-z0-9][a-z0-9\-_]{0,63}$", provider_id):
+        raise AdapterError(ERR_BAD_REQUEST, "request.id must be a slug-style provider id")
+    existing = {row["id"] for row in read_snapshot(agent)}
+    if provider_id in existing:
+        raise AdapterError(
+            ERR_BAD_REQUEST, f"provider id already exists: {provider_id}"
+        )
+    name, settings = build_add_settings(agent, request)
+    if not name:
+        raise AdapterError(ERR_BAD_REQUEST, "request.name is required")
+    secrets = _request_secrets(request)
+    _cli_add(agent, provider_id, name, settings, secrets)
+    return op_list(agent)
+
+
+def _request_secrets(request: dict[str, Any]) -> list[str]:
+    return [str(request["api_key"])] if request.get("api_key") else []
+
+
+def _merge_patch(
+    agent: str, current_settings: dict[str, Any], row_id: str,
+    patch: dict[str, Any], api_key: str,
+) -> dict[str, Any]:
+    """Apply the edit patch onto a full settings_config (never masked data)."""
+    if agent == "claude":
+        env = current_settings.get("env")
+        env = dict(env) if isinstance(env, dict) else {}
+        if patch.get("base_url"):
+            env["ANTHROPIC_BASE_URL"] = str(patch["base_url"])
+        if patch.get("model"):
+            env["ANTHROPIC_MODEL"] = str(patch["model"])
+        extras = patch.get("env")
+        if isinstance(extras, dict):
+            for key, value in extras.items():
+                if value is None:
+                    env.pop(str(key), None)
+                else:
+                    env[str(key)] = str(value)
+        if api_key:
+            env["ANTHROPIC_AUTH_TOKEN"] = api_key
+        return {"env": env}
+    # codex: rebuild the provider TOML from the patched fields.
+    fields = _codex_provider_fields(current_settings, row_id)
+    base_url = str(patch.get("base_url") or fields["base_url"])
+    model = str(patch.get("model") or fields["model"])
+    key = api_key or fields["api_key"]
+    lines = [f'model_provider = "{row_id}"']
+    if model:
+        lines.append(f'model = "{model}"')
+    lines.extend(
+        [
+            'model_reasoning_effort = "high"',
+            "",
+            f"[model_providers.{row_id}]",
+            f'name = "{row_id}"',
+            f'base_url = "{base_url}"',
+            'wire_api = "chat"',
+            "requires_openai_auth = true",
+        ]
+    )
+    if key:
+        lines.append(f'api_key = "{key}"')
+    lines.append("")
+    result: dict[str, Any] = {"config": "\n".join(lines)}
+    for key_name, value in current_settings.items():
+        if key_name not in result:
+            result[key_name] = value  # e.g. codex "auth"
+    return result
+
+
+def op_edit(agent: str, provider_id: str, request: dict[str, Any]) -> list[dict[str, Any]]:
+    snapshot = read_snapshot(agent)
+    row = next((r for r in snapshot if r["id"] == provider_id), None)
+    if row is None:
+        raise AdapterError(ERR_NOT_FOUND, f"provider not found: {provider_id}")
+
+    patch = request.get("patch")
+    if not isinstance(patch, dict):
+        patch = {k: v for k, v in request.items() if k != "api_key"}
+    api_key = str(request.get("api_key") or "")
+    new_settings = _merge_patch(agent, row["settings"], provider_id, patch, api_key)
+    new_name = str(patch.get("name") or row["name"])
+    secrets = _request_secrets(request) + snapshot_secrets(agent, snapshot)
+
+    was_current = row["is_current"]
+    switch_back_to = ""
+    if was_current:
+        switch_back_to = provider_id
+        _cli_switch(agent, _switch_away_target(agent, snapshot, provider_id), secrets)
+    _db_delete(agent, provider_id)
+    try:
+        _cli_add(agent, provider_id, new_name, new_settings, secrets)
+    except AdapterError:
+        # The dance window: deleted but the re-add failed. Best-effort
+        # restore of the exact previous state, then surface the failure.
+        try:
+            _cli_add(agent, provider_id, row["name"], row["settings"], secrets)
+            if was_current:
+                _cli_switch(agent, provider_id, secrets)
+        except AdapterError as restore_exc:
+            raise AdapterError(
+                ERR_RESTORE_FAILED,
+                f"edit failed AND restore failed; provider {provider_id} is "
+                f"deleted (restore error: {restore_exc.message})",
+            ) from restore_exc
+        raise
+    if switch_back_to:
+        _cli_switch(agent, switch_back_to, secrets)
+    return op_list(agent)
+
+
+def op_delete(agent: str, provider_id: str) -> list[dict[str, Any]]:
+    snapshot = read_snapshot(agent)
+    row = next((r for r in snapshot if r["id"] == provider_id), None)
+    if row is None:
+        raise AdapterError(ERR_NOT_FOUND, f"provider not found: {provider_id}")
+    secrets = snapshot_secrets(agent, snapshot)
+    if row["is_current"]:
+        _cli_switch(agent, _switch_away_target(agent, snapshot, provider_id), secrets)
+    _db_delete(agent, provider_id)
+    return op_list(agent)
+
+
+# ---------------------------------------------------------------------------
+# Envelope + entry point
+# ---------------------------------------------------------------------------
+
+def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
+              error: Optional[dict] = None) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "schema": PROTOCOL,
+        "operation_id": str(uuid.uuid4()),
+        "op": op,
+        "ok": ok,
+    }
+    if providers is not None:
+        out["providers"] = providers
+    if error is not None:
+        out["error"] = error
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="aisc-cc-provider")
+    parser.add_argument("op", choices=["list", "add", "edit", "delete"])
+    parser.add_argument("--agent", required=True, choices=list(AGENTS))
+    parser.add_argument("--id", default=None, help="provider id (add/edit/delete)")
+    args = parser.parse_args(argv)
+
+    request: dict[str, Any] = {}
+    if args.op in ("add", "edit"):
+        raw = sys.stdin.read()
+        if raw.strip():
+            try:
+                request = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                print(json.dumps(_envelope(
+                    args.op, False,
+                    error={"code": ERR_BAD_REQUEST, "message": f"bad request JSON: {exc}"},
+                )))
+                return 2
+            if not isinstance(request, dict):
+                print(json.dumps(_envelope(
+                    args.op, False,
+                    error={"code": ERR_BAD_REQUEST, "message": "request must be a JSON object"},
+                )))
+                return 2
+
+    try:
+        if args.op == "list":
+            providers = op_list(args.agent)
+        elif args.op == "add":
+            request.setdefault("id", args.id)
+            providers = op_add(args.agent, request)
+        elif args.op == "edit":
+            if not args.id:
+                raise AdapterError(ERR_BAD_REQUEST, "edit requires --id")
+            providers = op_edit(args.agent, args.id, request)
+        else:
+            if not args.id:
+                raise AdapterError(ERR_BAD_REQUEST, "delete requires --id")
+            providers = op_delete(args.agent, args.id)
+        print(json.dumps(_envelope(args.op, True, providers=providers)))
+        return 0
+    except AdapterError as exc:
+        print(json.dumps(_envelope(
+            args.op, False, error={"code": exc.code, "message": exc.message},
+        )))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

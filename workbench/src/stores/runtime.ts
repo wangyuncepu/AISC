@@ -92,6 +92,11 @@ const MAX_TABS = 8;
  * PTY); `activeTabId` may hold this id while it is open. */
 export const SETTINGS_TAB_ID = "settings-tab";
 
+/** Stage 8e (CS-05): the virtual cc-switch Provider UI tab — same contract
+ * as the settings tab (no session, never persisted, closes with the tab ×).
+ * Coexists with the `cc-switch` TUI tab (advanced diagnostics). */
+export const CC_SWITCH_UI_TAB_ID = "cc-switch-ui-tab";
+
 /** Session states that have reached a terminal outcome (no live PTY). */
 const TERMINAL_STATES: TabSessionState[] = ["exited", "failed", "disconnected"];
 
@@ -241,6 +246,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const activeTabId = ref<string | null>(null);
   /** IDEA-1: the virtual Settings tab is open (rendered as the last chip). */
   const settingsTabOpen = ref(false);
+  /** Stage 8e: the virtual cc-switch Provider UI tab is open. */
+  const ccSwitchUiTabOpen = ref(false);
 
   let startTimer: number | null = null;
 
@@ -290,6 +297,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     tabs.value = [];
     activeTabId.value = null;
     settingsTabOpen.value = false;
+    ccSwitchUiTabOpen.value = false;
     preflight.value = null;
     runtimeId.value = "";
     runtimeState.value = "unknown";
@@ -920,6 +928,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     const { tabs: created, bySavedId } = tabsFromRecords(records);
     tabs.value = created;
     settingsTabOpen.value = false; // fresh tab set; the virtual tab never restores
+    ccSwitchUiTabOpen.value = false;
     // G-17: open EVERY pane leaf (a restored split tab has several), each
     // through the same provider gate as + menu tabs - unconfigured claude/
     // codex restore as guide without a session (A-G08-3). `openAgents`
@@ -1310,6 +1319,19 @@ export const useRuntimeStore = defineStore("runtime", () => {
     }
   }
 
+  /** Stage 8e: the virtual cc-switch Provider UI tab (same contract). */
+  function openCcSwitchUiTab() {
+    ccSwitchUiTabOpen.value = true;
+    activeTabId.value = CC_SWITCH_UI_TAB_ID;
+  }
+
+  function closeCcSwitchUiTab() {
+    ccSwitchUiTabOpen.value = false;
+    if (activeTabId.value === CC_SWITCH_UI_TAB_ID) {
+      activeTabId.value = tabs.value[tabs.value.length - 1]?.tabId ?? null;
+    }
+  }
+
   /** Close a running/starting tab: terminate the active pane's session. The PTY
    * Exit event (single authoritative signal, 03 §五.2) finalizes the state via
    * onTabSessionExit; close_session guarantees the child is reaped. */
@@ -1532,6 +1554,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     tabs.value = [];
     activeTabId.value = null;
     settingsTabOpen.value = false;
+    ccSwitchUiTabOpen.value = false;
     try {
       if (runtimeId.value) {
         const snap = await ipc.stopRuntime(workspace.value.trim(), runtimeId.value);
@@ -1593,6 +1616,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
     settingsTabOpen,
     openSettingsTab,
     closeSettingsTab,
+    ccSwitchUiTabOpen,
+    openCcSwitchUiTab,
+    closeCcSwitchUiTab,
     runtimeState,
     runtimeSnapshot,
     conflicts,
