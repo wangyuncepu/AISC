@@ -142,6 +142,11 @@ def main() -> None:
         problem = _compare(cmd, a, b, expected_exit, expect_json)
         if problem:
             print(f"FAIL [{cmd}]: {problem}")
+            # Divergence triage on host-dependent commands: print both raw
+            # outputs so CI logs show WHAT differed (7f gate finding: an
+            # exit mismatch alone gave no signal).
+            print(f"  A rc={a.returncode} out={a.stdout[:400]!r} err={a.stderr[:200]!r}")
+            print(f"  B rc={b.returncode} out={b.stdout[:400]!r} err={b.stderr[:200]!r}")
             failed += 1
         else:
             suffix = "" if expected_exit is None else f" (exit {expected_exit})"
