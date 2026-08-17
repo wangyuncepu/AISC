@@ -190,7 +190,7 @@ jobs:
             & powershell -NoProfile -Command "aisc version --format json | Out-Null; exit `$LASTEXITCODE"
             if ($LASTEXITCODE -ne 0) { throw "G-18: aisc version via PATH failed with exit $LASTEXITCODE" }
 
-            & $sidecar.FullName build --dry-run --tag smoke:latest --events
+            & $sidecar.FullName build --dry-run --tag smoke:latest --events --cc-switch-manifest config/cc-switch-manifest.json
             if ($LASTEXITCODE -ne 0) { throw "aisc build --dry-run failed with exit $LASTEXITCODE" }
             Write-Host "SMOKE: PASSED"
 
