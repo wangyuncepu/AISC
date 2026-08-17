@@ -263,6 +263,12 @@ RUN chmod +x /usr/local/bin/aisc-session-wrapper
 COPY container/aisc-provider-inspect /usr/local/bin/aisc-provider-inspect
 RUN chmod +x /usr/local/bin/aisc-provider-inspect
 
+# AISC cc-switch provider adapter（Stage 8d）：aisc.cc-switch-provider/v1 数据面。
+# list=只读 SQLite 快照；add/edit/delete=官方非交互 CLI（secret 只走 stdin），
+# edit=switch-away→delete→re-add 舞步。stdout 全部经 redaction 后才出信封。
+COPY container/aisc-cc-provider /usr/local/bin/aisc-cc-provider
+RUN chmod +x /usr/local/bin/aisc-cc-provider
+
 # 防御：若构建上下文来自 Windows（CRLF），脚本 shebang 会变成 "#!/bin/bash\r"，
 # 导致 "cannot execute: required file not found"。统一剥离 CR，确保镜像内脚本可执行。
 # 注意：只处理文本脚本，绝不能 sed claude-real/codex-real —— 那些是原生 ELF 二进制，
@@ -273,6 +279,7 @@ RUN sed -i 's/\r$//' \
         /usr/local/bin/codex \
         /usr/local/bin/aisc-session-wrapper \
         /usr/local/bin/aisc-provider-inspect \
+        /usr/local/bin/aisc-cc-provider \
         /usr/local/bin/mihomo-build-config.js \
         /usr/local/bin/lib/env-inject.sh \
         /usr/local/bin/lib/writable.sh \
