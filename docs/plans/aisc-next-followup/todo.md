@@ -13,13 +13,15 @@
   菜单含设置项）。KI-2（向导复检）同轮 PASS；KI-1 仍未 exercised。
 - **历史**：`+` 菜单被 tabbar 滚动容器裁剪的 bug 已单独修复（Teleport + zoom
   补偿；Stage 6 UX-02 回归，非 Stage 7 范围）。
-- **KI-1 进展（2026-08-17 同轮）**：已装未启动场景可正常唤起，但弹 Dashboard 前台窗
-  ——已实现**静默启动**（唤起前写 Docker 自身设置 `OpenUIOnStartupDisabled: true`，
-  等价 GUI 取消勾选 "Open Docker Dashboard at startup"，启动进托盘；只增不反向、
-  保留其它键、原子写、损坏文件不动；settings-store.json 新键型 + settings.json 旧
-  camelCase 双兼容），待真机复验（退出 Docker → Workbench 唤起 → 应无弹窗、引擎正常
-  就绪）。副作用须知：该设置全局生效，手动启动 Docker 也不再弹 Dashboard；恢复方法
-  = Docker Desktop Settings → General 重新勾选。
+- **KI-1 进展（2026-08-17 同轮，用户真机复验 PASS）**：已装未启动场景可正常唤起，但弹
+  Dashboard 前台窗 ——已实现**静默启动**（唤起前写 Docker 自身设置
+  `OpenUIOnStartupDisabled: true`，等价 GUI 取消勾选 "Open Docker Dashboard at
+  startup"，启动进托盘；只增不反向、保留其它键、原子写、损坏文件不动；
+  settings-store.json 新键型 + settings.json 旧 camelCase 双兼容）。连带修复唤起反馈
+  UX：向导环境步骤与 summary 页均为「转圈+已等待秒数」连续进度 + 就绪绿色提示/播报，
+  轮询改静默探测（不再整页闪动），引擎 3 分钟未应答进度态自动收起。副作用须知：该设
+  置全局生效，手动启动 Docker 也不再弹 Dashboard；恢复方法 = Docker Desktop
+  Settings → General 重新勾选。
 
 ### IDEA-2 容器 TUN 模式的 mihomo 订阅配置（2026-08-17 用户提出，待规划）
 
