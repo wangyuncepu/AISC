@@ -165,6 +165,10 @@ class ContainerMountWiringTests(unittest.TestCase):
             self.assertIn(":/root/.codex", argv)
             self.assertIn(":/root/.cc-switch", argv)
             self.assertIn(":/root/.local/state/cc-switch", argv)
+            # Compat bridge: the host's entrypoint/wrapper overlay onto the
+            # container (pre-data-root images must not copy into /root/app).
+            self.assertIn(":/usr/local/bin/entrypoint.sh:ro", argv)
+            self.assertIn(":/usr/local/bin/cc-switch:ro", argv)
             # Host-side mount targets were created under the data root…
             resolved = DataRootResolver(env={"AISC_DATA_ROOT": str(root)}).resolve(ws)
             for sub in ("claude", "codex", "cc-switch", "runtime"):

@@ -340,6 +340,10 @@ class RunPlan:
     # run is project-scoped) the agent config dirs mount from here instead
     # of being copied into the workspace.
     agent_state_root: str = ""
+    # Stage 7 compat bridge: raw "-v" args overlaying the HOST's
+    # entrypoint/cc-switch wrapper into the container (old images predate
+    # the data-root layout and would copy factory state into /root/app).
+    script_mounts: list = field(default_factory=list)
 
     @property
     def docker_argv(self) -> list:
@@ -379,6 +383,7 @@ class RunPlan:
                 "-v", f"{base}/cc-switch:/root/.cc-switch",
                 "-v", f"{base}/runtime:/root/.local/state/cc-switch",
             ])
+        argv.extend(self.script_mounts)
         if self.non_interactive:
             argv.extend([
                 "-e", "AISC_NON_INTERACTIVE=1",
