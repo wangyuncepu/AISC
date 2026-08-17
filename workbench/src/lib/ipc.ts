@@ -4,6 +4,8 @@ import type {
   AckResult,
   BuildEvent,
   CapabilityReport,
+  CcSwitchProvidersResult,
+  CcSwitchRequest,
   DiagnosticBundle,
   DiscoveryReport,
   DoctorReport,
@@ -121,6 +123,27 @@ export const removeRuntime = (workspace: string, runtimeId: string, force = fals
 
 export const getProviderStatus = (workspace: string, runtimeId: string, agent: string) =>
   invoke<ProviderStatus>("get_provider_status", { workspace, runtimeId, agent });
+
+// --- Stage 8e: cc-switch provider data plane (aisc.cc-switch-provider/v1) ---
+// The request document (with any API key) rides the CLI child's stdin via the
+// Rust side — never argv, never persisted.
+
+export const ccSwitchProviders = (workspace: string, runtimeId: string, agent: string) =>
+  invoke<CcSwitchProvidersResult>("cc_switch_providers", { workspace, runtimeId, agent });
+
+export const ccSwitchAdd = (
+  workspace: string, runtimeId: string, agent: string, request: CcSwitchRequest,
+) => invoke<CcSwitchProvidersResult>("cc_switch_add", { workspace, runtimeId, agent, request });
+
+export const ccSwitchEdit = (
+  workspace: string, runtimeId: string, agent: string, providerId: string,
+  request: CcSwitchRequest,
+) => invoke<CcSwitchProvidersResult>("cc_switch_edit", {
+  workspace, runtimeId, agent, providerId, request,
+});
+
+export const ccSwitchDelete = (workspace: string, runtimeId: string, agent: string, providerId: string) =>
+  invoke<CcSwitchProvidersResult>("cc_switch_delete", { workspace, runtimeId, agent, providerId });
 
 export const cancelRuntimeStart = () => invoke<void>("cancel_runtime_start");
 

@@ -19,7 +19,11 @@ import { applyTheme, createSystemListener } from "./theme";
 import { layoutTierFor, type LayoutTier } from "./lib/layout";
 import { computeWindowTitle } from "./lib/title";
 import { leafCount } from "./stores/paneTree";
-import { useRuntimeStore, SETTINGS_TAB_ID } from "./stores/runtime";
+import {
+  CC_SWITCH_UI_TAB_ID,
+  SETTINGS_TAB_ID,
+  useRuntimeStore,
+} from "./stores/runtime";
 import { useSettingsStore } from "./stores/settings";
 import { useDoctorStore } from "./stores/doctor";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
@@ -33,6 +37,7 @@ import BuildProgress from "./features/startup/BuildProgress.vue";
 import ConflictManager from "./features/startup/ConflictManager.vue";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
 import SettingsTab from "./features/settings/SettingsTab.vue";
+import CcSwitchUiTab from "./features/ccswitch/CcSwitchUiTab.vue";
 import DoctorDialog from "./features/doctor/DoctorDialog.vue";
 import WorkspaceExplorer from "./features/workspace-explorer/WorkspaceExplorer.vue";
 import OnboardingWizard from "./features/onboarding/OnboardingWizard.vue";
@@ -90,11 +95,16 @@ function openSettings(): void {
   else settingsOpen.value = true;
 }
 
-// IDEA-1: the Settings tab pane (kept alive while hidden so unsaved edits and
-// scroll position survive tab switches; unmounted when the tab is closed).
+// IDEA-1 + Stage 8e: virtual-tab panes (Settings, cc-switch Provider UI) —
+// kept alive while hidden so unsaved state survives switches; unmounted when
+// the tab is closed.
 const settingsPaneRef = ref<HTMLElement | null>(null);
+const ccSwitchPaneRef = ref<HTMLElement | null>(null);
 const settingsPaneVisible = computed(
   () => store.settingsTabOpen && store.activeTabId === SETTINGS_TAB_ID
+);
+const ccSwitchPaneVisible = computed(
+  () => store.ccSwitchUiTabOpen && store.activeTabId === CC_SWITCH_UI_TAB_ID
 );
 
 // G-01 (Step 7, A-G01-3): ui.font_scale is immediate-effect. Applied as CSS
@@ -264,6 +274,10 @@ function focusTabTerminal(tabId: string): void {
     void nextTick(() => settingsPaneRef.value?.focus({ preventScroll: true }));
     return;
   }
+  if (tabId === CC_SWITCH_UI_TAB_ID) {
+    void nextTick(() => ccSwitchPaneRef.value?.focus({ preventScroll: true }));
+    return;
+  }
   // G-17: focus the tab's ACTIVE pane terminal (PaneTree exposes it).
   void nextTick(() => {
     paneTreeRefs.value.get(tabId)?.focusActivePane();
@@ -275,11 +289,13 @@ function focusTabTerminal(tabId: string): void {
 function renderedTabIds(): string[] {
   const ids = store.tabs.map((t) => t.tabId);
   if (store.settingsTabOpen) ids.push(SETTINGS_TAB_ID);
+  if (store.ccSwitchUiTabOpen) ids.push(CC_SWITCH_UI_TAB_ID);
   return ids;
 }
 
 function activateRenderedTab(id: string): void {
   if (id === SETTINGS_TAB_ID) store.openSettingsTab();
+  else if (id === CC_SWITCH_UI_TAB_ID) store.openCcSwitchUiTab();
   else store.activateTab(id);
   focusTabTerminal(id);
 }
@@ -651,7 +667,7 @@ function selectRecent(path: string): void {
         <main class="terminal-area">
           <!-- G-08 empty state (A-G08-6): focus target for creating the first
                tab. Hidden while the Settings tab fills the area (IDEA-1). -->
-          <div v-if="store.tabs.length === 0 && !settingsPaneVisible" class="empty-tabs">
+          <div v-if="store.tabs.length === 0 && !settingsPaneVisible && !ccSwitchPaneVisible" class="empty-tabs">
             <p>{{ t("tabs.empty") }}</p>
             <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
           </div>
@@ -667,9 +683,9 @@ function selectRecent(path: string): void {
           >
             <PaneTree :ref="setPaneTreeRef(t.tabId)" :tab-id="t.tabId" :tree="t.tree" />
           </div>
-          <!-- IDEA-1: the Settings tab pane. NOT counter-zoomed (regular UI
-               chrome like dialogs); kept alive while hidden so unsaved edits
-               and scroll survive switching back. -->
+          <!-- IDEA-1 + Stage 8e: virtual-tab panes (Settings, cc-switch
+               Provider UI). NOT counter-zoomed (regular UI chrome); kept
+               alive while hidden. -->
           <div
             v-if="store.settingsTabOpen"
             v-show="settingsPaneVisible"
@@ -678,6 +694,15 @@ function selectRecent(path: string): void {
             tabindex="-1"
           >
             <SettingsTab />
+          </div>
+          <div
+            v-if="store.ccSwitchUiTabOpen"
+            v-show="ccSwitchPaneVisible"
+            ref="ccSwitchPaneRef"
+            class="settings-pane"
+            tabindex="-1"
+          >
+            <CcSwitchUiTab />
           </div>
         </main>
       </div>

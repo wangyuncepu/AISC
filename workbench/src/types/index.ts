@@ -267,6 +267,45 @@ export interface ProviderStatus {
   observed_at: string;
 }
 
+// --- Stage 8e (CS-05/06): cc-switch provider data plane (v1, secret-free) ---
+
+/** One provider row from the in-container adapter snapshot. The API key is
+ * only ever represented as `api_key_mask` (**** + last 4). */
+export interface CcSwitchProvider {
+  id: string;
+  name: string;
+  app_type: string;
+  base_url: string;
+  model: string;
+  has_api_key: boolean;
+  api_key_mask: string;
+  is_current: boolean;
+}
+
+export interface CcSwitchProvidersResult {
+  agent: string;
+  providers: CcSwitchProvider[];
+  operation_id: string;
+}
+
+/** Request document for add/edit. `api_key` is the secret channel (transient
+ * form state → Tauri IPC → CLI stdin; never argv/storage/logs). */
+export interface CcSwitchRequest {
+  mode?: "simple" | "custom";
+  id?: string;
+  provider?: string; // preset id (simple mode)
+  name?: string;
+  base_url?: string;
+  model?: string;
+  api_key?: string;
+  patch?: {
+    name?: string;
+    base_url?: string;
+    model?: string;
+    env?: Record<string, string | null>;
+  };
+}
+
 // --- S2.4.a: workbench history (02 §九.2 subset) ---
 
 export interface RuntimeRef {

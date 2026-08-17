@@ -509,18 +509,37 @@ pub async fn run_control(
     cancel: CancellationToken,
 ) -> Result<Envelope, WorkbenchError> {
     let phase = argv.first().map(|s| s.as_str()).unwrap_or("cli").to_owned();
-    crate::trace::timed("cli", &phase, run_control_inner(executable, argv, timeout, cancel)).await
+    crate::trace::timed("cli", &phase, run_control_inner(executable, argv, None, timeout, cancel)).await
+}
+
+/// `run_control` with a stdin payload (Stage 8e): the cc-switch provider data
+/// plane carries its request document (including any API key) through the
+/// child's STDIN — argv, disk and logs never see a secret.
+pub async fn run_control_input(
+    executable: &Path,
+    argv: Vec<String>,
+    input: String,
+    timeout: Duration,
+    cancel: CancellationToken,
+) -> Result<Envelope, WorkbenchError> {
+    let phase = argv.first().map(|s| s.as_str()).unwrap_or("cli").to_owned();
+    crate::trace::timed("cli", &phase, run_control_inner(executable, argv, Some(input), timeout, cancel)).await
 }
 
 async fn run_control_inner(
     executable: &Path,
     argv: Vec<String>,
+    input: Option<String>,
     timeout: Duration,
     cancel: CancellationToken,
 ) -> Result<Envelope, WorkbenchError> {
     let mut cmd = Command::new(executable);
     cmd.args(&argv);
-    cmd.stdin(Stdio::null());
+    if input.is_some() {
+        cmd.stdin(Stdio::piped());
+    } else {
+        cmd.stdin(Stdio::null());
+    }
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     #[cfg(windows)]
@@ -535,6 +554,18 @@ async fn run_control_inner(
             return Err(WorkbenchError::cli_protocol().with_detail(format!("spawn failed: {e}")));
         }
     };
+
+    // Write the stdin payload (if any) concurrently with waiting — a blocking
+    // write before the wait would deadlock on pipe-buffer limits. Dropping the
+    // handle after the write closes the pipe (EOF) for the child.
+    let stdin_handle = input.map(|text| {
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let _ = stdin.write_all(text.as_bytes()).await;
+            let _ = stdin.shutdown().await;
+        })
+    });
 
     let stdout_handle = tokio::spawn(read_capped(child.stdout.take().expect("piped stdout"), MAX_STDOUT));
     let stderr_handle = tokio::spawn(read_capped(child.stderr.take().expect("piped stderr"), MAX_STDERR));
@@ -555,6 +586,9 @@ async fn run_control_inner(
 
     let (stdout_bytes, stdout_truncated) = stdout_handle.await.unwrap_or((Vec::new(), false));
     let (stderr_bytes, _) = stderr_handle.await.unwrap_or((Vec::new(), false));
+    if let Some(handle) = stdin_handle {
+        let _ = handle.await;
+    }
 
     let exit = exit.map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("wait failed: {e}")))?;
     let exit_code = exit.code();

@@ -38,7 +38,8 @@ use env::{env_poll_engine, env_readiness};
 use installer::installer_handoff;
 use onboarding::{onboarding_load, onboarding_update};
 use runtime::{
-    build_image, cancel_build, cancel_runtime_start, get_provider_status, list_runtimes,
+    build_image, cancel_build, cancel_runtime_start, cc_switch_add, cc_switch_delete,
+    cc_switch_edit, cc_switch_providers, get_provider_status, list_runtimes,
     remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_docker,
     start_runtime, stop_runtime, BuildOp, OpMutexes, StartOp,
 };
@@ -83,6 +84,10 @@ pub fn run(cli_arg: Option<String>) {
             list_runtimes,
             remove_runtime,
             get_provider_status,
+            cc_switch_providers,
+            cc_switch_add,
+            cc_switch_edit,
+            cc_switch_delete,
             load_history,
             save_history,
             build_image,

@@ -155,7 +155,7 @@ describe("IDEA-1 settings tab chip (S2)", () => {
 
     // 2 session tabs + the settings chip.
     expect(wrapper.findAll("[role=tab]").length).toBe(3);
-    const chip = wrapper.find(".settings-chip");
+    const chip = wrapper.find(".virtual-chip");
     expect(chip.exists()).toBe(true);
     expect(chip.classes()).not.toContain("active");
 
@@ -171,7 +171,7 @@ describe("IDEA-1 settings tab chip (S2)", () => {
     s.activeTabId = SETTINGS_TAB_ID;
     const wrapper = mount(TabBar, { global: { plugins: [i18n] } });
 
-    await wrapper.find(".settings-chip .x").trigger("click");
+    await wrapper.find(".virtual-chip .x").trigger("click");
     expect(s.settingsTabOpen).toBe(false);
     expect(s.activeTabId).toBe("t2"); // last session tab
     expect(wrapper.find(".settings-chip").exists()).toBe(false);
@@ -186,7 +186,7 @@ describe("IDEA-1 settings tab chip (S2)", () => {
     settings.lastSaved = JSON.parse(JSON.stringify(settingsDoc)) as SettingsDocument;
 
     const wrapper = mount(TabBar, { global: { plugins: [i18n] } });
-    await wrapper.find(".settings-chip .x").trigger("click");
+    await wrapper.find(".virtual-chip .x").trigger("click");
     expect(settings.doc?.ui.language).toBe("auto"); // reverted, not persisted
     wrapper.unmount();
   });
@@ -203,7 +203,7 @@ describe("IDEA-1 settings tab chip (S2)", () => {
     (mains[0]!.element as HTMLElement).focus();
 
     await tabbar.trigger("keydown", { key: "End" });
-    expect(document.activeElement).toBe(wrapper.find(".settings-chip .tab-main").element);
+    expect(document.activeElement).toBe(wrapper.find(".virtual-chip .tab-main").element);
 
     await tabbar.trigger("keydown", { key: "Enter" });
     expect(s.activeTabId).toBe(SETTINGS_TAB_ID);
@@ -246,7 +246,7 @@ describe("IDEA-1 + split button (S3)", () => {
     const menu = document.querySelector(".tab-new-menu");
     expect(menu).toBeTruthy();
     const items = menu!.querySelectorAll("[role=menuitem]");
-    expect(items.length).toBe(5); // claude/codex/bash/cc-switch + 设置
+    expect(items.length).toBe(6); // claude/codex/bash/cc-switch + 设置 + Provider 管理
     expect(menu!.querySelector("[role=separator]")).toBeTruthy();
 
     (items[1] as HTMLElement).click(); // codex
