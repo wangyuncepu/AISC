@@ -983,10 +983,6 @@ def start_runtime(
         # into the workspace again.
         if scope not in ("temporary", "temp", "global"):
             from aisc.application.data_root import DataRootResolver
-            from aisc.application.resources import (
-                container_entrypoint_mounts,
-                locate_aisc_root,
-            )
 
             ws_state_dir = DataRootResolver().resolve(
                 Path(canonical_workspace)
@@ -999,9 +995,6 @@ def start_runtime(
                 "-v", f"{ws_state_dir / 'cc-switch'}:/root/.cc-switch",
                 "-v", f"{ws_state_dir / 'runtime'}:/root/.local/state/cc-switch",
             ])
-            # Compat bridge: host entrypoint/wrapper overlay (old images
-            # would copy factory state into the workspace mount).
-            argv.extend(container_entrypoint_mounts(locate_aisc_root()))
         if network == "proxy":
             argv.extend(["--cap-add=NET_ADMIN", "--device", "/dev/net/tun"])
             if proxy_config:

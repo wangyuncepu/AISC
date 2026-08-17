@@ -112,32 +112,6 @@ def _resolve_frozen_bundle(exe_path: str) -> Optional[Path]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def container_entrypoint_mounts(aisc_root: Optional[Path]) -> list:
-    """Stage 7 compat bridge: overlay the HOST's entrypoint/cc-switch wrapper
-    into containers started by this CLI.
-
-    An image built before the data-root layout has an entrypoint that copies
-    factory agent state into ``/root/app`` (the workspace mount) — recreating
-    workspace pollution even though the host already passes the data-root
-    mounts. Overlaying the host's own files (shipped in the dev repo and the
-    installed bundle at ``<aisc-root>/container/``) makes the container follow
-    the HOST CLI's path model regardless of image age; a rebuilt image carries
-    the same files natively and the overlay is a no-op-equivalent. Files must
-    exist — otherwise no mounts (fail open: the image's own entrypoint runs).
-    """
-    if aisc_root is None:
-        return []
-    mounts: list = []
-    for rel, dst in (
-        ("container/entrypoint.sh", "/usr/local/bin/entrypoint.sh"),
-        ("container/cc-switch-wrapper", "/usr/local/bin/cc-switch"),
-    ):
-        src = aisc_root / rel
-        if src.is_file():
-            mounts.extend(["-v", f"{src}:{dst}:ro"])
-    return mounts
-
-
 def locate_aisc_root(
     explicit_root: Optional[str] = None,
     cwd: Optional[Path] = None,

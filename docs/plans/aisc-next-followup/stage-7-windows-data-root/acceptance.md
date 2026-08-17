@@ -134,10 +134,13 @@
   挂载检测推导 HOME（`586aa24`）
 - **发布前提**：~~release 镜像需重建~~ **已重建并验证**（2026-08-17 `aisc build
   --no-cache`，image `58c52ff09c7e`）：无覆盖挂载、纯镜像运行 —— fresh workspace 零
-  新增，data root 收全量 claude 2179 / codex 480 / cc-switch 479 + db + daemon 态；
-  另加宿主脚本覆盖桥（`4d33edf`，run/runtime start 自动挂宿主 entrypoint+wrapper，
-  旧镜像即插即用）作为镜像未重建环境的兼容层。OneDrive 重定向用户目录留待发布前
-  手测矩阵（LOCALAPPDATA 通常不受 OneDrive 影响）
+  新增，data root 收全量 claude 2179 / codex 480 / cc-switch 479 + db + daemon 态。
+  ~~宿主脚本覆盖桥~~ **已移除**：真机手测证明其版本偏斜危害大于收益（一份陈旧的
+  `target/debug/aisc-bundle` 暂存把新镜像降级回旧 entrypoint 行为，workspace 再次被
+  污染）——镜像确立为容器脚本唯一事实源，DATA-01 回归测试断言 argv **不含**宿主
+  entrypoint 覆盖。最终门：真实 sidecar 完整流程（runtime start → session → stop）
+  对新镜像，workspace 全净、data root 全量（claude 2179 / codex 480 / cc-switch 479
+  + db + containers.json + daemon 态）。OneDrive 重定向用户目录留待发布前手测矩阵
 - 结论：**PASS**（Workbench GUI 手测待用户执行）
 
 证据模板：

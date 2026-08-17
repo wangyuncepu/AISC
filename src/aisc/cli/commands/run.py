@@ -94,17 +94,11 @@ def plan_run(
     # Fail closed: an unusable data root stops the run — never fall back to
     # copying agent state into the workspace.
     from aisc.application.data_root import DataRootResolver
-    from aisc.application.resources import container_entrypoint_mounts, locate_aisc_root
 
     resolved_state = DataRootResolver().resolve(ws_path)
     ws_state_dir = resolved_state.workspace_dir
     for sub in ("claude", "codex", "cc-switch", "runtime"):
         (ws_state_dir / sub).mkdir(parents=True, exist_ok=True)
-
-    # Compat bridge: overlay the host's entrypoint/wrapper so pre-data-root
-    # images follow the host CLI's path model (old entrypoints would copy
-    # factory state into /root/app).
-    root_for_mounts = aisc_root or locate_aisc_root()
 
     return RunPlan(
         image=image,
@@ -118,7 +112,6 @@ def plan_run(
         label=label,
         keep_alive=keep_alive,
         agent_state_root=str(ws_state_dir),
-        script_mounts=container_entrypoint_mounts(root_for_mounts),
     )
 
 
