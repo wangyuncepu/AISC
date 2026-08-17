@@ -1,5 +1,19 @@
 # 待办与门禁
 
+## 想法 / Ideas
+
+### IDEA-1 Tab 新建 UX（Windows Terminal 式，2026-08-17 用户提出）
+
+- **内容**：设置页增加「默认新 tab」选项；点 `+` 立即建默认 tab；`+` 旁加 `↓`
+  展开完整列表选择（拆分按钮）；设置页本身改为一种 tab 类型。
+- **现状**：仅记录，**未实现**。`+` 菜单被 tabbar 滚动容器裁剪的 bug 已单独修复
+  （Teleport + zoom 补偿；Stage 6 UX-02 回归，非 Stage 7 范围）。
+- **归属**：Stage 7 合并后的独立 UI 小阶段——涉及 settings schema 新字段（含 REL-03
+  round-trip 用例）、TabBar 拆分按钮、设置页 tab 化（现 tab 模型绑定 agent session，
+  设置 tab 是无 session 的新类别，需验收 ID + vitest/i18n 同步）。
+- **附带**：KI-1（向导 Docker 就绪检测）与 KI-2（向导界面复检）仍在归档
+  `aisc-next/todo.md` 挂账，建议与 IDEA-1 同一轮手测一并处理。
+
 ## 进入 Stage 7 前
 
 - [x] 确认归档 `aisc-next` 的最终提交和迁移说明（最终提交 `f5a74e5`；目录随 followup 计划入库整体移入 `docs/archive/completed/`）；
