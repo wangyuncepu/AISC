@@ -55,6 +55,9 @@ def _exec_adapter(
     request: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Run the in-container adapter and return the validated envelope."""
+    from aisc.adapters.docker_ import RealDockerExecutor
+
+    executor = executor or RealDockerExecutor()
     argv = ["exec", "-i"]
     container = resolve_running_container(runtime_id, executor, registry_root)
     argv.append(container)
