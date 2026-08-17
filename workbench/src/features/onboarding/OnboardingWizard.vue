@@ -8,7 +8,7 @@
  * (ready / needs_login / needs_configuration / unsupported, never secrets).
  * Network / runtime / complete steps are added by 5e-5g.
  */
-import { computed, onMounted, onUnmounted, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useOnboardingStore } from "../../stores/onboarding";
 import { useEnvironmentStore } from "../../stores/environment";
@@ -69,6 +69,57 @@ async function startDocker() {
 async function retryEnv() {
   await environment.refresh();
 }
+
+// KI-1 UX (user feedback 2026-08-17): clicking 启动 Docker gave no visible
+// outcome — one flicker, then silence until the engine suddenly readied.
+// The wake-up now shows a continuous progress banner (spinner + elapsed) and
+// a terminal success note when the engine answers.
+const dockerBusy = computed(
+  () => environment.installing || environment.dockerStarting || environment.polling
+);
+/** The winget/bundled INSTALL only applies to a missing Docker Desktop; on an
+ * installed-not-running machine the same `installing` window is just the
+ * spawn (~1-2s) and must read 启动中, not 安装中. */
+const dockerInstallingMissing = computed(
+  () => environment.installing && environment.readiness.docker === "not_installed"
+);
+/** Sticky: this wizard session woke Docker up (drives the success note). */
+const dockerStartedHere = ref(false);
+watch(
+  () => environment.dockerStarting,
+  (on) => {
+    if (on) dockerStartedHere.value = true;
+  }
+);
+
+// Elapsed-seconds ticker while the wake-up runs (same pattern as the summary
+// page's banner).
+const nowMs = ref(Date.now());
+let dockerTicker: number | null = null;
+watch(
+  dockerBusy,
+  (busy) => {
+    if (busy && dockerTicker === null) {
+      dockerTicker = window.setInterval(() => (nowMs.value = Date.now()), 1_000);
+    } else if (!busy && dockerTicker !== null) {
+      window.clearInterval(dockerTicker);
+      dockerTicker = null;
+    }
+  },
+  { immediate: true }
+);
+onBeforeUnmount(() => {
+  if (dockerTicker !== null) window.clearInterval(dockerTicker);
+});
+const dockerElapsedSec = computed(() =>
+  environment.dockerStartedAt
+    ? Math.max(0, Math.floor((nowMs.value - environment.dockerStartedAt) / 1000))
+    : 0
+);
+/** Terminal success signal — the engine answered after OUR wake-up. */
+const dockerReadyHere = computed(
+  () => dockerStartedHere.value && environment.readiness.engine === "ready"
+);
 
 async function continueFromEnv() {
   await onboarding.patch({ completeStep: "environment", currentStep: "workspace" });
@@ -217,11 +268,22 @@ async function finish() {
         </li>
       </ul>
 
-      <p v-if="environment.installing" class="ob-note" role="status">
+      <p v-if="dockerInstallingMissing" class="ob-note" role="status">
         {{ t("onboarding.env.installingHint") }}
+      </p>
+      <!-- KI-1 UX: visible wake-up progress — spinner + elapsed + first-boot
+           hint, continuous until the engine answers (no flicker-then-silence). -->
+      <p v-else-if="dockerBusy" class="ob-note ob-progress" role="status">
+        <span class="spinner" aria-hidden="true" />
+        {{ t("onboarding.env.dockerProgress", { sec: dockerElapsedSec }) }}
       </p>
       <p v-else-if="environment.readiness.engine === 'starting'" class="ob-note" role="status">
         {{ t("onboarding.env.startingHint") }}
+      </p>
+      <!-- Terminal signal for OUR wake-up: green note the moment it readies
+           (previously the step just silently unlocked 继续). -->
+      <p v-if="dockerReadyHere" class="ob-ready" role="status">
+        {{ t("onboarding.env.dockerReadyNote") }}
       </p>
       <!-- KI-1 diagnostic: redacted probe detail so a still-not-ready engine is
            explainable in-place (docker CLI missing / spawn err / exit / timeout). -->
@@ -235,13 +297,13 @@ async function finish() {
         <button
           v-if="environment.dockerInstalling"
           class="ob-btn primary"
-          :disabled="environment.polling || environment.installing"
+          :disabled="dockerBusy"
           @click="startDocker"
         >
-          {{ environment.installing
+          {{ dockerInstallingMissing
             ? t("onboarding.env.installingDocker")
-            : environment.polling
-              ? t("onboarding.env.starting")
+            : dockerBusy
+              ? t("onboarding.env.startingDocker")
               : environment.readiness.docker === "not_installed"
                 ? t("onboarding.env.installDocker")
                 : t("onboarding.env.startDocker") }}
@@ -440,6 +502,24 @@ async function finish() {
 .ob-net-options { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .ob-btn.active { border-color: var(--accent, #4a9eff); color: var(--accent, #4a9eff); }
 .ob-note { color: var(--muted, #888); font-size: var(--font-sm); max-width: 420px; }
+/* KI-1 UX: wake-up progress + terminal success (wizard parity with the
+   summary page's banner). */
+.ob-progress {
+  display: inline-flex; align-items: center; gap: 8px;
+  color: var(--info, #4a9eff);
+}
+.spinner {
+  width: 12px; height: 12px; flex-shrink: 0;
+  border: 2px solid var(--border-strong, #444);
+  border-top-color: var(--info, #4a9eff);
+  border-radius: 50%;
+  animation: ob-spin 0.9s linear infinite;
+}
+@keyframes ob-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+}
+.ob-ready { color: var(--status-ok); font-size: var(--font-md); }
 .ob-engine-detail { font-family: monospace; font-size: var(--font-xs); color: var(--warn); }
 .ob-probe[data-result="ok"] { color: var(--status-ok); font-size: var(--font-sm); }
 .ob-probe[data-result="failed"] { color: var(--status-err); font-size: var(--font-sm); }
