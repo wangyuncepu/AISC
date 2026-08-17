@@ -1,25 +1,41 @@
 <script setup lang="ts">
 /**
- * TabBar (G-08, Step 5): dynamic tabs over the shared runtime. A + menu
- * creates any agent tab (duplicates allowed, capped at 8 per runtime); ×
- * removes a tab entirely (live sessions close best-effort); exited/failed/
- * disconnected tabs can be reopened with a fresh session id. ARIA tablist
- * with arrow/Home/End navigation; the + menu is a keyboard-reachable popup.
+ * TabBar (G-08, Step 5): dynamic tabs over the shared runtime. A + split
+ * button (IDEA-1, Windows Terminal style): the main + creates the DEFAULT
+ * agent tab immediately (ui.default_tab_agent); the ▾ caret opens the full
+ * menu (any agent + 设置). × removes a tab entirely (live sessions close
+ * best-effort); exited/failed/disconnected tabs reopen with a fresh session
+ * id. ARIA tablist with arrow/Home/End navigation; the ▾ menu is a
+ * keyboard-reachable popup.
  */
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRuntimeStore } from "../../stores/runtime";
+import { useRuntimeStore, SETTINGS_TAB_ID } from "../../stores/runtime";
+import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import type { LaunchAgent, Tab, TabSessionState } from "../../types";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
+const settingsStore = useSettingsStore();
 
 // --- G-08 + menu (aria-haspopup; Enter/Space opens, arrows move, Enter picks) ---
 const menuOpen = ref(false);
 const menuRef = ref<HTMLUListElement | null>(null);
 const addBtnRef = ref<HTMLButtonElement | null>(null);
+const caretBtnRef = ref<HTMLButtonElement | null>(null);
 const menuPos = ref({ x: 0, y: 0 });
+
+/** IDEA-1: the + main button creates this agent directly (ui.default_tab_agent;
+ * unknown/missing values fall back to bash, mirroring the Rust default). */
+const defaultAgent = computed<LaunchAgent>(() => {
+  const a = settingsStore.doc?.ui.default_tab_agent;
+  return AGENTS.includes(a as LaunchAgent) ? (a as LaunchAgent) : "bash";
+});
+
+function createDefaultTab() {
+  store.createTab(defaultAgent.value);
+}
 
 /**
  * The menu is teleported to <body> with fixed positioning: the tabbar is an
@@ -37,7 +53,7 @@ function appZoom(): number {
 }
 
 function placeMenu() {
-  const btn = addBtnRef.value;
+  const btn = caretBtnRef.value ?? addBtnRef.value;
   if (!btn) return;
   const zoom = appZoom();
   const rect = btn.getBoundingClientRect();
@@ -73,13 +89,22 @@ function onMenuKeydown(e: KeyboardEvent) {
     items[(idx - 1 + items.length) % items.length]?.focus();
   } else if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
-    if (idx >= 0) choose(items[idx].dataset.agent as LaunchAgent);
+    if (idx >= 0) {
+      // The settings entry carries data-agent="settings"; agents create a tab.
+      if (items[idx].dataset.agent === "settings") chooseSettings();
+      else choose(items[idx].dataset.agent as LaunchAgent);
+    }
   }
 }
 
 function choose(agent: LaunchAgent) {
   menuOpen.value = false;
   store.createTab(agent);
+}
+
+function chooseSettings() {
+  menuOpen.value = false;
+  store.openSettingsTab();
 }
 
 function onDocMousedown(e: MouseEvent) {
@@ -103,6 +128,29 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocMousedown))
 // landed in the terminal and navigation appeared broken.)
 const tabRefs = ref<(HTMLButtonElement | null)[]>([]);
 const roving = ref(-1); // -1 = no manual roving; follow the active tab
+/** IDEA-1: the virtual Settings tab chip renders after the session tabs, so
+ * the roving/focus model treats it as index `store.tabs.length`. */
+const settingsBtnRef = ref<HTMLButtonElement | null>(null);
+
+/** Rendered tab count: session tabs + the optional virtual Settings tab. */
+const tabCount = computed(
+  () => store.tabs.length + (store.settingsTabOpen ? 1 : 0)
+);
+
+/** Index of the active chip in the rendered sequence (-1 = none). */
+function activeIndex(): number {
+  const i = store.tabs.findIndex((t) => t.tabId === store.activeTabId);
+  if (i >= 0) return i;
+  return store.activeTabId === SETTINGS_TAB_ID && store.settingsTabOpen
+    ? store.tabs.length
+    : -1;
+}
+
+/** Focus chip `i` (session tab or the Settings chip). */
+function focusChip(i: number): void {
+  if (i < store.tabs.length) tabRefs.value[i]?.focus();
+  else settingsBtnRef.value?.focus();
+}
 
 function setTabRef(i: number) {
   return (el: unknown) => {
@@ -115,22 +163,43 @@ function tabIndex(tab: Tab, i: number): string {
   return tab.tabId === store.activeTabId ? "0" : "-1";
 }
 
+/** roving tabindex for the virtual Settings chip (index = tabs.length). */
+const settingsTabIndex = computed(() => {
+  if (roving.value >= 0) return roving.value === store.tabs.length ? "0" : "-1";
+  return store.activeTabId === SETTINGS_TAB_ID ? "0" : "-1";
+});
+
+function onSettingsClick() {
+  roving.value = -1;
+  store.openSettingsTab();
+}
+
+/** × on the Settings chip: revert unsaved edits (dialog-Cancel contract),
+ * then close the virtual tab. */
+function closeSettings() {
+  settingsStore.cancel();
+  store.closeSettingsTab();
+}
+
 function onTabClick(tabId: string) {
   roving.value = -1;
   store.activateTab(tabId);
 }
 
 function onTablistKeydown(e: KeyboardEvent) {
-  const count = store.tabs.length;
+  const count = tabCount.value;
   if (count === 0) return;
-  const activeIdx = store.tabs.findIndex((t) => t.tabId === store.activeTabId);
+  const activeIdx = activeIndex();
   const base = roving.value >= 0 ? roving.value : activeIdx;
 
   if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
     const pick = roving.value >= 0 ? roving.value : activeIdx;
-    if (pick >= 0) {
+    if (pick >= 0 && pick < store.tabs.length) {
       store.activateTab(store.tabs[pick].tabId);
+      roving.value = -1;
+    } else if (pick >= 0) {
+      store.openSettingsTab();
       roving.value = -1;
     }
     return;
@@ -158,7 +227,7 @@ function onTablistKeydown(e: KeyboardEvent) {
   // Move focus only; activation waits for Enter/Space.
   e.preventDefault();
   roving.value = target;
-  tabRefs.value[target]?.focus();
+  focusChip(target);
 }
 
 function stateLabel(tab: Tab): string {
@@ -239,20 +308,55 @@ function canReopen(s: TabSessionState): boolean {
       </span>
     </div>
 
-    <!-- G-08: + menu (duplicates allowed; cap enforced by the store).
-         Teleported to <body>: the tabbar's overflow-x scroll container would
-         clip an in-flow dropdown (Stage 6 UX-02 regression). -->
+    <!-- IDEA-1: the virtual Settings tab chip (no session; × reverts unsaved
+         form edits and closes). Keyboard model: last chip in the sequence. -->
+    <div
+      v-if="store.settingsTabOpen"
+      class="tab settings-chip"
+      :class="{ active: store.activeTabId === SETTINGS_TAB_ID }"
+    >
+      <button
+        ref="settingsBtnRef"
+        role="tab"
+        class="tab-main"
+        :tabindex="settingsTabIndex"
+        :aria-selected="store.activeTabId === SETTINGS_TAB_ID"
+        :title="t('settings.title')"
+        @click="onSettingsClick"
+      >⚙ {{ t("tabbar.settings") }}</button>
+      <span class="actions">
+        <button
+          class="icon x"
+          :title="t('tabbar.closeSettings')"
+          :aria-label="t('tabbar.closeSettings')"
+          @click="closeSettings"
+        >×</button>
+      </span>
+    </div>
+
+    <!-- G-08 + IDEA-1: + split button. Main + creates the DEFAULT agent tab
+         (ui.default_tab_agent) immediately; ▾ opens the full menu (any agent
+         duplicates allowed — cap enforced by the store — plus 设置). The menu
+         is teleported to <body>: the tabbar's overflow-x scroll container
+         would clip an in-flow dropdown (Stage 6 UX-02 regression). -->
     <div class="menu-wrap">
       <button
         ref="addBtnRef"
         class="icon add"
-        :aria-label="t('tabbar.newTab')"
-        :title="t('tabbar.newTab')"
+        :aria-label="t('tabbar.newTabDefault', { agent: t(`tabbar.menu.${defaultAgent}`) })"
+        :title="t('tabbar.newTabDefault', { agent: t(`tabbar.menu.${defaultAgent}`) })"
+        @click="createDefaultTab"
+      >+</button>
+      <button
+        ref="caretBtnRef"
+        class="icon add-caret"
+        :aria-label="t('tabbar.newTabChoose')"
+        :title="t('tabbar.newTabChoose')"
         aria-haspopup="menu"
         :aria-expanded="menuOpen"
         @click="toggleMenu"
         @keydown="onMenuKeydown"
-      >+</button>
+      >▾</button>
       <Teleport to="body">
         <ul
           v-if="menuOpen"
@@ -270,6 +374,13 @@ function canReopen(s: TabSessionState): boolean {
             :data-agent="a"
             @click="choose(a)"
           >{{ t(`tabbar.menu.${a}`) }}</li>
+          <li class="sep" role="separator" />
+          <li
+            role="menuitem"
+            tabindex="0"
+            data-agent="settings"
+            @click="chooseSettings"
+          >{{ t("tabbar.settings") }}</li>
         </ul>
       </Teleport>
     </div>
@@ -334,6 +445,8 @@ function canReopen(s: TabSessionState): boolean {
 .icon:hover { background: var(--surface-hover); color: var(--text); }
 .icon.reopen { color: var(--success); }
 .icon.add { color: var(--info); font-size: var(--font-lg); margin-left: 4px; }
+/* IDEA-1: split-button caret — visually attached to the + button. */
+.icon.add-caret { color: var(--info); font-size: var(--font-sm); padding: 0 2px; }
 .menu-wrap { position: relative; display: flex; align-items: center; }
 /* Teleported to <body>: fixed + zoom-compensated coordinates (see placeMenu);
    scoped styles still apply because Teleport preserves scope ids. */
@@ -348,4 +461,6 @@ function canReopen(s: TabSessionState): boolean {
   outline: none;
 }
 .menu li:hover, .menu li:focus { background: var(--surface-hover); color: var(--text); }
+.menu .sep { padding: 0; height: 1px; margin: 4px 8px; background: var(--border); cursor: default; }
+.menu .sep:hover, .menu .sep:focus { background: var(--border); }
 </style>

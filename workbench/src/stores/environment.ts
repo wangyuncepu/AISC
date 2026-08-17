@@ -38,6 +38,21 @@ export const useEnvironmentStore = defineStore("environment", () => {
   const cliReady = computed(() => readiness.value.cli === "ready");
   /** Everything the onboarding needs is ready. */
   const allReady = computed(() => cliReady.value && engineReady.value);
+  /** KI-1 UX (wizard, user feedback 2026-08-17): a wake-up is in flight —
+   * Docker Desktop was launched from here and the engine has not answered
+   * yet. Drives the progress banner (spinner + elapsed) so the click has a
+   * visible outcome instead of one flicker. Cleared by refresh() when the
+   * engine turns ready, or after a deadline if it never does. */
+  const dockerStarting = ref(false);
+  const dockerStartedAt = ref<number | null>(null);
+  /** How long the progress state may persist before giving up on it (ms). */
+  const DOCKER_START_DEADLINE_MS = 180_000;
+
+  /** Clear the wake-up progress state (engine answered, deadline, or stop). */
+  function clearDockerStarting(): void {
+    dockerStarting.value = false;
+    dockerStartedAt.value = null;
+  }
   /** Docker Desktop missing or installed but Engine not answering yet — the
    *  "Start Docker" action should offer to install (winget) and/or launch. */
   const dockerInstalling = computed(
@@ -88,17 +103,31 @@ export const useEnvironmentStore = defineStore("environment", () => {
       error.value = (e as { message?: string })?.message ?? String(e);
       return readiness.value;
     } finally {
+      // KI-1 UX: resolve the wake-up progress state on the same observation
+      // the auto-poll uses — engine answered, or the deadline passed.
+      if (dockerStarting.value) {
+        const started = dockerStartedAt.value ?? Date.now();
+        if (readiness.value.engine === "ready" || Date.now() - started >= DOCKER_START_DEADLINE_MS) {
+          clearDockerStarting();
+        }
+      }
       loading.value = false;
     }
   }
 
   async function startDocker() {
+    if (dockerStarting.value) return; // one wake-up at a time (no re-spawn)
     installing.value = true;
     error.value = null;
     try {
       // start_docker awaits the winget install (bounded ~10 min) and returns
       // a real error on failure; success means Docker Desktop.exe exists.
       await ipc.startDocker();
+      // Spawn dispatched (installed case returns in ~1-2s): enter the
+      // progress state — the auto-poll's refresh() clears it when the engine
+      // answers (or the deadline passes).
+      dockerStarting.value = true;
+      dockerStartedAt.value = Date.now();
     } catch (e) {
       error.value = (e as { message?: string })?.message ?? String(e);
     } finally {
@@ -131,6 +160,8 @@ export const useEnvironmentStore = defineStore("environment", () => {
     cliReady,
     allReady,
     dockerInstalling,
+    dockerStarting,
+    dockerStartedAt,
     refresh,
     startDocker,
     pollEngineReady,

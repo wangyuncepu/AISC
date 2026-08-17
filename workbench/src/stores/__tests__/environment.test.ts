@@ -76,6 +76,62 @@ describe("environment store (A-ONB02)", () => {
     const s = useEnvironmentStore();
     await s.startDocker();
     expect(s.error).toMatch(/not found/i);
+    expect(s.dockerStarting).toBe(false); // no progress state on failure
+  });
+
+  it("successful wake-up enters the progress state until the engine answers (KI-1 UX)", async () => {
+    vi.mocked(startDocker).mockResolvedValue(undefined);
+    vi.mocked(envReadiness).mockResolvedValue(ready({ engine: "starting" }) as never);
+    const s = useEnvironmentStore();
+    await s.startDocker();
+    expect(s.installing).toBe(false);
+    expect(s.dockerStarting).toBe(true); // spinner shown
+    expect(typeof s.dockerStartedAt).toBe("number");
+
+    // Auto-poll refresh with the engine still starting: progress persists.
+    await s.refresh();
+    expect(s.dockerStarting).toBe(true);
+
+    // Engine answers → progress cleared.
+    vi.mocked(envReadiness).mockResolvedValue(ready() as never);
+    await s.refresh();
+    expect(s.dockerStarting).toBe(false);
+    expect(s.dockerStartedAt).toBeNull();
+  });
+
+  it("a second startDocker while a wake-up is in flight is ignored", async () => {
+    vi.mocked(startDocker).mockResolvedValue(undefined);
+    const s = useEnvironmentStore();
+    const callsBefore = vi.mocked(startDocker).mock.calls.length;
+    await s.startDocker();
+    await s.startDocker(); // re-entry guard: no re-spawn
+    expect(vi.mocked(startDocker).mock.calls.length).toBe(callsBefore + 1);
+    expect(s.dockerStarting).toBe(true);
+  });
+
+  it("progress state gives up after the deadline even if the engine never answers", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(startDocker).mockResolvedValue(undefined);
+      vi.mocked(envReadiness).mockResolvedValue(
+        ready({ docker: "installed", engine: "unavailable" }) as never,
+      );
+      const s = useEnvironmentStore();
+      // Seed readiness first — the auto-poll self-stops while docker reads
+      // "unknown" (dockerInstalling false), as it would already be loaded in
+      // the wizard when the user clicks 启动.
+      await s.refresh();
+      await s.startDocker();
+      expect(s.dockerStarting).toBe(true);
+      // The deadline check lives in refresh(); the wizard's auto-poll drives it.
+      s.startAutoPoll();
+      await vi.advanceTimersByTimeAsync(180_000 + 5_000);
+      // refresh ran on the auto-poll past the deadline → cleared.
+      expect(s.dockerStarting).toBe(false);
+      expect(s.dockerStartedAt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("pollEngineReady returns after deadline and sets polling", async () => {
