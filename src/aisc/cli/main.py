@@ -705,10 +705,17 @@ def _cmd_profile(
 def _write_cc_switch_manifest(root: Path, resolved: Any) -> Optional[Path]:
     """Write the resolution receipt next to the build outputs (Stage 8b).
 
-    Best-effort: an unwritable dist/ warns and builds on (the receipt also
+    Best-effort: an unwritable cache warns and builds on (the receipt also
     lives in the image labels + BuildResult). Patched in tests to avoid
-    touching the real filesystem."""
-    manifest_path = root / "dist" / "cc-switch-manifest.json"
+    touching the real filesystem.
+
+    Location: the shared data-root cache (NOT the aisc bundle dir — a file
+    created inside the installed bundle survives the uninstaller's file list
+    and trips the NSIS clean-uninstall gate; resolver artifacts belong with
+    the resolver's metadata cache anyway)."""
+    from aisc.application.data_root import shared_root
+
+    manifest_path = shared_root() / "cache" / "cc-switch" / "last-resolved.json"
     try:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         from aisc.application.cc_switch_resolver import resolved_at_now
