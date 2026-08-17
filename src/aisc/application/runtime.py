@@ -184,9 +184,11 @@ def preflight_runtime(
     else:
         checks.append(PreflightCheck(id="network", status="pass"))
 
-    # Check 5: runtime_conflict
+    # Check 5: runtime_conflict (Stage 7: data-root state dir, DATA-01)
     if registry_root is None and workspace_valid:
-        registry_root = Path(canonical_workspace) / ".aisc"
+        from aisc.application.data_root import workspace_state_dir
+
+        registry_root = workspace_state_dir(Path(canonical_workspace))
 
     conflict_check, matching_runtime_id, conflicts, matching_state = _check_runtime_conflict(
         runtime_id=runtime_id,
@@ -719,10 +721,16 @@ def _wait_ready(
 def _resolve_registry_root(
     workspace: str, registry_root: Optional[Path]
 ) -> Path:
-    """Return the ``.aisc`` registry dir for *workspace*."""
+    """Return the registry state dir for *workspace*.
+
+    Stage 7: default is the data-root ``workspaces/<hash>/runtime`` dir
+    (DATA-01) — never a path inside the workspace.
+    """
     if registry_root is not None:
         return registry_root
-    return Path(workspace).resolve() / ".aisc"
+    from aisc.application.data_root import workspace_state_dir
+
+    return workspace_state_dir(Path(workspace).resolve())
 
 
 def iso_now() -> str:

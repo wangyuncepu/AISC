@@ -14,8 +14,10 @@ from aisc.application.provider import current_provider
 
 
 def _resolve_workspace_and_registry(workspace: Optional[str]):
+    from aisc.application.data_root import workspace_state_dir
+
     ws_path = Path(workspace).resolve() if workspace else Path.cwd()
-    return str(ws_path), ws_path / ".aisc"
+    return str(ws_path), workspace_state_dir(ws_path)
 
 
 def cmd_provider_current(

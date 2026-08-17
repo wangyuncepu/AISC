@@ -26,9 +26,16 @@ from aisc.domain.models import (
 
 
 def _resolve_workspace_and_registry(workspace: Optional[str]) -> Tuple[str, Path]:
-    """Return (canonical_workspace_str, registry_root_path)."""
+    """Return (canonical_workspace_str, registry_root_path).
+
+    Stage 7: the registry root is the data-root state dir
+    (``workspaces/<hash>/runtime``), never a workspace path (DATA-01);
+    legacy ``<workspace>/.aisc`` state is adopted on first use.
+    """
+    from aisc.application.data_root import workspace_state_dir
+
     ws_path = Path(workspace).resolve() if workspace else Path.cwd()
-    return str(ws_path), ws_path / ".aisc"
+    return str(ws_path), workspace_state_dir(ws_path)
 
 
 # ---------------------------------------------------------------------------

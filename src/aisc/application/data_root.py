@@ -196,3 +196,59 @@ class DataRootResolver:
         if probe is None:
             return False
         return os.access(probe, os.W_OK)
+
+
+# ---------------------------------------------------------------------------
+# State wiring (7e): the one boundary every registry/state caller uses
+# ---------------------------------------------------------------------------
+
+# Legacy AISC-owned state files adopted into the data root on first use
+# (copy-when-absent, never overwrite — they carry no user data, so no
+# consent gate applies; unknown files stay in the workspace until the
+# user runs `aisc data-root migrate`).
+_ADOPTED_STATE_FILES = ("containers.json", "state.env")
+
+
+def _adopt_file(src: Path, dst: Path) -> None:
+    """Copy src→dst only if dst is absent (hardlink create = no-overwrite
+    even under a concurrent adopter; sources are never modified)."""
+    import shutil
+
+    if dst.exists() or not src.is_file():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.adopt.{os.getpid()}")
+    shutil.copyfile(src, tmp)
+    try:
+        os.link(tmp, dst)
+    except FileExistsError:
+        pass  # concurrent adopter won
+    except OSError:
+        # Hardlinks unsupported (exotic fs): last-writer-checked copy.
+        if not dst.exists():
+            os.replace(tmp, dst)
+            return
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def workspace_state_dir(workspace: Path, *, env=None) -> Path:
+    """Canonical state dir for a workspace (``workspaces/<hash>/runtime``).
+
+    Adopts the legacy ``<workspace>/.aisc`` containers.json/state.env on
+    first use so pre-Stage-7 deployments keep their registry without a
+    manual migration. Resolver validation errors propagate (fail closed —
+    never silently fall back to writing the workspace).
+    """
+    resolved = DataRootResolver(env if env is not None else os.environ).resolve(
+        Path(workspace)
+    )
+    runtime_dir = resolved.workspace_dirs["runtime"]
+    legacy = Path(workspace).resolve() / ".aisc"
+    if legacy.is_dir():
+        for name in _ADOPTED_STATE_FILES:
+            _adopt_file(legacy / name, runtime_dir / name)
+    return runtime_dir

@@ -80,8 +80,10 @@ def cmd_runtime_preflight(
     from aisc.adapters.docker_ import RealDockerExecutor
     exec_ = executor or RealDockerExecutor()
 
-    # Execute preflight
-    registry_root = ws_path / ".aisc"
+    # Execute preflight (Stage 7: registry root = data-root state dir)
+    from aisc.application.data_root import workspace_state_dir
+
+    registry_root = workspace_state_dir(ws_path)
     result = preflight_runtime(
         runtime_id=runtime_id,
         workspace=str(ws_path),
@@ -118,9 +120,15 @@ def cmd_runtime_preflight(
 # ---------------------------------------------------------------------------
 
 def _resolve_workspace_and_registry(workspace: Optional[str]) -> tuple:
-    """Return (canonical_workspace_str, registry_root_path)."""
+    """Return (canonical_workspace_str, registry_root_path).
+
+    Stage 7: registry root is the data-root state dir (DATA-01); legacy
+    ``<workspace>/.aisc`` state is adopted on first use.
+    """
+    from aisc.application.data_root import workspace_state_dir
+
     ws_path = Path(workspace).resolve() if workspace else Path.cwd()
-    return str(ws_path), ws_path / ".aisc"
+    return str(ws_path), workspace_state_dir(ws_path)
 
 
 def cmd_runtime_start(

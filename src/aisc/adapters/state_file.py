@@ -97,12 +97,14 @@ def _parse_state_file(path: Path) -> List[Tuple[str, Optional[str], Optional[str
 
 
 def read_state_key(root: Path, key: str) -> Optional[str]:
-    """Read a single key from ``<root>/.aisc/state.env``.
+    """Read a single key from ``<root>/state.env`` (Stage 7: *root* is the
+    state directory itself — data-root ``workspaces/<hash>/runtime`` or the
+    legacy ``<workspace>/.aisc``; resolved by callers, never appended here).
 
     Returns the value string, or ``None`` if the key or file is absent.
     Duplicate keys resolve to last occurrence (shell-consistent).
     """
-    state_path = root / ".aisc" / "state.env"
+    state_path = root / "state.env"
     entries = _parse_state_file(state_path)
     # Walk backwards to find last occurrence (last-wins)
     for entry_key, value, _comment in reversed(entries):
@@ -131,7 +133,7 @@ def write_state_keys(root: Path, updates: Dict[str, str]) -> None:
     for k, v in updates.items():
         _validate_value(k, v)
 
-    state_dir = root / ".aisc"
+    state_dir = root  # Stage 7: root IS the state directory
     state_dir.mkdir(parents=True, exist_ok=True)
 
     state_path = state_dir / "state.env"
