@@ -157,6 +157,8 @@ export const zhCN = {
   "tabbar.closeTitle": "关闭标签（会话将结束）",
   "tabbar.reopenTitle": "重新打开（新会话）",
   "tabbar.newTab": "新建标签",
+  "tabbar.newTabDefault": "新建 {agent} 标签（默认）",
+  "tabbar.newTabChoose": "选择要新建的标签类型",
   "tabbar.menu.claude": "Claude",
   "tabbar.menu.codex": "Codex",
   "tabbar.menu.bash": "Bash",

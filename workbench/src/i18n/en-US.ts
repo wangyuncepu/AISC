@@ -157,6 +157,8 @@ export const enUS: Record<string, string> = {
   "tabbar.closeTitle": "Close tab (session ends)",
   "tabbar.reopenTitle": "Reopen (new session)",
   "tabbar.newTab": "New tab",
+  "tabbar.newTabDefault": "New {agent} tab (default)",
+  "tabbar.newTabChoose": "Choose a tab type to open",
   "tabbar.menu.claude": "Claude",
   "tabbar.menu.codex": "Codex",
   "tabbar.menu.bash": "Bash",

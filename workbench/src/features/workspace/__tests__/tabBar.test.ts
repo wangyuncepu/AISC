@@ -6,6 +6,7 @@
  * close/reopen are sibling buttons with accessible labels.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nextTick } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { mount } from "@vue/test-utils";
 import { i18n } from "../../../i18n";
@@ -206,6 +207,67 @@ describe("IDEA-1 settings tab chip (S2)", () => {
 
     await tabbar.trigger("keydown", { key: "Enter" });
     expect(s.activeTabId).toBe(SETTINGS_TAB_ID);
+    wrapper.unmount();
+  });
+});
+
+describe("IDEA-1 + split button (S3)", () => {
+  it("+ creates the configured default agent tab directly", async () => {
+    const s = setupStore();
+    const settings = useSettingsStore();
+    settings.doc = { ...settingsDoc, ui: { ...settingsDoc.ui, default_tab_agent: "codex" } };
+    const wrapper = mount(TabBar, { global: { plugins: [i18n] } });
+
+    await wrapper.find(".menu-wrap .add").trigger("click");
+    expect(s.tabs.length).toBe(3);
+    expect(s.tabs[2]!.agent).toBe("codex");
+    expect(s.activeTabId).toBe(s.tabs[2]!.tabId);
+    // Direct create: no menu opened.
+    expect(document.querySelector(".tab-new-menu")).toBeNull();
+    wrapper.unmount();
+  });
+
+  it("+ falls back to bash when no settings doc is loaded", async () => {
+    const s = setupStore();
+    useSettingsStore().doc = null;
+    const wrapper = mount(TabBar, { global: { plugins: [i18n] } });
+
+    await wrapper.find(".menu-wrap .add").trigger("click");
+    expect(s.tabs.length).toBe(3);
+    expect(s.tabs[2]!.agent).toBe("bash");
+    wrapper.unmount();
+  });
+
+  it("▾ menu lists 4 agents + settings; agent entry creates that tab", async () => {
+    const s = setupStore();
+    const wrapper = mount(TabBar, { global: { plugins: [i18n] } });
+    await wrapper.find(".menu-wrap .add-caret").trigger("click");
+
+    const menu = document.querySelector(".tab-new-menu");
+    expect(menu).toBeTruthy();
+    const items = menu!.querySelectorAll("[role=menuitem]");
+    expect(items.length).toBe(5); // claude/codex/bash/cc-switch + 设置
+    expect(menu!.querySelector("[role=separator]")).toBeTruthy();
+
+    (items[1] as HTMLElement).click(); // codex
+    await nextTick();
+    expect(s.tabs.length).toBe(3);
+    expect(s.tabs[2]!.agent).toBe("codex");
+    expect(document.querySelector(".tab-new-menu")).toBeNull(); // closed after pick
+    wrapper.unmount();
+  });
+
+  it("▾ menu 设置 entry opens the virtual settings tab", async () => {
+    const s = setupStore();
+    const wrapper = mount(TabBar, { global: { plugins: [i18n] } });
+    await wrapper.find(".menu-wrap .add-caret").trigger("click");
+
+    const items = document.querySelectorAll(".tab-new-menu [role=menuitem]");
+    (items[4] as HTMLElement).click(); // 设置
+    await nextTick();
+    expect(s.settingsTabOpen).toBe(true);
+    expect(s.activeTabId).toBe(SETTINGS_TAB_ID);
+    expect(s.tabs.length).toBe(2); // no session tab created
     wrapper.unmount();
   });
 });
