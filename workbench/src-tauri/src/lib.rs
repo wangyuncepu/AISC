@@ -5,6 +5,7 @@
 // See docs/gui-planning/06-implementation-plan.md §四.
 
 pub mod cli;
+pub mod data_root;
 pub mod doctor;
 pub mod env;
 pub mod error;
