@@ -261,6 +261,9 @@ function onCancel() {
 </template>
 
 <style scoped>
+/* Fill the host (dialog panel / settings tab pane); the body grows and the
+   sticky footer pins to the bottom when the content is short. */
+.settings-form { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .tab-strip { display: flex; align-items: center; gap: 8px; padding: 8px 14px 0; }
 .tab-strip .spacer { flex: 1; }
 .chip { font-size: var(--font-xs); padding: 2px 8px; border-radius: 10px; }

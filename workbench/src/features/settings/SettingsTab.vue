@@ -23,25 +23,15 @@ function closeTab() {
 
 <template>
   <section class="settings-tab" :aria-label="t('settings.title')">
-    <div class="card">
-      <SettingsForm mode="tab" @close="closeTab" />
-    </div>
+    <SettingsForm mode="tab" @close="closeTab" />
   </section>
 </template>
 
 <style scoped>
 .settings-tab {
   flex: 1; min-height: 0; min-width: 0;
-  display: flex; justify-content: center;
-  background: var(--bg);
-  overflow: auto;
-}
-.card {
-  width: 640px; max-width: 100%;
-  align-self: flex-start;
-  margin: 12px 0;
-  background: var(--surface); color: var(--text-2);
-  border: 1px solid var(--border-2); border-radius: var(--radius-lg);
   display: flex; flex-direction: column;
+  background: var(--surface);
+  overflow: auto;
 }
 </style>
