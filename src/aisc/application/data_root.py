@@ -235,6 +235,16 @@ def _adopt_file(src: Path, dst: Path) -> None:
             pass
 
 
+def shared_root(env=None) -> Path:
+    """The shared data root (no workspace coupling) for workspace-
+    independent trees like ``artifacts/`` — same env override, platform
+    default and reparse validation as the full resolver (fail closed)."""
+    resolver = DataRootResolver(env if env is not None else os.environ)
+    root, _origin = resolver._select_root(Path("_"))  # placeholder ws, unused
+    resolver._check_reparse_segments(root)
+    return root
+
+
 def workspace_state_dir(workspace: Path, *, env=None) -> Path:
     """Canonical state dir for a workspace (``workspaces/<hash>/runtime``).
 

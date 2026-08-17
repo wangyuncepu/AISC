@@ -36,10 +36,22 @@ _LOCKS: Dict[str, threading.Lock] = {}
 
 
 def data_root() -> Path:
-    """Host data dir for the artifact registry (never inside a workspace)."""
+    """Host data dir for the artifact registry (never inside a workspace).
+
+    Stage 7 (DATA-04): canonical location is ``<data-root>/artifacts``
+    (``AISC_DATA_ROOT`` override applies). The explicit
+    ``AISC_ARTIFACT_DATA_ROOT`` override keeps working for tests/dev.
+    """
     env = os.environ.get("AISC_ARTIFACT_DATA_ROOT")
     if env:
         return Path(env)
+    from aisc.application.data_root import shared_root
+
+    return shared_root() / "artifacts"
+
+
+def _legacy_data_root() -> Path:
+    """Pre-Stage-7 artifact root (read fallback for old records)."""
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
         return Path(base) / "aisc" / "artifacts"
@@ -173,15 +185,28 @@ def list_records(
     session_id: Optional[str] = None,
     kind: Optional[str] = None,
 ) -> List[ArtifactRecord]:
-    """List records for the session (or all sessions under the workspace hash)."""
-    base = data_root() / workspace_hash(workspace)
-    if not base.is_dir():
-        return []
+    """List records for the session (or all sessions under the workspace hash).
+
+    Stage 7: the canonical registry lives under ``<data-root>/artifacts``;
+    session files that exist ONLY in the pre-Stage-7 root are still read
+    (transition fallback — new files always win by session id).
+    """
+    ws_hash = workspace_hash(workspace)
+    base = data_root() / ws_hash
     files = [base / f"{session_id}.jsonl"] if session_id else sorted(base.glob("*.jsonl"))
+    files = [f for f in files if f.is_file() and not f.name.endswith(".lock")]
+    if not files:
+        # No canonical files: fall back to the legacy root's session files.
+        legacy_base = _legacy_data_root() / ws_hash
+        if legacy_base.is_dir():
+            legacy_files = (
+                [legacy_base / f"{session_id}.jsonl"]
+                if session_id
+                else sorted(legacy_base.glob("*.jsonl"))
+            )
+            files = [f for f in legacy_files if f.is_file() and not f.name.endswith(".lock")]
     out: List[ArtifactRecord] = []
     for f in files:
-        if f.name.endswith(".lock") or not f.is_file():
-            continue
         for rec in _read_lines(f):
             if kind and rec.kind != kind:
                 continue

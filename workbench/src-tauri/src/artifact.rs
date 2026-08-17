@@ -141,13 +141,20 @@ pub struct ArtifactIndex {
 // ---------------------------------------------------------------------------
 
 /// Host data root for artifact registries (never inside a workspace, R3-05).
-/// Same convention as `src/aisc/application/artifact.py::data_root()`.
+/// Stage 7 (DATA-04): canonical location is `<data-root>/artifacts` via
+/// `data_root::default_data_root()` (honors AISC_DATA_ROOT); the explicit
+/// `AISC_ARTIFACT_DATA_ROOT` override keeps working for tests/dev.
 pub fn resolve_data_root() -> PathBuf {
     if let Ok(root) = std::env::var("AISC_ARTIFACT_DATA_ROOT") {
         if !root.is_empty() {
             return PathBuf::from(root);
         }
     }
+    crate::data_root::default_data_root().join("artifacts")
+}
+
+/// Pre-Stage-7 artifact root (read fallback for old records).
+fn legacy_data_root() -> PathBuf {
     #[cfg(windows)]
     {
         let base = std::env::var("LOCALAPPDATA")
@@ -219,11 +226,22 @@ fn parse_record_line(line: &str) -> Option<ArtifactRecord> {
 
 /// Read all CLI session registries for a workspace into a merged record list.
 /// Corrupt lines are skipped; a missing registry dir yields an empty list.
+/// Stage 7: canonical `<data-root>/artifacts` first; when it has no
+/// session files the pre-Stage-7 root is read (transition fallback).
 pub fn read_cli_registries(workspace: &Path) -> Vec<ArtifactRecord> {
     let root = resolve_data_root();
     let dir = registry_dir(&root, workspace);
+    let mut out = read_registry_dir(&dir);
+    if out.is_empty() {
+        let legacy = registry_dir(&legacy_data_root(), workspace);
+        out = read_registry_dir(&legacy);
+    }
+    out
+}
+
+fn read_registry_dir(dir: &Path) -> Vec<ArtifactRecord> {
     let mut out = Vec::new();
-    let entries = match fs::read_dir(&dir) {
+    let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return out,
     };
