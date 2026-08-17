@@ -22,10 +22,11 @@
 
 ## Stage 7
 
-- [ ] Windows path resolver、workspace hash、lock、atomic replace；
-- [ ] legacy scan、迁移 manifest、dry-run、rollback 和损坏隔离；
-- [ ] CLI、Workbench、container mount 全部改用 resolver；
-- [ ] fresh/upgrade/multi-instance/long-path/disk-full 真机验收。
+- [x] Windows path resolver、workspace hash、lock、atomic replace（7a/7b）；
+- [x] legacy scan、迁移 manifest、dry-run、rollback 和损坏隔离（7c/7d）；
+- [x] CLI、Workbench、container mount 全部改用 resolver（7e）；
+- [x] fresh/upgrade/multi-instance/long-path/disk-full 真机验收（7f，A-DATA01..05 PASS，
+      用户手测 PASS 2026-08-17；磁盘不足为 mock 门，OneDrive 目录留发布前矩阵）。
 
 ## Stage 8
 

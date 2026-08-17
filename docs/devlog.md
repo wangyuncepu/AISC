@@ -2,9 +2,10 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
-# Stage 7 (2026-08-17，进行中) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
+# Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
 > 规划入口：`docs/plans/aisc-next-followup/stage-7-windows-data-root/`。把初始化/运行产生的配置、状态、runtime、日志、缓存、artifact、诊断和迁移文件统一收纳到 `%LOCALAPPDATA%\AISC\data`，workspace 只留用户文件；提供旧布局迁移。证据台账：`stage-7-windows-data-root/acceptance.md`。
+> **总门 PASS（2026-08-17）**：A-DATA01..05 真机全过 + 用户 Workbench 手测确认。
 
 - **7a contract**：`aisc.data-root/v1` 纯域契约 + 只读 `DataRootResolver`（Python SSOT
   `src/aisc/{domain,application}/data_root.py`，Rust mirror `workbench/src-tauri/src/data_root.rs`）：
@@ -55,6 +56,13 @@
   检测推导 HOME（`586aa24`，含显式 `--apply` flag）。发布前提：release 镜像重建烧入
   新 entrypoint+wrapper。本地全量门：Python 621 / cargo 183+7×3 / vitest 213 /
   vue-tsc 干净。
+- **7f 手测期间的三个连环修复**：① 泄漏测试写进真实 `%LOCALAPPDATA%\AISC\data\config`
+  的垃圾 onboarding 文件触发 `UnsupportedSchema` 死锁向导 → 无 schema_version 的文件
+  按损坏隔离+空态（`5899a8c`）；② `+` 新建 tab 菜单被 tabbar 滚动容器裁剪（Stage 6
+  UX-02 回归，非 Stage 7）→ Teleport + zoom 补偿（`aa10cd0`）；③ 镜像重建后仍污染 →
+  覆盖桥挂了陈旧 `target/debug/aisc-bundle` 暂存把新镜像降级 → **移除覆盖桥、镜像为
+  容器脚本唯一事实源**（`aa7ca34`），并用真实 sidecar 完整流程（start→session→stop）
+  对新镜像复验全净。**用户手测 PASS 确认（2026-08-17）**。
 - **启动序列**：followup 计划入库（`5ec13bb`）；`aisc-next` 整体归档
   `docs/archive/completed/aisc-next`（`e0af206`）；实测 fresh 初始化 workspace 清单
   （`.aisc/.claude/.codex/.cc-switch/.local`，~3130 文件/~69MB）入 02-domain-contract。
