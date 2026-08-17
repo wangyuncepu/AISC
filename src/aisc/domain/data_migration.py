@@ -49,6 +49,18 @@ STATUS_QUARANTINED = "quarantined"
 NAMESPACE_FOREIGN = "foreign"
 NAMESPACE_AISC = "aisc"
 
+# Namespace redirect marker left after a namespace fully migrates (risk
+# table: old entries must find a read-only redirect/diagnostic, not a
+# silently diverging copy). Content: JSON with schema/workspace_hash/root.
+MARKER_NAME = ".aisc-migrated"
+
+# Execution error codes (7d) — exit mapping stays with the CLI layer.
+ERR_CONFLICT = "AISC_ERR_DATA_MIGRATION_CONFLICT"
+ERR_UNKNOWN_PENDING = "AISC_ERR_DATA_MIGRATION_UNKNOWN_PENDING"
+ERR_SOURCE_CHANGED = "AISC_ERR_DATA_MIGRATION_SOURCE_CHANGED"
+ERR_INSUFFICIENT_SPACE = "AISC_ERR_DATA_MIGRATION_INSUFFICIENT_SPACE"
+ERR_CORRUPT_COPY = "AISC_ERR_DATA_MIGRATION_CORRUPT_COPY"
+
 # -- allowlist ---------------------------------------------------------------
 # Keys are workspace-relative namespaces; values: (exact_files, dir_prefixes,
 # transient_files, transient_prefixes). Everything else inside the namespace
@@ -59,7 +71,7 @@ ALLOWLIST: Dict[str, Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...], Tu
         # containers.json/state.env → runtime/; config.json → workspace config
         ("containers.json", "state.env", "config.json"),
         (),
-        (".containers.lock",),
+        (".containers.lock", MARKER_NAME),
         ("workspace-locks/",),
     ),
     ".claude": (
@@ -68,13 +80,13 @@ ALLOWLIST: Dict[str, Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...], Tu
         ("CLAUDE.md", "config.json", "settings.json", "settings.local.json",
          ".claude.json", ".factory-version"),
         ("backups/", "commands/", "plugins/", "projects/", "sessions/", "skills/"),
-        (),
+        (MARKER_NAME,),
         (),
     ),
     ".codex": (
         ("config.toml", "AGENTS.md", ".factory-version"),
         ("skills/",),
-        (),
+        (MARKER_NAME,),
         (),
     ),
     ".cc-switch": (
@@ -83,7 +95,8 @@ ALLOWLIST: Dict[str, Tuple[Tuple[str, ...], Tuple[str, ...], Tuple[str, ...], Tu
          "session-scan-cache.db", ".aisc-bundled-skills.sha256",
          ".aisc-preset-providers-claude.sha256", ".aisc-preset-providers-codex.sha256"),
         ("skills/",),
-        ("cc-switch.db.init.lock", "state-mutation.lock", ".aisc-bundled-skills.lock"),
+        ("cc-switch.db.init.lock", "state-mutation.lock", ".aisc-bundled-skills.lock",
+         MARKER_NAME),
         (),
     ),
     # daemon runtime only: logs/pids are transient, anything else → unknown
@@ -149,9 +162,13 @@ def classify(namespace: str, rel: str) -> Tuple[str, str]:
     return ENTRY_UNKNOWN, ""
 
 
-@dataclass(frozen=True)
+@dataclass
 class MigrationEntry:
-    """One classified file (scan draft) / migrated file (7d status update)."""
+    """One classified file (scan draft) / migrated file (7d status update).
+
+    Deliberately mutable (unlike the resolver results): the migration
+    journal advances ``status`` as prepare/copy/commit/rollback proceed.
+    """
 
     relative: str            # workspace-relative POSIX path, e.g. ".cc-switch/settings.json"
     classification: str      # ENTRY_*
@@ -201,6 +218,9 @@ class MigrationManifest:
     source: str = ""         # legacy workspace root (abs)
     target: str = ""         # data-root workspaces/<hash>/ (abs)
     entries: List[MigrationEntry] = field(default_factory=list)
+    # Namespace dirs where this migration wrote a redirect marker (rollback
+    # removes them). Dataclass field ordering: keep after entries.
+    markers: List[str] = field(default_factory=list)
     state: str = STATE_PREPARED
 
     def to_dict(self) -> Dict[str, Any]:
@@ -211,6 +231,7 @@ class MigrationManifest:
             "source": self.source,
             "target": self.target,
             "entries": [e.to_dict() for e in self.entries],
+            "markers": list(self.markers),
             "state": self.state,
         }
 
@@ -233,5 +254,6 @@ class MigrationManifest:
             source=raw.get("source", ""),
             target=raw.get("target", ""),
             entries=[MigrationEntry.from_dict(e) for e in raw.get("entries", [])],
+            markers=list(raw.get("markers", [])),
             state=state,
         )
