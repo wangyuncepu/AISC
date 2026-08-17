@@ -9,6 +9,7 @@ All docker operations are injected through a ``DockerExecutor``.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -116,6 +117,20 @@ def _build_parser() -> _AiscArgumentParser:
                     help="Always pull the base image")
     bp.add_argument("--dry-run", action="store_true", default=False,
                     help="Plan the build without executing")
+    # Stage 8b (CS-01/CS-02): cc-switch release resolution. `latest` resolves
+    # the newest stable upstream release live (fail closed, never a silent
+    # pin); an explicit vX.Y.Z is reproducible; --cc-switch-manifest builds
+    # fully offline from a previously written resolution receipt.
+    bp.add_argument("--cc-switch-version", type=str, default=argparse.SUPPRESS,
+                    help="cc-switch version: 'latest' (default) or vX.Y.Z "
+                         "(env: CC_SWITCH_VERSION)")
+    bp.add_argument("--cc-switch-channel", type=str, default=argparse.SUPPRESS,
+                    choices=["stable"],
+                    help="cc-switch release channel (default: stable; "
+                         "env: CC_SWITCH_CHANNEL)")
+    bp.add_argument("--cc-switch-manifest", type=str, default=None, metavar="PATH",
+                    help="Build from a resolver manifest file (offline / "
+                         "reproducible; skips the live resolve)")
 
     # --- run ---
     rp = sub.add_parser("run", help="Run Docker container", allow_abbrev=False)
@@ -644,6 +659,28 @@ def _cmd_profile(
 # Build / Run command dispatch — all docker through injected executor
 # ---------------------------------------------------------------------------
 
+def _write_cc_switch_manifest(root: Path, resolved: Any) -> Optional[Path]:
+    """Write the resolution receipt next to the build outputs (Stage 8b).
+
+    Best-effort: an unwritable dist/ warns and builds on (the receipt also
+    lives in the image labels + BuildResult). Patched in tests to avoid
+    touching the real filesystem."""
+    manifest_path = root / "dist" / "cc-switch-manifest.json"
+    try:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        from aisc.application.cc_switch_resolver import resolved_at_now
+
+        manifest_path.write_text(
+            json.dumps(resolved.to_manifest(resolved_at=resolved_at_now()), indent=2),
+            encoding="utf-8",
+        )
+        return manifest_path
+    except OSError as exc:
+        sys.stderr.write(f"⚠️  could not write cc-switch manifest ({exc}); "
+                         f"build continues\n")
+        return None
+
+
 def _cmd_build(
     args: argparse.Namespace,
     emitter: Optional[JsonlEmitter],
@@ -689,17 +726,60 @@ def _cmd_build(
             raise CliError(message="Build cancelled by user", exit_code=130,
                            error_code="AISC_ERR_CANCELLED")
 
+    # Stage 8b: resolve the cc-switch release BEFORE planning (D8-02 — the
+    # Dockerfile only consumes resolved facts, never resolves on its own).
+    import platform as _platform
+    from aisc.domain.cc_switch_release import ResolveError, normalize_arch
+    from aisc.application.cc_switch_resolver import CcSwitchResolver
+
+    cs_version = getattr(args, "cc_switch_version", None) or os.environ.get("CC_SWITCH_VERSION", "latest")
+    cs_channel = getattr(args, "cc_switch_channel", None) or os.environ.get("CC_SWITCH_CHANNEL", "stable")
+    cs_manifest = getattr(args, "cc_switch_manifest", None)
+    try:
+        cs_arch = normalize_arch(_platform.machine())
+    except ResolveError:
+        cs_arch = "x64"  # validated again inside the Dockerfile (arch assert)
+    resolver = CcSwitchResolver()
+    try:
+        resolved = resolver.resolve(
+            channel=cs_channel,
+            version=cs_version,
+            arch=cs_arch,
+            libc="musl",
+            manifest_path=Path(cs_manifest) if cs_manifest else None,
+        )
+    except ResolveError as exc:
+        raise CliError(message=f"cc-switch release resolution failed: {exc.message}",
+                       exit_code=1, error_code=exc.code) from exc
+
+    # Reproducibility receipt: always written next to the build outputs.
+    manifest_path = _write_cc_switch_manifest(root, resolved)
+
+    if effective_format == "text" and emitter is None:
+        sys.stderr.write(
+            f"cc-switch: {resolved.tag} ({resolved.asset_name}, "
+            f"sha256 {resolved.asset_sha256[:12]}…, source {resolved.source})\n"
+        )
+        sys.stderr.flush()
+
     plan = plan_build(
         root=root,
         tag=tag,
         no_cache=no_cache,
         pull=pull,
         dry_run=dry_run,
+        cc_switch=resolved,
     )
 
     # text mode → streaming (real-time build log); json/events → captured
     is_streaming = (effective_format == "text" and emitter is None)
-    result = run_build(plan, emitter=emitter, streaming=is_streaming)
+    result = run_build(
+        plan,
+        emitter=emitter,
+        streaming=is_streaming,
+        cc_switch_summary=resolved.to_manifest(),
+        cc_switch_manifest_path=str(manifest_path) if manifest_path else "",
+    )
     return result.to_dict(), 0, []
 
 

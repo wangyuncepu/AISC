@@ -303,6 +303,15 @@ class BuildPlan:
     build_arg_use_cn_mirror: str = "1"
     build_arg_node_image: str = "node:20-slim"
     dry_run: bool = False
+    # Stage 8 (CS-01/CS-02): the resolver-pinned cc-switch release. Empty
+    # strings = manual/legacy `docker build` (Dockerfile ARG fallback path,
+    # documented as non-reproducible); `aisc build` always injects these.
+    cc_switch_version: str = ""
+    cc_switch_commit: str = ""
+    cc_switch_asset_url: str = ""
+    cc_switch_asset_sha256: str = ""
+    cc_switch_asset_name: str = ""
+    cc_switch_manifest: str = ""  # compact JSON for the org.aisc.build-manifest label
 
     @property
     def docker_argv(self) -> list:
@@ -315,6 +324,17 @@ class BuildPlan:
         argv.extend([
             "--build-arg", f"USE_CN_MIRROR={self.build_arg_use_cn_mirror}",
             "--build-arg", f"NODE_IMAGE={self.build_arg_node_image}",
+        ])
+        if self.cc_switch_version:
+            argv.extend([
+                "--build-arg", f"CC_SWITCH_RESOLVED_VERSION={self.cc_switch_version}",
+                "--build-arg", f"CC_SWITCH_RELEASE_COMMIT={self.cc_switch_commit}",
+                "--build-arg", f"CC_SWITCH_ASSET_URL={self.cc_switch_asset_url}",
+                "--build-arg", f"CC_SWITCH_ASSET_SHA256={self.cc_switch_asset_sha256}",
+                "--build-arg", f"CC_SWITCH_ASSET_NAME={self.cc_switch_asset_name}",
+                "--build-arg", f"CC_SWITCH_BUILD_MANIFEST={self.cc_switch_manifest}",
+            ])
+        argv.extend([
             "-f", self.dockerfile,
             "-t", self.tag,
             self.root,

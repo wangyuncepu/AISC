@@ -22,7 +22,17 @@ ARG MIHOMO_VERSION=v1.19.27
 ARG GH_PROXY=
 
 # cc-switch-cli 版本（Claude/Codex provider 与 skills 的统一管理工具）
+# Stage 8b (CS-01/CS-02): `aisc build` resolves the release on the HOST and
+# injects CC_SWITCH_RESOLVED_VERSION/RELEASE_COMMIT/ASSET_URL/ASSET_SHA256/
+# ASSET_NAME/BUILD_MANIFEST. The fallback below only serves MANUAL
+# `docker build` invocations (no checksum pin — non-reproducible by design).
 ARG CC_SWITCH_VERSION=v5.9.0
+ARG CC_SWITCH_RESOLVED_VERSION=
+ARG CC_SWITCH_RELEASE_COMMIT=
+ARG CC_SWITCH_ASSET_URL=
+ARG CC_SWITCH_ASSET_SHA256=
+ARG CC_SWITCH_ASSET_NAME=
+ARG CC_SWITCH_BUILD_MANIFEST=
 
 # Claude Code npm 版本（@anthropic-ai/claude-code）
 ARG CLAUDE_CODE_VERSION=latest  # TODO: pin to specific version
@@ -294,23 +304,44 @@ ENV PATH="/opt/aisc/venv/bin:${PATH}"
 
 # ==========================================
 # cc-switch-cli（Rust 二进制）：Claude/Codex provider 与 skills 的唯一管理工具
-#   以 root 写入 /usr/local/bin。
+#   Stage 8b：resolver 注入 URL/SHA-256 时强校验（fail closed）；仅手动
+#   docker build（无 resolver 产物）走 tag 拼 URL 回退，无校验并显式警告。
 #   复用 mihomo 的 GH_PROXY 多镜像 fallback；musl 静态版兼容 glibc/musl。
 # ==========================================
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in amd64) cs_arch=x64;; arm64|aarch64) cs_arch=arm64;; *) cs_arch=x64;; esac; \
-    base="https://github.com/saladday/cc-switch-cli/releases/download/${CC_SWITCH_VERSION}/cc-switch-cli-linux-${cs_arch}-musl.tar.gz"; \
-    if [ -n "${GH_PROXY:-}" ]; then mirrors="${GH_PROXY}"; \
-    elif [ "$USE_CN_MIRROR" = "1" ]; then mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ https://ghproxy.net/"; \
-    else mirrors=""; fi; \
-    ok=0; \
-    for m in $mirrors ""; do \
-        u="${m}${base}"; echo "⬇️  cc-switch try: $u"; \
-        if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
-                --connect-timeout 8 --max-time 120 "$u" -o /tmp/ccs.tar.gz; then ok=1; break; fi; \
-    done; \
-    [ "$ok" = "1" ] || { echo "❌ cc-switch 下载失败（可 --build-arg GH_PROXY=<镜像前缀> 重试）"; exit 1; }; \
+    if [ -n "${CC_SWITCH_ASSET_URL}" ]; then \
+        base="${CC_SWITCH_ASSET_URL}"; \
+        case "${CC_SWITCH_ASSET_NAME}" in \
+            *-linux-${cs_arch}-musl.tar.gz) ;; \
+            *) echo "❌ cc-switch asset ${CC_SWITCH_ASSET_NAME} does not match build arch ${cs_arch}"; exit 1 ;; \
+        esac; \
+        if [ -n "${GH_PROXY:-}" ]; then mirrors="${GH_PROXY}"; \
+        elif [ "$USE_CN_MIRROR" = "1" ]; then mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ https://ghproxy.net/"; \
+        else mirrors=""; fi; \
+        ok=0; \
+        for m in $mirrors ""; do \
+            u="${m}${base}"; echo "⬇️  cc-switch try: $u"; \
+            if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
+                    --connect-timeout 8 --max-time 120 "$u" -o /tmp/ccs.tar.gz; then ok=1; break; fi; \
+        done; \
+        [ "$ok" = "1" ] || { echo "❌ cc-switch 下载失败（可 --build-arg GH_PROXY=<镜像前缀> 重试）"; exit 1; }; \
+        echo "${CC_SWITCH_ASSET_SHA256}  /tmp/ccs.tar.gz" | sha256sum -c - || { echo "❌ cc-switch sha256 mismatch"; exit 1; }; \
+    else \
+        echo "⚠️  手动构建回退：无 resolver 校验（aisc build 才有 sha256 pin）"; \
+        base="https://github.com/saladday/cc-switch-cli/releases/download/${CC_SWITCH_VERSION}/cc-switch-cli-linux-${cs_arch}-musl.tar.gz"; \
+        if [ -n "${GH_PROXY:-}" ]; then mirrors="${GH_PROXY}"; \
+        elif [ "$USE_CN_MIRROR" = "1" ]; then mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ https://ghproxy.net/"; \
+        else mirrors=""; fi; \
+        ok=0; \
+        for m in $mirrors ""; do \
+            u="${m}${base}"; echo "⬇️  cc-switch try: $u"; \
+            if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
+                    --connect-timeout 8 --max-time 120 "$u" -o /tmp/ccs.tar.gz; then ok=1; break; fi; \
+        done; \
+        [ "$ok" = "1" ] || { echo "❌ cc-switch 下载失败（可 --build-arg GH_PROXY=<镜像前缀> 重试）"; exit 1; }; \
+    fi; \
     tar -xzf /tmp/ccs.tar.gz -C /tmp; \
     mv /tmp/cc-switch /usr/local/bin/cc-switch-real; \
     chmod +x /usr/local/bin/cc-switch-real; \
@@ -341,6 +372,13 @@ RUN set -eux; \
         find . -type f -print0 | sort -z | xargs -0 sha256sum | \
         sha256sum | awk '{print $1}') > /tmp/aisc-skills.sha256; \
     mv /tmp/aisc-skills.sha256 /opt/aisc/skills/.aisc-bundle.sha256
+# Stage 8b (CS-02): provenance labels — the resolver receipt baked into the
+# image. Empty on manual builds (only the legacy version ARG is set).
+LABEL org.aisc.cc-switch.version="${CC_SWITCH_RESOLVED_VERSION}" \
+      org.aisc.cc-switch.commit="${CC_SWITCH_RELEASE_COMMIT}" \
+      org.aisc.cc-switch.asset-sha256="${CC_SWITCH_ASSET_SHA256}" \
+      org.aisc.build-manifest="${CC_SWITCH_BUILD_MANIFEST}"
+
 # 设置入口点
 ENTRYPOINT ["entrypoint.sh"]
 
