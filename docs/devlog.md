@@ -37,6 +37,15 @@
   CLI `aisc data-root doctor|migrate --dry-run|--apply|rollback`（冲突/未同意 unknown/
   空间不足/源变更均稳定错误码非零退出）。真实 workspace dry-run：3127 文件/~62MB、
   零冲突零 unknown。本地门：executor 13 + CLI 5 passed / 全量 613 OK。
+- **7e wiring**：五步接线——(1) registry/state 适配器改「root=state 目录」，
+  `workspace_state_dir` 边界 + legacy 首用收养 + `_resolve_root` 消除 stop/ps 与 run
+  的注册表双轨；(2) config workspace 层 canonical 优先 + legacy 回退；(3) artifact
+  注册表统一到 `<data-root>/artifacts`（Python/Rust 双侧 legacy 读回退）；
+  (4) Workbench `config_dir`→`app_state_dir`（Roaming 收养/回退）+ 诊断包 `dataRoot`；
+  (5) 容器 project 态四个 data-root 挂载（entrypoint 挂载优先、旧宿主回退
+  `/root/app`），宿主预建目标、fail closed；DATA-01 回归门（挂载 argv + workspace
+  零新增）。修测试封闭性：7 模块注入 hermetic data root（此前真实 LOCALAPPDATA 被
+  写入）。本地门：全量 620 OK / cargo 183+7×3 / workspaces 污染 0。
 - **启动序列**：followup 计划入库（`5ec13bb`）；`aisc-next` 整体归档
   `docs/archive/completed/aisc-next`（`e0af206`）；实测 fresh 初始化 workspace 清单
   （`.aisc/.claude/.codex/.cc-switch/.local`，~3130 文件/~69MB）入 02-domain-contract。

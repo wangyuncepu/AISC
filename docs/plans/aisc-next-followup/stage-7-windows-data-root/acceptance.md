@@ -81,6 +81,34 @@
 - 回归：全量 `python -m unittest discover` 613 OK（61 skipped 同前）
 - 结论：**PASS**
 
+### 7e-wiring — CLI/Rust/容器接线到 data root（2026-08-17）
+
+- 目标/验收 ID：DATA-01/04 生效（真机容器全链路在 7f）
+- Commit：`1da1ecb`（7e-1 状态写入）、`ae20673`（7e-2 config 层）、`92387e4`（7e-3 artifact
+  统一）、`b9c4b9d`（7e-4 Workbench）、`321ff0a`（7e-5 容器 + DATA-01 回归门）
+- OS/arch：Windows 11 Pro 10.0.26200 / x64
+- 步骤：全量 `python -m unittest discover`；`cargo test --offline`；hermetic 污染复查
+- 期望与结果：
+  - **7e-1** registry/state 适配器语义改为「root=state 目录」，六处边界经
+    `workspace_state_dir` 解析（fresh workspace 零写入断言通过）；legacy
+    containers.json/state.env 首用收养（不覆盖、源保留）；`_resolve_root` 消除
+    stop/ps 读 `<aisc-root>/.aisc` vs run 写 `<workspace>/.aisc` 的旧双轨
+  - **7e-2** workspace config 层 canonical 优先 + legacy 只读回退（fresh→canonical /
+    legacy-only→legacy / both→canonical 矩阵断言通过）
+  - **7e-3** artifact 注册表 canonical `<data-root>/artifacts`，双侧（Python/Rust）legacy
+    读回退，`AISC_ARTIFACT_DATA_ROOT` 覆盖保留
+  - **7e-4** Workbench 三处 `config_dir` 收敛到 `app_state_dir`（legacy Roaming 收养 +
+    不可校验回退）；DiagnosticBundle 增脱敏 `dataRoot` 区块（TS 类型同步）
+  - **7e-5** docker argv 增四个 data-root 挂载（claude/codex/cc-switch/runtime→daemon
+    态），宿主预建挂载目标、resolver 失败即停；entrypoint project 态挂载优先、旧宿主
+    回退 `/root/app` 布局；DATA-01 回归门：plan_run 挂载断言 + workspace 零新增断言
+  - 测试封闭性：7 个测试模块注入 hermetic `AISC_DATA_ROOT`（此前向真实
+    `%LOCALAPPDATA%` 写入——含一处 `addCleanup(pop)` 误清注入值的 bug）
+- 回归：全量 620 OK（61 skipped）；cargo 183+7×3；污染复查 workspaces=0
+- 待 7f 真机：Docker Desktop 实跑 project/temporary 双作用域、旧宿主回退布局、
+  cc-switch daemon 持久化
+- 结论：**PASS**
+
 证据模板：
 
 ```text
