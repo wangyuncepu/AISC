@@ -36,6 +36,17 @@ SHARED_SUBDIRS = ("config", "state", "workspaces", "artifacts", "cache", "diagno
 # Per-workspace layout under workspaces/<hash>/.
 WORKSPACE_SUBDIRS = ("claude", "codex", "cc-switch", "runtime", "logs")
 
+# Locks live under state/ (contract: "locks/indexes"). Workspace-scoped
+# locks share the dir with a hash prefix, keeping the contract layout intact.
+LOCKS_SUBDIR = "state/locks"
+
+# Stable error codes (exit mapping is the caller's job). Domain-owned so the
+# application resolver and adapter writers share one spelling.
+ERR_OVERRIDE_RELATIVE = "AISC_ERR_DATA_ROOT_OVERRIDE_RELATIVE"
+ERR_REPARSE_POINT = "AISC_ERR_DATA_ROOT_REPARSE_POINT"
+ERR_WORKSPACE_OVERLAP = "AISC_ERR_DATA_ROOT_WORKSPACE_OVERLAP"
+ERR_LOCK_TIMEOUT = "AISC_ERR_DATA_ROOT_LOCK_TIMEOUT"
+
 
 def strip_verbatim(path_str: str) -> str:
     """Drop Windows verbatim (``\\\\?\\``) prefixes so both languages hash the

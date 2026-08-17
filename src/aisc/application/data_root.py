@@ -29,6 +29,9 @@ from typing import Mapping, Optional
 from aisc.domain.data_root import (
     DATA_ROOT_PROTOCOL,
     DATA_ROOT_SCHEMA_VERSION,
+    ERR_OVERRIDE_RELATIVE,
+    ERR_REPARSE_POINT,
+    ERR_WORKSPACE_OVERLAP,
     SHARED_SUBDIRS,
     WORKSPACE_SUBDIRS,
     ResolvedDataRoot,
@@ -39,10 +42,15 @@ from aisc.domain.models import CliError
 
 ENV_OVERRIDE = "AISC_DATA_ROOT"
 
-# Stable error codes (exit 1 — no dedicated exit-code registry entry yet).
-ERR_OVERRIDE_RELATIVE = "AISC_ERR_DATA_ROOT_OVERRIDE_RELATIVE"
-ERR_REPARSE_POINT = "AISC_ERR_DATA_ROOT_REPARSE_POINT"
-ERR_WORKSPACE_OVERLAP = "AISC_ERR_DATA_ROOT_WORKSPACE_OVERLAP"
+# Stable error codes are domain-owned (domain/data_root.py); re-exported here
+# for callers that already import them from the resolver.
+__all__ = [
+    "ENV_OVERRIDE",
+    "ERR_OVERRIDE_RELATIVE",
+    "ERR_REPARSE_POINT",
+    "ERR_WORKSPACE_OVERLAP",
+    "DataRootResolver",
+]
 
 # windows.h FILE_ATTRIBUTE_REPARSE_POINT (symlinks, junctions, OneDrive
 # placeholders, app-exec links — any tag, per D7-04 fail-closed).
