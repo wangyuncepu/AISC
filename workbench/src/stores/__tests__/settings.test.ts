@@ -22,7 +22,7 @@ const doc: SettingsDocument = {
   schemaVersion: 1,
   revision: 3,
   aiscCliPath: "C:\\aisc.exe",
-  ui: { language: "auto", font_scale: 1.0, theme: "system", explorer_ignore: [] },
+  ui: { language: "auto", font_scale: 1.0, theme: "system", explorer_ignore: [], default_tab_agent: "bash" },
   terminal: {
     font_family: "Cascadia Mono, Consolas, monospace",
     font_size: 14,

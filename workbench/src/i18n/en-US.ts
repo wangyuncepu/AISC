@@ -255,6 +255,8 @@ export const enUS: Record<string, string> = {
   "settings.ui.theme.light": "Light",
   "settings.ui.explorerIgnore": "Explorer ignore names",
   "settings.ui.explorerIgnore.help": "Comma-separated names hidden from the Explorer tree and Artifacts panel (e.g. vendor, logs).",
+  "settings.ui.defaultTab": "Default new tab",
+  "settings.ui.defaultTab.help": "The tab type created directly by the tab bar + button; the dropdown next to + picks another type.",
   "settings.term.fontFamily": "Terminal font",
   "settings.term.fontFamily.help": "Non-empty, ≤256 chars",
   "settings.term.fontSize": "Terminal font size",

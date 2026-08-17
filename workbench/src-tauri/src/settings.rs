@@ -64,6 +64,9 @@ pub struct UiSettings {
     /// User-configured Explorer ignore names (WX-01). Complements the built-in
     /// dependency/build list; matched against a directory/file name at any depth.
     pub explorer_ignore: Vec<String>,
+    /// claude | codex | bash | cc-switch — the tab the tab-bar + split button
+    /// creates directly (IDEA-1, Windows Terminal-style default profile).
+    pub default_tab_agent: String,
 }
 
 impl Default for UiSettings {
@@ -73,6 +76,7 @@ impl Default for UiSettings {
             font_scale: 1.0,
             theme: "system".into(),
             explorer_ignore: Vec::new(),
+            default_tab_agent: "bash".into(),
         }
     }
 }
@@ -277,6 +281,12 @@ fn valid_theme(v: &Value) -> Option<String> {
     v.as_str().filter(|s| ["system", "dark", "light"].contains(s)).map(String::from)
 }
 
+fn valid_tab_agent(v: &Value) -> Option<String> {
+    v.as_str()
+        .filter(|s| ["claude", "codex", "bash", "cc-switch"].contains(s))
+        .map(String::from)
+}
+
 fn valid_renderer(v: &Value) -> Option<String> {
     v.as_str().filter(|s| ["auto", "default", "webgl"].contains(s)).map(String::from)
 }
@@ -328,6 +338,14 @@ fn validate_ui(raw: &Value) -> (UiSettings, Vec<ValidationIssue>) {
             } else {
                 issues.push(issue("ui.explorer_ignore", "非法类型，回退空列表"));
             }
+        }
+        if let Some(a) = sec.get("default_tab_agent").and_then(valid_tab_agent) {
+            out.default_tab_agent = a;
+        } else if sec.get("default_tab_agent").is_some() {
+            issues.push(issue(
+                "ui.default_tab_agent",
+                "非法值，回退 bash（合法：claude|codex|bash|cc-switch）",
+            ));
         }
     }
     (out, issues)
@@ -841,7 +859,7 @@ mod tests {
             "schema_version": 1,
             "revision": 0,
             "aisc_cli_path": null,
-            "ui": { "language": "auto", "font_scale": 1.0, "theme": "system" },
+            "ui": { "language": "auto", "font_scale": 1.0, "theme": "system", "default_tab_agent": "bash" },
             "terminal": {
                 "font_family": "Cascadia Mono, Cascadia Code, Consolas, monospace",
                 "font_size": 14, "line_height": 1.2, "letter_spacing": 0,
@@ -922,6 +940,7 @@ mod tests {
         assert_eq!(s.aisc_cli_path(), Some("C:\\prev\\aisc.exe"));
         assert_eq!(s.document().ui.explorer_ignore, Vec::<String>::new());
         assert_eq!(s.document().ui.theme, UiSettings::default().theme);
+        assert_eq!(s.document().ui.default_tab_agent, "bash");
         assert!(s.document().window.geometry.is_none());
         // Unknowns survive a save (round-trip keeps them for a future rollback).
         let mut s = s;
@@ -975,6 +994,40 @@ mod tests {
         let s2 = Settings::load(dir.path()).unwrap();
         assert_eq!(s2.document().ui.theme, "light");
         assert!(s2.document().issues.is_empty());
+    }
+
+    #[test]
+    fn default_tab_agent_valid_accepted_invalid_falls_back() {
+        let dir = tempdir().unwrap();
+        let mut doc = raw_doc();
+        doc["ui"]["default_tab_agent"] = Value::String("cc-switch".into());
+        write(dir.path(), &doc);
+        let s = Settings::load(dir.path()).unwrap();
+        let d = s.document();
+        assert_eq!(d.ui.default_tab_agent, "cc-switch");
+        assert!(d.issues.is_empty());
+
+        // A patch save round-trips a different valid agent (and reports no issue).
+        let mut s = s;
+        s.apply_gui_patch(&SettingsPatch {
+            ui: Some(UiSettings {
+                default_tab_agent: "codex".into(),
+                ..UiSettings::default()
+            }),
+            ..Default::default()
+        });
+        assert!(s.issues.iter().all(|i| i.field != "ui.default_tab_agent"));
+        s.save(dir.path()).unwrap();
+        let reloaded = Settings::load(dir.path()).unwrap();
+        assert_eq!(reloaded.document().ui.default_tab_agent, "codex");
+
+        let mut bad = raw_doc();
+        bad["ui"]["default_tab_agent"] = Value::String("powershell".into());
+        write(dir.path(), &bad);
+        let s2 = Settings::load(dir.path()).unwrap();
+        let d2 = s2.document();
+        assert_eq!(d2.ui.default_tab_agent, "bash");
+        assert!(d2.issues.iter().any(|i| i.field == "ui.default_tab_agent"));
     }
 
     #[test]

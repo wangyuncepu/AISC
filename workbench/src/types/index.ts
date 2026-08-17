@@ -487,6 +487,9 @@ export interface UiSettings {
   theme: string; // system | dark | light
   /** User-configured Explorer ignore names (WX-01); complements built-ins. */
   explorer_ignore: string[];
+  /** The agent tab the tab-bar + split button creates (IDEA-1); claude |
+   * codex | bash | cc-switch. Defaults to "bash" in the Rust backend. */
+  default_tab_agent: string;
 }
 
 export interface TerminalSettings {

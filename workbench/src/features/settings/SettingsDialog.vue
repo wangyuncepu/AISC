@@ -44,6 +44,12 @@ const FIELDS: FieldDef[] = [
     { value: "dark", labelKey: "settings.ui.theme.dark" },
     { value: "light", labelKey: "settings.ui.theme.light" },
   ], effect: "immediate" },
+  { key: "ui.default_tab_agent", labelKey: "settings.ui.defaultTab", control: "select", options: [
+    { value: "claude", labelKey: "tabbar.menu.claude" },
+    { value: "codex", labelKey: "tabbar.menu.codex" },
+    { value: "bash", labelKey: "tabbar.menu.bash" },
+    { value: "cc-switch", labelKey: "tabbar.menu.cc-switch" },
+  ], effect: "immediate", helpKey: "settings.ui.defaultTab.help" },
   { key: "ui.explorer_ignore", labelKey: "settings.ui.explorerIgnore", control: "text",
     effect: "immediate", helpKey: "settings.ui.explorerIgnore.help" },
   { key: "terminal.font_family", labelKey: "settings.term.fontFamily", control: "text",
@@ -182,6 +188,9 @@ function onCancel() {
                 type="range" :min="f.min" :max="f.max" :step="f.step" :disabled="store.readOnly" />
               <span v-if="f.control === 'range'" class="val">{{ f.key === 'ui.font_scale' ? ui.font_scale.toFixed(2) : '' }}</span>
               <select v-else-if="f.key === 'ui.theme'" :id="f.key" v-model="ui.theme" :disabled="store.readOnly">
+                <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
+              </select>
+              <select v-else-if="f.key === 'ui.default_tab_agent'" :id="f.key" v-model="ui.default_tab_agent" :disabled="store.readOnly">
                 <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
               </select>
               <input v-else-if="f.key === 'ui.explorer_ignore'" :id="f.key" v-model="explorerIgnoreText"

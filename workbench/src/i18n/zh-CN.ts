@@ -255,6 +255,8 @@ export const zhCN = {
   "settings.ui.theme.light": "浅色",
   "settings.ui.explorerIgnore": "资源管理器排除名称",
   "settings.ui.explorerIgnore.help": "逗号分隔，这些名称的文件/目录将从资源管理器树和产物面板中隐藏（如 vendor、logs）。",
+  "settings.ui.defaultTab": "默认新标签",
+  "settings.ui.defaultTab.help": "点击标签栏 + 直接创建的标签类型；+ 旁的下拉可选择其他类型。",
   "settings.term.fontFamily": "终端字体",
   "settings.term.fontFamily.help": "非空，≤256 字符",
   "settings.term.fontSize": "终端字号",
