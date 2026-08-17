@@ -167,6 +167,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
   const showAdvanced = ref(false);
   const startElapsedMs = ref(0);
   const dockerStarting = ref(false);
+  /** When the current Docker wake-up began (ms epoch); drives the summary
+   * progress banner's elapsed counter. Null while not starting. */
+  const dockerStartedAt = ref<number | null>(null);
   const cancelInspect = ref<RuntimeSnapshot | null>(null);
 
   // S2.1.b build state (in-memory only, 05 §4.1.5). G-14 (Step 13) adds
@@ -300,6 +303,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
       dockerRetryTimer = null;
     }
     dockerStarting.value = false;
+    dockerStartedAt.value = null;
     requestSeq.value = 0;
     lastAppliedSeq.value = 0;
     revision.value = 0;
@@ -493,35 +497,42 @@ export const useRuntimeStore = defineStore("runtime", () => {
   /** Start the Docker engine (Docker Desktop) and re-run preflight once the
    * daemon is reachable. Used from the summary when the docker gate is red
    * (auto on entry, or via the 「启动 Docker」 button). Reentrant-call guarded
-   * by `dockerStarting`. */
+   * by `dockerStarting`.
+   *
+   * KI-1 UX (user feedback 2026-08-17): the boot loop probes QUIETLY —
+   * `preflight` updates in place on the summary page; the global `status` is
+   * never flipped (summary→preflight→summary every 3s was a full-view flash),
+   * so the page reads as one continuous progress instead of flicker-then-
+   * silence-then-suddenly-ready. */
   let dockerRetryTimer: number | null = null;
   async function startDockerAndRepreflight() {
     if (dockerStarting.value) return; // one polling loop at a time
     error.value = null;
     dockerStarting.value = true;
+    dockerStartedAt.value = Date.now();
+    const stop = () => {
+      dockerStarting.value = false;
+      dockerStartedAt.value = null;
+      if (dockerRetryTimer !== null) {
+        window.clearTimeout(dockerRetryTimer);
+        dockerRetryTimer = null;
+      }
+    };
     try {
       await ipc.startDocker();
       // Docker Desktop takes a while to boot the engine (first run: license
-      // dialog + WSL init, ~30-60s); poll preflight every 3s for up to ~2 min
+      // dialog + WSL init, ~30-60s); probe every 3s for up to ~2 min
       // instead of one-shot.
       const deadline = Date.now() + 120_000;
       const attempt = async (): Promise<void> => {
-        try {
-          await runPreflight();
-          const dockerOk = preflight.value?.checks.some(
-            (c) => c.id === "docker" && c.status === "pass"
-          );
-          if (dockerOk) {
-            dockerStarting.value = false;
-            return;
-          }
-        } catch {
-          /* engine still starting - retry */
+        if (await probeDockerPreflight()) {
+          stop();
+          return;
         }
         if (Date.now() < deadline) {
           dockerRetryTimer = window.setTimeout(attempt, 3_000);
         } else {
-          dockerStarting.value = false;
+          stop();
           error.value = {
             code: "WB_ERR_DOCKER_START_TIMEOUT",
             message: i18n.global.t("runtime.dockerTimeout"),
@@ -533,8 +544,42 @@ export const useRuntimeStore = defineStore("runtime", () => {
       };
       await attempt();
     } catch (e) {
-      dockerStarting.value = false;
+      stop();
       error.value = e as WorkbenchError;
+    }
+  }
+
+  /** One docker-boot probe: run the preflight CLI WITHOUT the status churn of
+   * `runPreflight` (no summary→preflight→summary view swap, no scheduleSave).
+   * Returns whether the docker check passes; routes a discovered runtime
+   * conflict to the conflict manager exactly like runPreflight. */
+  async function probeDockerPreflight(): Promise<boolean> {
+    if (!runtimeId.value || !workspace.value.trim()) return false;
+    try {
+      const report = await ipc.runtimePreflight(
+        workspace.value.trim(),
+        runtimeId.value,
+        launch.value.image,
+        launch.value.network,
+        launch.value.scope
+      );
+      preflight.value = report;
+      const dockerOk = report.checks.some(
+        (c) => c.id === "docker" && c.status === "pass"
+      );
+      if (dockerOk) {
+        const runtimeConflictFailed = report.checks.some(
+          (c) => c.id === "runtime_conflict" && c.status === "fail"
+        );
+        if (runtimeConflictFailed) {
+          status.value = "conflict";
+          void loadConflicts();
+        }
+        return true;
+      }
+      return false;
+    } catch {
+      return false; // engine still starting - the loop retries
     }
   }
 
@@ -1572,6 +1617,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     recomputePreflightNeeded,
     startDockerAndRepreflight,
     dockerStarting,
+    dockerStartedAt,
     startFromSummary,
     resumeLayout,
     cancelStart,

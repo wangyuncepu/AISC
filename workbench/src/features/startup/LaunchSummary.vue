@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** Launch summary (02 §七): preflight gate + inferred config + Start/Change/Cancel. */
-import { computed } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 import PreflightGate from "./PreflightGate.vue";
@@ -49,6 +49,30 @@ function changeSettings() {
 function onConfigChanged() {
   store.recomputePreflightNeeded();
 }
+
+// KI-1 UX: elapsed-seconds ticker for the Docker boot banner — a visible
+// heartbeat while the engine comes up (user feedback 2026-08-17: silence for
+// 30-60s read as "nothing happened").
+const nowMs = ref(Date.now());
+let dockerTicker: number | null = null;
+watch(
+  () => store.dockerStarting,
+  (on) => {
+    if (on && dockerTicker === null) {
+      dockerTicker = window.setInterval(() => (nowMs.value = Date.now()), 1_000);
+    } else if (!on && dockerTicker !== null) {
+      window.clearInterval(dockerTicker);
+      dockerTicker = null;
+    }
+  },
+  { immediate: true }
+);
+onBeforeUnmount(() => {
+  if (dockerTicker !== null) window.clearInterval(dockerTicker);
+});
+const dockerElapsedSec = computed(() =>
+  store.dockerStartedAt ? Math.max(0, Math.floor((nowMs.value - store.dockerStartedAt) / 1000)) : 0
+);
 </script>
 
 <template>
@@ -83,8 +107,15 @@ function onConfigChanged() {
     </div>
 
     <p v-if="imageNotFound" class="gate-msg config">{{ t("summary.imageMissing") }}</p>
-    <p v-if="dockerDown" class="gate-msg hard">
-      {{ store.dockerStarting ? t("summary.dockerStarting") : t("summary.dockerDown") }}
+    <!-- KI-1 UX: boot progress banner (spinner + elapsed) while the wake-up
+         loop probes quietly; the red gate message only returns once it ends
+         without success (timeout re-shows via the error path). -->
+    <p v-if="store.dockerStarting" class="gate-msg docker-progress" role="status">
+      <span class="spinner" aria-hidden="true" />
+      {{ t("summary.dockerProgress", { sec: dockerElapsedSec }) }}
+    </p>
+    <p v-else-if="dockerDown" class="gate-msg hard">
+      {{ t("summary.dockerDown") }}
     </p>
     <p v-else-if="hardBlocking" class="gate-msg hard">{{ t("summary.hardBlocked") }}</p>
     <p v-else-if="action === 'resolve_conflict'" class="gate-msg hard">{{ t("summary.conflictGate") }}</p>
@@ -144,6 +175,22 @@ input, select {
 .gate-msg.config { background: var(--warn-bg); color: var(--warn-fg); }
 .gate-msg.hard { background: var(--error-bg); color: var(--error-fg); }
 .gate-msg.resume { background: var(--info-bg); color: var(--info); }
+/* KI-1 UX: Docker boot progress — visible heartbeat, not a silent wait. */
+.gate-msg.docker-progress {
+  background: var(--info-bg); color: var(--info);
+  display: flex; align-items: center; gap: 8px;
+}
+.spinner {
+  width: 12px; height: 12px; flex-shrink: 0;
+  border: 2px solid var(--info-border, var(--border-2));
+  border-top-color: var(--info);
+  border-radius: 50%;
+  animation: docker-spin 0.9s linear infinite;
+}
+@keyframes docker-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+}
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
   background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);

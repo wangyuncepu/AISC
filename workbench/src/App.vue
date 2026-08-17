@@ -208,6 +208,32 @@ const STATUS_KEY: Record<string, string> = {
   error: "app.error.title",
 };
 
+// KI-1 UX: while the Docker boot loop runs, the topbar leads with the wake-up
+// (status stays "summary" so the page does not flash between views).
+const statusLabel = computed(() =>
+  store.dockerStarting
+    ? t("app.dockerStartingStatus")
+    : t(STATUS_KEY[store.status] ?? "app.unknown")
+);
+
+// KI-1 UX: announce the wake-up start and its SUCCESS (the gate flipping green
+// was previously silent; user feedback 2026-08-17). Ready is only announced
+// when the docker check actually passes — the timeout path announces via the
+// error watch below.
+watch(
+  () => store.dockerStarting,
+  (starting, prev) => {
+    if (starting) {
+      announce(t("app.dockerStartingStatus"));
+    } else if (prev) {
+      const dockerOk = store.preflight?.checks.some(
+        (c) => c.id === "docker" && c.status === "pass"
+      );
+      if (dockerOk) announce(t("app.dockerReady"));
+    }
+  }
+);
+
 // Announce runtime-state transitions (not every poll - only when the state
 // value actually changes).
 let lastAnnouncedState: string | null = null;
@@ -520,7 +546,7 @@ function selectRecent(path: string): void {
   <div class="app" :style="uiZoom" :data-tier="layoutTier">
     <header class="topbar">
       <span class="brand">AISC Workbench</span>
-      <span class="status" :data-status="store.status">{{ t(STATUS_KEY[store.status] ?? "app.unknown") }}</span>
+      <span class="status" :data-status="store.status">{{ statusLabel }}</span>
       <span class="spacer" />
       <button class="settings-btn" @click="openSettings">{{ t("app.settings") }}</button>
     </header>
