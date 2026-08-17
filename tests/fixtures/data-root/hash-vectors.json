@@ -1,0 +1,46 @@
+{
+  "schema": "aisc.data-root/v1",
+  "description": "Cross-language contract vectors for the Stage 7 data-root workspace hash and verbatim-strip. Consumed by tests/test_data_root.py (Python) and workbench/src-tauri/src/data_root.rs (Rust). 'canonical' strings are already canonicalized (no verbatim prefix); hash is sha256-v1:<full sha256 hex> of the UTF-8 bytes.",
+  "algo": "sha256-v1",
+  "hash_vectors": [
+    {
+      "name": "posix-simple",
+      "canonical": "/home/dev/project-x",
+      "hash": "sha256-v1:b73b76c75f92d2a6bc6c55b26680f85054fdb52053b260d6b74234b500b3a1dd"
+    },
+    {
+      "name": "windows-drive",
+      "canonical": "C:\\Users\\dev\\Projects\\demo",
+      "hash": "sha256-v1:c8cee92e9452ea16ac57261c7ca17d08dd4c5bea4252a2fdd25fc3758ee5095f"
+    },
+    {
+      "name": "windows-space-cjk",
+      "canonical": "D:\\工作区\\my projects\\测试 demo",
+      "hash": "sha256-v1:cfe5bcce6eb848ab73fa483ef6b08bebba2e735c8f2f8fb91851ecafa3f60880"
+    },
+    {
+      "name": "windows-emoji",
+      "canonical": "C:\\Users\\dev\\Projects\\🚀-demo",
+      "hash": "sha256-v1:c5443a2da77190adff69e784153e90686340e9ec4525dd17bd3300862167feee"
+    },
+    {
+      "name": "unc",
+      "canonical": "\\\\srv\\share\\proj",
+      "hash": "sha256-v1:55b291da6077a40e9f8b138a30ca755aa6a834b909d24ccd865cdb64a597b23a"
+    }
+  ],
+  "strip_vectors": [
+    {
+      "verbatim": "\\\\?\\C:\\Users\\dev\\Projects\\demo",
+      "stripped": "C:\\Users\\dev\\Projects\\demo"
+    },
+    {
+      "verbatim": "\\\\?\\UNC\\srv\\share\\proj",
+      "stripped": "\\\\srv\\share\\proj"
+    },
+    {
+      "verbatim": "\\\\srv\\share\\proj",
+      "stripped": "\\\\srv\\share\\proj"
+    }
+  ]
+}
