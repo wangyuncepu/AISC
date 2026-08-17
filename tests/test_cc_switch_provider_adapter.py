@@ -208,16 +208,9 @@ class EditDanceTests(AdapterTestCase):
         A.op_edit("claude", "zhipu", {
             "patch": {"model": "glm-5.2"}, "api_key": "sk-rotated-4444",
         })
-        kinds = []
-        for call in self.cli.calls:
-            if "delete" in call.args:
-                kinds.append("delete")
-            elif "add" in call.args:
-                kinds.append("add")
-            elif "switch" in call.args:
-                kinds.append("switch")
-        self.assertEqual(kinds, ["delete", "add"])  # no switch dance needed
-        sent = json.loads(self.cli.calls[1].stdin_text)
+        add_calls = [c for c in self.cli.calls if "add" in c.args]
+        self.assertEqual(len(add_calls), 1)  # no switch dance; delete is DB-side
+        sent = json.loads(add_calls[0].stdin_text)
         self.assertEqual(sent["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-rotated-4444")
         self.assertEqual(sent["env"]["ANTHROPIC_MODEL"], "glm-5.2")
         self.assertEqual(sent["env"]["ANTHROPIC_BASE_URL"],
@@ -238,14 +231,14 @@ class EditDanceTests(AdapterTestCase):
             return None
 
         kinds = [k for k in (kind(c) for c in self.cli.calls) if k]
+        # Delete is the adapter's DB transaction (no CLI call).
         self.assertEqual(kinds, [
             ("switch", "zhipu"),
-            ("delete", "deepseek"),
             ("add", "deepseek"),
             ("switch", "deepseek"),
         ])
         # The re-add carries the FULL preserved settings (incl. old token).
-        sent = json.loads(self.cli.calls[2].stdin_text)
+        sent = json.loads(self.cli.calls[1].stdin_text)
         self.assertEqual(sent["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-live-abcdef123456")
 
     def test_edit_failure_restores_previous_state(self):
@@ -292,10 +285,12 @@ class DeleteTests(AdapterTestCase):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
         seed_provider(self.dir, "zhipu", {"ANTHROPIC_BASE_URL": "https://z"})
         A.op_delete("claude", "deepseek")
+        # switch via CLI, delete via adapter DB transaction.
         self.assertEqual(
-            ["switch" if "switch" in c.args else "delete" for c in self.cli.calls],
-            ["switch", "delete"],
+            [c.args[-1] for c in self.cli.calls if "switch" in c.args],
+            ["zhipu"],
         )
+        self.assertNotIn("deepseek", {r["id"] for r in A.op_list("claude")})
 
     def test_delete_requires_confirm_at_host_but_sole_current_fails_here(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)

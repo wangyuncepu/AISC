@@ -75,9 +75,9 @@
       secret stdin+stdout 回显风险全固化；DeepSeek 官方 fixture 落
       `container/lib/deepseek-official-facts.json`；详见
       `stage-8-cc-switch-provider-ui/8a-discovery-report.md` + D8-08..D8-12）；
-- [ ] 实现 stable latest resolver、资产架构校验、SHA-256 和 image labels；
-- [ ] 从官方 DeepSeek 文档生成 fixture，确认字段、模型 ID、endpoint 和 `[1m]`；
-- [ ] 冻结 Provider UI protocol，完成 list/add/edit/delete 和 secrets redaction；
+- [x] 实现 stable latest resolver、资产架构校验、SHA-256 和 image labels（8b：domain 选择+application resolver（分页/限流/TTL cache/manifest 离线）+6 build-arg+OCI labels+21 测试；真机 dry-run 验证 latest→v5.10.1/digest 一致）；
+- [x] 从官方 DeepSeek 文档生成 fixture，确认字段、模型 ID、endpoint 和 `[1m]`（8a 四页取证 + 8c fixture 驱动 preset + ownership 刷新 +13 测试；A-CS03/04 自动化绿）；
+- [x] 冻结 Provider UI protocol，完成 list/add/edit/delete 和 secrets redaction（8d 容器 adapter + 宿主 CLI 23 测试；8e Workbench 虚拟 tab + Rust stdin 通道 + store 分层）；
 - [ ] 验证 UI/CLI 同库、并发写、preset refresh 用户覆盖和升级迁移。
 
 ## Stage 9

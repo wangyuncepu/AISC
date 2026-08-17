@@ -356,12 +356,35 @@ def _cli_add(
     )
 
 
-def _cli_delete(agent: str, provider_id: str, secrets: list[str]) -> None:
-    _cli(
-        ["-a", agent, "provider", "delete", provider_id],
-        secrets=secrets,
-        what=f"provider delete {provider_id}",
-    )
+def _db_delete(agent: str, provider_id: str) -> None:
+    """Delete a provider row in ONE transaction (BEGIN IMMEDIATE).
+
+    Upstream `provider delete` demands a real TTY confirmation (probed on
+    v5.10.1 — even piped "y" fails), so the controlled adapter performs the
+    delete itself — same direct-SQLite writer pattern as the preset module
+    (D8-04/D8-05: the in-container adapter owns DB transactions).
+    """
+    path = _db_path()
+    conn = sqlite3.connect(path, timeout=15)
+    try:
+        conn.execute("PRAGMA busy_timeout=15000")
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            "DELETE FROM providers WHERE id = ? AND app_type = ?",
+            (provider_id, agent),
+        )
+        if cur.rowcount != 1:
+            conn.rollback()
+            raise AdapterError(ERR_NOT_FOUND, f"provider not found: {provider_id}")
+        conn.commit()
+    except sqlite3.Error as exc:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        raise AdapterError(ERR_DELETE_FAILED, f"db delete failed: {exc}") from exc
+    finally:
+        conn.close()
 
 
 def _cli_switch(agent: str, provider_id: str, secrets: list[str]) -> None:
@@ -498,7 +521,7 @@ def op_edit(agent: str, provider_id: str, request: dict[str, Any]) -> list[dict[
     if was_current:
         switch_back_to = provider_id
         _cli_switch(agent, _switch_away_target(agent, snapshot, provider_id), secrets)
-    _cli_delete(agent, provider_id, secrets)
+    _db_delete(agent, provider_id)
     try:
         _cli_add(agent, provider_id, new_name, new_settings, secrets)
     except AdapterError:
@@ -528,7 +551,7 @@ def op_delete(agent: str, provider_id: str) -> list[dict[str, Any]]:
     secrets = snapshot_secrets(agent, snapshot)
     if row["is_current"]:
         _cli_switch(agent, _switch_away_target(agent, snapshot, provider_id), secrets)
-    _cli_delete(agent, provider_id, secrets)
+    _db_delete(agent, provider_id)
     return op_list(agent)
 
 

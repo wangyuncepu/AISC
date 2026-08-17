@@ -14,3 +14,4 @@
 | D8-10（8a） | `provider edit` 为 TUI-only → adapter 的 edit = 快照合并 + switch-away→delete→re-add（同 `--id`）；delete/switch 的 current 守卫由 adapter 舞步处理（换走目标须为有实际配置的 provider） | 非 tty prompt 失败实测 |
 | D8-11（8a） | DeepSeek preset 以官方 Claude Code 接入页**逐字环境变量集**为准：MODEL/OPUS/SONNET→`deepseek-v4-pro[1m]`，HAIKU/SUBAGENT→`deepseek-v4-flash`，`ANTHROPIC_AUTH_TOKEN`+`CLAUDE_CODE_EFFORT_LEVEL=max`；`[1m]` 为官方语法。**supersede 规划的 flash-default alias 表** | D8-06（fixture 优先于假设）；`container/lib/deepseek-official-facts.json` |
 | D8-12（8a） | resolver 选**版本化资产名** + GitHub API `digest`（sha256）为权威校验；`dds`/`deepseek` 上游模板与 DeepSeek 官方无关（ddshub 三方中转），不用于 preset | 实测 dds→www.ddshub.cc |
+| D8-13（8e） | Provider UI 走 Tauri IPC 通道：协议中 HTTP 专属项（session token/CORS/CSRF）不适用；可迁移不变量全部实现——secret 仅瞬态表单→IPC→CLI stdin（argv/存储/日志零 secret）、adapter 层 redaction、面板卸载即清态 | 04 §Security 按 Path B 实际架构适配 |
