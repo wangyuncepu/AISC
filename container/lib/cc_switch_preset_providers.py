@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Preconfigure cc-switch providers without storing API keys."""
+"""Preconfigure cc-switch providers without storing API keys.
+
+Stage 8c (CS-03/CS-04, D8-06/D8-11): the DeepSeek preset is driven by the
+official-docs fixture (``deepseek-official-facts.json`` next to this module)
+— nothing about models, endpoints or the ``[1m]`` suffix is hardcoded here.
+Refresh is ownership-aware: preset-written values are upgraded, values the
+USER set on top of the preset survive every refresh.
+"""
 
 from __future__ import annotations
 
@@ -13,52 +20,140 @@ import tomllib
 from pathlib import Path
 from typing import Any, TextIO
 
+FIXTURE_PATH = Path(__file__).parent / "deepseek-official-facts.json"
+FIXTURE_SCHEMA = "aisc.deepseek-official-facts/v1"
+# Env keys the official Claude Code integration page defines; the fixture
+# must carry every one of them (the AUTH_TOKEN is user-owned and never
+# written by the preset — the preset env template simply omits it).
+_REQUIRED_FIXTURE_ENV_KEYS = (
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+    "CLAUDE_CODE_EFFORT_LEVEL",
+)
+# The user's token env key — preset-owned env never includes it.
+USER_ONLY_ENV_KEYS = frozenset({"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"})
 
-PRESET_PROVIDERS = [
-    {
+
+def load_deepseek_fixture(path: Path = FIXTURE_PATH) -> dict[str, Any]:
+    """Strictly validate the official-docs fixture (fail closed)."""
+    try:
+        fixture = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"DeepSeek fixture unreadable at {path}: {exc}") from exc
+    if fixture.get("schema") != FIXTURE_SCHEMA:
+        raise RuntimeError(
+            f"DeepSeek fixture schema {fixture.get('schema')!r} != {FIXTURE_SCHEMA!r}"
+        )
+    env = fixture.get("claude_code_official_env")
+    if not isinstance(env, dict):
+        raise RuntimeError("DeepSeek fixture is missing claude_code_official_env")
+    missing = [k for k in _REQUIRED_FIXTURE_ENV_KEYS if k not in env]
+    if missing:
+        raise RuntimeError(f"DeepSeek fixture env is missing keys: {', '.join(missing)}")
+    models = fixture.get("models", {}).get("official_ids")
+    if not isinstance(models, list) or not models:
+        raise RuntimeError("DeepSeek fixture is missing models.official_ids")
+    if not fixture.get("base_url_anthropic"):
+        raise RuntimeError("DeepSeek fixture is missing base_url_anthropic")
+    return fixture
+
+
+def deepseek_provider_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
+    """Build the DeepSeek preset entry from the official fixture.
+
+    ``claude_env`` is the FULL official environment set minus the user-owned
+    token keys — the preset writes exactly these and owns exactly these.
+    ``_env_history`` lists every value earlier AISC presets (or cc-switch's
+    MODEL fan-out) historically wrote, so a refresh can tell "old preset
+    value → upgrade" apart from "user override → keep" (CS-04).
+    """
+    env = dict(fixture["claude_code_official_env"])
+    for key in USER_ONLY_ENV_KEYS:
+        env.pop(key, None)
+    # Historical preset-written values for the model keys: the deprecated
+    # official ids, the bare v4 name, and the [1m] forms. The role-model
+    # keys also carry these because cc-switch's `provider add` fans
+    # ANTHROPIC_MODEL out to the three DEFAULT_* keys verbatim.
+    model_history = [
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "deepseek-v4-pro",
+        "deepseek-v4-pro[1m]",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash[1m]",
+    ]
+    history: dict[str, list[str]] = {
+        "ANTHROPIC_BASE_URL": [
+            "https://api.deepseek.com",
+            "https://api.deepseek.com/v1",
+            "https://api.deepseek.com/anthropic",
+        ],
+        "ANTHROPIC_MODEL": list(model_history),
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": list(model_history),
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": list(model_history),
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": list(model_history),
+        "CLAUDE_CODE_SUBAGENT_MODEL": list(model_history),
+        # First revision shipping this key: nothing historical wrote it.
+        "CLAUDE_CODE_EFFORT_LEVEL": [],
+    }
+    official_ids = list(fixture["models"]["official_ids"])
+    return {
         "id": "deepseek",
         "name": "DeepSeek",
-        # Per api-docs.deepseek.com (2026-08): the OpenAI-compatible base URL is
-        # https://api.deepseek.com (the legacy /v1 alias also works); the
-        # Anthropic-compatible endpoint is https://api.deepseek.com/anthropic.
-        "base_url": "https://api.deepseek.com",
-        "anthropic_base_url": "https://api.deepseek.com/anthropic",
-        # Primary model for both the OpenAI and Anthropic endpoints.
-        "model": "deepseek-v4-pro",
-        # Claude Code's ANTHROPIC_MODEL per the docs (opus-equivalent; the
-        # [1m] context variant is what the docs recommend for Claude Code).
-        "anthropic_model": "deepseek-v4-pro[1m]",
-        "description": "DeepSeek V4; deepseek-v4-pro primary (Claude Code opus-equivalent), "
-                       "deepseek-v4-flash for fast/cheap reasoning",
-    },
-    {
-        "id": "volcengine-ark",
-        "name": "Volcengine Ark",
-        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "model": "",
-        "description": "Volcengine Ark inference service; configure an endpoint ID",
-    },
-    {
-        "id": "zhipu",
-        "name": "Zhipu GLM",
-        "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "anthropic_base_url": "https://open.bigmodel.cn/api/anthropic",
-        "model": "glm-5.2",
-        "description": "Zhipu GLM-5.2 flagship model service",
-    },
-    {
-        "id": "kimi",
-        "name": "Kimi",
-        "base_url": "https://api.moonshot.cn/v1",
-        "anthropic_base_url": "https://api.moonshot.cn/anthropic",
-        "model": "kimi-k3",
-        "description": "Moonshot Kimi K3 model service",
-    },
-]
+        "base_url": fixture.get("base_url_openai", "https://api.deepseek.com"),
+        "anthropic_base_url": fixture["base_url_anthropic"],
+        # Codex side keeps the official pro id (fixture-verified).
+        "model": "deepseek-v4-pro" if "deepseek-v4-pro" in official_ids else official_ids[-1],
+        "claude_env": env,
+        "_env_history": history,
+        "_retired_env_keys": [],
+        "description": (
+            "DeepSeek V4 (official Anthropic-compatible endpoint; "
+            "pro[1m] main + flash for haiku/subagent per official docs)"
+        ),
+    }
+
+
+def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, Any]]:
+    fixture = load_deepseek_fixture(fixture_path)
+    return [
+        deepseek_provider_from_fixture(fixture),
+        {
+            "id": "volcengine-ark",
+            "name": "Volcengine Ark",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "model": "",
+            "description": "Volcengine Ark inference service; configure an endpoint ID",
+        },
+        {
+            "id": "zhipu",
+            "name": "Zhipu GLM",
+            "base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "anthropic_base_url": "https://open.bigmodel.cn/api/anthropic",
+            "model": "glm-5.2",
+            "description": "Zhipu GLM-5.2 flagship model service",
+        },
+        {
+            "id": "kimi",
+            "name": "Kimi",
+            "base_url": "https://api.moonshot.cn/v1",
+            "anthropic_base_url": "https://api.moonshot.cn/anthropic",
+            "model": "kimi-k3",
+            "description": "Moonshot Kimi K3 model service",
+        },
+    ]
+
+
+PRESET_PROVIDERS = build_preset_providers()
 
 SUPPORTED_AGENTS = ("claude", "codex")
 MARKER_TEMPLATE = ".aisc-preset-providers-{agent}.sha256"
-PRESET_FORMAT_VERSION = 3
+PRESET_FORMAT_VERSION = 4
 # Preset provider ids removed from PRESET_PROVIDERS, mapped to a fingerprint
 # that identifies the old preset's settings_config. On refresh an id is deleted
 # only if its stored config still carries the fingerprint, so a user who
@@ -111,9 +206,12 @@ def _toml_string(value: str) -> str:
 
 
 def _settings_config(
-    agent: str, provider: dict[str, str], *, api_key: str = ""
+    agent: str, provider: dict[str, Any], *, api_key: str = ""
 ) -> dict[str, Any]:
     if agent == "claude":
+        # Fixture-driven providers (Stage 8c) carry the full official env set.
+        if "claude_env" in provider:
+            return {"env": dict(provider["claude_env"])}
         # Third-party providers expose a separate Anthropic-compatible endpoint
         # (e.g. /anthropic) distinct from their OpenAI base_url. Prefer it when
         # present so Claude Code speaks the Messages API to the right URL.
@@ -157,9 +255,8 @@ def _settings_config(
     raise ValueError(f"unsupported agent: {agent}")
 
 
-# Env keys the preset owns on the claude agent; refresh overwrites these but
-# leaves any other env var (notably ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN)
-# untouched so a user's stored key survives a preset update.
+# Env keys the legacy (non-fixture) claude presets own; refresh overwrites
+# these but leaves any other env var (notably the user's token keys) alone.
 _CLAUDE_PRESET_ENV_KEYS = frozenset({"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"})
 
 
@@ -171,6 +268,40 @@ def _parse_json_settings(raw: str | None) -> dict[str, Any]:
     except (json.JSONDecodeError, TypeError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _merged_claude_env(
+    provider: dict[str, Any], existing_env: dict[str, Any]
+) -> dict[str, str]:
+    """Ownership-aware claude env refresh (Stage 8c, CS-04).
+
+    For each preset-owned key:
+    - absent, or still carrying a value the PRESET (or cc-switch's MODEL
+      fan-out) historically wrote → upgrade to the new official value;
+    - carrying anything else → the USER changed it; keep their value.
+    Keys outside the owned set are user-owned and always kept; keys retired
+    from the preset are dropped.
+    """
+    owned: dict[str, str] = dict(provider["claude_env"])
+    history: dict[str, list[str]] = provider.get("_env_history", {})
+    retired: set[str] = set(provider.get("_retired_env_keys", []))
+
+    merged = {
+        k: v
+        for k, v in existing_env.items()
+        if k not in owned and k not in retired
+    }
+    for key, new_value in owned.items():
+        existing_value = existing_env.get(key)
+        if (
+            existing_value is not None
+            and existing_value != new_value
+            and existing_value not in history.get(key, [])
+        ):
+            merged[key] = existing_value  # user override wins (D8-07)
+        else:
+            merged[key] = new_value
+    return merged
 
 
 def _extract_codex_api_key(existing_raw: str | None) -> str:
@@ -193,7 +324,7 @@ def _extract_codex_api_key(existing_raw: str | None) -> str:
 
 def _merged_settings(
     agent: str,
-    provider: dict[str, str],
+    provider: dict[str, Any],
     existing_raw: str | None,
 ) -> dict[str, Any]:
     """Build fresh settings for a provider, preserving user-owned fields.
@@ -211,11 +342,14 @@ def _merged_settings(
     if agent == "claude":
         existing_env = existing.get("env")
         existing_env = existing_env if isinstance(existing_env, dict) else {}
-        merged_env = {
-            k: v for k, v in existing_env.items()
-            if k not in _CLAUDE_PRESET_ENV_KEYS
-        }
-        merged_env.update(_settings_config(agent, provider)["env"])
+        if "claude_env" in provider:
+            merged_env = _merged_claude_env(provider, existing_env)
+        else:
+            merged_env = {
+                k: v for k, v in existing_env.items()
+                if k not in _CLAUDE_PRESET_ENV_KEYS
+            }
+            merged_env.update(_settings_config(agent, provider)["env"])
         result: dict[str, Any] = {"env": merged_env}
     elif agent == "codex":
         api_key = _extract_codex_api_key(existing_raw)

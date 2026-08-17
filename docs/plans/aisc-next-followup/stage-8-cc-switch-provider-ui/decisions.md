@@ -12,5 +12,5 @@
 | D8-08（8a） | **Path B 受控 adapter**：无官方 HTTP/IPC API（实测）；写=官方非交互 CLI，读=容器内 adapter 只读 SQLite 快照；Workbench 永不直连 DB | 见 8a-discovery-report.md §2/§5 |
 | D8-09（8a） | secret 一律经 `--config-file /dev/stdin`（argv 零 secret）；**cc-switch CLI 全部 stdout 视为含 secret 的不可信文本**，redaction 后才可进 UI/日志/诊断（add 实测明文回显 key） | A-CS07 的直接依据 |
 | D8-10（8a） | `provider edit` 为 TUI-only → adapter 的 edit = 快照合并 + switch-away→delete→re-add（同 `--id`）；delete/switch 的 current 守卫由 adapter 舞步处理（换走目标须为有实际配置的 provider） | 非 tty prompt 失败实测 |
-| D8-11（8a） | DeepSeek preset 以官方 Claude Code 接入页**逐字环境变量集**为准：MODEL/OPUS/SONNET→`deepseek-v4-pro[1m]`，HAIKU/SUBAGENT→`deepseek-v4-flash`，`ANTHROPIC_AUTH_TOKEN`+`CLAUDE_CODE_EFFORT_LEVEL=max`；`[1m]` 为官方语法。**supersede 规划的 flash-default alias 表** | D8-06（fixture 优先于假设）；`tests/fixtures/deepseek/official-api-facts.json` |
+| D8-11（8a） | DeepSeek preset 以官方 Claude Code 接入页**逐字环境变量集**为准：MODEL/OPUS/SONNET→`deepseek-v4-pro[1m]`，HAIKU/SUBAGENT→`deepseek-v4-flash`，`ANTHROPIC_AUTH_TOKEN`+`CLAUDE_CODE_EFFORT_LEVEL=max`；`[1m]` 为官方语法。**supersede 规划的 flash-default alias 表** | D8-06（fixture 优先于假设）；`container/lib/deepseek-official-facts.json` |
 | D8-12（8a） | resolver 选**版本化资产名** + GitHub API `digest`（sha256）为权威校验；`dds`/`deepseek` 上游模板与 DeepSeek 官方无关（ddshub 三方中转），不用于 preset | 实测 dds→www.ddshub.cc |

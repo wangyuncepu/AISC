@@ -2,7 +2,7 @@
 
 > 调研日期：2026-08-17 · 方法：真实 release metadata（GitHub API）+ Linux musl 二进制
 > 黑盒实跑（python:3.12-slim 容器，隔离 `CC_SWITCH_CONFIG_DIR`）+ DeepSeek 官方文档
-> 逐页取证。**未依赖任何旧版本猜测。** fixture：`tests/fixtures/deepseek/official-api-facts.json`。
+> 逐页取证。**未依赖任何旧版本猜测。** fixture：`container/lib/deepseek-official-facts.json`。
 
 ## 1. Release / resolver 事实（CS-01/CS-02）
 

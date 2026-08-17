@@ -354,6 +354,9 @@ RUN sed -i 's/\r$//' /usr/local/bin/cc-switch \
 
 COPY container/cc_switch_skills.py /usr/local/bin/lib/cc_switch_skills.py
 COPY container/lib/cc_switch_preset_providers.py /usr/local/bin/lib/cc_switch_preset_providers.py
+# Stage 8c (D8-06): the DeepSeek preset consumes this official-docs fixture
+# at runtime — models/endpoints/[1m] rules never live in code.
+COPY container/lib/deepseek-official-facts.json /usr/local/bin/lib/deepseek-official-facts.json
 
 # cc-switch 离线 skills：元技能说明 + 已暂存插件中的实际 skill 内容。
 COPY container/cc-switch-skills/ /opt/aisc/skills/
