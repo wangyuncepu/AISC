@@ -46,6 +46,15 @@
   `/root/app`），宿主预建目标、fail closed；DATA-01 回归门（挂载 argv + workspace
   零新增）。修测试封闭性：7 模块注入 hermetic data root（此前真实 LOCALAPPDATA 被
   写入）。本地门：全量 620 OK / cargo 183+7×3 / workspaces 污染 0。
+- **7f gate（真机）**：A-DATA01..05 全 PASS——fresh workspace 经 CLI+60 并发注册+**真实
+  容器跑**（super-claude:latest + 新 entrypoint/wrapper bind-mount + 四 data-root 挂载）
+  保持零新增，data root 收全量（claude 2171/codex 479/cc-switch 479+db+daemon 态）；
+  用户实际 legacy workspace 副本 3127 文件迁移/幂等/回滚全链路；并发 60 写入零丢失；
+  CJK/emoji/空格/359 字符长路径迁移 PASS、junction 拒绝。**根因修复**：镜像内旧
+  cc-switch wrapper 硬编码 `HOME=/root/app` 回写 workspace → 改 `/proc/mounts` 挂载
+  检测推导 HOME（`586aa24`，含显式 `--apply` flag）。发布前提：release 镜像重建烧入
+  新 entrypoint+wrapper。本地全量门：Python 621 / cargo 183+7×3 / vitest 213 /
+  vue-tsc 干净。
 - **启动序列**：followup 计划入库（`5ec13bb`）；`aisc-next` 整体归档
   `docs/archive/completed/aisc-next`（`e0af206`）；实测 fresh 初始化 workspace 清单
   （`.aisc/.claude/.codex/.cc-switch/.local`，~3130 文件/~69MB）入 02-domain-contract。

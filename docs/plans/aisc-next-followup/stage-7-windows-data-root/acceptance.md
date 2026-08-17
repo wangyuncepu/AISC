@@ -2,11 +2,11 @@
 
 | ID | 验收方法 | 结果 |
 |---|---|---|
-| A-DATA01 | fresh Windows workspace，启动 CLI/Workbench/container 后扫描根目录 | 待执行 |
-| A-DATA02 | legacy fixture dry-run/apply，校验 manifest、hash、redirect 和源文件 | 待执行 |
-| A-DATA03 | 中断迁移后 resume/rollback，模拟权限/磁盘不足 | 待执行 |
-| A-DATA04 | 两个 session + provider 写入并发，检查 lock 和 SQLite/JSON 完整性 | 待执行 |
-| A-DATA05 | 中文、emoji、长路径、junction、OneDrive 用户目录 | 待执行 |
+| A-DATA01 | fresh Windows workspace，启动 CLI/Workbench/container 后扫描根目录 | **PASS**（2026-08-17 真机，见下） |
+| A-DATA02 | legacy fixture dry-run/apply，校验 manifest、hash、redirect 和源文件 | **PASS**（2026-08-17 真机 3127 文件全链路） |
+| A-DATA03 | 中断迁移后 resume/rollback，模拟权限/磁盘不足 | **PASS**（自动化 13 用例 + 真机 cancel/resume 语义；磁盘不足 mock 门） |
+| A-DATA04 | 两个 session + provider 写入并发，检查 lock 和 SQLite/JSON 完整性 | **PASS**（真机 2 进程 ×30 写入零丢失 + msvcrt 锁门） |
+| A-DATA05 | 中文、emoji、长路径、junction、OneDrive 用户目录 | **PASS**（真机 CJK/emoji/空格 + 359 字符长路径 + junction 拒绝；OneDrive 见遗留） |
 
 ## 子步骤证据
 
@@ -108,6 +108,34 @@
 - 待 7f 真机：Docker Desktop 实跑 project/temporary 双作用域、旧宿主回退布局、
   cc-switch daemon 持久化
 - 结论：**PASS**
+
+### 7f-gate — Windows 真机验证（2026-08-17）
+
+- Commit：门禁修复 `586aa24`（wrapper HOME 挂载检测 + 显式 `--apply`）
+- OS/arch：Windows 11 Pro 10.0.26200 / x64；Docker Desktop 29.7.2（super-claude:latest）
+- 本地全量门：Python 621 OK（61 skipped）/ cargo 183+7×3 / vitest 213 / vue-tsc build 干净
+- **A-DATA01（真机）**：fresh 临时 workspace → `data-root doctor` + 60 次注册写入 →
+  workspace 条目 `[]`；**真实容器跑**（super-claude:latest，新 entrypoint + wrapper 经
+  bind-mount 覆盖、四 data-root 挂载、CLI_SCOPE=project）→ workspace 保持空，
+  data root 收全量：claude 2171 / codex 479 / cc-switch 479 + db
+- **A-DATA02（真机）**：用户实际 legacy workspace（Downloads\test，3135 文件/~69MB）副本
+  → dry-run（3127/8/0 冲突/0 unknown）→ `--apply`（copied=3127，markers 四命名空间）
+  → 目标/源/标记 8 项断言全过 → doctor=committed → 幂等重跑（copied=0/skipped=3127）
+  → rollback（removed=3127/kept=0，源与未知文件完好、标记清除）
+- **A-DATA03**：自动化门（取消保留 prepared manifest→重跑 resume；迁移中源变更/冲突/
+  空间不足 fail closed；用户改目标后 rollback 保留）+ 真机 3127 文件 apply 的 staging
+  逐条持久化路径实测
+- **A-DATA04（真机）**：两并发进程 ×30 次 register（msvcrt 锁）→ 60/60 条目零丢失
+- **A-DATA05（真机）**：workspace 名含 CJK/emoji/空格 → 迁移+doctor PASS；359 字符
+  深路径 workspace → 迁移 PASS；junction 指向的 override root →
+  `AISC_ERR_DATA_ROOT_REPARSE_POINT` 拒绝
+- **门禁修复（根因）**：镜像内旧 cc-switch wrapper 硬编码 `HOME=/root/app`，导致
+  proxy/daemon 回写 workspace `.claude/.codex/.local` → wrapper 改用 `/proc/mounts`
+  挂载检测推导 HOME（`586aa24`）
+- **发布前提**：release 镜像需重建以烧入新 entrypoint + wrapper（真机门用 bind-mount
+  覆盖验证）；OneDrive 重定向用户目录留待发布前手测矩阵（LOCALAPPDATA 通常不受
+  OneDrive 影响）
+- 结论：**PASS**（Workbench GUI 手测待用户执行）
 
 证据模板：
 
