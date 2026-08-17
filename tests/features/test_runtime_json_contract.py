@@ -4,6 +4,12 @@ Tests that aisc runtime commands produce correct JSON envelopes per
 docs/rfc/aisc-cli-v1.md and docs/gui-planning/05-cli-gui-contract.md.
 """
 
+# Stage 7: keep run/start paths hermetic — they resolve the data root and
+# create the agent mount dirs; without this the tests would write into the
+# real %LOCALAPPDATA% AISC data.
+import os as _os
+import tempfile as _tempfile
+_os.environ.setdefault("AISC_DATA_ROOT", _tempfile.mkdtemp(prefix="aisc-test-data-"))
 import json
 import subprocess
 import sys

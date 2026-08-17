@@ -18,10 +18,40 @@ const store = useRuntimeStore();
 // --- G-08 + menu (aria-haspopup; Enter/Space opens, arrows move, Enter picks) ---
 const menuOpen = ref(false);
 const menuRef = ref<HTMLUListElement | null>(null);
+const addBtnRef = ref<HTMLButtonElement | null>(null);
+const menuPos = ref({ x: 0, y: 0 });
+
+/**
+ * The menu is teleported to <body> with fixed positioning: the tabbar is an
+ * `overflow-x: auto` scroll container (UX-02), which CLIPS an absolutely
+ * positioned dropdown that drops below the bar (Stage 6 regression — the
+ * agent list appeared cut off). The app chrome is CSS-zoomed
+ * (`ui.font_scale` → `.app { zoom }`), so button-rect coordinates must be
+ * divided by the live zoom — same pattern as the Explorer context menu.
+ */
+function appZoom(): number {
+  const app = document.querySelector<HTMLElement>(".app");
+  if (!app) return 1;
+  const w = app.offsetWidth || 0;
+  return w > 0 ? app.getBoundingClientRect().width / w : 1;
+}
+
+function placeMenu() {
+  const btn = addBtnRef.value;
+  if (!btn) return;
+  const zoom = appZoom();
+  const rect = btn.getBoundingClientRect();
+  const menuWidth = 160;
+  menuPos.value = {
+    x: Math.max(4, Math.min(rect.left / zoom, window.innerWidth / zoom - menuWidth)),
+    y: rect.bottom / zoom + 2,
+  };
+}
 
 function toggleMenu() {
   menuOpen.value = !menuOpen.value;
   if (menuOpen.value) {
+    placeMenu();
     window.setTimeout(() => menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus(), 0);
   }
 }
@@ -53,7 +83,11 @@ function choose(agent: LaunchAgent) {
 }
 
 function onDocMousedown(e: MouseEvent) {
-  if (menuOpen.value && !(e.target as HTMLElement).closest(".menu-wrap")) {
+  // The menu is teleported to <body>, so the containment check covers BOTH
+  // the anchor button and the teleported menu itself (a mousedown on a menu
+  // item must not close the menu before the click lands).
+  const target = e.target as HTMLElement;
+  if (menuOpen.value && !target.closest(".menu-wrap") && !target.closest(".tab-new-menu")) {
     menuOpen.value = false;
   }
 }
@@ -205,9 +239,12 @@ function canReopen(s: TabSessionState): boolean {
       </span>
     </div>
 
-    <!-- G-08: + menu (duplicates allowed; cap enforced by the store) -->
+    <!-- G-08: + menu (duplicates allowed; cap enforced by the store).
+         Teleported to <body>: the tabbar's overflow-x scroll container would
+         clip an in-flow dropdown (Stage 6 UX-02 regression). -->
     <div class="menu-wrap">
       <button
+        ref="addBtnRef"
         class="icon add"
         :aria-label="t('tabbar.newTab')"
         :title="t('tabbar.newTab')"
@@ -216,16 +253,25 @@ function canReopen(s: TabSessionState): boolean {
         @click="toggleMenu"
         @keydown="onMenuKeydown"
       >+</button>
-      <ul v-if="menuOpen" ref="menuRef" class="menu" role="menu" @keydown="onMenuKeydown">
-        <li
-          v-for="a in AGENTS"
-          :key="a"
-          role="menuitem"
-          tabindex="0"
-          :data-agent="a"
-          @click="choose(a)"
-        >{{ t(`tabbar.menu.${a}`) }}</li>
-      </ul>
+      <Teleport to="body">
+        <ul
+          v-if="menuOpen"
+          ref="menuRef"
+          class="menu tab-new-menu"
+          role="menu"
+          :style="{ left: `${menuPos.x}px`, top: `${menuPos.y}px` }"
+          @keydown="onMenuKeydown"
+        >
+          <li
+            v-for="a in AGENTS"
+            :key="a"
+            role="menuitem"
+            tabindex="0"
+            :data-agent="a"
+            @click="choose(a)"
+          >{{ t(`tabbar.menu.${a}`) }}</li>
+        </ul>
+      </Teleport>
     </div>
   </div>
 </template>
@@ -289,9 +335,11 @@ function canReopen(s: TabSessionState): boolean {
 .icon.reopen { color: var(--success); }
 .icon.add { color: var(--info); font-size: var(--font-lg); margin-left: 4px; }
 .menu-wrap { position: relative; display: flex; align-items: center; }
+/* Teleported to <body>: fixed + zoom-compensated coordinates (see placeMenu);
+   scoped styles still apply because Teleport preserves scope ids. */
 .menu {
-  position: absolute; top: 100%; left: 0; z-index: var(--z-drawer);
-  list-style: none; margin: 2px 0 0; padding: 4px 0;
+  position: fixed; z-index: var(--z-drawer);
+  list-style: none; margin: 0; padding: 4px 0;
   background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--radius-md);
   min-width: 140px;
 }

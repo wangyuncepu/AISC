@@ -35,45 +35,45 @@ _REGISTRY_FILE = "containers.json"
 # ---------------------------------------------------------------------------
 
 def _registry_path(root: Path) -> Path:
-    """Return path to containers.json.
+    """Return path to containers.json inside the STATE DIRECTORY *root*.
 
-    Args:
-        root: Either workspace root or .aisc directory.
-              If root ends with .aisc, use it directly.
-              Otherwise append .aisc.
+    Stage 7 wiring: *root* is the registry's state directory itself (the
+    data-root ``workspaces/<hash>/runtime`` dir, or the legacy
+    ``<workspace>/.aisc`` during transition) — callers resolve it via
+    ``application.data_root.workspace_state_dir``; this module never
+    concatenates workspace paths (01-cross-stage-contracts §1).
     """
-    if root.name == ".aisc":
-        return root / _REGISTRY_FILE
-    else:
-        return root / ".aisc" / _REGISTRY_FILE
+    return root / _REGISTRY_FILE
 
 
 def _state_dir(root: Path) -> Path:
-    """Return the ``.aisc`` state directory, accepting either a workspace
-    root or an already-``.aisc`` path (mirrors :func:`_registry_path`).
-
-    All lock/temp-file placement goes through here so callers may pass
-    either form consistently.
-    """
-    if root.name == ".aisc":
-        return root
-    return root / ".aisc"
+    """Return the state directory for locks/temp files (= *root* itself)."""
+    return root
 
 
 def _resolve_root(root: Optional[Path], explicit_root: Optional[str] = None) -> Optional[Path]:
-    """Resolve the aisc root, accepting either a ready Path or explicit_root str."""
+    """Resolve the registry STATE DIR for the active workspace (Stage 7).
+
+    *root*/*explicit_root* may be a workspace path, a pre-resolved state
+    dir (legacy ``.aisc`` or data-root ``runtime``), or None (→ current
+    directory). State is per-workspace under the data root — the old
+    install-root fallback (repo/.aisc split-brain with run's workspace
+    registry) is gone; legacy state is adopted on first use.
+    Resolver failures propagate (fail closed, never write the workspace).
+    """
     if root is not None:
-        return root
-    if explicit_root is not None:
-        p = Path(explicit_root).resolve()
-        if p.is_dir():
-            return p
-    # Fall back to locate_aisc_root for auto-discovery
-    try:
-        from aisc.application.resources import locate_aisc_root
-        return locate_aisc_root(explicit_root=explicit_root)
-    except Exception:
-        return None
+        base = Path(root)
+    elif explicit_root is not None:
+        base = Path(explicit_root).resolve()
+        if not base.is_dir():
+            return None
+    else:
+        base = Path.cwd()
+    if base.name == ".aisc" or (base / _REGISTRY_FILE).is_file():
+        return base  # already a state dir
+    from aisc.application.data_root import workspace_state_dir
+
+    return workspace_state_dir(base)
 
 
 # ---------------------------------------------------------------------------

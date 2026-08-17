@@ -18,7 +18,7 @@ from aisc.domain.models import CliError, RuntimeErrorCode, RuntimeExitCode
 def _register_after_start(root: str, name: str, start) -> None:
     start.wait()
     register(
-        Path(root),
+        Path(root) / ".aisc",  # Stage 7: registry root = state dir itself
         name,
         {
             "image": "super-claude:test",
@@ -51,7 +51,7 @@ class ContainerRegistryConcurrencyTests(unittest.TestCase):
                 process.join(timeout=10)
 
             exit_codes = [process.exitcode for process in processes]
-            registered = list_containers(Path(temp_dir))
+            registered = list_containers(Path(temp_dir) / ".aisc")
 
         self.assertEqual(exit_codes, [0] * process_count)
         self.assertEqual(set(registered), {f"container-{i}" for i in range(process_count)})
@@ -70,7 +70,7 @@ class ContainerRegistryConcurrencyTests(unittest.TestCase):
             fcntl.flock(holder_fd, fcntl.LOCK_EX)
             try:
                 with self.assertRaises(CliError) as cm:
-                    with _registry_lock(root, timeout=1.0):
+                    with _registry_lock(root / ".aisc", timeout=1.0):
                         pass
                 self.assertEqual(cm.exception.exit_code, RuntimeExitCode.STATE_LOCK_TIMEOUT)
                 self.assertEqual(cm.exception.error_code, RuntimeErrorCode.STATE_LOCK_TIMEOUT)
@@ -90,7 +90,7 @@ class ContainerRegistryConcurrencyTests(unittest.TestCase):
             fcntl.flock(holder_fd, fcntl.LOCK_EX)
             try:
                 with self.assertRaises(CliError) as cm:
-                    with workspace_lock(root, "k", timeout=1.0):
+                    with workspace_lock(root / ".aisc", "k", timeout=1.0):
                         pass
                 self.assertEqual(cm.exception.exit_code, RuntimeExitCode.STATE_LOCK_TIMEOUT)
             finally:

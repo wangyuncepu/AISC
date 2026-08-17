@@ -38,7 +38,11 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
 
         self.assertIn('CC_SWITCH_CONFIG_DIR="$TEMP_HOME/.cc-switch"', entrypoint)
-        self.assertIn('CC_SWITCH_CONFIG_DIR="/root/app/.cc-switch"', entrypoint)
+        # Stage 7: project scope mounts the data root at /root/.cc-switch
+        # (legacy /root/app layout stays as the old-host fallback).
+        self.assertIn('CC_SWITCH_CONFIG_DIR="$PROJECT_CC_SWITCH_DIR"', entrypoint)
+        self.assertIn('PROJECT_CC_SWITCH_DIR="/root/.cc-switch"', entrypoint)
+        self.assertIn('PROJECT_CC_SWITCH_DIR="/root/app/.cc-switch"', entrypoint)
         self.assertIn("export CC_SWITCH_CONFIG_DIR", entrypoint)
         self.assertNotIn("PROVIDERS_JSON", entrypoint)
         self.assertNotIn("providers.json", entrypoint)
@@ -167,7 +171,7 @@ class CcSwitchRuntimeTests(unittest.TestCase):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")
 
         self.assertIn('export IS_SANDBOX="${IS_SANDBOX:-1}"', entrypoint)
-        self.assertIn('CC_SWITCH_CONFIG_DIR="/root/app/.cc-switch"', entrypoint)
+        self.assertIn('CC_SWITCH_CONFIG_DIR="$PROJECT_CC_SWITCH_DIR"', entrypoint)
         self.assertNotIn("chown -R", entrypoint)
         self.assertNotIn("cleanup_permissions", entrypoint)
 

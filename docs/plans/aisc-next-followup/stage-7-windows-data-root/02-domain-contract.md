@@ -29,6 +29,7 @@
     workspace-locks/<sha256-hex>.lock   # 现行 hash 为裸 64 位 hex，无版本前缀
   .claude/                              # ~43MB / 2171 文件 — 工厂态整体复制
     CLAUDE.md config.json settings.json settings.local.json
+    .claude.json .factory-version       # 隐藏文件（7c 实扫补充）
     backups/ commands/ plugins/ projects/ sessions/ skills/
   .codex/                               # ~13MB / 479 文件
     config.toml AGENTS.md .factory-version skills/
@@ -38,7 +39,7 @@
     .aisc-bundled-skills.{lock,sha256} .aisc-preset-providers-{claude,codex}.sha256
     state-mutation.lock
   .local/state/cc-switch/               # cc-switchd 运行态
-    cc-switchd.log runtime/daemon.pid
+    cc-switchd.log runtime/daemon.pid runtime/daemon.sock  # sock 系 AF_UNIX reparse
 ```
 
 设计相关观察：

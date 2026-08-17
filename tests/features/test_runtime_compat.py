@@ -4,7 +4,15 @@ These tests document and protect the current behavior of `aisc run`,
 ensuring that new runtime/session commands do not break existing workflows.
 """
 
+
+# Stage 7: keep run/start paths hermetic — they resolve the data root and
+# create the agent mount dirs; without this the tests would write into the
+# real %LOCALAPPDATA% AISC data.
+import os as _os
+import tempfile as _tempfile
+_os.environ.setdefault("AISC_DATA_ROOT", _tempfile.mkdtemp(prefix="aisc-test-data-"))
 import json
+import os
 import sys
 import tempfile
 import time
@@ -93,7 +101,7 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
 
             # Register a container with current schema
             register(
-                root,
+                root / ".aisc",  # Stage 7: registry root = state dir
                 "test-container",
                 {
                     "image": "super-claude:latest",
@@ -147,13 +155,13 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
                 json.dump(old_registry, f)
 
             # Should be able to list without error
-            containers = list_containers(root)
+            containers = list_containers(root / ".aisc")
             self.assertIn("old-container", containers)
             self.assertEqual(containers["old-container"]["image"], "super-claude:v2.1.4")
 
             # Register a new container (simulating upgrade write)
             register(
-                root,
+                root / ".aisc",  # Stage 7: registry root = state dir
                 "new-container",
                 {
                     "image": "super-claude:latest",
@@ -164,7 +172,7 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
             )
 
             # Old container should still exist
-            containers = list_containers(root)
+            containers = list_containers(root / ".aisc")
             self.assertIn("old-container", containers)
             self.assertIn("new-container", containers)
 
@@ -181,10 +189,10 @@ class RuntimeBackwardCompatibilityTests(unittest.TestCase):
 
             # Test default restoration: unregister new-container (current default)
             from aisc.adapters.container_registry import unregister
-            unregister(root, "new-container")
+            unregister(root / ".aisc", "new-container")
 
             # Verify new-container is removed
-            containers = list_containers(root)
+            containers = list_containers(root / ".aisc")
             self.assertNotIn("new-container", containers)
             self.assertIn("old-container", containers)
 
@@ -275,9 +283,11 @@ class ScopeWrapperBehaviorTests(unittest.TestCase):
         entrypoint_path = Path(__file__).parent.parent.parent / "container" / "entrypoint.sh"
         entrypoint = entrypoint_path.read_text(encoding="utf-8")
 
-        # Should set CC_SWITCH_CONFIG_DIR based on scope
+        # Should set CC_SWITCH_CONFIG_DIR based on scope (Stage 7: project
+        # scope resolves to the data-root mount, legacy layout as fallback).
         self.assertIn('CC_SWITCH_CONFIG_DIR="$TEMP_HOME/.cc-switch"', entrypoint)
-        self.assertIn('CC_SWITCH_CONFIG_DIR="/root/app/.cc-switch"', entrypoint)
+        self.assertIn('CC_SWITCH_CONFIG_DIR="$PROJECT_CC_SWITCH_DIR"', entrypoint)
+        self.assertIn('PROJECT_CC_SWITCH_DIR="/root/.cc-switch"', entrypoint)
 
 
 class LegacyCommandBehaviorTests(unittest.TestCase):
@@ -418,15 +428,24 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_root:
             root = Path(temp_root)
+            # Stage 7: resolve_target resolves the data-root state dir —
+            # keep the test out of the real %LOCALAPPDATA%.
+            _prev_dr = os.environ.get("AISC_DATA_ROOT")
+            os.environ["AISC_DATA_ROOT"] = str(root) + "-state"
+            self.addCleanup(
+                (lambda v: (os.environ.__setitem__("AISC_DATA_ROOT", v)
+                            if v is not None else os.environ.pop("AISC_DATA_ROOT", None))),
+                _prev_dr,
+            )
 
             # Setup registry with multiple containers
-            register(root, "container-a", {
+            register(root / ".aisc", "container-a", {
                 "image": "super-claude:latest",
                 "workspace": "/workspace-a",
                 "network": "direct",
                 "label": "work",
             })
-            register(root, "container-b", {
+            register(root / ".aisc", "container-b", {
                 "image": "super-claude:latest",
                 "workspace": "/workspace-b",
                 "network": "direct",

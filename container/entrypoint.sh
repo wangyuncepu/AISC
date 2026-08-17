@@ -20,12 +20,15 @@ source /usr/local/bin/lib/writable.sh
 # ==========================================
 # 路径模型（全程以 root 运行，宿主工作区挂载为 /root/app）
 #   .claude = Claude CLI 原生完整目录（skills/plugins/projects/todos/statsig…，软件本体）
-#             出厂模板在 /opt/aisc/factory；项目模式复制到 /root/app/.claude
-#             临时模式复制到 /tmp/aisc-home/.claude
-#   .codex  = Codex CLI 配置目录（类似 .claude 结构）
-#             项目模式使用 /root/app/.codex；临时模式使用 /tmp/aisc-home/.codex
-#   .cc-switch = cc-switch 运行时目录（数据库、设置、备份及 skills SSOT）
-#             项目模式放 /root/app/.cc-switch；临时模式放 /tmp/aisc-home/.cc-switch
+#             出厂模板在 /opt/aisc/factory。
+#             临时模式复制到 /tmp/aisc-home/.claude（容器退出即重置）。
+#             项目模式（Stage 7, DATA-01）使用宿主 data root 挂载到
+#             /root/.claude（旧版宿主未挂载时回退 /root/app/.claude，
+#             保持新旧混用可运行）。
+#   .codex  = Codex CLI 配置目录（类似 .claude 结构），同上。
+#   .cc-switch = cc-switch 运行时目录（数据库、设置、备份及 skills SSOT），
+#             项目模式挂载在 /root/.cc-switch；daemon 运行态挂载在
+#             /root/.local/state/cc-switch。
 # ==========================================
 FACTORY_HOME="/opt/aisc/factory"
 FACTORY_CLAUDE_DIR="$FACTORY_HOME/.claude"
@@ -33,8 +36,23 @@ FACTORY_CODEX_DIR="$FACTORY_HOME/.codex"
 TEMP_HOME="/tmp/aisc-home"
 TEMP_CLAUDE_DIR="$TEMP_HOME/.claude"
 TEMP_CODEX_DIR="$TEMP_HOME/.codex"
-PROJECT_CLAUDE_DIR="/root/app/.claude"
-PROJECT_CODEX_DIR="/root/app/.codex"
+# 项目态目录：宿主把 data root 的 workspaces/<hash>/{claude,codex,cc-switch}
+# 挂到 /root 下；未挂载（旧版宿主）则回退到工作区内的旧位置。
+if grep -qs " /root/.claude " /proc/mounts; then
+    PROJECT_CLAUDE_DIR="/root/.claude"
+else
+    PROJECT_CLAUDE_DIR="/root/app/.claude"
+fi
+if grep -qs " /root/.codex " /proc/mounts; then
+    PROJECT_CODEX_DIR="/root/.codex"
+else
+    PROJECT_CODEX_DIR="/root/app/.codex"
+fi
+if grep -qs " /root/.cc-switch " /proc/mounts; then
+    PROJECT_CC_SWITCH_DIR="/root/.cc-switch"
+else
+    PROJECT_CC_SWITCH_DIR="/root/app/.cc-switch"
+fi
 
 echo -e "\n🚀 [AISC] AI 工作站初始化中..."
 
@@ -80,7 +98,7 @@ if [ "$SCOPE" = "global" ] || [ "$SCOPE" = "temp" ] || [ "$SCOPE" = "temporary" 
 else
     CLAUDE_CONFIG_DIR="$PROJECT_CLAUDE_DIR"
     CODEX_CONFIG_DIR="$PROJECT_CODEX_DIR"
-    CC_SWITCH_CONFIG_DIR="/root/app/.cc-switch"
+    CC_SWITCH_CONFIG_DIR="$PROJECT_CC_SWITCH_DIR"
     echo "📁 作用域: 项目 (project) → Claude: $CLAUDE_CONFIG_DIR, Codex: $CODEX_CONFIG_DIR"
 
     # 项目 .claude 初始化（保持原有逻辑）
@@ -279,10 +297,13 @@ if command -v cc-switch >/dev/null 2>&1; then
             fi
         fi
 
-        # cc-switch 的 skills 路径以 HOME 为根：项目态同步到挂载的 /root，
-        # 临时态同步到 /tmp/aisc-home，不污染宿主工作区。
+        # cc-switch 的 skills 路径以 HOME 为根：项目态用 /root（skills 落在
+        # 挂载的 /root/.claude、/root/.codex，持久到宿主 data root），
+        # 临时态同步到 /tmp/aisc-home。旧宿主回退布局时保持 /root/app。
         if [ "$SCOPE" = "global" ] || [ "$SCOPE" = "temp" ] || [ "$SCOPE" = "temporary" ]; then
             CC_SWITCH_SKILLS_HOME="$TEMP_HOME"
+        elif [ "$PROJECT_CLAUDE_DIR" = "/root/.claude" ]; then
+            CC_SWITCH_SKILLS_HOME="/root"
         else
             CC_SWITCH_SKILLS_HOME="/root/app"
         fi

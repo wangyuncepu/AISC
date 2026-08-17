@@ -148,8 +148,11 @@ fn isolate_corrupt(dir: &Path) {
 /// Load `dir/onboarding.json` and normalize to the current schema.
 ///
 /// Missing → empty (not_started). Corrupt JSON → isolate to `.corrupt` and
-/// return empty so the app starts. Unsupported (newer) schema → error, file
-/// untouched, saves refused (A-ONB01-1).
+/// return empty so the app starts. A file with NO schema_version at all is
+/// not an onboarding document (7f gate: test/foreign junk at this path
+/// deadlocked the wizard behind UnsupportedSchema) → isolate + empty.
+/// Unsupported (newer) schema → error, file untouched, saves refused
+/// (A-ONB01-1).
 pub fn load(dir: &Path) -> Result<OnboardingState, OnboardingError> {
     let path = dir.join(ONBOARDING_FILE);
     match fs::read(&path) {
@@ -171,6 +174,12 @@ pub fn load(dir: &Path) -> Result<OnboardingState, OnboardingError> {
                             Err(OnboardingError::Corrupt(e.to_string()))
                         }
                     }
+                }
+                None => {
+                    // Not an onboarding document: isolate and start fresh
+                    // (bytes preserved under *.corrupt for inspection).
+                    isolate_corrupt(dir);
+                    Ok(OnboardingState::empty())
                 }
                 other => Err(OnboardingError::UnsupportedSchema { found: other }),
             }
@@ -367,6 +376,21 @@ mod tests {
         assert!(updated.is_step_complete("workspace"));
         let reloaded = load(dir.path()).unwrap();
         assert!(reloaded.is_step_complete("workspace"));
+    }
+
+    /// 7f gate: a file with NO schema_version is not an onboarding document
+    /// (test/foreign junk at the config path) — isolate + empty so the
+    /// wizard starts instead of deadlocking behind UnsupportedSchema.
+    #[test]
+    fn non_onboarding_file_is_isolated_and_starts_fresh() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(ONBOARDING_FILE), r#"{"b":2}"#).unwrap();
+        let s = load(dir.path()).unwrap();
+        assert_eq!(s.status, OnboardingStatus::NotStarted);
+        assert!(dir.path().join(format!("{ONBOARDING_FILE}{CORRUPT_SUFFIX}")).is_file());
+        // The isolated bytes are preserved and a subsequent save works.
+        let updated = update(dir.path(), |st| st.status = OnboardingStatus::InProgress).unwrap();
+        assert_eq!(updated.status, OnboardingStatus::InProgress);
     }
 
     #[test]

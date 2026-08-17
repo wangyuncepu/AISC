@@ -184,9 +184,11 @@ def preflight_runtime(
     else:
         checks.append(PreflightCheck(id="network", status="pass"))
 
-    # Check 5: runtime_conflict
+    # Check 5: runtime_conflict (Stage 7: data-root state dir, DATA-01)
     if registry_root is None and workspace_valid:
-        registry_root = Path(canonical_workspace) / ".aisc"
+        from aisc.application.data_root import workspace_state_dir
+
+        registry_root = workspace_state_dir(Path(canonical_workspace))
 
     conflict_check, matching_runtime_id, conflicts, matching_state = _check_runtime_conflict(
         runtime_id=runtime_id,
@@ -719,10 +721,16 @@ def _wait_ready(
 def _resolve_registry_root(
     workspace: str, registry_root: Optional[Path]
 ) -> Path:
-    """Return the ``.aisc`` registry dir for *workspace*."""
+    """Return the registry state dir for *workspace*.
+
+    Stage 7: default is the data-root ``workspaces/<hash>/runtime`` dir
+    (DATA-01) — never a path inside the workspace.
+    """
     if registry_root is not None:
         return registry_root
-    return Path(workspace).resolve() / ".aisc"
+    from aisc.application.data_root import workspace_state_dir
+
+    return workspace_state_dir(Path(workspace).resolve())
 
 
 def iso_now() -> str:
@@ -969,6 +977,24 @@ def start_runtime(
             "-e", "TERM=xterm-256color",
             "-v", f"{canonical_workspace}:/root/app",
         ]
+        # Stage 7 (DATA-01): project-scope agent config mounts from the
+        # data root; dirs are created host-side so bind mounts are real.
+        # Fail closed: resolver errors propagate — never copy agent state
+        # into the workspace again.
+        if scope not in ("temporary", "temp", "global"):
+            from aisc.application.data_root import DataRootResolver
+
+            ws_state_dir = DataRootResolver().resolve(
+                Path(canonical_workspace)
+            ).workspace_dir
+            for sub in ("claude", "codex", "cc-switch", "runtime"):
+                (ws_state_dir / sub).mkdir(parents=True, exist_ok=True)
+            argv.extend([
+                "-v", f"{ws_state_dir / 'claude'}:/root/.claude",
+                "-v", f"{ws_state_dir / 'codex'}:/root/.codex",
+                "-v", f"{ws_state_dir / 'cc-switch'}:/root/.cc-switch",
+                "-v", f"{ws_state_dir / 'runtime'}:/root/.local/state/cc-switch",
+            ])
         if network == "proxy":
             argv.extend(["--cap-add=NET_ADMIN", "--device", "/dev/net/tun"])
             if proxy_config:

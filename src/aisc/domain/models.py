@@ -336,6 +336,10 @@ class RunPlan:
     proxy_config: str = ""    # host path to .claude/mihomo/config.yaml (when network=proxy)
     label: str = ""           # optional container label for multi-container addressing
     keep_alive: bool = False  # --keep-alive: omit --rm, keep container after exit
+    # Stage 7 (DATA-01): data-root workspaces/<hash>/ dir; when set (and the
+    # run is project-scoped) the agent config dirs mount from here instead
+    # of being copied into the workspace.
+    agent_state_root: str = ""
 
     @property
     def docker_argv(self) -> list:
@@ -347,6 +351,8 @@ class RunPlan:
         - network=proxy     → adds NET_ADMIN, TUN device, mihomo config mount
         - keep_alive=False  → includes ``--rm`` (default: remove on exit)
         - keep_alive=True   → omits ``--rm`` (persist after exit)
+        - agent_state_root  → project-scope mounts: claude/codex/cc-switch
+                          config + daemon runtime state from the data root
         - Runs as the image default user (root) so bind-mounted WSL2 files remain writable
         """
         argv = ["run"]
@@ -365,6 +371,14 @@ class RunPlan:
             "--name", self.name,
             "-v", f"{self.workspace}:/root/app",
         ])
+        if self.agent_state_root:
+            base = self.agent_state_root.rstrip("/\\")
+            argv.extend([
+                "-v", f"{base}/claude:/root/.claude",
+                "-v", f"{base}/codex:/root/.codex",
+                "-v", f"{base}/cc-switch:/root/.cc-switch",
+                "-v", f"{base}/runtime:/root/.local/state/cc-switch",
+            ])
         if self.non_interactive:
             argv.extend([
                 "-e", "AISC_NON_INTERACTIVE=1",

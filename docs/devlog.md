@@ -2,6 +2,71 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+# Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
+
+> 规划入口：`docs/plans/aisc-next-followup/stage-7-windows-data-root/`。把初始化/运行产生的配置、状态、runtime、日志、缓存、artifact、诊断和迁移文件统一收纳到 `%LOCALAPPDATA%\AISC\data`，workspace 只留用户文件；提供旧布局迁移。证据台账：`stage-7-windows-data-root/acceptance.md`。
+> **总门 PASS（2026-08-17）**：A-DATA01..05 真机全过 + 用户 Workbench 手测确认。
+
+- **7a contract**：`aisc.data-root/v1` 纯域契约 + 只读 `DataRootResolver`（Python SSOT
+  `src/aisc/{domain,application}/data_root.py`，Rust mirror `workbench/src-tauri/src/data_root.rs`）：
+  平台默认根（Win `%LOCALAPPDATA%\AISC\data`，跨平台 XDG）、`AISC_DATA_ROOT` override
+  校验（绝对路径/无空白/与 workspace 双向不重叠，fail closed）、reparse segment 拒绝、
+  `sha256-v1` 全量 workspace hash（目录名冒号→连字符，Windows 合法）、契约布局目录映射；
+  Python/Rust 共享向量 fixture `tests/fixtures/data-root/hash-vectors.json`（CJK/emoji/UNC）。
+  未接线——现行为不变（接线在 7e）。本地门：pytest 17+8 subtests / cargo data_root 8 /
+  全量 572 OK + 181+7×3。
+- **7b storage**：`adapters/data_root_store.py` 统一存储 API：幂等 `prepare` 契约骨架、
+  跨进程 fail-closed `file_lock`（msvcrt/fcntl，error_code 可参数化以便 7e 保留
+  STATE_LOCK_TIMEOUT 语义）、rel 路径校验（artifacts validator）、原子 UTF-8 写
+  （同目录 temp + fsync + replace）、损坏隔离 `*.corrupt`、写前 reparse 链复检（TOCTOU
+  防御）；稳定错误码下沉 domain。未改现有 writer（7e）。本地门：store 12 passed
+  （含子进程持锁超时用例）/ 全量 584 OK。
+- **7c legacy-scan**：`domain/data_migration.py`（known-owned allowlist + 瞬态集 +
+  目标映射 + `aisc.data-migration/v1` manifest，from_dict 对错误
+  schema/version/state/classification fail closed）+ `application/legacy_scan.py`
+  只读 walker：owned/unknown 计算 sha256、冲突按 hash 比较（同字节仍 owned、异字节
+  conflict）、无 AISC 初始化标记的同名目录判 foreign（只报告不迁移）、symlink/junction
+  不穿透、AF_UNIX socket（reparse tag）计瞬态。真实 workspace 实扫 **3127 owned /
+  8 transient / 0 unknown / 0 conflict**，实扫反哺 allowlist（补
+  `.claude/{.claude.json,.factory-version}` 与 daemon.sock 处理）。执行/回滚在 7d。
+  本地门：legacy 11 passed + 18 subtests / 全量 595 OK。
+- **7d migration**：`application/data_migration.py` 两阶段执行器（staging 复制 + SHA-256
+  校验 → 同卷原子 `os.replace` 提交；manifest `migrations/<ws>.json` 先落 prepared、
+  逐条推进、崩溃可 resume；取消保留可恢复 manifest；全迁移命名空间写只读
+  `.aisc-migrated` 重定向标记；rollback 只删 manifest 内且 hash 未变的目标、恢复
+  quarantine、清标记；unknown 仅在显式 `--quarantine-unknown` 下 copy→verify→删源）+
+  CLI `aisc data-root doctor|migrate --dry-run|--apply|rollback`（冲突/未同意 unknown/
+  空间不足/源变更均稳定错误码非零退出）。真实 workspace dry-run：3127 文件/~62MB、
+  零冲突零 unknown。本地门：executor 13 + CLI 5 passed / 全量 613 OK。
+- **7e wiring**：五步接线——(1) registry/state 适配器改「root=state 目录」，
+  `workspace_state_dir` 边界 + legacy 首用收养 + `_resolve_root` 消除 stop/ps 与 run
+  的注册表双轨；(2) config workspace 层 canonical 优先 + legacy 回退；(3) artifact
+  注册表统一到 `<data-root>/artifacts`（Python/Rust 双侧 legacy 读回退）；
+  (4) Workbench `config_dir`→`app_state_dir`（Roaming 收养/回退）+ 诊断包 `dataRoot`；
+  (5) 容器 project 态四个 data-root 挂载（entrypoint 挂载优先、旧宿主回退
+  `/root/app`），宿主预建目标、fail closed；DATA-01 回归门（挂载 argv + workspace
+  零新增）。修测试封闭性：7 模块注入 hermetic data root（此前真实 LOCALAPPDATA 被
+  写入）。本地门：全量 620 OK / cargo 183+7×3 / workspaces 污染 0。
+- **7f gate（真机）**：A-DATA01..05 全 PASS——fresh workspace 经 CLI+60 并发注册+**真实
+  容器跑**（super-claude:latest + 新 entrypoint/wrapper bind-mount + 四 data-root 挂载）
+  保持零新增，data root 收全量（claude 2171/codex 479/cc-switch 479+db+daemon 态）；
+  用户实际 legacy workspace 副本 3127 文件迁移/幂等/回滚全链路；并发 60 写入零丢失；
+  CJK/emoji/空格/359 字符长路径迁移 PASS、junction 拒绝。**根因修复**：镜像内旧
+  cc-switch wrapper 硬编码 `HOME=/root/app` 回写 workspace → 改 `/proc/mounts` 挂载
+  检测推导 HOME（`586aa24`，含显式 `--apply` flag）。发布前提：release 镜像重建烧入
+  新 entrypoint+wrapper。本地全量门：Python 621 / cargo 183+7×3 / vitest 213 /
+  vue-tsc 干净。
+- **7f 手测期间的三个连环修复**：① 泄漏测试写进真实 `%LOCALAPPDATA%\AISC\data\config`
+  的垃圾 onboarding 文件触发 `UnsupportedSchema` 死锁向导 → 无 schema_version 的文件
+  按损坏隔离+空态（`5899a8c`）；② `+` 新建 tab 菜单被 tabbar 滚动容器裁剪（Stage 6
+  UX-02 回归，非 Stage 7）→ Teleport + zoom 补偿（`aa10cd0`）；③ 镜像重建后仍污染 →
+  覆盖桥挂了陈旧 `target/debug/aisc-bundle` 暂存把新镜像降级 → **移除覆盖桥、镜像为
+  容器脚本唯一事实源**（`aa7ca34`），并用真实 sidecar 完整流程（start→session→stop）
+  对新镜像复验全净。**用户手测 PASS 确认（2026-08-17）**。
+- **启动序列**：followup 计划入库（`5ec13bb`）；`aisc-next` 整体归档
+  `docs/archive/completed/aisc-next`（`e0af206`）；实测 fresh 初始化 workspace 清单
+  （`.aisc/.claude/.codex/.cc-switch/.local`，~3130 文件/~69MB）入 02-domain-contract。
+
 # Stage 6 (2026-08-16) — UI / a11y / 可观测性 / 发布收口（AISC Next，分支 stage-6-ui-release-convergence）
 
 > 规划入口：`docs/plans/aisc-next/stage-6-ui-release-convergence/`。在新增工作流稳定后统一

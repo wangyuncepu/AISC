@@ -20,9 +20,10 @@ const MIN_HEIGHT: u32 = 600;
 const VISIBLE_PX: i32 = 64; // at least 64×64 logical px must be on-screen
 
 fn config_dir(app: &AppHandle) -> Result<std::path::PathBuf, WorkbenchError> {
-    app.path()
-        .app_config_dir()
-        .map_err(|e| WorkbenchError::settings_error().with_detail(format!("config dir: {e}")))
+    // Stage 7 (DATA-04): <data-root>/config (legacy app_config_dir is the
+    // adoption source / fallback). See session::config_dir.
+    let legacy = app.path().app_config_dir().ok();
+    Ok(crate::data_root::app_state_dir(legacy.as_deref()))
 }
 
 fn main_window(app: &AppHandle) -> Result<WebviewWindow, WorkbenchError> {

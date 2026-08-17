@@ -4,6 +4,12 @@ Per docs/gui-planning/05-cli-gui-contract.md §5.1:
 "该命令只读且无副作用：不得创建 workspace/config 目录、容器、registry 记录或下载资源。"
 """
 
+# Stage 7: keep run/start paths hermetic — they resolve the data root and
+# create the agent mount dirs; without this the tests would write into the
+# real %LOCALAPPDATA% AISC data.
+import os as _os
+import tempfile as _tempfile
+_os.environ.setdefault("AISC_DATA_ROOT", _tempfile.mkdtemp(prefix="aisc-test-data-"))
 import json
 import subprocess
 import sys

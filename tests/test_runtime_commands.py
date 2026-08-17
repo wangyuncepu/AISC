@@ -3,6 +3,13 @@
 Tests preflight_runtime() logic with mocked Docker executor.
 """
 
+
+# Stage 7: keep run/start paths hermetic — they resolve the data root and
+# create the agent mount dirs; without this the tests would write into the
+# real %LOCALAPPDATA% AISC data.
+import os as _os
+import tempfile as _tempfile
+_os.environ.setdefault("AISC_DATA_ROOT", _tempfile.mkdtemp(prefix="aisc-test-data-"))
 import json
 import tempfile
 import unittest
