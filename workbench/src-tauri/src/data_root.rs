@@ -184,6 +184,63 @@ pub fn resolve_data_root(workspace: &Path) -> Result<ResolvedDataRoot, DataRootE
     Ok(build_result(root, origin, workspace))
 }
 
+/// Workbench app-state dir (Stage 7, DATA-04): `<data-root>/config`.
+///
+/// Adopts the legacy Tauri `app_config_dir` state files copy-when-absent on
+/// first use (settings/history/onboarding/artifacts index); never
+/// overwrites, sources are kept so a downgrade keeps working. If the data
+/// root cannot be VALIDATED (reparse/relative override), falls back to the
+/// legacy dir — app state must stay loadable (writes through the CLI still
+/// fail closed there).
+pub fn app_state_dir(legacy: Option<&Path>) -> PathBuf {
+    let dir = match validate_data_root() {
+        Ok(root) => root.join("config"),
+        Err(_) => {
+            return legacy.map(|p| p.to_path_buf()).unwrap_or(default_data_root().join("config"))
+        }
+    };
+    if let Some(legacy) = legacy {
+        for name in ["settings.json", "history.json", "onboarding.json", "artifacts.json"] {
+            adopt_file(&legacy.join(name), &dir.join(name));
+        }
+    }
+    dir
+}
+
+/// Full root selection + validation (override shape + reparse walk),
+/// reusable without a workspace.
+pub fn validate_data_root() -> Result<PathBuf, DataRootError> {
+    let (root, _origin) = select_root()?;
+    check_reparse_segments(&root)?;
+    Ok(root)
+}
+
+/// Copy src→dst only when dst is absent (hardlink create = no-overwrite
+/// under a concurrent adopter; never touches the source).
+fn adopt_file(src: &Path, dst: &Path) {
+    if dst.exists() || !src.is_file() {
+        return;
+    }
+    if let Some(parent) = dst.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let tmp = dst.with_extension("adopt.tmp");
+    if fs::copy(src, &tmp).is_err() {
+        let _ = fs::remove_file(&tmp);
+        return;
+    }
+    // Link-then-unlink: creating the link fails atomically if a concurrent
+    // adopter already placed the file.
+    match fs::hard_link(&tmp, dst) {
+        Ok(()) => {
+            let _ = fs::remove_file(&tmp);
+        }
+        Err(_) => {
+            let _ = fs::remove_file(&tmp);
+        }
+    }
+}
+
 fn select_root() -> Result<(PathBuf, &'static str), DataRootError> {
     if let Ok(override_raw) = std::env::var(ENV_OVERRIDE) {
         if !override_raw.is_empty() {
@@ -212,7 +269,7 @@ fn check_overlap(root: &Path, workspace: &Path) -> Result<(), DataRootError> {
 
 /// Reject reparse points/symlinks on any EXISTING segment of the root path
 /// (01-risk-analysis: junction escapes → arbitrary paths).
-fn check_reparse_segments(root: &Path) -> Result<(), DataRootError> {
+pub fn check_reparse_segments(root: &Path) -> Result<(), DataRootError> {
     let mut cur = root.to_path_buf();
     loop {
         if let Ok(meta) = fs::symlink_metadata(&cur) {
@@ -399,6 +456,53 @@ mod tests {
         let err = resolve_data_root(Path::new("/definitely/not/overlapping/ws")).unwrap_err();
         std::env::remove_var(ENV_OVERRIDE);
         assert_eq!(err.code(), ERR_OVERRIDE_RELATIVE);
+    }
+
+    #[test]
+    fn app_state_dir_adopts_legacy_without_overwrite() {
+        let _env = lock_env();
+        let legacy = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        fs::write(legacy.path().join("settings.json"), r#"{"a":1}"#).unwrap();
+        fs::write(legacy.path().join("onboarding.json"), r#"{"b":2}"#).unwrap();
+
+        // Keep the override for BOTH calls — a stray default-root resolve
+        // would adopt into the real %LOCALAPPDATA%.
+        std::env::set_var(ENV_OVERRIDE, root.path());
+        let dir = app_state_dir(Some(legacy.path()));
+
+        assert_eq!(dir, root.path().join("config"));
+        assert_eq!(
+            fs::read_to_string(dir.join("settings.json")).unwrap(),
+            r#"{"a":1}"#
+        );
+        assert!(dir.join("onboarding.json").is_file());
+        // Locks/transients are not adopted.
+        assert!(!dir.join("settings.json.lock").exists());
+        // Sources kept for downgrade compatibility.
+        assert!(legacy.path().join("settings.json").is_file());
+
+        // No-overwrite: existing canonical state wins over legacy.
+        fs::write(dir.join("settings.json"), r#"{"canonical":true}"#).unwrap();
+        fs::write(legacy.path().join("settings.json"), r#"{"stale":1}"#).unwrap();
+        let dir2 = app_state_dir(Some(legacy.path()));
+        std::env::remove_var(ENV_OVERRIDE);
+        assert_eq!(dir2, dir);
+        assert_eq!(
+            fs::read_to_string(dir2.join("settings.json")).unwrap(),
+            r#"{"canonical":true}"#
+        );
+    }
+
+    #[test]
+    fn app_state_dir_falls_back_to_legacy_on_invalid_root() {
+        let _env = lock_env();
+        let legacy = tempfile::tempdir().unwrap();
+        // Relative override cannot be validated → keep the legacy dir.
+        std::env::set_var(ENV_OVERRIDE, "relative/data");
+        let dir = app_state_dir(Some(legacy.path()));
+        std::env::remove_var(ENV_OVERRIDE);
+        assert_eq!(dir, legacy.path());
     }
 
     #[test]

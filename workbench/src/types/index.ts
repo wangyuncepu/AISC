@@ -207,6 +207,8 @@ export interface DiagnosticBundle {
   envReadiness: EnvReadiness;
   doctor: DoctorReport | null;
   recentOperations: OpTrace[];
+  /** Stage 7 (DATA-04): canonical data root { root, origin }. */
+  dataRoot: { root: string; origin: string } | null;
   path: string | null;
 }
 

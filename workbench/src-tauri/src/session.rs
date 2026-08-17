@@ -126,9 +126,10 @@ fn registry(app: &AppHandle) -> SessionRegistry {
 }
 
 pub fn config_dir(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
-    app.path()
-        .app_config_dir()
-        .map_err(|e| WorkbenchError::settings_error().with_detail(format!("config dir: {e}")))
+    // Stage 7 (DATA-04): app state lives under <data-root>/config; the
+    // legacy Tauri app_config_dir is the adoption source / fallback.
+    let legacy = app.path().app_config_dir().ok();
+    Ok(crate::data_root::app_state_dir(legacy.as_deref()))
 }
 
 pub fn resolve_pin(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {

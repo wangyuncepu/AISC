@@ -137,9 +137,27 @@ pub struct DiagnosticBundle {
     pub env_readiness: crate::env::EnvReadiness,
     pub doctor: Option<DoctorReport>,
     pub recent_operations: Vec<crate::trace::OpTrace>,
+    /// Stage 7 (DATA-04): the canonical data root facts (root path,
+    /// origin, writability) so diagnostics and the CLI doctor agree.
+    pub data_root: serde_json::Value,
     /// Set when the bundle was written to disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+}
+
+/// Redacted data-root section for the diagnostic bundle (path + origin +
+/// writability only; never a workspace path or hash unless explicitly
+/// exported).
+fn data_root_section() -> serde_json::Value {
+    let root = crate::data_root::default_data_root();
+    serde_json::json!({
+        "root": root.to_string_lossy(),
+        "origin": if std::env::var("AISC_DATA_ROOT").map(|v| !v.is_empty()).unwrap_or(false) {
+            "env"
+        } else {
+            "default"
+        },
+    })
 }
 
 fn rfc3339_now() -> String {
@@ -170,6 +188,7 @@ pub async fn diagnostic_bundle(
         env_readiness: env,
         doctor,
         recent_operations: crate::trace::snapshot(),
+        data_root: data_root_section(),
         path: None,
     };
     if let Some(p) = write_path {

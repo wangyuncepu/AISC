@@ -111,9 +111,13 @@ class ArtifactSchemaTests(unittest.TestCase):
         self.assertEqual(again.to_dict(), rec.to_dict())
 
     def test_corrupt_line_isolated_in_registry(self):
-        with tempfile.TemporaryDirectory(prefix="aisc-art-") as d:
+        with tempfile.TemporaryDirectory(prefix="aisc-art-") as d, \
+                tempfile.TemporaryDirectory(prefix="aisc-art-root-") as data_root:
             root = Path(d)
-            # A corrupt line must not truncate the registry.
+            # A corrupt line must not truncate the registry. Hermetic data
+            # root (Stage 7: no writes into the real %LOCALAPPDATA%).
+            from unittest.mock import patch
+
             from aisc.application.artifact import registry_path
             from aisc.domain.artifacts import ArtifactRecord
             from aisc.application.artifact import record, list_records
@@ -125,10 +129,11 @@ class ArtifactSchemaTests(unittest.TestCase):
                 workspace_relative_path="a.md",
                 producer={"agent": "claude", "session_id": SESSION_ID, "runtime_id": RUNTIME_ID},
             ).validate()
-            record(ws, rec, session_id=SESSION_ID)
-            p = registry_path(ws, SESSION_ID)
-            p.write_text("not-json\n" + p.read_text(encoding="utf-8"), encoding="utf-8")
-            records = list_records(ws, session_id=SESSION_ID)
+            with patch.dict(os.environ, {"AISC_DATA_ROOT": data_root}):
+                record(ws, rec, session_id=SESSION_ID)
+                p = registry_path(ws, SESSION_ID)
+                p.write_text("not-json\n" + p.read_text(encoding="utf-8"), encoding="utf-8")
+                records = list_records(ws, session_id=SESSION_ID)
             self.assertEqual(len(records), 1)  # corrupt line isolated, valid kept
 
 
@@ -214,6 +219,8 @@ class ArtifactCliTests(unittest.TestCase):
         self.assertEqual(r["previous_path"], "doc.md")
 
     def test_duplicate_id_updates_in_place(self):
+        from unittest.mock import patch
+
         from aisc.application.artifact import list_records, record as _record
         from aisc.domain.artifacts import ArtifactRecord
 
@@ -222,9 +229,13 @@ class ArtifactCliTests(unittest.TestCase):
         producer = {"agent": "claude", "session_id": SESSION_ID, "runtime_id": RUNTIME_ID}
         base = dict(artifact_id="cccccccc-0000-4000-8000-000000000003",
                     workspace_relative_path="x.md", producer=producer)
-        _record(ws, ArtifactRecord(**base, action="created").validate(), session_id=SESSION_ID)
-        _record(ws, ArtifactRecord(**base, action="deleted").validate(), session_id=SESSION_ID)
-        listed = list_records(ws, session_id=SESSION_ID)
+        # Hermetic data root (Stage 7): keep the registry out of the real
+        # %LOCALAPPDATA%.
+        with tempfile.TemporaryDirectory(prefix="aisc-art-root-") as data_root, \
+                patch.dict(os.environ, {"AISC_DATA_ROOT": data_root}):
+            _record(ws, ArtifactRecord(**base, action="created").validate(), session_id=SESSION_ID)
+            _record(ws, ArtifactRecord(**base, action="deleted").validate(), session_id=SESSION_ID)
+            listed = list_records(ws, session_id=SESSION_ID)
         # Same artifact_id: one record, updated to deleted.
         self.assertEqual(len(listed), 1)
         self.assertEqual(listed[0].action, "deleted")

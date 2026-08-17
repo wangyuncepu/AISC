@@ -21,8 +21,10 @@ use crate::error::WorkbenchError;
 
 /// Directories skipped by default in the Explorer (dependency/cache/build +
 /// container-injected state — R3-04: a 100k-file fixture must not scan these
-/// eagerly; workspace init copies `.claude`/`.codex`/`.cc-switch` into the
-/// mount, and they must not flood the tree or the unattributed projection).
+/// eagerly). Stage 7 note: fresh workspaces no longer gain
+/// `.aisc`/`.claude`/`.codex`/`.cc-switch`/`.local` (they live in the data
+/// root), but PRE-migration workspaces still have them and they must not
+/// flood the tree or the unattributed projection.
 const DEFAULT_IGNORE: &[&str] = &[
     ".git",
     ".aisc",
