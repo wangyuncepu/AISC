@@ -89,6 +89,17 @@ def plan_run(
     if network == "proxy" and not resolved_proxy and aisc_root is not None:
         resolved_proxy = str(aisc_root / ".claude" / "mihomo" / "config.yaml")
 
+    # Stage 7 (DATA-01): agent config mounts from the data root. The dirs
+    # are created here (host side) so Windows bind mounts have real targets.
+    # Fail closed: an unusable data root stops the run — never fall back to
+    # copying agent state into the workspace.
+    from aisc.application.data_root import DataRootResolver
+
+    resolved_state = DataRootResolver().resolve(ws_path)
+    ws_state_dir = resolved_state.workspace_dir
+    for sub in ("claude", "codex", "cc-switch", "runtime"):
+        (ws_state_dir / sub).mkdir(parents=True, exist_ok=True)
+
     return RunPlan(
         image=image,
         workspace=str(ws_path),
@@ -100,6 +111,7 @@ def plan_run(
         proxy_config=resolved_proxy,
         label=label,
         keep_alive=keep_alive,
+        agent_state_root=str(ws_state_dir),
     )
 
 

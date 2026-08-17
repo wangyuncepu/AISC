@@ -4,6 +4,13 @@ These tests document and protect the current behavior of `aisc run`,
 ensuring that new runtime/session commands do not break existing workflows.
 """
 
+
+# Stage 7: keep run/start paths hermetic — they resolve the data root and
+# create the agent mount dirs; without this the tests would write into the
+# real %LOCALAPPDATA% AISC data.
+import os as _os
+import tempfile as _tempfile
+_os.environ.setdefault("AISC_DATA_ROOT", _tempfile.mkdtemp(prefix="aisc-test-data-"))
 import json
 import os
 import sys
@@ -276,9 +283,11 @@ class ScopeWrapperBehaviorTests(unittest.TestCase):
         entrypoint_path = Path(__file__).parent.parent.parent / "container" / "entrypoint.sh"
         entrypoint = entrypoint_path.read_text(encoding="utf-8")
 
-        # Should set CC_SWITCH_CONFIG_DIR based on scope
+        # Should set CC_SWITCH_CONFIG_DIR based on scope (Stage 7: project
+        # scope resolves to the data-root mount, legacy layout as fallback).
         self.assertIn('CC_SWITCH_CONFIG_DIR="$TEMP_HOME/.cc-switch"', entrypoint)
-        self.assertIn('CC_SWITCH_CONFIG_DIR="/root/app/.cc-switch"', entrypoint)
+        self.assertIn('CC_SWITCH_CONFIG_DIR="$PROJECT_CC_SWITCH_DIR"', entrypoint)
+        self.assertIn('PROJECT_CC_SWITCH_DIR="/root/.cc-switch"', entrypoint)
 
 
 class LegacyCommandBehaviorTests(unittest.TestCase):
@@ -421,8 +430,13 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
             root = Path(temp_root)
             # Stage 7: resolve_target resolves the data-root state dir —
             # keep the test out of the real %LOCALAPPDATA%.
+            _prev_dr = os.environ.get("AISC_DATA_ROOT")
             os.environ["AISC_DATA_ROOT"] = str(root) + "-state"
-            self.addCleanup(os.environ.pop, "AISC_DATA_ROOT", None)
+            self.addCleanup(
+                (lambda v: (os.environ.__setitem__("AISC_DATA_ROOT", v)
+                            if v is not None else os.environ.pop("AISC_DATA_ROOT", None))),
+                _prev_dr,
+            )
 
             # Setup registry with multiple containers
             register(root / ".aisc", "container-a", {

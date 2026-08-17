@@ -147,6 +147,32 @@ class ArtifactRootWiringTests(unittest.TestCase):
                     self.assertEqual(list_records(ws), [])
 
 
+class ContainerMountWiringTests(unittest.TestCase):
+    """DATA-01 at the docker-argv level: project runs mount agent state
+    from the data root and never copy into the workspace."""
+
+    def test_plan_run_mounts_data_root_and_keeps_workspace_clean(self) -> None:
+        from aisc.cli.commands.run import plan_run
+
+        with tempfile.TemporaryDirectory() as ws_tmp, tempfile.TemporaryDirectory() as root_tmp:
+            ws, root = Path(ws_tmp), Path(root_tmp)
+            with mock.patch.dict(os.environ, {"AISC_DATA_ROOT": str(root)}):
+                plan = plan_run(image="super-claude:latest", workspace=str(ws),
+                                name="t", interactive=True, dry_run=True)
+            argv = " ".join(plan.docker_argv)
+            self.assertIn(f"{root}", argv)
+            self.assertIn(":/root/.claude", argv)
+            self.assertIn(":/root/.codex", argv)
+            self.assertIn(":/root/.cc-switch", argv)
+            self.assertIn(":/root/.local/state/cc-switch", argv)
+            # Host-side mount targets were created under the data root…
+            resolved = DataRootResolver(env={"AISC_DATA_ROOT": str(root)}).resolve(ws)
+            for sub in ("claude", "codex", "cc-switch", "runtime"):
+                self.assertTrue((resolved.workspace_dir / sub).is_dir(), sub)
+            # …and the workspace itself gained NOTHING (DATA-01).
+            self.assertEqual(list(p.name for p in ws.iterdir()), [])
+
+
 class ConfigLayerWiringTests(unittest.TestCase):
     """Workspace config layer: canonical first, legacy read fallback."""
 

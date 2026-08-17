@@ -1,11 +1,15 @@
 #!/bin/bash
-# cc-switch 用 HOME 推导 skills 目标。项目态使用挂载后的 /root/app；
-# 临时态改用 /tmp/aisc-home，避免写入宿主工作区。
+# cc-switch 用 HOME 推导 skills 目标。项目态（Stage 7）使用 /root——
+# skills 落在挂载到 /root/.claude、/root/.codex 的 data root 卷；
+# 临时态改用 /tmp/aisc-home。旧版宿主回退布局（配置仍在 /root/app）时
+# 保持 /root/app。
 set -e
 
 if [ "${CLAUDE_CONFIG_DIR:-}" = "/tmp/aisc-home/.claude" ] || \
    [ "${CODEX_HOME:-}" = "/tmp/aisc-home/.codex" ]; then
     export HOME="/tmp/aisc-home"
+elif [ "${CLAUDE_CONFIG_DIR:-}" = "/root/.claude" ]; then
+    export HOME="/root"
 else
     export HOME="/root/app"
 fi
