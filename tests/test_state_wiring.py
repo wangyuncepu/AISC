@@ -102,5 +102,35 @@ class StateWiringTests(unittest.TestCase):
             self.assertEqual(list(p.name for p in ws.iterdir()), [])
 
 
+class ConfigLayerWiringTests(unittest.TestCase):
+    """Workspace config layer: canonical first, legacy read fallback."""
+
+    def _path(self, ws: Path) -> str:
+        from aisc.application.config_service import _ws_path_str
+
+        return _ws_path_str(str(ws))
+
+    def test_matrix(self) -> None:
+        with tempfile.TemporaryDirectory() as ws_tmp, tempfile.TemporaryDirectory() as root_tmp:
+            ws, root = Path(ws_tmp), Path(root_tmp)
+            with mock.patch.dict(os.environ, {"AISC_DATA_ROOT": str(root)}):
+                resolved = DataRootResolver(env={"AISC_DATA_ROOT": str(root)}).resolve(ws)
+                canonical = resolved.workspace_dir / "config.json"
+                legacy = ws / ".aisc" / "config.json"
+
+                # Fresh workspace → canonical (reported missing there).
+                self.assertEqual(self._path(ws), str(canonical))
+
+                # Legacy only → read fallback to legacy.
+                legacy.parent.mkdir()
+                legacy.write_text("{}", encoding="utf-8")
+                self.assertEqual(self._path(ws), str(legacy))
+
+                # Both → canonical wins.
+                canonical.parent.mkdir(parents=True)
+                canonical.write_text("{}", encoding="utf-8")
+                self.assertEqual(self._path(ws), str(canonical))
+
+
 if __name__ == "__main__":
     unittest.main()

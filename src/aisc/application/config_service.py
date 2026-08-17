@@ -268,25 +268,29 @@ def _read_layers(
     # --- Read workspace layer ---
     ws_path = _ws_path_str(ws_abs)
     ws_file_path = Path(ws_path)
-    try:
-        check_dir_component(str(ws_file_path.parent.parent), ".aisc")
-    except FileNotFoundError:
-        pass  # .aisc doesn't exist → config.json will be missing (handled by _read_layer)
-    except ReadError:
-        return (_early_err(1, ERR_GENERAL, "Workspace config component is a symlink",
-                           user_src,
-                           _mk_src("workspace", ws_path, STATUS_INVALID_SOURCE)),
-                None, None, [], [])
-    except PermissionError:
-        return (_early_err(9, ERR_PERMISSION_DENIED, "Permission denied accessing workspace config",
-                           user_src,
-                           _mk_src("workspace", ws_path, STATUS_PERMISSION_DENIED)),
-                None, None, [], [])
-    except OSError:
-        return (_early_err(1, ERR_GENERAL, "Cannot access workspace config component",
-                           user_src,
-                           _mk_src("workspace", ws_path, STATUS_ERROR)),
-                None, None, [], [])
+    legacy_ws_file = Path(ws_abs) / ".aisc" / "config.json"
+    if ws_file_path == legacy_ws_file:
+        # Structural reparse check only applies to the legacy layout; the
+        # data-root path was validated by the resolver at resolve time.
+        try:
+            check_dir_component(str(ws_file_path.parent.parent), ".aisc")
+        except FileNotFoundError:
+            pass  # .aisc doesn't exist → config.json will be missing (handled by _read_layer)
+        except ReadError:
+            return (_early_err(1, ERR_GENERAL, "Workspace config component is a symlink",
+                               user_src,
+                               _mk_src("workspace", ws_path, STATUS_INVALID_SOURCE)),
+                    None, None, [], [])
+        except PermissionError:
+            return (_early_err(9, ERR_PERMISSION_DENIED, "Permission denied accessing workspace config",
+                               user_src,
+                               _mk_src("workspace", ws_path, STATUS_PERMISSION_DENIED)),
+                    None, None, [], [])
+        except OSError:
+            return (_early_err(1, ERR_GENERAL, "Cannot access workspace config component",
+                               user_src,
+                               _mk_src("workspace", ws_path, STATUS_ERROR)),
+                    None, None, [], [])
 
     ws_data, ws_src, ws_ce = _read_layer(ws_file_path, False, "workspace")
 
@@ -307,7 +311,30 @@ def _read_layers(
 
 
 def _ws_path_str(ws_abs: str) -> str:
-    return os.path.join(ws_abs, ".aisc", "config.json")
+    """Workspace config layer path (Stage 7).
+
+    Canonical: ``<data-root>/workspaces/<hash>/config.json``. The legacy
+    ``<ws>/.aisc/config.json`` remains the read fallback until migrations
+    catch up. This is a read-only layer — if the data root is unusable we
+    degrade to the legacy path instead of failing the whole command
+    (writes go through ``workspace_state_dir`` and fail closed there).
+    """
+    canonical = None
+    try:
+        from aisc.application.data_root import DataRootResolver
+
+        resolved = DataRootResolver().resolve(Path(ws_abs))
+        canonical = resolved.workspace_dir / "config.json"
+        if canonical.is_file():
+            return str(canonical)
+    except Exception:
+        canonical = None
+    legacy = Path(ws_abs) / ".aisc" / "config.json"
+    # Existing legacy wins over an absent canonical (transition read);
+    # otherwise report the canonical location (honest fresh state).
+    if legacy.is_file():
+        return str(legacy)
+    return str(canonical) if canonical is not None else str(legacy)
 
 
 def _finalize_classify(valid, sources, issues, effective=None, provenance=None):
