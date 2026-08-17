@@ -43,6 +43,26 @@
 - 回归：全量 `python -m unittest discover` 584 OK（61 skipped 同前）
 - 结论：**PASS**
 
+### 7c-legacy-scan — 只读扫描 + allowlist + manifest（2026-08-17）
+
+- 目标/验收 ID：DATA-02 契约层（扫描/分类/manifest；dry-run/apply/rollback 执行在 7d）
+- Commit：`abd855e`
+- OS/arch：Windows 11 Pro 10.0.26200 / x64
+- 步骤：`python -m pytest tests/test_legacy_scan.py -q`；真实 workspace 只读实扫
+- 期望：合成 legacy 全形状分类正确（owned 22 / transient 7，含 `.aisc→runtime/`、
+  agent 目录→`workspaces/<h>/{claude,codex,cc-switch}/` 映射、db+wal+shm 成组 owned）；
+  namespace 内未知文件→unknown；无 AISC 标记的同名目录→foreign（只报告不迁移）；
+  目标同 hash→仍 owned、异 hash→conflict fail closed；扫描全程只读（目录快照不变）；
+  manifest to_dict/from_dict 往返一致、错误 schema/version/state/classification 拒绝
+- 结果：**PASS** — 11 passed + 18 subtests；data-root 组合计 40 passed + 32 subtests
+- 真实实扫（用户提供的标准初始化 workspace，只读）：**owned 3127 / transient 8 /
+  unknown 0 / conflict 0**，五命名空间全判 AISC 态；`workspace_hash` 与现行
+  `.aisc/workspace-locks/<同 hex>` 一致（sha256-v1 前缀化不改变摘要）。实扫并反哺
+  allowlist 两处修正：`.claude/{.claude.json,.factory-version}`（隐藏文件）入列；
+  `daemon.sock`（Windows AF_UNIX reparse）按 transient 处理
+- 回归：全量 `python -m unittest discover` 595 OK（61 skipped 同前）
+- 结论：**PASS**
+
 证据模板：
 
 ```text

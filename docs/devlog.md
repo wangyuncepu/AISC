@@ -20,6 +20,15 @@
   （同目录 temp + fsync + replace）、损坏隔离 `*.corrupt`、写前 reparse 链复检（TOCTOU
   防御）；稳定错误码下沉 domain。未改现有 writer（7e）。本地门：store 12 passed
   （含子进程持锁超时用例）/ 全量 584 OK。
+- **7c legacy-scan**：`domain/data_migration.py`（known-owned allowlist + 瞬态集 +
+  目标映射 + `aisc.data-migration/v1` manifest，from_dict 对错误
+  schema/version/state/classification fail closed）+ `application/legacy_scan.py`
+  只读 walker：owned/unknown 计算 sha256、冲突按 hash 比较（同字节仍 owned、异字节
+  conflict）、无 AISC 初始化标记的同名目录判 foreign（只报告不迁移）、symlink/junction
+  不穿透、AF_UNIX socket（reparse tag）计瞬态。真实 workspace 实扫 **3127 owned /
+  8 transient / 0 unknown / 0 conflict**，实扫反哺 allowlist（补
+  `.claude/{.claude.json,.factory-version}` 与 daemon.sock 处理）。执行/回滚在 7d。
+  本地门：legacy 11 passed + 18 subtests / 全量 595 OK。
 - **启动序列**：followup 计划入库（`5ec13bb`）；`aisc-next` 整体归档
   `docs/archive/completed/aisc-next`（`e0af206`）；实测 fresh 初始化 workspace 清单
   （`.aisc/.claude/.codex/.cc-switch/.local`，~3130 文件/~69MB）入 02-domain-contract。
