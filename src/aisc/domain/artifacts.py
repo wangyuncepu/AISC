@@ -3,7 +3,7 @@
 The authoritative fact layer for Agent deliverables: ``aisc.artifact/v1``.
 Deliberately SEPARATE from ``packaging/artifact.py`` (release bundle builder) —
 different schema, different namespace, different module. See
-docs/plans/aisc-next/stage-3-workspace-artifacts/.
+docs/archive/completed/aisc-next/stage-3-workspace-artifacts/.
 
 Invariants (D3-01..D3-08):
 - Skill provides semantics (title/category/open suggestion), not facts.

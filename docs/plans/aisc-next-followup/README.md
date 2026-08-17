@@ -4,7 +4,7 @@
 > 代码基线：`f5a74e5`
 > 规划日期：2026-08-17
 
-这是 `docs/plans/aisc-next` 完成并归档后的后续计划。旧计划目录保持不变；本目录只覆盖新的 Windows 数据布局、容器内 cc-switch Provider UI、最新版 cc-switch 构建以及 C# Workbench 功能等价 POC。
+这是 `aisc-next` 计划（已归档至 `docs/archive/completed/aisc-next/`）完成后的后续计划。本目录只覆盖新的 Windows 数据布局、容器内 cc-switch Provider UI、最新版 cc-switch 构建以及 C# Workbench 功能等价 POC。
 
 阅读顺序：
 

@@ -9,7 +9,7 @@ GO/NO-GO is evidence-based, not guesswork:
   keeps Build on the CLI backend until this benchmark says otherwise).
 
 Output: a baseline JSON (p50/p95/max ms + exit codes + image ref) that feeds
-the GO/NO-GO decision in ``docs/plans/aisc-next/stage-4-docker-gateway/``.
+the GO/NO-GO decision in ``docs/archive/completed/aisc-next/stage-4-docker-gateway/``.
 
 Usage (requires a reachable Docker daemon):
     python scripts/bench/build-bench.py [--backend cli|sdk|both] [--samples N] [--tag TAG]
