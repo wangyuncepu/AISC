@@ -161,6 +161,8 @@ export const zhCN = {
   "tabbar.menu.codex": "Codex",
   "tabbar.menu.bash": "Bash",
   "tabbar.menu.cc-switch": "cc-switch",
+  "tabbar.settings": "设置",
+  "tabbar.closeSettings": "关闭设置标签（未保存更改将回退）",
   "tabbar.menu.splitH": "左右分屏",
   "tabbar.menu.splitV": "上下分屏",
   "pane.close": "关闭分屏",

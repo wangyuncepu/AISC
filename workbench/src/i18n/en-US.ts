@@ -161,6 +161,8 @@ export const enUS: Record<string, string> = {
   "tabbar.menu.codex": "Codex",
   "tabbar.menu.bash": "Bash",
   "tabbar.menu.cc-switch": "cc-switch",
+  "tabbar.settings": "Settings",
+  "tabbar.closeSettings": "Close settings tab (unsaved edits revert)",
   "tabbar.menu.splitH": "Split left/right",
   "tabbar.menu.splitV": "Split top/bottom",
   "pane.close": "Close pane",

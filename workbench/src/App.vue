@@ -19,7 +19,7 @@ import { applyTheme, createSystemListener } from "./theme";
 import { layoutTierFor, type LayoutTier } from "./lib/layout";
 import { computeWindowTitle } from "./lib/title";
 import { leafCount } from "./stores/paneTree";
-import { useRuntimeStore } from "./stores/runtime";
+import { useRuntimeStore, SETTINGS_TAB_ID } from "./stores/runtime";
 import { useSettingsStore } from "./stores/settings";
 import { useDoctorStore } from "./stores/doctor";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
@@ -32,6 +32,7 @@ import StartProgress from "./features/startup/StartProgress.vue";
 import BuildProgress from "./features/startup/BuildProgress.vue";
 import ConflictManager from "./features/startup/ConflictManager.vue";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
+import SettingsTab from "./features/settings/SettingsTab.vue";
 import DoctorDialog from "./features/doctor/DoctorDialog.vue";
 import WorkspaceExplorer from "./features/workspace-explorer/WorkspaceExplorer.vue";
 import OnboardingWizard from "./features/onboarding/OnboardingWizard.vue";
@@ -79,9 +80,22 @@ watch(
   { immediate: true }
 );
 
-// Step 3: settings dialog entry (keyboard-reachable topbar button).
+// Step 3: settings entry (keyboard-reachable topbar button). IDEA-1: in the
+// ready workspace the Settings TAB is the surface; pre-ready states (blocked/
+// picker/summary/...) keep the modal dialog — there is no tab bar yet.
 const settingsOpen = ref(false);
 const showExplorer = ref(true);
+function openSettings(): void {
+  if (store.status === "ready") store.openSettingsTab();
+  else settingsOpen.value = true;
+}
+
+// IDEA-1: the Settings tab pane (kept alive while hidden so unsaved edits and
+// scroll position survive tab switches; unmounted when the tab is closed).
+const settingsPaneRef = ref<HTMLElement | null>(null);
+const settingsPaneVisible = computed(
+  () => store.settingsTabOpen && store.activeTabId === SETTINGS_TAB_ID
+);
 
 // G-01 (Step 7, A-G01-3): ui.font_scale is immediate-effect. Applied as CSS
 // zoom on the UI chrome (topbar/picker/summary/sidebar/tabbar/dialog); the
@@ -218,10 +232,30 @@ watch(
 // after switching via Ctrl/Cmd+1..4. nextTick: the target tab becomes visible
 // (v-show) on the next render; focusing synchronously would hit a hidden xterm.
 function focusTabTerminal(tabId: string): void {
+  // IDEA-1: the Settings tab has no terminal; focus its pane instead so
+  // keyboard input lands in the form.
+  if (tabId === SETTINGS_TAB_ID) {
+    void nextTick(() => settingsPaneRef.value?.focus({ preventScroll: true }));
+    return;
+  }
   // G-17: focus the tab's ACTIVE pane terminal (PaneTree exposes it).
   void nextTick(() => {
     paneTreeRefs.value.get(tabId)?.focusActivePane();
   });
+}
+
+/** IDEA-1: the rendered tab sequence = session tabs + the open Settings chip
+ * (mirrors TabBar's rendering order; drives Ctrl+Tab / Ctrl+1..9). */
+function renderedTabIds(): string[] {
+  const ids = store.tabs.map((t) => t.tabId);
+  if (store.settingsTabOpen) ids.push(SETTINGS_TAB_ID);
+  return ids;
+}
+
+function activateRenderedTab(id: string): void {
+  if (id === SETTINGS_TAB_ID) store.openSettingsTab();
+  else store.activateTab(id);
+  focusTabTerminal(id);
 }
 
 // G-08 (2026-08-10): every activation path (click, + menu, empty-state
@@ -318,22 +352,19 @@ function onKeydown(e: KeyboardEvent) {
     }
   }
   // S1.6: Ctrl/Cmd+Tab cycles to the next tab, Ctrl/Cmd+Shift+Tab backwards
-  // (browser-style). If a WebView2 build swallows the combo, the TabBar roving
-  // focus remains the keyboard fallback.
+  // (browser-style). IDEA-1: the cycle covers the rendered sequence including
+  // the virtual Settings tab. If a WebView2 build swallows the combo, the
+  // TabBar roving focus remains the keyboard fallback.
   if (e.key === "Tab") {
     if (store.status !== "ready") return;
-    const tabs = store.tabs;
-    if (tabs.length === 0) return;
+    const ids = renderedTabIds();
+    if (ids.length === 0) return;
     e.preventDefault();
-    const current = tabs.findIndex((t) => t.tabId === store.activeTabId);
+    const current = ids.indexOf(store.activeTabId ?? "");
     const dir = e.shiftKey ? -1 : 1;
     const base = current < 0 ? 0 : current;
-    const next = (base + dir + tabs.length) % tabs.length;
-    const tab = tabs[next];
-    if (tab) {
-      store.activateTab(tab.tabId);
-      focusTabTerminal(tab.tabId);
-    }
+    const next = (base + dir + ids.length) % ids.length;
+    activateRenderedTab(ids[next]!);
     return;
   }
   // G-08 (A-G08-6): Ctrl/Cmd+1..9 map the current committed tab order; the
@@ -341,11 +372,8 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key >= "1" && e.key <= "9") {
     if (store.status !== "ready") return;
     e.preventDefault();
-    const tab = store.tabs[Number(e.key) - 1];
-    if (tab) {
-      store.activateTab(tab.tabId);
-      focusTabTerminal(tab.tabId);
-    }
+    const id = renderedTabIds()[Number(e.key) - 1];
+    if (id) activateRenderedTab(id);
   } else if (e.key === "Enter" && store.status === "summary") {
     e.preventDefault();
     store.startFromSummary();
@@ -494,7 +522,7 @@ function selectRecent(path: string): void {
       <span class="brand">AISC Workbench</span>
       <span class="status" :data-status="store.status">{{ t(STATUS_KEY[store.status] ?? "app.unknown") }}</span>
       <span class="spacer" />
-      <button class="settings-btn" @click="settingsOpen = true">{{ t("app.settings") }}</button>
+      <button class="settings-btn" @click="openSettings">{{ t("app.settings") }}</button>
     </header>
 
     <!-- Stage 5 (ONB-01): first-run wizard overlay. Covers the app until
@@ -595,8 +623,9 @@ function selectRecent(path: string): void {
       <div class="main">
         <TabBar />
         <main class="terminal-area">
-          <!-- G-08 empty state (A-G08-6): focus target for creating the first tab -->
-          <div v-if="store.tabs.length === 0" class="empty-tabs">
+          <!-- G-08 empty state (A-G08-6): focus target for creating the first
+               tab. Hidden while the Settings tab fills the area (IDEA-1). -->
+          <div v-if="store.tabs.length === 0 && !settingsPaneVisible" class="empty-tabs">
             <p>{{ t("tabs.empty") }}</p>
             <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
           </div>
@@ -611,6 +640,18 @@ function selectRecent(path: string): void {
             v-show="t.tabId === store.activeTabId"
           >
             <PaneTree :ref="setPaneTreeRef(t.tabId)" :tab-id="t.tabId" :tree="t.tree" />
+          </div>
+          <!-- IDEA-1: the Settings tab pane. NOT counter-zoomed (regular UI
+               chrome like dialogs); kept alive while hidden so unsaved edits
+               and scroll survive switching back. -->
+          <div
+            v-if="store.settingsTabOpen"
+            v-show="settingsPaneVisible"
+            ref="settingsPaneRef"
+            class="settings-pane"
+            tabindex="-1"
+          >
+            <SettingsTab />
           </div>
         </main>
       </div>
@@ -728,6 +769,7 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
 .diagnose { background: var(--info-bg); border-color: var(--info-border); }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: var(--bg); display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
+.settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }
 .explorer-toggle {
   align-self: flex-start;
   margin-top: 4px;

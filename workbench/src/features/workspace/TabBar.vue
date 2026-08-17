@@ -6,14 +6,16 @@
  * disconnected tabs can be reopened with a fresh session id. ARIA tablist
  * with arrow/Home/End navigation; the + menu is a keyboard-reachable popup.
  */
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRuntimeStore } from "../../stores/runtime";
+import { useRuntimeStore, SETTINGS_TAB_ID } from "../../stores/runtime";
+import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import type { LaunchAgent, Tab, TabSessionState } from "../../types";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
+const settingsStore = useSettingsStore();
 
 // --- G-08 + menu (aria-haspopup; Enter/Space opens, arrows move, Enter picks) ---
 const menuOpen = ref(false);
@@ -103,6 +105,29 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocMousedown))
 // landed in the terminal and navigation appeared broken.)
 const tabRefs = ref<(HTMLButtonElement | null)[]>([]);
 const roving = ref(-1); // -1 = no manual roving; follow the active tab
+/** IDEA-1: the virtual Settings tab chip renders after the session tabs, so
+ * the roving/focus model treats it as index `store.tabs.length`. */
+const settingsBtnRef = ref<HTMLButtonElement | null>(null);
+
+/** Rendered tab count: session tabs + the optional virtual Settings tab. */
+const tabCount = computed(
+  () => store.tabs.length + (store.settingsTabOpen ? 1 : 0)
+);
+
+/** Index of the active chip in the rendered sequence (-1 = none). */
+function activeIndex(): number {
+  const i = store.tabs.findIndex((t) => t.tabId === store.activeTabId);
+  if (i >= 0) return i;
+  return store.activeTabId === SETTINGS_TAB_ID && store.settingsTabOpen
+    ? store.tabs.length
+    : -1;
+}
+
+/** Focus chip `i` (session tab or the Settings chip). */
+function focusChip(i: number): void {
+  if (i < store.tabs.length) tabRefs.value[i]?.focus();
+  else settingsBtnRef.value?.focus();
+}
 
 function setTabRef(i: number) {
   return (el: unknown) => {
@@ -115,22 +140,43 @@ function tabIndex(tab: Tab, i: number): string {
   return tab.tabId === store.activeTabId ? "0" : "-1";
 }
 
+/** roving tabindex for the virtual Settings chip (index = tabs.length). */
+const settingsTabIndex = computed(() => {
+  if (roving.value >= 0) return roving.value === store.tabs.length ? "0" : "-1";
+  return store.activeTabId === SETTINGS_TAB_ID ? "0" : "-1";
+});
+
+function onSettingsClick() {
+  roving.value = -1;
+  store.openSettingsTab();
+}
+
+/** × on the Settings chip: revert unsaved edits (dialog-Cancel contract),
+ * then close the virtual tab. */
+function closeSettings() {
+  settingsStore.cancel();
+  store.closeSettingsTab();
+}
+
 function onTabClick(tabId: string) {
   roving.value = -1;
   store.activateTab(tabId);
 }
 
 function onTablistKeydown(e: KeyboardEvent) {
-  const count = store.tabs.length;
+  const count = tabCount.value;
   if (count === 0) return;
-  const activeIdx = store.tabs.findIndex((t) => t.tabId === store.activeTabId);
+  const activeIdx = activeIndex();
   const base = roving.value >= 0 ? roving.value : activeIdx;
 
   if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
     const pick = roving.value >= 0 ? roving.value : activeIdx;
-    if (pick >= 0) {
+    if (pick >= 0 && pick < store.tabs.length) {
       store.activateTab(store.tabs[pick].tabId);
+      roving.value = -1;
+    } else if (pick >= 0) {
+      store.openSettingsTab();
       roving.value = -1;
     }
     return;
@@ -158,7 +204,7 @@ function onTablistKeydown(e: KeyboardEvent) {
   // Move focus only; activation waits for Enter/Space.
   e.preventDefault();
   roving.value = target;
-  tabRefs.value[target]?.focus();
+  focusChip(target);
 }
 
 function stateLabel(tab: Tab): string {
@@ -236,6 +282,32 @@ function canReopen(s: TabSessionState): boolean {
           :aria-label="t('tabbar.reopenTitle')"
           @click="store.reopenTab(tab.tabId)"
         >↻</button>
+      </span>
+    </div>
+
+    <!-- IDEA-1: the virtual Settings tab chip (no session; × reverts unsaved
+         form edits and closes). Keyboard model: last chip in the sequence. -->
+    <div
+      v-if="store.settingsTabOpen"
+      class="tab settings-chip"
+      :class="{ active: store.activeTabId === SETTINGS_TAB_ID }"
+    >
+      <button
+        ref="settingsBtnRef"
+        role="tab"
+        class="tab-main"
+        :tabindex="settingsTabIndex"
+        :aria-selected="store.activeTabId === SETTINGS_TAB_ID"
+        :title="t('settings.title')"
+        @click="onSettingsClick"
+      >⚙ {{ t("tabbar.settings") }}</button>
+      <span class="actions">
+        <button
+          class="icon x"
+          :title="t('tabbar.closeSettings')"
+          :aria-label="t('tabbar.closeSettings')"
+          @click="closeSettings"
+        >×</button>
       </span>
     </div>
 

@@ -9,10 +9,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { mount } from "@vue/test-utils";
 import { i18n } from "../../../i18n";
-import { useRuntimeStore } from "../../../stores/runtime";
+import { SETTINGS_TAB_ID, useRuntimeStore } from "../../../stores/runtime";
+import { useSettingsStore } from "../../../stores/settings";
 import { AGENT_TITLE, newPaneTab } from "../../../stores/tabLayout";
 import TabBar from "../TabBar.vue";
-import type { LaunchAgent, Tab, TabSessionState } from "../../../types";
+import type { LaunchAgent, SettingsDocument, Tab, TabSessionState } from "../../../types";
+
+/** Minimal settings doc fixture (full section shapes for vue-tsc). */
+const settingsDoc: SettingsDocument = {
+  schemaVersion: 1,
+  revision: 0,
+  aiscCliPath: null,
+  ui: { language: "auto", font_scale: 1.0, theme: "system", explorer_ignore: [], default_tab_agent: "bash" },
+  terminal: {
+    font_family: "Cascadia Mono, Consolas, monospace",
+    font_size: 14,
+    line_height: 1.2,
+    letter_spacing: 0,
+    scrollback: 5000,
+    renderer: "auto",
+    smooth_scroll_duration: 100,
+  },
+  window: { remember_geometry: true, close_behavior: "quit", geometry: null },
+  issues: [],
+  corrupted: false,
+  readOnly: false,
+};
 
 function makeTab(agent: LaunchAgent, state: TabSessionState, id: string): Tab {
   const t = newPaneTab(id, agent, AGENT_TITLE[agent], null);
@@ -120,6 +142,70 @@ describe("S1.6 TabBar structure (no nested buttons)", () => {
     // Enter on the focused tab activates it.
     await tabbar.trigger("keydown", { key: "Enter" });
     expect(s.activeTabId).toBe("t2");
+    wrapper.unmount();
+  });
+});
+
+describe("IDEA-1 settings tab chip (S2)", () => {
+  it("renders as the last role=tab when open; click activates the sentinel", async () => {
+    const s = setupStore();
+    s.settingsTabOpen = true;
+    const wrapper = mount(TabBar, { global: { plugins: [i18n] } });
+
+    // 2 session tabs + the settings chip.
+    expect(wrapper.findAll("[role=tab]").length).toBe(3);
+    const chip = wrapper.find(".settings-chip");
+    expect(chip.exists()).toBe(true);
+    expect(chip.classes()).not.toContain("active");
+
+    await chip.find(".tab-main").trigger("click");
+    expect(s.activeTabId).toBe(SETTINGS_TAB_ID);
+    expect(chip.classes()).toContain("active");
+    wrapper.unmount();
+  });
+
+  it("× closes the settings tab, falling back to the last session tab", async () => {
+    const s = setupStore();
+    s.settingsTabOpen = true;
+    s.activeTabId = SETTINGS_TAB_ID;
+    const wrapper = mount(TabBar, { global: { plugins: [i18n] } });
+
+    await wrapper.find(".settings-chip .x").trigger("click");
+    expect(s.settingsTabOpen).toBe(false);
+    expect(s.activeTabId).toBe("t2"); // last session tab
+    expect(wrapper.find(".settings-chip").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("× reverts unsaved form edits to the last saved baseline", async () => {
+    const s = setupStore();
+    s.settingsTabOpen = true;
+    const settings = useSettingsStore();
+    settings.doc = { ...settingsDoc, ui: { ...settingsDoc.ui, language: "en-US" } };
+    settings.lastSaved = JSON.parse(JSON.stringify(settingsDoc)) as SettingsDocument;
+
+    const wrapper = mount(TabBar, { global: { plugins: [i18n] } });
+    await wrapper.find(".settings-chip .x").trigger("click");
+    expect(settings.doc?.ui.language).toBe("auto"); // reverted, not persisted
+    wrapper.unmount();
+  });
+
+  it("End focuses the settings chip; Enter activates it (roving covers it)", async () => {
+    const s = setupStore();
+    s.settingsTabOpen = true;
+    const wrapper = mount(TabBar, {
+      global: { plugins: [i18n] },
+      attachTo: document.body,
+    });
+    const tabbar = wrapper.find(".tabbar");
+    const mains = wrapper.findAll(".tab-main");
+    (mains[0]!.element as HTMLElement).focus();
+
+    await tabbar.trigger("keydown", { key: "End" });
+    expect(document.activeElement).toBe(wrapper.find(".settings-chip .tab-main").element);
+
+    await tabbar.trigger("keydown", { key: "Enter" });
+    expect(s.activeTabId).toBe(SETTINGS_TAB_ID);
     wrapper.unmount();
   });
 });

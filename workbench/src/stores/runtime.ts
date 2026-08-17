@@ -86,6 +86,12 @@ const DEFAULT_LAUNCH: LaunchConfig = {
  * (A-G08-8). History saves truncate defensively at the same bound. */
 const MAX_TABS = 8;
 
+/** IDEA-1: sentinel id of the virtual Settings tab. Real tab ids are UUIDs,
+ * so this never collides. The settings tab is NOT a session tab: it lives
+ * outside `tabs` (never persisted, never counted toward MAX_TABS, owns no
+ * PTY); `activeTabId` may hold this id while it is open. */
+export const SETTINGS_TAB_ID = "settings-tab";
+
 /** Session states that have reached a terminal outcome (no live PTY). */
 const TERMINAL_STATES: TabSessionState[] = ["exited", "failed", "disconnected"];
 
@@ -230,6 +236,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
   // S2.2.a: multi-tab. One tab per agent, sharing the runtime (03 §二.3/§六).
   const tabs = ref<Tab[]>([]);
   const activeTabId = ref<string | null>(null);
+  /** IDEA-1: the virtual Settings tab is open (rendered as the last chip). */
+  const settingsTabOpen = ref(false);
 
   let startTimer: number | null = null;
 
@@ -278,6 +286,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
   function resetWorkspace() {
     tabs.value = [];
     activeTabId.value = null;
+    settingsTabOpen.value = false;
     preflight.value = null;
     runtimeId.value = "";
     runtimeState.value = "unknown";
@@ -865,6 +874,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     };
     const { tabs: created, bySavedId } = tabsFromRecords(records);
     tabs.value = created;
+    settingsTabOpen.value = false; // fresh tab set; the virtual tab never restores
     // G-17: open EVERY pane leaf (a restored split tab has several), each
     // through the same provider gate as + menu tabs - unconfigured claude/
     // codex restore as guide without a session (A-G08-3). `openAgents`
@@ -1238,6 +1248,23 @@ export const useRuntimeStore = defineStore("runtime", () => {
     scheduleSave();
   }
 
+  // --- IDEA-1: the virtual Settings tab (no session, never persisted) ---
+
+  /** Open (or just activate) the Settings tab. Idempotent. */
+  function openSettingsTab() {
+    settingsTabOpen.value = true;
+    activeTabId.value = SETTINGS_TAB_ID;
+  }
+
+  /** Close the Settings tab. The caller (TabBar) reverts unsaved form edits
+   * via the settings store; focus falls to the last session tab, else empty. */
+  function closeSettingsTab() {
+    settingsTabOpen.value = false;
+    if (activeTabId.value === SETTINGS_TAB_ID) {
+      activeTabId.value = tabs.value[tabs.value.length - 1]?.tabId ?? null;
+    }
+  }
+
   /** Close a running/starting tab: terminate the active pane's session. The PTY
    * Exit event (single authoritative signal, 03 §五.2) finalizes the state via
    * onTabSessionExit; close_session guarantees the child is reaped. */
@@ -1459,6 +1486,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     ]);
     tabs.value = [];
     activeTabId.value = null;
+    settingsTabOpen.value = false;
     try {
       if (runtimeId.value) {
         const snap = await ipc.stopRuntime(workspace.value.trim(), runtimeId.value);
@@ -1517,6 +1545,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
     buildDurationMs,
     tabs,
     activeTabId,
+    settingsTabOpen,
+    openSettingsTab,
+    closeSettingsTab,
     runtimeState,
     runtimeSnapshot,
     conflicts,
