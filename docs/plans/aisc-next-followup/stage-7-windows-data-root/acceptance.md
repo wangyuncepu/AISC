@@ -63,6 +63,24 @@
 - 回归：全量 `python -m unittest discover` 595 OK（61 skipped 同前）
 - 结论：**PASS**
 
+### 7d-migration — 执行层 + CLI doctor/migrate/rollback（2026-08-17）
+
+- 目标/验收 ID：DATA-02/05 执行层（A-DATA02/A-DATA03 自动化部分；真机故障注入与并发门在 7f）
+- Commit：`3118a02`（executor）、`34811cf`（CLI）
+- OS/arch：Windows 11 Pro 10.0.26200 / x64
+- 步骤：`python -m pytest tests/test_data_migration_exec.py tests/test_cli_data_root.py -q`
+- 期望：commit 后源文件不动、瞬态原地、全迁移命名空间落 `.aisc-migrated` 标记；重复 apply 幂等
+  （copied=0/skipped=N）；取消保留 prepared manifest、重跑 resume；迁移中源变更/冲突/
+  空间不足/损坏复制 fail closed（稳定 `AISC_ERR_DATA_MIGRATION_*`）；unknown 未经
+  `--quarantine-unknown` 非零退出、consent 后 copy→verify→删源；rollback 只删 manifest 内
+  且 hash 未变的目标（用户改过的保留）、恢复 quarantine、移除标记；doctor/dry-run 全程
+  只读；CLI 信封 `aisc.cli/v1`、doctor 载荷不含原始 workspace 路径
+- 结果：**PASS** — executor 13 passed + CLI 5 passed
+- 真实 workspace CLI dry-run（只读）：copy_count **3127** / skip 8 / **62,187,538 bytes**，
+  conflicts=0、unknowns=0 —— 该 workspace 满足直接迁移条件
+- 回归：全量 `python -m unittest discover` 613 OK（61 skipped 同前）
+- 结论：**PASS**
+
 证据模板：
 
 ```text

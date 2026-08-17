@@ -29,6 +29,14 @@
   8 transient / 0 unknown / 0 conflict**，实扫反哺 allowlist（补
   `.claude/{.claude.json,.factory-version}` 与 daemon.sock 处理）。执行/回滚在 7d。
   本地门：legacy 11 passed + 18 subtests / 全量 595 OK。
+- **7d migration**：`application/data_migration.py` 两阶段执行器（staging 复制 + SHA-256
+  校验 → 同卷原子 `os.replace` 提交；manifest `migrations/<ws>.json` 先落 prepared、
+  逐条推进、崩溃可 resume；取消保留可恢复 manifest；全迁移命名空间写只读
+  `.aisc-migrated` 重定向标记；rollback 只删 manifest 内且 hash 未变的目标、恢复
+  quarantine、清标记；unknown 仅在显式 `--quarantine-unknown` 下 copy→verify→删源）+
+  CLI `aisc data-root doctor|migrate --dry-run|--apply|rollback`（冲突/未同意 unknown/
+  空间不足/源变更均稳定错误码非零退出）。真实 workspace dry-run：3127 文件/~62MB、
+  零冲突零 unknown。本地门：executor 13 + CLI 5 passed / 全量 613 OK。
 - **启动序列**：followup 计划入库（`5ec13bb`）；`aisc-next` 整体归档
   `docs/archive/completed/aisc-next`（`e0af206`）；实测 fresh 初始化 workspace 清单
   （`.aisc/.claude/.codex/.cc-switch/.local`，~3130 文件/~69MB）入 02-domain-contract。
