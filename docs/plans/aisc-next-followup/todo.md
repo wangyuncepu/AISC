@@ -23,6 +23,17 @@
   置全局生效，手动启动 Docker 也不再弹 Dashboard；恢复方法 = Docker Desktop
   Settings → General 重新勾选。
 
+### IDEA-4 Provider 一键切换激活（2026-08-17 用户提出，Stage 8 手测发现缺位）
+
+- **内容**：Provider 管理 tab 支持**切换 current provider**——点击条目或行内按钮即切换
+  到该 provider 代理，需有明确 UI 效果提示（当前项高亮/切换成功反馈，可仿照 cc-switch
+  桌面版 UI）。
+- **现状**：Stage 8 的 `aisc.cc-switch-provider/v1` 只冻结了 list/add/edit/delete；切换
+  目前只有 TUI（`aisc switch --quick`）。实现要点：adapter 增加 `switch` 操作（复用官方
+  CLI `provider switch`，非交互已验证可用）+ 协议版本升级（v1→v1.1 或 v2，向后兼容）+
+  面板行点击/按钮 + 切换后快照刷新与视觉反馈（当前行 accent、顶部轻提示）。
+- **归属**：Stage 8 之后的独立小迭代（可与 IDEA-2/3 同轮规划）。
+
 ### IDEA-2 容器 TUN 模式的 mihomo 订阅配置（2026-08-17 用户提出，待规划）
 
 - **内容**：用户在启动配置选择 `network=proxy`（容器 TUN）后，应引导用户配置

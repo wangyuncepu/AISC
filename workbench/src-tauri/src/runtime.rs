@@ -316,8 +316,17 @@ async fn cc_switch_call(
         }
         None => run_control(&pin, argv, PROVIDER_TIMEOUT, CancellationToken::new()).await?,
     };
-    if let Some(e) = envelope_error(&env) {
-        return Err(e);
+    if let Some(err) = env.errors.first() {
+        // Stage 8e: the adapter's stable AISC_ERR_CC_SWITCH_PROVIDER_* codes
+        // are unknown to map_aisc's curated table — surface the adapter's own
+        // message (e.g. "provider id already exists: deepseek") instead of
+        // the generic fallback.
+        let mut wb = WorkbenchError::map_aisc(&err.code);
+        if err.code.starts_with("AISC_ERR_CC_SWITCH_PROVIDER_") {
+            wb.message = err.message.clone();
+            wb.retryable = false;
+        }
+        return Err(wb.with_detail(err.message.clone()));
     }
     let data = env.data.unwrap_or(Value::Null);
     serde_json::from_value::<CcSwitchProvidersResult>(data)
@@ -414,7 +423,8 @@ pub async fn cc_switch_delete(
     provider_id: String,
 ) -> Result<CcSwitchProvidersResult, WorkbenchError> {
     cc_switch_validate(&runtime_id, &agent)?;
-    let argv = cc_switch_argv("delete", &runtime_id, &agent, &workspace, Some(&provider_id));
+    let mut argv = cc_switch_argv("delete", &runtime_id, &agent, &workspace, Some(&provider_id));
+    argv.push("--confirm".into()); // the CLI gates delete on this flag
     cc_switch_call(&app, argv, None).await
 }
 
