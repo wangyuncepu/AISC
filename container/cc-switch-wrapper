@@ -1,14 +1,17 @@
 #!/bin/bash
-# cc-switch 用 HOME 推导 skills 目标。项目态（Stage 7）使用 /root——
-# skills 落在挂载到 /root/.claude、/root/.codex 的 data root 卷；
-# 临时态改用 /tmp/aisc-home。旧版宿主回退布局（配置仍在 /root/app）时
-# 保持 /root/app。
+# cc-switch 用 HOME 推导 skills/daemon-state 目标。
+#   临时态 → /tmp/aisc-home（容器退出即重置）；
+#   项目态（Stage 7）→ /root：skills/daemon 状态落在挂载到 /root/.claude、
+#     /root/.codex、/root/.local/state/cc-switch 的 data root 卷；
+#   旧版宿主（未挂载 /root/.claude，配置仍在 /root/app）→ /root/app。
+# 判据用 /proc/mounts 挂载检测，而非 CLAUDE_CONFIG_DIR 的字面值——对
+# 新旧宿主的任意 CONFIG_DIR 拼写都成立。
 set -e
 
 if [ "${CLAUDE_CONFIG_DIR:-}" = "/tmp/aisc-home/.claude" ] || \
    [ "${CODEX_HOME:-}" = "/tmp/aisc-home/.codex" ]; then
     export HOME="/tmp/aisc-home"
-elif [ "${CLAUDE_CONFIG_DIR:-}" = "/root/.claude" ]; then
+elif grep -qs " /root/.claude " /proc/mounts; then
     export HOME="/root"
 else
     export HOME="/root/app"

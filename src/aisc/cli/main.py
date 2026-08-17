@@ -461,6 +461,8 @@ def _build_parser() -> _AiscArgumentParser:
                        help="Workspace path (default: current directory)")
     drmig.add_argument("--dry-run", action="store_true", default=False,
                        help="Report the plan without touching anything")
+    drmig.add_argument("--apply", action="store_true", default=False,
+                       help="Execute the migration (default when --dry-run is absent)")
     drmig.add_argument("--quarantine-unknown", action="store_true", default=False,
                        help="Move unknown files to the migration quarantine "
                             "(explicit consent; sources kept)")
@@ -1261,6 +1263,8 @@ def _cmd_data_root(
             dry_run=args.dry_run,
             quarantine_unknown=args.quarantine_unknown,
         ), 0, []
+    # --apply is accepted for explicitness; applying is the default action
+    # when --dry-run is absent (03-ux-flow contract spelling).
     elif sub == "rollback":
         return cmd_data_root_rollback(
             workspace=args.workspace, manifest=args.manifest,
