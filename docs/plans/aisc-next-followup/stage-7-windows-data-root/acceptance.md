@@ -132,9 +132,12 @@
 - **门禁修复（根因）**：镜像内旧 cc-switch wrapper 硬编码 `HOME=/root/app`，导致
   proxy/daemon 回写 workspace `.claude/.codex/.local` → wrapper 改用 `/proc/mounts`
   挂载检测推导 HOME（`586aa24`）
-- **发布前提**：release 镜像需重建以烧入新 entrypoint + wrapper（真机门用 bind-mount
-  覆盖验证）；OneDrive 重定向用户目录留待发布前手测矩阵（LOCALAPPDATA 通常不受
-  OneDrive 影响）
+- **发布前提**：~~release 镜像需重建~~ **已重建并验证**（2026-08-17 `aisc build
+  --no-cache`，image `58c52ff09c7e`）：无覆盖挂载、纯镜像运行 —— fresh workspace 零
+  新增，data root 收全量 claude 2179 / codex 480 / cc-switch 479 + db + daemon 态；
+  另加宿主脚本覆盖桥（`4d33edf`，run/runtime start 自动挂宿主 entrypoint+wrapper，
+  旧镜像即插即用）作为镜像未重建环境的兼容层。OneDrive 重定向用户目录留待发布前
+  手测矩阵（LOCALAPPDATA 通常不受 OneDrive 影响）
 - 结论：**PASS**（Workbench GUI 手测待用户执行）
 
 证据模板：
