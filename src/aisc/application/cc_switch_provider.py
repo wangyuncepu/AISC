@@ -81,7 +81,7 @@ def _exec_adapter(
     # Docker `-i` + run_captured(input_text=…): the request (with any secret)
     # reaches the adapter via stdin only — never argv, never disk (D8-09).
     result = executor.run_captured(argv, timeout=60.0, input_text=stdin_text)
-    if result.returncode != 0 and not (result.stdout or "").strip():
+    if result.exit_code != 0 and not (result.stdout or "").strip():
         raise CliError(
             message=f"cc-switch provider {op} failed: {(result.stderr or '').strip()[:200]}",
             exit_code=RuntimeExitCode.PROVIDER_STATUS_FAILED,

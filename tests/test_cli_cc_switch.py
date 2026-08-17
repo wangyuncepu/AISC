@@ -46,7 +46,7 @@ class FakeExec:
         self.input_text = input_text
         out = json.dumps(self.envelope) if self.rc == 0 else ""
         return SimpleNamespace(
-            returncode=self.rc,
+            exit_code=self.rc,
             stdout=out,
             stderr="docker: boom" if self.rc else "",
         )
@@ -118,7 +118,7 @@ class HostLayerTests(unittest.TestCase):
         from types import SimpleNamespace
 
         self.exec.run_captured = lambda argv, *, timeout=None, input_text=None: (
-            SimpleNamespace(returncode=0, stdout="not json", stderr="")
+            SimpleNamespace(exit_code=0, stdout="not json", stderr="")
         )
         with self.assertRaises(CliError) as ctx:
             host.list_providers(RUNTIME, "claude", self.tmp.name, self.exec)
