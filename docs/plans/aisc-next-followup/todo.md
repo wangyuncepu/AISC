@@ -70,7 +70,11 @@
 
 ## Stage 8
 
-- [ ] 预研最新 stable cc-switch 的 daemon/API 和数据库锁行为；
+- [x] 预研最新 stable cc-switch 的 daemon/API 和数据库锁行为（8a 完成 2026-08-17：
+      latest=v5.10.1/DB schema v16/无 HTTP API→Path B adapter/官方 CLI CRUD 表面+
+      secret stdin+stdout 回显风险全固化；DeepSeek 官方 fixture 落
+      `tests/fixtures/deepseek/official-api-facts.json`；详见
+      `stage-8-cc-switch-provider-ui/8a-discovery-report.md` + D8-08..D8-12）；
 - [ ] 实现 stable latest resolver、资产架构校验、SHA-256 和 image labels；
 - [ ] 从官方 DeepSeek 文档生成 fixture，确认字段、模型 ID、endpoint 和 `[1m]`；
 - [ ] 冻结 Provider UI protocol，完成 list/add/edit/delete 和 secrets redaction；

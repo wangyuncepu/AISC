@@ -1,0 +1,52 @@
+{
+  "schema": "aisc.deepseek-official-facts/v1",
+  "fixture_revision": 1,
+  "docs_source_urls": [
+    "https://api-docs.deepseek.com/zh-cn/quick_start/agent_integrations/claude_code",
+    "https://api-docs.deepseek.com/zh-cn/guides/anthropic_api",
+    "https://api-docs.deepseek.com/zh-cn/quick_start/pricing",
+    "https://api-docs.deepseek.com/zh-cn/news/news260424"
+  ],
+  "retrieved_at": "2026-08-17",
+
+  "base_url_openai": "https://api.deepseek.com",
+  "base_url_anthropic": "https://api.deepseek.com/anthropic",
+
+  "models": {
+    "official_ids": ["deepseek-v4-flash", "deepseek-v4-pro"],
+    "deprecated_ids": ["deepseek-chat", "deepseek-reasoner"],
+    "deprecated_since": "2026-07-24",
+    "context_length": "1M",
+    "max_output": "384K"
+  },
+
+  "claude_code_official_env": {
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "<user DeepSeek API key>",
+    "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_EFFORT_LEVEL": "max"
+  },
+
+  "one_million_context_suffix": {
+    "suffix": "[1m]",
+    "applies_to": ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL"],
+    "not_applicable_to": ["ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"],
+    "source": "Official Claude Code integration page exports deepseek-v4-pro[1m] verbatim; Haiku/subagent entries carry no suffix."
+  },
+
+  "server_side_alias_mapping": {
+    "claude-opus*": "deepseek-v4-pro",
+    "claude-haiku*, claude-sonnet*": "deepseek-v4-flash",
+    "unsupported_names": "deepseek-v4-flash"
+  },
+
+  "anthropic_api_notes": {
+    "x-api-key": "fully supported",
+    "anthropic-beta": "ignored",
+    "anthropic-version": "ignored"
+  }
+}
