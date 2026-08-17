@@ -534,9 +534,11 @@ pub async fn start_docker(app: AppHandle) -> Result<(), WorkbenchError> {
 async fn start_docker_inner(app: AppHandle) -> Result<(), WorkbenchError> {
     #[cfg(windows)]
     {
-        // Docker Desktop.exe already present → just launch it.
+        // Docker Desktop.exe already present → just launch it. KI-1: first
+        // suppress the dashboard popup so the start is silent (tray only).
         for exe in docker_desktop_candidates() {
             if exe.exists() {
+                suppress_docker_dashboard();
                 std::process::Command::new(&exe).spawn().map_err(|e| {
                     WorkbenchError::cli_protocol()
                         .with_detail(format!("failed to start Docker Desktop: {e}"))
@@ -584,6 +586,64 @@ async fn start_docker_inner(app: AppHandle) -> Result<(), WorkbenchError> {
         Err(WorkbenchError::cli_protocol()
             .with_detail("start Docker manually (e.g. systemctl start docker)".to_string()))
     }
+}
+
+/// Make the next Docker Desktop start silent (KI-1, user request 2026-08-17:
+/// no foreground dashboard popup when Workbench wakes Docker).
+///
+/// Mechanism: Docker Desktop's own startup setting — the equivalent of
+/// unchecking "Open Docker Dashboard at startup" in its GUI. We write it into
+/// `%APPDATA%\Docker\settings-store.json` (Docker Desktop 4.3x+, PascalCase
+/// keys) or legacy `settings.json` (camelCase) BEFORE spawning, so the app
+/// reads it at startup and starts to the tray.
+///
+/// Safety: only ever ENABLES the suppression (missing/false → true), never
+/// re-enables the popup; every other key is preserved; the write is atomic
+/// (temp + replace); an existing-but-unparseable file is left untouched
+/// (worst case the dashboard still opens). Best-effort — failures are
+/// ignored, launching Docker matters more than silencing it.
+#[cfg(windows)]
+fn suppress_docker_dashboard() {
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        suppress_docker_dashboard_in(&std::path::Path::new(&appdata).join("Docker"));
+    }
+}
+
+/// Testable core of [`suppress_docker_dashboard`] over a Docker config dir.
+#[cfg(windows)]
+fn suppress_docker_dashboard_in(dir: &std::path::Path) -> bool {
+    let store = dir.join("settings-store.json");
+    let legacy = dir.join("settings.json");
+    // Prefer the modern store; the legacy file only when it is all there is.
+    let (path, key) = if store.exists() || !legacy.exists() {
+        (store, "OpenUIOnStartupDisabled")
+    } else {
+        (legacy, "openUIOnStartupDisabled")
+    };
+    let bytes = std::fs::read(&path).unwrap_or_default();
+    let mut val: serde_json::Value = if path.exists() {
+        match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(_) => return false, // corrupt/foreign content — never rewrite
+        }
+    } else {
+        serde_json::json!({}) // fresh install: minimal store, Docker fills defaults
+    };
+    // Already suppressed (explicitly true) → nothing to do.
+    if val.get(key).and_then(|v| v.as_bool()) == Some(true) {
+        return false;
+    }
+    let Some(obj) = val.as_object_mut() else {
+        return false; // unexpected shape (array/string) — leave it alone
+    };
+    obj.insert(key.to_string(), serde_json::Value::Bool(true));
+    let Ok(out) = serde_json::to_vec_pretty(&val) else {
+        return false;
+    };
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    crate::storage::atomic_replace(&path, &out).is_ok()
 }
 
 /// Candidate paths for the Docker Desktop executable (Windows). Single source
@@ -753,6 +813,94 @@ mod tests {
         assert_eq!(candidates.len(), via_env.len());
         if !candidates.is_empty() {
             assert_eq!(candidates[0], via_env[0]);
+        }
+    }
+
+    #[cfg(windows)]
+    mod suppress_dashboard {
+        use super::*;
+
+        fn read(p: &std::path::Path) -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()
+        }
+
+        #[test]
+        fn modern_store_key_set_and_other_keys_preserved() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("settings-store.json"),
+                r#"{ "AutoStart": false, "SettingsVersion": 45 }"#,
+            )
+            .unwrap();
+            assert!(suppress_docker_dashboard_in(dir.path()));
+            let v = read(&dir.path().join("settings-store.json"));
+            assert_eq!(v["OpenUIOnStartupDisabled"], serde_json::json!(true));
+            assert_eq!(v["AutoStart"], serde_json::json!(false)); // untouched
+            assert_eq!(v["SettingsVersion"], serde_json::json!(45));
+        }
+
+        #[test]
+        fn already_suppressed_is_a_no_write() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("settings-store.json"),
+                r#"{ "OpenUIOnStartupDisabled": true, "AutoStart": false }"#,
+            )
+            .unwrap();
+            let before = std::fs::read(dir.path().join("settings-store.json")).unwrap();
+            assert!(!suppress_docker_dashboard_in(dir.path()));
+            let after = std::fs::read(dir.path().join("settings-store.json")).unwrap();
+            assert_eq!(before, after); // byte-identical, never rewritten
+        }
+
+        #[test]
+        fn legacy_settings_json_uses_camel_case_key() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("settings.json"), r#"{ "autoStart": true }"#)
+                .unwrap();
+            assert!(suppress_docker_dashboard_in(dir.path()));
+            let v = read(&dir.path().join("settings.json"));
+            assert_eq!(v["openUIOnStartupDisabled"], serde_json::json!(true));
+            assert_eq!(v["autoStart"], serde_json::json!(true));
+            // The modern store must NOT be created when the legacy file exists.
+            assert!(!dir.path().join("settings-store.json").exists());
+        }
+
+        #[test]
+        fn fresh_install_writes_minimal_store() {
+            let dir = tempfile::tempdir().unwrap();
+            assert!(suppress_docker_dashboard_in(dir.path()));
+            let v = read(&dir.path().join("settings-store.json"));
+            assert_eq!(v["OpenUIOnStartupDisabled"], serde_json::json!(true));
+        }
+
+        #[test]
+        fn corrupt_or_non_object_store_left_alone() {
+            let dir = tempfile::tempdir().unwrap();
+            // Corrupt JSON: never rewritten (data preservation beats silence).
+            std::fs::write(dir.path().join("settings-store.json"), b"{not json").unwrap();
+            assert!(!suppress_docker_dashboard_in(dir.path()));
+            assert_eq!(std::fs::read(dir.path().join("settings-store.json")).unwrap(), b"{not json");
+            // Non-object root: also untouched.
+            let dir2 = tempfile::tempdir().unwrap();
+            std::fs::write(dir2.path().join("settings-store.json"), b"[1,2]").unwrap();
+            assert!(!suppress_docker_dashboard_in(dir2.path()));
+            assert_eq!(std::fs::read(dir2.path().join("settings-store.json")).unwrap(), b"[1,2]");
+        }
+
+        #[test]
+        fn explicit_false_is_upgraded_to_true() {
+            // The user (or an older Docker version) disabled suppression —
+            // Workbench re-silences; only true→false is forbidden.
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("settings-store.json"),
+                r#"{ "OpenUIOnStartupDisabled": false }"#,
+            )
+            .unwrap();
+            assert!(suppress_docker_dashboard_in(dir.path()));
+            let v = read(&dir.path().join("settings-store.json"));
+            assert_eq!(v["OpenUIOnStartupDisabled"], serde_json::json!(true));
         }
     }
 
