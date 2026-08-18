@@ -29,6 +29,16 @@ function read(name: string): string {
   return readFileSync(resolve(FIXTURES, name), "utf-8");
 }
 
+/** The repo VERSION the CLI reports (mirrors the Python contract test: the
+ * version fixture moves with every bump — read it, don't hardcode). */
+function repoVersion(): string {
+  for (const root of [resolve(FIXTURES, "../.."), resolve(FIXTURES, "../../..")]) {
+    const p = resolve(root, "VERSION");
+    if (existsSync(p)) return readFileSync(p, "utf-8").trim();
+  }
+  throw new Error("VERSION not found relative to fixtures");
+}
+
 interface Envelope {
   meta: {
     protocol: string;
@@ -51,7 +61,8 @@ describe("aisc.cli/v1 fixture set (TS consumer)", () => {
     expect(env.errors).toEqual([]);
 
     const vi = env.data as VersionInfo & { capabilities: Capabilities };
-    expect(vi.cli_version).toBe("2.1.5.dev0");
+    expect(vi.cli_version).toBe(repoVersion());
+    expect(env.meta.version).toBe(repoVersion());
     expect(vi.capabilities.runtime).toBe("aisc.runtime/v1");
     expect(vi.capabilities.session).toBe("aisc.session/v1");
     expect(vi.capabilities.providerStatus).toBe("aisc.provider-status/v1");
