@@ -104,7 +104,8 @@ class AdapterTestCase(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
         create_db(self.dir)
-        self._env = {"CC_SWITCH_CONFIG_DIR": str(self.dir)}
+        self._env = {"CC_SWITCH_CONFIG_DIR": str(self.dir),
+                     "CODEX_CONFIG_DIR": str(self.dir)}
         self._patcher = mock.patch.dict("os.environ", self._env, clear=False)
         self._patcher.start()
         self.addCleanup(self._patcher.stop)
@@ -321,6 +322,48 @@ class SwitchTests(AdapterTestCase):
         first = " ".join(self.cli.calls[0].args)
         self.assertIn("proxy -a codex enable", first)
         self.assertIn("switch", " ".join(self.cli.calls[1].args))
+
+    def test_codex_switch_manages_auth_placeholder(self):
+        import os as _os
+        # Enable path: absent auth.json gets the marker placeholder.
+        toml_cfg = 'model_provider = "deepseek"\n[model_providers.deepseek]\nbase_url = "https://x"\n'
+        seed_provider(self.dir, "codex-official", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": ""})
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"auth": {}, "config": toml_cfg})
+        A.op_switch("codex", "deepseek")
+        auth = self.dir / "auth.json"
+        self.assertEqual(auth.read_text(encoding="utf-8").strip(),
+                         A._AUTH_PLACEHOLDER)
+
+        # The fake CLI never flips is_current — drive it with direct DB
+        # updates between switches, as the real CLI would.
+        def set_current(pid: str) -> None:
+            db = sqlite3.connect(self.dir / "cc-switch.db")
+            db.execute("UPDATE providers SET is_current=0 WHERE app_type='codex'")
+            db.execute("UPDATE providers SET is_current=1 WHERE id=? AND app_type='codex'", (pid,))
+            db.commit()
+            db.close()
+
+        seed_provider(self.dir, "kimi", {}, agent="codex",
+                      settings={"auth": {}, "config": toml_cfg.replace("deepseek", "kimi")})
+        set_current("deepseek")
+        # A REAL login is never overwritten.
+        auth.write_text('{"tokens":{"id_token":"real"}}', encoding="utf-8")
+        A.op_switch("codex", "kimi")
+        self.assertIn("real", auth.read_text(encoding="utf-8"))
+
+        # Back to official: our marker is removed, a real login stays.
+        set_current("kimi")
+        auth.write_text(A._AUTH_PLACEHOLDER, encoding="utf-8")
+        A.op_switch("codex", "official")
+        self.assertFalse(auth.exists())
+        auth.write_text('{"tokens":{"id_token":"real"}}', encoding="utf-8")
+        set_current("kimi")
+        A.op_switch("codex", "deepseek")
+        set_current("deepseek")
+        A.op_switch("codex", "official")
+        self.assertTrue(auth.exists())
 
     def test_codex_switch_to_official_disables_route(self):
         seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,

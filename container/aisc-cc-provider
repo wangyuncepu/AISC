@@ -593,6 +593,43 @@ def _cli_switch_empty_config(agent: str, provider_id: str) -> None:
         )
 
 
+_AUTH_PLACEHOLDER = '{"OPENAI_API_KEY":"AISC_PROXY_PLACEHOLDER"}'
+
+
+def _codex_auth_path() -> Path:
+    root = os.environ.get("CODEX_CONFIG_DIR") or os.environ.get("CODEX_HOME")
+    if not root:
+        raise AdapterError(ERR_BAD_REQUEST, "CODEX_CONFIG_DIR is not set")
+    return Path(root) / "auth.json"
+
+
+def _manage_codex_auth_placeholder(*, remove: bool) -> None:
+    """Interactive codex refuses to start without an auth.json (its own
+    onboarding wizard — IDEA-4 round 5 manual find). The placeholder carries
+    NO secret (the real key lives in the live-synced config.toml and the
+    local proxy injects upstream); a REAL login file is never touched, and
+    the marker is removed again when switching back to official."""
+    path = _codex_auth_path()
+    try:
+        existing = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+    except OSError:
+        return
+    if remove:
+        if existing == _AUTH_PLACEHOLDER:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return
+    if not existing:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_AUTH_PLACEHOLDER, encoding="utf-8")
+            os.chmod(path, 0o600)
+        except OSError:
+            pass  # best-effort: the wizard stays, but the switch itself holds
+
+
 def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
     """Activate a provider (IDEA-4): official non-interactive `provider switch`.
 
@@ -614,10 +651,16 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
         # Codex only reaches third-party providers through cc-switch's LOCAL
         # proxy route (default OFF — without it codex talks to api.openai.com
         # regardless of model_provider; probed on the real container). Toggle
-        # idempotently with the switch direction.
-        route = "disable" if provider_id.endswith("-official") else "enable"
+        # idempotently with the switch direction. The real API key rides the
+        # live-synced config.toml (model_providers.<id>.api_key); interactive
+        # codex ALSO demands an auth.json before it starts — manage a marker
+        # placeholder that never carries a secret and never touches a real
+        # ChatGPT login.
+        to_official = provider_id.endswith("-official")
+        route = "disable" if to_official else "enable"
         _cli(["proxy", "-a", "codex", route], secrets=secrets,
              what=f"codex proxy route {route}")
+        _manage_codex_auth_placeholder(remove=to_official)
     if _settings_are_real(agent, row):
         _cli_switch(agent, provider_id, secrets)
     else:
