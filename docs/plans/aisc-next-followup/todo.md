@@ -23,16 +23,25 @@
   置全局生效，手动启动 Docker 也不再弹 Dashboard；恢复方法 = Docker Desktop
   Settings → General 重新勾选。
 
-### IDEA-4 Provider 一键切换激活（2026-08-17 用户提出，Stage 8 手测发现缺位）
+### IDEA-4 Provider 一键切换激活（2026-08-17 用户提出；**2026-08-18 实现并手测 PASS**）
 
-- **内容**：Provider 管理 tab 支持**切换 current provider**——点击条目或行内按钮即切换
-  到该 provider 代理，需有明确 UI 效果提示（当前项高亮/切换成功反馈，可仿照 cc-switch
-  桌面版 UI）。
-- **现状**：Stage 8 的 `aisc.cc-switch-provider/v1` 只冻结了 list/add/edit/delete；切换
-  目前只有 TUI（`aisc switch --quick`）。实现要点：adapter 增加 `switch` 操作（复用官方
-  CLI `provider switch`，非交互已验证可用）+ 协议版本升级（v1→v1.1 或 v2，向后兼容）+
-  面板行点击/按钮 + 切换后快照刷新与视觉反馈（当前行 accent、顶部轻提示）。
-- **归属**：Stage 8 之后的独立小迭代（可与 IDEA-2/3 同轮规划）。
+- **已实现**（分支 `idea-4-provider-switch`）：adapter `switch` 操作（真配置行走官方
+  非交互 CLI；空配置官方行走 pty+自动应答；id slug 校验防注入）+ `official` 伪目标
+  （取消代理回官方直连）+ codex 切换自动开/关本地代理路由 + codex auth.json 无密钥
+  占位管理（修 Codex 自身首跑向导；真实登录永不触碰）+ 行点击/使用中行取消代理确认/
+  无密钥切换确认 + 隐藏不可切换占位行 + 侧栏状态联动。手测五轮 PASS
+  （2026-08-18 用户确认）。打磨项拆到 IDEA-5。
+
+### IDEA-5 Provider 管理打磨（2026-08-18 用户提出，IDEA-4 手测瑕疵）
+
+- **模型映射**：claude 侧缺少模型映射设置项（MODEL/OPUS/SONNET/HAIKU/SUBAGENT 五个
+  角色位）。建议增加「从 API 拉取可用模型列表 → 用户下拉选择映射」的可选功能
+  （仿照 cc-switch 桌面版）。上游已有 `provider fetch-models` 子命令可作数据源；
+  preset 的官方默认集（8c）保持为初始值，用户映射覆盖后按 ownership 规则保留。
+- **切换视觉反馈**：切换 provider 时的视觉效果较差（当前只有 3 秒横幅）——需设计
+  更明显的过渡（行高亮动画/当前 chip 平滑移动/顶部 toast 样式），参照 cc-switch
+  桌面版观感。
+- **归属**：与 Provider 管理相关的独立小迭代，可与 IDEA-2/3 同轮规划。
 
 ### IDEA-2 容器 TUN 模式的 mihomo 订阅配置（2026-08-17 用户提出，待规划）
 
