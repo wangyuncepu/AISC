@@ -130,6 +130,10 @@ async function activate(p: CcSwitchProvider): Promise<void> {
     if (!ok) return;
     target = "official";
   }
+  if (target !== "official" && !p.has_api_key) {
+    const go = await confirm(t("ccswitch.noKeyConfirm", { name: p.name || p.id }));
+    if (!go) return;
+  }
   const ok = await ui.activate(store.workspace, store.runtimeId, target);
   if (ok) {
     switchedTo.value =

@@ -5,7 +5,8 @@
  * never in the sidebar (auth is Session-specific, not Runtime-global).
  *
  * Auth-state behavior (04 §三 rule table):
- * - not_configured / login_required: guide state, button opens cc-switch
+ * - not_configured / login_required: guide state, button opens the Provider
+ *   management tab (IDEA-4 round 4: the TUI is no longer the entry point)
  *   (activates an existing tab or creates one); retry starts the session
  *   once the provider reports configured.
  * - unknown / capability missing: "无法确认" copy, retry; never presented as
@@ -60,8 +61,8 @@ async function retry() {
   }
 }
 
-function openCcSwitch() {
-  store.openCcSwitch();
+function openProviderTab() {
+  store.openCcSwitchUiTab();
 }
 
 /** G-12 (user request 2026-08-10): official-account login goes straight into
@@ -113,7 +114,7 @@ function closeMenus() {
           <!-- Official TUI login is available for both login_required and
                not_configured (codex can log in directly regardless of proxy). -->
           <button v-if="auth === 'login_required' || auth === 'not_configured'" @click="loginOfficial">{{ t("guide.loginOfficial") }}</button>
-          <button class="primary" @click="openCcSwitch">{{ t("guide.openCcSwitch") }}</button>
+          <button class="primary" @click="openProviderTab">{{ t("guide.openProviderTab") }}</button>
         </template>
       </div>
     </div>

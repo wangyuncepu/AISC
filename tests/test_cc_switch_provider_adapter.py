@@ -306,6 +306,30 @@ class SwitchTests(AdapterTestCase):
         # snapshot returned unchanged (the CLI owns is_current truth)
         self.assertEqual([p["id"] for p in providers][0], "deepseek")
 
+    def test_codex_switch_enables_proxy_route_first(self):
+        # Codex reaches third parties only through the local proxy route
+        # (default OFF) — the adapter enables it before switching.
+        toml_cfg = (
+            'model_provider = "deepseek"\n[model_providers.deepseek]\n'
+            'base_url = "https://api.deepseek.com"\n'
+        )
+        seed_provider(self.dir, "codex-official", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": ""})
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"auth": {}, "config": toml_cfg})
+        A.op_switch("codex", "deepseek")
+        first = " ".join(self.cli.calls[0].args)
+        self.assertIn("proxy -a codex enable", first)
+        self.assertIn("switch", " ".join(self.cli.calls[1].args))
+
+    def test_codex_switch_to_official_disables_route(self):
+        seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": 'model_provider = "d"\n'})
+        seed_provider(self.dir, "codex-official", {}, agent="codex",
+                      settings={"auth": {}, "config": ""})
+        A.op_switch("codex", "official")
+        self.assertIn("proxy -a codex disable", " ".join(self.cli.calls[0].args))
+
     def test_switch_to_current_is_idempotent_no_cli(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
         A.op_switch("claude", "deepseek")

@@ -610,6 +610,14 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
     if row["is_current"]:
         return op_list(agent)  # already active — idempotent success
     secrets = snapshot_secrets(agent, snapshot)
+    if agent == "codex":
+        # Codex only reaches third-party providers through cc-switch's LOCAL
+        # proxy route (default OFF — without it codex talks to api.openai.com
+        # regardless of model_provider; probed on the real container). Toggle
+        # idempotently with the switch direction.
+        route = "disable" if provider_id.endswith("-official") else "enable"
+        _cli(["proxy", "-a", "codex", route], secrets=secrets,
+             what=f"codex proxy route {route}")
     if _settings_are_real(agent, row):
         _cli_switch(agent, provider_id, secrets)
     else:

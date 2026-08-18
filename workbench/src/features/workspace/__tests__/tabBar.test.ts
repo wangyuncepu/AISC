@@ -246,7 +246,7 @@ describe("IDEA-1 + split button (S3)", () => {
     const menu = document.querySelector(".tab-new-menu");
     expect(menu).toBeTruthy();
     const items = menu!.querySelectorAll("[role=menuitem]");
-    expect(items.length).toBe(6); // claude/codex/bash/cc-switch + 设置 + Provider 管理
+    expect(items.length).toBe(5); // claude/codex/bash + 设置 + Provider 管理 (cc-switch TUI 已移除)
     expect(menu!.querySelector("[role=separator]")).toBeTruthy();
 
     (items[1] as HTMLElement).click(); // codex
@@ -263,7 +263,7 @@ describe("IDEA-1 + split button (S3)", () => {
     await wrapper.find(".menu-wrap .add-caret").trigger("click");
 
     const items = document.querySelectorAll(".tab-new-menu [role=menuitem]");
-    (items[4] as HTMLElement).click(); // 设置
+    (items[3] as HTMLElement).click(); // 设置
     await nextTick();
     expect(s.settingsTabOpen).toBe(true);
     expect(s.activeTabId).toBe(SETTINGS_TAB_ID);
