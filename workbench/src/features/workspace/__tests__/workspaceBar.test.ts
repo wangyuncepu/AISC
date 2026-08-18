@@ -110,6 +110,23 @@ describe("WorkspaceBar (3c)", () => {
     bar.unmount();
   });
 
+  it("round-4 labels: folder name only; full path only to disambiguate same-name folders", async () => {
+    const ws = useWorkspacesStore();
+    // Windows backslashed paths (the round-4 bug: "/"-only basename leaked
+    // the whole path) + a same-name pair elsewhere.
+    await launchWorkspace(ws, "C:\\Users\\me\\projects\\alpha");
+    await launchWorkspace(ws, "D:\\work\\alpha");
+    await launchWorkspace(ws, "C:\\solo");
+    const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
+    const labels = bar.findAll(".chip .name").map((n) => n.text());
+    expect(labels).toContain("solo"); // unique → bare folder name
+    // Both alpha folders show their FULL paths to disambiguate.
+    expect(labels.some((l) => l.includes("projects\\alpha"))).toBe(true);
+    expect(labels.some((l) => l.includes("D:\\work\\alpha"))).toBe(true);
+    expect(labels.some((l) => l === "alpha")).toBe(false);
+    bar.unmount();
+  });
+
   it("activates a workspace on chip click", async () => {
     const ws = useWorkspacesStore();
     await launchWorkspace(ws, "C:/alpha");

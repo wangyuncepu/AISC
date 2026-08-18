@@ -11,7 +11,8 @@ const { t } = useI18n();
 const store = useRuntimeStore();
 
 function basename(p: string): string {
-  const parts = p.replace(/\/+$/, "").split("/");
+  // Both separators — Windows paths are backslashed (round-4 fix).
+  const parts = p.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts[parts.length - 1] || p;
 }
 </script>

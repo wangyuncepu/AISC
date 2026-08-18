@@ -108,9 +108,19 @@ interface Chip {
   settings?: boolean;
 }
 
+/** Folder name of a workspace path (both separators — Windows paths are
+ * backslashed; a "/"-only split returned the whole path as the "name"). */
 function basename(p: string): string {
-  const parts = p.replace(/\/+$/, "").split("/");
+  const parts = p.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts[parts.length - 1] || p;
+}
+
+/** Round-4 rule (user): chips show the FOLDER NAME; only when two open
+ * workspaces share a folder name do those chips show the full path so the
+ * user can tell them apart. */
+function chipLabel(path: string, all: string[]): string {
+  const name = basename(path);
+  return all.filter((p) => basename(p) === name).length > 1 ? path : name;
 }
 
 const STATUS_KEY: Record<string, string> = {
@@ -136,9 +146,10 @@ function dotState(c: Chip): string {
 }
 
 const chips = computed<Chip[]>(() => {
+  const paths = ws.runtimes.map((r) => r.workspace.value);
   const list: Chip[] = ws.runtimes.map((r) => ({
     id: r.id,
-    label: basename(r.workspace.value),
+    label: chipLabel(r.workspace.value, paths),
     title: r.workspace.value,
     status: r.status.value,
     state: r.runtimeState.value,
