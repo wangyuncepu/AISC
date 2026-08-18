@@ -1,14 +1,13 @@
 <script setup lang="ts">
 /**
- * Shared settings form (Step 3 / G-01; IDEA-1 S2 extracted from
- * SettingsDialog so the same fields render in the modal dialog AND the
- * Settings tab).
+ * Shared settings form (Step 3 / G-01; IDEA-1 S2; IDEA-3 3d: tab-only — the
+ * pre-runtime modal dialog is retired, Settings is a workspace-layer tab).
  *
  * Load/save/reset against the typed settings backend, per-field errors and
  * effective-scope markers (02 §三.4 table). Defaults and bounds live in Rust -
- * this view renders whatever `load_settings` returns. Chrome (overlay + focus
- * trap vs tab pane) belongs to the parent; `mode` only toggles the footer
- * Close button and the tab-mode status strip.
+ * this view renders whatever `load_settings` returns. Chrome belongs to the
+ * parent; the status strip (dirty/saved) renders here because the pane has no
+ * header of its own.
  */
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
@@ -16,7 +15,6 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../../stores/settings";
 import type { TerminalSettings, UiSettings, WindowSettings } from "../../types";
 
-const props = withDefaults(defineProps<{ mode?: "dialog" | "tab" }>(), { mode: "dialog" });
 const { t } = useI18n();
 const store = useSettingsStore();
 const emit = defineEmits<{ close: [] }>();
@@ -53,6 +51,10 @@ const FIELDS: FieldDef[] = [
     { value: "bash", labelKey: "tabbar.menu.bash" },
     { value: "cc-switch", labelKey: "tabbar.menu.cc-switch" },
   ], effect: "immediate", helpKey: "settings.ui.defaultTab.help" },
+  { key: "ui.default_new_page", labelKey: "settings.ui.defaultNewPage", control: "select", options: [
+    { value: "workspace", labelKey: "workspbar.newWorkspace" },
+    { value: "settings", labelKey: "workspbar.settings" },
+  ], effect: "immediate", helpKey: "settings.ui.defaultNewPage.help" },
   { key: "ui.explorer_ignore", labelKey: "settings.ui.explorerIgnore", control: "text",
     effect: "immediate", helpKey: "settings.ui.explorerIgnore.help" },
   { key: "terminal.font_family", labelKey: "settings.term.fontFamily", control: "text",
@@ -137,17 +139,12 @@ async function reopenOnboarding() {
   await onboarding.patch({ status: "in_progress", currentStep: "environment" });
   emit("close");
 }
-
-function onCancel() {
-  store.cancel();
-  emit("close");
-}
 </script>
 
 <template>
   <div class="settings-form">
-    <!-- Tab mode has no dialog header, so the dirty/saved state lives here. -->
-    <div v-if="props.mode === 'tab'" class="tab-strip">
+    <!-- No header of its own, so the dirty/saved state lives here. -->
+    <div class="tab-strip">
       <span class="spacer" />
       <span v-if="store.dirty" class="chip dirty">{{ t("settings.dirty") }}</span>
       <span v-if="savedFlash" class="chip saved">{{ t("settings.saved") }}</span>
@@ -181,7 +178,7 @@ function onCancel() {
             <select v-else-if="f.key === 'ui.theme'" :id="f.key" v-model="ui.theme" :disabled="store.readOnly">
               <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
             </select>
-            <select v-else-if="f.key === 'ui.default_tab_agent'" :id="f.key" v-model="ui.default_tab_agent" :disabled="store.readOnly">
+            <select v-else-if="f.key === 'ui.default_tab_agent' || f.key === 'ui.default_new_page'" :id="f.key" v-model="ui[f.key.split('.')[1] as 'default_tab_agent' | 'default_new_page']" :disabled="store.readOnly">
               <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
             </select>
             <input v-else-if="f.key === 'ui.explorer_ignore'" :id="f.key" v-model="explorerIgnoreText"
@@ -253,9 +250,8 @@ function onCancel() {
       </button>
       <button :disabled="saving || store.readOnly || !store.loaded" @click="onReset">{{ t("settings.reset") }}</button>
       <button :disabled="saving" @click="reopenOnboarding">{{ t("settings.reopenOnboarding") }}</button>
-      <!-- Dialog mode keeps the explicit Close (Escape/overlay also close);
-           tab mode closes via the tab × only. -->
-      <button v-if="props.mode === 'dialog'" :disabled="saving" @click="onCancel">{{ t("settings.close") }}</button>
+      <!-- Closing happens via the strip chip × / Ctrl+, (both revert unsaved
+           edits) — no in-form Close button. -->
     </footer>
   </div>
 </template>

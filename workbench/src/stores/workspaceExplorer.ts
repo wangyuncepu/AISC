@@ -23,6 +23,10 @@ import { useSettingsStore } from "./settings";
 import type { ArtifactRecord, WorkspaceNode, WorkspacePreviewResult } from "../types";
 
 interface WorkspaceChangeBatch {
+  /** The WATCHED workspace path (IDEA-3 3e): lets the frontend drop batches
+   * from a just-replaced watcher during rapid workspace switches. Absent in
+   * payloads from older backends (treated as unscoped = accepted). */
+  workspace?: string;
   changes: Array<{
     relative_path: string;
     change_type: string;
@@ -30,6 +34,20 @@ interface WorkspaceChangeBatch {
     revision: number;
   }>;
   overflow: boolean;
+  stale: boolean;
+}
+
+/** One workspace's cached Explorer state (IDEA-3 3e: per-path cache —
+ * switching back restores the tree instead of re-listing from scratch). */
+interface ExplorerCache {
+  tree: Record<string, WorkspaceNode[]>;
+  expanded: Set<string>;
+  loading: Record<string, boolean>;
+  loadingMore: Record<string, boolean>;
+  errors: Record<string, string>;
+  nextCursors: Record<string, string | null>;
+  truncatedDirs: Record<string, boolean>;
+  unattributed: Record<string, string>;
   stale: boolean;
 }
 
@@ -78,6 +96,8 @@ let watcherUnlisteners: Array<() => void> = [];
 export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
   state: () => ({
     workspace: null as string | null,
+    /** IDEA-3 (3e): per-workspace Explorer caches (switch-back is instant). */
+    caches: {} as Record<string, ExplorerCache>,
     /** Directory children keyed by relative dir ("" = root). */
     tree: {} as Record<string, WorkspaceNode[]>,
     /** Directories the user has expanded. */
@@ -179,17 +199,47 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
     setWorkspace(workspace: string) {
       if (this.workspace !== workspace) {
         void this.stopWatching();
+        // IDEA-3 (3e): snapshot the outgoing workspace; restore a prior cache
+        // for the incoming one instead of destroying everything. Rapid A→B→A
+        // switches keep A's tree, expansions and unattributed projection.
+        if (this.workspace) {
+          this.caches[this.workspace] = {
+            tree: this.tree,
+            expanded: this.expanded,
+            loading: {},
+            loadingMore: {},
+            errors: this.errors,
+            nextCursors: this.nextCursors,
+            truncatedDirs: this.truncatedDirs,
+            unattributed: this.unattributed,
+            stale: this.stale,
+          };
+        }
+        const cached = this.caches[workspace];
+        if (cached) {
+          this.tree = cached.tree;
+          this.expanded = cached.expanded;
+          this.loading = {};
+          this.loadingMore = {};
+          this.errors = cached.errors;
+          this.nextCursors = cached.nextCursors;
+          this.truncatedDirs = cached.truncatedDirs;
+          this.unattributed = cached.unattributed;
+          this.stale = cached.stale;
+        } else {
+          this.tree = {};
+          this.expanded = new Set();
+          this.loading = {};
+          this.loadingMore = {};
+          this.errors = {};
+          this.nextCursors = {};
+          this.truncatedDirs = {};
+          this.unattributed = {};
+          this.stale = false;
+        }
         this.workspace = workspace;
-        this.tree = {};
-        this.expanded = new Set();
-        this.loading = {};
-        this.loadingMore = {};
-        this.errors = {};
-        this.nextCursors = {};
-        this.truncatedDirs = {};
         this.artifacts = [];
         this.artifactsNextCursor = null;
-        this.unattributed = {};
         this.preview = null;
         void this.startWatching(workspace);
       }
@@ -205,10 +255,15 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
       }
       const unlisteners: Array<() => void> = [];
       const unlistenChanged = await listen<WorkspaceChangeBatch>("workspace://changed", (ev) => {
+        // IDEA-3 (3e): scope by the watched path — a batch from a just-
+        // replaced watcher (rapid workspace switch) must not mutate the new
+        // workspace's tree. Unscoped payloads (older backends) pass through.
+        if (ev.payload.workspace && ev.payload.workspace !== workspace) return;
         this.handleWorkspaceChanges(ev.payload.changes);
       });
       unlisteners.push(unlistenChanged);
-      const unlistenStale = await listen("workspace://stale", () => {
+      const unlistenStale = await listen<WorkspaceChangeBatch>("workspace://stale", (ev) => {
+        if (ev.payload.workspace && ev.payload.workspace !== workspace) return;
         this.stale = true;
         // Bounded rescan: re-list the root; clear stale once loaded.
         void this.loadDir("", true).then(() => {

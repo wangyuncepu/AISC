@@ -1,5 +1,24 @@
 # 待办与门禁
 
+## v2.1.6-dev 预览手测阻塞项（2026-08-18，draft 暂不发布）
+
+> 来源：v2.1.6-dev 安装包"全新机器"手测（用户 2026-08-18）。发布前需逐项
+> 解决；原始记录在 `docs/todo.md`「手测异常/问题」。
+
+- **KI-3 首次运行 CLI 发现竞态（P1+P2 同族）**：✅ **已修（2026-08-18，
+  随 IDEA-3 分支合并 develop）**——真根因是 `resolve_pin` 抢跑：向导期间
+  negotiate 被推迟 → 环境探测/预检读 pin 落空 → 裸 `cli_not_found`
+  （`technical_detail: null` 实锤）；重检时 negotiate 已写 pin 故恢复。
+  修复：`session::resolve_cli`（15 个命令调用点）无 pin 时当场自动发现并
+  落盘（`cli::auto_select_and_pin`）；另探测超时 15s→45s + 超时重试一次
+  （冷启动 sidecar 解包+杀软首扫兜底）+ `cli_not_found` 携带逐候选明细。
+  **待最终复验**：从含修复的提交重建安装包后在干净环境复测安装→首跑
+  全链路（当前 v2.1.6-dev draft 构建于 `65ba5d5`，不含本修复）。
+- **KI-4 卸载/升级的配套资源管理**：aisc 卸载、升级时应同步处理 Docker
+  镜像（super-claude 等）、数据根等配套资源（删除/重建）；如能同步
+  更新已有 container 更好。需先定策略（默认清理 vs 询问保留——与
+    docs/todo.md「退出前询问是否保留 runtime」同族，可合并设计）。
+
 ## 想法 / Ideas
 
 ### IDEA-1 Tab 新建 UX（Windows Terminal 式，2026-08-17 用户提出）
@@ -59,20 +78,20 @@
   - 与现有 `network: direct|proxy` preflight/UI 的衔接点。
 - **归属建议**：独立小阶段或并入 Stage 8 前置（涉及网络面，不动 Provider UI）。
 
-### IDEA-3 顶栏设置按钮去留 + 工作区级 tab（2026-08-17 用户提出，待规划）
+### IDEA-3 顶栏设置按钮去留 + 工作区级 tab（2026-08-17 用户提出；**2026-08-18 实现并手测 PASS**）
 
-- **内容**：有了设置 tab 后，右上角顶栏「设置」按钮是否可取消？用户自答：取消后
-  预配置阶段（无 runtime/无 tab 栏）无法进入设置 UI。设想：**设置 tab 不在
-  runtime 内，而与工作区同级**——即出现更高一层的 tab 层级（工作区 tab），设置
-  与工作区同层；同一层级也可打开**多个工作区 tab**。
-- **待规划问题**：
-  - 现架构为单工作区单窗口状态机（status: picker→summary→ready），多工作区 tab
-    = 多 runtime 并存的会话/轮询/快捷键模型重构（Ctrl+Tab 语义分层）；
-  - 预备态设置入口：保留模态对话框 vs 快捷键（如 Ctrl+,）直开设置 tab；
-  - 与现有 session tab 栏的视觉层级（嵌套 tab 条 vs 顶栏下拉切换工作区）；
-  - 迁移路径（先支持多工作区窗口再收顶栏按钮，避免中间态失去唯一入口）。
-- **归属建议**：大改动，需独立 spec（影响 startup flow / history / 快捷键 / 关闭
-  协调器），不与当前小项轮混合。
+- **已实现**（分支 `idea-3-workspace-tabs`，3a..3f 六子阶段）：门面抽取
+  （WorkspaceRuntime 工厂 + runtime store 可写 computed 逐键转发）→ Rust
+  取消 token 键化 → workspaces 中枢（launcher 物化/上限 3/关闭即时摘
+  chip+后台静默收尾/合并历史保存/退出聚合）+ 双层条（真并行，活跃 5s/
+  后台 25s 轮询）→ 设置升工作区层（对话框退役、Ctrl+,、+ ▾ 入口、
+  `ui.default_new_page`）→ 快捷键（Ctrl+PgUp/PgDn、Ctrl+Alt+数字，WebView2
+  实测可用）+ watcher 事件带路径 + explorer per-path 缓存。条模型（用户
+  三轮手测定稿）：**只显示真实打开的页**（启动器 chip 仅聚焦时显示），
+  chip 显示文件夹名、同名冲突才显全路径。用户四轮手测确认收束。
+- **对已批方案的一处偏离**：工作区容器用 `:key` 重挂载而非全挂 v-show
+  （组件全绑门面，v-show 多实例全渲活跃区；Terminal 重挂重放缓冲是既有
+  安全设计，还改善内存上界）。
 
 ## 进入 Stage 7 前
 

@@ -529,6 +529,9 @@ export interface UiSettings {
   /** The agent tab the tab-bar + split button creates (IDEA-1); claude |
    * codex | bash | cc-switch. Defaults to "bash" in the Rust backend. */
   default_tab_agent: string;
+  /** IDEA-3 (3f round 3): the workspace-bar `+` default target page
+   * (workspace | settings; future feature pages extend this). */
+  default_new_page: string;
 }
 
 export interface TerminalSettings {

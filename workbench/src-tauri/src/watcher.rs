@@ -33,9 +33,16 @@ pub struct WorkspaceChange {
     pub revision: u64,
 }
 
-/// A coalesced batch emitted to the frontend.
+/// A coalesced batch emitted to the frontend. IDEA-3 (3e): carries the
+/// WATCHED WORKSPACE path so the frontend can attribute batches correctly
+/// while rapidly switching workspaces (the watcher is a single instance
+/// following the ACTIVE workspace; without this field a batch emitted right
+/// after a switch could be applied to the wrong tree). `#[serde(default)]`
+/// keeps old payloads/tests constructing without it deserializable.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspaceChangeBatch {
+    #[serde(default)]
+    pub workspace: String,
     pub changes: Vec<WorkspaceChange>,
     pub revision: u64,
     pub overflow: bool,
@@ -72,6 +79,8 @@ impl ChangeBatcher {
         let overflow = self.overflow;
         self.overflow = false;
         WorkspaceChangeBatch {
+            // Stamped by the caller (debounce_loop knows the watched path).
+            workspace: String::new(),
             changes,
             revision,
             overflow,
@@ -260,8 +269,9 @@ impl WorkspaceWatcher {
 
         let stop = Arc::new(Mutex::new(false));
         let stop_clone = stop.clone();
+        let ws_label = ws.to_string_lossy().to_string();
         let handle = std::thread::spawn(move || {
-            debounce_loop(app_clone, raw_rx, stop_clone);
+            debounce_loop(app_clone, ws_label, raw_rx, stop_clone);
         });
 
         Ok(WorkspaceWatcher {
@@ -280,6 +290,7 @@ impl WorkspaceWatcher {
 
 fn debounce_loop(
     app: AppHandle,
+    workspace: String,
     rx: mpsc::Receiver<(String, String, String)>,
     stop: Arc<Mutex<bool>>,
 ) {
@@ -316,7 +327,8 @@ fn debounce_loop(
 
         if should_flush || (received >= MAX_BATCH) {
             pending = None;
-            let batch = batcher.drain(revision);
+            let mut batch = batcher.drain(revision);
+            batch.workspace = workspace.clone();
             revision = revision.wrapping_add(1);
             if !batch.changes.is_empty() || batch.overflow {
                 let _ = app.emit("workspace://changed", &batch);

@@ -203,6 +203,9 @@ fn webview2_present() -> bool {
 /// pin-only lookup falsely reported "unavailable" on a fresh install (manual
 /// test 2026-08-16). The real negotiate (cli.rs) validates version/capability.
 fn resolve_cli_path(app: &tauri::AppHandle) -> PathBuf {
+    // Presence-only (sync) lookup: the pin when present, else the first
+    // existing candidate file. The async resolve_cli (auto-pin) is NOT used
+    // here — readiness is a cheap presence probe, never a subprocess spawn.
     let saved = crate::session::resolve_pin(app).ok();
     for (path, _src) in crate::cli::enumerate_candidates(None, saved.as_deref()) {
         if path.is_file() {

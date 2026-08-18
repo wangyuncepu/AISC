@@ -67,6 +67,9 @@ pub struct UiSettings {
     /// claude | codex | bash | cc-switch — the tab the tab-bar + split button
     /// creates directly (IDEA-1, Windows Terminal-style default profile).
     pub default_tab_agent: String,
+    /// IDEA-3 (3f round 3): the workspace-bar `+` default target page.
+    /// workspace | settings (future feature pages extend this list).
+    pub default_new_page: String,
 }
 
 impl Default for UiSettings {
@@ -77,6 +80,7 @@ impl Default for UiSettings {
             theme: "system".into(),
             explorer_ignore: Vec::new(),
             default_tab_agent: "bash".into(),
+            default_new_page: "workspace".into(),
         }
     }
 }
@@ -287,6 +291,12 @@ fn valid_tab_agent(v: &Value) -> Option<String> {
         .map(String::from)
 }
 
+fn valid_new_page(v: &Value) -> Option<String> {
+    v.as_str()
+        .filter(|s| ["workspace", "settings"].contains(s))
+        .map(String::from)
+}
+
 fn valid_renderer(v: &Value) -> Option<String> {
     v.as_str().filter(|s| ["auto", "default", "webgl"].contains(s)).map(String::from)
 }
@@ -345,6 +355,14 @@ fn validate_ui(raw: &Value) -> (UiSettings, Vec<ValidationIssue>) {
             issues.push(issue(
                 "ui.default_tab_agent",
                 "非法值，回退 bash（合法：claude|codex|bash|cc-switch）",
+            ));
+        }
+        if let Some(a) = sec.get("default_new_page").and_then(valid_new_page) {
+            out.default_new_page = a;
+        } else if sec.get("default_new_page").is_some() {
+            issues.push(issue(
+                "ui.default_new_page",
+                "非法值，回退 workspace（合法：workspace|settings）",
             ));
         }
     }
@@ -859,7 +877,7 @@ mod tests {
             "schema_version": 1,
             "revision": 0,
             "aisc_cli_path": null,
-            "ui": { "language": "auto", "font_scale": 1.0, "theme": "system", "default_tab_agent": "bash" },
+            "ui": { "language": "auto", "font_scale": 1.0, "theme": "system", "default_tab_agent": "bash", "default_new_page": "workspace" },
             "terminal": {
                 "font_family": "Cascadia Mono, Cascadia Code, Consolas, monospace",
                 "font_size": 14, "line_height": 1.2, "letter_spacing": 0,
@@ -1028,6 +1046,28 @@ mod tests {
         let d2 = s2.document();
         assert_eq!(d2.ui.default_tab_agent, "bash");
         assert!(d2.issues.iter().any(|i| i.field == "ui.default_tab_agent"));
+    }
+
+    #[test]
+    fn default_new_page_valid_accepted_invalid_falls_back() {
+        let dir = tempdir().unwrap();
+        let mut doc = raw_doc();
+        doc["ui"]["default_new_page"] = Value::String("settings".into());
+        write(dir.path(), &doc);
+        let s = Settings::load(dir.path()).unwrap();
+        assert_eq!(s.document().ui.default_new_page, "settings");
+        assert!(s.document().issues.is_empty());
+
+        let mut bad = raw_doc();
+        bad["ui"]["default_new_page"] = Value::String("terminal".into());
+        write(dir.path(), &bad);
+        let s2 = Settings::load(dir.path()).unwrap();
+        assert_eq!(s2.document().ui.default_new_page, "workspace");
+        assert!(s2
+            .document()
+            .issues
+            .iter()
+            .any(|i| i.field == "ui.default_new_page"));
     }
 
     #[test]

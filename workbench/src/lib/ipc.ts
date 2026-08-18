@@ -148,14 +148,18 @@ export const ccSwitchSwitch = (workspace: string, runtimeId: string, agent: stri
 export const ccSwitchDelete = (workspace: string, runtimeId: string, agent: string, providerId: string) =>
   invoke<CcSwitchProvidersResult>("cc_switch_delete", { workspace, runtimeId, agent, providerId });
 
-export const cancelRuntimeStart = () => invoke<void>("cancel_runtime_start");
+/** IDEA-3 (3b): keyed by runtime_id — concurrent workspace starts each cancel
+ * only their own op (a no-op once the start settled). */
+export const cancelRuntimeStart = (runtimeId: string) =>
+  invoke<void>("cancel_runtime_start", { runtimeId });
 
 // --- S2.1.b: build --events streaming ---
 
 export const buildImage = (tag: string, onEvent: Channel<BuildEvent>) =>
   invoke<void>("build_image", { tag, onEvent });
 
-export const cancelBuild = () => invoke<void>("cancel_build");
+/** IDEA-3 (3b): keyed by the build tag. */
+export const cancelBuild = (tag: string) => invoke<void>("cancel_build", { tag });
 
 // --- S4.1.b fix: start the Docker engine (Docker Desktop) ---
 

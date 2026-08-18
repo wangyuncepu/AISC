@@ -96,7 +96,7 @@ export const SETTINGS_TAB_ID = "settings-tab";
 export const CC_SWITCH_UI_TAB_ID = "cc-switch-ui-tab";
 
 /** Session states that have reached a terminal outcome (no live PTY). */
-const TERMINAL_STATES: TabSessionState[] = ["exited", "failed", "disconnected"];
+export const TERMINAL_STATES: TabSessionState[] = ["exited", "failed", "disconnected"];
 
 function uuid(): string {
   return crypto.randomUUID();
@@ -113,6 +113,9 @@ export interface WorkspaceRuntimeDeps {
   /** Flush pending saves NOW (stopRuntime must persist the layout before it
    * clears tabs - G-07 2026-08-10). */
   flushSave(): Promise<void>;
+  /** IDEA-3 (3c): fired once when this instance reaches status "ready"
+   * (initTabs settle). The launcher instance materializes into a workspace. */
+  onReady?(): void;
 }
 
 /** IDEA-3 (3a): one workspace's runtime state machine — status, tabs, panes,
@@ -121,6 +124,8 @@ export interface WorkspaceRuntimeDeps {
  * A plain factory (NOT a pinia store): instances live inside the workspaces
  * store's list; the runtime facade forwards the active one. */
 export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
+  /** Stable instance id (never the workspace path — paths change mid-preflight). */
+  const id = uuid();
   const status = ref<WorkbenchStatus>("idle");
   const error = ref<WorkbenchError | null>(null);
 
@@ -252,9 +257,8 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   // S2.2.a: multi-tab. One tab per agent, sharing the runtime (03 §二.3/§六).
   const tabs = ref<Tab[]>([]);
   const activeTabId = ref<string | null>(null);
-  /** IDEA-1: the virtual Settings tab is open (rendered as the last chip). */
-  const settingsTabOpen = ref(false);
-  /** Stage 8e: the virtual cc-switch Provider UI tab is open. */
+  /** Stage 8e: the virtual cc-switch Provider UI tab is open. (The Settings
+   * tab moved to the WORKSPACE layer in IDEA-3 3d — see stores/workspaces.) */
   const ccSwitchUiTabOpen = ref(false);
 
   let startTimer: number | null = null;
@@ -267,7 +271,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   function resetWorkspace() {
     tabs.value = [];
     activeTabId.value = null;
-    settingsTabOpen.value = false;
     ccSwitchUiTabOpen.value = false;
     preflight.value = null;
     runtimeId.value = "";
@@ -292,6 +295,28 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   function backToPicker() {
     resetWorkspace();
     status.value = "picker";
+  }
+
+  /** IDEA-3 (3c): final teardown for a CLOSED workspace (closeWorkspace in
+   * the workspaces store). Releases the per-pane stream buffers — the only
+   * writer that ever did — and stops the instance-scoped timers, so removing
+   * a workspace bounds the memory it held (buffers were never GC'd before).
+   * The instance itself is dropped from the workspaces list right after. */
+  function dispose(): void {
+    stopTimer();
+    if (dockerRetryTimer !== null) {
+      window.clearTimeout(dockerRetryTimer);
+      dockerRetryTimer = null;
+    }
+    if (flushFrame !== null) {
+      window.cancelAnimationFrame(flushFrame);
+      flushFrame = null;
+    }
+    paneStreams.value = {};
+    paneStreamMeta.value = {};
+    streamCursor.value = {};
+    for (const k of Object.keys(pendingChunks)) delete pendingChunks[k];
+    for (const k of Object.keys(paneByteCounts)) delete paneByteCounts[k];
   }
 
   // S2.1.b: build the image with `aisc build --events` (05 §4.1).
@@ -386,7 +411,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   async function cancelBuild() {
     try {
-      await ipc.cancelBuild();
+      await ipc.cancelBuild(buildTag.value);
     } catch {
       /* best-effort */
     }
@@ -812,8 +837,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     };
     const { tabs: created, bySavedId } = tabsFromRecords(records);
     tabs.value = created;
-    settingsTabOpen.value = false; // fresh tab set; the virtual tab never restores
-    ccSwitchUiTabOpen.value = false;
+    ccSwitchUiTabOpen.value = false; // fresh tab set; the virtual tab never restores
     // G-17: open EVERY pane leaf (a restored split tab has several), each
     // through the same provider gate as + menu tabs - unconfigured claude/
     // codex restore as guide without a session (A-G08-3). `openAgents`
@@ -846,6 +870,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     }
     status.value = "ready";
     scheduleSave();
+    deps.onReady?.(); // 3c: the launcher materializes into a workspace here
   }
 
   function findTab(tabId: string): Tab | undefined {
@@ -1187,24 +1212,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     scheduleSave();
   }
 
-  // --- IDEA-1: the virtual Settings tab (no session, never persisted) ---
+  // --- Stage 8e: the virtual cc-switch Provider UI tab (no session, never
+  // persisted). The IDEA-1 Settings tab moved to the WORKSPACE layer (3d). ---
 
-  /** Open (or just activate) the Settings tab. Idempotent. */
-  function openSettingsTab() {
-    settingsTabOpen.value = true;
-    activeTabId.value = SETTINGS_TAB_ID;
-  }
-
-  /** Close the Settings tab. The caller (TabBar) reverts unsaved form edits
-   * via the settings store; focus falls to the last session tab, else empty. */
-  function closeSettingsTab() {
-    settingsTabOpen.value = false;
-    if (activeTabId.value === SETTINGS_TAB_ID) {
-      activeTabId.value = tabs.value[tabs.value.length - 1]?.tabId ?? null;
-    }
-  }
-
-  /** Stage 8e: the virtual cc-switch Provider UI tab (same contract). */
   function openCcSwitchUiTab() {
     ccSwitchUiTabOpen.value = true;
     activeTabId.value = CC_SWITCH_UI_TAB_ID;
@@ -1382,7 +1392,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   async function cancelStart() {
     try {
-      await ipc.cancelRuntimeStart();
+      await ipc.cancelRuntimeStart(runtimeId.value);
     } catch {
       /* swallow; startFromSummary will resolve with cancelled */
     }
@@ -1438,7 +1448,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     ]);
     tabs.value = [];
     activeTabId.value = null;
-    settingsTabOpen.value = false;
     ccSwitchUiTabOpen.value = false;
     try {
       if (runtimeId.value) {
@@ -1477,6 +1486,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   }
 
   return {
+    id,
     status,
     error,
     workspace,
@@ -1496,9 +1506,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     buildDurationMs,
     tabs,
     activeTabId,
-    settingsTabOpen,
-    openSettingsTab,
-    closeSettingsTab,
     ccSwitchUiTabOpen,
     openCcSwitchUiTab,
     closeCcSwitchUiTab,
@@ -1559,6 +1566,8 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     stopConflictRuntime,
     removeConflictRuntime,
     retryFromConflict,
+    resetWorkspace,
+    dispose,
   };
 }
 
