@@ -334,7 +334,7 @@ def build_add_settings(
     if api_key:
         lines.append(f'api_key = "{api_key}"')
     lines.append("")
-    return str(request.get("name") or pid), {"config": "\n".join(lines)}
+    return str(request.get("name") or pid), {"auth": {}, "config": "\n".join(lines)}
 
 
 def _cli_add(
@@ -495,7 +495,7 @@ def _merge_patch(
     if key:
         lines.append(f'api_key = "{key}"')
     lines.append("")
-    result: dict[str, Any] = {"config": "\n".join(lines)}
+    result: dict[str, Any] = {"auth": {}, "config": "\n".join(lines)}
     for key_name, value in current_settings.items():
         if key_name not in result:
             result[key_name] = value  # e.g. codex "auth"

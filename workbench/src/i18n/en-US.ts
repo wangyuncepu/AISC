@@ -197,6 +197,7 @@ export const enUS: Record<string, string> = {
   "ccswitch.currentChip": "Active",
   "ccswitch.activateHint": "Click to switch to this provider",
   "ccswitch.currentHint": "Current provider",
+  "ccswitch.notConfiguredHint": "Not configured (set its base URL / key first)",
   "tabbar.menu.splitH": "Split left/right",
   "tabbar.menu.splitV": "Split top/bottom",
   "pane.close": "Close pane",

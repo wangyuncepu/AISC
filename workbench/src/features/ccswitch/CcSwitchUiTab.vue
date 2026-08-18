@@ -112,8 +112,15 @@ async function submitEdit(): Promise<void> {
 const switchedTo = ref("");
 let switchFlashTimer: number | null = null;
 
+function canActivate(p: CcSwitchProvider): boolean {
+  // Rows without a usable configuration (e.g. cc-switch's built-in
+  // claude-official with an empty env) cannot be activated — the adapter
+  // would fail closed; the UI simply does not offer the click.
+  return !p.is_current && busy.value === "" && Boolean(p.base_url);
+}
+
 async function activate(p: CcSwitchProvider): Promise<void> {
-  if (p.is_current || busy.value !== "") return;
+  if (!canActivate(p)) return;
   const ok = await ui.activate(store.workspace, store.runtimeId, p.id);
   if (ok) {
     switchedTo.value = p.name || p.id;
@@ -174,8 +181,10 @@ onBeforeUnmount(() => {
         v-for="p in providers"
         :key="p.id"
         class="row"
-        :class="{ current: p.is_current, activatable: !p.is_current && busy === '' }"
-        :title="p.is_current ? t('ccswitch.currentHint') : t('ccswitch.activateHint')"
+        :class="{ current: p.is_current, activatable: canActivate(p) }"
+        :title="p.is_current
+          ? t('ccswitch.currentHint')
+          : p.base_url ? t('ccswitch.activateHint') : t('ccswitch.notConfiguredHint')"
         @click="activate(p)"
       >
         <span class="cur" :class="{ on: p.is_current }">

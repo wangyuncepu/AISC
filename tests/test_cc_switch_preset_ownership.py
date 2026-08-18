@@ -85,7 +85,7 @@ class FixtureDrivenPresetTests(unittest.TestCase):
             self.assertNotIn(key, env)
 
     def test_preset_format_bumped_and_revision_is_fixture_sensitive(self):
-        self.assertEqual(H.PRESET_FORMAT_VERSION, 4)
+        self.assertEqual(H.PRESET_FORMAT_VERSION, 5)
         base_revision = H.preset_revision("claude")
         # A mutated fixture must yield a different revision (refresh triggers).
         mutated = json.loads(json.dumps(deepseek()))
@@ -102,6 +102,14 @@ class FixtureDrivenPresetTests(unittest.TestCase):
                        separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         self.assertNotEqual(base_revision, other)
+
+    def test_codex_settings_carry_auth_field(self):
+        # Upstream `provider switch` refuses codex rows without an "auth"
+        # object (IDEA-4 manual test on the real container).
+        for provider in H.PRESET_PROVIDERS:
+            settings = H._settings_config("codex", provider)
+            self.assertIn("auth", settings)
+            self.assertIsInstance(settings["auth"], dict)
 
     def test_bad_fixture_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:

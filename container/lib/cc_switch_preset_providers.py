@@ -153,7 +153,7 @@ PRESET_PROVIDERS = build_preset_providers()
 
 SUPPORTED_AGENTS = ("claude", "codex")
 MARKER_TEMPLATE = ".aisc-preset-providers-{agent}.sha256"
-PRESET_FORMAT_VERSION = 4
+PRESET_FORMAT_VERSION = 5
 # Preset provider ids removed from PRESET_PROVIDERS, mapped to a fingerprint
 # that identifies the old preset's settings_config. On refresh an id is deleted
 # only if its stored config still carries the fingerprint, so a user who
@@ -250,7 +250,10 @@ def _settings_config(
         if api_key:
             lines.append(f"api_key = {_toml_string(api_key)}")
         lines.append("")
-        return {"config": "\n".join(lines)}
+        # Upstream `provider switch` refuses a codex settings_config without
+        # an "auth" object ("Codex 供应商配置缺少 'auth' 字段"); its own
+        # official rows seed {"auth":{},"config":""}.
+        return {"auth": {}, "config": "\n".join(lines)}
 
     raise ValueError(f"unsupported agent: {agent}")
 
@@ -354,6 +357,10 @@ def _merged_settings(
     elif agent == "codex":
         api_key = _extract_codex_api_key(existing_raw)
         result = _settings_config(agent, provider, api_key=api_key)
+        # Preserve a non-empty existing auth object (e.g. the codex OAuth
+        # mirror) — only absent/empty auth gets the fresh {} placeholder.
+        if isinstance(existing.get("auth"), dict) and existing["auth"]:
+            result["auth"] = existing["auth"]
     else:
         raise ValueError(f"unsupported agent: {agent}")
 

@@ -186,6 +186,14 @@ class AddTests(AdapterTestCase):
                                 "base_url": "https://y"})
         self.assertEqual(ctx.exception.code, A.ERR_BAD_REQUEST)
 
+    def test_custom_codex_add_carries_auth_field(self):
+        providers = A.op_add("codex", {"mode": "custom", "id": "mine",
+                                       "name": "Mine",
+                                       "base_url": "https://api.mine"})
+        sent = json.loads(self.cli.calls[0].stdin_text)
+        self.assertIn("auth", sent)
+        self.assertIn("config", sent)
+
     def test_duplicate_id_rejected_before_any_cli_call(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV)
         with self.assertRaises(A.AdapterError) as ctx:

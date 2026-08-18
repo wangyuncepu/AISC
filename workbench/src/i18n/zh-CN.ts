@@ -197,6 +197,7 @@ export const zhCN = {
   "ccswitch.currentChip": "使用中",
   "ccswitch.activateHint": "点击切换到此 provider",
   "ccswitch.currentHint": "当前使用的 provider",
+  "ccswitch.notConfiguredHint": "未配置（需先填写 Base URL / 密钥）",
   "tabbar.menu.splitH": "左右分屏",
   "tabbar.menu.splitV": "上下分屏",
   "pane.close": "关闭分屏",
