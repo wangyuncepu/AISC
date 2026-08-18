@@ -95,15 +95,33 @@ function toggleSettings(): void {
   }
 }
 
-// The ONE app-level keydown: Ctrl/Cmd+, toggles Settings everywhere after
-// onboarding (blocked/picker/summary/ready alike). Session-layer shortcuts
-// live in WorkspaceView; workspace-cycling shortcuts land in 3e.
+// The ONE app-level keydown (workspace layer): Ctrl/Cmd+, toggles Settings
+// everywhere after onboarding; Ctrl/Cmd+PgUp/PgDn cycles workspaces;
+// Ctrl/Cmd+Alt+1..9 activates the nth workspace (VSCode-style groups are a
+// different metaphor — Ctrl+1..9 keep their SESSION-tab meaning in
+// WorkspaceView). If a WebView2 build swallows a combo, the strip chips
+// remain the fallback (same philosophy as the Ctrl+Tab comment).
 function onAppKeydown(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
   if (e.key === "," && !showOnboarding.value) {
     e.preventDefault();
     toggleSettings();
+    return;
+  }
+  if (showOnboarding.value || !workspaceLayerVisible.value) return;
+  if (e.key === "PageUp" && !e.altKey && !e.shiftKey) {
+    e.preventDefault();
+    ws.cycle(-1);
+  } else if (e.key === "PageDown" && !e.altKey && !e.shiftKey) {
+    e.preventDefault();
+    ws.cycle(1);
+  } else if (e.altKey && e.key >= "1" && e.key <= "9") {
+    const target = ws.runtimes[Number(e.key) - 1];
+    if (target) {
+      e.preventDefault();
+      ws.activate(target.id);
+    }
   }
 }
 onMounted(() => window.addEventListener("keydown", onAppKeydown, { capture: true }));

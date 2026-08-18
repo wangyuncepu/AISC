@@ -10,7 +10,7 @@
  * every workspace, not just the active one). Full APG roving-focus polish is
  * 3e; this ships the correct roles/labels.
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspacesStore, MAX_WORKSPACES } from "../../stores/workspaces";
 import { useSettingsStore } from "../../stores/settings";
@@ -122,13 +122,40 @@ function closeSettingsChip(): void {
   settingsStore.cancel();
   ws.closeSettingsTab();
 }
+
+// --- APG tabs pattern (3e): roving tabindex. Arrows/Home/End move FOCUS
+// without activating; Enter/Space activates (the chip's own handlers).
+const chipEls = ref<(HTMLElement | null)[]>([]);
+function setChipRef(i: number) {
+  return (el: unknown) => {
+    chipEls.value[i] = (el as HTMLElement | null) ?? null;
+  };
+}
+function chipTabIndex(i: number): string {
+  const activeI = chips.value.findIndex((c) => c.id === ws.activeId);
+  return i === (activeI >= 0 ? activeI : 0) ? "0" : "-1";
+}
+function onBarKeydown(e: KeyboardEvent) {
+  const n = chips.value.length;
+  if (n === 0) return;
+  let next: number;
+  const activeI = Math.max(0, chips.value.findIndex((c) => c.id === ws.activeId));
+  if (e.key === "ArrowLeft") next = (activeI - 1 + n) % n;
+  else if (e.key === "ArrowRight") next = (activeI + 1) % n;
+  else if (e.key === "Home") next = 0;
+  else if (e.key === "End") next = n - 1;
+  else return;
+  e.preventDefault();
+  chipEls.value[next]?.focus();
+}
 </script>
 
 <template>
-  <nav class="workspbar" role="tablist" :aria-label="t('workspbar.label')">
+  <nav class="workspbar" role="tablist" :aria-label="t('workspbar.label')" @keydown="onBarKeydown">
     <div
-      v-for="c in chips"
+      v-for="(c, i) in chips"
       :key="c.id"
+      :ref="setChipRef(i)"
       class="chip"
       :class="{ active: ws.activeId === c.id, launcher: c.launcher }"
       role="tab"
@@ -136,7 +163,7 @@ function closeSettingsChip(): void {
       :aria-label="chipTitle(c)"
       :title="chipTitle(c)"
       :data-dot="dotState(c)"
-      tabindex="0"
+      :tabindex="chipTabIndex(i)"
       @click="onChip(c)"
       @keydown.enter.prevent="onChip(c)"
       @keydown.space.prevent="onChip(c)"
