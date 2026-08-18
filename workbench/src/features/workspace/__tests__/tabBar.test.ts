@@ -21,7 +21,7 @@ const settingsDoc: SettingsDocument = {
   schemaVersion: 1,
   revision: 0,
   aiscCliPath: null,
-  ui: { language: "auto", font_scale: 1.0, theme: "system", explorer_ignore: [], default_tab_agent: "bash" },
+  ui: { language: "auto", font_scale: 1.0, theme: "system", explorer_ignore: [], default_tab_agent: "bash", default_new_page: "workspace" },
   terminal: {
     font_family: "Cascadia Mono, Consolas, monospace",
     font_size: 14,

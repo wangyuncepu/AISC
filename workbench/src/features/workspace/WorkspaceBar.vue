@@ -144,36 +144,51 @@ const chips = computed<Chip[]>(() => {
     state: r.runtimeState.value,
     launcher: false,
   }));
-  const lg = ws.launcher;
-  list.push({
-    id: lg.id,
-    label: t("workspbar.launcher"),
-    title: t("workspbar.launcher"),
-    status: lg.status.value,
-    state: lg.runtimeState.value,
-    launcher: true,
-  });
-  // The Settings chip is ALWAYS present (user manual-test round 1: an
-  // only-when-open sentinel was undiscoverable). Click opens/activates the
-  // workspace-layer settings tab; × (when open) reverts unsaved edits.
-  list.push({
-    id: SETTINGS_TAB_ID,
-    label: t("workspbar.settings"),
-    title: `${t("workspbar.settings")} (Ctrl+,)`,
-    status: "settings",
-    state: "",
-    launcher: false,
-    settings: true,
-  });
+  // Round-3 model (user spec): the strip shows only REAL open pages — the
+  // launcher chip exists while it is the FOCUSED page (initial state, or
+  // re-opened via +), and disappears once a workspace materializes.
+  if (ws.activeId === ws.launcher.id) {
+    const lg = ws.launcher;
+    list.push({
+      id: lg.id,
+      label: t("workspbar.launcher"),
+      title: t("workspbar.launcher"),
+      status: lg.status.value,
+      state: lg.runtimeState.value,
+      launcher: true,
+    });
+  }
+  // Settings is a page opened via ▾ / Ctrl+, — its chip (and ×) exist only
+  // while it is open.
+  if (ws.settingsTabOpen) {
+    list.push({
+      id: SETTINGS_TAB_ID,
+      label: t("workspbar.settings"),
+      title: t("workspbar.settings"),
+      status: "settings",
+      state: "",
+      launcher: false,
+      settings: true,
+    });
+  }
   return list;
 });
 
-const atCap = computed(() => ws.runtimes.length >= MAX_WORKSPACES);
-/** The launcher chip refuses new launches at the cap, but still works as a
- * focus target while one is already mid-flight or active. */
-const launcherDisabled = computed(
-  () => atCap.value && ws.activeId !== ws.launcher.id
+/** The + button's default target (round 3): the configured page; the cap
+ * only disables a workspace-target +. */
+const defaultPage = computed(
+  () => settingsStore.doc?.ui.default_new_page ?? "workspace"
 );
+function openDefaultPage(): void {
+  if (defaultPage.value === "settings") {
+    ws.openSettingsTab();
+    return;
+  }
+  ws.openLauncher();
+}
+const plusDisabled = computed(() => defaultPage.value === "workspace" && atCap.value);
+
+const atCap = computed(() => ws.runtimes.length >= MAX_WORKSPACES);
 
 function chipTitle(c: Chip): string {
   if (c.settings) return `${c.label} · ${t("tabbar.closeSettings")}`;
@@ -189,7 +204,9 @@ function onChip(c: Chip): void {
     return;
   }
   if (c.launcher) {
-    if (!launcherDisabled.value) ws.openLauncher();
+    // The launcher chip only renders while already focused; clicking it just
+    // re-asserts focus (the cap gate lives on the + button).
+    ws.openLauncher();
     return;
   }
   ws.activate(c.id);
@@ -275,9 +292,9 @@ function onBarKeydown(e: KeyboardEvent) {
         ref="addBtnRef"
         class="add"
         :aria-label="t('workspbar.launcher')"
-        :title="atCap ? t('workspbar.capHint') : t('workspbar.launcher')"
-        :disabled="atCap"
-        @click="ws.openLauncher()"
+        :title="plusDisabled ? t('workspbar.capHint') : t('workspbar.launcher')"
+        :disabled="plusDisabled"
+        @click="openDefaultPage()"
       >+</button>
       <button
         ref="caretBtnRef"

@@ -18,7 +18,7 @@ const settingsDoc: SettingsDocument = {
   schemaVersion: 1,
   revision: 0,
   aiscCliPath: null,
-  ui: { language: "auto", font_scale: 1.0, theme: "system", explorer_ignore: [], default_tab_agent: "bash" },
+  ui: { language: "auto", font_scale: 1.0, theme: "system", explorer_ignore: [], default_tab_agent: "bash", default_new_page: "workspace" },
   terminal: {
     font_family: "Cascadia Mono, Consolas, monospace",
     font_size: 14,
@@ -79,21 +79,35 @@ beforeEach(() => {
 });
 
 describe("WorkspaceBar (3c)", () => {
-  it("renders one chip per workspace + the launcher chip, marking the active", async () => {
+  it("round-3 model: only REAL open pages — workspaces only once one is active", async () => {
     const ws = useWorkspacesStore();
     await launchWorkspace(ws, "C:/alpha");
     await launchWorkspace(ws, "C:/beta");
     const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
     const chips = bar.findAll(".chip");
-    expect(chips).toHaveLength(4); // 2 workspaces + launcher + settings (always present)
+    // 2 workspaces; the launcher chip is GONE (a workspace is focused) and
+    // settings is closed — no persistent chips.
+    expect(chips).toHaveLength(2);
     const active = chips.filter((c) => c.classes("active"));
     expect(active).toHaveLength(1);
     expect(active[0]!.text()).toContain("beta");
-    expect(chips[chips.length - 2]!.text()).toContain("新建工作区");
-    expect(chips[chips.length - 1]!.text()).toContain("设置");
-    // Roles for a11y (full roving polish lands in 3e).
+    expect(chips.some((c) => c.text().includes("新建工作区"))).toBe(false);
+    expect(chips.some((c) => c.text().includes("设置"))).toBe(false);
     expect(bar.find('[role="tablist"]').exists()).toBe(true);
     expect(chips[0]!.attributes("role")).toBe("tab");
+  });
+
+  it("the launcher chip reappears while it is the FOCUSED page (+ re-opens it)", async () => {
+    const ws = useWorkspacesStore();
+    await launchWorkspace(ws, "C:/alpha");
+    const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
+    expect(bar.text()).not.toContain("新建工作区"); // hidden: workspace focused
+    await bar.find(".add-group .add").trigger("click"); // + opens the launcher
+    await nextTick();
+    expect(ws.activeId).toBe(ws.launcher.id);
+    const chips = bar.findAll(".chip");
+    expect(chips.some((c) => c.text().includes("新建工作区"))).toBe(true);
+    bar.unmount();
   });
 
   it("activates a workspace on chip click", async () => {
@@ -118,16 +132,16 @@ describe("WorkspaceBar (3c)", () => {
     expect(ws.runtimes[0].workspace.value).toBe("C:/beta");
   });
 
-  it("refuses new launches at the cap without moving focus", async () => {
+  it("refuses new launches at the cap: the + button disables (workspace default)", async () => {
     const ws = useWorkspacesStore();
     for (let i = 0; i < MAX_WORKSPACES; i++) {
       await launchWorkspace(ws, `C:/w${i}`);
     }
     const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
-    const all = bar.findAll(".chip");
-    const launcherChip = all[all.length - 2]!;
+    const plus = bar.find(".add-group .add");
+    expect(plus.attributes("disabled")).toBeDefined();
     const active = ws.activeId;
-    await launcherChip.trigger("click");
+    await plus.trigger("click");
     expect(ws.activeId).toBe(active); // cap: no launcher activation
   });
 
@@ -149,18 +163,17 @@ describe("WorkspaceBar (3c)", () => {
     bar.unmount();
   });
 
-  it("Settings chip (3d): renders when open, × reverts unsaved edits then closes", async () => {
+  it("Settings chip (3d): exists only while open, × reverts unsaved edits then closes", async () => {
     const ws = useWorkspacesStore();
     await launchWorkspace(ws, "C:/alpha");
     const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
-    // Always-present settings chip: no × until open.
-    let settingsChip = bar.findAll(".chip")[bar.findAll(".chip").length - 1]!;
-    expect(settingsChip.text()).toContain("设置");
-    expect(settingsChip.find(".close").exists()).toBe(false);
+    // Closed: no settings chip at all (round-3 model).
+    expect(bar.findAll(".chip").some((c) => c.text().includes("设置"))).toBe(false);
     ws.openSettingsTab();
     expect(ws.settingsTabActive).toBe(true);
     await nextTick(); // store mutation → DOM update is async
-    settingsChip = bar.findAll(".chip")[bar.findAll(".chip").length - 1]!;
+    const settingsChip = bar.findAll(".chip")[bar.findAll(".chip").length - 1]!;
+    expect(settingsChip.text()).toContain("设置");
     expect(settingsChip.classes()).toContain("active");
     expect(settingsChip.find(".close").exists()).toBe(true);
 

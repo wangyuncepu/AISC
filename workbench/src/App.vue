@@ -373,12 +373,6 @@ onBeforeUnmount(() => {
       <OnboardingWizard />
     </div>
 
-    <!-- IDEA-3 (3d): the workspace-level Settings tab (Ctrl+, / strip chip /
-         picker entry). Fills the content area; no modal anywhere. -->
-    <div v-if="ws.settingsTabActive" ref="settingsPaneRef" class="settings-pane" tabindex="-1">
-      <SettingsTab />
-    </div>
-
     <!-- S3.3: screen-reader live regions. -->
     <div class="sr-only" role="status" aria-live="polite">{{ livePolite }}</div>
     <div class="sr-only" role="alert" aria-live="assertive">{{ liveAlert }}</div>
@@ -389,6 +383,13 @@ onBeforeUnmount(() => {
            content area — so the chip × (and the + ▾ menu) are always an exit
            path. Only the WorkspaceView yields to the settings pane. -->
       <WorkspaceBar v-if="workspaceLayerVisible" />
+
+      <!-- IDEA-3 (3d): the workspace-level Settings page — rendered AFTER the
+           strip (round-3 fix: it used to sit above it, pushing the strip to
+           the window bottom) and taking the content area only. -->
+      <div v-if="ws.settingsTabActive" ref="settingsPaneRef" class="settings-pane" tabindex="-1">
+        <SettingsTab />
+      </div>
 
       <!-- Capability gate (app-level; strip stays for reachability) -->
       <div v-if="store.status === 'blocked'" class="gate blocked">
