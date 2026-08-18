@@ -383,8 +383,11 @@ onBeforeUnmount(() => {
     <div class="sr-only" role="status" aria-live="polite">{{ livePolite }}</div>
     <div class="sr-only" role="alert" aria-live="assertive">{{ liveAlert }}</div>
 
-    <template v-if="!showOnboarding && !ws.settingsTabActive">
-      <!-- IDEA-3 (3c): the workspace strip. -->
+    <template v-if="!showOnboarding">
+      <!-- IDEA-3 (3c/3f round 2): the workspace strip stays mounted in EVERY
+           post-onboarding state — including while the Settings tab fills the
+           content area — so the chip × (and the + ▾ menu) are always an exit
+           path. Only the WorkspaceView yields to the settings pane. -->
       <WorkspaceBar v-if="workspaceLayerVisible" />
 
       <!-- Capability gate (app-level; strip stays for reachability) -->
@@ -403,8 +406,9 @@ onBeforeUnmount(() => {
         <p class="msg">{{ t("app.negotiating") }}</p>
       </div>
 
-      <!-- The ACTIVE workspace's view (keyed remount on switch) -->
-      <WorkspaceView v-else :key="ws.activeRuntime.id" :zoom="terminalZoom" />
+      <!-- The ACTIVE workspace's view (keyed remount on switch); yields to
+           the Settings pane while that tab is active. -->
+      <WorkspaceView v-else-if="!ws.settingsTabActive" :key="ws.activeRuntime.id" :zoom="terminalZoom" />
     </template>
 
     <!-- G-13: diagnosis dialog, shared by blocked/error/ready entry points -->

@@ -6,11 +6,9 @@
  */
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
-import { useWorkspacesStore } from "../../stores/workspaces";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
-const ws = useWorkspacesStore();
 
 function basename(p: string): string {
   const parts = p.replace(/\/+$/, "").split("/");
@@ -32,11 +30,6 @@ function basename(p: string): string {
       <button class="primary" :disabled="!store.workspace.trim()" @click="store.runPreflight()">{{ t("picker.next") }}</button>
     </div>
     <p class="hint">{{ t("picker.hint") }}</p>
-    <!-- IDEA-3 (3d): pre-runtime settings entry — the picker is the launcher's
-         surface, so this + Ctrl+, replace the retired topbar gear/dialog. -->
-    <button class="settings-entry" :title="`${t('workspbar.settings')} (Ctrl+,)`" @click="ws.openSettingsTab()">
-      ⚙ {{ t("workspbar.settings") }}
-    </button>
     <div v-if="store.recentWorkspaces.length" class="recents">
       <div class="recents-label">{{ t("picker.recents") }}</div>
       <ul>
@@ -64,17 +57,6 @@ function basename(p: string): string {
 }
 .picker .row { display: flex; gap: 8px; width: 560px; max-width: 90vw; }
 .picker .hint { font-size: var(--font-sm); color: var(--text-muted); }
-.settings-entry {
-  margin-top: 4px;
-  padding: 4px 12px;
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text-muted);
-  font-size: var(--font-sm);
-  cursor: pointer;
-}
-.settings-entry:hover { color: var(--text-2); border-color: var(--border-2); background: var(--surface-2); }
 .recents { width: 560px; max-width: 90vw; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
 .recents-label { font-size: var(--font-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
 .recents ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }

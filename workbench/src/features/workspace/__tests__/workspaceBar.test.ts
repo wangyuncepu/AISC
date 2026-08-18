@@ -131,6 +131,24 @@ describe("WorkspaceBar (3c)", () => {
     expect(ws.activeId).toBe(active); // cap: no launcher activation
   });
 
+  it("+ split button: + opens the launcher, ▾ menu 设置 opens the settings tab", async () => {
+    const ws = useWorkspacesStore();
+    await launchWorkspace(ws, "C:/alpha");
+    const bar = mount(WorkspaceBar, { global: { plugins: [i18n] }, attachTo: document.body });
+    // + activates the launcher (default new workspace).
+    await bar.find(".add-group .add").trigger("click");
+    expect(ws.activeId).toBe(ws.launcher.id);
+    // ▾ menu: teleported, carries 设置, opens the workspace-layer sentinel.
+    await bar.find(".add-group .add-caret").trigger("click");
+    const item = document.querySelector(".wsp-menu.menu [role=menuitem]") as HTMLElement;
+    expect(item).toBeTruthy();
+    expect(item.textContent).toContain("设置");
+    item.click();
+    await nextTick();
+    expect(ws.settingsTabActive).toBe(true);
+    bar.unmount();
+  });
+
   it("Settings chip (3d): renders when open, × reverts unsaved edits then closes", async () => {
     const ws = useWorkspacesStore();
     await launchWorkspace(ws, "C:/alpha");

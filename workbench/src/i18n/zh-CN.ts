@@ -172,6 +172,7 @@ export const zhCN = {
   "workspbar.launcher": "新建工作区 +",
   "workspbar.close": "关闭工作区",
   "workspbar.capHint": "最多同时打开 3 个工作区",
+  "workspbar.choose": "选择要打开的页面",
   "workspbar.settings": "设置",
   "ccswitch.add": "添加 Provider",
   "ccswitch.mode.simple": "简易添加",

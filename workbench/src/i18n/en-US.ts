@@ -172,6 +172,7 @@ export const enUS: Record<string, string> = {
   "workspbar.launcher": "New workspace +",
   "workspbar.close": "Close workspace",
   "workspbar.capHint": "Up to 3 concurrent workspaces",
+  "workspbar.choose": "Choose a page to open",
   "workspbar.settings": "Settings",
   "ccswitch.add": "Add provider",
   "ccswitch.mode.simple": "Simple",

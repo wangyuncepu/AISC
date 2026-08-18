@@ -10,7 +10,7 @@
  * every workspace, not just the active one). Full APG roving-focus polish is
  * 3e; this ships the correct roles/labels.
  */
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspacesStore, MAX_WORKSPACES } from "../../stores/workspaces";
 import { useSettingsStore } from "../../stores/settings";
@@ -19,6 +19,84 @@ import { SETTINGS_TAB_ID } from "../../stores/runtime";
 const { t } = useI18n();
 const ws = useWorkspacesStore();
 const settingsStore = useSettingsStore();
+
+// --- + split button (3f round 2, user request): main + opens the launcher
+// (default new workspace), ▾ opens a menu with the workspace-layer entries
+// (Settings). Same teleport + zoom-compensation pattern as TabBar's ▾: the
+// strip is an overflow-x scroll container, and the chrome is CSS-zoomed. ---
+const menuOpen = ref(false);
+const menuRef = ref<HTMLUListElement | null>(null);
+const addBtnRef = ref<HTMLButtonElement | null>(null);
+const caretBtnRef = ref<HTMLButtonElement | null>(null);
+const menuPos = ref({ x: 0, y: 0 });
+
+function appZoom(): number {
+  const app = document.querySelector<HTMLElement>(".app");
+  if (!app) return 1;
+  const w = app.offsetWidth || 0;
+  return w > 0 ? app.getBoundingClientRect().width / w : 1;
+}
+
+function placeMenu() {
+  const btn = caretBtnRef.value ?? addBtnRef.value;
+  if (!btn) return;
+  const zoom = appZoom();
+  const rect = btn.getBoundingClientRect();
+  const menuWidth = 180;
+  menuPos.value = {
+    x: Math.max(4, Math.min(rect.left / zoom, window.innerWidth / zoom - menuWidth)),
+    y: rect.bottom / zoom + 2,
+  };
+}
+
+function toggleMenu() {
+  menuOpen.value = !menuOpen.value;
+  if (menuOpen.value) {
+    placeMenu();
+    window.setTimeout(() => menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus(), 0);
+  }
+}
+
+function closeMenu() {
+  menuOpen.value = false;
+}
+
+function onMenuKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape" || e.key === "Tab") {
+    e.preventDefault();
+    closeMenu();
+    caretBtnRef.value?.focus();
+    return;
+  }
+  const items = Array.from(menuRef.value?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? []);
+  if (items.length === 0) return;
+  const idx = items.findIndex((el) => el === document.activeElement);
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    items[(idx + 1 + items.length) % items.length]!.focus();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    items[(idx - 1 + items.length) % items.length]!.focus();
+  } else if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    (items[idx >= 0 ? idx : 0] as HTMLElement).click();
+  }
+}
+
+function onDocMousedown(e: MouseEvent) {
+  const target = e.target as HTMLElement;
+  if (menuOpen.value && !target.closest(".wsp-menu") && !target.closest(".add-group")) {
+    closeMenu();
+  }
+}
+
+onMounted(() => document.addEventListener("mousedown", onDocMousedown));
+onBeforeUnmount(() => document.removeEventListener("mousedown", onDocMousedown));
+
+function menuOpenSettings() {
+  closeMenu();
+  ws.openSettingsTab();
+}
 
 interface Chip {
   id: string;
@@ -190,6 +268,44 @@ function onBarKeydown(e: KeyboardEvent) {
         ×
       </button>
     </div>
+
+    <!-- + split button: + = launcher (default new workspace), ▾ = Settings. -->
+    <div class="add-group wsp-menu">
+      <button
+        ref="addBtnRef"
+        class="add"
+        :aria-label="t('workspbar.launcher')"
+        :title="atCap ? t('workspbar.capHint') : t('workspbar.launcher')"
+        :disabled="atCap"
+        @click="ws.openLauncher()"
+      >+</button>
+      <button
+        ref="caretBtnRef"
+        class="add-caret"
+        :aria-label="t('workspbar.choose')"
+        :title="t('workspbar.choose')"
+        aria-haspopup="menu"
+        :aria-expanded="menuOpen"
+        @click="toggleMenu"
+        @keydown="onMenuKeydown"
+      >▾</button>
+      <Teleport to="body">
+        <ul
+          v-if="menuOpen"
+          ref="menuRef"
+          class="menu wsp-menu tab-new-menu"
+          role="menu"
+          :style="{ left: `${menuPos.x}px`, top: `${menuPos.y}px` }"
+          @keydown="onMenuKeydown"
+        >
+          <li
+            role="menuitem"
+            tabindex="0"
+            @click="menuOpenSettings"
+          >{{ t("workspbar.settings") }}</li>
+        </ul>
+      </Teleport>
+    </div>
   </nav>
 </template>
 
@@ -239,4 +355,38 @@ function onBarKeydown(e: KeyboardEvent) {
   cursor: pointer;
 }
 .close:hover { color: var(--error-fg); }
+
+/* + split button (mirrors TabBar's, one tier thinner). */
+.add-group { display: flex; align-items: center; margin-left: 4px; }
+.add, .add-caret {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: var(--font-md);
+  line-height: 1;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.add:hover:not(:disabled), .add-caret:hover { color: var(--text-2); background: var(--surface-2); border-radius: var(--radius-md); }
+.add:disabled { opacity: 0.45; cursor: default; }
+.menu {
+  position: fixed;
+  z-index: var(--z-menu);
+  min-width: 180px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.menu li {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.menu li:hover, .menu li:focus { background: var(--surface-hover); outline: none; }
 </style>
