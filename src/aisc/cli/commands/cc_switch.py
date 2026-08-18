@@ -93,6 +93,18 @@ def cmd_cc_switch_edit(args: Any) -> Dict[str, Any]:
     )
 
 
+def cmd_cc_switch_switch(args: Any) -> Dict[str, Any]:
+    from aisc.application.cc_switch_provider import switch_provider
+
+    return switch_provider(
+        runtime_id=args.runtime_id,
+        agent=args.agent,
+        provider_id=args.provider_id,
+        workspace=args.workspace,
+        executor=None,
+    )
+
+
 def cmd_cc_switch_delete(args: Any) -> Dict[str, Any]:
     from aisc.application.cc_switch_provider import delete_provider
 

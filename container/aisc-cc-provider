@@ -543,6 +543,30 @@ def op_edit(agent: str, provider_id: str, request: dict[str, Any]) -> list[dict[
     return op_list(agent)
 
 
+def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
+    """Activate a provider (IDEA-4): official non-interactive `provider switch`.
+
+    Guards: the target must exist and carry REAL configuration (an
+    empty-config target makes the CLI prompt on a non-tty — 8a probe);
+    switching to the already-current provider is an idempotent no-op.
+    """
+    snapshot = read_snapshot(agent)
+    row = next((r for r in snapshot if r["id"] == provider_id), None)
+    if row is None:
+        raise AdapterError(ERR_NOT_FOUND, f"provider not found: {provider_id}")
+    if row["is_current"]:
+        return op_list(agent)  # already active — idempotent success
+    if not _settings_are_real(agent, row):
+        raise AdapterError(
+            ERR_BAD_REQUEST,
+            f"provider {provider_id} has no usable configuration to switch to "
+            f"(set its base URL / key first)",
+        )
+    secrets = snapshot_secrets(agent, snapshot)
+    _cli_switch(agent, provider_id, secrets)
+    return op_list(agent)
+
+
 def op_delete(agent: str, provider_id: str) -> list[dict[str, Any]]:
     snapshot = read_snapshot(agent)
     row = next((r for r in snapshot if r["id"] == provider_id), None)
@@ -576,7 +600,7 @@ def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aisc-cc-provider")
-    parser.add_argument("op", choices=["list", "add", "edit", "delete"])
+    parser.add_argument("op", choices=["list", "add", "edit", "switch", "delete"])
     parser.add_argument("--agent", required=True, choices=list(AGENTS))
     parser.add_argument("--id", default=None, help="provider id (add/edit/delete)")
     args = parser.parse_args(argv)
@@ -610,6 +634,10 @@ def main(argv: list[str] | None = None) -> int:
             if not args.id:
                 raise AdapterError(ERR_BAD_REQUEST, "edit requires --id")
             providers = op_edit(args.agent, args.id, request)
+        elif args.op == "switch":
+            if not args.id:
+                raise AdapterError(ERR_BAD_REQUEST, "switch requires --id")
+            providers = op_switch(args.agent, args.id)
         else:
             if not args.id:
                 raise AdapterError(ERR_BAD_REQUEST, "delete requires --id")

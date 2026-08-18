@@ -280,6 +280,49 @@ class EditDanceTests(AdapterTestCase):
         self.assertEqual(ctx.exception.code, A.ERR_NOT_FOUND)
 
 
+class SwitchTests(AdapterTestCase):
+    def test_switch_runs_cli_switch_and_returns_snapshot(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "zhipu", {"ANTHROPIC_BASE_URL": "https://z"})
+        providers = A.op_switch("claude", "zhipu")
+        self.assertEqual(len(self.cli.calls), 1)
+        argv = self.cli.calls[0].args
+        self.assertIn("switch", argv)
+        self.assertEqual(argv[-1], "zhipu")
+        # snapshot returned unchanged (the CLI owns is_current truth)
+        self.assertEqual([p["id"] for p in providers][0], "deepseek")
+
+    def test_switch_to_current_is_idempotent_no_cli(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        A.op_switch("claude", "deepseek")
+        self.assertEqual(self.cli.calls, [])
+
+    def test_switch_to_unconfigured_provider_fails_closed(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "bare", {"ANTHROPIC_MODEL": "m"})  # no BASE_URL
+        with self.assertRaises(A.AdapterError) as ctx:
+            A.op_switch("claude", "bare")
+        self.assertEqual(ctx.exception.code, A.ERR_BAD_REQUEST)
+        self.assertEqual(self.cli.calls, [])
+
+    def test_switch_unknown_provider(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        with self.assertRaises(A.AdapterError) as ctx:
+            A.op_switch("claude", "ghost")
+        self.assertEqual(ctx.exception.code, A.ERR_NOT_FOUND)
+
+    def test_main_switch_envelope(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "zhipu", {"ANTHROPIC_BASE_URL": "https://z"})
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = A.main(["switch", "--agent", "claude", "--id", "zhipu"])
+        self.assertEqual(rc, 0)
+        env = json.loads(buf.getvalue())
+        self.assertTrue(env["ok"])
+        self.assertEqual(env["op"], "switch")
+
+
 class DeleteTests(AdapterTestCase):
     def test_delete_current_switches_away_first(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)

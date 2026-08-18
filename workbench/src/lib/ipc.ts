@@ -142,6 +142,9 @@ export const ccSwitchEdit = (
   workspace, runtimeId, agent, providerId, request,
 });
 
+export const ccSwitchSwitch = (workspace: string, runtimeId: string, agent: string, providerId: string) =>
+  invoke<CcSwitchProvidersResult>("cc_switch_switch", { workspace, runtimeId, agent, providerId });
+
 export const ccSwitchDelete = (workspace: string, runtimeId: string, agent: string, providerId: string) =>
   invoke<CcSwitchProvidersResult>("cc_switch_delete", { workspace, runtimeId, agent, providerId });
 

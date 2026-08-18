@@ -413,6 +413,21 @@ pub async fn cc_switch_edit(
     cc_switch_call(&app, argv, Some(request.to_string())).await
 }
 
+/// Activate a provider (IDEA-4): the adapter runs the official
+/// non-interactive `provider switch` and returns the fresh snapshot.
+#[tauri::command]
+pub async fn cc_switch_switch(
+    app: AppHandle,
+    workspace: String,
+    runtime_id: String,
+    agent: String,
+    provider_id: String,
+) -> Result<CcSwitchProvidersResult, WorkbenchError> {
+    cc_switch_validate(&runtime_id, &agent)?;
+    let argv = cc_switch_argv("switch", &runtime_id, &agent, &workspace, Some(&provider_id));
+    cc_switch_call(&app, argv, None).await
+}
+
 /// Delete a provider (the CLI gates on --confirm internally).
 #[tauri::command]
 pub async fn cc_switch_delete(

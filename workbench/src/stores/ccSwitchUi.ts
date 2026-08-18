@@ -70,6 +70,11 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
       ipc.ccSwitchEdit(ws, rt, agent.value, providerId, request));
   }
 
+  function activate(ws: string, rt: string, providerId: string): Promise<boolean> {
+    return _run(`switch:${providerId}`, () =>
+      ipc.ccSwitchSwitch(ws, rt, agent.value, providerId));
+  }
+
   function remove(ws: string, rt: string, providerId: string): Promise<boolean> {
     return _run(`delete:${providerId}`, () =>
       ipc.ccSwitchDelete(ws, rt, agent.value, providerId));
@@ -77,6 +82,6 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
 
   return {
     agent, providers, loading, busy, error,
-    list, switchAgent, add, edit, remove,
+    list, switchAgent, add, edit, activate, remove,
   };
 });
