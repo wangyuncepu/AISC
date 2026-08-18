@@ -4,7 +4,6 @@
  */
 export const zhCN = {
   // --- topbar / blocked / error shell (App.vue) ---
-  "app.settings": "设置",
   "app.blocked.title": "无法启动 Workbench 主路径",
   "app.blocked.cli": "AISC CLI 不可用",
   "app.blocked.pickCli": "选择 AISC CLI",
@@ -166,7 +165,6 @@ export const zhCN = {
   "tabbar.menu.codex": "Codex",
   "tabbar.menu.bash": "Bash",
   "tabbar.menu.cc-switch": "cc-switch",
-  "tabbar.settings": "设置",
   "tabbar.ccSwitchUi": "Provider 管理",
   "tabbar.closeVirtual": "关闭标签",
   "tabbar.closeSettings": "关闭设置标签（未保存更改将回退）",
@@ -174,6 +172,7 @@ export const zhCN = {
   "workspbar.launcher": "新建工作区 +",
   "workspbar.close": "关闭工作区",
   "workspbar.capHint": "最多同时打开 3 个工作区",
+  "workspbar.settings": "设置",
   "ccswitch.add": "添加 Provider",
   "ccswitch.mode.simple": "简易添加",
   "ccswitch.mode.custom": "自定义",
@@ -282,7 +281,6 @@ export const zhCN = {
   "settings.saving": "保存中…",
   "settings.reset": "重置为默认",
   "settings.reopenOnboarding": "重新打开设置向导",
-  "settings.close": "关闭",
   "settings.resetConfirm": "重置所有 GUI 设置为默认值？aisc_cli_path（CLI 固定）、历史记录、工作区与 Runtime 不受影响。",
   "settings.effect.immediate": "即时生效",
   "settings.effect.rebuild": "重建 Terminal 视图生效（会话不重开）",

@@ -13,9 +13,12 @@
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspacesStore, MAX_WORKSPACES } from "../../stores/workspaces";
+import { useSettingsStore } from "../../stores/settings";
+import { SETTINGS_TAB_ID } from "../../stores/runtime";
 
 const { t } = useI18n();
 const ws = useWorkspacesStore();
+const settingsStore = useSettingsStore();
 
 interface Chip {
   id: string;
@@ -24,6 +27,7 @@ interface Chip {
   status: string;
   state: string;
   launcher: boolean;
+  settings?: boolean;
 }
 
 function basename(p: string): string {
@@ -71,6 +75,17 @@ const chips = computed<Chip[]>(() => {
     state: lg.runtimeState.value,
     launcher: true,
   });
+  if (ws.settingsTabOpen) {
+    list.push({
+      id: SETTINGS_TAB_ID,
+      label: t("workspbar.settings"),
+      title: t("workspbar.settings"),
+      status: "settings",
+      state: "",
+      launcher: false,
+      settings: true,
+    });
+  }
   return list;
 });
 
@@ -82,6 +97,7 @@ const launcherDisabled = computed(
 );
 
 function chipTitle(c: Chip): string {
+  if (c.settings) return `${c.label} · ${t("tabbar.closeSettings")}`;
   const statusText = t(STATUS_KEY[c.status] ?? "app.unknown");
   const parts = c.launcher ? [c.label] : [c.title, statusText];
   if (!c.launcher) parts.push(t("workspbar.close"));
@@ -89,11 +105,22 @@ function chipTitle(c: Chip): string {
 }
 
 function onChip(c: Chip): void {
+  if (c.settings) {
+    ws.openSettingsTab();
+    return;
+  }
   if (c.launcher) {
     if (!launcherDisabled.value) ws.openLauncher();
     return;
   }
   ws.activate(c.id);
+}
+
+/** The Settings chip × reverts unsaved form edits via the settings store
+ * (same contract the session-layer chip had), then closes the sentinel. */
+function closeSettingsChip(): void {
+  settingsStore.cancel();
+  ws.closeSettingsTab();
 }
 </script>
 
@@ -117,7 +144,16 @@ function onChip(c: Chip): void {
       <span class="dot" :data-state="dotState(c)" />
       <span class="name">{{ c.label }}</span>
       <button
-        v-if="!c.launcher"
+        v-if="c.settings"
+        class="close"
+        :title="t('tabbar.closeSettings')"
+        :aria-label="t('tabbar.closeSettings')"
+        @click.stop="closeSettingsChip()"
+      >
+        ×
+      </button>
+      <button
+        v-else-if="!c.launcher"
         class="close"
         :title="t('workspbar.close')"
         :aria-label="`${t('workspbar.close')}: ${c.title}`"

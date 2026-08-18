@@ -4,7 +4,6 @@
  */
 export const enUS: Record<string, string> = {
   // --- topbar / blocked / error shell (App.vue) ---
-  "app.settings": "Settings",
   "app.blocked.title": "Cannot start Workbench main flow",
   "app.blocked.cli": "AISC CLI unavailable",
   "app.blocked.pickCli": "Choose AISC CLI",
@@ -166,7 +165,6 @@ export const enUS: Record<string, string> = {
   "tabbar.menu.codex": "Codex",
   "tabbar.menu.bash": "Bash",
   "tabbar.menu.cc-switch": "cc-switch",
-  "tabbar.settings": "Settings",
   "tabbar.ccSwitchUi": "Providers",
   "tabbar.closeVirtual": "Close tab",
   "tabbar.closeSettings": "Close settings tab (unsaved edits revert)",
@@ -174,6 +172,7 @@ export const enUS: Record<string, string> = {
   "workspbar.launcher": "New workspace +",
   "workspbar.close": "Close workspace",
   "workspbar.capHint": "Up to 3 concurrent workspaces",
+  "workspbar.settings": "Settings",
   "ccswitch.add": "Add provider",
   "ccswitch.mode.simple": "Simple",
   "ccswitch.mode.custom": "Custom",
@@ -282,7 +281,6 @@ export const enUS: Record<string, string> = {
   "settings.saving": "Saving…",
   "settings.reset": "Reset to defaults",
   "settings.reopenOnboarding": "Reopen setup wizard",
-  "settings.close": "Close",
   "settings.resetConfirm": "Reset all GUI settings to defaults? aisc_cli_path (CLI pin), history, workspaces and Runtime are not affected.",
   "settings.effect.immediate": "Applies immediately",
   "settings.effect.rebuild": "Applies after the Terminal view is rebuilt (sessions stay open)",

@@ -20,11 +20,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { leafCount } from "../../stores/paneTree";
-import {
-  CC_SWITCH_UI_TAB_ID,
-  SETTINGS_TAB_ID,
-  useRuntimeStore,
-} from "../../stores/runtime";
+import { CC_SWITCH_UI_TAB_ID, useRuntimeStore } from "../../stores/runtime";
 import { useDoctorStore } from "../../stores/doctor";
 import PaneTree from "../terminal/PaneTree.vue";
 import TabBar from "./TabBar.vue";
@@ -34,7 +30,6 @@ import LaunchSummary from "../startup/LaunchSummary.vue";
 import StartProgress from "../startup/StartProgress.vue";
 import BuildProgress from "../startup/BuildProgress.vue";
 import ConflictManager from "../startup/ConflictManager.vue";
-import SettingsTab from "../settings/SettingsTab.vue";
 import CcSwitchUiTab from "../ccswitch/CcSwitchUiTab.vue";
 import WorkspaceExplorer from "../workspace-explorer/WorkspaceExplorer.vue";
 
@@ -49,13 +44,10 @@ const doctorStore = useDoctorStore();
 
 const showExplorer = ref(true);
 
-// IDEA-1 + Stage 8e: virtual-tab panes — kept alive while hidden so unsaved
-// state survives switches; unmounted when the tab is closed.
-const settingsPaneRef = ref<HTMLElement | null>(null);
+// Stage 8e: the cc-switch Provider UI virtual pane — kept alive while hidden
+// so unsaved state survives switches. (The Settings pane is workspace-layer
+// now — App renders it; see stores/workspaces 3d.)
 const ccSwitchPaneRef = ref<HTMLElement | null>(null);
-const settingsPaneVisible = computed(
-  () => store.settingsTabOpen && store.activeTabId === SETTINGS_TAB_ID
-);
 const ccSwitchPaneVisible = computed(
   () => store.ccSwitchUiTabOpen && store.activeTabId === CC_SWITCH_UI_TAB_ID
 );
@@ -65,10 +57,6 @@ const ccSwitchPaneVisible = computed(
 // (v-show) on the next render; focusing synchronously would hit a hidden
 // xterm.
 function focusTabTerminal(tabId: string): void {
-  if (tabId === SETTINGS_TAB_ID) {
-    void nextTick(() => settingsPaneRef.value?.focus({ preventScroll: true }));
-    return;
-  }
   if (tabId === CC_SWITCH_UI_TAB_ID) {
     void nextTick(() => ccSwitchPaneRef.value?.focus({ preventScroll: true }));
     return;
@@ -83,14 +71,12 @@ function focusTabTerminal(tabId: string): void {
  * rendering order; drives Ctrl+Tab / Ctrl+1..9). */
 function renderedTabIds(): string[] {
   const ids = store.tabs.map((tb) => tb.tabId);
-  if (store.settingsTabOpen) ids.push(SETTINGS_TAB_ID);
   if (store.ccSwitchUiTabOpen) ids.push(CC_SWITCH_UI_TAB_ID);
   return ids;
 }
 
 function activateRenderedTab(id: string): void {
-  if (id === SETTINGS_TAB_ID) store.openSettingsTab();
-  else if (id === CC_SWITCH_UI_TAB_ID) store.openCcSwitchUiTab();
+  if (id === CC_SWITCH_UI_TAB_ID) store.openCcSwitchUiTab();
   else store.activateTab(id);
   focusTabTerminal(id);
 }
@@ -244,7 +230,7 @@ function setPaneTreeRef(tabId: string) {
       <div class="main">
         <TabBar />
         <main class="terminal-area">
-          <div v-if="store.tabs.length === 0 && !settingsPaneVisible && !ccSwitchPaneVisible" class="empty-tabs">
+          <div v-if="store.tabs.length === 0 && !ccSwitchPaneVisible" class="empty-tabs">
             <p>{{ t("tabs.empty") }}</p>
             <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
           </div>
@@ -256,15 +242,6 @@ function setPaneTreeRef(tabId: string) {
             v-show="tb.tabId === store.activeTabId"
           >
             <PaneTree :ref="setPaneTreeRef(tb.tabId)" :tab-id="tb.tabId" :tree="tb.tree" />
-          </div>
-          <div
-            v-if="store.settingsTabOpen"
-            v-show="settingsPaneVisible"
-            ref="settingsPaneRef"
-            class="settings-pane"
-            tabindex="-1"
-          >
-            <SettingsTab />
           </div>
           <div
             v-if="store.ccSwitchUiTabOpen"

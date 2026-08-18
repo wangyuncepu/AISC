@@ -5,7 +5,12 @@ import type { WorkbenchError, WorkbenchHistory, WorkspaceRecord } from "../types
 import * as ipc from "../lib/ipc";
 import { i18n } from "../i18n";
 import { sameWorkspace } from "./tabLayout";
-import { TERMINAL_STATES, createWorkspaceRuntime, type WorkspaceRuntime } from "./workspaceRuntime";
+import {
+  TERMINAL_STATES,
+  createWorkspaceRuntime,
+  SETTINGS_TAB_ID,
+  type WorkspaceRuntime,
+} from "./workspaceRuntime";
 
 /** IDEA-3 (3c, user decision 2026-08-18): at most this many concurrent
  * workspaces (each = one live container + its terminals). A constant for v1;
@@ -55,9 +60,33 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
   const runtimes = shallowRef<WorkspaceRuntime[]>([]);
   const launcher = shallowRef<WorkspaceRuntime>(mint());
   const activeId = ref<string>(launcher.value.id);
-  /** The last non-launcher active id: what to fall back to / keep mounted
-   * underneath when a workspace-layer sentinel (settings, 3d) is active. */
+  /** The last non-launcher active id: what to fall back to when a
+   * workspace-layer sentinel (settings) closes. */
   const lastWorkspaceId = ref<string>(launcher.value.id);
+
+  // --- IDEA-3 (3d): the Settings tab at WORKSPACE level (the strip's
+  // sentinel). Same contract as the session-layer virtual tabs: never
+  // persisted, owns no PTY, `activeId` may hold the sentinel while open.
+  // Unlike them it survives workspace switches/closes — settings is not
+  // owned by any one workspace. When active, the content area shows the
+  // settings pane INSTEAD of a WorkspaceView (keyed remount semantics).
+  const settingsTabOpen = ref(false);
+
+  function openSettingsTab(): void {
+    settingsTabOpen.value = true;
+    activeId.value = SETTINGS_TAB_ID;
+  }
+
+  function closeSettingsTab(): void {
+    settingsTabOpen.value = false;
+    if (activeId.value === SETTINGS_TAB_ID) {
+      // Fall back to the last workspace, else the launcher (never stranded).
+      const target = byId(lastWorkspaceId.value) ?? launcher.value;
+      activeId.value = target.id;
+    }
+  }
+
+  const settingsTabActive = computed(() => settingsTabOpen.value && activeId.value === SETTINGS_TAB_ID);
 
   function mint(): WorkspaceRuntime {
     // Late-bound self: the deps closures run long after mint returns, so the
@@ -118,12 +147,20 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     return true;
   }
 
-  /** Cycle workspaces (launcher rides last — it is the `+` tab). */
+  /** Cycle workspaces (launcher rides last — it is the `+` tab; the open
+   * settings sentinel rides after that). */
   function cycle(dir: 1 | -1): void {
-    const ordered = [...runtimes.value, launcher.value];
-    if (ordered.length < 2) return;
-    const i = ordered.findIndex((r) => r.id === activeId.value);
-    activate(ordered[(i + dir + ordered.length) % ordered.length].id);
+    const ids: string[] = [...runtimes.value.map((r) => r.id), launcher.value.id];
+    if (settingsTabOpen.value) ids.push(SETTINGS_TAB_ID);
+    if (ids.length < 2) return;
+    const i = ids.indexOf(activeId.value);
+    const next = ids[(i + dir + ids.length) % ids.length]!;
+    if (next === SETTINGS_TAB_ID) {
+      settingsTabOpen.value = true;
+      activeId.value = SETTINGS_TAB_ID;
+    } else {
+      activate(next);
+    }
   }
 
   // --- launcher materialization (the only way a workspace is born) ---
@@ -207,8 +244,8 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     ]);
     inst.tabs.value = [];
     inst.activeTabId.value = null;
-    inst.settingsTabOpen.value = false;
     inst.ccSwitchUiTabOpen.value = false;
+    // The workspace-level Settings sentinel deliberately survives (3d).
     try {
       if (inst.runtimeId.value) {
         const snap = await ipc.stopRuntime(inst.workspace.value.trim(), inst.runtimeId.value);
@@ -331,6 +368,11 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     launcher,
     activeId,
     activeRuntime,
+    // workspace-level Settings sentinel (3d)
+    settingsTabOpen,
+    settingsTabActive,
+    openSettingsTab,
+    closeSettingsTab,
     // history (shared)
     history,
     historyRevision,

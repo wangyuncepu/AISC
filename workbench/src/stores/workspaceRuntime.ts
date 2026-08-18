@@ -257,9 +257,8 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   // S2.2.a: multi-tab. One tab per agent, sharing the runtime (03 §二.3/§六).
   const tabs = ref<Tab[]>([]);
   const activeTabId = ref<string | null>(null);
-  /** IDEA-1: the virtual Settings tab is open (rendered as the last chip). */
-  const settingsTabOpen = ref(false);
-  /** Stage 8e: the virtual cc-switch Provider UI tab is open. */
+  /** Stage 8e: the virtual cc-switch Provider UI tab is open. (The Settings
+   * tab moved to the WORKSPACE layer in IDEA-3 3d — see stores/workspaces.) */
   const ccSwitchUiTabOpen = ref(false);
 
   let startTimer: number | null = null;
@@ -272,7 +271,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   function resetWorkspace() {
     tabs.value = [];
     activeTabId.value = null;
-    settingsTabOpen.value = false;
     ccSwitchUiTabOpen.value = false;
     preflight.value = null;
     runtimeId.value = "";
@@ -839,8 +837,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     };
     const { tabs: created, bySavedId } = tabsFromRecords(records);
     tabs.value = created;
-    settingsTabOpen.value = false; // fresh tab set; the virtual tab never restores
-    ccSwitchUiTabOpen.value = false;
+    ccSwitchUiTabOpen.value = false; // fresh tab set; the virtual tab never restores
     // G-17: open EVERY pane leaf (a restored split tab has several), each
     // through the same provider gate as + menu tabs - unconfigured claude/
     // codex restore as guide without a session (A-G08-3). `openAgents`
@@ -1215,24 +1212,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     scheduleSave();
   }
 
-  // --- IDEA-1: the virtual Settings tab (no session, never persisted) ---
+  // --- Stage 8e: the virtual cc-switch Provider UI tab (no session, never
+  // persisted). The IDEA-1 Settings tab moved to the WORKSPACE layer (3d). ---
 
-  /** Open (or just activate) the Settings tab. Idempotent. */
-  function openSettingsTab() {
-    settingsTabOpen.value = true;
-    activeTabId.value = SETTINGS_TAB_ID;
-  }
-
-  /** Close the Settings tab. The caller (TabBar) reverts unsaved form edits
-   * via the settings store; focus falls to the last session tab, else empty. */
-  function closeSettingsTab() {
-    settingsTabOpen.value = false;
-    if (activeTabId.value === SETTINGS_TAB_ID) {
-      activeTabId.value = tabs.value[tabs.value.length - 1]?.tabId ?? null;
-    }
-  }
-
-  /** Stage 8e: the virtual cc-switch Provider UI tab (same contract). */
   function openCcSwitchUiTab() {
     ccSwitchUiTabOpen.value = true;
     activeTabId.value = CC_SWITCH_UI_TAB_ID;
@@ -1466,7 +1448,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     ]);
     tabs.value = [];
     activeTabId.value = null;
-    settingsTabOpen.value = false;
     ccSwitchUiTabOpen.value = false;
     try {
       if (runtimeId.value) {
@@ -1525,9 +1506,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     buildDurationMs,
     tabs,
     activeTabId,
-    settingsTabOpen,
-    openSettingsTab,
-    closeSettingsTab,
     ccSwitchUiTabOpen,
     openCcSwitchUiTab,
     closeCcSwitchUiTab,

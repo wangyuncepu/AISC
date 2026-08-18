@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { watch } from "vue";
 import { createPinia, setActivePinia } from "pinia";
-import { useRuntimeStore, SETTINGS_TAB_ID } from "../runtime";
+import { useRuntimeStore, CC_SWITCH_UI_TAB_ID } from "../runtime";
 import { normalizePath } from "../tabLayout";
 import type { Tab } from "../../types";
 
@@ -96,20 +96,20 @@ describe("facade state forwarding (3a)", () => {
     const s = useRuntimeStore();
     const seen: (string | null)[] = [];
     const stop = watch(() => s.activeTabId, (v) => seen.push(v));
-    s.openSettingsTab();
-    await vi.waitFor(() => expect(seen).toContain(SETTINGS_TAB_ID));
-    expect(s.settingsTabOpen).toBe(true);
-    expect(s.activeTabId).toBe(SETTINGS_TAB_ID);
+    s.openCcSwitchUiTab();
+    await vi.waitFor(() => expect(seen).toContain(CC_SWITCH_UI_TAB_ID));
+    expect(s.ccSwitchUiTabOpen).toBe(true);
+    expect(s.activeTabId).toBe(CC_SWITCH_UI_TAB_ID);
     stop();
   });
 
-  it("forwards instance methods (closeSettingsTab falls back to the last tab)", () => {
+  it("forwards the workspace-layer Settings sentinel (IDEA-3 3d)", () => {
     const s = useRuntimeStore();
-    s.tabs = [bareTab("t1")];
+    expect(s.settingsTabOpen).toBe(false);
     s.openSettingsTab();
+    expect(s.settingsTabOpen).toBe(true);
     s.closeSettingsTab();
     expect(s.settingsTabOpen).toBe(false);
-    expect(s.activeTabId).toBe("t1");
   });
 });
 

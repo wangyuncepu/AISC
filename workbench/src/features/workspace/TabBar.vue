@@ -10,11 +10,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import {
-  CC_SWITCH_UI_TAB_ID,
-  SETTINGS_TAB_ID,
-  useRuntimeStore,
-} from "../../stores/runtime";
+import { CC_SWITCH_UI_TAB_ID, useRuntimeStore } from "../../stores/runtime";
 import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import type { LaunchAgent, Tab, TabSessionState } from "../../types";
@@ -94,9 +90,7 @@ function onMenuKeydown(e: KeyboardEvent) {
   } else if (e.key === "Enter" || e.key === " ") {
     e.preventDefault();
     if (idx >= 0) {
-      // The settings entry carries data-agent="settings"; agents create a tab.
-      if (items[idx].dataset.agent === "settings") chooseSettings();
-      else if (items[idx].dataset.agent === "cc-switch-ui") chooseCcSwitchUi();
+      if (items[idx].dataset.agent === "cc-switch-ui") chooseCcSwitchUi();
       else choose(items[idx].dataset.agent as LaunchAgent);
     }
   }
@@ -105,11 +99,6 @@ function onMenuKeydown(e: KeyboardEvent) {
 function choose(agent: LaunchAgent) {
   menuOpen.value = false;
   store.createTab(agent);
-}
-
-function chooseSettings() {
-  menuOpen.value = false;
-  store.openSettingsTab();
 }
 
 function chooseCcSwitchUi() {
@@ -142,9 +131,9 @@ const roving = ref(-1); // -1 = no manual roving; follow the active tab
  * tabs, in this fixed order — the roving/focus model appends them as indexes
  * `store.tabs.length + n`. */
 const virtualTabs = computed(() => {
+  // IDEA-3 (3d): the Settings tab moved to the WORKSPACE strip; the only
+  // session-layer virtual tab left is the cc-switch Provider UI.
   const out: { id: string; labelKey: string; icon: string }[] = [];
-  if (store.settingsTabOpen)
-    out.push({ id: SETTINGS_TAB_ID, labelKey: "tabbar.settings", icon: "⚙" });
   if (store.ccSwitchUiTabOpen)
     out.push({ id: CC_SWITCH_UI_TAB_ID, labelKey: "tabbar.ccSwitchUi", icon: "⇄" });
   return out;
@@ -180,8 +169,7 @@ function activateChip(i: number): void {
     store.activateTab(store.tabs[i].tabId);
   } else {
     const id = virtualTabs.value[i - store.tabs.length]?.id;
-    if (id === SETTINGS_TAB_ID) store.openSettingsTab();
-    else if (id === CC_SWITCH_UI_TAB_ID) store.openCcSwitchUiTab();
+    if (id === CC_SWITCH_UI_TAB_ID) store.openCcSwitchUiTab();
   }
 }
 
@@ -204,15 +192,7 @@ function virtualTabIndex(i: number): string {
 
 function onVirtualClick(id: string) {
   roving.value = -1;
-  if (id === SETTINGS_TAB_ID) store.openSettingsTab();
-  else if (id === CC_SWITCH_UI_TAB_ID) store.openCcSwitchUiTab();
-}
-
-/** × on the Settings chip: revert unsaved edits (dialog-Cancel contract),
- * then close the virtual tab. */
-function closeSettings() {
-  settingsStore.cancel();
-  store.closeSettingsTab();
+  if (id === CC_SWITCH_UI_TAB_ID) store.openCcSwitchUiTab();
 }
 
 /** × on the cc-switch UI chip (no unsaved-state contract — forms are
@@ -367,14 +347,15 @@ function canReopen(s: TabSessionState): boolean {
           class="icon x"
           :title="t('tabbar.closeVirtual')"
           :aria-label="t('tabbar.closeVirtual')"
-          @click="v.id === 'settings-tab' ? closeSettings() : closeCcSwitchUi()"
+          @click="closeCcSwitchUi()"
         >×</button>
       </span>
     </div>
 
     <!-- G-08 + IDEA-1: + split button. Main + creates the DEFAULT agent tab
          (ui.default_tab_agent) immediately; ▾ opens the full menu (any agent
-         duplicates allowed — cap enforced by the store — plus 设置). The menu
+         duplicates allowed — cap enforced by the store — plus the Provider
+         page). The menu
          is teleported to <body>: the tabbar's overflow-x scroll container
          would clip an in-flow dropdown (Stage 6 UX-02 regression). -->
     <div class="menu-wrap">
@@ -413,12 +394,6 @@ function canReopen(s: TabSessionState): boolean {
             @click="choose(a)"
           >{{ t(`tabbar.menu.${a}`) }}</li>
           <li class="sep" role="separator" />
-          <li
-            role="menuitem"
-            tabindex="0"
-            data-agent="settings"
-            @click="chooseSettings"
-          >{{ t("tabbar.settings") }}</li>
           <li
             role="menuitem"
             tabindex="0"

@@ -8,7 +8,30 @@ import { createPinia, setActivePinia } from "pinia";
 import { mount } from "@vue/test-utils";
 import { i18n } from "../../../i18n";
 import { useWorkspacesStore, MAX_WORKSPACES } from "../../../stores/workspaces";
+import { useSettingsStore } from "../../../stores/settings";
+import type { SettingsDocument } from "../../../types";
 import WorkspaceBar from "../WorkspaceBar.vue";
+
+/** Minimal settings doc fixture (full section shapes for vue-tsc). */
+const settingsDoc: SettingsDocument = {
+  schemaVersion: 1,
+  revision: 0,
+  aiscCliPath: null,
+  ui: { language: "auto", font_scale: 1.0, theme: "system", explorer_ignore: [], default_tab_agent: "bash" },
+  terminal: {
+    font_family: "Cascadia Mono, Consolas, monospace",
+    font_size: 14,
+    line_height: 1.2,
+    letter_spacing: 0,
+    scrollback: 5000,
+    renderer: "auto",
+    smooth_scroll_duration: 100,
+  },
+  window: { remember_geometry: true, close_behavior: "quit", geometry: null },
+  issues: [],
+  corrupted: false,
+  readOnly: false,
+};
 
 const mockIpc = vi.hoisted(() => ({
   closeSession: vi.fn().mockResolvedValue({ reason: "user_close", exitCode: null }),
@@ -103,5 +126,30 @@ describe("WorkspaceBar (3c)", () => {
     const active = ws.activeId;
     await launcherChip.trigger("click");
     expect(ws.activeId).toBe(active); // cap: no launcher activation
+  });
+
+  it("Settings chip (3d): renders when open, × reverts unsaved edits then closes", async () => {
+    const ws = useWorkspacesStore();
+    await launchWorkspace(ws, "C:/alpha");
+    ws.openSettingsTab();
+    expect(ws.settingsTabActive).toBe(true);
+    const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
+    // 1 workspace + launcher + settings chip.
+    const chips = bar.findAll(".chip");
+    expect(chips).toHaveLength(3);
+    const settingsChip = chips[chips.length - 1]!;
+    expect(settingsChip.text()).toContain("设置");
+
+    // Dirty the settings form, then ×: cancel() reverts to lastSaved, sentinel closes.
+    const settings = useSettingsStore();
+    settings.doc = {
+      ...settingsDoc,
+      ui: { ...settingsDoc.ui, language: "en-US" },
+    };
+    settings.lastSaved = JSON.parse(JSON.stringify(settingsDoc)) as SettingsDocument;
+    await settingsChip.find(".close").trigger("click");
+    expect(settings.doc?.ui.language).toBe("auto"); // reverted
+    expect(ws.settingsTabOpen).toBe(false);
+    expect(ws.activeId).toBe(ws.runtimes[0].id); // falls back to the last workspace
   });
 });

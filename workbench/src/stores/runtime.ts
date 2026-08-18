@@ -116,6 +116,16 @@ export const useRuntimeStore = defineStore("runtime", () => {
     confirmExit: () => ws.confirmExit(),
     flushSave: () => ws.flushSave(),
     loadHistory: () => ws.loadHistory(),
+    // IDEA-3 (3d): Settings is a WORKSPACE-layer sentinel now — forwarded
+    // from the workspaces store (it survives workspace switches/closes).
+    settingsTabOpen: computed({
+      get: () => ws.settingsTabOpen,
+      set: (v: boolean) => {
+        ws.settingsTabOpen = v;
+      },
+    }),
+    openSettingsTab: () => ws.openSettingsTab(),
+    closeSettingsTab: () => ws.closeSettingsTab(),
     // shared history (workspaces-owned). Through the pinia proxy `ws.history`
     // is ALREADY the unwrapped value — no `.value` here, or everything reads
     // undefined. Value semantics match the original plain-ref store
@@ -145,7 +155,6 @@ export const useRuntimeStore = defineStore("runtime", () => {
     buildDurationMs: fwdRef("buildDurationMs"),
     tabs: fwdRef("tabs"),
     activeTabId: fwdRef("activeTabId"),
-    settingsTabOpen: fwdRef("settingsTabOpen"),
     ccSwitchUiTabOpen: fwdRef("ccSwitchUiTabOpen"),
     runtimeState: fwdRef("runtimeState"),
     runtimeSnapshot: fwdRef("runtimeSnapshot"),
@@ -208,8 +217,6 @@ export const useRuntimeStore = defineStore("runtime", () => {
     stopConflictRuntime: fwdFn("stopConflictRuntime"),
     removeConflictRuntime: fwdFn("removeConflictRuntime"),
     retryFromConflict: fwdFn("retryFromConflict"),
-    openSettingsTab: fwdFn("openSettingsTab"),
-    closeSettingsTab: fwdFn("closeSettingsTab"),
     openCcSwitchUiTab: fwdFn("openCcSwitchUiTab"),
     closeCcSwitchUiTab: fwdFn("closeCcSwitchUiTab"),
     dispose: fwdFn("dispose"),

@@ -8,7 +8,7 @@
  * workspace internals and the session-layer shortcuts all live in
  * WorkspaceView now; workspace concurrency lives in stores/workspaces.ts.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -29,7 +29,7 @@ import { useSettingsStore } from "./stores/settings";
 import { useDoctorStore } from "./stores/doctor";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
 import { useProviderPolling } from "./composables/useProviderPolling";
-import SettingsDialog from "./features/settings/SettingsDialog.vue";
+import SettingsTab from "./features/settings/SettingsTab.vue";
 import DoctorDialog from "./features/doctor/DoctorDialog.vue";
 import OnboardingWizard from "./features/onboarding/OnboardingWizard.vue";
 import WorkspaceBar from "./features/workspace/WorkspaceBar.vue";
@@ -79,15 +79,34 @@ watch(
   { immediate: true }
 );
 
-// Step 3: settings entry (keyboard-reachable topbar button). IDEA-1: in the
-// ready workspace the Settings TAB is the surface; pre-ready states (blocked/
-// picker/summary/...) keep the modal dialog — the workspace-level Settings
-// chip replaces this split in 3d.
-const settingsOpen = ref(false);
-function openSettings(): void {
-  if (store.status === "ready") store.openSettingsTab();
-  else settingsOpen.value = true;
+// IDEA-3 (3d): Settings is a WORKSPACE-layer tab (the strip's sentinel) —
+// the topbar gear and the pre-ready modal dialog are both retired. Entries:
+// the strip's Settings chip, the picker's embedded button, and Ctrl+, from
+// ANY post-onboarding state. When active, the settings pane fills the
+// content area (the last workspace stays a keyed-remount away).
+const settingsPaneRef = ref<HTMLElement | null>(null);
+function toggleSettings(): void {
+  if (ws.settingsTabActive) {
+    settingsStore.cancel(); // revert unsaved edits, same contract as the chip ×
+    ws.closeSettingsTab();
+  } else {
+    ws.openSettingsTab();
+    void nextTick(() => settingsPaneRef.value?.focus({ preventScroll: true }));
+  }
 }
+
+// The ONE app-level keydown: Ctrl/Cmd+, toggles Settings everywhere after
+// onboarding (blocked/picker/summary/ready alike). Session-layer shortcuts
+// live in WorkspaceView; workspace-cycling shortcuts land in 3e.
+function onAppKeydown(e: KeyboardEvent) {
+  const mod = e.ctrlKey || e.metaKey;
+  if (!mod) return;
+  if (e.key === "," && !showOnboarding.value) {
+    e.preventDefault();
+    toggleSettings();
+  }
+}
+onMounted(() => window.addEventListener("keydown", onAppKeydown, { capture: true }));
 
 // G-01 (Step 7, A-G01-3): ui.font_scale is immediate-effect. Applied as CSS
 // zoom on the UI chrome; the terminal area is counter-zoomed so xterm stays
@@ -317,6 +336,7 @@ onBeforeUnmount(() => {
   providerPolling.stop();
   stopSystemTheme();
   window.removeEventListener("resize", onViewportResize);
+  window.removeEventListener("keydown", onAppKeydown, { capture: true });
   if (announceTimer !== null) window.clearTimeout(announceTimer);
   if (geometryTimer !== null) window.clearTimeout(geometryTimer);
 });
@@ -328,7 +348,6 @@ onBeforeUnmount(() => {
       <span class="brand">AISC Workbench</span>
       <span class="status" :data-status="store.status">{{ statusLabel }}</span>
       <span class="spacer" />
-      <button class="settings-btn" @click="openSettings">{{ t("app.settings") }}</button>
     </header>
 
     <!-- Stage 5 (ONB-01): first-run wizard overlay. -->
@@ -336,14 +355,17 @@ onBeforeUnmount(() => {
       <OnboardingWizard />
     </div>
 
-    <!-- Step 3: typed settings dialog (pre-ready states; retired in 3d) -->
-    <SettingsDialog v-if="settingsOpen" @close="settingsOpen = false" />
+    <!-- IDEA-3 (3d): the workspace-level Settings tab (Ctrl+, / strip chip /
+         picker entry). Fills the content area; no modal anywhere. -->
+    <div v-if="ws.settingsTabActive" ref="settingsPaneRef" class="settings-pane" tabindex="-1">
+      <SettingsTab />
+    </div>
 
     <!-- S3.3: screen-reader live regions. -->
     <div class="sr-only" role="status" aria-live="polite">{{ livePolite }}</div>
     <div class="sr-only" role="alert" aria-live="assertive">{{ liveAlert }}</div>
 
-    <template v-if="!showOnboarding">
+    <template v-if="!showOnboarding && !ws.settingsTabActive">
       <!-- IDEA-3 (3c): the workspace strip. -->
       <WorkspaceBar v-if="workspaceLayerVisible" />
 
@@ -405,7 +427,7 @@ onBeforeUnmount(() => {
 .status { font-size: var(--font-sm); color: var(--text-muted); }
 .status[data-status="ready"] { color: var(--success); }
 .status[data-status="error"], .status[data-status="blocked"] { color: var(--error); }
-.settings-btn { padding: 3px 10px; font-size: var(--font-sm); }
+.settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }
 .gate.blocked, .center {
   flex: 1;
   display: flex;
@@ -440,7 +462,7 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
 
 /* Stage 6 (UX-02): layout tiers driven by the effective app-box width. */
 .app[data-tier="compact"] .topbar { gap: var(--space-2); padding: 4px var(--space-2); }
-.app[data-tier="compact"] .topbar .status { display: none; } /* keep brand + settings */
+.app[data-tier="compact"] .topbar .status { display: none; } /* keep the brand readable */
 .app[data-tier="compact"] .sidebar { width: 200px; min-width: 200px; padding: var(--space-2); }
 .app[data-tier="compact"] .explorer-drawer { width: min(320px, 100%); }
 </style>
