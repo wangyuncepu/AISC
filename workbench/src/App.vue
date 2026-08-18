@@ -1,9 +1,14 @@
 <script setup lang="ts">
 /**
- * S2.1.a startup shell: routes between startup-state views (02 §三) and the
- * terminal workspace. Capability gate on mount.
+ * S2.1.a startup shell. IDEA-3 (3c): App is now the app-level shell only —
+ * topbar, onboarding gate, boot/blocked gates, the workspace strip
+ * (WorkspaceBar) and ONE active WorkspaceView (keyed by instance id; switching
+ * remounts, which is safe by design — Terminals replay from store-owned
+ * buffers and sessions never re-open). Instance state machines, the ready
+ * workspace internals and the session-layer shortcuts all live in
+ * WorkspaceView now; workspace concurrency lives in stores/workspaces.ts.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -18,34 +23,23 @@ import { applyLocale } from "./i18n";
 import { applyTheme, createSystemListener } from "./theme";
 import { layoutTierFor, type LayoutTier } from "./lib/layout";
 import { computeWindowTitle } from "./lib/title";
-import { leafCount } from "./stores/paneTree";
-import {
-  CC_SWITCH_UI_TAB_ID,
-  SETTINGS_TAB_ID,
-  useRuntimeStore,
-} from "./stores/runtime";
+import { useRuntimeStore } from "./stores/runtime";
+import { useWorkspacesStore } from "./stores/workspaces";
 import { useSettingsStore } from "./stores/settings";
 import { useDoctorStore } from "./stores/doctor";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
 import { useProviderPolling } from "./composables/useProviderPolling";
-import PaneTree from "./features/terminal/PaneTree.vue";
-import TabBar from "./features/workspace/TabBar.vue";
-import RuntimeSidebar from "./features/workspace/RuntimeSidebar.vue";
-import LaunchSummary from "./features/startup/LaunchSummary.vue";
-import StartProgress from "./features/startup/StartProgress.vue";
-import BuildProgress from "./features/startup/BuildProgress.vue";
-import ConflictManager from "./features/startup/ConflictManager.vue";
 import SettingsDialog from "./features/settings/SettingsDialog.vue";
-import SettingsTab from "./features/settings/SettingsTab.vue";
-import CcSwitchUiTab from "./features/ccswitch/CcSwitchUiTab.vue";
 import DoctorDialog from "./features/doctor/DoctorDialog.vue";
-import WorkspaceExplorer from "./features/workspace-explorer/WorkspaceExplorer.vue";
 import OnboardingWizard from "./features/onboarding/OnboardingWizard.vue";
+import WorkspaceBar from "./features/workspace/WorkspaceBar.vue";
+import WorkspaceView from "./features/workspace/WorkspaceView.vue";
 import { useWorkspaceExplorerStore } from "./stores/workspaceExplorer";
 import { useOnboardingStore } from "./stores/onboarding";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
+const ws = useWorkspacesStore();
 const settingsStore = useSettingsStore();
 const doctorStore = useDoctorStore();
 const explorerStore = useWorkspaceExplorerStore();
@@ -57,7 +51,7 @@ const providerPolling = useProviderPolling();
 // Loaded async at startup; fail-closed (corrupt/high-version) still shows the
 // main app rather than trapping the user in a broken wizard.
 const showOnboarding = computed(
-  () => onboardingStore.loaded && !onboardingStore.isFinished,
+  () => onboardingStore.loaded && !onboardingStore.isFinished
 );
 
 // Stage 5 (ONB-07): once the wizard finishes, negotiate the main app (it was
@@ -65,21 +59,21 @@ const showOnboarding = computed(
 watch(
   () => onboardingStore.isFinished,
   (finished) => {
-    // Deferred during onboarding; negotiate once the wizard completes and the
-    // app has not already negotiated.
     if (finished && store.status === "idle") {
       store.negotiate();
     }
-  },
+  }
 );
 
 // Stage 3: keep the workspace watcher alive even when the Explorer rail is
 // hidden, so agent-created files are captured while the panel is closed.
+// Follows the ACTIVE workspace (the explorer is a single instance; per-path
+// tree caching is 3e).
 watch(
   [() => store.workspace, () => store.status],
-  ([ws, status]) => {
-    if (ws && status === "ready") {
-      explorerStore.setWorkspace(ws);
+  ([w, status]) => {
+    if (w && status === "ready") {
+      explorerStore.setWorkspace(w);
     }
   },
   { immediate: true }
@@ -87,30 +81,17 @@ watch(
 
 // Step 3: settings entry (keyboard-reachable topbar button). IDEA-1: in the
 // ready workspace the Settings TAB is the surface; pre-ready states (blocked/
-// picker/summary/...) keep the modal dialog — there is no tab bar yet.
+// picker/summary/...) keep the modal dialog — the workspace-level Settings
+// chip replaces this split in 3d.
 const settingsOpen = ref(false);
-const showExplorer = ref(true);
 function openSettings(): void {
   if (store.status === "ready") store.openSettingsTab();
   else settingsOpen.value = true;
 }
 
-// IDEA-1 + Stage 8e: virtual-tab panes (Settings, cc-switch Provider UI) —
-// kept alive while hidden so unsaved state survives switches; unmounted when
-// the tab is closed.
-const settingsPaneRef = ref<HTMLElement | null>(null);
-const ccSwitchPaneRef = ref<HTMLElement | null>(null);
-const settingsPaneVisible = computed(
-  () => store.settingsTabOpen && store.activeTabId === SETTINGS_TAB_ID
-);
-const ccSwitchPaneVisible = computed(
-  () => store.ccSwitchUiTabOpen && store.activeTabId === CC_SWITCH_UI_TAB_ID
-);
-
 // G-01 (Step 7, A-G01-3): ui.font_scale is immediate-effect. Applied as CSS
-// zoom on the UI chrome (topbar/picker/summary/sidebar/tabbar/dialog); the
-// terminal area is counter-zoomed so xterm stays 1:1 (its own font settings
-// govern terminal text). Backend default 1.0 when settings are not loaded.
+// zoom on the UI chrome; the terminal area is counter-zoomed so xterm stays
+// 1:1 (WorkspaceView receives the counter-zoom style).
 const uiScale = computed(() => settingsStore.doc?.ui.font_scale ?? 1);
 // G-04 (Step 17, A-G04-1/2): apply the persisted theme mode as soon as it is
 // known; main.ts already painted the system default before the first frame.
@@ -119,16 +100,11 @@ watch(
   (mode) => applyTheme(mode ?? "system"),
   { immediate: true }
 );
-// A-G04-4: `system` (or unset) re-resolves on OS dark/light changes; fixed
-// dark/light stay sticky. Single listener, removed on unmount.
+// A-G04-4: `system` (or unset) re-resolves on OS dark/light changes.
 const stopSystemTheme = createSystemListener(() => {
   const mode = settingsStore.doc?.ui.theme;
   if (!mode || mode === "system") applyTheme("system");
 });
-// The effective scale adapts to the window (user request 2026-08-10): the
-// chosen value applies only up to what fits the current window - the design
-// baseline is the 800x600 default window, so a non-maximized window at 1.5
-// never clips (max fit = min(w/800, h/600)). Resizes update the cap live.
 const windowSize = ref({ w: window.innerWidth, h: window.innerHeight });
 // G-10: debounced geometry capture (300ms, A-G10-5).
 let geometryTimer: number | null = null;
@@ -144,35 +120,19 @@ onMounted(() => window.addEventListener("resize", onViewportResize));
 const effectiveScale = computed(() =>
   Math.min(uiScale.value, 1.5, windowSize.value.w / 800, windowSize.value.h / 600)
 );
-// Zoom scales layout too, so the app box must compensate its height/width
-// (calc(100vh/scale) zoomed = 100vh) or the content shrinks away from the
-// window edges at scale < 1 (observed 2026-08-10: sidebar buttons and the
-// terminal area lifted off the bottom edge).
+// Zoom scales layout too, so the app box must compensate its height/width.
 const uiZoom = computed(() => ({
   zoom: String(effectiveScale.value),
   height: `calc(100vh / ${effectiveScale.value})`,
   width: `calc(100vw / ${effectiveScale.value})`,
 }));
-
-// Stage 6 (UX-02): layout tier by the EFFECTIVE layout width (the zoomed app
-// box = viewport / scale), NOT the raw viewport — the zoom system scales the
-// 800px baseline, so a 320px window still lays out at ~800px. Compact <640,
-// Standard 640-1100, Wide >1100 (02-domain-contract.md). Exposed as data-tier
-// on the app root; components react via .app[data-tier="..."] selectors.
+// Stage 6 (UX-02): layout tier by the EFFECTIVE layout width.
 const layoutTier = computed<LayoutTier>(
-  () => layoutTierFor(window.innerWidth / (effectiveScale.value || 1)),
+  () => layoutTierFor(window.innerWidth / (effectiveScale.value || 1))
 );
 const terminalZoom = computed(() => ({ zoom: String(1 / effectiveScale.value) }));
-// G-11 (2026-08-10): the counter-zoom keeps the terminal visually 1:1 when
-// the UI scale changes, preventing the canvas re-fit flicker observed when it
-// was removed (real-time font_scale preview flickered). The terminal FILLS
-// the terminal-area because .terminal-area is display:flex (term-wrap flex:1
-// stretches) and the counter-zoom is 1 at the default scale (1.0). At
-// font_scale > 1 the terminal occupies 1/scale of the area by design (it
-// stays 1:1 while the chrome grows); terminal.font_size governs text.
 
-// S3.3: aria-live regions (04 §九 - announce semantic changes only, never
-// routine polls). Throttled ~1s so a burst of updates coalesces to the latest.
+// S3.3: aria-live regions. Throttled ~1s so bursts coalesce to the latest.
 const livePolite = ref("");
 const liveAlert = ref("");
 let announceTimer: number | null = null;
@@ -180,7 +140,7 @@ let pendingAnnounce = "";
 
 function announce(text: string, alert = false) {
   pendingAnnounce = text;
-  if (announceTimer !== null) return; // coalesce into the pending tick
+  if (announceTimer !== null) return;
   announceTimer = window.setTimeout(() => {
     announceTimer = null;
     const msg = pendingAnnounce;
@@ -218,18 +178,14 @@ const STATUS_KEY: Record<string, string> = {
   error: "app.error.title",
 };
 
-// KI-1 UX: while the Docker boot loop runs, the topbar leads with the wake-up
-// (status stays "summary" so the page does not flash between views).
+// KI-1 UX: while the Docker boot loop runs, the topbar leads with the wake-up.
 const statusLabel = computed(() =>
   store.dockerStarting
     ? t("app.dockerStartingStatus")
     : t(STATUS_KEY[store.status] ?? "app.unknown")
 );
 
-// KI-1 UX: announce the wake-up start and its SUCCESS (the gate flipping green
-// was previously silent; user feedback 2026-08-17). Ready is only announced
-// when the docker check actually passes — the timeout path announces via the
-// error watch below.
+// KI-1 UX: announce the wake-up start and its SUCCESS.
 watch(
   () => store.dockerStarting,
   (starting, prev) => {
@@ -244,8 +200,7 @@ watch(
   }
 );
 
-// Announce runtime-state transitions (not every poll - only when the state
-// value actually changes).
+// Announce runtime-state transitions (only when the value actually changes).
 let lastAnnouncedState: string | null = null;
 watch(
   () => store.runtimeState,
@@ -264,58 +219,9 @@ watch(
   }
 );
 
-// S3.3: focus the terminal of a tab (xterm's own focus) so typing works right
-// after switching via Ctrl/Cmd+1..4. nextTick: the target tab becomes visible
-// (v-show) on the next render; focusing synchronously would hit a hidden xterm.
-function focusTabTerminal(tabId: string): void {
-  // IDEA-1: the Settings tab has no terminal; focus its pane instead so
-  // keyboard input lands in the form.
-  if (tabId === SETTINGS_TAB_ID) {
-    void nextTick(() => settingsPaneRef.value?.focus({ preventScroll: true }));
-    return;
-  }
-  if (tabId === CC_SWITCH_UI_TAB_ID) {
-    void nextTick(() => ccSwitchPaneRef.value?.focus({ preventScroll: true }));
-    return;
-  }
-  // G-17: focus the tab's ACTIVE pane terminal (PaneTree exposes it).
-  void nextTick(() => {
-    paneTreeRefs.value.get(tabId)?.focusActivePane();
-  });
-}
-
-/** IDEA-1: the rendered tab sequence = session tabs + the open Settings chip
- * (mirrors TabBar's rendering order; drives Ctrl+Tab / Ctrl+1..9). */
-function renderedTabIds(): string[] {
-  const ids = store.tabs.map((t) => t.tabId);
-  if (store.settingsTabOpen) ids.push(SETTINGS_TAB_ID);
-  if (store.ccSwitchUiTabOpen) ids.push(CC_SWITCH_UI_TAB_ID);
-  return ids;
-}
-
-function activateRenderedTab(id: string): void {
-  if (id === SETTINGS_TAB_ID) store.openSettingsTab();
-  else if (id === CC_SWITCH_UI_TAB_ID) store.openCcSwitchUiTab();
-  else store.activateTab(id);
-  focusTabTerminal(id);
-}
-
-// G-08 (2026-08-10): every activation path (click, + menu, empty-state
-// button, restore, shortcuts) moves keyboard focus into the terminal - a
-// freshly created tab must be typeable without an extra click.
-watch(
-  () => store.activeTabId,
-  (id) => {
-    if (id && store.status === "ready") focusTabTerminal(id);
-  }
-);
-
-// G-15 (Step 14): dynamic window title, driven by the active context (workspace
-// + active tab session type), never by a polling ticker (F-5). The pure
-// computeWindowTitle is re-derived whenever workspace / activeTabId / the active
-// tab's session state changes; setTitle failure only logs (A-G15-3).
+// G-15 (Step 14): dynamic window title, driven by the active context.
 const activeTabTitleContext = computed(() => {
-  const tab = store.tabs.find((t) => t.tabId === store.activeTabId) ?? null;
+  const tab = store.tabs.find((tb) => tb.tabId === store.activeTabId) ?? null;
   const sessionType = tab && tab.sessionState !== "idle" ? tab.agent : null;
   return computeWindowTitle({ workspace: store.workspace, sessionType });
 });
@@ -329,116 +235,24 @@ watch(
   { immediate: true }
 );
 
-// G-12 (2026-08-10): 官方账号登录 / 重试 start the session on the ALREADY
-// active guide tab - activeTabId does not change, so focus the terminal once
-// it mounts after the guide -> starting transition.
-watch(
-  () => {
-    const t = store.tabs.find((x) => x.tabId === store.activeTabId);
-    return t?.sessionState;
-  },
-  (st, prev) => {
-    if (st === "starting" && prev === "guide" && store.activeTabId) {
-      window.setTimeout(() => {
-        const id = store.activeTabId;
-        if (id) focusTabTerminal(id);
-      }, 50);
-    }
-  }
-);
+/** Boot states live on the launcher until negotiate settles; after that the
+ * workspace layer (strip + views) owns the surface. Blocked renders the
+ * app gate UNDER the strip (settings must stay reachable — the chip lands
+ * 3d; today the topbar gear covers it). */
+const booting = computed(() => ["idle", "negotiating"].includes(store.status));
+const workspaceLayerVisible = computed(() => !booting.value);
 
-function onKeydown(e: KeyboardEvent) {
-  const mod = e.ctrlKey || e.metaKey;
-  if (!mod) return;
-  const key = e.key.toLowerCase();
-  // G-17: pane focus navigation + close. This window-level CAPTURE handler runs
-  // before the terminal textarea and before any WebView2 accelerator the page
-  // can see; scoped to keys originating inside a pane (`.pane` covers xterm,
-  // guide and dormant leaves alike). Consumed keys never reach the PTY.
-  // (Note: WebView2 may swallow some browser-reserved combos - Ctrl+J opened
-  // the downloads page; Ctrl+arrows and Ctrl+Shift+hjkl are page-level safe.)
-  if (store.status === "ready" && store.activeTabId) {
-    const target = e.target as HTMLElement | null;
-    if (target?.closest?.(".pane")) {
-      if (e.shiftKey && key === "w") {
-        // Ctrl+Shift+W closes the focused pane (multi-leaf tabs only).
-        const t = store.tabs.find((x) => x.tabId === store.activeTabId);
-        if (t && leafCount(t.tree) > 1) {
-          e.preventDefault();
-          void store.closePane(store.activeTabId, t.activePaneId);
-        }
-        return;
-      }
-      // Ctrl+arrows (page-level, WebView2-safe) OR Ctrl+Shift+hjkl (vim; the
-      // plain Ctrl+hjkl are WebView2 browser accelerators and are swallowed).
-      if (!e.altKey) {
-        const arrow = !e.shiftKey && e.key.startsWith("Arrow")
-          ? (e.key === "ArrowLeft" ? "left"
-            : e.key === "ArrowRight" ? "right"
-            : e.key === "ArrowUp" ? "up" : "down")
-          : null;
-        const letter = e.shiftKey && "hjkl".includes(key)
-          ? (key === "h" ? "left"
-            : key === "j" ? "down"
-            : key === "k" ? "up" : "right")
-          : null;
-        const dir = arrow ?? letter;
-        if (dir && store.navigatePane(store.activeTabId, dir)) {
-          // A-G17-5: move keyboard focus into the newly active pane's terminal
-          // too - the store's activePaneId alone leaves typing in the old pane.
-          e.preventDefault();
-          focusTabTerminal(store.activeTabId);
-          return;
-        }
-      }
-    }
-  }
-  // S1.6: Ctrl/Cmd+Tab cycles to the next tab, Ctrl/Cmd+Shift+Tab backwards
-  // (browser-style). IDEA-1: the cycle covers the rendered sequence including
-  // the virtual Settings tab. If a WebView2 build swallows the combo, the
-  // TabBar roving focus remains the keyboard fallback.
-  if (e.key === "Tab") {
-    if (store.status !== "ready") return;
-    const ids = renderedTabIds();
-    if (ids.length === 0) return;
-    e.preventDefault();
-    const current = ids.indexOf(store.activeTabId ?? "");
-    const dir = e.shiftKey ? -1 : 1;
-    const base = current < 0 ? 0 : current;
-    const next = (base + dir + ids.length) % ids.length;
-    activateRenderedTab(ids[next]!);
-    return;
-  }
-  // G-08 (A-G08-6): Ctrl/Cmd+1..9 map the current committed tab order; the
-  // 10th tab and beyond use the tablist arrow/Home/End navigation.
-  if (e.key >= "1" && e.key <= "9") {
-    if (store.status !== "ready") return;
-    e.preventDefault();
-    const id = renderedTabIds()[Number(e.key) - 1];
-    if (id) activateRenderedTab(id);
-  } else if (e.key === "Enter" && store.status === "summary") {
-    e.preventDefault();
-    store.startFromSummary();
-  }
-}
-
-// G-16 (Step 15): tray availability gate. A stored minimize-to-tray value falls
-// back to quit when no tray exists (A-G16-4), and the frontend only skips its
-// shutdown flow when both tray mode AND a live tray apply (Rust hides).
+// G-16 (Step 15): tray availability gate.
 const trayAvailable = ref(false);
 
 // Shared quit flow: window close confirm + hide + geometry flush + shutdown
-// coordinator. Used by both the window close (quit) and the tray 退出 menu
-// (A-G16-3: the same confirm gate and ShutdownReport).
+// coordinator (A-G16-3: the tray 退出 menu shares it).
 async function runExitFlow(): Promise<void> {
   const allow = await store.confirmExit();
   if (!allow) return;
   const win = getCurrentWindow();
   void win.hide().catch(() => undefined);
-  // G-16: hide the tray icon instantly too (window close already feels instant;
-  // cleanup runs in the background, A-G16-3).
   void trayRemove().catch(() => undefined);
-  // G-10: flush geometry before shutdown (A-G10-5).
   void captureWindowGeometry().catch(() => undefined);
   // G-17: flush the debounced history save so a split/pane-close inside the
   // 300ms window survives 恢复布局 on the next launch (feedback 2026-08-10).
@@ -450,18 +264,13 @@ async function runExitFlow(): Promise<void> {
 }
 
 onMounted(() => {
-  // Stage 5 (ONB-07): decide the first-run gate BEFORE negotiating the main
-  // app, so a fresh install does not flash the blocked/error gate while the
-  // wizard is about to cover it (observed 2026-08-16: first launch showed
-  // "启动失败" for a frame; restart was fine). When onboarding is active, the
-  // wizard is the only surface — the main app negotiates after it finishes.
+  // Stage 5 (ONB-07): decide the first-run gate BEFORE negotiating.
   void (async () => {
     await onboardingStore.load();
     if (!onboardingStore.isFinished) return; // wizard handles startup
     store.negotiate();
   })();
-  // G-09 (02 §3.1): resolve + apply the locale in parallel with capability
-  // negotiation - language resolution never blocks it.
+  // G-09 (02 §3.1): resolve + apply the locale in parallel.
   void (async () => {
     if (!settingsStore.loaded) await settingsStore.load();
     const locale = await resolveLocale(settingsStore.doc?.ui.language ?? "auto");
@@ -471,21 +280,8 @@ onMounted(() => {
   void trayAvailableIpc()
     .then((ok: boolean) => (trayAvailable.value = ok))
     .catch(() => undefined);
-  // Exit gate (03 §4.3): always prevent the default close. G-07 refinement
-  // (2026-08-09): the close feels instant - the window hides and the Rust
-  // shutdown coordinator runs in the background (bounded ~12s worst case),
-  // then the coordinator exits the process itself. BOTH are fire-and-forget:
-  // awaiting hide() here never settles while the close request is pending on
-  // this Tauri version (observed 2026-08-09 - the window stayed, the
-  // coordinator never ran, no shutdown log). The coordinator exits the app
-  // even if hide failed; on coordinator failure, destroy the window as a
-  // fallback and let the OS tear the process (and PTY children) down - the
-  // runtime container keeps running by design. An unreaped-session report is
-  // logged by Rust, not shown. (preventDefault must precede the async
-  // confirm, otherwise the default close races it.)
-  // G-16 (Step 15): with close_behavior=minimize-to-tray AND a live tray, Rust
-  // has already hidden the window - skip the shutdown flow entirely so sessions
-  // keep running (A-G16-1/2). Otherwise run the quit flow.
+  // Exit gate (03 §4.3): always prevent the default close; hide first, the
+  // Rust shutdown coordinator runs in the background and exits the process.
   void getCurrentWindow().onCloseRequested(async (event) => {
     event.preventDefault();
     const behavior = settingsStore.doc?.window.close_behavior ?? "quit";
@@ -496,21 +292,23 @@ onMounted(() => {
   void listen("exit-requested", () => {
     void runExitFlow();
   });
-  window.addEventListener("keydown", onKeydown, { capture: true });
 });
 
-// S2.3.a/b: poll runtime + provider state while a runtime is active (ready),
-// so external stop/remove is reflected within one poll cycle (04 §五; Phase 2).
+// S2.3.a/b: poll runtimes while ANY workspace is open (真并行: the loop
+// refreshes the active one at full cadence and downshifts background ones —
+// see useRuntimePolling); provider status still follows the ACTIVE tab.
+watch(
+  () => ws.runtimes.length > 0,
+  (any) => {
+    if (any) polling.start();
+    else polling.stop();
+  }
+);
 watch(
   () => store.status,
   (s) => {
-    if (s === "ready") {
-      polling.start();
-      providerPolling.start();
-    } else {
-      polling.stop();
-      providerPolling.stop();
-    }
+    if (s === "ready") providerPolling.start();
+    else providerPolling.stop();
   }
 );
 
@@ -519,43 +317,9 @@ onBeforeUnmount(() => {
   providerPolling.stop();
   stopSystemTheme();
   window.removeEventListener("resize", onViewportResize);
-  window.removeEventListener("keydown", onKeydown, { capture: true });
   if (announceTimer !== null) window.clearTimeout(announceTimer);
   if (geometryTimer !== null) window.clearTimeout(geometryTimer);
 });
-
-function isStartingView(s: string): boolean {
-  return s === "starting" || s === "cancelled";
-}
-
-// G-17 (Step 16): render each non-idle tab as a PaneTree (single-leaf for a
-// flat tab, recursive splits for a split tab). v-show keeps hidden tabs (and
-// their PTYs) alive so switching back preserves scrollback (03 §六.8).
-// Render EVERY tab's PaneTree. Each leaf already shows the right content
-// (Terminal / GuidePane / dormant start view), so a tab is never black - not
-// mid-split, not while a claude/codex provider gate is pending, not after a
-// layout restore (G-17 feedback 2026-08-10). v-show keeps only the active tab
-// visible; the projection filter was the source of the whole-page vanish.
-const paneTabs = computed(() => store.tabs);
-
-// S3.3: expose each tab's PaneTree so switching moves keyboard focus to the
-// active pane's terminal.
-const paneTreeRefs = ref(new Map<string, InstanceType<typeof PaneTree>>());
-function setPaneTreeRef(tabId: string) {
-  return (el: unknown) => {
-    if (el) paneTreeRefs.value.set(tabId, el as InstanceType<typeof PaneTree>);
-    else paneTreeRefs.value.delete(tabId);
-  };
-}
-
-// S2.4.a: recent workspaces (from history) in the picker.
-function basename(p: string): string {
-  const parts = p.replace(/\/+$/, "").split("/");
-  return parts[parts.length - 1] || p;
-}
-function selectRecent(path: string): void {
-  store.selectRecentWorkspace(path);
-}
 </script>
 
 <template>
@@ -567,164 +331,41 @@ function selectRecent(path: string): void {
       <button class="settings-btn" @click="openSettings">{{ t("app.settings") }}</button>
     </header>
 
-    <!-- Stage 5 (ONB-01): first-run wizard overlay. Covers the app until
-         onboarding finishes; SettingsDialog (opened via topbar) renders above. -->
+    <!-- Stage 5 (ONB-01): first-run wizard overlay. -->
     <div v-if="showOnboarding" class="onboarding-gate">
       <OnboardingWizard />
     </div>
 
-    <!-- Step 3: typed settings dialog (keyboard-accessible modal, A-G01-1) -->
+    <!-- Step 3: typed settings dialog (pre-ready states; retired in 3d) -->
     <SettingsDialog v-if="settingsOpen" @close="settingsOpen = false" />
 
-    <!-- S3.3: screen-reader live regions (04 §九). Visually hidden, announced
-         only on semantic changes (throttled). -->
+    <!-- S3.3: screen-reader live regions. -->
     <div class="sr-only" role="status" aria-live="polite">{{ livePolite }}</div>
     <div class="sr-only" role="alert" aria-live="assertive">{{ liveAlert }}</div>
 
-    <!-- Capability gate -->
-    <div v-if="store.status === 'blocked'" class="gate blocked">
-      <h2>{{ t("app.blocked.title") }}</h2>
-      <p class="err">{{ store.error?.message ?? t("app.blocked.cli") }}</p>
-      <p class="detail">{{ store.error?.technical_detail }}</p>
-      <div class="actions">
-        <button @click="store.pickAndPinCli()">{{ t("app.blocked.pickCli") }}</button>
-        <button class="diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
+    <template v-if="!showOnboarding">
+      <!-- IDEA-3 (3c): the workspace strip. -->
+      <WorkspaceBar v-if="workspaceLayerVisible" />
+
+      <!-- Capability gate (app-level; strip stays for reachability) -->
+      <div v-if="store.status === 'blocked'" class="gate blocked">
+        <h2>{{ t("app.blocked.title") }}</h2>
+        <p class="err">{{ store.error?.message ?? t("app.blocked.cli") }}</p>
+        <p class="detail">{{ store.error?.technical_detail }}</p>
+        <div class="actions">
+          <button @click="store.pickAndPinCli()">{{ t("app.blocked.pickCli") }}</button>
+          <button class="diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
+        </div>
       </div>
-    </div>
 
-    <!-- Loading / stopping -->
-    <div v-else-if="['idle', 'negotiating', 'preflight', 'stopping'].includes(store.status)" class="center">
-      <p class="msg">{{
-        store.status === "stopping"
-          ? t("app.stopping")
-          : store.status === "preflight"
-          ? t("app.preflight")
-          : t("app.negotiating")
-      }}</p>
-    </div>
-
-    <!-- Workspace picker -->
-    <div v-else-if="store.status === 'picker'" class="picker">
-      <h2>{{ t("picker.title") }}</h2>
-      <div class="row">
-        <input
-          v-model="store.workspace"
-          class="workspace"
-          :placeholder="t('picker.placeholder')"
-          @keyup.enter="store.runPreflight()"
-        />
-        <button @click="store.pickWorkspace()">{{ t("picker.browse") }}</button>
-        <button class="primary" :disabled="!store.workspace.trim()" @click="store.runPreflight()">{{ t("picker.next") }}</button>
+      <!-- Boot (idle/negotiating) -->
+      <div v-else-if="booting" class="center">
+        <p class="msg">{{ t("app.negotiating") }}</p>
       </div>
-      <p class="hint">{{ t("picker.hint") }}</p>
-      <div v-if="store.recentWorkspaces.length" class="recents">
-        <div class="recents-label">{{ t("picker.recents") }}</div>
-        <ul>
-          <li v-for="w in store.recentWorkspaces" :key="w.path">
-            <button class="recent" :title="w.path" @click="selectRecent(w.path)">
-              <span class="r-name">{{ basename(w.path) }}</span>
-              <span class="r-path">{{ w.path }}</span>
-              <span class="r-agent">{{ w.last_agent || "-" }}</span>
-            </button>
-          </li>
-        </ul>
-      </div>
-    </div>
 
-    <!-- Launch summary (preflight gate + config + Start) -->
-    <div v-else-if="store.status === 'summary'" class="main">
-      <LaunchSummary />
-    </div>
-
-    <!-- Start progress / cancel -->
-    <div v-else-if="isStartingView(store.status)" class="main">
-      <StartProgress />
-    </div>
-
-    <!-- Build progress (image missing -> aisc build --events) -->
-    <div v-else-if="store.status === 'building'" class="main">
-      <BuildProgress />
-    </div>
-
-    <!-- Runtime conflict (resolve_conflict -> list/stop/remove) -->
-    <div v-else-if="store.status === 'conflict'" class="main">
-      <ConflictManager />
-    </div>
-
-    <!-- Terminal workspace -->
-    <div v-else-if="store.status === 'ready'" class="ready">
-      <RuntimeSidebar />
-      <button
-        class="explorer-toggle"
-        :title="t('explorer.tab.files')"
-        :aria-pressed="showExplorer"
-        @click="showExplorer = !showExplorer"
-      >
-        ☰
-      </button>
-      <div class="main">
-        <TabBar />
-        <main class="terminal-area">
-          <!-- G-08 empty state (A-G08-6): focus target for creating the first
-               tab. Hidden while the Settings tab fills the area (IDEA-1). -->
-          <div v-if="store.tabs.length === 0 && !settingsPaneVisible && !ccSwitchPaneVisible" class="empty-tabs">
-            <p>{{ t("tabs.empty") }}</p>
-            <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
-          </div>
-          <!-- G-17: each non-idle tab renders its PaneTree (single-leaf for a
-               flat tab, recursive splits for a split tab). The 1:1 counter-zoom
-               keeps xterm visually 1:1 under the UI scale. -->
-          <div
-            v-for="t in paneTabs"
-            :key="t.tabId"
-            class="term-wrap"
-            :style="terminalZoom"
-            v-show="t.tabId === store.activeTabId"
-          >
-            <PaneTree :ref="setPaneTreeRef(t.tabId)" :tab-id="t.tabId" :tree="t.tree" />
-          </div>
-          <!-- IDEA-1 + Stage 8e: virtual-tab panes (Settings, cc-switch
-               Provider UI). NOT counter-zoomed (regular UI chrome); kept
-               alive while hidden. -->
-          <div
-            v-if="store.settingsTabOpen"
-            v-show="settingsPaneVisible"
-            ref="settingsPaneRef"
-            class="settings-pane"
-            tabindex="-1"
-          >
-            <SettingsTab />
-          </div>
-          <div
-            v-if="store.ccSwitchUiTabOpen"
-            v-show="ccSwitchPaneVisible"
-            ref="ccSwitchPaneRef"
-            class="settings-pane"
-            tabindex="-1"
-          >
-            <CcSwitchUiTab />
-          </div>
-        </main>
-      </div>
-      <!-- Stage 3 (3c): Workspace Explorer + Agent Artifacts overlay drawer.
-           Overlay means opening/closing it never resizes the terminal area. -->
-      <div v-show="showExplorer" class="explorer-drawer">
-        <WorkspaceExplorer />
-      </div>
-    </div>
-
-    <!-- Error -->
-    <div v-else-if="store.status === 'error'" class="gate error">
-      <h2>{{ t("app.error.title") }}</h2>
-      <p class="err">{{ store.error?.message }}</p>
-      <p class="detail">{{ store.error?.technical_detail }}</p>
-      <div class="actions">
-        <button @click="store.negotiate()">{{ t("app.error.retry") }}</button>
-        <button @click="store.backToPicker()">{{ t("app.error.back") }}</button>
-        <!-- G-13: one-click diagnosis from the error page (A-G13-1/3) -->
-        <button class="diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
-      </div>
-    </div>
+      <!-- The ACTIVE workspace's view (keyed remount on switch) -->
+      <WorkspaceView v-else :key="ws.activeRuntime.id" :zoom="terminalZoom" />
+    </template>
 
     <!-- G-13: diagnosis dialog, shared by blocked/error/ready entry points -->
     <DoctorDialog v-if="doctorStore.open" />
@@ -765,7 +406,7 @@ function selectRecent(path: string): void {
 .status[data-status="ready"] { color: var(--success); }
 .status[data-status="error"], .status[data-status="blocked"] { color: var(--error); }
 .settings-btn { padding: 3px 10px; font-size: var(--font-sm); }
-.gate.blocked, .gate.error, .center, .picker {
+.gate.blocked, .center {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -774,10 +415,9 @@ function selectRecent(path: string): void {
   gap: 8px;
   color: var(--text-2);
 }
-.gate .err, .picker h2 { color: var(--text-2); }
+.gate .err { color: var(--text-2); }
 .gate .detail { font-size: var(--font-sm); color: var(--text-muted); }
 .center .msg { color: var(--text-muted); }
-.picker { gap: 12px; }
 .onboarding-gate {
   position: fixed;
   inset: 0;
@@ -785,27 +425,7 @@ function selectRecent(path: string): void {
   background: var(--surface, #1e1e1e);
   display: flex;
 }
-.picker .row { display: flex; gap: 8px; width: 560px; max-width: 90vw; }
-.picker .hint { font-size: var(--font-sm); color: var(--text-muted); }
-.recents { width: 560px; max-width: 90vw; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
-.recents-label { font-size: var(--font-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
-.recents ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
-.recents li { width: 100%; }
-.recent {
-  width: 100%; display: flex; align-items: center; gap: 8px; text-align: left;
-  background: var(--surface); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-md);
-  padding: 6px 10px; font-size: var(--font-sm); cursor: pointer;
-}
-.recent:hover { background: var(--surface-2); border-color: var(--border-2); }
-.r-name { color: var(--text-2); font-weight: 500; min-width: 80px; }
-.r-path { flex: 1; color: var(--text-muted); font-family: monospace; font-size: var(--font-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.r-agent { color: var(--info); font-size: var(--font-xs); }
-.workspace {
-  flex: 1; min-width: 0; background: var(--surface); color: var(--text-2);
-  border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 6px 8px; font-size: var(--font-md);
-}
-.ready { flex: 1; display: flex; min-height: 0; position: relative; }
-.main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
   background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
   padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
@@ -816,49 +436,9 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 button.danger { background: var(--error-bg); border-color: var(--border-strong); color: var(--error-fg); }
 button.danger:hover:not(:disabled) { background: var(--error-hover); }
-.actions { display: flex; gap: 8px; margin-top: 8px; }
 .diagnose { background: var(--info-bg); border-color: var(--info-border); }
-.terminal-area { flex: 1; min-height: 0; padding: 4px; background: var(--bg); display: flex; }
-.term-wrap { flex: 1; min-height: 0; min-width: 0; }
-.settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }
-.explorer-toggle {
-  align-self: flex-start;
-  margin-top: 4px;
-  padding: 4px 6px;
-  background: var(--surface-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  color: var(--text-2);
-  cursor: pointer;
-  font-size: var(--font-sm);
-}
-.explorer-drawer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 320px;
-  max-width: 100%; /* never exceed the window at narrow tiers (UX-02) */
-  z-index: var(--z-drawer);
-  display: flex;
-  background: var(--surface);
-  border-left: 1px solid var(--border-strong);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
-}
-.explorer-drawer > * {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-}
-.empty-tabs {
-  /* fill the terminal-area row so internal centering is global, not the
-     content-width box anchored at the left edge (G-17 feedback 2026-08-10) */
-  flex: 1; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 10px; color: var(--text-muted); font-size: var(--font-md);
-}
 
-/* Stage 6 (UX-02): layout tiers driven by the effective app-box width
- * (data-tier on .app; see layoutTier). Compact < 640px box. */
+/* Stage 6 (UX-02): layout tiers driven by the effective app-box width. */
 .app[data-tier="compact"] .topbar { gap: var(--space-2); padding: 4px var(--space-2); }
 .app[data-tier="compact"] .topbar .status { display: none; } /* keep brand + settings */
 .app[data-tier="compact"] .sidebar { width: 200px; min-width: 200px; padding: var(--space-2); }

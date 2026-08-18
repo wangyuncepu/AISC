@@ -18,12 +18,14 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useRuntimeStore } from "../../stores/runtime";
+import { useWorkspacesStore } from "../../stores/workspaces";
 import { useDoctorStore } from "../../stores/doctor";
 import { i18n as i18nLocale } from "../../i18n";
 import type { RuntimeState } from "../../types";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
+const workspaces = useWorkspacesStore();
 const doctorStore = useDoctorStore();
 
 const snap = computed(() => store.runtimeSnapshot);
@@ -194,7 +196,9 @@ function copyDone(key: string): boolean {
         <button :disabled="store.inspectInFlight" @click="store.refreshRuntime(true)">
           {{ store.userRefreshInFlight ? t("sidebar.refreshing") : t("sidebar.refresh") }}
         </button>
-        <button class="danger" @click="store.stopRuntime()">{{ t("sidebar.stopRuntime") }}</button>
+        <!-- IDEA-3 (3c): stopping now closes THIS workspace only (真并行:
+             other workspaces' runtimes keep running). -->
+        <button class="danger" @click="workspaces.closeWorkspace(store.id)">{{ t("sidebar.stopRuntime") }}</button>
       </div>
     </section>
 
