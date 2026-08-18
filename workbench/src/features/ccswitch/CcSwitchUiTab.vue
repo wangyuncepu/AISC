@@ -10,7 +10,7 @@
  * logged, or stored in browser storage (04 §Security, adapted to the Tauri
  * IPC channel per D8-13).
  */
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n } from "vue-i18n";
 import { confirm } from "@tauri-apps/plugin-dialog";
@@ -108,6 +108,43 @@ async function submitEdit(): Promise<void> {
   if (ok) editId.value = null;
 }
 
+// --- activate (IDEA-4): click a row to make that provider current ---
+const switchedTo = ref("");
+let switchFlashTimer: number | null = null;
+
+function canActivate(p: CcSwitchProvider): boolean {
+  if (busy.value !== "") return false;
+  // A current PROXY row offers "cancel proxy" (click → confirm → official
+  // direct). Non-current rows need a usable configuration (no base_url =
+  // cc-switch's official/direct placeholders — hidden, see visibleProviders).
+  return p.is_current ? Boolean(p.base_url) : Boolean(p.base_url);
+}
+
+async function activate(p: CcSwitchProvider): Promise<void> {
+  if (!canActivate(p)) return;
+  let target = p.id;
+  if (p.is_current) {
+    // Clicking the active row = the cancel-proxy affordance (IDEA-4 round 3):
+    // confirm, then switch to the direct-official row via the pseudo target.
+    const ok = await confirm(t("ccswitch.cancelProxyConfirm", { name: p.name || p.id }));
+    if (!ok) return;
+    target = "official";
+  }
+  if (target !== "official" && !p.has_api_key) {
+    const go = await confirm(t("ccswitch.noKeyConfirm", { name: p.name || p.id }));
+    if (!go) return;
+  }
+  const ok = await ui.activate(store.workspace, store.runtimeId, target);
+  if (ok) {
+    switchedTo.value =
+      target === "official" ? t("ccswitch.officialDirect") : (p.name || p.id);
+    if (switchFlashTimer !== null) window.clearTimeout(switchFlashTimer);
+    switchFlashTimer = window.setTimeout(() => (switchedTo.value = ""), 3000);
+    // Sidebar G-12 cache follows the live switch (both agents are valid).
+    void store.loadProviderStatus(agent.value);
+  }
+}
+
 // --- delete ---
 async function remove(p: CcSwitchProvider): Promise<void> {
   const ok = await confirm(t("ccswitch.deleteConfirm", { id: p.id }));
@@ -117,8 +154,21 @@ async function remove(p: CcSwitchProvider): Promise<void> {
 
 const hasRuntime = computed(() => Boolean(store.runtimeId && store.workspace));
 
+/**
+ * IDEA-4 (manual round 2): rows that cannot be activated (no base_url —
+ * cc-switch's built-in `*-official` rows and the imported `default`
+ * direct-official snapshot) are HIDDEN instead of shown unclickable; the
+ * current row always stays visible.
+ */
+const visibleProviders = computed(() =>
+  providers.value.filter((p) => p.is_current || Boolean(p.base_url)),
+);
+
 onMounted(() => {
   if (hasRuntime.value) void refresh();
+});
+onBeforeUnmount(() => {
+  if (switchFlashTimer !== null) window.clearTimeout(switchFlashTimer);
 });
 </script>
 
@@ -146,10 +196,24 @@ onMounted(() => {
 
     <p v-if="!hasRuntime" class="banner warn">{{ t("ccswitch.noRuntime") }}</p>
     <p v-if="error" class="banner err" role="alert">{{ error }}</p>
+    <p v-if="switchedTo" class="banner ok" role="status">
+      ✓ {{ t("ccswitch.switchedTo", { name: switchedTo }) }}
+    </p>
 
-    <div class="list" v-if="providers.length">
-      <div v-for="p in providers" :key="p.id" class="row" :class="{ current: p.is_current }">
-        <span class="cur">{{ p.is_current ? "→" : "" }}</span>
+    <div class="list" v-if="visibleProviders.length">
+      <div
+        v-for="p in visibleProviders"
+        :key="p.id"
+        class="row"
+        :class="{ current: p.is_current, activatable: canActivate(p), cancelable: p.is_current && p.base_url }"
+        :title="p.is_current
+          ? t('ccswitch.cancelProxyHint')
+          : p.base_url ? t('ccswitch.activateHint') : t('ccswitch.notConfiguredHint')"
+        @click="activate(p)"
+      >
+        <span class="cur" :class="{ on: p.is_current }">
+          {{ p.is_current ? t("ccswitch.currentChip") : "" }}
+        </span>
         <span class="pid" :title="p.id">{{ p.id }}</span>
         <span class="name">{{ p.name }}</span>
         <span class="url" :title="p.base_url">{{ p.base_url }}</span>
@@ -157,7 +221,7 @@ onMounted(() => {
         <span class="key" :class="{ none: !p.has_api_key }">
           {{ p.has_api_key ? p.api_key_mask : t("ccswitch.noKey") }}
         </span>
-        <span class="actions">
+        <span class="actions" @click.stop>
           <button :disabled="busy !== ''" @click="openEdit(p)">{{ t("ccswitch.edit") }}</button>
           <button class="danger" :disabled="busy !== ''" @click="remove(p)">
             {{ t("ccswitch.delete") }}
@@ -166,6 +230,9 @@ onMounted(() => {
       </div>
     </div>
     <p v-else-if="!loading && hasRuntime" class="empty">{{ t("ccswitch.empty") }}</p>
+    <p v-if="providers.length > visibleProviders.length" class="hidden-note">
+      {{ t("ccswitch.hiddenRows") }}
+    </p>
 
     <!-- add form -->
     <div v-if="addOpen" class="form-card" role="dialog" :aria-label="t('ccswitch.add')">
@@ -251,12 +318,18 @@ onMounted(() => {
 .banner.err { background: var(--error-bg); color: var(--error-fg); }
 .list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
 .row {
-  display: grid; grid-template-columns: 18px 130px 120px 1fr 160px 110px auto;
+  display: grid; grid-template-columns: 64px 130px 120px 1fr 160px 110px auto;
   gap: 8px; align-items: center; padding: 6px 8px; border-radius: var(--radius-md);
   font-size: var(--font-sm); color: var(--text-2);
 }
 .row.current { background: var(--surface-2); }
-.row.current .cur { color: var(--accent); }
+.row.activatable { cursor: pointer; }
+.row.activatable:hover { background: var(--surface-hover); }
+.row.cancelable .cur.on { cursor: pointer; }
+.cur { color: var(--text-faint); font-size: var(--font-xs); }
+.cur.on { color: var(--accent); font-weight: 600; }
+.banner.ok { background: var(--success-bg); color: var(--success); }
+.hidden-note { font-size: var(--font-xs); color: var(--text-faint); }
 .pid { font-family: monospace; }
 .url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
 .model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

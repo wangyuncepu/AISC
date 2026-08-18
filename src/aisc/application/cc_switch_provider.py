@@ -21,7 +21,7 @@ from aisc.domain.models import CliError, RuntimeExitCode
 PROTOCOL = "aisc.cc-switch-provider/v1"
 _ADAPTER_PATH = "/usr/local/bin/aisc-cc-provider"
 _AGENTS = ("claude", "codex")
-_OPS = ("list", "add", "edit", "delete")
+_OPS = ("list", "add", "edit", "switch", "delete")
 
 
 def _validate(runtime_id: str, agent: str, op: str) -> None:
@@ -179,6 +179,21 @@ def edit_provider(runtime_id: str, agent: str, provider_id: str,
     envelope = _exec_adapter(
         runtime_id, workspace_state_dir(ws_path), executor, "edit", agent,
         provider_id, request,
+    )
+    return {"agent": agent, "providers": envelope.get("providers") or [],
+            "operation_id": envelope.get("operation_id")}
+
+
+def switch_provider(runtime_id: str, agent: str, provider_id: str,
+                    workspace: Optional[str], executor: Any) -> Dict[str, Any]:
+    from aisc.application.data_root import workspace_state_dir
+    from pathlib import Path
+
+    ws_path = Path(workspace).resolve() if workspace else Path.cwd()
+    _validate(runtime_id, agent, "switch")
+    envelope = _exec_adapter(
+        runtime_id, workspace_state_dir(ws_path), executor, "switch", agent,
+        provider_id, None,
     )
     return {"agent": agent, "providers": envelope.get("providers") or [],
             "operation_id": envelope.get("operation_id")}

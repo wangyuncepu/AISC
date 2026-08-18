@@ -91,7 +91,8 @@ class RecordingCli:
         for marker, message in self.fail_on.items():
             if marker in " ".join(args):
                 return subprocess.CompletedProcess(args, 1, stdout="", stderr=message)
-        return subprocess.CompletedProcess(args, 0, stdout="✓ ok (API Key: sk-leak)", stderr="")
+        stdout = "Switched to provider 'x'\n✓ ok (API Key: sk-leak)"
+        return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
     def argv(self) -> list[list[str]]:
         return [c.args for c in self.calls]
@@ -103,7 +104,8 @@ class AdapterTestCase(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
         create_db(self.dir)
-        self._env = {"CC_SWITCH_CONFIG_DIR": str(self.dir)}
+        self._env = {"CC_SWITCH_CONFIG_DIR": str(self.dir),
+                     "CODEX_CONFIG_DIR": str(self.dir)}
         self._patcher = mock.patch.dict("os.environ", self._env, clear=False)
         self._patcher.start()
         self.addCleanup(self._patcher.stop)
@@ -111,6 +113,11 @@ class AdapterTestCase(unittest.TestCase):
         self._orig_cli = A.run_cli
         A.run_cli = self.cli
         self.addCleanup(setattr, A, "run_cli", self._orig_cli)
+        # The pty path uses the raw runner (no automatic cc-switch prefix);
+        # route it through the same recorder.
+        self._orig_raw = A.run_raw
+        A.run_raw = lambda argv, inp, _cli=self.cli: _cli(argv, inp, [])
+        self.addCleanup(setattr, A, "run_raw", self._orig_raw)
 
 
 class SnapshotAndRedactionTests(AdapterTestCase):
@@ -185,6 +192,14 @@ class AddTests(AdapterTestCase):
             A.op_add("claude", {"mode": "custom", "id": "Bad Id!", "name": "x",
                                 "base_url": "https://y"})
         self.assertEqual(ctx.exception.code, A.ERR_BAD_REQUEST)
+
+    def test_custom_codex_add_carries_auth_field(self):
+        providers = A.op_add("codex", {"mode": "custom", "id": "mine",
+                                       "name": "Mine",
+                                       "base_url": "https://api.mine"})
+        sent = json.loads(self.cli.calls[0].stdin_text)
+        self.assertIn("auth", sent)
+        self.assertIn("config", sent)
 
     def test_duplicate_id_rejected_before_any_cli_call(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV)
@@ -278,6 +293,133 @@ class EditDanceTests(AdapterTestCase):
         with self.assertRaises(A.AdapterError) as ctx:
             A.op_edit("claude", "nope", {"patch": {}})
         self.assertEqual(ctx.exception.code, A.ERR_NOT_FOUND)
+
+
+class SwitchTests(AdapterTestCase):
+    def test_switch_runs_cli_switch_and_returns_snapshot(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "zhipu", {"ANTHROPIC_BASE_URL": "https://z"})
+        providers = A.op_switch("claude", "zhipu")
+        self.assertEqual(len(self.cli.calls), 1)
+        argv = self.cli.calls[0].args
+        self.assertIn("switch", argv)
+        self.assertEqual(argv[-1], "zhipu")
+        # snapshot returned unchanged (the CLI owns is_current truth)
+        self.assertEqual([p["id"] for p in providers][0], "deepseek")
+
+    def test_codex_switch_enables_proxy_route_first(self):
+        # Codex reaches third parties only through the local proxy route
+        # (default OFF) — the adapter enables it before switching.
+        toml_cfg = (
+            'model_provider = "deepseek"\n[model_providers.deepseek]\n'
+            'base_url = "https://api.deepseek.com"\n'
+        )
+        seed_provider(self.dir, "codex-official", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": ""})
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"auth": {}, "config": toml_cfg})
+        A.op_switch("codex", "deepseek")
+        first = " ".join(self.cli.calls[0].args)
+        self.assertIn("proxy -a codex enable", first)
+        self.assertIn("switch", " ".join(self.cli.calls[1].args))
+
+    def test_codex_switch_manages_auth_placeholder(self):
+        import os as _os
+        # Enable path: absent auth.json gets the marker placeholder.
+        toml_cfg = 'model_provider = "deepseek"\n[model_providers.deepseek]\nbase_url = "https://x"\n'
+        seed_provider(self.dir, "codex-official", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": ""})
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"auth": {}, "config": toml_cfg})
+        A.op_switch("codex", "deepseek")
+        auth = self.dir / "auth.json"
+        self.assertEqual(auth.read_text(encoding="utf-8").strip(),
+                         A._AUTH_PLACEHOLDER)
+
+        # The fake CLI never flips is_current — drive it with direct DB
+        # updates between switches, as the real CLI would.
+        def set_current(pid: str) -> None:
+            db = sqlite3.connect(self.dir / "cc-switch.db")
+            db.execute("UPDATE providers SET is_current=0 WHERE app_type='codex'")
+            db.execute("UPDATE providers SET is_current=1 WHERE id=? AND app_type='codex'", (pid,))
+            db.commit()
+            db.close()
+
+        seed_provider(self.dir, "kimi", {}, agent="codex",
+                      settings={"auth": {}, "config": toml_cfg.replace("deepseek", "kimi")})
+        set_current("deepseek")
+        # A REAL login is never overwritten.
+        auth.write_text('{"tokens":{"id_token":"real"}}', encoding="utf-8")
+        A.op_switch("codex", "kimi")
+        self.assertIn("real", auth.read_text(encoding="utf-8"))
+
+        # Back to official: our marker is removed, a real login stays.
+        set_current("kimi")
+        auth.write_text(A._AUTH_PLACEHOLDER, encoding="utf-8")
+        A.op_switch("codex", "official")
+        self.assertFalse(auth.exists())
+        auth.write_text('{"tokens":{"id_token":"real"}}', encoding="utf-8")
+        set_current("kimi")
+        A.op_switch("codex", "deepseek")
+        set_current("deepseek")
+        A.op_switch("codex", "official")
+        self.assertTrue(auth.exists())
+
+    def test_codex_switch_to_official_disables_route(self):
+        seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": 'model_provider = "d"\n'})
+        seed_provider(self.dir, "codex-official", {}, agent="codex",
+                      settings={"auth": {}, "config": ""})
+        A.op_switch("codex", "official")
+        self.assertIn("proxy -a codex disable", " ".join(self.cli.calls[0].args))
+
+    def test_switch_to_current_is_idempotent_no_cli(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        A.op_switch("claude", "deepseek")
+        self.assertEqual(self.cli.calls, [])
+
+    def test_switch_to_empty_config_row_uses_pty_path(self):
+        # Empty-config rows (official/direct placeholders) prompt upstream —
+        # the adapter answers them under a pty via `script -qec` + "y".
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "claude-official", {})
+        self.cli.stdout_for = None
+        A.op_switch("claude", "claude-official")
+        call = self.cli.calls[0]
+        self.assertEqual(call.args[0], "script")
+        self.assertIn("provider switch claude-official", call.args[2])
+        self.assertEqual(call.stdin_text, "y\ny\n")
+
+    def test_switch_official_pseudo_target_maps_to_agent_row(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "claude-official", {})
+        A.op_switch("claude", "official")
+        self.assertIn("provider switch claude-official", self.cli.calls[0].args[2])
+
+    def test_switch_injection_guard_rejects_bad_ids(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "bad; rm -rf /", {})
+        with self.assertRaises(A.AdapterError) as ctx:
+            A.op_switch("claude", "bad; rm -rf /")
+        self.assertEqual(ctx.exception.code, A.ERR_BAD_REQUEST)
+        self.assertEqual(self.cli.calls, [])
+
+    def test_switch_unknown_provider(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        with self.assertRaises(A.AdapterError) as ctx:
+            A.op_switch("claude", "ghost")
+        self.assertEqual(ctx.exception.code, A.ERR_NOT_FOUND)
+
+    def test_main_switch_envelope(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "zhipu", {"ANTHROPIC_BASE_URL": "https://z"})
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = A.main(["switch", "--agent", "claude", "--id", "zhipu"])
+        self.assertEqual(rc, 0)
+        env = json.loads(buf.getvalue())
+        self.assertTrue(env["ok"])
+        self.assertEqual(env["op"], "switch")
 
 
 class DeleteTests(AdapterTestCase):

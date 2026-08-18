@@ -421,7 +421,9 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
         claude_settings = [json.loads(raw) for app, raw, _ in rows if app == "claude"]
         codex_settings = [json.loads(raw) for app, raw, _ in rows if app == "codex"]
         self.assertTrue(all("env" in settings for settings in claude_settings))
-        self.assertTrue(all("auth" not in settings for settings in codex_settings))
+        # IDEA-4: codex rows MUST carry an auth object (upstream provider
+        # switch refuses rows without one).
+        self.assertTrue(all("auth" in settings for settings in codex_settings))
         self.assertTrue(
             all("wire_api = \"chat\"" in settings["config"]
                 for settings in codex_settings)

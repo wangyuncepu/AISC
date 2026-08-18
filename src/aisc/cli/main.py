@@ -313,6 +313,11 @@ def _build_parser() -> _AiscArgumentParser:
     _cc_switch_common(cse)
     cse.add_argument("provider_id", type=str, help="Provider ID to edit")
 
+    css = cssub.add_parser("switch", help="Activate a provider (make it current)",
+                           allow_abbrev=False)
+    _cc_switch_common(css)
+    css.add_argument("provider_id", type=str, help="Provider ID to activate")
+
     csd = cssub.add_parser("delete", help="Delete a provider", allow_abbrev=False)
     _cc_switch_common(csd)
     csd.add_argument("provider_id", type=str, help="Provider ID to delete")
@@ -1093,6 +1098,8 @@ def _cmd_cc_switch(
         data = cs_cmd.cmd_cc_switch_add(args)
     elif sub == "edit":
         data = cs_cmd.cmd_cc_switch_edit(args)
+    elif sub == "switch":
+        data = cs_cmd.cmd_cc_switch_switch(args)
     elif sub == "delete":
         data = cs_cmd.cmd_cc_switch_delete(args)
     else:

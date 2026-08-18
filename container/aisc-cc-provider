@@ -235,6 +235,28 @@ def _real_run_cli(
 run_cli = _real_run_cli
 
 
+def _real_run_raw(argv: list[str], input_text: str) -> subprocess.CompletedProcess:
+    """Run a raw argv WITHOUT the automatic `cc-switch` prefix (pty path).
+
+    Output still goes through redaction — no code path may emit a raw key.
+    """
+    completed = subprocess.run(
+        argv,
+        input=input_text,
+        capture_output=True,
+        text=True,
+        timeout=CLI_TIMEOUT_S,
+        env=dict(os.environ),
+    )
+    completed.stdout = redact(completed.stdout or "", [])
+    completed.stderr = redact(completed.stderr or "", [])
+    return completed
+
+
+# Injectable for tests (records argv instead of spawning).
+run_raw = _real_run_raw
+
+
 def _cli(args: list[str], *, stdin_text: str = "", secrets: list[str] | None = None,
          what: str = "cc-switch call") -> None:
     completed = run_cli(args, stdin_text, secrets or [])
@@ -334,7 +356,7 @@ def build_add_settings(
     if api_key:
         lines.append(f'api_key = "{api_key}"')
     lines.append("")
-    return str(request.get("name") or pid), {"config": "\n".join(lines)}
+    return str(request.get("name") or pid), {"auth": {}, "config": "\n".join(lines)}
 
 
 def _cli_add(
@@ -495,7 +517,7 @@ def _merge_patch(
     if key:
         lines.append(f'api_key = "{key}"')
     lines.append("")
-    result: dict[str, Any] = {"config": "\n".join(lines)}
+    result: dict[str, Any] = {"auth": {}, "config": "\n".join(lines)}
     for key_name, value in current_settings.items():
         if key_name not in result:
             result[key_name] = value  # e.g. codex "auth"
@@ -543,6 +565,109 @@ def op_edit(agent: str, provider_id: str, request: dict[str, Any]) -> list[dict[
     return op_list(agent)
 
 
+_PROVIDER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_]{0,63}$")
+
+# Pseudo target meaning "stop using the proxy provider, go back to the
+# direct-official row" (IDEA-4 manual round 3).
+OFFICIAL_TARGET = "official"
+_OFFICIAL_ROW_ID = {"claude": "claude-official", "codex": "codex-official"}
+
+
+def _cli_switch_empty_config(agent: str, provider_id: str) -> None:
+    """Switch to an EMPTY-config row (the official/direct placeholders).
+
+    Upstream prompts a confirmation on these rows — a non-tty exec dies with
+    "Prompt failed" (8a probe). Probed fix: run under a pty (`script -qec`,
+    util-linux) and answer "y". The id is SLUG-VALIDATED before it enters
+    the shell command string (injection guard).
+    """
+    if not _PROVIDER_ID_RE.match(provider_id):
+        raise AdapterError(ERR_BAD_REQUEST, f"invalid provider id: {provider_id!r}")
+    cmd = f"cc-switch -a {agent} provider switch {provider_id}"
+    completed = run_raw(["script", "-qec", cmd, "/dev/null"], "y\ny\n")
+    if completed.returncode != 0 or "Switched to provider" not in (completed.stdout or ""):
+        detail = (completed.stdout + completed.stderr).strip()[:300]
+        raise AdapterError(
+            ERR_CLI,
+            f"provider switch {provider_id} failed (exit {completed.returncode}): {detail}",
+        )
+
+
+_AUTH_PLACEHOLDER = '{"OPENAI_API_KEY":"AISC_PROXY_PLACEHOLDER"}'
+
+
+def _codex_auth_path() -> Path:
+    root = os.environ.get("CODEX_CONFIG_DIR") or os.environ.get("CODEX_HOME")
+    if not root:
+        raise AdapterError(ERR_BAD_REQUEST, "CODEX_CONFIG_DIR is not set")
+    return Path(root) / "auth.json"
+
+
+def _manage_codex_auth_placeholder(*, remove: bool) -> None:
+    """Interactive codex refuses to start without an auth.json (its own
+    onboarding wizard — IDEA-4 round 5 manual find). The placeholder carries
+    NO secret (the real key lives in the live-synced config.toml and the
+    local proxy injects upstream); a REAL login file is never touched, and
+    the marker is removed again when switching back to official."""
+    path = _codex_auth_path()
+    try:
+        existing = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+    except OSError:
+        return
+    if remove:
+        if existing == _AUTH_PLACEHOLDER:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return
+    if not existing:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_AUTH_PLACEHOLDER, encoding="utf-8")
+            os.chmod(path, 0o600)
+        except OSError:
+            pass  # best-effort: the wizard stays, but the switch itself holds
+
+
+def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
+    """Activate a provider (IDEA-4): official non-interactive `provider switch`.
+
+    ``official`` (pseudo target) = switch back to the agent's direct-official
+    row — the "cancel proxy" affordance. Real-config targets use the plain
+    CLI path; empty-config targets (official placeholders) go through the
+    pty path. Switching to the already-current provider is idempotent.
+    """
+    if provider_id == OFFICIAL_TARGET:
+        provider_id = _OFFICIAL_ROW_ID[agent]
+    snapshot = read_snapshot(agent)
+    row = next((r for r in snapshot if r["id"] == provider_id), None)
+    if row is None:
+        raise AdapterError(ERR_NOT_FOUND, f"provider not found: {provider_id}")
+    if row["is_current"]:
+        return op_list(agent)  # already active — idempotent success
+    secrets = snapshot_secrets(agent, snapshot)
+    if agent == "codex":
+        # Codex only reaches third-party providers through cc-switch's LOCAL
+        # proxy route (default OFF — without it codex talks to api.openai.com
+        # regardless of model_provider; probed on the real container). Toggle
+        # idempotently with the switch direction. The real API key rides the
+        # live-synced config.toml (model_providers.<id>.api_key); interactive
+        # codex ALSO demands an auth.json before it starts — manage a marker
+        # placeholder that never carries a secret and never touches a real
+        # ChatGPT login.
+        to_official = provider_id.endswith("-official")
+        route = "disable" if to_official else "enable"
+        _cli(["proxy", "-a", "codex", route], secrets=secrets,
+             what=f"codex proxy route {route}")
+        _manage_codex_auth_placeholder(remove=to_official)
+    if _settings_are_real(agent, row):
+        _cli_switch(agent, provider_id, secrets)
+    else:
+        _cli_switch_empty_config(agent, provider_id)
+    return op_list(agent)
+
+
 def op_delete(agent: str, provider_id: str) -> list[dict[str, Any]]:
     snapshot = read_snapshot(agent)
     row = next((r for r in snapshot if r["id"] == provider_id), None)
@@ -576,7 +701,7 @@ def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aisc-cc-provider")
-    parser.add_argument("op", choices=["list", "add", "edit", "delete"])
+    parser.add_argument("op", choices=["list", "add", "edit", "switch", "delete"])
     parser.add_argument("--agent", required=True, choices=list(AGENTS))
     parser.add_argument("--id", default=None, help="provider id (add/edit/delete)")
     args = parser.parse_args(argv)
@@ -610,6 +735,10 @@ def main(argv: list[str] | None = None) -> int:
             if not args.id:
                 raise AdapterError(ERR_BAD_REQUEST, "edit requires --id")
             providers = op_edit(args.agent, args.id, request)
+        elif args.op == "switch":
+            if not args.id:
+                raise AdapterError(ERR_BAD_REQUEST, "switch requires --id")
+            providers = op_switch(args.agent, args.id)
         else:
             if not args.id:
                 raise AdapterError(ERR_BAD_REQUEST, "delete requires --id")

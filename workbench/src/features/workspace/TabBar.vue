@@ -405,7 +405,7 @@ function canReopen(s: TabSessionState): boolean {
           @keydown="onMenuKeydown"
         >
           <li
-            v-for="a in AGENTS"
+            v-for="a in AGENTS.filter((x) => x !== 'cc-switch')"
             :key="a"
             role="menuitem"
             tabindex="0"

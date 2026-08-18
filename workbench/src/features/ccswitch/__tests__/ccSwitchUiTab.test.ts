@@ -16,6 +16,7 @@ vi.mock("../../../lib/ipc", () => ({
   ccSwitchProviders: vi.fn(),
   ccSwitchAdd: vi.fn(),
   ccSwitchEdit: vi.fn(),
+  ccSwitchSwitch: vi.fn(),
   ccSwitchDelete: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -92,6 +93,60 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     await w.findAll(".agent-toggle button")[1]!.trigger("click");
     await vi.waitFor(() => expect(ipc.ccSwitchProviders).toHaveBeenCalledTimes(2));
     expect(vi.mocked(ipc.ccSwitchProviders).mock.calls[1]![2]).toBe("codex");
+    w.unmount();
+  });
+
+  it("clicking a non-current row activates it and shows feedback", async () => {
+    setup();
+    vi.mocked(ipc.ccSwitchSwitch).mockResolvedValue(RESULT(["deepseek", "zhipu"]));
+    const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
+    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
+    // Row 1 (zhipu) is not current — clicking it activates.
+    await w.findAll(".row")[1]!.trigger("click");
+    await vi.waitFor(() => expect(ipc.ccSwitchSwitch).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(ipc.ccSwitchSwitch).mock.calls[0]![3]).toBe("zhipu");
+    await vi.waitFor(() =>
+      expect(w.find(".banner.ok").text()).toContain("已切换到"));
+    w.unmount();
+  });
+
+  it("rows without a base_url are hidden (direct-official placeholders)", async () => {
+    setup();
+    const bare = RESULT(["deepseek", "zhipu"]);
+    bare.providers[1]!.base_url = "";
+    vi.mocked(ipc.ccSwitchProviders).mockResolvedValue(bare);
+    const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
+    // Only the activatable + current rows render; the bare row is gone.
+    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(1));
+    expect(w.find(".hidden-note").exists()).toBe(true);
+    w.unmount();
+  });
+
+  it("clicking the current row offers cancel-proxy → official direct", async () => {
+    setup();
+    vi.mocked(ipc.ccSwitchSwitch).mockResolvedValue(RESULT(["zhipu"]));
+    const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
+    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
+    await w.findAll(".row")[0]!.trigger("click");
+    const { confirm } = await import("@tauri-apps/plugin-dialog");
+    await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(ipc.ccSwitchSwitch).toHaveBeenCalledTimes(1));
+    // Pseudo target flows to the adapter, not a row id.
+    expect(vi.mocked(ipc.ccSwitchSwitch).mock.calls[0]![3]).toBe("official");
+    await vi.waitFor(() =>
+      expect(w.find(".banner.ok").text()).toContain("官方直连"));
+    w.unmount();
+  });
+
+  it("declining the cancel confirm sends nothing", async () => {
+    setup();
+    const { confirm } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(confirm).mockResolvedValueOnce(false);
+    const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
+    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
+    await w.findAll(".row")[0]!.trigger("click");
+    await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(ipc.ccSwitchSwitch).not.toHaveBeenCalled();
     w.unmount();
   });
 

@@ -93,6 +93,13 @@ class HostLayerTests(unittest.TestCase):
         host.delete_provider(RUNTIME, "claude", "kimi", self.tmp.name, self.exec)
         self.assertIn("delete --agent claude --id kimi", " ".join(self.exec.argv))
 
+    def test_switch_addressing(self):
+        self.exec.envelope = {**ENVELOPE_OK, "op": "switch"}
+        host.switch_provider(RUNTIME, "claude", "zhipu",
+                              self.tmp.name, self.exec)
+        self.assertIn("switch --agent claude --id zhipu", " ".join(self.exec.argv))
+        self.assertFalse(self.exec.input_text)  # no request body
+
     def test_adapter_error_maps_to_cli_error_with_stable_code(self):
         self.exec.envelope = {
             "schema": "aisc.cc-switch-provider/v1", "operation_id": "op-2",
