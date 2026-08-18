@@ -41,7 +41,7 @@ use runtime::{
     build_image, cancel_build, cancel_runtime_start, cc_switch_add, cc_switch_delete,
     cc_switch_edit, cc_switch_providers, cc_switch_switch, get_provider_status, list_runtimes,
     remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_docker,
-    start_runtime, stop_runtime, BuildOp, OpMutexes, StartOp,
+    start_runtime, stop_runtime, BuildOps, OpMutexes, StartOps,
 };
 use session::{
     ack_session_exit, close_session, open_session, resize_session, shutdown_workbench,
@@ -61,8 +61,8 @@ pub fn run(cli_arg: Option<String>) {
         .plugin(tauri_plugin_notification::init())
         .manage(cli_arg_state)
         .manage(SessionRegistry::default())
-        .manage(StartOp::default())
-        .manage(BuildOp::default())
+        .manage(StartOps::default())
+        .manage(BuildOps::default())
         .manage(OpMutexes::default())
         .invoke_handler(tauri::generate_handler![
             cli_discover,

@@ -386,7 +386,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   async function cancelBuild() {
     try {
-      await ipc.cancelBuild();
+      await ipc.cancelBuild(buildTag.value);
     } catch {
       /* best-effort */
     }
@@ -1382,7 +1382,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   async function cancelStart() {
     try {
-      await ipc.cancelRuntimeStart();
+      await ipc.cancelRuntimeStart(runtimeId.value);
     } catch {
       /* swallow; startFromSummary will resolve with cancelled */
     }

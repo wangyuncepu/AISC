@@ -35,16 +35,50 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
 const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Cancellation token for the in-flight `start_runtime` operation (02 §三:
-/// every async operation has a cancellation token). One at a time - S2.1.a is
-/// single-session. Newtype wrapper so it is a distinct managed state from
-/// `BuildOp` (Tauri keys state by concrete type).
+/// Cancellation tokens for in-flight `start_runtime` operations, keyed by
+/// runtime_id (02 §三: every async operation has a cancellation token).
+/// IDEA-3 (3b): keyed per runtime so concurrent workspace starts never
+/// clobber each other's token — the pre-3b single `Option` meant a second
+/// start replaced the first's token and `cancel_runtime_start` could cancel
+/// the wrong op. Newtype wrappers keep start/build as distinct managed
+/// states (Tauri keys state by concrete type).
 #[derive(Default, Clone)]
-pub struct StartOp(pub Arc<Mutex<Option<CancellationToken>>>);
+pub struct StartOps(pub Arc<Mutex<HashMap<String, CancellationToken>>>);
 
-/// Cancellation token for the in-flight `build_image` operation.
+/// Cancellation tokens for in-flight `build_image` operations, keyed by tag.
 #[derive(Default, Clone)]
-pub struct BuildOp(pub Arc<Mutex<Option<CancellationToken>>>);
+pub struct BuildOps(pub Arc<Mutex<HashMap<String, CancellationToken>>>);
+
+type OpTokenMap = Arc<Mutex<HashMap<String, CancellationToken>>>;
+
+/// Register an op's token under its key (a same-key restart replaces the
+/// previous token, mirroring the pre-3b single-slot semantics).
+fn insert_op(map: &OpTokenMap, key: &str, token: CancellationToken) {
+    if let Ok(mut g) = map.lock() {
+        g.insert(key.to_string(), token);
+    }
+}
+
+/// Drop a settled op's token; a late cancel of this key is then a no-op.
+fn remove_op(map: &OpTokenMap, key: &str) {
+    if let Ok(mut g) = map.lock() {
+        g.remove(key);
+    }
+}
+
+/// Cancel the op registered under `key` (no-op when it already settled).
+fn cancel_op(map: &OpTokenMap, key: &str) -> bool {
+    match map.lock() {
+        Ok(g) => match g.get(key) {
+            Some(t) => {
+                t.cancel();
+                true
+            }
+            None => false,
+        },
+        Err(_) => false,
+    }
+}
 
 /// Per-runtime operation mutexes (03 §九.1: each runtime ID has an independent
 /// operation mutex; different runtimes run concurrently). Keyed by runtime_id.
@@ -511,11 +545,10 @@ pub async fn start_runtime(
     scope: Option<String>,
 ) -> Result<RuntimeStartResult, WorkbenchError> {
     let pin = resolve_pin(&app)?;
-    let start_op = app.state::<StartOp>().inner().clone();
+    let start_ops = app.state::<StartOps>().inner().clone();
     let cancel = CancellationToken::new();
-    if let Ok(mut g) = start_op.0.lock() {
-        *g = Some(cancel.clone());
-    }
+    let start_key = runtime_id.clone();
+    insert_op(&start_ops.0, &start_key, cancel.clone());
     let image = image.unwrap_or_else(|| "super-claude:latest".to_string());
     let network = network.unwrap_or_else(|| "direct".to_string());
     let scope = scope.unwrap_or_else(|| "project".to_string());
@@ -539,9 +572,7 @@ pub async fn start_runtime(
     ];
     let env = run_control(&pin, argv, START_TIMEOUT, cancel).await;
     // Clear the in-flight token regardless of outcome.
-    if let Ok(mut g) = start_op.0.lock() {
-        *g = None;
-    }
+    remove_op(&start_ops.0, &start_key);
     let env = env?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
@@ -552,13 +583,9 @@ pub async fn start_runtime(
 }
 
 #[tauri::command]
-pub async fn cancel_runtime_start(app: AppHandle) -> Result<(), WorkbenchError> {
-    let start_op = app.state::<StartOp>().inner().clone();
-    if let Ok(g) = start_op.0.lock() {
-        if let Some(t) = g.as_ref() {
-            t.cancel();
-        }
-    }
+pub async fn cancel_runtime_start(app: AppHandle, runtime_id: String) -> Result<(), WorkbenchError> {
+    let start_ops = app.state::<StartOps>().inner().clone();
+    cancel_op(&start_ops.0, &runtime_id);
     Ok(())
 }
 
@@ -667,11 +694,10 @@ pub async fn build_image(
     on_event: Channel<BuildEvent>,
 ) -> Result<(), WorkbenchError> {
     let pin = resolve_pin(&app)?;
-    let build_op = app.state::<BuildOp>().inner().clone();
+    let build_ops = app.state::<BuildOps>().inner().clone();
     let cancel = CancellationToken::new();
-    if let Ok(mut g) = build_op.0.lock() {
-        *g = Some(cancel.clone());
-    }
+    let build_key = tag.clone();
+    insert_op(&build_ops.0, &build_key, cancel.clone());
 
     let (tx, mut rx) = mpsc::channel::<BuildEvent>(256);
     // Bridge mpsc -> Tauri Channel.
@@ -686,20 +712,14 @@ pub async fn build_image(
     let argv = vec!["build".into(), "--tag".into(), tag, "--events".into()];
     let result = run_build_stream(&pin, argv, BUILD_TIMEOUT, cancel, tx).await;
 
-    if let Ok(mut g) = build_op.0.lock() {
-        *g = None;
-    }
+    remove_op(&build_ops.0, &build_key);
     result
 }
 
 #[tauri::command]
-pub async fn cancel_build(app: AppHandle) -> Result<(), WorkbenchError> {
-    let build_op = app.state::<BuildOp>().inner().clone();
-    if let Ok(g) = build_op.0.lock() {
-        if let Some(t) = g.as_ref() {
-            t.cancel();
-        }
-    }
+pub async fn cancel_build(app: AppHandle, tag: String) -> Result<(), WorkbenchError> {
+    let build_ops = app.state::<BuildOps>().inner().clone();
+    cancel_op(&build_ops.0, &tag);
     Ok(())
 }
 
@@ -967,6 +987,43 @@ async fn install_docker_desktop_bundled(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- IDEA-3 (3b): keyed op-token map (concurrent workspaces) ---
+
+    #[test]
+    fn op_tokens_are_keyed_and_independent() {
+        let map: OpTokenMap = Default::default();
+        let (a, b) = (CancellationToken::new(), CancellationToken::new());
+        insert_op(&map, "runtime-a", a.clone());
+        insert_op(&map, "runtime-b", b.clone());
+
+        assert!(cancel_op(&map, "runtime-a"));
+        assert!(a.is_cancelled());
+        assert!(!b.is_cancelled(), "cancel must not bleed across keys");
+
+        remove_op(&map, "runtime-a");
+        assert!(!cancel_op(&map, "runtime-a"), "late cancel is a no-op");
+        assert!(cancel_op(&map, "runtime-b"), "other key still cancellable");
+    }
+
+    #[test]
+    fn op_cancel_of_unknown_key_is_a_noop() {
+        let map: OpTokenMap = Default::default();
+        assert!(!cancel_op(&map, "never-started"));
+        remove_op(&map, "never-started"); // removing an absent key must not panic
+    }
+
+    #[test]
+    fn op_same_key_restart_replaces_the_token() {
+        let map: OpTokenMap = Default::default();
+        let first = CancellationToken::new();
+        insert_op(&map, "rid", first.clone());
+        let second = CancellationToken::new();
+        insert_op(&map, "rid", second.clone());
+        assert!(cancel_op(&map, "rid"));
+        assert!(second.is_cancelled());
+        assert!(!first.is_cancelled(), "superseded token is untouched");
+    }
 
     #[test]
     fn inspect_argv_threads_workspace() {
