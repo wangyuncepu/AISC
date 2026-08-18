@@ -91,7 +91,8 @@ class RecordingCli:
         for marker, message in self.fail_on.items():
             if marker in " ".join(args):
                 return subprocess.CompletedProcess(args, 1, stdout="", stderr=message)
-        return subprocess.CompletedProcess(args, 0, stdout="✓ ok (API Key: sk-leak)", stderr="")
+        stdout = "Switched to provider 'x'\n✓ ok (API Key: sk-leak)"
+        return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
     def argv(self) -> list[list[str]]:
         return [c.args for c in self.calls]
@@ -305,11 +306,29 @@ class SwitchTests(AdapterTestCase):
         A.op_switch("claude", "deepseek")
         self.assertEqual(self.cli.calls, [])
 
-    def test_switch_to_unconfigured_provider_fails_closed(self):
+    def test_switch_to_empty_config_row_uses_pty_path(self):
+        # Empty-config rows (official/direct placeholders) prompt upstream —
+        # the adapter answers them under a pty via `script -qec` + "y".
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
-        seed_provider(self.dir, "bare", {"ANTHROPIC_MODEL": "m"})  # no BASE_URL
+        seed_provider(self.dir, "claude-official", {})
+        self.cli.stdout_for = None
+        A.op_switch("claude", "claude-official")
+        call = self.cli.calls[0]
+        self.assertEqual(call.args[0], "script")
+        self.assertIn("provider switch claude-official", call.args[2])
+        self.assertEqual(call.stdin_text, "y\ny\n")
+
+    def test_switch_official_pseudo_target_maps_to_agent_row(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "claude-official", {})
+        A.op_switch("claude", "official")
+        self.assertIn("provider switch claude-official", self.cli.calls[0].args[2])
+
+    def test_switch_injection_guard_rejects_bad_ids(self):
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "bad; rm -rf /", {})
         with self.assertRaises(A.AdapterError) as ctx:
-            A.op_switch("claude", "bare")
+            A.op_switch("claude", "bad; rm -rf /")
         self.assertEqual(ctx.exception.code, A.ERR_BAD_REQUEST)
         self.assertEqual(self.cli.calls, [])
 

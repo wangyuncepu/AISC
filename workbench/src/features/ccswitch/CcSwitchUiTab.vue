@@ -113,17 +113,27 @@ const switchedTo = ref("");
 let switchFlashTimer: number | null = null;
 
 function canActivate(p: CcSwitchProvider): boolean {
-  // Rows without a usable configuration (e.g. cc-switch's built-in
-  // claude-official with an empty env) cannot be activated — the adapter
-  // would fail closed; the UI simply does not offer the click.
-  return !p.is_current && busy.value === "" && Boolean(p.base_url);
+  if (busy.value !== "") return false;
+  // A current PROXY row offers "cancel proxy" (click → confirm → official
+  // direct). Non-current rows need a usable configuration (no base_url =
+  // cc-switch's official/direct placeholders — hidden, see visibleProviders).
+  return p.is_current ? Boolean(p.base_url) : Boolean(p.base_url);
 }
 
 async function activate(p: CcSwitchProvider): Promise<void> {
   if (!canActivate(p)) return;
-  const ok = await ui.activate(store.workspace, store.runtimeId, p.id);
+  let target = p.id;
+  if (p.is_current) {
+    // Clicking the active row = the cancel-proxy affordance (IDEA-4 round 3):
+    // confirm, then switch to the direct-official row via the pseudo target.
+    const ok = await confirm(t("ccswitch.cancelProxyConfirm", { name: p.name || p.id }));
+    if (!ok) return;
+    target = "official";
+  }
+  const ok = await ui.activate(store.workspace, store.runtimeId, target);
   if (ok) {
-    switchedTo.value = p.name || p.id;
+    switchedTo.value =
+      target === "official" ? t("ccswitch.officialDirect") : (p.name || p.id);
     if (switchFlashTimer !== null) window.clearTimeout(switchFlashTimer);
     switchFlashTimer = window.setTimeout(() => (switchedTo.value = ""), 3000);
     // Sidebar G-12 cache follows the live switch (both agents are valid).
@@ -191,9 +201,9 @@ onBeforeUnmount(() => {
         v-for="p in visibleProviders"
         :key="p.id"
         class="row"
-        :class="{ current: p.is_current, activatable: canActivate(p) }"
+        :class="{ current: p.is_current, activatable: canActivate(p), cancelable: p.is_current && p.base_url }"
         :title="p.is_current
-          ? t('ccswitch.currentHint')
+          ? t('ccswitch.cancelProxyHint')
           : p.base_url ? t('ccswitch.activateHint') : t('ccswitch.notConfiguredHint')"
         @click="activate(p)"
       >
@@ -311,6 +321,7 @@ onBeforeUnmount(() => {
 .row.current { background: var(--surface-2); }
 .row.activatable { cursor: pointer; }
 .row.activatable:hover { background: var(--surface-hover); }
+.row.cancelable .cur.on { cursor: pointer; }
 .cur { color: var(--text-faint); font-size: var(--font-xs); }
 .cur.on { color: var(--accent); font-weight: 600; }
 .banner.ok { background: var(--success-bg); color: var(--success); }

@@ -543,27 +543,59 @@ def op_edit(agent: str, provider_id: str, request: dict[str, Any]) -> list[dict[
     return op_list(agent)
 
 
+_PROVIDER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_]{0,63}$")
+
+# Pseudo target meaning "stop using the proxy provider, go back to the
+# direct-official row" (IDEA-4 manual round 3).
+OFFICIAL_TARGET = "official"
+_OFFICIAL_ROW_ID = {"claude": "claude-official", "codex": "codex-official"}
+
+
+def _cli_switch_empty_config(agent: str, provider_id: str) -> None:
+    """Switch to an EMPTY-config row (the official/direct placeholders).
+
+    Upstream prompts a confirmation on these rows — a non-tty exec dies with
+    "Prompt failed" (8a probe). Probed fix: run under a pty (`script -qec`,
+    util-linux) and answer "y". The id is SLUG-VALIDATED before it enters
+    the shell command string (injection guard).
+    """
+    if not _PROVIDER_ID_RE.match(provider_id):
+        raise AdapterError(ERR_BAD_REQUEST, f"invalid provider id: {provider_id!r}")
+    cmd = f"cc-switch -a {agent} provider switch {provider_id}"
+    completed = run_cli(
+        ["script", "-qec", cmd, "/dev/null"],
+        "y\ny\n",
+        [],
+    )
+    if completed.returncode != 0 or "Switched to provider" not in (completed.stdout or ""):
+        detail = (completed.stdout + completed.stderr).strip()[:300]
+        raise AdapterError(
+            ERR_CLI,
+            f"provider switch {provider_id} failed (exit {completed.returncode}): {detail}",
+        )
+
+
 def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
     """Activate a provider (IDEA-4): official non-interactive `provider switch`.
 
-    Guards: the target must exist and carry REAL configuration (an
-    empty-config target makes the CLI prompt on a non-tty — 8a probe);
-    switching to the already-current provider is an idempotent no-op.
+    ``official`` (pseudo target) = switch back to the agent's direct-official
+    row — the "cancel proxy" affordance. Real-config targets use the plain
+    CLI path; empty-config targets (official placeholders) go through the
+    pty path. Switching to the already-current provider is idempotent.
     """
+    if provider_id == OFFICIAL_TARGET:
+        provider_id = _OFFICIAL_ROW_ID[agent]
     snapshot = read_snapshot(agent)
     row = next((r for r in snapshot if r["id"] == provider_id), None)
     if row is None:
         raise AdapterError(ERR_NOT_FOUND, f"provider not found: {provider_id}")
     if row["is_current"]:
         return op_list(agent)  # already active — idempotent success
-    if not _settings_are_real(agent, row):
-        raise AdapterError(
-            ERR_BAD_REQUEST,
-            f"provider {provider_id} has no usable configuration to switch to "
-            f"(set its base URL / key first)",
-        )
     secrets = snapshot_secrets(agent, snapshot)
-    _cli_switch(agent, provider_id, secrets)
+    if _settings_are_real(agent, row):
+        _cli_switch(agent, provider_id, secrets)
+    else:
+        _cli_switch_empty_config(agent, provider_id)
     return op_list(agent)
 
 
