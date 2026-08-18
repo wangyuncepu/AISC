@@ -1368,14 +1368,60 @@ SectionEnd
 ; ($DockerCleanupSkipped) and returns — the uninstall never fails here, and
 ; un.onUnInstSuccess surfaces the manual commands. No --format anywhere:
 ; double braces are handlebars in this template.
-Function un.CleanDockerResources
+; KI-4 manual-test finding (2026-08-18): a Docker Desktop installed to a
+; NON-DEFAULT path was invisible to the two hardcoded locations. Discovery
+; chain: 1) `where docker` (the Desktop installer puts resources\bin on PATH,
+; which covers every custom location it knows about); 2) the two default
+; install roots; 3) the Docker Desktop uninstall-registry InstallLocation
+; (mirrors CheckDocker). Writes the absolute path to $DockerExe, "" if none.
+Function un.FindDockerCli
   StrCpy $DockerExe ""
-  ; Known locations only (mirrors CheckDocker): machine MSI + per-user winget.
+  nsExec::ExecToStack 'where docker'
+  Pop $0
+  Pop $1
+  ${If} $0 = 0
+    ; first line of `where` output = an absolute docker.exe path
+    ${Do}
+      StrCpy $2 $1 1
+      ${If} $2 == "\r"
+      ${OrIf} $2 == "\n"
+      ${OrIf} $2 == ""
+        ${Break}
+      ${EndIf}
+      StrCpy $DockerExe "$DockerExe$2"
+      StrCpy $1 $1 "" 1
+    ${Loop}
+  ${EndIf}
+  ${If} $DockerExe != ""
+  ${AndIf} ${FileExists} $DockerExe
+    Return
+  ${EndIf}
+  StrCpy $DockerExe ""
   ${If} ${FileExists} "$PROGRAMFILES64\Docker\Docker\resources\bin\docker.exe"
     StrCpy $DockerExe "$PROGRAMFILES64\Docker\Docker\resources\bin\docker.exe"
   ${ElseIf} ${FileExists} "$LOCALAPPDATA\Docker\resources\bin\docker.exe"
     StrCpy $DockerExe "$LOCALAPPDATA\Docker\resources\bin\docker.exe"
+  ${Else}
+    ; registry fallback: Docker Desktop's InstallLocation is the dir holding
+    ; Docker Desktop.exe; docker.exe sits under resources\bin below it.
+    SetRegView 64
+    ReadRegStr $5 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
+    ${If} $5 == ""
+      ReadRegStr $5 HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
+    ${EndIf}
+    SetRegView 32
+    ${If} $5 == ""
+      ReadRegStr $5 HKLM "SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
+    ${EndIf}
+    ${If} $5 != ""
+    ${AndIf} ${FileExists} "$5\resources\bin\docker.exe"
+      StrCpy $DockerExe "$5\resources\bin\docker.exe"
+    ${EndIf}
   ${EndIf}
+FunctionEnd
+
+Function un.CleanDockerResources
+  Call un.FindDockerCli
   ${If} $DockerExe == ""
     DetailPrint "$(DOCKER_CLEAN_UNREACHABLE): docker.exe not found"
     StrCpy $DockerCleanupSkipped 1

@@ -29,7 +29,19 @@
   `rm -f` + `super-claude:latest` `rmi -f`；不可达则跳过、完成页弹
   手动命令；模板禁用 `--format`——双大括号是 handlebars）；/UPDATE
   全跳过；CI smoke 补「静默卸载数据根必须保留」断言（勾选仅 GUI 存在，
-  删除严格 opt-in）。
+  删除严格 opt-in）。**手测修复轮（2026-08-18）**：①Docker 勾选框不渲染
+  ——`WM_GETFONT` 把内层对话框 HWND 覆盖成字体句柄，第二个 `CreateWindowEx`
+  拿字体句柄当父窗口静默失败（`ccd5dbc`：字体改存 `$8`）；②Docker Desktop
+  **非默认路径**识别不到 docker.exe——新增 `un.FindDockerCli` 探测链：`where
+  docker`（PATH，覆盖自定义安装）→ 两个默认位 → Docker Desktop 卸载注册表
+  InstallLocation 回退。
+- **KI-5 升级用户 PATH 冲突提示（2026-08-18 手测记录，待产品决策）**：用过
+  旧版（uv/pip 装过 aisc，如 `C:\Users\<user>\.local\bin\aisc.exe`）的机器
+  安装新 Workbench 时，G-18 冲突探测按设计（05 §5.2.5 never-shadow）拒绝把
+  安装目录加入 PATH 并弹提示。行为本身符合设计（不破坏用户现有环境），但
+  旧版升级用户永远拿不到 Workbench 自带的新 CLI on PATH。可选方向：保持现
+  状只记录 / 检测到"旧版本 aisc 同源"时询问接管 PATH / 文档说明。**需用户
+  拍板后另开一轮**。
 - **挂账：容器随镜像同步更新**（KI-4 衍生，用户 2026-08-18 拍板本轮
   不动）：`config_fingerprint` 只含镜像名（`super-claude:latest`），同
   tag 重建镜像后旧容器照旧复用、继续跑旧镜像层。方向：fingerprint 纳入
