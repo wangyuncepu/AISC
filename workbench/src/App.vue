@@ -486,6 +486,7 @@ button.danger:hover:not(:disabled) { background: var(--error-hover); }
 /* Stage 6 (UX-02): layout tiers driven by the effective app-box width. */
 .app[data-tier="compact"] .topbar { gap: var(--space-2); padding: 4px var(--space-2); }
 .app[data-tier="compact"] .topbar .status { display: none; } /* keep the brand readable */
-.app[data-tier="compact"] .sidebar { width: 200px; min-width: 200px; padding: var(--space-2); }
-.app[data-tier="compact"] .explorer-drawer { width: min(320px, 100%); }
+.app[data-tier="compact"] .sidebar { padding: var(--space-2); }
+.app[data-tier="compact"] .explorer-dock { width: min(280px, 45%); min-width: 200px; }
+.app[data-tier="compact"] .status-drawer { width: min(300px, 100%); }
 </style>

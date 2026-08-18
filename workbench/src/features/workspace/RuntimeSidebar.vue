@@ -266,16 +266,17 @@ function copyDone(key: string): boolean {
 </template>
 
 <style scoped>
+/* 2026-08-18 样式对调：本组件从左侧固定列变右侧悬浮抽屉的内容——填充
+ * WorkspaceView 的 .status-drawer（容器画边框/阴影），不再自带固定宽度。 */
 .sidebar {
-  width: 232px;
-  min-width: 200px; /* UX-02: explicit min so compact never collapses it */
-  flex-shrink: 0;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-3);
   background: var(--surface);
-  border-right: 1px solid var(--border);
   color: var(--text-2);
   font-size: var(--font-sm);
   overflow-y: auto;

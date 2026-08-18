@@ -146,6 +146,9 @@ export const zhCN = {
   "sidebar.providerN/a": "不适用",
   "sidebar.stopRuntime": "停止 Runtime",
   "sidebar.cancel": "取消",
+  "sidebar.drawerTitle": "状态信息",
+  "sidebar.drawerOpen": "展开状态信息",
+  "sidebar.drawerClose": "收起状态信息",
 
   // --- tab bar (TabBar.vue) ---
   "tabbar.idle": "未启动",
