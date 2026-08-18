@@ -25,7 +25,13 @@ use crate::settings::Settings;
 const PROTOCOL: &str = "aisc.cli/v1";
 const MAX_STDOUT: usize = 8 * 1024 * 1024; // 8 MB control-plane cap (05 §九.1)
 const MAX_STDERR: usize = 64 * 1024; // 64 KB summary for redacted technical_detail
-const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
+/// `aisc version` probe budget. KI-3 (2026-08-18): a COLD one-file sidecar
+/// (first execution after install/dev-root reset) unpacks to %TEMP% and eats
+/// a full real-time AV scan of the exe — that can exceed the old 15s budget,
+/// marking every candidate invalid ("CLI not found" in the wizard/picker;
+/// re-detect passed because the scan verdict was cached). 45s only bites in
+/// the pathological cold case (wizard spinner); warm probes stay instant.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(45);
 
 const EXPECTED_RUNTIME: &str = "aisc.runtime/v1";
 const EXPECTED_SESSION: &str = "aisc.session/v1";
@@ -453,6 +459,9 @@ fn candidate_from_envelope(path: String, source: CandidateSource, env: Envelope)
 }
 
 /// Validate a candidate: executable check + `version --format json`. IO.
+/// KI-3: a TIMEOUT gets exactly one retry — the timed-out cold spawn has
+/// already triggered the AV scan/unpack, so the retry is warm in practice;
+/// genuinely broken candidates still fail on the second probe.
 pub async fn validate_candidate(path: PathBuf, source: CandidateSource) -> Candidate {
     let path_str = path.to_string_lossy().into_owned();
     if !is_executable(&path) {
@@ -466,8 +475,13 @@ pub async fn validate_candidate(path: PathBuf, source: CandidateSource) -> Candi
         };
     }
     let argv = vec!["version".into(), "--format".into(), "json".into()];
-    let cancel = CancellationToken::new();
-    match run_control(&path, argv, VERSION_TIMEOUT, cancel).await {
+    let mut attempt = run_control(&path, argv.clone(), VERSION_TIMEOUT, CancellationToken::new()).await;
+    if let Err(e) = &attempt {
+        if e.code == "WB_ERR_CLI_TIMEOUT" {
+            attempt = run_control(&path, argv, VERSION_TIMEOUT, CancellationToken::new()).await;
+        }
+    }
+    match attempt {
         Ok(env) => candidate_from_envelope(path_str, source, env),
         Err(e) => Candidate {
             path: path_str,
@@ -833,7 +847,20 @@ pub async fn cli_discover(
             false,
             None,
         ),
-        (None, 0) => (None, false, Some(WorkbenchError::cli_not_found())),
+        // KI-3: carry per-candidate probe results so "CLI not found" is
+        // diagnosable from the gate (which candidate, which error code).
+        (None, 0) => {
+            let mut err = WorkbenchError::cli_not_found();
+            let detail = candidates
+                .iter()
+                .map(|c| format!("{} [{}] -> {}", c.path, source_label(c.source), c.error.as_deref().unwrap_or("?")))
+                .collect::<Vec<_>>()
+                .join("; ");
+            if !detail.is_empty() {
+                err = err.with_detail(detail);
+            }
+            (None, false, Some(err))
+        }
         (None, _) => (None, true, None), // >1 valid, no pin -> user must confirm
     };
 
@@ -896,10 +923,13 @@ pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, 
     // cli_not_found.
     let raw = enumerate_candidates(None, None);
     let mut valid: Vec<PathBuf> = Vec::new();
+    let mut probed: Vec<Candidate> = Vec::new();
     for (p, _) in raw {
-        if validate_candidate(p.clone(), CandidateSource::PathEnv).await.valid {
+        let candidate = validate_candidate(p.clone(), CandidateSource::PathEnv).await;
+        if candidate.valid {
             valid.push(p);
         }
+        probed.push(candidate);
     }
     if let Some(first) = valid.first() {
         let report = negotiate(first, cancel).await;
@@ -909,7 +939,30 @@ pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, 
         }
         return Ok(report);
     }
-    Ok(failed_report(Some(WorkbenchError::cli_not_found())))
+    // KI-3: no valid candidate — say WHY each probe failed (path + error
+    // code), so a recurrence is diagnosable from the blocked gate instead of
+    // a bare "CLI not found". Empty candidate list stays a plain error.
+    let mut err = WorkbenchError::cli_not_found();
+    if !probed.is_empty() {
+        let detail = probed
+            .iter()
+            .map(|c| format!("{} [{}] -> {}", c.path, source_label(c.source), c.error.as_deref().unwrap_or("?")))
+            .collect::<Vec<_>>()
+            .join("; ");
+        err = err.with_detail(detail);
+    }
+    Ok(failed_report(Some(err)))
+}
+
+/// Short human label for a candidate source (diagnostic detail only). */
+fn source_label(source: CandidateSource) -> &'static str {
+    match source {
+        CandidateSource::Explicit => "explicit",
+        CandidateSource::Saved => "saved",
+        CandidateSource::PathEnv => "path",
+        CandidateSource::Platform => "platform",
+        CandidateSource::Sidecar => "sidecar",
+    }
 }
 
 #[cfg(test)]
