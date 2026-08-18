@@ -235,6 +235,28 @@ def _real_run_cli(
 run_cli = _real_run_cli
 
 
+def _real_run_raw(argv: list[str], input_text: str) -> subprocess.CompletedProcess:
+    """Run a raw argv WITHOUT the automatic `cc-switch` prefix (pty path).
+
+    Output still goes through redaction — no code path may emit a raw key.
+    """
+    completed = subprocess.run(
+        argv,
+        input=input_text,
+        capture_output=True,
+        text=True,
+        timeout=CLI_TIMEOUT_S,
+        env=dict(os.environ),
+    )
+    completed.stdout = redact(completed.stdout or "", [])
+    completed.stderr = redact(completed.stderr or "", [])
+    return completed
+
+
+# Injectable for tests (records argv instead of spawning).
+run_raw = _real_run_raw
+
+
 def _cli(args: list[str], *, stdin_text: str = "", secrets: list[str] | None = None,
          what: str = "cc-switch call") -> None:
     completed = run_cli(args, stdin_text, secrets or [])
@@ -562,11 +584,7 @@ def _cli_switch_empty_config(agent: str, provider_id: str) -> None:
     if not _PROVIDER_ID_RE.match(provider_id):
         raise AdapterError(ERR_BAD_REQUEST, f"invalid provider id: {provider_id!r}")
     cmd = f"cc-switch -a {agent} provider switch {provider_id}"
-    completed = run_cli(
-        ["script", "-qec", cmd, "/dev/null"],
-        "y\ny\n",
-        [],
-    )
+    completed = run_raw(["script", "-qec", cmd, "/dev/null"], "y\ny\n")
     if completed.returncode != 0 or "Switched to provider" not in (completed.stdout or ""):
         detail = (completed.stdout + completed.stderr).strip()[:300]
         raise AdapterError(

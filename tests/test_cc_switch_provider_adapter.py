@@ -112,6 +112,11 @@ class AdapterTestCase(unittest.TestCase):
         self._orig_cli = A.run_cli
         A.run_cli = self.cli
         self.addCleanup(setattr, A, "run_cli", self._orig_cli)
+        # The pty path uses the raw runner (no automatic cc-switch prefix);
+        # route it through the same recorder.
+        self._orig_raw = A.run_raw
+        A.run_raw = lambda argv, inp, _cli=self.cli: _cli(argv, inp, [])
+        self.addCleanup(setattr, A, "run_raw", self._orig_raw)
 
 
 class SnapshotAndRedactionTests(AdapterTestCase):
