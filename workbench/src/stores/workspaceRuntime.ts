@@ -96,7 +96,7 @@ export const SETTINGS_TAB_ID = "settings-tab";
 export const CC_SWITCH_UI_TAB_ID = "cc-switch-ui-tab";
 
 /** Session states that have reached a terminal outcome (no live PTY). */
-const TERMINAL_STATES: TabSessionState[] = ["exited", "failed", "disconnected"];
+export const TERMINAL_STATES: TabSessionState[] = ["exited", "failed", "disconnected"];
 
 function uuid(): string {
   return crypto.randomUUID();
@@ -113,6 +113,9 @@ export interface WorkspaceRuntimeDeps {
   /** Flush pending saves NOW (stopRuntime must persist the layout before it
    * clears tabs - G-07 2026-08-10). */
   flushSave(): Promise<void>;
+  /** IDEA-3 (3c): fired once when this instance reaches status "ready"
+   * (initTabs settle). The launcher instance materializes into a workspace. */
+  onReady?(): void;
 }
 
 /** IDEA-3 (3a): one workspace's runtime state machine — status, tabs, panes,
@@ -121,6 +124,8 @@ export interface WorkspaceRuntimeDeps {
  * A plain factory (NOT a pinia store): instances live inside the workspaces
  * store's list; the runtime facade forwards the active one. */
 export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
+  /** Stable instance id (never the workspace path — paths change mid-preflight). */
+  const id = uuid();
   const status = ref<WorkbenchStatus>("idle");
   const error = ref<WorkbenchError | null>(null);
 
@@ -292,6 +297,28 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   function backToPicker() {
     resetWorkspace();
     status.value = "picker";
+  }
+
+  /** IDEA-3 (3c): final teardown for a CLOSED workspace (closeWorkspace in
+   * the workspaces store). Releases the per-pane stream buffers — the only
+   * writer that ever did — and stops the instance-scoped timers, so removing
+   * a workspace bounds the memory it held (buffers were never GC'd before).
+   * The instance itself is dropped from the workspaces list right after. */
+  function dispose(): void {
+    stopTimer();
+    if (dockerRetryTimer !== null) {
+      window.clearTimeout(dockerRetryTimer);
+      dockerRetryTimer = null;
+    }
+    if (flushFrame !== null) {
+      window.cancelAnimationFrame(flushFrame);
+      flushFrame = null;
+    }
+    paneStreams.value = {};
+    paneStreamMeta.value = {};
+    streamCursor.value = {};
+    for (const k of Object.keys(pendingChunks)) delete pendingChunks[k];
+    for (const k of Object.keys(paneByteCounts)) delete paneByteCounts[k];
   }
 
   // S2.1.b: build the image with `aisc build --events` (05 §4.1).
@@ -846,6 +873,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     }
     status.value = "ready";
     scheduleSave();
+    deps.onReady?.(); // 3c: the launcher materializes into a workspace here
   }
 
   function findTab(tabId: string): Tab | undefined {
@@ -1477,6 +1505,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   }
 
   return {
+    id,
     status,
     error,
     workspace,
@@ -1559,6 +1588,8 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     stopConflictRuntime,
     removeConflictRuntime,
     retryFromConflict,
+    resetWorkspace,
+    dispose,
   };
 }
 
