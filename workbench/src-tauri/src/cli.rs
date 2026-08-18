@@ -962,7 +962,8 @@ pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, 
     if let Ok(pin) = crate::session::resolve_pin(&app) {
         return Ok(negotiate(&pin, cancel).await);
     }
-    // No pin: auto-select + persist (see auto_select_and_pin), then report.
+    // No pin — or a STALE one (pinned file deleted by uninstall/upgrade;
+    // resolve_pin errs on it, KI-3 round 3): auto-select + persist, then report.
     let first = auto_select_and_pin(&app).await?;
     Ok(negotiate(&first, cancel).await)
 }

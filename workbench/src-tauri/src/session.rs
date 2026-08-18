@@ -135,10 +135,22 @@ pub fn config_dir(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
 pub fn resolve_pin(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
     let dir = config_dir(app)?;
     let settings = Settings::load(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
+    pinned_cli(&settings).ok_or_else(WorkbenchError::cli_not_found)
+}
+
+/// The saved pin, but only while its file actually exists. KI-3 round 3
+/// (2026-08-18): uninstalling the installed Workbench deletes its sidecar
+/// `aisc.exe` while settings survive in the shared data root — a pin pointing
+/// at the deleted exe then poisons every CLI call (negotiate + commands all
+/// spawn a nonexistent binary). A pin whose file is gone is treated as no pin
+/// at all, so callers fall through to auto-discovery which re-pins a live
+/// candidate. Existence-only check (`is_file`): cheap, no subprocess; a
+/// present-but-broken pin still surfaces through the normal validate path.
+pub(crate) fn pinned_cli(settings: &Settings) -> Option<PathBuf> {
     settings
         .aisc_cli_path()
         .map(PathBuf::from)
-        .ok_or_else(WorkbenchError::cli_not_found)
+        .filter(|p| p.is_file())
 }
 
 /// Resolve the CLI for a command invocation. KI-3 round 2 (2026-08-18): the
@@ -147,7 +159,9 @@ pub fn resolve_pin(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
 /// `resolve_pin`, failed with a bare cli_not_found (recovers once negotiate
 /// writes the pin). This wrapper auto-selects and PERSISTS a candidate when
 /// the pin is absent (same selection negotiate makes), so no CLI consumer can
-/// lose that race. Use from async commands; `resolve_pin` stays for tests.
+/// lose that race. Round 3: `resolve_pin` now also fails on a STALE pin
+/// (pinned file deleted by uninstall/upgrade), so the same fallback re-heals
+/// it. Use from async commands.
 pub async fn resolve_cli(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
     match resolve_pin(app) {
         Ok(pin) => Ok(pin),
@@ -800,6 +814,27 @@ mod tests {
     use super::*;
     use crate::pty::REASON_PROCESS_EXIT;
     use tempfile::tempdir;
+
+    #[test]
+    fn pinned_cli_requires_existing_file() {
+        // KI-3 round 3: a pin is only a pin while its file exists — uninstall
+        // deletes the exe but the shared-data-root settings survive.
+        let dir = tempdir().unwrap();
+        let live = dir.path().join("aisc.exe");
+        std::fs::write(&live, b"").unwrap();
+
+        let mut present = Settings::default();
+        present.set_aisc_cli_path(Some(live.to_str().unwrap()));
+        assert_eq!(pinned_cli(&present), Some(live));
+
+        let mut stale = Settings::default();
+        stale.set_aisc_cli_path(Some(
+            dir.path().join("uninstalled-gone.exe").to_str().unwrap(),
+        ));
+        assert_eq!(pinned_cli(&stale), None);
+
+        assert_eq!(pinned_cli(&Settings::default()), None); // never pinned
+    }
 
     #[test]
     fn uuid_v4_validation() {
