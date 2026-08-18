@@ -2,8 +2,10 @@
 /**
  * IDEA-3 (3c): ONE workspace's view — the instance state chain (picker →
  * summary → starting → building → conflict → error → ready) plus the ready
- * workspace's internals (sidebar, TabBar, PaneTrees, virtual panes, explorer
- * drawer) moved out of App.vue.
+ * workspace's internals (explorer dock, TabBar, PaneTrees, virtual panes,
+ * status drawer) moved out of App.vue. 2026-08-18 样式对调: the Explorer is
+ * the resident LEFT dock; the runtime status info lives in a right floating
+ * drawer (default collapsed, weak ⓘ toggle).
  *
  * Mounts ONLY for the ACTIVE workspace instance (App keys it by instance id
  * so switching remounts). All existing ready-view components stay
@@ -42,7 +44,10 @@ const { t } = useI18n();
 const store = useRuntimeStore();
 const doctorStore = useDoctorStore();
 
-const showExplorer = ref(true);
+/** 2026-08-18 用户决策（样式对调）：资源管理器/产物框固定常驻左侧（原
+ * RuntimeSidebar 的固定列样式，无开关），状态信息栏变右侧悬浮抽屉
+ * （原资源管理器抽屉样式）——默认收起，右缘弱化 ⓘ 开关 + 抽屉内 ✕ 关闭。 */
+const showStatus = ref(false);
 
 // Stage 8e: the cc-switch Provider UI virtual pane — kept alive while hidden
 // so unsaved state survives switches. (The Settings pane is workspace-layer
@@ -218,15 +223,10 @@ function setPaneTreeRef(tabId: string) {
 
     <!-- Terminal workspace -->
     <div v-else-if="store.status === 'ready'" class="ready">
-      <RuntimeSidebar />
-      <button
-        class="explorer-toggle"
-        :title="t('explorer.tab.files')"
-        :aria-pressed="showExplorer"
-        @click="showExplorer = !showExplorer"
-      >
-        ☰
-      </button>
+      <!-- 2026-08-18 样式对调：Explorer 固定常驻左侧（dock，无开关） -->
+      <div class="explorer-dock">
+        <WorkspaceExplorer />
+      </div>
       <div class="main">
         <TabBar />
         <main class="terminal-area">
@@ -254,8 +254,30 @@ function setPaneTreeRef(tabId: string) {
           </div>
         </main>
       </div>
-      <div v-show="showExplorer" class="explorer-drawer">
-        <WorkspaceExplorer />
+      <!-- 弱化开关：右缘幽灵 ⓘ（抽屉打开时被抽屉覆盖，经抽屉内 ✕ 关闭） -->
+      <button
+        class="status-toggle"
+        :title="t('sidebar.drawerOpen')"
+        :aria-label="t('sidebar.drawerOpen')"
+        :aria-pressed="showStatus"
+        @click="showStatus = true"
+      >
+        ⓘ
+      </button>
+      <!-- 状态信息栏：右侧悬浮抽屉（原资源管理器抽屉样式），默认收起 -->
+      <div v-show="showStatus" class="status-drawer">
+        <div class="status-head">
+          <span>{{ t("sidebar.drawerTitle") }}</span>
+          <button
+            class="status-close"
+            :title="t('sidebar.drawerClose')"
+            :aria-label="t('sidebar.drawerClose')"
+            @click="showStatus = false"
+          >
+            ✕
+          </button>
+        </div>
+        <RuntimeSidebar />
       </div>
     </div>
 
@@ -292,31 +314,65 @@ function setPaneTreeRef(tabId: string) {
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: var(--bg); display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
 .settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }
-.explorer-toggle {
+/* 2026-08-18 样式对调：Explorer 固定停靠左列（原 RuntimeSidebar 的 dock 样式） */
+.explorer-dock {
+  width: 320px;
+  min-width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  background: var(--surface);
+  border-right: 1px solid var(--border-strong);
+}
+.explorer-dock > * { flex: 1; min-height: 0; min-width: 0; }
+/* 右缘弱化开关：幽灵样式，hover 才浮出 */
+.status-toggle {
   align-self: flex-start;
   margin-top: 4px;
   padding: 4px 6px;
-  background: var(--surface-3);
-  border: 1px solid var(--border-strong);
+  background: none;
+  border: none;
   border-radius: var(--radius-md);
-  color: var(--text-2);
+  color: var(--text-faint);
   cursor: pointer;
-  font-size: var(--font-sm);
+  font-size: var(--font-md);
 }
-.explorer-drawer {
+.status-toggle:hover { background: var(--surface-2); color: var(--text-2); }
+/* 状态信息栏：右侧悬浮抽屉（原资源管理器抽屉的浮层样式） */
+.status-drawer {
   position: absolute;
   top: 0;
   right: 0;
   bottom: 0;
-  width: 320px;
+  width: 300px;
   max-width: 100%;
   z-index: var(--z-drawer);
   display: flex;
+  flex-direction: column;
   background: var(--surface);
   border-left: 1px solid var(--border-strong);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
 }
-.explorer-drawer > * { flex: 1; min-height: 0; min-width: 0; }
+.status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.status-close {
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--font-sm);
+}
+.status-close:hover { background: var(--surface-2); color: var(--text); }
 .empty-tabs {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 10px; color: var(--text-muted); font-size: var(--font-md);

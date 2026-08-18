@@ -146,6 +146,9 @@ export const enUS: Record<string, string> = {
   "sidebar.providerN/a": "N/A",
   "sidebar.stopRuntime": "Stop Runtime",
   "sidebar.cancel": "Cancel",
+  "sidebar.drawerTitle": "Status",
+  "sidebar.drawerOpen": "Show status info",
+  "sidebar.drawerClose": "Hide status info",
 
   // --- tab bar (TabBar.vue) ---
   "tabbar.idle": "Idle",
