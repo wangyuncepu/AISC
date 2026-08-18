@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AISC Workbench",
-  "version": "2.1.5-dev",
+  "version": "2.1.6-dev",
   "identifier": "cn.aisc.workbench",
   "build": {
     "beforeDevCommand": "npm run dev",
