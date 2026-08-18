@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { watch } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { useRuntimeStore, SETTINGS_TAB_ID } from "../runtime";
+import { normalizePath } from "../tabLayout";
 import type { Tab } from "../../types";
 
 const mockIpc = vi.hoisted(() => ({
@@ -152,6 +153,8 @@ describe("facade shell-owned surface (3a)", () => {
     expect(mockIpc.saveHistory).toHaveBeenCalledTimes(1);
     const [, patch] = mockIpc.saveHistory.mock.calls[0] as [number, { workspaces: { path: string }[] }];
     expect(patch.workspaces).toHaveLength(1);
-    expect(patch.workspaces[0].path).toBe("C:\\tmp\\w"); // normalizePath form
+    // normalizePath is platform-dependent (backslashes on Windows): expect the
+    // function's own output, not a hardcoded separator form (CI runs Linux).
+    expect(patch.workspaces[0].path).toBe(normalizePath("C:/tmp/w"));
   });
 });
