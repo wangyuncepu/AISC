@@ -14,6 +14,12 @@
   （冷启动 sidecar 解包+杀软首扫兜底）+ `cli_not_found` 携带逐候选明细。
   **待最终复验**：从含修复的提交重建安装包后在干净环境复测安装→首跑
   全链路（当前 v2.1.6-dev draft 构建于 `65ba5d5`，不含本修复）。
+  - **KI-3 round 3（stale pin 自愈，2026-08-18）**：卸载安装版删掉 sidecar
+    `aisc.exe`，但共享数据根的 settings.json 残留死路径 pin → dev 模式所有
+    CLI 调用/negotiate 全挂（须手动重检才恢复）。已修：`resolve_pin` 对
+    pin 加存在性检查（`is_file`），失效即视为无 pin → `resolve_cli`/
+    `negotiate_capabilities` 落入 `auto_select_and_pin` 自动重发现并覆写
+    pin（`session::pinned_cli` + 单测）。属 KI-4 卸载配套家族的 dev 侧症状。
 - **KI-4 卸载/升级的配套资源管理**：aisc 卸载、升级时应同步处理 Docker
   镜像（super-claude 等）、数据根等配套资源（删除/重建）；如能同步
   更新已有 container 更好。需先定策略（默认清理 vs 询问保留——与
