@@ -205,6 +205,15 @@ jobs:
             $wsMarker = Join-Path $wsMarkerDir "workspace-marker.txt"
             Set-Content -Path $wsMarker -Value "survive-uninstall" -Encoding utf8
 
+            # KI-4: the REAL data root (Stage 7 layout) under
+            # %LOCALAPPDATA%\AISC. Silent uninstall never selects the
+            # confirm-page checkboxes (they only exist in GUI mode), so the
+            # data root must survive — deletion is strictly opt-in.
+            $dataRootCfg = Join-Path $env:LOCALAPPDATA "AISC\data\config"
+            New-Item -ItemType Directory -Force -Path $dataRootCfg | Out-Null
+            $dataRootMarker = Join-Path $dataRootCfg "data-root-marker.txt"
+            Set-Content -Path $dataRootMarker -Value "survive-silent-uninstall" -Encoding utf8
+
             # Upgrade: re-run the same installer (same version -> add/reinstall
             # maintenance flow; see PageReinstall in installer.nsi).
             $proc2 = Start-Process -FilePath $setup.FullName -ArgumentList "/S" -Wait -PassThru
@@ -224,6 +233,7 @@ jobs:
             if (Test-Path "$appDir\aisc-bundle") { throw "aisc-bundle still present after uninstall" }
             if (-not (Test-Path $appDataMarker)) { throw "app-data marker lost after uninstall" }
             if (-not (Test-Path $wsMarker)) { throw "workspace marker lost after uninstall" }
+            if (-not (Test-Path $dataRootMarker)) { throw "KI-4: data-root marker lost in SILENT uninstall (deletion is opt-in via the GUI checkbox)" }
             if (Test-Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AISC Workbench") {
               throw "uninstall registry key still present"
             }
@@ -236,4 +246,6 @@ jobs:
           } finally {
             # restore the runner's original user PATH
             Set-UserPath $origPath
+            # KI-4: drop the smoke data root so the runner stays clean
+            Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "AISC") -ErrorAction SilentlyContinue
           }

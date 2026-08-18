@@ -20,10 +20,34 @@
     pin 加存在性检查（`is_file`），失效即视为无 pin → `resolve_cli`/
     `negotiate_capabilities` 落入 `auto_select_and_pin` 自动重发现并覆写
     pin（`session::pinned_cli` + 单测）。属 KI-4 卸载配套家族的 dev 侧症状。
-- **KI-4 卸载/升级的配套资源管理**：aisc 卸载、升级时应同步处理 Docker
-  镜像（super-claude 等）、数据根等配套资源（删除/重建）；如能同步
-  更新已有 container 更好。需先定策略（默认清理 vs 询问保留——与
-    docs/todo.md「退出前询问是否保留 runtime」同族，可合并设计）。
+- **KI-4 卸载/升级的配套资源管理**：✅ **已修（2026-08-18，分支
+  `ki-4-uninstall-companions`，用户决策：两勾选默认不勾 / 引擎不可达
+  跳过+提示手动命令 / 容器同步本轮不动 / 暂不发布）**——①「删除应用
+  数据」勾选扩到真数据根 `%LOCALAPPDATA%\AISC`（Stage 7 布局；原 Tauri
+  路径只覆盖旧布局）；②新增「删除 Docker 容器与镜像」勾选（docker.exe
+  已知位置探测 + `docker version` 引擎 probe；`aisc-wb-*` 容器逐个
+  `rm -f` + `super-claude:latest` `rmi -f`；不可达则跳过、完成页弹
+  手动命令；模板禁用 `--format`——双大括号是 handlebars）；/UPDATE
+  全跳过；CI smoke 补「静默卸载数据根必须保留」断言（勾选仅 GUI 存在，
+  删除严格 opt-in）。**手测修复轮（2026-08-18）**：①Docker 勾选框不渲染
+  ——`WM_GETFONT` 把内层对话框 HWND 覆盖成字体句柄，第二个 `CreateWindowEx`
+  拿字体句柄当父窗口静默失败（`ccd5dbc`：字体改存 `$8`）；②Docker Desktop
+  **非默认路径**识别不到 docker.exe——新增 `un.FindDockerCli` 探测链：`where
+  docker`（PATH，覆盖自定义安装）→ 两个默认位 → Docker Desktop 卸载注册表
+  InstallLocation 回退。
+- **KI-5 升级用户 PATH 冲突提示（2026-08-18 手测记录，待产品决策）**：用过
+  旧版（uv/pip 装过 aisc，如 `C:\Users\<user>\.local\bin\aisc.exe`）的机器
+  安装新 Workbench 时，G-18 冲突探测按设计（05 §5.2.5 never-shadow）拒绝把
+  安装目录加入 PATH 并弹提示。行为本身符合设计（不破坏用户现有环境），但
+  旧版升级用户永远拿不到 Workbench 自带的新 CLI on PATH。可选方向：保持现
+  状只记录 / 检测到"旧版本 aisc 同源"时询问接管 PATH / 文档说明。**需用户
+  拍板后另开一轮**。
+- **挂账：容器随镜像同步更新**（KI-4 衍生，用户 2026-08-18 拍板本轮
+  不动）：`config_fingerprint` 只含镜像名（`super-claude:latest`），同
+  tag 重建镜像后旧容器照旧复用、继续跑旧镜像层。方向：fingerprint 纳入
+  image ID（`docker image inspect .Id`）→ 升级后下次 start 判为冲突 →
+  引导重建容器。触碰运行时身份/复用/冲突机制 + Python 全套测试，需独立
+  规划。
 
 ## 想法 / Ideas
 
