@@ -198,6 +198,7 @@ export const enUS: Record<string, string> = {
   "ccswitch.activateHint": "Click to switch to this provider",
   "ccswitch.currentHint": "Current provider",
   "ccswitch.notConfiguredHint": "Not configured (set its base URL / key first)",
+  "ccswitch.hiddenRows": "Hidden: direct-official placeholder rows (claude-official, default) that cannot be switched to",
   "tabbar.menu.splitH": "Split left/right",
   "tabbar.menu.splitV": "Split top/bottom",
   "pane.close": "Close pane",

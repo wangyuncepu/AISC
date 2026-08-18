@@ -140,6 +140,16 @@ async function remove(p: CcSwitchProvider): Promise<void> {
 
 const hasRuntime = computed(() => Boolean(store.runtimeId && store.workspace));
 
+/**
+ * IDEA-4 (manual round 2): rows that cannot be activated (no base_url —
+ * cc-switch's built-in `*-official` rows and the imported `default`
+ * direct-official snapshot) are HIDDEN instead of shown unclickable; the
+ * current row always stays visible.
+ */
+const visibleProviders = computed(() =>
+  providers.value.filter((p) => p.is_current || Boolean(p.base_url)),
+);
+
 onMounted(() => {
   if (hasRuntime.value) void refresh();
 });
@@ -176,9 +186,9 @@ onBeforeUnmount(() => {
       ✓ {{ t("ccswitch.switchedTo", { name: switchedTo }) }}
     </p>
 
-    <div class="list" v-if="providers.length">
+    <div class="list" v-if="visibleProviders.length">
       <div
-        v-for="p in providers"
+        v-for="p in visibleProviders"
         :key="p.id"
         class="row"
         :class="{ current: p.is_current, activatable: canActivate(p) }"
@@ -206,6 +216,9 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <p v-else-if="!loading && hasRuntime" class="empty">{{ t("ccswitch.empty") }}</p>
+    <p v-if="providers.length > visibleProviders.length" class="hidden-note">
+      {{ t("ccswitch.hiddenRows") }}
+    </p>
 
     <!-- add form -->
     <div v-if="addOpen" class="form-card" role="dialog" :aria-label="t('ccswitch.add')">
@@ -301,6 +314,7 @@ onBeforeUnmount(() => {
 .cur { color: var(--text-faint); font-size: var(--font-xs); }
 .cur.on { color: var(--accent); font-weight: 600; }
 .banner.ok { background: var(--success-bg); color: var(--success); }
+.hidden-note { font-size: var(--font-xs); color: var(--text-faint); }
 .pid { font-family: monospace; }
 .url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
 .model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

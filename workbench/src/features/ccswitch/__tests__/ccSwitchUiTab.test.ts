@@ -110,16 +110,15 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     w.unmount();
   });
 
-  it("rows without a base_url are not activatable", async () => {
+  it("rows without a base_url are hidden (direct-official placeholders)", async () => {
     setup();
-    // zhipu row rendered without a base_url
     const bare = RESULT(["deepseek", "zhipu"]);
     bare.providers[1]!.base_url = "";
     vi.mocked(ipc.ccSwitchProviders).mockResolvedValue(bare);
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
-    await w.findAll(".row")[1]!.trigger("click");
-    expect(ipc.ccSwitchSwitch).not.toHaveBeenCalled();
+    // Only the activatable + current rows render; the bare row is gone.
+    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(1));
+    expect(w.find(".hidden-note").exists()).toBe(true);
     w.unmount();
   });
 
