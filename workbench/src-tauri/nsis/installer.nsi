@@ -544,15 +544,19 @@ Function un.ConfirmShow ; Add add a `Delete app data` check box
   IntOp $7 $7 / 96
   System::Call 'user32::CreateWindowEx(i r3, w "${__NSD_CheckBox_CLASS}", w "$(deleteAppData)", i ${__NSD_CheckBox_STYLE}, i r4, i r5, i r6, i r7, p r1, i0, i0, i0) i .s'
   Pop $DeleteAppDataCheckbox
-  SendMessage $HWNDPARENT ${WM_GETFONT} 0 0 $1
-  SendMessage $DeleteAppDataCheckbox ${WM_SETFONT} $1 1
+  ; KI-4: capture the dialog font into $8 — the stock code reused $1 for it,
+  ; which CLOBBERS the inner-dialog HWND the second checkbox still needs as
+  ; its parent (CreateWindowEx with a font-handle parent fails silently, so
+  ; the Docker checkbox never appeared in the 2026-08-18 manual test).
+  SendMessage $HWNDPARENT ${WM_GETFONT} 0 0 $8
+  SendMessage $DeleteAppDataCheckbox ${WM_SETFONT} $8 1
   ; KI-4: second checkbox — Docker containers + image (default unchecked).
-  ; Same dialog, one row below the app-data checkbox.
+  ; Same dialog ($1 is STILL the inner dialog HWND), one row below.
   IntOp $5 125 * $2
   IntOp $5 $5 / 96
   System::Call 'user32::CreateWindowEx(i r3, w "${__NSD_CheckBox_CLASS}", w "$(DOCKER_CLEANUP_CHECKBOX)", i ${__NSD_CheckBox_STYLE}, i r4, i r5, i r6, i r7, p r1, i0, i0, i0) i .s'
   Pop $DeleteDockerCheckbox
-  SendMessage $DeleteDockerCheckbox ${WM_SETFONT} $1 1
+  SendMessage $DeleteDockerCheckbox ${WM_SETFONT} $8 1
 FunctionEnd
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ConfirmLeave
 Function un.ConfirmLeave
