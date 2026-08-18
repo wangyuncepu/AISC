@@ -20,8 +20,8 @@
     pin 加存在性检查（`is_file`），失效即视为无 pin → `resolve_cli`/
     `negotiate_capabilities` 落入 `auto_select_and_pin` 自动重发现并覆写
     pin（`session::pinned_cli` + 单测）。属 KI-4 卸载配套家族的 dev 侧症状。
-- **KI-4 卸载/升级的配套资源管理**：✅ **已修（2026-08-18，分支
-  `ki-4-uninstall-companions`，用户决策：两勾选默认不勾 / 引擎不可达
+- **KI-4 卸载/升级的配套资源管理**：✅ **已修并合并（2026-08-18，合并
+  develop `604c4b4`，用户四步手测矩阵 PASS）**（用户决策：两勾选默认不勾 / 引擎不可达
   跳过+提示手动命令 / 容器同步本轮不动 / 暂不发布）**——①「删除应用
   数据」勾选扩到真数据根 `%LOCALAPPDATA%\AISC`（Stage 7 布局；原 Tauri
   路径只覆盖旧布局）；②新增「删除 Docker 容器与镜像」勾选（docker.exe
