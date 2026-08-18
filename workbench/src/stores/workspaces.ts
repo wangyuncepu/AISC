@@ -228,54 +228,59 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
         : i18n.global.t("runtime.stopPlain")
     );
     if (!ok) return;
-    inst.status.value = "stopping";
-    // G-07 (2026-08-10): persist the CURRENT layout before tabs are cleared.
+    // G-07 (2026-08-10): persist the CURRENT layout BEFORE tabs are cleared —
+    // the flush is a fast local write, done while the tabs still exist.
     await flushSave();
-    // Staged concurrent stop (03 §4.2): start every session close in
-    // parallel, wait at most 400ms for the terminate spawns, then stop the
-    // runtime; stop-confirmed by a follow-up inspect.
-    const closing = inst.tabs.value.filter(
-      (t) => t.sessionId && !TERMINAL_STATES.includes(t.sessionState) && t.sessionState !== "closing"
-    );
-    const closePromises = closing.map((t) => ipc.closeSession(t.sessionId!).catch(() => null));
-    await Promise.race([
-      Promise.all(closePromises),
-      new Promise((resolve) => setTimeout(resolve, 400)),
-    ]);
-    inst.tabs.value = [];
-    inst.activeTabId.value = null;
-    inst.ccSwitchUiTabOpen.value = false;
-    // The workspace-level Settings sentinel deliberately survives (3d).
-    try {
-      if (inst.runtimeId.value) {
-        const snap = await ipc.stopRuntime(inst.workspace.value.trim(), inst.runtimeId.value);
-        if (["running", "stopping", "unknown"].includes(snap.state)) {
-          const insp = await ipc.runtimeInspect(inst.workspace.value.trim(), inst.runtimeId.value);
-          if (!["stopped", "not_found"].includes(insp.state)) {
-            throw {
-              code: "WB_ERR_RUNTIME_NOT_STOPPED",
-              message: i18n.global.t("runtime.notStopped", { state: insp.state }),
-              technical_detail: null,
-              retryable: true,
-              action: "retry",
-            } as WorkbenchError;
-          }
-        }
-      }
-    } catch (e) {
-      // Keep the workspace open on stop failure — the user retries the ×.
-      inst.status.value = "error";
-      inst.error.value = e as WorkbenchError;
-      return;
-    }
-    inst.dispose();
+    // User request 2026-08-18: closing a workspace must feel like closing the
+    // window — VISUALLY instant, teardown continues silently in the
+    // background. Take the chip away + hand focus to the neighbor now; the
+    // staged session close + stop + verify + dispose run detached below.
     const idx = runtimes.value.indexOf(inst);
     if (idx >= 0) runtimes.value = runtimes.value.filter((r) => r !== inst);
-    // Neighbor activation: the item now at the closed slot (right neighbor),
-    // else the tail (left), else the launcher (A-G08-6 order).
     const list = runtimes.value;
     const neighbor = list.length > 0 ? list[Math.min(idx, list.length - 1)] : launcher.value;
     activate(neighbor.id);
+    void (async () => {
+      // Staged concurrent stop (03 §4.2): start every session close in
+      // parallel, wait at most 400ms for the terminate spawns, then stop the
+      // runtime; stop-confirmed by a follow-up inspect.
+      const closing = inst.tabs.value.filter(
+        (t) => t.sessionId && !TERMINAL_STATES.includes(t.sessionState) && t.sessionState !== "closing"
+      );
+      const closePromises = closing.map((t) => ipc.closeSession(t.sessionId!).catch(() => null));
+      await Promise.race([
+        Promise.all(closePromises),
+        new Promise((resolve) => setTimeout(resolve, 400)),
+      ]);
+      inst.tabs.value = [];
+      inst.activeTabId.value = null;
+      inst.ccSwitchUiTabOpen.value = false;
+      // The workspace-level Settings sentinel deliberately survives (3d).
+      try {
+        if (inst.runtimeId.value) {
+          const snap = await ipc.stopRuntime(inst.workspace.value.trim(), inst.runtimeId.value);
+          if (["running", "stopping", "unknown"].includes(snap.state)) {
+            const insp = await ipc.runtimeInspect(inst.workspace.value.trim(), inst.runtimeId.value);
+            if (!["stopped", "not_found"].includes(insp.state)) {
+              throw {
+                code: "WB_ERR_RUNTIME_NOT_STOPPED",
+                message: i18n.global.t("runtime.notStopped", { state: insp.state }),
+                technical_detail: null,
+                retryable: true,
+                action: "retry",
+              } as WorkbenchError;
+            }
+          }
+        }
+      } catch (e) {
+        // The chip is already gone; a background stop failure is logged, and
+        // the next launch of this workspace surfaces the leftover through the
+        // runtime_conflict gate (the safety net for a silently-failed stop).
+        console.error("[workspaces] background stop failed (runtime_conflict gate will surface it):", e);
+      }
+      inst.dispose();
+      dirtyIds.delete(inst.id);
+    })();
   }
 
   /** Total live panes across EVERY instance (exit gate aggregation). */

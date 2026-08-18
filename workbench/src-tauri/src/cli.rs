@@ -900,27 +900,20 @@ pub async fn cli_clear_pin(app: AppHandle) -> Result<(), WorkbenchError> {
     Ok(())
 }
 
-#[tauri::command]
-pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, WorkbenchError> {
-    let dir = config_dir(&app)?;
+/// Auto-select the highest-priority valid CLI candidate (S4.1.a sidecar >
+/// PATH > platform) and PERSIST it as the pin. Returns the selected path
+/// (already capability-checked) or an enriched cli_not_found.
+///
+/// KI-3 round 2 (2026-08-18): the REAL recurrence was `session::resolve_pin`
+/// racing negotiate — during the onboarding wizard negotiate is deferred, so
+/// the wizard env probe and the post-wizard preflight saw "no pin" and failed
+/// with a BARE cli_not_found (technical_detail: null); the manual re-detect
+/// passed because negotiate had by then written the pin. `session::resolve_cli`
+/// now delegates here whenever the pin is absent, so every CLI consumer
+/// converges on the same auto-selection instead of failing the race.
+pub async fn auto_select_and_pin(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
+    let dir = config_dir(app)?;
     let mut settings = Settings::load(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
-    let cancel = CancellationToken::new();
-    // `--aisc-cli` process arg outranks the saved pin (S4.1.a).
-    if let Some(explicit) = explicit_cli_path(&app, None) {
-        return Ok(negotiate(&explicit, cancel).await);
-    }
-    if let Some(pin) = settings.aisc_cli_path() {
-        return Ok(negotiate(Path::new(pin), cancel).await);
-    }
-    // No pin: auto-select the highest-priority valid candidate (S4.1.a
-    // sidecar > PATH > platform) and persist it as the pin. With the bundled
-    // sidecar discoverable, an installed app legitimately has 2+ valid
-    // candidates (sidecar + a dev-installed CLI on PATH); priority order
-    // decides instead of the old "exactly one" gate. The selection must be
-    // saved, not just reported: every runtime command (preflight included)
-    // resolves the CLI through the pin (session::resolve_pin), so an
-    // unpinned fresh install passes negotiation but fails preflight with
-    // cli_not_found.
     let raw = enumerate_candidates(None, None);
     let mut valid: Vec<PathBuf> = Vec::new();
     let mut probed: Vec<Candidate> = Vec::new();
@@ -932,12 +925,17 @@ pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, 
         probed.push(candidate);
     }
     if let Some(first) = valid.first() {
-        let report = negotiate(first, cancel).await;
-        if report.required_ok {
-            settings.set_aisc_cli_path(Some(&first.to_string_lossy()));
-            settings.save(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
+        // Pin only a COMPATIBLE CLI (same contract as negotiate below).
+        let report = negotiate(&first, CancellationToken::new()).await;
+        if !report.required_ok {
+            return Err(WorkbenchError::cli_not_found().with_detail(format!(
+                "candidate lacks required capabilities: {}",
+                first.display()
+            )));
         }
-        return Ok(report);
+        settings.set_aisc_cli_path(Some(&first.to_string_lossy()));
+        settings.save(&dir).map_err(|e| WorkbenchError::settings_error().with_detail(e.to_string()))?;
+        return Ok(first.clone());
     }
     // KI-3: no valid candidate — say WHY each probe failed (path + error
     // code), so a recurrence is diagnosable from the blocked gate instead of
@@ -951,7 +949,22 @@ pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, 
             .join("; ");
         err = err.with_detail(detail);
     }
-    Ok(failed_report(Some(err)))
+    Err(err)
+}
+
+#[tauri::command]
+pub async fn negotiate_capabilities(app: AppHandle) -> Result<CapabilityReport, WorkbenchError> {
+    let cancel = CancellationToken::new();
+    // `--aisc-cli` process arg outranks the saved pin (S4.1.a).
+    if let Some(explicit) = explicit_cli_path(&app, None) {
+        return Ok(negotiate(&explicit, cancel).await);
+    }
+    if let Ok(pin) = crate::session::resolve_pin(&app) {
+        return Ok(negotiate(&pin, cancel).await);
+    }
+    // No pin: auto-select + persist (see auto_select_and_pin), then report.
+    let first = auto_select_and_pin(&app).await?;
+    Ok(negotiate(&first, cancel).await)
 }
 
 /// Short human label for a candidate source (diagnostic detail only). */

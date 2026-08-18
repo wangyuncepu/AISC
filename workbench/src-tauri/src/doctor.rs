@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cli::{run_control, Envelope};
 use crate::error::{redact, WorkbenchError};
-use crate::session::resolve_pin;
+use crate::session::resolve_cli;
 
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -116,7 +116,7 @@ pub fn doctor_report_from_envelope(env: Envelope) -> Result<DoctorReport, Workbe
 
 #[tauri::command]
 pub async fn run_doctor(app: AppHandle) -> Result<DoctorReport, WorkbenchError> {
-    let pin = resolve_pin(&app)?;
+    let pin = resolve_cli(&app).await?;
     let env = run_control(&pin, doctor_argv(), DOCTOR_TIMEOUT, CancellationToken::new()).await?;
     doctor_report_from_envelope(env)
 }

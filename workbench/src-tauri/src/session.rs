@@ -141,6 +141,20 @@ pub fn resolve_pin(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
         .ok_or_else(WorkbenchError::cli_not_found)
 }
 
+/// Resolve the CLI for a command invocation. KI-3 round 2 (2026-08-18): the
+/// pin may not exist yet — negotiate is DEFERRED during the onboarding
+/// wizard, and the wizard env probe / post-wizard preflight resolved through
+/// `resolve_pin`, failed with a bare cli_not_found (recovers once negotiate
+/// writes the pin). This wrapper auto-selects and PERSISTS a candidate when
+/// the pin is absent (same selection negotiate makes), so no CLI consumer can
+/// lose that race. Use from async commands; `resolve_pin` stays for tests.
+pub async fn resolve_cli(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
+    match resolve_pin(app) {
+        Ok(pin) => Ok(pin),
+        Err(_) => crate::cli::auto_select_and_pin(app).await,
+    }
+}
+
 fn is_uuid_v4(s: &str) -> bool {
     if s.len() != 36 {
         return false;
@@ -313,7 +327,7 @@ pub async fn open_session(
         gen
     };
 
-    let pin = resolve_pin(&app)?;
+    let pin = resolve_cli(&app).await?;
     let argv = session_open_argv(&runtime_id, &session_id, &agent, &ws);
 
     let (event_tx, event_rx) = mpsc::channel::<PtyEvent>(EVENT_CHANNEL_CAP);
@@ -585,7 +599,7 @@ pub async fn close_session(
                 // §3.1: terminate (kill container agent) -> wait/reap local
                 // child. cancel() sets the exit reason to user_close.
                 session.cancel();
-                let pin = resolve_pin(&app)?;
+                let pin = resolve_cli(&app).await?;
                 let _ = run_control(
                     &pin,
                     session_terminate_argv(&runtime_id, &session_id, &workspace),

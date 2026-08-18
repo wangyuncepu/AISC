@@ -131,7 +131,7 @@ describe("activation cycling (3c)", () => {
 });
 
 describe("closeWorkspace (3c)", () => {
-  it("confirms with live-pane count, flushes the layout BEFORE clearing, GCs streams, activates the neighbor", async () => {
+  it("confirms with live-pane count, removes the chip IMMEDIATELY, flushes pre-clear, GCs in background", async () => {
     const ws = useWorkspacesStore();
     await launchWorkspace(ws, "C:/a");
     await launchWorkspace(ws, "C:/b");
@@ -143,25 +143,31 @@ describe("closeWorkspace (3c)", () => {
     await ws.closeWorkspace(a.id);
 
     expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("1"));
+    // Visual-first (user round-1 request): the chip is gone and the neighbor
+    // active the moment the confirm returns — no "stopping" limbo.
     expect(ws.runtimes.map((r) => r.id)).toEqual([b.id]);
     expect(ws.activeId).toBe(b.id); // right neighbor
     // The layout was persisted while tabs were still present (G-07).
     const calls = mockIpc.saveHistory.mock.calls as [number, HistoryPatch][];
     const last = calls[calls.length - 1]?.[1];
     expect(last?.workspaces.some((w) => w.layout?.tabs?.length === 1)).toBe(true);
-    // Stream buffers GC'd (first writer ever).
-    expect(Object.keys(a.paneStreams.value)).toHaveLength(0);
-    expect(a.streamCursor.value).toEqual({});
+    // Teardown (close + stop + dispose/GC) continues detached.
+    await vi.waitFor(() => {
+      expect(Object.keys(a.paneStreams.value)).toHaveLength(0);
+      expect(a.streamCursor.value).toEqual({});
+    });
   });
 
-  it("keeps the workspace open on stop failure (error state, retryable)", async () => {
+  it("stays visually closed even when the background stop fails (conflict gate is the safety net)", async () => {
     const ws = useWorkspacesStore();
     await launchWorkspace(ws, "C:/a");
     mockIpc.stopRuntime.mockResolvedValue({ state: "running" });
     mockIpc.runtimeInspect.mockResolvedValue({ state: "running" });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await ws.closeWorkspace(ws.runtimes[0].id);
-    expect(ws.runtimes).toHaveLength(1);
-    expect(ws.runtimes[0].status.value).toBe("error");
+    expect(ws.runtimes).toHaveLength(0); // chip already gone
+    await vi.waitFor(() => expect(errSpy).toHaveBeenCalled());
+    errSpy.mockRestore();
   });
 });
 

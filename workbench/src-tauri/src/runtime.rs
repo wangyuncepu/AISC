@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cli::{run_build_stream, run_control, BuildEvent};
 use crate::error::WorkbenchError;
-use crate::session::resolve_pin;
+use crate::session::resolve_cli;
 
 const START_TIMEOUT: Duration = Duration::from_secs(120);
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -343,7 +343,7 @@ async fn cc_switch_call(
     argv: Vec<String>,
     input: Option<String>,
 ) -> Result<CcSwitchProvidersResult, WorkbenchError> {
-    let pin = crate::session::resolve_pin(app)?;
+    let pin = crate::session::resolve_cli(app).await?;
     let env = match input {
         Some(text) => {
             crate::cli::run_control_input(&pin, argv, text, PROVIDER_TIMEOUT, CancellationToken::new()).await?
@@ -486,7 +486,7 @@ pub async fn runtime_preflight(
     network: Option<String>,
     scope: Option<String>,
 ) -> Result<PreflightReport, WorkbenchError> {
-    let pin = resolve_pin(&app)?;
+    let pin = resolve_cli(&app).await?;
     let mut argv = vec![
         "runtime".into(),
         "preflight".into(),
@@ -524,7 +524,7 @@ pub async fn runtime_inspect(
     runtime_id: String,
     workspace: String,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let pin = resolve_pin(&app)?;
+    let pin = resolve_cli(&app).await?;
     let argv = runtime_inspect_argv(&runtime_id, &workspace);
     let env = run_control(&pin, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -544,7 +544,7 @@ pub async fn start_runtime(
     network: Option<String>,
     scope: Option<String>,
 ) -> Result<RuntimeStartResult, WorkbenchError> {
-    let pin = resolve_pin(&app)?;
+    let pin = resolve_cli(&app).await?;
     let start_ops = app.state::<StartOps>().inner().clone();
     let cancel = CancellationToken::new();
     let start_key = runtime_id.clone();
@@ -595,7 +595,7 @@ pub async fn runtime_restart(
     runtime_id: String,
     workspace: String,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let pin = resolve_pin(&app)?;
+    let pin = resolve_cli(&app).await?;
     let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_restart_argv(&runtime_id, &workspace);
     let env = run_control(&pin, argv, RESTART_TIMEOUT, CancellationToken::new()).await?;
@@ -613,7 +613,7 @@ pub async fn stop_runtime(
     runtime_id: String,
     workspace: String,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let pin = resolve_pin(&app)?;
+    let pin = resolve_cli(&app).await?;
     let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_stop_argv(&runtime_id, &workspace);
     let env = run_control(&pin, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
@@ -631,7 +631,7 @@ pub async fn list_runtimes(
     workspace: String,
     owner: Option<String>,
 ) -> Result<RuntimeListResult, WorkbenchError> {
-    let pin = resolve_pin(&app)?;
+    let pin = resolve_cli(&app).await?;
     let argv = runtime_list_argv(&workspace, owner.as_deref());
     let env = run_control(&pin, argv, LIST_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -649,7 +649,7 @@ pub async fn remove_runtime(
     workspace: String,
     force: bool,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let pin = resolve_pin(&app)?;
+    let pin = resolve_cli(&app).await?;
     let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_remove_argv(&runtime_id, &workspace, force);
     let env = run_control(&pin, argv, REMOVE_TIMEOUT, CancellationToken::new()).await?;
@@ -674,7 +674,7 @@ pub async fn get_provider_status(
     if agent != "claude" && agent != "codex" {
         return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_AGENT"));
     }
-    let pin = resolve_pin(&app)?;
+    let pin = resolve_cli(&app).await?;
     let argv = provider_current_argv(&runtime_id, &agent, &workspace);
     let env = run_control(&pin, argv, PROVIDER_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -693,7 +693,7 @@ pub async fn build_image(
     tag: String,
     on_event: Channel<BuildEvent>,
 ) -> Result<(), WorkbenchError> {
-    let pin = resolve_pin(&app)?;
+    let pin = resolve_cli(&app).await?;
     let build_ops = app.state::<BuildOps>().inner().clone();
     let cancel = CancellationToken::new();
     let build_key = tag.clone();

@@ -5,6 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { nextTick } from "vue";
 import { mount } from "@vue/test-utils";
 import { i18n } from "../../../i18n";
 import { useWorkspacesStore, MAX_WORKSPACES } from "../../../stores/workspaces";
@@ -84,11 +85,12 @@ describe("WorkspaceBar (3c)", () => {
     await launchWorkspace(ws, "C:/beta");
     const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
     const chips = bar.findAll(".chip");
-    expect(chips).toHaveLength(3); // 2 workspaces + launcher
+    expect(chips).toHaveLength(4); // 2 workspaces + launcher + settings (always present)
     const active = chips.filter((c) => c.classes("active"));
     expect(active).toHaveLength(1);
     expect(active[0]!.text()).toContain("beta");
-    expect(chips[chips.length - 1]!.text()).toContain("新建工作区");
+    expect(chips[chips.length - 2]!.text()).toContain("新建工作区");
+    expect(chips[chips.length - 1]!.text()).toContain("设置");
     // Roles for a11y (full roving polish lands in 3e).
     expect(bar.find('[role="tablist"]').exists()).toBe(true);
     expect(chips[0]!.attributes("role")).toBe("tab");
@@ -122,7 +124,8 @@ describe("WorkspaceBar (3c)", () => {
       await launchWorkspace(ws, `C:/w${i}`);
     }
     const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
-    const launcherChip = bar.findAll(".chip")[bar.findAll(".chip").length - 1]!;
+    const all = bar.findAll(".chip");
+    const launcherChip = all[all.length - 2]!;
     const active = ws.activeId;
     await launcherChip.trigger("click");
     expect(ws.activeId).toBe(active); // cap: no launcher activation
@@ -131,14 +134,17 @@ describe("WorkspaceBar (3c)", () => {
   it("Settings chip (3d): renders when open, × reverts unsaved edits then closes", async () => {
     const ws = useWorkspacesStore();
     await launchWorkspace(ws, "C:/alpha");
+    const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
+    // Always-present settings chip: no × until open.
+    let settingsChip = bar.findAll(".chip")[bar.findAll(".chip").length - 1]!;
+    expect(settingsChip.text()).toContain("设置");
+    expect(settingsChip.find(".close").exists()).toBe(false);
     ws.openSettingsTab();
     expect(ws.settingsTabActive).toBe(true);
-    const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
-    // 1 workspace + launcher + settings chip.
-    const chips = bar.findAll(".chip");
-    expect(chips).toHaveLength(3);
-    const settingsChip = chips[chips.length - 1]!;
-    expect(settingsChip.text()).toContain("设置");
+    await nextTick(); // store mutation → DOM update is async
+    settingsChip = bar.findAll(".chip")[bar.findAll(".chip").length - 1]!;
+    expect(settingsChip.classes()).toContain("active");
+    expect(settingsChip.find(".close").exists()).toBe(true);
 
     // Dirty the settings form, then ×: cancel() reverts to lastSaved, sentinel closes.
     const settings = useSettingsStore();

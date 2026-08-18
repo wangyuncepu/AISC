@@ -75,17 +75,18 @@ const chips = computed<Chip[]>(() => {
     state: lg.runtimeState.value,
     launcher: true,
   });
-  if (ws.settingsTabOpen) {
-    list.push({
-      id: SETTINGS_TAB_ID,
-      label: t("workspbar.settings"),
-      title: t("workspbar.settings"),
-      status: "settings",
-      state: "",
-      launcher: false,
-      settings: true,
-    });
-  }
+  // The Settings chip is ALWAYS present (user manual-test round 1: an
+  // only-when-open sentinel was undiscoverable). Click opens/activates the
+  // workspace-layer settings tab; × (when open) reverts unsaved edits.
+  list.push({
+    id: SETTINGS_TAB_ID,
+    label: t("workspbar.settings"),
+    title: `${t("workspbar.settings")} (Ctrl+,)`,
+    status: "settings",
+    state: "",
+    launcher: false,
+    settings: true,
+  });
   return list;
 });
 
@@ -171,7 +172,7 @@ function onBarKeydown(e: KeyboardEvent) {
       <span class="dot" :data-state="dotState(c)" />
       <span class="name">{{ c.label }}</span>
       <button
-        v-if="c.settings"
+        v-if="c.settings && ws.settingsTabOpen"
         class="close"
         :title="t('tabbar.closeSettings')"
         :aria-label="t('tabbar.closeSettings')"
@@ -180,7 +181,7 @@ function onBarKeydown(e: KeyboardEvent) {
         ×
       </button>
       <button
-        v-else-if="!c.launcher"
+        v-else-if="!c.launcher && !c.settings"
         class="close"
         :title="t('workspbar.close')"
         :aria-label="`${t('workspbar.close')}: ${c.title}`"
