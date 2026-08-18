@@ -87,6 +87,7 @@ pub fn run(cli_arg: Option<String>) {
             cc_switch_providers,
             cc_switch_add,
             cc_switch_edit,
+            cc_switch_switch,
             cc_switch_delete,
             load_history,
             save_history,
