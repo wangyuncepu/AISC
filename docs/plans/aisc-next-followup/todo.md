@@ -20,10 +20,22 @@
     pin 加存在性检查（`is_file`），失效即视为无 pin → `resolve_cli`/
     `negotiate_capabilities` 落入 `auto_select_and_pin` 自动重发现并覆写
     pin（`session::pinned_cli` + 单测）。属 KI-4 卸载配套家族的 dev 侧症状。
-- **KI-4 卸载/升级的配套资源管理**：aisc 卸载、升级时应同步处理 Docker
-  镜像（super-claude 等）、数据根等配套资源（删除/重建）；如能同步
-  更新已有 container 更好。需先定策略（默认清理 vs 询问保留——与
-    docs/todo.md「退出前询问是否保留 runtime」同族，可合并设计）。
+- **KI-4 卸载/升级的配套资源管理**：✅ **已修（2026-08-18，分支
+  `ki-4-uninstall-companions`，用户决策：两勾选默认不勾 / 引擎不可达
+  跳过+提示手动命令 / 容器同步本轮不动 / 暂不发布）**——①「删除应用
+  数据」勾选扩到真数据根 `%LOCALAPPDATA%\AISC`（Stage 7 布局；原 Tauri
+  路径只覆盖旧布局）；②新增「删除 Docker 容器与镜像」勾选（docker.exe
+  已知位置探测 + `docker version` 引擎 probe；`aisc-wb-*` 容器逐个
+  `rm -f` + `super-claude:latest` `rmi -f`；不可达则跳过、完成页弹
+  手动命令；模板禁用 `--format`——双大括号是 handlebars）；/UPDATE
+  全跳过；CI smoke 补「静默卸载数据根必须保留」断言（勾选仅 GUI 存在，
+  删除严格 opt-in）。
+- **挂账：容器随镜像同步更新**（KI-4 衍生，用户 2026-08-18 拍板本轮
+  不动）：`config_fingerprint` 只含镜像名（`super-claude:latest`），同
+  tag 重建镜像后旧容器照旧复用、继续跑旧镜像层。方向：fingerprint 纳入
+  image ID（`docker image inspect .Id`）→ 升级后下次 start 判为冲突 →
+  引导重建容器。触碰运行时身份/复用/冲突机制 + Python 全套测试，需独立
+  规划。
 
 ## 想法 / Ideas
 
