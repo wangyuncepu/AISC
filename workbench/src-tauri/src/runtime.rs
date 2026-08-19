@@ -854,7 +854,11 @@ fn suppress_docker_dashboard_in(dir: &std::path::Path) -> bool {
 pub(crate) fn docker_desktop_candidates() -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     if let Ok(base) = std::env::var("LOCALAPPDATA") {
-        out.push(std::path::PathBuf::from(base).join("Docker\\Docker Desktop\\Docker Desktop.exe"));
+        let la = std::path::PathBuf::from(&base);
+        // Per-user install layout (KI-6): the frontend exe lives under
+        // Programs\DockerDesktop\frontend, not the machine-wide Program Files.
+        out.push(la.join("Programs\\DockerDesktop\\frontend\\Docker Desktop.exe"));
+        out.push(la.join("Docker\\Docker Desktop\\Docker Desktop.exe"));
     }
     if let Ok(pf) = std::env::var("ProgramFiles") {
         out.push(std::path::PathBuf::from(pf).join("Docker\\Docker\\Docker Desktop.exe"));

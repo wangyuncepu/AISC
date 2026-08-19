@@ -1,5 +1,18 @@
 # 待办与门禁
 
+## KI-6 Docker 检测/操作受启动时 PATH 与安装位置影响（2026-08-19，IDEA-2 手测期间发现，随 `idea-2-network-usage` 修复）
+
+- **症状**：Docker Desktop 已启动，Workbench 启动摘要仍报「Docker 引擎未运行」。
+- **根因（双层）**：①本机 Docker 为**每用户安装**（`%LOCALAPPDATA%\Programs\DockerDesktop`），
+  而 `env.rs::docker_cli_candidates` 只认机装位 + 错误的旧猜测位；②GUI 进程 PATH 是
+  启动时快照，装 Docker 前开的终端继承不到安装器写入用户 PATH 的 bin 目录。
+- **修复（三层）**：①引擎探测改为**命名管道 `\\.\pipe\docker_engine` 直发
+  `GET /_ping`**（实时、与安装位置/PATH 完全无关；tokio named pipe，CLI 探测降为
+  兜底）；②CLI/Desktop exe 候选链补每用户安装位（docker.exe 与 frontend\Docker
+  Desktop.exe），NSIS `un.FindDockerCli` 同步补；③`run_control_inner` 给 aisc 子进程
+  **前置注入 docker bin 目录到 PATH**（Python CLI 的裸 docker 调用不再受快照影响）。
+  cargo --lib 197 全绿（含每用户路径锚定 + 管道探测实测）。
+
 ## v2.1.6-dev 预览手测阻塞项（2026-08-18，draft 暂不发布）
 
 > 来源：v2.1.6-dev 安装包"全新机器"手测（用户 2026-08-18）。发布前需逐项

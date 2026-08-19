@@ -1669,6 +1669,9 @@ Function un.FindDockerCli
   StrCpy $DockerExe ""
   ${If} ${FileExists} "$PROGRAMFILES64\Docker\Docker\resources\bin\docker.exe"
     StrCpy $DockerExe "$PROGRAMFILES64\Docker\Docker\resources\bin\docker.exe"
+  ${ElseIf} ${FileExists} "$LOCALAPPDATA\Programs\DockerDesktop\resources\bin\docker.exe"
+    ; per-user "Install for me" layout (KI-6: engine probe missed it too)
+    StrCpy $DockerExe "$LOCALAPPDATA\Programs\DockerDesktop\resources\bin\docker.exe"
   ${ElseIf} ${FileExists} "$LOCALAPPDATA\Docker\resources\bin\docker.exe"
     StrCpy $DockerExe "$LOCALAPPDATA\Docker\resources\bin\docker.exe"
   ${Else}

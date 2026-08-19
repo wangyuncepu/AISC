@@ -549,6 +549,15 @@ async fn run_control_inner(
 ) -> Result<Envelope, WorkbenchError> {
     let mut cmd = Command::new(executable);
     cmd.args(&argv);
+    // KI-6: the GUI process may carry a launch-time PATH snapshot without
+    // Docker's bin (per-user installs register it in the USER PATH only
+    // after install). Prepend the resolved docker bin dir so every docker
+    // subprocess the aisc CLI spawns keeps resolving.
+    #[cfg(windows)]
+    if let Some(dir) = crate::env::docker_bin_dir() {
+        let path = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", format!("{};{}", dir.display(), path));
+    }
     if input.is_some() {
         cmd.stdin(Stdio::piped());
     } else {
