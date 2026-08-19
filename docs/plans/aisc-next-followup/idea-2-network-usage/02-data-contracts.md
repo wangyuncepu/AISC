@@ -105,13 +105,58 @@ if network == "proxy":
 - 采用发生在 start_runtime 自动解析与 `subscription show` 时（幂等：目标
   存在即跳过）；`aisc build` 向导步骤 2b 起改写新路径。
 
-## 5. 用量数据面契约（⚠️ 2a 探针后冻结）
+## 5. 用量数据面契约（✅ 2a 探针冻结：2026-08-19，宿主侧 db 副本实探）
+
+### 5.0 实测 schema（cc-switch v5.10.1，schema v16）
+
+数据源裁定：**adapter 只聚合 `proxy_request_logs`**（逐请求事实表，全部
+`data_source` 来源一并统计）；`usage_daily_rollups` 为上游自身缓存（新鲜度
+语义未知，不读）；`session_log_sync`/`session-scan-cache.db` 为扫描断点状态
+（不读）。
+
+```sql
+-- 逐请求事实表（数据落点；data_source 区分 'proxy' 直录 vs 会话扫描导入）
+CREATE TABLE proxy_request_logs (
+  request_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL,
+  app_type TEXT NOT NULL,             -- 'claude'|'codex'|'gemini'|'grokbuild'
+  model TEXT NOT NULL, request_model TEXT, pricing_model TEXT,
+  input_tokens INT, output_tokens INT,
+  cache_read_tokens INT, cache_creation_tokens INT,
+  input_token_semantics INT DEFAULT 0,
+  input_cost_usd TEXT, output_cost_usd TEXT,
+  cache_read_cost_usd TEXT, cache_creation_cost_usd TEXT, total_cost_usd TEXT,
+  latency_ms INT, first_token_ms INT, duration_ms INT,
+  status_code INT, error_message TEXT, session_id TEXT,
+  provider_type TEXT, is_streaming INT DEFAULT 0,
+  cost_multiplier TEXT DEFAULT '1.0', created_at INT NOT NULL,
+  data_source TEXT NOT NULL DEFAULT 'proxy'
+);
+-- 名称映射
+CREATE TABLE providers (id TEXT, app_type TEXT, name TEXT, settings_config TEXT, …,
+  is_current BOOLEAN, PRIMARY KEY (id, app_type));  -- settings_config 含密钥：永不 SELECT
+-- 定价（费用已在日志行内预计算，无需 join 此表）
+CREATE TABLE model_pricing (model_id TEXT PRIMARY KEY, display_name TEXT,
+  input_cost_per_million TEXT, output_cost_per_million TEXT,
+  cache_read_cost_per_million TEXT, cache_creation_cost_per_million TEXT);
+```
+
+实测补充事实：
+- live 库中 `proxy_request_logs`/`usage_daily_rollups` **0 行**（容器 08-18
+  重建后无走代理流量；schema 完好）。2c 手测时打一发真实请求验证落库与
+  `created_at` 单位后，adapter 的时间过滤按实测单位固化。
+- `providers` 表 `settings_config` 含 API 密钥——adapter 侧只 SELECT
+  `id, app_type, name`，其余列不触碰（redaction 纪律）。
+- 成功判定（我们自己的口径）：`status_code BETWEEN 200 AND 299`。
+- `tokens_total`（真实消耗）= `input+output+cache_read+cache_creation`（与
+  cc-switch 用量页归一化口径一致）。
+- 费用 = SUM(`total_cost_usd`)（TEXT 十进制，容器侧转 float 求和，展示层
+  保留 4 位）；币种恒 USD。
 
 ### 5.1 容器 adapter `usage` 操作（`aisc.cc-switch-provider/v1` 信封扩展）
 
 - argv：`aisc-cc-provider usage --range today|7d|30d`（容器内只读 SQLite，
   照 `op_list` 快照模式；输出经既有 redaction）。
-- data（**假设，2a 冻结**）：
+- data（冻结）：
 
 ```json
 {
@@ -119,49 +164,43 @@ if network == "proxy":
   "generated_at": "2026-08-19T12:00:00Z",
   "available": true,
   "providers": [
-    {
-      "app": "claude",
-      "provider_id": "deepseek",
-      "provider_name": "DeepSeek",
+    { "app": "claude", "provider_id": "deepseek", "provider_name": "DeepSeek",
       "requests": 123, "success": 120, "failed": 3,
       "tokens_total": 1234567,
-      "cost_estimate": 1.23, "currency": "USD"
-    }
+      "cost_estimate": 1.2345, "currency": "USD" }
   ],
   "models": [
     { "app": "claude", "model": "deepseek-v4-flash", "requests": 120,
-      "tokens_in": 100000, "tokens_out": 5000 }
+      "tokens_in": 100000, "tokens_out": 5000,
+      "cost_estimate": 0.5678 }
   ]
 }
 ```
 
-- `available=false`：usage 表缺失/空库/版本不符 → `ok=true` + 空数据
-  （面板显示「暂无数据」，不报错）。
-- provider 归属口径：cc-switch 自身逻辑（代理请求日志精确归属 + 会话扫描
-  导入）；官方直连流量归属有限，面板附口径说明。
+- `available=false`：表缺失/版本不符 → `ok=true` + 空数组（面板「暂无数据」，
+  不报错）；表存在但 0 行 → `available=true` + 空数组（正常态）。
+- provider 归属口径：cc-switch 自身（代理日志精确 + 会话扫描导入）；官方直连
+  流量归属有限，面板附口径说明。
+- 聚合 SQL 一次往返（GROUP BY provider_id, app_type / GROUP BY model, app_type），
+  `created_at` 时间下界按 range 换算（单位以 2c 实测为准）。
 
 ### 5.2 宿主 `aisc usage overview --format json`
 
 - argv：`aisc usage overview [--range today|7d|30d] [--workspace <path>]`
   （默认 7d；`--workspace` 限定单工作区，默认聚合全部）。
-- data：
+- data（冻结）：
 
 ```json
 {
   "subscription": { …§4 同构… },
   "workspaces": [
-    {
-      "workspace_hash": "sha256-v1-…",
-      "workspace_path": "C:\\Users\\…\\proj",
-      "running": true,
-      "source": "live",
+    { "workspace_hash": "sha256-v1-…", "workspace_path": "C:\\Users\\…\\proj",
+      "running": true, "source": "live",
       "fetched_at": "2026-08-19T12:00:00+08:00",
-      "providers": [ …5.1 行同构… ],
-      "models": [ … ]
-    }
+      "providers": [ …5.1 行同构… ], "models": [ … ] }
   ],
   "totals": {
-    "providers": [ …跨工作区同名 provider 聚合行… ],
+    "providers": [ …跨工作区按 (app, provider_id) 聚合行… ],
     "tokens_total": 0, "requests": 0, "cost_estimate": 0.0
   }
 }
@@ -170,26 +209,53 @@ if network == "proxy":
 - `source`: `live`（容器运行中，adapter 实时取，顺手写缓存快照）|
   `cache`（容器停止，读 `<data-root>/cache/usage/<ws-hash>.json`）|
   `none`（无缓存）。
-- 时间范围语义：`today`=本地自然日 00:00 起；`7d`/`30d`=`now - N*24h` 起
-  （与 cc-switch 用量页对齐；2a 探针确认其对齐方式后冻结）。
+- 时间范围语义：`today`=本地自然日 00:00 起；`7d`/`30d`=`now - N*24h` 起。
 
 ### 5.3 Rust 侧
 
-- Tauri 命令：`network_subscription_import`（stdin 通道传 URL，走
+- Tauri 命令：`network_subscription_import`（stdin 通道传 URL 或内容，走
   `run_control_input`）/ `network_subscription_refresh` / `network_subscription_clear`
   / `usage_overview(range, workspace?)`（`run_control`，**超时 120s**——多容器
   逐个 exec）。
 - argv builder 纯函数 + 内联测试（照 `cc_switch_argv` 模式）。
 
-## 6. 2a 探针清单（冻结前必做）
+## 6. 订阅源传输契约修订（⚠️ 2a 探针实测：2026-08-19，用户真实机场链接）
 
-1. **cc-switch.db usage 表**（live 容器 `docker exec … python3 sqlite3`）：
-   - `SELECT name FROM sqlite_master WHERE type='table'` 全表清单；
-   - usage/请求/会话相关表逐一 `schema` + 行数 + 5 行脱敏样例；
-   - 时间戳存储形态（epoch 秒/毫秒/ISO）、provider 关联方式（id/name/外键）、
-     token 字段拆分（in/out/cache_read/cache_create）、费用与币种字段；
-   - `app`（claude/codex）区分字段；定价表（180 行）结构。
-2. **真实订阅行为**（用户机场链接，手测一次）：UA 门控返回格式；
-   `subscription-userinfo` 是否存在及字段齐度；重定向行为。
-3. 产出：本文 §5 改写为冻结版 + `tests/fixtures/` 增加 usage schema/样例
-   fixture + `container/lib/` 如需 cc-switch usage 事实 fixture 一并落。
+### 6.1 实测行为矩阵（103.14.76.98，IP 直连 HTTPS 订阅）
+
+| 客户端栈 | 路径 | 结果 |
+|---|---|---|
+| 直连 443 | 任意 | **TCP 拒绝**（必须经代理出口） |
+| HTTP 80 | clash UA | 308 → 同址 https（无 http 回退） |
+| curl(schannel) / openssl / python-urllib / .NET HttpWebRequest（经 7890 代理 CONNECT） | 任意 UA | **TLS ClientHello 后被服务端掐断**（EOF，无证书阶段） |
+| curl_cffi impersonate=chrome（经代理） | clash UA | 同上被掐（模拟不够深，疑似校验 PQ keyshare 等 ClientHello 细节） |
+| **真 Chrome headless**（经代理） | 浏览器 UA | **通过**，返回 190KB JS 壳 HTML（机场面板页，非配置） |
+
+结论：该类机场在 TLS 层做**客户端指纹白名单**（真浏览器/客户端栈放行，
+脚本栈一律掐）；HTTP 层再按 UA 分发（浏览器→HTML 页，clash 家族→配置）。
+Python urllib 默认传输**无法直连此类源**。`subscription-userinfo` 头在本源
+**未能实测**（拿不到配置响应）；解析契约按生态标准（§2，容错设计）。
+
+### 6.2 契约修订：URL 与内容双导入（D4，2026-08-19）
+
+- `aisc network subscription import`：stdin=URL（原设计不变，适用于无指纹
+  防护的源：自建 subconverter、多数面板）。
+- **新增 `aisc network subscription import-file`**：stdin=完整订阅内容
+  （任意格式，`mihomo-build-config.js` 全都能转）→ 落盘 `subscription.yaml`，
+  快照 `source: "manual"`、`url: null`、`userinfo: null`。文件/粘贴路径，
+  指纹防护源的保底通路。
+- 快照 schema v1 增字段：`"source": "download" | "manual"`。
+- 新增稳定错误码 `AISC_ERR_NETWORK_SUBSCRIPTION_TLS_REJECTED`：transport 捕获
+  握手期 EOF/连接重置类 SSL 错误时映射（区别于网络不可达）→ UI 引导「该订阅
+  源拒绝自动化下载，请改用粘贴配置内容导入」。
+- SubscriptionForm（UI）双模式：订阅链接输入 + 粘贴配置内容文本域。
+- **挂账（指纹防护源的自动下载）**：候选方案——①容器内 mihomo（Go 栈）以
+  proxy-provider 方式代拉；②Rust 侧 reqwest（若验证 rustls 可过）；③Stage 9
+  C# 原生栈。待用户确认其日常客户端（哪条栈能过）后择期规划。
+
+### 6.3 2a 探针清单执行状态
+
+- [x] cc-switch.db usage 表结构/行数/落点（宿主副本实探，§5.0）；
+- [x] 真实订阅源连通性/UA/TLS 行为（§6.1 矩阵；userinfo 头未实测）；
+- [ ] `created_at` 单位 + 首行真实数据落库验证（2c，镜像重建后打真实请求）；
+- [ ] fixtures：usage schema/样例（2c 随 adapter 测试落 `tests/fixtures/`）。

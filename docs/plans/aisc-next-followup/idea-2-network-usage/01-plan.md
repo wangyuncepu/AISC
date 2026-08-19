@@ -20,6 +20,7 @@
 | D1 | 订阅刷新后如何生效 | **自动重建**：fingerprint 纳入订阅内容哈希（仅 network=proxy），刷新后下次启动走既有 runtime_conflict 引导重建容器。与挂账「容器随镜像同步更新」同族机制（本轮只做订阅维度） |
 | D2 | token 统计范围 | **全部工作区聚合**：运行中容器实时取数 + 已停止工作区用缓存快照；面板可切换单工作区 |
 | D3 | 导入入口 | **面板 + 向导内嵌表单**：onboarding network 步（container_tun 分支）内嵌完整导入表单；表单组件面板/向导两处复用 |
+| D4 | 指纹防护源的保底通路（2a 探针后增补） | **URL 与内容双导入**：`import`（stdin=URL）之外新增 `import-file`（stdin=完整订阅内容，快照 `source:"manual"`/`userinfo:null`）；transport 握手期被掐 → 稳定错误码 `AISC_ERR_NETWORK_SUBSCRIPTION_TLS_REJECTED` → UI 引导粘贴导入。指纹防护源的**自动**下载挂账（候选：容器 mihomo Go 代拉 / Rust reqwest / Stage 9 原生栈） |
 
 ## 2. 已核实事实（探索结论，2026-08-19）
 
