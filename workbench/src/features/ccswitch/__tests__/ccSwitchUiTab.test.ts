@@ -126,6 +126,18 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     w.unmount();
   });
 
+  it("becoming visible again refetches the list (KI-7②)", async () => {
+    setup();
+    const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] }, props: { visible: false } });
+    await vi.waitFor(() => expect(ipc.ccSwitchProviders).toHaveBeenCalledTimes(1));
+    // Hidden → visible (user returns from a bash tab where they edited the
+    // cc-switch TUI): the kept-alive pane refetches instead of showing stale
+    // rows.
+    await w.setProps({ visible: true });
+    await vi.waitFor(() => expect(ipc.ccSwitchProviders).toHaveBeenCalledTimes(2));
+    w.unmount();
+  });
+
   it("agent toggle refetches with the other agent", async () => {
     setup();
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });

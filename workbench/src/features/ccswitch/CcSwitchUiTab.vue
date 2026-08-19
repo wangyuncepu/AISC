@@ -10,13 +10,15 @@
  * logged, or stored in browser storage (04 §Security, adapted to the Tauri
  * IPC channel per D8-13).
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n } from "vue-i18n";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useCcSwitchUiStore } from "../../stores/ccSwitchUi";
 import type { CcSwitchProvider } from "../../types";
+
+const props = withDefaults(defineProps<{ visible?: boolean }>(), { visible: true });
 
 const { t } = useI18n();
 const store = useRuntimeStore();
@@ -29,6 +31,17 @@ async function refresh(): Promise<void> {
   if (!store.runtimeId || !store.workspace) return;
   await ui.list(store.workspace, store.runtimeId);
 }
+
+// KI-7②: the pane is kept alive (v-show) so mounts never re-run; refetch
+// whenever it becomes visible again (e.g. returning from a bash tab where
+// the user edited providers in the cc-switch TUI). Non-immediate: the
+// initial load is owned by onMounted.
+watch(
+  () => props.visible,
+  (now, was) => {
+    if (now && was === false && !loading.value) void refresh();
+  },
+);
 
 function switchAgent(a: "claude" | "codex"): void {
   if (!store.runtimeId || !store.workspace) return;
