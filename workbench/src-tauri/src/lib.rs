@@ -40,6 +40,8 @@ use onboarding::{onboarding_load, onboarding_update};
 use runtime::{
     build_image, cancel_build, cancel_runtime_start, cc_switch_add, cc_switch_delete,
     cc_switch_edit, cc_switch_providers, cc_switch_switch, get_provider_status, list_runtimes,
+    network_subscription_clear, network_subscription_import, network_subscription_import_file,
+    network_subscription_refresh, network_subscription_show, usage_overview,
     remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_docker,
     start_runtime, stop_runtime, BuildOps, OpMutexes, StartOps,
 };
@@ -89,6 +91,12 @@ pub fn run(cli_arg: Option<String>) {
             cc_switch_edit,
             cc_switch_switch,
             cc_switch_delete,
+            network_subscription_import,
+            network_subscription_import_file,
+            network_subscription_refresh,
+            network_subscription_clear,
+            network_subscription_show,
+            usage_overview,
             load_history,
             save_history,
             build_image,
