@@ -25,6 +25,9 @@ vi.mock("../../../lib/ipc", () => ({
   runtimePreflight: vi.fn(),
   startRuntime: vi.fn().mockResolvedValue(undefined),
   runtimeRestart: vi.fn(),
+  // IDEA-2 (2d): the wizard's container_tun branch asks for the subscription
+  // status through the usage store.
+  networkSubscriptionShow: vi.fn().mockResolvedValue({ configured: true }),
 }));
 
 function envReady(over: Record<string, string> = {}) {

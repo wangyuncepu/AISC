@@ -78,11 +78,16 @@ pub(crate) fn docker_desktop_candidates() -> Vec<PathBuf> {
 #[cfg(windows)]
 fn docker_cli_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
+    if let Ok(base) = std::env::var("LOCALAPPDATA") {
+        let la = PathBuf::from(&base);
+        // Per-user Docker Desktop install (default "Install for me" — observed
+        // 2026-08-19: engine probe missed it and fell back to a stale launch
+        // PATH, so the summary showed "engine not running" with Desktop up).
+        out.push(la.join("Programs\\DockerDesktop\\resources\\bin\\docker.exe"));
+        out.push(la.join("Docker\\Docker Desktop\\resources\\bin\\docker.exe"));
+    }
     if let Ok(pf) = std::env::var("ProgramFiles") {
         out.push(PathBuf::from(pf).join("Docker\\Docker\\resources\\bin\\docker.exe"));
-    }
-    if let Ok(base) = std::env::var("LOCALAPPDATA") {
-        out.push(PathBuf::from(base).join("Docker\\Docker Desktop\\resources\\bin\\docker.exe"));
     }
     out
 }
@@ -105,12 +110,66 @@ fn resolve_docker_cli() -> PathBuf {
     PathBuf::from("docker") // PATH resolution at spawn; caller probes the failure
 }
 
+/// Directory holding the resolved docker.exe (when it came from a known
+/// candidate). The aisc CLI child processes get this prepended to their PATH
+/// (KI-6): the GUI's launch-time PATH snapshot may predate Docker's install
+/// and its USER-PATH registration, but runtime operations must still find
+/// docker.
+#[cfg(windows)]
+pub(crate) fn docker_bin_dir() -> Option<PathBuf> {
+    let resolved = resolve_docker_cli();
+    if resolved.is_absolute() && resolved.is_file() {
+        resolved.parent().map(|p| p.to_path_buf())
+    } else {
+        None
+    }
+}
+
+/// Real-time engine liveness straight from the engine's own named pipe
+/// (`\\.\pipe\docker_engine`, HTTP-over-pipe) — independent of the GUI's
+/// launch-time PATH and of where Docker Desktop is installed (KI-6: a
+/// per-user install plus a pre-install terminal made the CLI probe see
+/// "engine not running" with Desktop up). Returns ``None`` when the pipe
+/// does not exist (engine absent → CLI probe reports the detail).
+#[cfg(windows)]
+async fn engine_reachable_via_pipe() -> Option<bool> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    let mut client = match ClientOptions::new().open(r"\\.\pipe\docker_engine") {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    let req = b"GET /_ping HTTP/1.1\r\nHost: docker\r\nConnection: close\r\n\r\n";
+    if client.write_all(req).await.is_err() {
+        return Some(false);
+    }
+    let mut buf = [0u8; 128];
+    match tokio::time::timeout(ENGINE_PROBE_TIMEOUT, client.read(&mut buf)).await {
+        Ok(Ok(n)) if n > 0 => {
+            let head = String::from_utf8_lossy(&buf[..n]);
+            Some(head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200"))
+        }
+        _ => Some(false),
+    }
+}
+
 /// Probe whether the Docker Engine is reachable, with a bounded timeout.
-/// Uses `docker version --format {{.Server.Version}}` (the CLI is a hard
-/// dependency) with a tokio deadline so a hung daemon never blocks onboarding.
-/// Returns (reachable, redacted-detail) — the detail explains WHY not ready
-/// (spawn failed / non-zero exit / timeout) for the wizard + Doctor (KI-1).
+/// Prefers the engine named pipe (real-time, location-independent, KI-6);
+/// falls back to `docker version --format {{.Server.Version}}` (the CLI is
+/// a hard dependency for operations anyway) with a tokio deadline so a hung
+/// daemon never blocks onboarding. Returns (reachable, redacted-detail) —
+/// the detail explains WHY not ready (spawn failed / non-zero exit /
+/// timeout) for the wizard + Doctor (KI-1).
 async fn engine_reachable_detail() -> (bool, String) {
+    #[cfg(windows)]
+    if let Some(up) = engine_reachable_via_pipe().await {
+        return if up {
+            (true, String::new())
+        } else {
+            (false, "engine pipe answered but /_ping did not return 200".into())
+        };
+    }
     let cli = resolve_docker_cli();
     if cli.as_os_str().is_empty() {
         return (false, "docker CLI not found (not on PATH or Docker Desktop bin)".into());
@@ -339,6 +398,23 @@ mod tests {
         for c in docker_cli_candidates() {
             assert!(c.to_string_lossy().ends_with("docker.exe"));
         }
+    }
+
+    /// KI-6 (2026-08-19): a per-user Docker Desktop install keeps docker.exe
+    /// under `%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin` — with a
+    /// stale launch-time PATH the engine probe saw "engine not running" while
+    /// Desktop was up. The per-user location must be among the candidates.
+    #[cfg(windows)]
+    #[test]
+    fn diag_docker_cli_candidates_include_per_user_install() {
+        let cands = docker_cli_candidates();
+        let base = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        assert!(
+            cands.iter().any(|c| c.to_string_lossy().contains(
+                &format!("{base}\\Programs\\DockerDesktop\\resources\\bin\\docker.exe")
+            )),
+            "per-user DockerDesktop bin missing from candidates: {cands:?}"
+        );
     }
 
     #[cfg(windows)]

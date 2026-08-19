@@ -306,6 +306,79 @@ export interface CcSwitchRequest {
   };
 }
 
+// --- IDEA-2 (2d): subscription status + provider token usage ---
+
+/** Raw `subscription-userinfo` header values (bytes / unix seconds); the
+ * whole object is null when the source provided no usage header. */
+export interface SubscriptionUserInfo {
+  upload?: number;
+  download?: number;
+  total?: number; // 0 = unlimited plan
+  expire?: number;
+}
+
+/** Secret-free subscription snapshot (envelope of `aisc network subscription
+ * …`); the full URL only ever lives in the data-root snapshot file. */
+export interface SubscriptionStatus {
+  configured: boolean;
+  source: "download" | "manual" | null;
+  url_masked: string | null;
+  fetched_at: string | null;
+  config_sha256: string | null;
+  has_config_file: boolean;
+  userinfo: SubscriptionUserInfo | null;
+  config_path?: string;
+}
+
+export type UsageRange = "today" | "7d" | "30d";
+
+/** Per-provider aggregation row (tokens = input+output+cache read+creation). */
+export interface UsageProviderRow {
+  app: string;
+  provider_id: string;
+  provider_name: string;
+  requests: number;
+  success: number;
+  failed: number;
+  tokens_total: number;
+  cost_estimate: number;
+  currency: string;
+}
+
+export interface UsageModelRow {
+  app: string;
+  model: string;
+  requests: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_estimate: number;
+}
+
+export interface UsageWorkspaceEntry {
+  workspace_hash: string;
+  workspace_path: string;
+  running: boolean;
+  container: string;
+  source: "live" | "cache" | "none";
+  fetched_at: string | null;
+  available: boolean;
+  providers: UsageProviderRow[];
+  models: UsageModelRow[];
+}
+
+export interface UsageOverview {
+  subscription: SubscriptionStatus;
+  range: UsageRange | string;
+  since: number;
+  workspaces: UsageWorkspaceEntry[];
+  totals: {
+    providers: UsageProviderRow[];
+    requests: number;
+    tokens_total: number;
+    cost_estimate: number;
+  };
+}
+
 // --- S2.4.a: workbench history (02 §九.2 subset) ---
 
 export interface RuntimeRef {

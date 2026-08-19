@@ -14,6 +14,8 @@ import { useOnboardingStore } from "../../stores/onboarding";
 import { useEnvironmentStore } from "../../stores/environment";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useNetworkStore } from "../../stores/network";
+import { useUsageStore } from "../../stores/usage";
+import SubscriptionForm from "../usage/SubscriptionForm.vue";
 
 const { t } = useI18n();
 const onboarding = useOnboardingStore();
@@ -26,6 +28,23 @@ onMounted(() => {
 });
 
 onUnmounted(() => environment.stopAutoPoll());
+
+// IDEA-2 (D3): inline subscription import for the container_tun choice.
+// The wizard never blocks on it — the form is skippable and the「网络与
+// 用量」panel manages the subscription later.
+const usageStore = useUsageStore();
+const subConfigured = ref<boolean | null>(null);
+watch(
+  () => (onboarding.state?.current_step === "network" ? network.choice : null),
+  (choice) => {
+    if (choice === "container_tun" && subConfigured.value === null) {
+      void usageStore.refreshSubscriptionStatus().then((configured) => {
+        subConfigured.value = configured;
+      });
+    }
+  },
+  { immediate: true },
+);
 
 // Load readiness once when the wizard reaches the environment step, and keep
 // live auto-polling while it is visible (real-time detection — manual test
@@ -400,6 +419,16 @@ async function finish() {
       <p class="ob-note">{{ t("onboarding.net.impact") }}</p>
       <p v-if="network.error" class="ob-error" role="alert">{{ network.error }}</p>
 
+      <!-- IDEA-2 (D3): the container TUN choice needs a proxy subscription —
+           import inline (URL or pasted content) or skip and configure later
+           from the「网络与用量」panel. Never blocks the wizard. -->
+      <div v-if="network.choice === 'container_tun'" class="ob-sub-import">
+        <p class="ob-note">{{ t("onboarding.net.subNeed") }}</p>
+        <p v-if="subConfigured" class="ob-sub-ok">✓ {{ t("onboarding.net.subReady") }}</p>
+        <SubscriptionForm v-else @imported="subConfigured = true" />
+        <p class="ob-note">{{ t("onboarding.net.subLater") }}</p>
+      </div>
+
       <div class="ob-actions">
         <button class="ob-btn ghost" :disabled="network.probing" @click="probeNetwork">
           {{ network.probing ? t("onboarding.net.probing") : t("onboarding.net.probe") }}
@@ -523,6 +552,14 @@ async function finish() {
 .ob-engine-detail { font-family: monospace; font-size: var(--font-xs); color: var(--warn); }
 .ob-probe[data-result="ok"] { color: var(--status-ok); font-size: var(--font-sm); }
 .ob-probe[data-result="failed"] { color: var(--status-err); font-size: var(--font-sm); }
+
+/* IDEA-2 (D3): inline subscription import block (container_tun choice). */
+.ob-sub-import {
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+  max-width: 640px; text-align: left;
+}
+.ob-sub-ok { color: var(--status-ok); font-size: var(--font-sm); }
 .ob-btn.confirm { border-color: var(--status-pending); color: var(--status-pending); }
 .ob-conflicts { max-width: 420px; }
 .ob-conflict-row { color: var(--muted, #888); font-size: var(--font-sm); margin: 2px 0; }

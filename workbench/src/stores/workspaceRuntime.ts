@@ -95,6 +95,12 @@ export const SETTINGS_TAB_ID = "settings-tab";
  * Coexists with the `cc-switch` TUI tab (advanced diagnostics). */
 export const CC_SWITCH_UI_TAB_ID = "cc-switch-ui-tab";
 
+/** IDEA-2 (2d): sentinel id of the workspace-layer「网络与用量」panel —
+ * same contract as the Settings sentinel (never persisted, owns no PTY,
+ * survives workspace switches/closes; the strip chip and the + ▾ menu are
+ * its only entries — no shortcut in v1, WebView2 swallow risk unprobed). */
+export const NETWORK_USAGE_TAB_ID = "network-usage-tab";
+
 /** Session states that have reached a terminal outcome (no live PTY). */
 export const TERMINAL_STATES: TabSessionState[] = ["exited", "failed", "disconnected"];
 

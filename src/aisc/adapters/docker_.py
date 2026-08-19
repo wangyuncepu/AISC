@@ -171,7 +171,10 @@ class RealDockerExecutor:
     # winget install only lands in the user PATH after Explorer re-reads the
     # environment, so a Workbench launched straight from the installer inherits
     # a stale PATH and ``shutil.which`` misses it (TODO 20260806 line 76).
+    # The per-user "Install for me" layout (Programs\DockerDesktop) leads —
+    # KI-6: its absence made direct terminal CLI runs see no running engine.
     _WINDOWS_FALLBACK_PATHS = (
+        r"%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin\docker.exe",
         r"C:\Program Files\Docker\Docker\resources\bin\docker.exe",
         r"%LOCALAPPDATA%\Docker\Docker\resources\bin\docker.exe",
     )

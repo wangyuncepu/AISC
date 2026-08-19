@@ -84,10 +84,16 @@ def plan_run(
 
     ws_path = Path(workspace).resolve() if workspace else Path.cwd()
 
-    # Resolve proxy config
+    # Resolve proxy config (IDEA-2: data-root subscription first — the
+    # legacy <aisc_root>/.claude/mihomo/config.yaml is adopted once on first
+    # use; an explicit --proxy-config always wins).
     resolved_proxy = proxy_config
-    if network == "proxy" and not resolved_proxy and aisc_root is not None:
-        resolved_proxy = str(aisc_root / ".claude" / "mihomo" / "config.yaml")
+    if network == "proxy" and not resolved_proxy:
+        from aisc.application.network_subscription import (
+            resolve_subscription_config_path,
+        )
+
+        resolved_proxy = resolve_subscription_config_path() or ""
 
     # Stage 7 (DATA-01): agent config mounts from the data root. The dirs
     # are created here (host side) so Windows bind mounts have real targets.

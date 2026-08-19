@@ -87,40 +87,37 @@ def run_build_wizard(
         mode = _prompt("Select [1/2]", default="2")
 
         if mode == "1":
-            # Local file
+            # Local file → store as manually imported subscription content
             path_input = _prompt("Local config file absolute path")
             if path_input and Path(path_input).is_file():
-                proxy_config_path = path_input
-                print(f"✅ Using local config: {path_input}")
+                from aisc.application.network_subscription import (
+                    import_subscription_content,
+                )
+                try:
+                    snap = import_subscription_content(Path(path_input).read_bytes())
+                    proxy_config_path = snap["config_path"]
+                    print(f"✅ Config imported: {snap['config_path']}")
+                except Exception as e:  # noqa: BLE001 - wizard stays chatty
+                    print(f"❌ Import failed: {e}")
             else:
                 print(f"⚠️  File not found: {path_input}, skipping proxy.")
         else:
-            # URL download
+            # URL download (IDEA-2: data-root subscription store; the clash
+            # UA, retries and userinfo capture live in the application layer)
             url = _prompt("Config URL")
             if url:
-                # Setup mihomo directory
-                if aisc_root is None:
-                    print("⚠️  AISC root not found, cannot save proxy config.")
-                else:
-                    mihomo_dir = aisc_root / ".claude" / "mihomo"
-                    mihomo_dir.mkdir(parents=True, exist_ok=True)
-                    config_file = mihomo_dir / "config.yaml"
+                from aisc.application.network_subscription import import_subscription
+                from aisc.domain.models import CliError
 
-                    print("⬇️  Downloading config...")
-                    import subprocess
-                    try:
-                        result = subprocess.run(
-                            ["curl", "-fsSL", url, "-o", str(config_file)],
-                            capture_output=True,
-                            timeout=30,
-                        )
-                        if result.returncode == 0 and config_file.exists() and config_file.stat().st_size > 0:
-                            proxy_config_path = str(config_file)
-                            print(f"✅ Proxy config downloaded: {config_file}")
-                        else:
-                            print(f"❌ Download failed: {url}")
-                    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-                        print(f"❌ Download error: {e}")
+                print("⬇️  Downloading subscription...")
+                try:
+                    snap = import_subscription(url)
+                    proxy_config_path = snap["config_path"]
+                    print(f"✅ Subscription imported: {snap['config_path']}")
+                    if snap.get("userinfo"):
+                        print(f"📊 Usage header captured: {snap['userinfo']}")
+                except CliError as e:
+                    print(f"❌ Import failed: {e.message}")
 
     print("\n" + "=" * 50)
     print("Configuration Summary:")

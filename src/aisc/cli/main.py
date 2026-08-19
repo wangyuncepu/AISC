@@ -324,6 +324,67 @@ def _build_parser() -> _AiscArgumentParser:
     csd.add_argument("--confirm", action="store_true", default=False,
                      help="Required confirmation flag")
 
+    # --- network (IDEA-2: mihomo subscription data plane) ---
+    nwp = sub.add_parser(
+        "network", help="Network management (mihomo subscription for container TUN)",
+        allow_abbrev=False,
+    )
+    _add_global_args(nwp, is_subparser=True)
+    nwsub = nwp.add_subparsers(dest="network_command", title="network commands",
+                               parser_class=_AiscArgumentParser, required=True)
+
+    nws = nwsub.add_parser(
+        "subscription", help="Manage the proxy subscription (IDEA-2)",
+        allow_abbrev=False,
+    )
+    _add_global_args(nws, is_subparser=True)
+    nwssub = nws.add_subparsers(dest="subscription_command",
+                                title="subscription commands",
+                                parser_class=_AiscArgumentParser, required=True)
+
+    nwi = nwssub.add_parser(
+        "import", help="Import a subscription (URL on stdin — a credential, "
+                       "never argv)", allow_abbrev=False)
+    _add_global_args(nwi, is_subparser=True)
+
+    nwif = nwssub.add_parser(
+        "import-file", help="Import manually supplied subscription content "
+                            "(full content on stdin; fallback for sources "
+                            "that reject automated downloads)", allow_abbrev=False)
+    _add_global_args(nwif, is_subparser=True)
+
+    nwr = nwssub.add_parser(
+        "refresh", help="Re-fetch the stored subscription URL", allow_abbrev=False)
+    _add_global_args(nwr, is_subparser=True)
+
+    nww = nwssub.add_parser(
+        "show", help="Show subscription status (secret-free)", allow_abbrev=False)
+    _add_global_args(nww, is_subparser=True)
+
+    nwc = nwssub.add_parser("clear", help="Remove the stored subscription",
+                            allow_abbrev=False)
+    _add_global_args(nwc, is_subparser=True)
+    nwc.add_argument("--confirm", action="store_true", default=False,
+                     help="Required confirmation flag")
+
+    # --- usage (IDEA-2: provider token usage aggregation) ---
+    usp = sub.add_parser(
+        "usage", help="Provider token usage statistics (all workspaces)",
+        allow_abbrev=False,
+    )
+    _add_global_args(usp, is_subparser=True)
+    ussub = usp.add_subparsers(dest="usage_command", title="usage commands",
+                               parser_class=_AiscArgumentParser, required=True)
+    uso = ussub.add_parser(
+        "overview", help="Subscription status + per-provider token usage",
+        allow_abbrev=False)
+    _add_global_args(uso, is_subparser=True)
+    uso.add_argument("--range", dest="range", type=str, default="7d",
+                     choices=["today", "7d", "30d"],
+                     help="Time window (default: 7d)")
+    uso.add_argument("--workspace", type=str, default=None,
+                     help="Limit to one workspace path (default: all)")
+
     # --- ps ---
     psp = sub.add_parser("ps", help="List all registered containers", allow_abbrev=False)
     _add_global_args(psp, is_subparser=True)
@@ -561,7 +622,8 @@ def _detect_events(argv: List[str]) -> bool:
 def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "profile",
              "status", "stop", "restart", "shell", "switch", "provider",
-             "ps", "runtime", "session", "artifact", "data-root"}
+             "cc-switch", "network", "usage", "ps", "runtime", "session",
+             "artifact", "data-root"}
     for arg in argv:
         if arg in known:
             return arg
@@ -1108,6 +1170,57 @@ def _cmd_cc_switch(
 
     if effective_format == "text":
         cs_cmd.print_cc_switch_text(data)
+    return data, 0, []
+
+
+def _cmd_network(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc network`` subcommands (IDEA-2 subscription data plane).
+
+    Non-interactive, ``--format json`` throughout; the subscription URL rides
+    stdin for ``import`` (secrets never ride argv).
+    """
+    from aisc.cli.commands import network as nw_cmd
+
+    if getattr(args, "network_command", None) != "subscription":
+        raise CliError(message="unknown network subcommand",
+                       exit_code=2, error_code="AISC_ERR_USAGE")
+
+    sub = getattr(args, "subscription_command", None)
+    if sub == "import":
+        data = nw_cmd.cmd_network_subscription_import(args)
+    elif sub == "import-file":
+        data = nw_cmd.cmd_network_subscription_import_file(args)
+    elif sub == "refresh":
+        data = nw_cmd.cmd_network_subscription_refresh(args)
+    elif sub == "show":
+        data = nw_cmd.cmd_network_subscription_show(args)
+    elif sub == "clear":
+        data = nw_cmd.cmd_network_subscription_clear(args)
+    else:
+        raise CliError(message="unknown network subscription subcommand",
+                       exit_code=2, error_code="AISC_ERR_USAGE")
+
+    if effective_format == "text":
+        nw_cmd.print_network_subscription_text(data)
+    return data, 0, []
+
+
+def _cmd_usage(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc usage`` subcommands (IDEA-2 usage data plane)."""
+    from aisc.cli.commands import usage as usage_cmd
+
+    if getattr(args, "usage_command", None) != "overview":
+        raise CliError(message="unknown usage subcommand",
+                       exit_code=2, error_code="AISC_ERR_USAGE")
+    data = usage_cmd.cmd_usage_overview(args)
+    if effective_format == "text":
+        usage_cmd.print_usage_overview_text(data)
     return data, 0, []
 
 
@@ -1722,6 +1835,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_provider(args, effective_format)
         elif args.command == "cc-switch":
             data, exit_code, errors = _cmd_cc_switch(args, effective_format)
+        elif args.command == "network":
+            data, exit_code, errors = _cmd_network(args, effective_format)
+        elif args.command == "usage":
+            data, exit_code, errors = _cmd_usage(args, effective_format)
         elif args.command == "ps":
             data, exit_code, errors = _cmd_ps(args, effective_format)
         elif args.command == "runtime":

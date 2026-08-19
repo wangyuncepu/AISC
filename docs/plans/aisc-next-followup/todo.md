@@ -1,5 +1,32 @@
 # 待办与门禁
 
+## KI-7 Provider 管理页两处异常（2026-08-19 用户 IDEA-2 手测期间发现，挂账待查）
+
+- **自定义添加供应商报错**：provider 页「自定义」方式添加时报
+  `unknown preset provider (simple mode uses preset ids)`——疑似 custom 模式的
+  mode 未正确传到容器 adapter（op_add 按 simple 走了 preset 查找）。
+  排查方向：CcSwitchUiTab 自定义表单构造的 request、Rust `cc_switch_add`
+  传参、adapter `op_add` 的 mode 分支。
+- **外部 cc-switch 改动不同步**：用户在 bash 里用 cc-switch（TUI）新增
+  provider / 改 api-key 后，provider 页不实时反映（无刷新或刷新粒度不含
+  list）。排查方向：ccSwitchUi store 的加载时机（tab 开时一次性？）、
+  useProviderPolling 只覆盖 provider current 不覆盖 list。
+- 归属：IDEA-4/Stage 8e 家族打磨，可与 IDEA-5（模型映射 UI + 切换视觉反馈）
+  同轮规划。
+
+## KI-6 Docker 检测/操作受启动时 PATH 与安装位置影响（2026-08-19，IDEA-2 手测期间发现，随 `idea-2-network-usage` 修复）
+
+- **症状**：Docker Desktop 已启动，Workbench 启动摘要仍报「Docker 引擎未运行」。
+- **根因（双层）**：①本机 Docker 为**每用户安装**（`%LOCALAPPDATA%\Programs\DockerDesktop`），
+  而 `env.rs::docker_cli_candidates` 只认机装位 + 错误的旧猜测位；②GUI 进程 PATH 是
+  启动时快照，装 Docker 前开的终端继承不到安装器写入用户 PATH 的 bin 目录。
+- **修复（三层）**：①引擎探测改为**命名管道 `\\.\pipe\docker_engine` 直发
+  `GET /_ping`**（实时、与安装位置/PATH 完全无关；tokio named pipe，CLI 探测降为
+  兜底）；②CLI/Desktop exe 候选链补每用户安装位（docker.exe 与 frontend\Docker
+  Desktop.exe），NSIS `un.FindDockerCli` 同步补；③`run_control_inner` 给 aisc 子进程
+  **前置注入 docker bin 目录到 PATH**（Python CLI 的裸 docker 调用不再受快照影响）。
+  cargo --lib 197 全绿（含每用户路径锚定 + 管道探测实测）。
+
 ## v2.1.6-dev 预览手测阻塞项（2026-08-18，draft 暂不发布）
 
 > 来源：v2.1.6-dev 安装包"全新机器"手测（用户 2026-08-18）。发布前需逐项
@@ -101,21 +128,43 @@
   桌面版观感。
 - **归属**：与 Provider 管理相关的独立小迭代，可与 IDEA-2/3 同轮规划。
 
-### IDEA-2 容器 TUN 模式的 mihomo 订阅配置（2026-08-17 用户提出，待规划）
+### IDEA-2 mihomo 订阅导入 + 「网络与用量」面板 + Provider token 统计（2026-08-17 提出；**2026-08-19 实现，手测三轮 PASS，2e 收口**）
 
-- **内容**：用户在启动配置选择 `network=proxy`（容器 TUN）后，应引导用户配置
-  mihomo 所需代理——输入其**购买的代理配置文件（订阅）链接**，Workbench 下载后
-  作为容器内 mihomo 的配置文件。
-- **待规划问题**（拟定计划时逐项决策）：
-  - 订阅链接属敏感凭据：存储位置（settings vs data root 专属文件）、脱敏展示、
-    是否随诊断包导出（默认否）；
-  - 下载链路归属（Rust reqwest vs CLI 子命令）与超时/重试/离线失败 UX；
-  - 配置形态假设：Clash 订阅（可整份用作 mihomo config）vs 需要 Workbench 合成
-    基础配置 + 注入节点（TUN 段、DNS 段必须由我们控制，不能全盘信任订阅内容）；
-  - 刷新策略（每次启动拉新 vs 手动刷新 + 缓存于 data root）、完整性校验
-    （YAML 可解析、必要段落存在）；
-  - 与现有 `network: direct|proxy` preflight/UI 的衔接点。
-- **归属建议**：独立小阶段或并入 Stage 8 前置（涉及网络面，不动 Provider UI）。
+- **实现收束**（分支 `idea-2-network-usage`，2a-2e 全阶段）：
+  - **2a 探针**：usage schema 用宿主 db 副本直接冻结（数据落点
+    `proxy_request_logs`；rollups 是上游缓存不读；providers 只取
+    id/app_type/name）；**用户机场订阅源有 TLS 指纹墙**（curl/openssl/
+    python/.NET/curl_cffi 全被 ClientHello 掐，真 Chrome 过但拿 HTML；
+    clash-verge 刷新正常 → Rust reqwest 能过，挂账首选 Rust 侧下载）。
+  - **2b 订阅数据面**：`aisc network subscription import/import-file/
+    refresh/show/clear`（URL 与内容均走 stdin；信封只出脱敏串；
+    TLS_REJECTED 稳定错误码）；数据根 `config/mihomo/subscription.yaml` +
+    快照（source: download|manual）；legacy 一次性采用；向导重定向；
+    **start_runtime/plan_run 自动解析订阅（修缺口①：Workbench proxy 容器
+    从此真挂配置）**；fingerprint 增 `proxy_config_sha256` 仅 proxy 模式
+    （direct 字节级不变，订阅刷新→下次 start 走既有重建引导）。
+  - **2c 用量数据面**：容器 adapter `usage` 操作（created_at 单位嗅探 ms/s，
+    表缺失优雅降级；`--since` 宿主算 epoch，today=本地零点）+ 宿主
+    `aisc usage overview [--range][--workspace]`（live=容器内 exec 宿主永不
+    直开 WAL 库；停止用 cache/usage 快照，today 跨日不复用；跨工作区
+    (app, provider_id) 聚合）。
+  - **2d 面板**：`NETWORK_USAGE_TAB_ID` 设置同层哨兵（chip/▾ 菜单/App.vue
+    接管）+ `stores/usage.ts`（组件零直接 ipc，层契约守门）+ 面板两节 +
+    共享 SubscriptionForm（URL/粘贴内容）+ 向导内嵌 + LaunchSummary 警示。
+    偏离：preflight warning 未做（can_start 语义下 warn=变相 fail）。
+  - **手测三轮**：一轮面板/导入/摘要/向导/proxy 实跑（**mihomo 实际生效实证：
+    容器内 gstatic 204 / api.anthropic 403**）；二轮修导入后不切视图/无反馈/
+    加 token 单位（自动/k/M/纯数字）与币种（USD/CNY 固定汇率 7.25）切换 +
+    价格未知标记（有请求费用 0→未命中定价表）；三轮修工作区选择器被服务端
+    过滤收窄（改全量拉取客户端过滤）。
+- **顺带修复（手测期间发现）**：KI-6 Docker 检测（引擎探测改命名管道
+  `\\.\pipe\docker_engine` 直发 /_ping；每用户安装位补进 Rust/NSIS/Python
+  三处探测链；Workbench 给 aisc 子进程注入 docker bin 到 PATH）；entrypoint
+  mihomo 探测误报（容器无 procps，pgrep 不存在 → PID+kill-0 判活 + 3 轮重试）。
+- **挂账**：指纹源自动下载（Rust reqwest 方向已定）；订阅把用量做进假节点名
+  （`已用流量：4.03 GB` 等）——可作 userinfo 头缺失时的用量兜底解析；
+  KI-7（provider 自定义添加报 unknown preset / 外部 cc-switch 改动不同步）。
+- 单位/币种偏好现为会话级（不持久化），持久化需求待用户提出再挂账。
 
 ### IDEA-3 顶栏设置按钮去留 + 工作区级 tab（2026-08-17 用户提出；**2026-08-18 实现并手测 PASS**）
 

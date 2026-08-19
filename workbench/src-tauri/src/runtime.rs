@@ -477,6 +477,134 @@ pub async fn cc_switch_delete(
     cc_switch_call(&app, argv, None).await
 }
 
+// --- IDEA-2 (2d): network subscription + usage overview IPC -----------------
+// Thin wrappers over the CLI data plane (`aisc network subscription …` /
+// `aisc usage overview`); the panel trusts the CLI envelope's data shape.
+
+/// Subscription fetch budget: 30s per attempt × 2 attempts + connect slack.
+const SUBSCRIPTION_TIMEOUT: Duration = Duration::from_secs(90);
+/// Usage overview budget: one adapter exec per RUNNING workspace container.
+const USAGE_OVERVIEW_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn network_subscription_argv(op: &str, confirm: bool) -> Vec<String> {
+    let mut argv = vec![
+        "network".into(),
+        "subscription".into(),
+        op.into(),
+        "--format".into(),
+        "json".into(),
+    ];
+    if confirm {
+        argv.push("--confirm".into()); // the CLI gates clear on this flag
+    }
+    argv
+}
+
+fn usage_overview_argv(range: &str, workspace: Option<&str>) -> Vec<String> {
+    let mut argv = vec![
+        "usage".into(),
+        "overview".into(),
+        "--range".into(),
+        range.into(),
+        "--format".into(),
+        "json".into(),
+    ];
+    if let Some(ws) = workspace {
+        argv.push("--workspace".into());
+        argv.push(ws.into());
+    }
+    argv
+}
+
+/// Shared runner for the IDEA-2 data-plane commands: run the aisc CLI,
+/// surface envelope errors (AISC_ERR_NETWORK_SUBSCRIPTION_* / AISC_ERR_USAGE
+/// carry the CLI's own guidance text), return the envelope's `data`.
+async fn aisc_data_call(
+    app: &AppHandle,
+    argv: Vec<String>,
+    input: Option<String>,
+    timeout: Duration,
+) -> Result<Value, WorkbenchError> {
+    let pin = crate::session::resolve_cli(app).await?;
+    let env = match input {
+        Some(text) => {
+            crate::cli::run_control_input(&pin, argv, text, timeout, CancellationToken::new()).await?
+        }
+        None => run_control(&pin, argv, timeout, CancellationToken::new()).await?,
+    };
+    if let Some(err) = env.errors.first() {
+        let mut wb = WorkbenchError::map_aisc(&err.code);
+        // The subscription error codes are unknown to map_aisc's curated
+        // table — the CLI's message already carries the recovery guidance
+        // (e.g. TLS_REJECTED points at content import).
+        if err.code.starts_with("AISC_ERR_NETWORK_SUBSCRIPTION_")
+            || err.code.starts_with("AISC_ERR_USAGE")
+        {
+            wb.message = err.message.clone();
+            wb.retryable = false;
+        }
+        return Err(wb.with_detail(err.message.clone()));
+    }
+    Ok(env.data.unwrap_or(Value::Null))
+}
+
+/// Import a subscription from a URL (the URL is a credential — it rides the
+/// CLI child's STDIN, never argv/logs/disk).
+#[tauri::command]
+pub async fn network_subscription_import(
+    app: AppHandle,
+    url: String,
+) -> Result<Value, WorkbenchError> {
+    let argv = network_subscription_argv("import", false);
+    aisc_data_call(&app, argv, Some(url), SUBSCRIPTION_TIMEOUT).await
+}
+
+/// Import manually supplied subscription content (D4 fallback for
+/// fingerprint-filtering sources); content rides STDIN.
+#[tauri::command]
+pub async fn network_subscription_import_file(
+    app: AppHandle,
+    content: String,
+) -> Result<Value, WorkbenchError> {
+    let argv = network_subscription_argv("import-file", false);
+    aisc_data_call(&app, argv, Some(content), SUBSCRIPTION_TIMEOUT).await
+}
+
+/// Re-fetch the stored subscription URL.
+#[tauri::command]
+pub async fn network_subscription_refresh(app: AppHandle) -> Result<Value, WorkbenchError> {
+    let argv = network_subscription_argv("refresh", false);
+    aisc_data_call(&app, argv, None, SUBSCRIPTION_TIMEOUT).await
+}
+
+/// Remove the stored subscription (the CLI gates on --confirm internally).
+#[tauri::command]
+pub async fn network_subscription_clear(app: AppHandle) -> Result<Value, WorkbenchError> {
+    let argv = network_subscription_argv("clear", true);
+    aisc_data_call(&app, argv, None, PROVIDER_TIMEOUT).await
+}
+
+/// Secret-free subscription status, no fetch (wizard + summary hint source).
+#[tauri::command]
+pub async fn network_subscription_show(app: AppHandle) -> Result<Value, WorkbenchError> {
+    let argv = network_subscription_argv("show", false);
+    aisc_data_call(&app, argv, None, PROVIDER_TIMEOUT).await
+}
+
+/// Subscription status + per-provider token usage across all workspaces.
+#[tauri::command]
+pub async fn usage_overview(
+    app: AppHandle,
+    range: String,
+    workspace: Option<String>,
+) -> Result<Value, WorkbenchError> {
+    if !matches!(range.as_str(), "today" | "7d" | "30d") {
+        return Err(WorkbenchError::map_aisc("AISC_ERR_USAGE"));
+    }
+    let argv = usage_overview_argv(&range, workspace.as_deref());
+    aisc_data_call(&app, argv, None, USAGE_OVERVIEW_TIMEOUT).await
+}
+
 #[tauri::command]
 pub async fn runtime_preflight(
     app: AppHandle,
@@ -854,7 +982,11 @@ fn suppress_docker_dashboard_in(dir: &std::path::Path) -> bool {
 pub(crate) fn docker_desktop_candidates() -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     if let Ok(base) = std::env::var("LOCALAPPDATA") {
-        out.push(std::path::PathBuf::from(base).join("Docker\\Docker Desktop\\Docker Desktop.exe"));
+        let la = std::path::PathBuf::from(&base);
+        // Per-user install layout (KI-6): the frontend exe lives under
+        // Programs\DockerDesktop\frontend, not the machine-wide Program Files.
+        out.push(la.join("Programs\\DockerDesktop\\frontend\\Docker Desktop.exe"));
+        out.push(la.join("Docker\\Docker Desktop\\Docker Desktop.exe"));
     }
     if let Ok(pf) = std::env::var("ProgramFiles") {
         out.push(std::path::PathBuf::from(pf).join("Docker\\Docker\\Docker Desktop.exe"));
@@ -987,6 +1119,33 @@ async fn install_docker_desktop_bundled(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- IDEA-2 (2d): subscription / usage argv builders ---
+
+    #[test]
+    fn network_subscription_argv_shapes() {
+        assert_eq!(
+            network_subscription_argv("import", false),
+            vec!["network", "subscription", "import", "--format", "json"]
+        );
+        assert_eq!(
+            network_subscription_argv("clear", true),
+            vec!["network", "subscription", "clear", "--format", "json", "--confirm"]
+        );
+    }
+
+    #[test]
+    fn usage_overview_argv_range_and_workspace_filter() {
+        assert_eq!(
+            usage_overview_argv("7d", None),
+            vec!["usage", "overview", "--range", "7d", "--format", "json"]
+        );
+        assert_eq!(
+            usage_overview_argv("today", Some("C:\\ws")),
+            vec!["usage", "overview", "--range", "today", "--format", "json",
+                 "--workspace", "C:\\ws"]
+        );
+    }
 
     // --- IDEA-3 (3b): keyed op-token map (concurrent workspaces) ---
 

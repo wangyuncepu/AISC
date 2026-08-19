@@ -30,6 +30,7 @@ import { useDoctorStore } from "./stores/doctor";
 import { useRuntimePolling } from "./composables/useRuntimePolling";
 import { useProviderPolling } from "./composables/useProviderPolling";
 import SettingsTab from "./features/settings/SettingsTab.vue";
+import NetworkUsageTab from "./features/usage/NetworkUsageTab.vue";
 import DoctorDialog from "./features/doctor/DoctorDialog.vue";
 import OnboardingWizard from "./features/onboarding/OnboardingWizard.vue";
 import WorkspaceBar from "./features/workspace/WorkspaceBar.vue";
@@ -94,6 +95,16 @@ function toggleSettings(): void {
     void nextTick(() => settingsPaneRef.value?.focus({ preventScroll: true }));
   }
 }
+
+// IDEA-2 (2d): the「网络与用量」pane — same slot as Settings. It opens from
+// the strip chip / ▾ menu (no shortcut in v1), so focus follows activation.
+const networkUsagePaneRef = ref<HTMLElement | null>(null);
+watch(
+  () => ws.networkUsageTabActive,
+  (active) => {
+    if (active) void nextTick(() => networkUsagePaneRef.value?.focus({ preventScroll: true }));
+  },
+);
 
 // The ONE app-level keydown (workspace layer): Ctrl/Cmd+, toggles Settings
 // everywhere after onboarding; Ctrl/Cmd+PgUp/PgDn cycles workspaces;
@@ -391,6 +402,12 @@ onBeforeUnmount(() => {
         <SettingsTab />
       </div>
 
+      <!-- IDEA-2 (2d): the workspace-level「网络与用量」panel — same content
+           area takeover semantics as the settings pane. -->
+      <div v-if="ws.networkUsageTabActive" ref="networkUsagePaneRef" class="settings-pane" tabindex="-1">
+        <NetworkUsageTab />
+      </div>
+
       <!-- Capability gate (app-level; strip stays for reachability) -->
       <div v-if="store.status === 'blocked'" class="gate blocked">
         <h2>{{ t("app.blocked.title") }}</h2>
@@ -408,8 +425,12 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- The ACTIVE workspace's view (keyed remount on switch); yields to
-           the Settings pane while that tab is active. -->
-      <WorkspaceView v-else-if="!ws.settingsTabActive" :key="ws.activeRuntime.id" :zoom="terminalZoom" />
+           the Settings / 网络与用量 panes while either is active. -->
+      <WorkspaceView
+        v-else-if="!ws.settingsTabActive && !ws.networkUsageTabActive"
+        :key="ws.activeRuntime.id"
+        :zoom="terminalZoom"
+      />
     </template>
 
     <!-- G-13: diagnosis dialog, shared by blocked/error/ready entry points -->
