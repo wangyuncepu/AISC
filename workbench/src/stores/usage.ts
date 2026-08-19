@@ -109,8 +109,11 @@ export const useUsageStore = defineStore("usage", () => {
     loading.value = true;
     usageError.value = null;
     try {
-      const ws = scope.value === "all" ? undefined : scope.value;
-      overview.value = await usageOverview(range.value, ws);
+      // Always fetch the FULL overview: the workspace selector is built from
+      // the returned list, so a server-side --workspace filter would shrink
+      // the dropdown to just the selected entry (2d 手测 round 3). `scope`
+      // stays a purely client-side row filter.
+      overview.value = await usageOverview(range.value);
       // The overview envelope carries the subscription snapshot too.
       if (overview.value?.subscription) subscription.value = overview.value.subscription;
       return overview.value;

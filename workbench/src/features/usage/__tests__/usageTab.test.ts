@@ -123,6 +123,26 @@ describe("NetworkUsageTab (IDEA-2 2d)", () => {
     tab.unmount();
   });
 
+  it("selecting a workspace keeps the full dropdown (server never filters, 2d round 3)", async () => {
+    mockIpc.usageOverview.mockResolvedValue(overview(SUB_CONFIGURED));
+    const usage = useUsageStore();
+    const tab = mount(NetworkUsageTab, { global: { plugins: [i18n] } });
+    await flushPromises();
+
+    // Two workspaces in the dropdown: 全部 + ttt (fixture has one ws).
+    usage.scope = "C:\\proj\\ttt";
+    await usage.fetchOverview();
+    await flushPromises();
+
+    // The fetch must stay unfiltered — a server-side --workspace would
+    // shrink the selector to the selected entry only.
+    expect(mockIpc.usageOverview).toHaveBeenLastCalledWith("7d");
+    const options = tab.findAll("select")[1]!.findAll("option");
+    expect(options.some((o) => o.text().includes("全部工作区"))).toBe(true);
+    expect(options.some((o) => o.text().includes("ttt"))).toBe(true);
+    tab.unmount();
+  });
+
   it("a successful import switches the panel back to the status view (2d round 2)", async () => {
     const subNone: SubscriptionStatus = {
       configured: false, source: null, url_masked: null, fetched_at: null,

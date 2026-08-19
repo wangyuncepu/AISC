@@ -1,5 +1,19 @@
 # 待办与门禁
 
+## KI-7 Provider 管理页两处异常（2026-08-19 用户 IDEA-2 手测期间发现，挂账待查）
+
+- **自定义添加供应商报错**：provider 页「自定义」方式添加时报
+  `unknown preset provider (simple mode uses preset ids)`——疑似 custom 模式的
+  mode 未正确传到容器 adapter（op_add 按 simple 走了 preset 查找）。
+  排查方向：CcSwitchUiTab 自定义表单构造的 request、Rust `cc_switch_add`
+  传参、adapter `op_add` 的 mode 分支。
+- **外部 cc-switch 改动不同步**：用户在 bash 里用 cc-switch（TUI）新增
+  provider / 改 api-key 后，provider 页不实时反映（无刷新或刷新粒度不含
+  list）。排查方向：ccSwitchUi store 的加载时机（tab 开时一次性？）、
+  useProviderPolling 只覆盖 provider current 不覆盖 list。
+- 归属：IDEA-4/Stage 8e 家族打磨，可与 IDEA-5（模型映射 UI + 切换视觉反馈）
+  同轮规划。
+
 ## KI-6 Docker 检测/操作受启动时 PATH 与安装位置影响（2026-08-19，IDEA-2 手测期间发现，随 `idea-2-network-usage` 修复）
 
 - **症状**：Docker Desktop 已启动，Workbench 启动摘要仍报「Docker 引擎未运行」。
