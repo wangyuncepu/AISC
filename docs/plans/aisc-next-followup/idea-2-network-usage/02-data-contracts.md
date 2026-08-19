@@ -71,14 +71,18 @@
 ```json
 {
   "configured": true,
+  "source": "download",
   "url_masked": "https://provider.example/api/…?****",
   "fetched_at": "2026-08-19T12:34:56+08:00",
   "config_sha256": "sha256:3f2a…",
   "has_config_file": true,
-  "userinfo": { … }        // 或 null
+  "userinfo": { … },        // 或 null
+  "config_path": "C:\\…\\subscription.yaml"
 }
 ```
 
+- `source`: `download`（URL 拉取）| `manual`（内容导入/legacy 采用，无 URL）。
+- `config_path`：落盘绝对路径（非机密）；其余调用无此键。
 - `clear --confirm` 成功 → `{"configured": false}`。
 - 脱敏规则（Python 侧确定性实现）：保留 `scheme://host`；路径截前 8 字符接
   `…`；有 query 则替换为 `****`；fragment 丢弃。

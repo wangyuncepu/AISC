@@ -42,10 +42,17 @@ def compute_config_fingerprint(
     network: str,
     scope: str,
     workspace: str,
+    proxy_config_sha256: Optional[str] = None,
 ) -> str:
     """Compute canonical config fingerprint for runtime identity.
 
     Returns sha256:<hex> format per docs/gui-planning/03-lifecycle-contract.md.
+
+    IDEA-2 (D1): ``proxy_config_sha256`` participates only when
+    ``network == "proxy"`` — direct-mode canonical JSON stays byte-identical
+    to the pre-IDEA-2 shape so existing direct containers never conflict.
+    A refreshed subscription changes the hash, so the next start sees a
+    fingerprint mismatch and the existing recreate guidance takes over.
     """
     canonical_workspace = str(Path(workspace).resolve())
     config = {
@@ -54,8 +61,35 @@ def compute_config_fingerprint(
         "scope": scope,
         "workspace": canonical_workspace,
     }
+    if network == "proxy":
+        config["proxy_config_sha256"] = proxy_config_sha256 or ""
     config_str = json.dumps(config, sort_keys=True, separators=(',', ':'))
     digest = hashlib.sha256(config_str.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _proxy_config_sha256(network: str, proxy_config: Optional[str]) -> str:
+    """Subscription content hash for proxy-mode fingerprints (IDEA-2 D1).
+
+    Empty string in direct mode and for proxy runs without any config file
+    (TUN without a config stays a valid mode). Read-only by design: legacy
+    adoption never happens here so preflight stays side-effect free.
+    """
+    if network != "proxy":
+        return ""
+    path = proxy_config
+    if not path:
+        from aisc.application.network_subscription import (
+            resolve_subscription_config_path,
+        )
+
+        path = resolve_subscription_config_path(adopt_legacy=False)
+    if not path:
+        return ""
+    try:
+        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return ""
     return f"sha256:{digest}"
 
 
@@ -325,6 +359,7 @@ def _check_runtime_conflict(
     registry_root: Optional[Path],
     docker_available: bool,
     executor: Any,
+    proxy_config: Optional[str] = None,
 ) -> tuple[PreflightCheck, Optional[str], List[Dict[str, Any]], Optional[str]]:
     """Check for runtime conflicts.
 
@@ -332,6 +367,10 @@ def _check_runtime_conflict(
     matching_state is "running", "stopped", or None.
     Fail-closed: if registry cannot be read, returns conflict fail.
     Also checks Docker labels to reconcile registry with actual container state.
+
+    ``proxy_config`` (IDEA-2 D1) feeds the fingerprint's subscription hash;
+    ``None`` auto-resolves read-only so preflight and start agree on the
+    file the start would mount.
     """
     from aisc.adapters.container_registry import list_containers_readonly
 
@@ -364,7 +403,10 @@ def _check_runtime_conflict(
         )
 
     # Compute config fingerprint for this request
-    fingerprint = compute_config_fingerprint(image, network, scope, workspace)
+    fingerprint = compute_config_fingerprint(
+        image, network, scope, workspace,
+        proxy_config_sha256=_proxy_config_sha256(network, proxy_config),
+    )
 
     # Query Docker for containers with matching runtime-id label
     docker_containers = _query_docker_labels(runtime_id, executor)
@@ -878,7 +920,23 @@ def start_runtime(
         )
 
     canonical_workspace = str(ws_path)
-    fingerprint = compute_config_fingerprint(image, network, scope, canonical_workspace)
+
+    # IDEA-2 (缺口①): the Workbench never passed --proxy-config, so proxy
+    # launches got TUN caps with nothing mounted and the entrypoint silently
+    # skipped mihomo. Auto-resolve from the data root (adopting the legacy
+    # repo-root config once); an explicit --proxy-config still wins.
+    resolved_proxy = proxy_config
+    if network == "proxy" and not resolved_proxy:
+        from aisc.application.network_subscription import (
+            resolve_subscription_config_path,
+        )
+
+        resolved_proxy = resolve_subscription_config_path()
+
+    fingerprint = compute_config_fingerprint(
+        image, network, scope, canonical_workspace,
+        proxy_config_sha256=_proxy_config_sha256(network, resolved_proxy),
+    )
     ws_key = workspace_key_for(canonical_workspace)
     container_name = container_name_for(runtime_id)
     reg_root = _resolve_registry_root(canonical_workspace, registry_root)
@@ -904,6 +962,7 @@ def start_runtime(
                 registry_root=reg_root,
                 docker_available=True,
                 executor=executor,
+                proxy_config=resolved_proxy,
             )
         )
 
@@ -997,8 +1056,8 @@ def start_runtime(
             ])
         if network == "proxy":
             argv.extend(["--cap-add=NET_ADMIN", "--device", "/dev/net/tun"])
-            if proxy_config:
-                argv.extend(["-v", f"{proxy_config}:/etc/mihomo/config.yaml:ro"])
+            if resolved_proxy:
+                argv.extend(["-v", f"{resolved_proxy}:/etc/mihomo/config.yaml:ro"])
         argv.append(image)
 
         proc = executor.run_captured(argv, timeout=60.0)
