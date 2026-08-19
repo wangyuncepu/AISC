@@ -903,6 +903,45 @@ def _parse_model_lines(text: str) -> list[str]:
     return list(dict.fromkeys(out))[:200]
 
 
+def _http_get_json(url: str, headers: dict[str, str], timeout: float) -> tuple[int, Any]:
+    """Injectable HTTP GET returning (status, parsed-json-or-None). The
+    default uses stdlib urllib; tests stub this seam."""
+    import urllib.request
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            import json as _json
+            return int(resp.status), _json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), None
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0, None
+
+
+def _openai_compatible_models(base_url: str, api_key: str) -> list[str] | None:
+    """The documented fetch path (user-manual 2.1 §自动获取模型): the
+    OpenAI-compatible `/v1/models` endpoint. For anthropic-compat providers
+    (`…/anthropic` base) the native base is derived by stripping the suffix.
+    Returns None when the endpoint/auth rejects us — the caller degrades."""
+    base = base_url.rstrip("/")
+    if base.endswith("/anthropic"):
+        base = base[: -len("/anthropic")]
+    if not base:
+        return None
+    status, payload = _http_get_json(
+        f"{base}/v1/models",
+        {"Authorization": f"Bearer {api_key}"} if api_key else {},
+        15.0,
+    )
+    if status != 200 or not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return None
+    ids = [str(m.get("id")) for m in data if isinstance(m, dict) and m.get("id")]
+    return ids or None
+
+
 def op_fetch_models(agent: str, provider_id: str) -> dict[str, Any]:
     snapshot = read_snapshot(agent)
     row = next((r for r in snapshot if r["id"] == provider_id), None)
@@ -913,16 +952,27 @@ def op_fetch_models(agent: str, provider_id: str) -> dict[str, Any]:
         ["-a", agent, "provider", "fetch-models", provider_id], "", secrets
     )
     combined = f"{completed.stdout or ''}\n{completed.stderr or ''}"
-    if completed.returncode != 0 or "error" in combined.lower():
-        lines = [l.strip() for l in combined.splitlines() if l.strip()]
-        detail = next((l for l in reversed(lines)), "") or f"exit {completed.returncode}"
-        return {"available": False, "models": [], "message": redact(detail, secrets)[:200]}
-    models = _parse_model_lines(completed.stdout or "")
-    return {
-        "available": bool(models),
-        "models": models,
-        "message": "" if models else "no model ids recognized in the upstream output",
-    }
+    cli_failed = completed.returncode != 0 or "error" in combined.lower()
+    if not cli_failed:
+        models = _parse_model_lines(completed.stdout or "")
+        if models:
+            return {"available": True, "models": models, "message": ""}
+
+    # Fallback: the documented OpenAI-compatible path (the CLI subcommand
+    # targets the anthropic-compat base; many providers only serve /v1/models
+    # on their native base). The key is used transiently in-process and never
+    # enters the envelope.
+    env = row["settings"].get("env")
+    env = env if isinstance(env, dict) else {}
+    base_url = str(env.get("ANTHROPIC_BASE_URL") or "")
+    api_key = str(env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY") or "")
+    fallback = _openai_compatible_models(base_url, api_key) if base_url else None
+    if fallback:
+        return {"available": True, "models": fallback, "message": ""}
+
+    lines = [l.strip() for l in combined.splitlines() if l.strip()]
+    detail = next((l for l in reversed(lines)), "") or f"exit {completed.returncode}"
+    return {"available": False, "models": [], "message": redact(detail, secrets)[:200]}
 
 
 # ---------------------------------------------------------------------------

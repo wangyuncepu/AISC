@@ -614,10 +614,48 @@ class RoleEnvAndFetchModelsTests(AdapterTestCase):
             "Endpoint: https://api.deepseek.com/anthropic\n\n"
             "Error: HTTP 401 Unauthorized\n"
         )
-        result = A.op_fetch_models("claude", "deepseek")
+        # No fallback base to derive (https://x has no /anthropic suffix and
+        # the stub HTTP seam returns nothing) → documented degrade.
+        orig_http = A._http_get_json
+        A._http_get_json = lambda url, headers, timeout: (404, None)
+        try:
+            result = A.op_fetch_models("claude", "deepseek")
+        finally:
+            A._http_get_json = orig_http
         self.assertFalse(result["available"])
         self.assertEqual(result["models"], [])
         self.assertIn("401", result["message"])
+
+    def test_fetch_models_falls_back_to_openai_compatible_endpoint(self):
+        # The documented path (user-manual 2.1): the OpenAI-compatible
+        # /v1/models on the NATIVE base (…/anthropic suffix stripped). The
+        # CLI fails (401 on the anthropic-compat base) but the fallback
+        # delivers the list.
+        seed_provider(self.dir, "prov", {
+            "ANTHROPIC_BASE_URL": "https://api.prov.example/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": "sk-live-abcdef123456",
+        })
+        self.cli.stub_stdout(
+            "Fetching models for 'prov'...\nError: HTTP 401 Unauthorized\n"
+        )
+        calls: list[str] = []
+
+        def fake_http(url, headers, timeout):
+            calls.append(url)
+            self.assertIn("Bearer sk-live-abcdef123456", headers.get("Authorization", ""))
+            return 200, {"data": [{"id": "prov-xl"}, {"id": "prov-lite"}]}
+
+        orig_http = A._http_get_json
+        A._http_get_json = fake_http
+        try:
+            result = A.op_fetch_models("claude", "prov")
+        finally:
+            A._http_get_json = orig_http
+        self.assertEqual(calls, ["https://api.prov.example/v1/models"])
+        self.assertTrue(result["available"])
+        self.assertEqual(result["models"], ["prov-xl", "prov-lite"])
+        # The key never leaks into the envelope.
+        self.assertNotIn("sk-live-abcdef123456", json.dumps(result))
 
     def test_fetch_models_unknown_provider_is_adapter_error(self):
         with self.assertRaises(A.AdapterError) as ctx:
