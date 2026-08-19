@@ -127,8 +127,10 @@
   （不阻断向导）。
 - **LaunchSummary**（高级配置 network select 旁）：`network=proxy && 无订阅` →
   警示行 + 「去配置」开面板。
-- **preflight 新 warning 检查**：`network=proxy && 无配置文件` → warning
-  （不 fail；无配置 TUN 可启动维持现状）。
+- **preflight 新 warning 检查**：~~`network=proxy && 无配置文件` → warning~~
+  **（2d 偏离，未做）**：`can_start = all(status == "pass")` 的既有语义下任何
+  warn 都会挡启动——加 warn 等于变相 fail，与「不 fail 可启动」目标自相矛盾；
+  引导职责由 LaunchSummary 警示行（proxy 且无订阅 → 提示 + 跳面板）承担。
 - 数据获取：面板打开自动拉一次 + 手动刷新按钮；不做定时轮询（v1）。
 - i18n：全部键双语成对新增。
 

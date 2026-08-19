@@ -14,7 +14,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspacesStore, MAX_WORKSPACES } from "../../stores/workspaces";
 import { useSettingsStore } from "../../stores/settings";
-import { SETTINGS_TAB_ID } from "../../stores/runtime";
+import { SETTINGS_TAB_ID, NETWORK_USAGE_TAB_ID } from "../../stores/runtime";
 
 const { t } = useI18n();
 const ws = useWorkspacesStore();
@@ -98,6 +98,11 @@ function menuOpenSettings() {
   ws.openSettingsTab();
 }
 
+function menuOpenNetworkUsage() {
+  closeMenu();
+  ws.openNetworkUsageTab();
+}
+
 interface Chip {
   id: string;
   label: string;
@@ -106,6 +111,7 @@ interface Chip {
   state: string;
   launcher: boolean;
   settings?: boolean;
+  networkUsage?: boolean;
 }
 
 /** Folder name of a workspace path (both separators — Windows paths are
@@ -182,6 +188,19 @@ const chips = computed<Chip[]>(() => {
       settings: true,
     });
   }
+  // IDEA-2 (2d): the「网络与用量」panel rides after Settings — same
+  // only-while-open chip model.
+  if (ws.networkUsageTabOpen) {
+    list.push({
+      id: NETWORK_USAGE_TAB_ID,
+      label: t("workspbar.networkUsage"),
+      title: t("workspbar.networkUsage"),
+      status: "settings",
+      state: "",
+      launcher: false,
+      networkUsage: true,
+    });
+  }
   return list;
 });
 
@@ -203,6 +222,7 @@ const atCap = computed(() => ws.runtimes.length >= MAX_WORKSPACES);
 
 function chipTitle(c: Chip): string {
   if (c.settings) return `${c.label} · ${t("tabbar.closeSettings")}`;
+  if (c.networkUsage) return `${c.label} · ${t("tabbar.closeNetworkUsage")}`;
   const statusText = t(STATUS_KEY[c.status] ?? "app.unknown");
   const parts = c.launcher ? [c.label] : [c.title, statusText];
   if (!c.launcher) parts.push(t("workspbar.close"));
@@ -212,6 +232,10 @@ function chipTitle(c: Chip): string {
 function onChip(c: Chip): void {
   if (c.settings) {
     ws.openSettingsTab();
+    return;
+  }
+  if (c.networkUsage) {
+    ws.openNetworkUsageTab();
     return;
   }
   if (c.launcher) {
@@ -228,6 +252,11 @@ function onChip(c: Chip): void {
 function closeSettingsChip(): void {
   settingsStore.cancel();
   ws.closeSettingsTab();
+}
+
+/** The「网络与用量」chip × — no dirty-form contract, just close. */
+function closeNetworkUsageChip(): void {
+  ws.closeNetworkUsageTab();
 }
 
 // --- APG tabs pattern (3e): roving tabindex. Arrows/Home/End move FOCUS
@@ -287,6 +316,15 @@ function onBarKeydown(e: KeyboardEvent) {
         ×
       </button>
       <button
+        v-else-if="c.networkUsage && ws.networkUsageTabOpen"
+        class="close"
+        :title="t('tabbar.closeNetworkUsage')"
+        :aria-label="t('tabbar.closeNetworkUsage')"
+        @click.stop="closeNetworkUsageChip()"
+      >
+        ×
+      </button>
+      <button
         v-else-if="!c.launcher && !c.settings"
         class="close"
         :title="t('workspbar.close')"
@@ -331,6 +369,11 @@ function onBarKeydown(e: KeyboardEvent) {
             tabindex="0"
             @click="menuOpenSettings"
           >{{ t("workspbar.settings") }}</li>
+          <li
+            role="menuitem"
+            tabindex="0"
+            @click="menuOpenNetworkUsage"
+          >{{ t("workspbar.networkUsage") }}</li>
         </ul>
       </Teleport>
     </div>

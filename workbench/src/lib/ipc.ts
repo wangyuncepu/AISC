@@ -27,6 +27,9 @@ import type {
   SettingsDocument,
   SettingsPatch,
   ShutdownReport,
+  SubscriptionStatus,
+  UsageOverview,
+  UsageRange,
   WorkbenchHistory,
 } from "../types";
 
@@ -147,6 +150,28 @@ export const ccSwitchSwitch = (workspace: string, runtimeId: string, agent: stri
 
 export const ccSwitchDelete = (workspace: string, runtimeId: string, agent: string, providerId: string) =>
   invoke<CcSwitchProvidersResult>("cc_switch_delete", { workspace, runtimeId, agent, providerId });
+
+// --- IDEA-2 (2d): subscription + usage data plane ---
+// The subscription URL / content ride the CLI child's stdin on the Rust side
+// (credentials never travel via argv, logs or disk).
+
+export const networkSubscriptionImport = (url: string) =>
+  invoke<SubscriptionStatus>("network_subscription_import", { url });
+
+export const networkSubscriptionImportFile = (content: string) =>
+  invoke<SubscriptionStatus>("network_subscription_import_file", { content });
+
+export const networkSubscriptionRefresh = () =>
+  invoke<SubscriptionStatus>("network_subscription_refresh");
+
+export const networkSubscriptionClear = () =>
+  invoke<{ configured: boolean }>("network_subscription_clear");
+
+export const networkSubscriptionShow = () =>
+  invoke<SubscriptionStatus>("network_subscription_show");
+
+export const usageOverview = (range: UsageRange, workspace?: string) =>
+  invoke<UsageOverview>("usage_overview", { range, workspace: workspace ?? null });
 
 /** IDEA-3 (3b): keyed by runtime_id — concurrent workspace starts each cancel
  * only their own op (a no-op once the start settled). */

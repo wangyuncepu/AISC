@@ -111,6 +111,15 @@ describe("facade state forwarding (3a)", () => {
     s.closeSettingsTab();
     expect(s.settingsTabOpen).toBe(false);
   });
+
+  it("forwards the workspace-layer 网络与用量 sentinel (IDEA-2 2d)", () => {
+    const s = useRuntimeStore();
+    expect(s.networkUsageTabOpen).toBe(false);
+    s.openNetworkUsageTab();
+    expect(s.networkUsageTabOpen).toBe(true);
+    s.closeNetworkUsageTab();
+    expect(s.networkUsageTabOpen).toBe(false);
+  });
 });
 
 describe("facade shell-owned surface (3a)", () => {

@@ -206,4 +206,34 @@ describe("WorkspaceBar (3c)", () => {
     expect(ws.settingsTabOpen).toBe(false);
     expect(ws.activeId).toBe(ws.runtimes[0].id); // falls back to the last workspace
   });
+
+  it("▾ menu 网络与用量 opens the network-usage sentinel (IDEA-2 2d)", async () => {
+    const ws = useWorkspacesStore();
+    await launchWorkspace(ws, "C:/alpha");
+    const bar = mount(WorkspaceBar, { global: { plugins: [i18n] }, attachTo: document.body });
+    await bar.find(".add-group .add-caret").trigger("click");
+    const items = [...document.querySelectorAll(".wsp-menu.menu [role=menuitem]")];
+    const usage = items.find((el) => el.textContent?.includes("网络与用量"));
+    expect(usage, "menu must list 网络与用量").toBeTruthy();
+    (usage as HTMLElement).click();
+    await nextTick();
+    expect(ws.networkUsageTabActive).toBe(true);
+    expect(ws.settingsTabActive).toBe(false); // the two sentinels are independent
+    bar.unmount();
+  });
+
+  it("Network-usage chip: exists only while open, × closes and falls back", async () => {
+    const ws = useWorkspacesStore();
+    await launchWorkspace(ws, "C:/alpha");
+    const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
+    expect(bar.findAll(".chip").some((c) => c.text().includes("网络与用量"))).toBe(false);
+    ws.openNetworkUsageTab();
+    await nextTick();
+    const chip = bar.findAll(".chip").find((c) => c.text().includes("网络与用量"))!;
+    expect(chip.classes()).toContain("active");
+    expect(chip.find(".close").exists()).toBe(true);
+    await chip.find(".close").trigger("click");
+    expect(ws.networkUsageTabOpen).toBe(false);
+    expect(ws.activeId).toBe(ws.runtimes[0].id); // falls back to the last workspace
+  });
 });

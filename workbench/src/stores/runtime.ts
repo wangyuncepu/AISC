@@ -10,7 +10,7 @@ import type { WorkspaceRuntime } from "./workspaceRuntime";
 // IDEA-3 (3a): the sentinel ids + status domain live with the per-workspace
 // state machine now; re-exported here so existing consumers keep their import
 // paths (App.vue, TabBar.vue, tests).
-export { CC_SWITCH_UI_TAB_ID, SETTINGS_TAB_ID } from "./workspaceRuntime";
+export { CC_SWITCH_UI_TAB_ID, SETTINGS_TAB_ID, NETWORK_USAGE_TAB_ID } from "./workspaceRuntime";
 export type { WorkbenchStatus } from "./workspaceRuntime";
 
 /** Unwrap `Ref<V>` for the forwarding helpers below. */
@@ -126,6 +126,15 @@ export const useRuntimeStore = defineStore("runtime", () => {
     }),
     openSettingsTab: () => ws.openSettingsTab(),
     closeSettingsTab: () => ws.closeSettingsTab(),
+    // IDEA-2 (2d): the「网络与用量」sentinel, forwarded like Settings.
+    networkUsageTabOpen: computed({
+      get: () => ws.networkUsageTabOpen,
+      set: (v: boolean) => {
+        ws.networkUsageTabOpen = v;
+      },
+    }),
+    openNetworkUsageTab: () => ws.openNetworkUsageTab(),
+    closeNetworkUsageTab: () => ws.closeNetworkUsageTab(),
     // shared history (workspaces-owned). Through the pinia proxy `ws.history`
     // is ALREADY the unwrapped value — no `.value` here, or everything reads
     // undefined. Value semantics match the original plain-ref store

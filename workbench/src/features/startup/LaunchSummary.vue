@@ -3,10 +3,32 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
+import { useWorkspacesStore } from "../../stores/workspaces";
+import { useUsageStore } from "../../stores/usage";
 import PreflightGate from "./PreflightGate.vue";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
+const ws = useWorkspacesStore();
+const usageStore = useUsageStore();
+
+// IDEA-2 (2d): proxy mode with no imported subscription mounts nothing (the
+// entrypoint silently skips mihomo). Hint + jump to the「网络与用量」panel.
+const subConfigured = ref<boolean | null>(null);
+watch(
+  () => store.launch.network,
+  (network) => {
+    if (network === "proxy" && subConfigured.value === null) {
+      void usageStore.refreshSubscriptionStatus().then((configured) => {
+        subConfigured.value = configured;
+      });
+    }
+  },
+  { immediate: true },
+);
+const proxyNoSub = computed(
+  () => store.launch.network === "proxy" && store.showAdvanced && subConfigured.value === false,
+);
 
 const ACTION_KEY: Record<string, string> = {
   start: "summary.action.start",
@@ -104,6 +126,14 @@ const dockerElapsedSec = computed(() =>
           <option value="temporary">temporary</option>
         </select>
       </div>
+      <!-- IDEA-2 (2d): proxy without a subscription = TUN caps with nothing
+           mounted (mihomo silently skipped). Non-blocking hint + jump. -->
+      <p v-if="proxyNoSub" class="gate-msg config sub-hint" role="status">
+        {{ t("summary.proxyNoSub") }}
+        <button class="linklike" @click="ws.openNetworkUsageTab()">
+          {{ t("summary.configureSub") }}
+        </button>
+      </p>
     </div>
 
     <p v-if="imageNotFound" class="gate-msg config">{{ t("summary.imageMissing") }}</p>

@@ -9,6 +9,7 @@ import {
   TERMINAL_STATES,
   createWorkspaceRuntime,
   SETTINGS_TAB_ID,
+  NETWORK_USAGE_TAB_ID,
   type WorkspaceRuntime,
 } from "./workspaceRuntime";
 
@@ -88,6 +89,29 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
 
   const settingsTabActive = computed(() => settingsTabOpen.value && activeId.value === SETTINGS_TAB_ID);
 
+  // --- IDEA-2 (2d): the「网络与用量」panel, a second workspace-layer
+  // sentinel with the same contract as Settings (never persisted, owns no
+  // PTY, survives workspace switches/closes). Entered via the + ▾ menu or
+  // its strip chip; no app-level shortcut in v1.
+  const networkUsageTabOpen = ref(false);
+
+  function openNetworkUsageTab(): void {
+    networkUsageTabOpen.value = true;
+    activeId.value = NETWORK_USAGE_TAB_ID;
+  }
+
+  function closeNetworkUsageTab(): void {
+    networkUsageTabOpen.value = false;
+    if (activeId.value === NETWORK_USAGE_TAB_ID) {
+      const target = byId(lastWorkspaceId.value) ?? launcher.value;
+      activeId.value = target.id;
+    }
+  }
+
+  const networkUsageTabActive = computed(
+    () => networkUsageTabOpen.value && activeId.value === NETWORK_USAGE_TAB_ID,
+  );
+
   function mint(): WorkspaceRuntime {
     // Late-bound self: the deps closures run long after mint returns, so the
     // const-binding trick below gives them the finished instance.
@@ -152,12 +176,16 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
   function cycle(dir: 1 | -1): void {
     const ids: string[] = [...runtimes.value.map((r) => r.id), launcher.value.id];
     if (settingsTabOpen.value) ids.push(SETTINGS_TAB_ID);
+    if (networkUsageTabOpen.value) ids.push(NETWORK_USAGE_TAB_ID);
     if (ids.length < 2) return;
     const i = ids.indexOf(activeId.value);
     const next = ids[(i + dir + ids.length) % ids.length]!;
     if (next === SETTINGS_TAB_ID) {
       settingsTabOpen.value = true;
       activeId.value = SETTINGS_TAB_ID;
+    } else if (next === NETWORK_USAGE_TAB_ID) {
+      networkUsageTabOpen.value = true;
+      activeId.value = NETWORK_USAGE_TAB_ID;
     } else {
       activate(next);
     }
@@ -378,6 +406,11 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     settingsTabActive,
     openSettingsTab,
     closeSettingsTab,
+    // workspace-level「网络与用量」sentinel (IDEA-2 2d)
+    networkUsageTabOpen,
+    networkUsageTabActive,
+    openNetworkUsageTab,
+    closeNetworkUsageTab,
     // history (shared)
     history,
     historyRevision,
