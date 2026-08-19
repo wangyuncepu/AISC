@@ -419,12 +419,27 @@ if [ -f /etc/mihomo/config.yaml ]; then
     # 原始订阅 → mihomo 配置（格式自动转换 + TUN/DNS 强制注入）到可写副本。
     # 支持 yaml / base64 订阅 / URI 直链 / JSON(SIP008)；失败仅告警不阻断，便于进 bash 排障。
     if node /usr/local/bin/mihomo-build-config.js /etc/mihomo/config.yaml "$MIHOMO_CFG"; then
-        # 后台启动 mihomo（root）
-        bash -c "mihomo -d '$MIHOMO_DATA_DIR' -f '$MIHOMO_CFG' > '$MIHOMO_DATA_DIR/mihomo.log' 2>&1" &
-        # 等待 TUN 接管路由 + url-test 初选节点（节点多时需几秒）
-        sleep 4
-        # 健康探测：经代理能否到达 api.anthropic.com（不带 -f：401/404 等任何 HTTP 响应都算可达，只看连接是否成功）
-        if curl -sS --max-time 10 -o /dev/null https://api.anthropic.com 2>/dev/null; then
+        # 后台启动 mihomo（root）。exec 让 $! 直接就是 mihomo 的 PID——
+        # 容器没有 procps（无 pgrep/ps），存活检查只能靠 kill -0（2026-08-19
+        # 实测：旧版用 pgrep 判活，命令不存在导致探测失败时永远误报
+        # 「mihomo 进程已退出」，实际进程健在且代理正常）。
+        bash -c "exec mihomo -d '$MIHOMO_DATA_DIR' -f '$MIHOMO_CFG' > '$MIHOMO_DATA_DIR/mihomo.log' 2>&1" &
+        MIHOMO_PID=$!
+        # 健康探测（带重试）：url-test 初选节点 + MMDB 加载需要数秒，机场的
+        # 信息假节点（"剩余流量/官网地址"等）也可能拖慢首个可用节点选定；
+        # 探测 3 轮 × 4s，进程退出则提前收手。
+        probe_ok=0
+        for _ in 1 2 3; do
+            sleep 4
+            if curl -sS --max-time 10 -o /dev/null https://api.anthropic.com 2>/dev/null; then
+                probe_ok=1
+                break
+            fi
+            if ! kill -0 "$MIHOMO_PID" 2>/dev/null; then
+                break
+            fi
+        done
+        if [ "$probe_ok" = 1 ]; then
             echo "✅ Mihomo TUN 已就绪，代理连通: api.anthropic.com 可达"
 
             # 验证 Codex 官方访问（OpenAI API）
@@ -442,9 +457,9 @@ if [ -f /etc/mihomo/config.yaml ]; then
                 fi
             fi
         else
-            # curl 失败：区分 mihomo 进程是否存活，给出更准确的排障提示
-            if pgrep -f 'mihomo -d' >/dev/null 2>&1; then
-                echo "⚠️  mihomo 运行中但代理暂未通（可能仍在 url-test 初选节点，或节点异常）。可继续；若 claude 连不上请查 $MIHOMO_DATA_DIR/mihomo.log"
+            # 进程存活判定用 PID（容器无 pgrep）
+            if kill -0 "$MIHOMO_PID" 2>/dev/null; then
+                echo "⚠️  mihomo 运行中但代理暂未通（可能 url-test 未选出可用节点，或节点异常）。可继续；若 claude 连不上请查 $MIHOMO_DATA_DIR/mihomo.log"
             else
                 echo "❌ mihomo 进程已退出，请查日志: $MIHOMO_DATA_DIR/mihomo.log"
             fi
