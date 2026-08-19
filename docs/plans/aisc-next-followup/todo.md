@@ -101,21 +101,24 @@
   桌面版观感。
 - **归属**：与 Provider 管理相关的独立小迭代，可与 IDEA-2/3 同轮规划。
 
-### IDEA-2 容器 TUN 模式的 mihomo 订阅配置（2026-08-17 用户提出，待规划）
+### IDEA-2 mihomo 订阅导入 + 「网络与用量」面板 + Provider token 统计（2026-08-17 提出；**2026-08-19 已规划，进行中**）
 
-- **内容**：用户在启动配置选择 `network=proxy`（容器 TUN）后，应引导用户配置
-  mihomo 所需代理——输入其**购买的代理配置文件（订阅）链接**，Workbench 下载后
-  作为容器内 mihomo 的配置文件。
-- **待规划问题**（拟定计划时逐项决策）：
-  - 订阅链接属敏感凭据：存储位置（settings vs data root 专属文件）、脱敏展示、
-    是否随诊断包导出（默认否）；
-  - 下载链路归属（Rust reqwest vs CLI 子命令）与超时/重试/离线失败 UX；
-  - 配置形态假设：Clash 订阅（可整份用作 mihomo config）vs 需要 Workbench 合成
-    基础配置 + 注入节点（TUN 段、DNS 段必须由我们控制，不能全盘信任订阅内容）；
-  - 刷新策略（每次启动拉新 vs 手动刷新 + 缓存于 data root）、完整性校验
-    （YAML 可解析、必要段落存在）；
-  - 与现有 `network: direct|proxy` preflight/UI 的衔接点。
-- **归属建议**：独立小阶段或并入 Stage 8 前置（涉及网络面，不动 Provider UI）。
+- **范围扩容**（2026-08-19 用户拍板）：原「容器 TUN 订阅配置」扩为三件——
+  ①订阅导入（面板 + 向导内嵌表单双入口）；②与设置同层级新面板；③面板展示
+  mihomo 订阅用量/余量（`subscription-userinfo` 头）+ Provider token 用量统计
+  （cc-switch 容器内用量体系，全工作区聚合）。
+- **关键决策**（2026-08-19）：刷新生效=**自动重建**（fingerprint 纳入订阅内容
+  哈希，仅 proxy 模式，direct 指纹字节级不变）；统计范围=**全部工作区聚合**
+  （运行中实时 + 停止用缓存快照）；导入入口=**面板 + 向导内嵌表单**。
+- **规划文档**：`idea-2-network-usage/01-plan.md`（主计划：架构/阶段 2a-2e/
+  文件清单/风险）+ `02-data-contracts.md`（存储/信封/fingerprint 扩维契约；
+  usage 侧字段 2a 探针后冻结）。分支 `idea-2-network-usage`。
+- **原待规划问题全部落定**：URL 存数据根专属文件（快照含完整 URL，信封/UI 只出
+  脱敏串，不进诊断包）；下载归 Python CLI（urllib 可注入 transport，Rust 零新
+  依赖）；配置形态=容器 `mihomo-build-config.js` 是转换唯一事实源（宿主只存
+  原始订阅文件，任意格式可）；刷新=手动（面板）+ 下次启动自动生效（fingerprint
+  冲突引导重建）；衔接点=向导 network 步内嵌表单 + LaunchSummary 警示跳转 +
+  preflight 新 warning（proxy 无配置不 fail）。
 
 ### IDEA-3 顶栏设置按钮去留 + 工作区级 tab（2026-08-17 用户提出；**2026-08-18 实现并手测 PASS**）
 
