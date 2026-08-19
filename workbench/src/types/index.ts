@@ -344,6 +344,10 @@ export interface SubscriptionStatus {
   config_sha256: string | null;
   has_config_file: boolean;
   userinfo: SubscriptionUserInfo | null;
+  /** Where the usage facts came from when userinfo is present:
+   * "header" (subscription-userinfo) | "node-names" (airports that embed the
+   * plan facts as fake proxy nodes — 挂账② fallback). */
+  userinfo_source?: "header" | "node-names" | null;
   config_path?: string;
 }
 
