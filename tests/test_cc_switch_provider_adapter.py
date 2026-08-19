@@ -84,6 +84,10 @@ class RecordingCli:
     def __init__(self):
         self.calls: list[FakeCall] = []
         self.fail_on: dict[str, str] = {}  # substring of argv -> error
+        self.stub: str | None = None  # IDEA-5 tests: canned stdout
+
+    def stub_stdout(self, text: str) -> None:
+        self.stub = text
 
     def __call__(self, args, stdin_text, secrets):
         call = FakeCall(list(args), stdin_text)
@@ -91,7 +95,8 @@ class RecordingCli:
         for marker, message in self.fail_on.items():
             if marker in " ".join(args):
                 return subprocess.CompletedProcess(args, 1, stdout="", stderr=message)
-        stdout = "Switched to provider 'x'\n✓ ok (API Key: sk-leak)"
+        stdout = self.stub if self.stub is not None else \
+            "Switched to provider 'x'\n✓ ok (API Key: sk-leak)"
         return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
 
     def argv(self) -> list[list[str]]:
@@ -541,6 +546,95 @@ class SqliteBackedCliTests(AdapterTestCase):
         finally:
             hold.rollback()
             hold.close()
+
+
+
+
+class RoleEnvAndFetchModelsTests(AdapterTestCase):
+    """IDEA-5 (5c): the secret-free role_env view, known_models for preset
+    rows, and the fetch-models op's defensive parse + degrade."""
+
+    def test_role_env_whitelist_never_carries_credentials(self):
+        env = {
+            "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": "sk-live-abcdef123456",
+            "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+            "ANTHROPIC_SMALL_FAST_MODEL": "user-added",
+        }
+        seed_provider(self.dir, "deepseek", env)
+        view = {p["id"]: p for p in A.op_list("claude")}["deepseek"]
+        self.assertEqual(view["role_env"]["ANTHROPIC_MODEL"], "deepseek-v4-pro[1m]")
+        self.assertEqual(view["role_env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+                         "deepseek-v4-flash")
+        self.assertNotIn("ANTHROPIC_AUTH_TOKEN", view["role_env"])
+        self.assertNotIn("ANTHROPIC_SMALL_FAST_MODEL", view["role_env"])
+        # Secrets still only ever appear as the mask.
+        self.assertNotIn("sk-live-abcdef123456", json.dumps(view))
+        # codex rows carry the empty shape (mapping UI is claude-only).
+        seed_provider(self.dir, "codexprov", {"config": 'model_provider = "x"'},
+                      agent="codex")
+        codex_view = {p["id"]: p for p in A.op_list("codex")}["codexprov"]
+        self.assertEqual(codex_view["role_env"], {})
+        self.assertEqual(codex_view["known_models"], [])
+
+    def test_known_models_for_preset_rows(self):
+        seed_provider(self.dir, "deepseek", {"ANTHROPIC_BASE_URL": "https://x"})
+        view = {p["id"]: p for p in A.op_list("claude")}["deepseek"]
+        for historical in ("deepseek-chat", "deepseek-v4-pro",
+                           "deepseek-v4-pro[1m]", "deepseek-v4-flash"):
+            self.assertIn(historical, view["known_models"])
+        # Custom rows get nothing.
+        seed_provider(self.dir, "mine", {"ANTHROPIC_BASE_URL": "https://y"})
+        custom = {p["id"]: p for p in A.op_list("claude")}["mine"]
+        self.assertEqual(custom["known_models"], [])
+
+    def test_fetch_models_parses_lines_and_label_pairs(self):
+        seed_provider(self.dir, "deepseek", {"ANTHROPIC_BASE_URL": "https://x"})
+        self.cli.stub_stdout(
+            "Fetching models for 'DeepSeek'...\n"
+            "Endpoint: https://api.deepseek.com/anthropic\n\n"
+            "- deepseek-chat\n"
+            "deepseek-reasoner\n"
+            "  default: deepseek-v4-flash[1m]\n"
+        )
+        result = A.op_fetch_models("claude", "deepseek")
+        self.assertTrue(result["available"])
+        self.assertEqual(result["models"],
+                         ["deepseek-chat", "deepseek-reasoner",
+                          "deepseek-v4-flash[1m]"])
+        argv = self.cli.argv()
+        self.assertIn(["-a", "claude", "provider", "fetch-models", "deepseek"],
+                      argv)
+
+    def test_fetch_models_degrades_on_upstream_failure(self):
+        seed_provider(self.dir, "deepseek", {"ANTHROPIC_BASE_URL": "https://x"})
+        self.cli.stub_stdout(
+            "Fetching models for 'DeepSeek'...\n"
+            "Endpoint: https://api.deepseek.com/anthropic\n\n"
+            "Error: HTTP 401 Unauthorized\n"
+        )
+        result = A.op_fetch_models("claude", "deepseek")
+        self.assertFalse(result["available"])
+        self.assertEqual(result["models"], [])
+        self.assertIn("401", result["message"])
+
+    def test_fetch_models_unknown_provider_is_adapter_error(self):
+        with self.assertRaises(A.AdapterError) as ctx:
+            A.op_fetch_models("claude", "ghost")
+        self.assertEqual(ctx.exception.code, A.ERR_NOT_FOUND)
+
+    def test_fetch_models_main_envelope_shape(self):
+        seed_provider(self.dir, "deepseek", {"ANTHROPIC_BASE_URL": "https://x"})
+        self.cli.stub_stdout("deepseek-chat\ndeepseek-reasoner\n")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = A.main(["fetch-models", "--agent", "claude", "--id", "deepseek"])
+        self.assertEqual(code, 0)
+        envelope = json.loads(buf.getvalue().strip().splitlines()[-1])
+        self.assertTrue(envelope["ok"])
+        self.assertTrue(envelope["fetch_models"]["available"])
+        self.assertEqual(envelope["fetch_models"]["models"][0], "deepseek-chat")
 
 
 if __name__ == "__main__":

@@ -68,6 +68,21 @@ _MS_EPOCH_THRESHOLD = 10 ** 11
 _CLAUDE_SECRET_KEYS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
 _GENERIC_SECRET_RE = re.compile(r"sk-[A-Za-z0-9_\-]{6,}")
 
+#: IDEA-5 (5c): the five model-role slots the mapping UI edits, plus their
+#: companions — the SECRET-FREE whitelist `role_env` may carry. Credential
+#: keys are structurally absent, so the view can never leak them.
+_CLAUDE_MODEL_ROLE_KEYS = (
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+)
+_CLAUDE_ROLE_ENV_KEYS = _CLAUDE_MODEL_ROLE_KEYS + (
+    "CLAUDE_CODE_EFFORT_LEVEL",
+    "ANTHROPIC_BASE_URL",
+)
+
 
 class AdapterError(Exception):
     def __init__(self, code: str, message: str):
@@ -291,6 +306,29 @@ def _codex_provider_fields(settings: dict[str, Any], pid: str) -> dict[str, str]
     return fields
 
 
+def _preset_known_models(provider_id: str) -> list[str]:
+    """Offline dropdown tier (IDEA-5): historical preset-written model values
+    ∪ current official ones for a PRESET row. Custom rows → empty."""
+    try:
+        module = _preset_module()
+    except AdapterError:
+        return []
+    for provider in module.PRESET_PROVIDERS:
+        if provider.get("id") != provider_id:
+            continue
+        pool: list[str] = []
+        history = provider.get("_env_history") or {}
+        current = provider.get("claude_env") or {}
+        for key in _CLAUDE_MODEL_ROLE_KEYS:
+            for value in history.get(key) or []:
+                if value:
+                    pool.append(str(value))
+            if current.get(key):
+                pool.append(str(current[key]))
+        return list(dict.fromkeys(pool))
+    return []
+
+
 def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
     """The secret-free v1 view of one provider row."""
     settings = row["settings"]
@@ -304,11 +342,21 @@ def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
             if env.get(key):
                 secret = str(env[key])
                 break
+        # IDEA-5 (5c): the role-slot env the mapping UI edits — whitelist
+        # only; credential keys can never appear here.
+        role_env = {
+            key: str(value)
+            for key, value in env.items()
+            if key in _CLAUDE_ROLE_ENV_KEYS and value is not None
+        }
+        known_models = _preset_known_models(str(row["id"]))
     else:
         fields = _codex_provider_fields(settings, row["id"])
         base_url = fields["base_url"]
         model = fields["model"]
         secret = fields["api_key"]
+        role_env = {}
+        known_models = []
     return {
         "id": row["id"],
         "name": row["name"],
@@ -318,6 +366,8 @@ def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
         "has_api_key": bool(secret),
         "api_key_mask": mask_secret(secret) if secret else "",
         "is_current": row["is_current"],
+        "role_env": role_env,
+        "known_models": known_models,
     }
 
 
@@ -812,11 +862,76 @@ def op_delete(agent: str, provider_id: str) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# fetch-models (IDEA-5 5c): the remote model list for the mapping dropdown.
+# Upstream has no --json — stdout is human text and UNTRUSTED; parsing is
+# defensive and any failure degrades to available=false (the UI falls back
+# to known_models + manual input) instead of an error envelope.
+# ---------------------------------------------------------------------------
+
+# Bracket chars are model-id-legal (DeepSeek's `[1m]` context suffix).
+_MODEL_LINE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-\[\]]*$")
+_MODEL_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\-\[\]]{3,}")
+_LINE_NOISE_PREFIXES = (
+    "fetching", "endpoint", "error", "http", "provider", "models",
+    "total", "found", "retrieved", "using",
+)
+
+
+def _parse_model_lines(text: str) -> list[str]:
+    """Best-effort extraction of model ids from upstream's human output.
+    Accepts one-id-per-line (with bullet/decoration) and `label: id` pairs;
+    skips obvious noise lines. Deduped, order preserved, capped."""
+    out: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip().lstrip("-*•·—> ").strip()
+        if not line or len(line) > 120:
+            continue
+        low = line.lower()
+        if any(low.startswith(p) for p in _LINE_NOISE_PREFIXES):
+            continue
+        candidates: list[str] = []
+        if _MODEL_LINE_RE.match(line) and "/" not in line:
+            candidates = [line]
+        else:
+            # `label: value` / tab-separated — take tokens that look like ids.
+            tail = line.rsplit(":", 1)[-1] if ":" in line else line
+            candidates = _MODEL_TOKEN_RE.findall(tail)
+        for c in candidates:
+            if c.lower() in ("true", "false", "null", "none"):
+                continue
+            out.append(c)
+    return list(dict.fromkeys(out))[:200]
+
+
+def op_fetch_models(agent: str, provider_id: str) -> dict[str, Any]:
+    snapshot = read_snapshot(agent)
+    row = next((r for r in snapshot if r["id"] == provider_id), None)
+    if row is None:
+        raise AdapterError(ERR_NOT_FOUND, f"provider not found: {provider_id}")
+    secrets = snapshot_secrets(agent, snapshot)
+    completed = run_cli(
+        ["-a", agent, "provider", "fetch-models", provider_id], "", secrets
+    )
+    combined = f"{completed.stdout or ''}\n{completed.stderr or ''}"
+    if completed.returncode != 0 or "error" in combined.lower():
+        lines = [l.strip() for l in combined.splitlines() if l.strip()]
+        detail = next((l for l in reversed(lines)), "") or f"exit {completed.returncode}"
+        return {"available": False, "models": [], "message": redact(detail, secrets)[:200]}
+    models = _parse_model_lines(completed.stdout or "")
+    return {
+        "available": bool(models),
+        "models": models,
+        "message": "" if models else "no model ids recognized in the upstream output",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Envelope + entry point
 # ---------------------------------------------------------------------------
 
 def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
               usage: Optional[dict] = None,
+              fetch_models: Optional[dict] = None,
               error: Optional[dict] = None) -> dict[str, Any]:
     out: dict[str, Any] = {
         "schema": PROTOCOL,
@@ -828,6 +943,8 @@ def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
         out["providers"] = providers
     if usage is not None:
         out["usage"] = usage
+    if fetch_models is not None:
+        out["fetch_models"] = fetch_models
     if error is not None:
         out["error"] = error
     return out
@@ -836,7 +953,7 @@ def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aisc-cc-provider")
     parser.add_argument("op", choices=["list", "add", "edit", "switch", "delete",
-                                       "usage"])
+                                       "usage", "fetch-models"])
     parser.add_argument("--agent", default=None, choices=list(AGENTS),
                         help="agent (required for every op except usage)")
     parser.add_argument("--id", default=None, help="provider id (add/edit/delete)")
@@ -849,6 +966,30 @@ def main(argv: list[str] | None = None) -> int:
         try:
             print(json.dumps(_envelope(
                 args.op, True, usage=op_usage(args.since),
+            )))
+            return 0
+        except AdapterError as exc:
+            print(json.dumps(_envelope(
+                args.op, False, error={"code": exc.code, "message": exc.message},
+            )))
+            return 1
+
+    if args.op == "fetch-models":
+        if not args.agent:
+            print(json.dumps(_envelope(
+                args.op, False,
+                error={"code": ERR_BAD_REQUEST, "message": "fetch-models requires --agent"},
+            )))
+            return 2
+        if not args.id:
+            print(json.dumps(_envelope(
+                args.op, False,
+                error={"code": ERR_BAD_REQUEST, "message": "fetch-models requires --id"},
+            )))
+            return 2
+        try:
+            print(json.dumps(_envelope(
+                args.op, True, fetch_models=op_fetch_models(args.agent, args.id),
             )))
             return 0
         except AdapterError as exc:

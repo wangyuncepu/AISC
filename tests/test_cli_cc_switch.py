@@ -154,6 +154,31 @@ class CommandLayerTests(unittest.TestCase):
         self.assertIn("switch --agent claude --id zhipu", " ".join(self.exec.argv))
         self.assertFalse(self.exec.input_text)  # no request body
 
+    def test_fetch_models_addressing_and_result(self):
+        # IDEA-5 (5c): the op addresses the adapter with --id and surfaces
+        # the envelope's fetch_models payload verbatim.
+        self.exec.envelope = {
+            **ENVELOPE_OK, "op": "fetch-models",
+            "fetch_models": {"available": True,
+                             "models": ["deepseek-chat", "deepseek-v4-pro[1m]"],
+                             "message": ""},
+        }
+        data = host.fetch_models(RUNTIME, "claude", "deepseek",
+                                 self.tmp.name, self.exec)
+        self.assertIn("fetch-models --agent claude --id deepseek",
+                      " ".join(self.exec.argv))
+        self.assertTrue(data["available"])
+        self.assertEqual(data["models"][1], "deepseek-v4-pro[1m]")
+
+    def test_fetch_models_degrades_when_payload_missing(self):
+        # Older adapter / unexpected payload → the documented empty degrade,
+        # never an exception.
+        self.exec.envelope = {**ENVELOPE_OK, "op": "fetch-models"}
+        data = host.fetch_models(RUNTIME, "claude", "deepseek",
+                                 self.tmp.name, self.exec)
+        self.assertFalse(data["available"])
+        self.assertEqual(data["models"], [])
+
     def test_adapter_error_maps_to_cli_error_with_stable_code(self):
         self.exec.envelope = {
             "schema": "aisc.cc-switch-provider/v1", "operation_id": "op-2",

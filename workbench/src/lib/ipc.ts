@@ -10,6 +10,7 @@ import type {
   DiscoveryReport,
   DoctorReport,
   EnvReadiness,
+  FetchModelsResult,
   OpTrace,
   HistoryPatch,
   InstallerHandoff,
@@ -150,6 +151,11 @@ export const ccSwitchSwitch = (workspace: string, runtimeId: string, agent: stri
 
 export const ccSwitchDelete = (workspace: string, runtimeId: string, agent: string, providerId: string) =>
   invoke<CcSwitchProvidersResult>("cc_switch_delete", { workspace, runtimeId, agent, providerId });
+
+/** IDEA-5 (5c): remote model list for the mapping dropdown. Degrades to
+ * `available=false` (with the upstream message) instead of an error. */
+export const ccSwitchFetchModels = (workspace: string, runtimeId: string, agent: string, providerId: string) =>
+  invoke<FetchModelsResult>("cc_switch_fetch_models", { workspace, runtimeId, agent, providerId });
 
 // --- IDEA-2 (2d): subscription + usage data plane ---
 // The subscription URL / content ride the CLI child's stdin on the Rust side

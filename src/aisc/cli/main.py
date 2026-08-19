@@ -328,6 +328,13 @@ def _build_parser() -> _AiscArgumentParser:
     csd.add_argument("--confirm", action="store_true", default=False,
                      help="Required confirmation flag")
 
+    # IDEA-5 (5c): remote model list for the mapping dropdown.
+    csf = cssub.add_parser("fetch-models",
+                           help="Fetch the remote model list for a provider",
+                           allow_abbrev=False)
+    _cc_switch_common(csf)
+    csf.add_argument("provider_id", type=str, help="Provider ID to query")
+
     # --- network (IDEA-2: mihomo subscription data plane) ---
     nwp = sub.add_parser(
         "network", help="Network management (mihomo subscription for container TUN)",
@@ -1168,6 +1175,8 @@ def _cmd_cc_switch(
         data = cs_cmd.cmd_cc_switch_switch(args)
     elif sub == "delete":
         data = cs_cmd.cmd_cc_switch_delete(args)
+    elif sub == "fetch-models":
+        data = cs_cmd.cmd_cc_switch_fetch_models(args)
     else:
         raise CliError(message="unknown cc-switch subcommand",
                        exit_code=2, error_code="AISC_ERR_USAGE")

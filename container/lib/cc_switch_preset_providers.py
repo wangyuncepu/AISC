@@ -128,6 +128,11 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "name": "Volcengine Ark",
             "base_url": "https://ark.cn-beijing.volces.com/api/v3",
             "model": "",
+            # IDEA-5 (5c): historical preset-written MODEL values — the
+            # ownership-merge discriminator (in-list → upgrade on refresh;
+            # anything else is a user override and survives). Empty: this
+            # preset never wrote a model.
+            "_model_history": [],
             "description": "Volcengine Ark inference service; configure an endpoint ID",
         },
         {
@@ -136,6 +141,7 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "base_url": "https://open.bigmodel.cn/api/paas/v4",
             "anthropic_base_url": "https://open.bigmodel.cn/api/anthropic",
             "model": "glm-5.2",
+            "_model_history": ["glm-5.2"],
             "description": "Zhipu GLM-5.2 flagship model service",
         },
         {
@@ -144,6 +150,7 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "base_url": "https://api.moonshot.cn/v1",
             "anthropic_base_url": "https://api.moonshot.cn/anthropic",
             "model": "kimi-k3",
+            "_model_history": ["kimi-k3"],
             "description": "Moonshot Kimi K3 model service",
         },
     ]
@@ -348,11 +355,29 @@ def _merged_settings(
         if "claude_env" in provider:
             merged_env = _merged_claude_env(provider, existing_env)
         else:
-            merged_env = {
-                k: v for k, v in existing_env.items()
-                if k not in _CLAUDE_PRESET_ENV_KEYS
+            # IDEA-5 (5c): ANTHROPIC_MODEL rides the same ownership merge as
+            # the claude_env presets — a user mapping override survives
+            # refresh, while an absent/historical preset value upgrades.
+            # BASE_URL keeps its legacy semantics (preset resets it).
+            preset_env = _settings_config(agent, provider)["env"]
+            preset_model = preset_env.get("ANTHROPIC_MODEL")
+            synth = {
+                "claude_env": ({"ANTHROPIC_MODEL": preset_model}
+                               if preset_model is not None else {}),
+                "_env_history": {
+                    "ANTHROPIC_MODEL": list(provider.get("_model_history") or []),
+                },
             }
-            merged_env.update(_settings_config(agent, provider)["env"])
+            strip = {"ANTHROPIC_BASE_URL"}
+            if preset_model is not None:
+                strip.add("ANTHROPIC_MODEL")
+            merged_env = {
+                k: v for k, v in existing_env.items() if k not in strip
+            }
+            merged_env.update(_merged_claude_env(synth, existing_env))
+            merged_env.update(
+                {k: v for k, v in preset_env.items() if k != "ANTHROPIC_MODEL"}
+            )
         result: dict[str, Any] = {"env": merged_env}
     elif agent == "codex":
         api_key = _extract_codex_api_key(existing_raw)
