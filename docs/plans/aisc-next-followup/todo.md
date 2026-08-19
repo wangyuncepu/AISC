@@ -128,24 +128,43 @@
   桌面版观感。
 - **归属**：与 Provider 管理相关的独立小迭代，可与 IDEA-2/3 同轮规划。
 
-### IDEA-2 mihomo 订阅导入 + 「网络与用量」面板 + Provider token 统计（2026-08-17 提出；**2026-08-19 已规划，进行中**）
+### IDEA-2 mihomo 订阅导入 + 「网络与用量」面板 + Provider token 统计（2026-08-17 提出；**2026-08-19 实现，手测三轮 PASS，2e 收口**）
 
-- **范围扩容**（2026-08-19 用户拍板）：原「容器 TUN 订阅配置」扩为三件——
-  ①订阅导入（面板 + 向导内嵌表单双入口）；②与设置同层级新面板；③面板展示
-  mihomo 订阅用量/余量（`subscription-userinfo` 头）+ Provider token 用量统计
-  （cc-switch 容器内用量体系，全工作区聚合）。
-- **关键决策**（2026-08-19）：刷新生效=**自动重建**（fingerprint 纳入订阅内容
-  哈希，仅 proxy 模式，direct 指纹字节级不变）；统计范围=**全部工作区聚合**
-  （运行中实时 + 停止用缓存快照）；导入入口=**面板 + 向导内嵌表单**。
-- **规划文档**：`idea-2-network-usage/01-plan.md`（主计划：架构/阶段 2a-2e/
-  文件清单/风险）+ `02-data-contracts.md`（存储/信封/fingerprint 扩维契约；
-  usage 侧字段 2a 探针后冻结）。分支 `idea-2-network-usage`。
-- **原待规划问题全部落定**：URL 存数据根专属文件（快照含完整 URL，信封/UI 只出
-  脱敏串，不进诊断包）；下载归 Python CLI（urllib 可注入 transport，Rust 零新
-  依赖）；配置形态=容器 `mihomo-build-config.js` 是转换唯一事实源（宿主只存
-  原始订阅文件，任意格式可）；刷新=手动（面板）+ 下次启动自动生效（fingerprint
-  冲突引导重建）；衔接点=向导 network 步内嵌表单 + LaunchSummary 警示跳转 +
-  preflight 新 warning（proxy 无配置不 fail）。
+- **实现收束**（分支 `idea-2-network-usage`，2a-2e 全阶段）：
+  - **2a 探针**：usage schema 用宿主 db 副本直接冻结（数据落点
+    `proxy_request_logs`；rollups 是上游缓存不读；providers 只取
+    id/app_type/name）；**用户机场订阅源有 TLS 指纹墙**（curl/openssl/
+    python/.NET/curl_cffi 全被 ClientHello 掐，真 Chrome 过但拿 HTML；
+    clash-verge 刷新正常 → Rust reqwest 能过，挂账首选 Rust 侧下载）。
+  - **2b 订阅数据面**：`aisc network subscription import/import-file/
+    refresh/show/clear`（URL 与内容均走 stdin；信封只出脱敏串；
+    TLS_REJECTED 稳定错误码）；数据根 `config/mihomo/subscription.yaml` +
+    快照（source: download|manual）；legacy 一次性采用；向导重定向；
+    **start_runtime/plan_run 自动解析订阅（修缺口①：Workbench proxy 容器
+    从此真挂配置）**；fingerprint 增 `proxy_config_sha256` 仅 proxy 模式
+    （direct 字节级不变，订阅刷新→下次 start 走既有重建引导）。
+  - **2c 用量数据面**：容器 adapter `usage` 操作（created_at 单位嗅探 ms/s，
+    表缺失优雅降级；`--since` 宿主算 epoch，today=本地零点）+ 宿主
+    `aisc usage overview [--range][--workspace]`（live=容器内 exec 宿主永不
+    直开 WAL 库；停止用 cache/usage 快照，today 跨日不复用；跨工作区
+    (app, provider_id) 聚合）。
+  - **2d 面板**：`NETWORK_USAGE_TAB_ID` 设置同层哨兵（chip/▾ 菜单/App.vue
+    接管）+ `stores/usage.ts`（组件零直接 ipc，层契约守门）+ 面板两节 +
+    共享 SubscriptionForm（URL/粘贴内容）+ 向导内嵌 + LaunchSummary 警示。
+    偏离：preflight warning 未做（can_start 语义下 warn=变相 fail）。
+  - **手测三轮**：一轮面板/导入/摘要/向导/proxy 实跑（**mihomo 实际生效实证：
+    容器内 gstatic 204 / api.anthropic 403**）；二轮修导入后不切视图/无反馈/
+    加 token 单位（自动/k/M/纯数字）与币种（USD/CNY 固定汇率 7.25）切换 +
+    价格未知标记（有请求费用 0→未命中定价表）；三轮修工作区选择器被服务端
+    过滤收窄（改全量拉取客户端过滤）。
+- **顺带修复（手测期间发现）**：KI-6 Docker 检测（引擎探测改命名管道
+  `\\.\pipe\docker_engine` 直发 /_ping；每用户安装位补进 Rust/NSIS/Python
+  三处探测链；Workbench 给 aisc 子进程注入 docker bin 到 PATH）；entrypoint
+  mihomo 探测误报（容器无 procps，pgrep 不存在 → PID+kill-0 判活 + 3 轮重试）。
+- **挂账**：指纹源自动下载（Rust reqwest 方向已定）；订阅把用量做进假节点名
+  （`已用流量：4.03 GB` 等）——可作 userinfo 头缺失时的用量兜底解析；
+  KI-7（provider 自定义添加报 unknown preset / 外部 cc-switch 改动不同步）。
+- 单位/币种偏好现为会话级（不持久化），持久化需求待用户提出再挂账。
 
 ### IDEA-3 顶栏设置按钮去留 + 工作区级 tab（2026-08-17 用户提出；**2026-08-18 实现并手测 PASS**）
 
