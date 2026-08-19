@@ -276,8 +276,10 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     // checkbox; MODEL is prefilled WITH [1m] → checked; toggling strips it.
     const oneMBoxes = w.findAll("input.one-m");
     expect(oneMBoxes.length).toBe(3); // MODEL/OPUS/SONNET only
+    // Fixture prefills all three applicable slots WITH [1m] → all checked.
     expect((oneMBoxes[0]!.element as HTMLInputElement).checked).toBe(true);
-    expect((oneMBoxes[2]!.element as HTMLInputElement).checked).toBe(false);
+    expect((oneMBoxes[1]!.element as HTMLInputElement).checked).toBe(true);
+    expect((oneMBoxes[2]!.element as HTMLInputElement).checked).toBe(true);
     await oneMBoxes[0]!.trigger("change"); // strip from MODEL
     expect((slots[0]!.element as HTMLInputElement).value).toBe("deepseek-v4-pro");
     await oneMBoxes[0]!.trigger("change"); // re-append
