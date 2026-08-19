@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import ssl
 import urllib.error
 import urllib.request
@@ -211,6 +212,80 @@ def parse_userinfo(value: str) -> Optional[Dict[str, int]]:
     return out or None
 
 
+# ---------------------------------------------------------------------------
+# Node-name usage fallback (挂账②): many airports send NO userinfo header but
+# embed the plan facts as FAKE PROXY NODES ("已用流量：4.03 GB", "剩余流量：
+# 9999995.97 GB", "套餐总量：10000000 GB", "套餐到期：永久有效"). When the
+# header is absent, the raw subscription text is scanned for these patterns
+# and the result is mapped onto the header's userinfo shape (upload+download
+# = used ⇒ everything lands in `download`; derivations fill the gaps).
+# ---------------------------------------------------------------------------
+
+_UNIT_MULT = {
+    "B": 1, "KB": 1_000, "MB": 1_000_000, "GB": 1_000_000_000, "TB": 10**12,
+    "KIB": 1024, "MIB": 1024**2, "GIB": 1024**3, "TIB": 1024**4,
+}
+_TRAFFIC_VALUE = r"([0-9][0-9.,]*)\s*(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)"
+_NODE_USAGE_PATTERNS = {
+    "used": re.compile(r"(?:已用|已使用|使用量)[^:：\n]{0,6}[:：]\s*" + _TRAFFIC_VALUE, re.I),
+    "remaining": re.compile(r"(?:剩余|可用|余量)[^:：\n]{0,6}[:：]\s*" + _TRAFFIC_VALUE, re.I),
+    "total": re.compile(r"(?:总流量|套餐总量|流量总量|总量)[^:：\n]{0,6}[:：]\s*" + _TRAFFIC_VALUE, re.I),
+}
+_EXPIRE_LINE_RE = re.compile(r"(?:到期|过期|有效期|expire)[^:：\n]{0,6}[:：]\s*([^|｜,，\n\r]{1,40})", re.I)
+_PERMANENT_RE = re.compile(r"永久|不过期|长期|never", re.I)
+_EXPIRE_DATE_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+                        "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M",
+                        "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d")
+
+
+def _traffic_to_bytes(value: str, unit: str) -> Optional[int]:
+    try:
+        return int(float(value.replace(",", "")) * _UNIT_MULT[unit.upper()])
+    except (ValueError, KeyError, OverflowError):
+        return None
+
+
+def parse_node_name_userinfo(text: str) -> Optional[Dict[str, int]]:
+    """Extract plan usage from fake-node names in the subscription text.
+
+    Returns the header-shaped dict (``download`` carries the used bytes) or
+    ``None`` when nothing recognizable is present. Derivations: any one of
+    used/total missing is filled from the other two when possible; a
+    permanent-plan keyword omits ``expire``; a parseable date becomes an
+    epoch."""
+    found: Dict[str, int] = {}
+    for name, pattern in _NODE_USAGE_PATTERNS.items():
+        m = pattern.search(text)
+        if m:
+            amount = _traffic_to_bytes(m.group(1), m.group(2))
+            if amount is not None:
+                found[name] = amount
+    used = found.get("used")
+    remaining = found.get("remaining")
+    total = found.get("total")
+    if total is None and used is not None and remaining is not None:
+        total = used + remaining
+    elif used is None and total is not None and remaining is not None:
+        used = total - remaining
+    if used is None or (total is None and remaining is None):
+        return None
+
+    out: Dict[str, int] = {"upload": 0, "download": used}
+    if total is not None:
+        out["total"] = total
+    m = _EXPIRE_LINE_RE.search(text)
+    if m:
+        raw = m.group(1).strip()
+        if not _PERMANENT_RE.search(raw):
+            for fmt in _EXPIRE_DATE_FORMATS:
+                try:
+                    out["expire"] = int(datetime.strptime(raw, fmt).timestamp())
+                    break
+                except ValueError:
+                    continue
+    return out
+
+
 def mask_url(url: str) -> Optional[str]:
     """Deterministic display form: scheme + host survive, path truncated,
     query replaced by ``****``, fragment dropped. ``None`` for garbage."""
@@ -284,6 +359,7 @@ def _envelope_data(
     config_sha256: Optional[str],
     has_config_file: bool,
     userinfo: Optional[Dict[str, int]],
+    userinfo_source: Optional[str] = None,
     config_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     data: Dict[str, Any] = {
@@ -295,6 +371,8 @@ def _envelope_data(
         "has_config_file": has_config_file,
         "userinfo": userinfo,
     }
+    if userinfo_source is not None:
+        data["userinfo_source"] = userinfo_source
     if config_path is not None:
         data["config_path"] = config_path
     return data
@@ -376,8 +454,15 @@ def import_subscription(
     url = _validate_url(url)
     body, headers = _fetch(url, transport=transport, timeout=timeout)
     userinfo = parse_userinfo(headers.get("subscription-userinfo", ""))
+    userinfo_source = "header" if userinfo else None
+    if userinfo is None:
+        # 挂账②: airports without the header embed the facts as fake nodes.
+        userinfo = parse_node_name_userinfo(body.decode("utf-8", "replace"))
+        if userinfo is not None:
+            userinfo_source = "node-names"
     return _persist(
-        url=url, body=body, userinfo=userinfo, source="download", env=env,
+        url=url, body=body, userinfo=userinfo, userinfo_source=userinfo_source,
+        source="download", env=env,
         fetched_at=datetime.now().astimezone().isoformat(timespec="seconds"),
     )
 
@@ -388,15 +473,19 @@ def import_subscription_content(
     env: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     """Store manually supplied subscription content (D4 fallback for
-    fingerprint-filtering sources). No URL, no userinfo."""
+    fingerprint-filtering sources). No URL — and no header either, so the
+    node-name fallback is the only usage source."""
     if not content or not content.strip():
         raise CliError(
             message="subscription content is empty",
             exit_code=2,
             error_code=ERROR_EMPTY,
         )
+    userinfo = parse_node_name_userinfo(content.decode("utf-8", "replace"))
     return _persist(
-        url=None, body=content, userinfo=None, source="manual", env=env,
+        url=None, body=content, userinfo=userinfo,
+        userinfo_source="node-names" if userinfo else None,
+        source="manual", env=env,
         fetched_at=datetime.now().astimezone().isoformat(timespec="seconds"),
     )
 
@@ -406,6 +495,7 @@ def _persist(
     url: Optional[str],
     body: bytes,
     userinfo: Optional[Dict[str, int]],
+    userinfo_source: Optional[str],
     source: str,
     env: Optional[Mapping[str, str]],
     fetched_at: str,
@@ -419,6 +509,7 @@ def _persist(
         "fetched_at": fetched_at,
         "config_sha256": _sha256_hex(body),
         "userinfo": userinfo,
+        "userinfo_source": userinfo_source,
     }
     _atomic_write(
         _snapshot_path(env),
@@ -432,6 +523,7 @@ def _persist(
         config_sha256=snapshot["config_sha256"],
         has_config_file=True,
         userinfo=userinfo,
+        userinfo_source=userinfo_source,
         config_path=str(config_path),
     )
 
@@ -480,6 +572,9 @@ def show_subscription(
     userinfo = snapshot.get("userinfo")
     if not isinstance(userinfo, dict):
         userinfo = None
+    userinfo_source = snapshot.get("userinfo_source")
+    if userinfo_source not in ("header", "node-names"):
+        userinfo_source = None
     url = snapshot.get("url")
     return _envelope_data(
         configured=True,
@@ -489,6 +584,7 @@ def show_subscription(
         config_sha256=sha,
         has_config_file=True,
         userinfo=userinfo,
+        userinfo_source=userinfo_source,
         config_path=str(config_path),
     )
 

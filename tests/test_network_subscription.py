@@ -18,6 +18,7 @@ import ssl
 import tempfile
 import unittest
 import urllib.error
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from unittest import mock
@@ -86,6 +87,72 @@ class ParseUserinfoTests(unittest.TestCase):
     def test_empty_is_none(self):
         self.assertIsNone(ns.parse_userinfo(""))
         self.assertIsNone(ns.parse_userinfo("   ; ; "))
+
+
+class NodeNameUsageFallbackTests(unittest.TestCase):
+    """挂账②: no userinfo header → the facts ride as fake proxy nodes."""
+
+    REAL_WORLD = (
+        "proxies:\n"
+        "  - { name: 认准官网地址, type: ss, server: a.example, port: 1 }\n"
+        "  - { name: '剩余流量：9999995.97 GB', type: ss, server: a.example, port: 1 }\n"
+        "  - { name: '已用流量：4.03 GB', type: ss, server: a.example, port: 1 }\n"
+        "  - { name: '套餐总量：10000000 GB', type: ss, server: a.example, port: 1 }\n"
+        "  - { name: '套餐到期：永久有效', type: ss, server: a.example, port: 1 }\n"
+    )
+
+    def test_real_world_shape(self):
+        info = ns.parse_node_name_userinfo(self.REAL_WORLD)
+        self.assertEqual(info, {
+            "upload": 0,
+            "download": int(4.03 * 1e9),
+            "total": int(10000000 * 1e9),
+            # permanent plan → no expire key
+        })
+
+    def test_derives_total_from_used_and_remaining(self):
+        info = ns.parse_node_name_userinfo(
+            "已用: 1.5GB\n剩余流量：500MB\n")
+        self.assertEqual(info["download"], int(1.5e9))
+        self.assertEqual(info["total"], int(1.5e9) + int(500e6))
+
+    def test_date_expiry_becomes_epoch(self):
+        info = ns.parse_node_name_userinfo(
+            "已用流量：1 GB\n套餐总量：10 GB\n到期时间：2027-01-15\n")
+        self.assertEqual(info["expire"],
+                         int(datetime(2027, 1, 15).timestamp()))
+
+    def test_used_alone_without_denominator_is_none(self):
+        # Conservative: without total/remaining there is nothing displayable
+        # beyond a bare "used" number — keep the no-info contract.
+        self.assertIsNone(ns.parse_node_name_userinfo("已用流量：1 GB\n"))
+
+    def test_nothing_recognizable_is_none(self):
+        self.assertIsNone(ns.parse_node_name_userinfo(
+            "proxies:\n  - { name: 香港节点01, type: ss }\n"))
+        self.assertIsNone(ns.parse_node_name_userinfo(""))
+
+    def test_import_content_stores_node_derived_userinfo(self):
+        with HermeticDataRoot() as hr:
+            data = ns.import_subscription_content(
+                self.REAL_WORLD.encode("utf-8"), env=hr.env)
+            self.assertEqual(data["userinfo_source"], "node-names")
+            self.assertEqual(data["userinfo"]["download"], int(4.03e9))
+            shown = ns.show_subscription(env=hr.env)
+            self.assertEqual(shown["userinfo_source"], "node-names")
+            self.assertEqual(shown["userinfo"]["total"], int(10000000e9))
+
+    def test_header_wins_over_node_names(self):
+        with HermeticDataRoot() as hr:
+            body = self.REAL_WORLD.encode("utf-8")
+            t = _fake_transport([(200, {"subscription-userinfo": "total=10"},
+                                      body)])
+            data = ns.import_subscription(
+                "https://sub.example/api", transport=t, env=hr.env)
+            self.assertEqual(data["userinfo_source"], "header")
+            self.assertEqual(data["userinfo"], {"total": 10})
+            shown = ns.show_subscription(env=hr.env)
+            self.assertEqual(shown["userinfo_source"], "header")
 
 
 class MaskUrlTests(unittest.TestCase):

@@ -87,6 +87,8 @@ function successRate(ok: number, total: number): string {
   return total > 0 ? `${Math.round((ok * 100) / total)}%` : "—";
 }
 function fmtBytes(n: number): string {
+  if (n >= 1024 ** 5) return `${(n / 1024 ** 5).toFixed(2)} PB`;
+  if (n >= 1024 ** 4) return `${(n / 1024 ** 4).toFixed(2)} TB`;
   if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(2)} GB`;
   if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
   if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
