@@ -367,6 +367,24 @@ def _build_parser() -> _AiscArgumentParser:
     nwc.add_argument("--confirm", action="store_true", default=False,
                      help="Required confirmation flag")
 
+    # --- usage (IDEA-2: provider token usage aggregation) ---
+    usp = sub.add_parser(
+        "usage", help="Provider token usage statistics (all workspaces)",
+        allow_abbrev=False,
+    )
+    _add_global_args(usp, is_subparser=True)
+    ussub = usp.add_subparsers(dest="usage_command", title="usage commands",
+                               parser_class=_AiscArgumentParser, required=True)
+    uso = ussub.add_parser(
+        "overview", help="Subscription status + per-provider token usage",
+        allow_abbrev=False)
+    _add_global_args(uso, is_subparser=True)
+    uso.add_argument("--range", dest="range", type=str, default="7d",
+                     choices=["today", "7d", "30d"],
+                     help="Time window (default: 7d)")
+    uso.add_argument("--workspace", type=str, default=None,
+                     help="Limit to one workspace path (default: all)")
+
     # --- ps ---
     psp = sub.add_parser("ps", help="List all registered containers", allow_abbrev=False)
     _add_global_args(psp, is_subparser=True)
@@ -604,8 +622,8 @@ def _detect_events(argv: List[str]) -> bool:
 def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "profile",
              "status", "stop", "restart", "shell", "switch", "provider",
-             "cc-switch", "network", "ps", "runtime", "session", "artifact",
-             "data-root"}
+             "cc-switch", "network", "usage", "ps", "runtime", "session",
+             "artifact", "data-root"}
     for arg in argv:
         if arg in known:
             return arg
@@ -1187,6 +1205,22 @@ def _cmd_network(
 
     if effective_format == "text":
         nw_cmd.print_network_subscription_text(data)
+    return data, 0, []
+
+
+def _cmd_usage(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc usage`` subcommands (IDEA-2 usage data plane)."""
+    from aisc.cli.commands import usage as usage_cmd
+
+    if getattr(args, "usage_command", None) != "overview":
+        raise CliError(message="unknown usage subcommand",
+                       exit_code=2, error_code="AISC_ERR_USAGE")
+    data = usage_cmd.cmd_usage_overview(args)
+    if effective_format == "text":
+        usage_cmd.print_usage_overview_text(data)
     return data, 0, []
 
 
@@ -1803,6 +1837,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_cc_switch(args, effective_format)
         elif args.command == "network":
             data, exit_code, errors = _cmd_network(args, effective_format)
+        elif args.command == "usage":
+            data, exit_code, errors = _cmd_usage(args, effective_format)
         elif args.command == "ps":
             data, exit_code, errors = _cmd_ps(args, effective_format)
         elif args.command == "runtime":

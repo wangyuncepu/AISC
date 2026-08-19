@@ -32,6 +32,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 import tomllib
 import uuid
 from pathlib import Path
@@ -57,6 +58,11 @@ ERR_RESTORE_FAILED = "AISC_ERR_CC_SWITCH_PROVIDER_RESTORE_FAILED"
 ERR_NO_SWITCH_TARGET = "AISC_ERR_CC_SWITCH_PROVIDER_NO_SWITCH_TARGET"
 ERR_CLI = "AISC_ERR_CC_SWITCH_PROVIDER_CLI_ERROR"
 ERR_SNAPSHOT = "AISC_ERR_CC_SWITCH_PROVIDER_SNAPSHOT_FAILED"
+
+#: ``proxy_request_logs.created_at`` unit is not documented upstream; epochs
+#: in milliseconds are ~1e12 while seconds are ~1e9 (IDEA-2 2a deferred the
+#: live confirmation, so the adapter sniffs once per call).
+_MS_EPOCH_THRESHOLD = 10 ** 11
 
 # Claude env keys that hold credentials (never emitted in full).
 _CLAUDE_SECRET_KEYS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
@@ -139,6 +145,131 @@ def read_snapshot(agent: str) -> list[dict[str, Any]]:
             }
         )
     return snapshot
+
+
+# ---------------------------------------------------------------------------
+# Usage aggregation (IDEA-2 2c): read-only, degraded gracefully when the
+# upstream usage tables are absent — the panel shows "no data", never an
+# error. All sources (proxy capture + session-log import) live in
+# proxy_request_logs; usage_daily_rollups is an upstream cache we do not read.
+# ---------------------------------------------------------------------------
+
+def _utc_now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _usage_empty(available: bool, since: float, unit: Optional[str]) -> dict[str, Any]:
+    return {
+        "available": available,
+        "providers": [],
+        "models": [],
+        "since": since,
+        "unit": unit,
+        "generated_at": _utc_now_iso(),
+    }
+
+
+def op_usage(since_epoch_s: float) -> dict[str, Any]:
+    """Aggregate per-provider / per-model token usage since an epoch.
+
+    ``since_epoch_s`` is computed host-side (local timezone) so "today"
+    means the user's today. The ``created_at`` unit is sniffed from the
+    data (ms vs s) before the cutoff is applied.
+    """
+    path = _db_path()
+    if not path.is_file():
+        return _usage_empty(False, since_epoch_s, None)
+    uri = f"file:{path.as_posix()}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True, timeout=10)
+    except sqlite3.Error:
+        return _usage_empty(False, since_epoch_s, None)
+    try:
+        conn.execute("PRAGMA busy_timeout=10000")
+        has_table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name = 'proxy_request_logs'"
+        ).fetchone()
+        if not has_table:
+            return _usage_empty(False, since_epoch_s, None)
+        max_created = conn.execute(
+            "SELECT MAX(created_at) FROM proxy_request_logs"
+        ).fetchone()[0]
+        if max_created is None:
+            return _usage_empty(True, since_epoch_s, None)
+        is_ms = int(max_created) >= _MS_EPOCH_THRESHOLD
+        unit = "ms" if is_ms else "s"
+        cutoff = int(since_epoch_s * 1000) if is_ms else int(since_epoch_s)
+        provider_rows = conn.execute(
+            """
+            SELECT l.provider_id, l.app_type,
+                   COALESCE(pr.name, l.provider_id),
+                   COUNT(*),
+                   SUM(CASE WHEN l.status_code BETWEEN 200 AND 299 THEN 1 ELSE 0 END),
+                   SUM(l.input_tokens + l.output_tokens
+                       + l.cache_read_tokens + l.cache_creation_tokens),
+                   SUM(CAST(l.total_cost_usd AS REAL))
+            FROM proxy_request_logs l
+            LEFT JOIN providers pr
+              ON pr.id = l.provider_id AND pr.app_type = l.app_type
+            WHERE l.created_at >= ?
+            GROUP BY l.provider_id, l.app_type
+            ORDER BY 6 DESC
+            """,
+            (cutoff,),
+        ).fetchall()
+        model_rows = conn.execute(
+            """
+            SELECT l.model, l.app_type, COUNT(*),
+                   SUM(l.input_tokens), SUM(l.output_tokens),
+                   SUM(CAST(l.total_cost_usd AS REAL))
+            FROM proxy_request_logs l
+            WHERE l.created_at >= ?
+            GROUP BY l.model, l.app_type
+            ORDER BY 3 DESC
+            """,
+            (cutoff,),
+        ).fetchall()
+    except sqlite3.Error:
+        # Missing/renamed columns across cc-switch versions degrade to
+        # "no data" instead of an error the panel cannot recover from.
+        return _usage_empty(False, since_epoch_s, None)
+    finally:
+        conn.close()
+
+    providers = [
+        {
+            "app": str(app),
+            "provider_id": str(pid),
+            "provider_name": str(name or pid),
+            "requests": int(reqs or 0),
+            "success": int(ok or 0),
+            "failed": int((reqs or 0) - (ok or 0)),
+            "tokens_total": int(tokens or 0),
+            "cost_estimate": round(float(cost or 0.0), 4),
+            "currency": "USD",
+        }
+        for pid, app, name, reqs, ok, tokens, cost in provider_rows
+    ]
+    models = [
+        {
+            "app": str(app),
+            "model": str(model),
+            "requests": int(reqs or 0),
+            "tokens_in": int(tok_in or 0),
+            "tokens_out": int(tok_out or 0),
+            "cost_estimate": round(float(cost or 0.0), 4),
+        }
+        for model, app, reqs, tok_in, tok_out, cost in model_rows
+    ]
+    return {
+        "available": True,
+        "providers": providers,
+        "models": models,
+        "since": since_epoch_s,
+        "unit": unit,
+        "generated_at": _utc_now_iso(),
+    }
 
 
 def _codex_provider_fields(settings: dict[str, Any], pid: str) -> dict[str, str]:
@@ -685,6 +816,7 @@ def op_delete(agent: str, provider_id: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
+              usage: Optional[dict] = None,
               error: Optional[dict] = None) -> dict[str, Any]:
     out: dict[str, Any] = {
         "schema": PROTOCOL,
@@ -694,6 +826,8 @@ def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
     }
     if providers is not None:
         out["providers"] = providers
+    if usage is not None:
+        out["usage"] = usage
     if error is not None:
         out["error"] = error
     return out
@@ -701,10 +835,34 @@ def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aisc-cc-provider")
-    parser.add_argument("op", choices=["list", "add", "edit", "switch", "delete"])
-    parser.add_argument("--agent", required=True, choices=list(AGENTS))
+    parser.add_argument("op", choices=["list", "add", "edit", "switch", "delete",
+                                       "usage"])
+    parser.add_argument("--agent", default=None, choices=list(AGENTS),
+                        help="agent (required for every op except usage)")
     parser.add_argument("--id", default=None, help="provider id (add/edit/delete)")
+    parser.add_argument("--since", type=float, default=0.0,
+                        help="usage: epoch-seconds cutoff computed host-side "
+                             "(local timezone semantics)")
     args = parser.parse_args(argv)
+
+    if args.op == "usage":
+        try:
+            print(json.dumps(_envelope(
+                args.op, True, usage=op_usage(args.since),
+            )))
+            return 0
+        except AdapterError as exc:
+            print(json.dumps(_envelope(
+                args.op, False, error={"code": exc.code, "message": exc.message},
+            )))
+            return 1
+
+    if not args.agent:
+        print(json.dumps(_envelope(
+            args.op, False,
+            error={"code": ERR_BAD_REQUEST, "message": f"{args.op} requires --agent"},
+        )))
+        return 2
 
     request: dict[str, Any] = {}
     if args.op in ("add", "edit"):
