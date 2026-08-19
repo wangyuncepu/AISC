@@ -768,11 +768,23 @@ SectionEnd
 ; WM_SETTINGCHANGE("Environment") after every write so new terminals pick it up.
 LangString PATH_CONFLICT ${LANG_ENGLISH} "PATH already contains another aisc executable ($PathHit). To keep the existing environment intact, AISC Workbench was not added to PATH. The Workbench keeps using its bundled CLI internally."
 LangString PATH_CONFLICT ${LANG_SIMPCHINESE} "PATH 中已存在其他 aisc 可执行文件（$PathHit）。为避免破坏现有环境，未将 AISC Workbench 加入 PATH。Workbench 内部仍使用自带 CLI。"
+; KI-5 (2026-08-19): same-origin takeover ask. The user decision: an older
+; aisc of OUR product family (aisc.cli/v1 envelope + older semver) may be
+; offered to be shadowed BY the Workbench install dir (prepended to the user
+; PATH; the old entry and files are left untouched — reversible). Everything
+; else keeps the never-shadow behavior (05 §5.2.5).
+LangString PATH_TAKEOVER_ASK ${LANG_ENGLISH} "An older AISC CLI (v$PathVer) was found on PATH:$\r$\n$PathHit$\r$\n$\r$\nLet AISC Workbench take over PATH? Its bundled CLI will then answer the aisc command first; the old installation is left untouched."
+LangString PATH_TAKEOVER_ASK ${LANG_SIMPCHINESE} "检测到旧版 AISC CLI（v$PathVer）：$\r$\n$PathHit$\r$\n$\r$\n是否让 AISC Workbench 接管 PATH？之后 aisc 命令将优先使用 Workbench 自带的新版 CLI，旧安装保持原样不动。"
+LangString PATH_TAKEOVER_DONE ${LANG_ENGLISH} "AISC Workbench took over PATH (prepended; the old entry is untouched)."
+LangString PATH_TAKEOVER_DONE ${LANG_SIMPCHINESE} "AISC Workbench 已接管 PATH（条目前置；旧条目未改动）。"
+LangString PATH_TAKEOVER_SYSTEM ${LANG_ENGLISH} "An older AISC CLI is shadowing this install from the SYSTEM PATH:$\r$\n$PathHit$\r$\n$\r$\nA per-user install cannot override the system PATH. Remove or reorder that entry manually if you want the Workbench CLI to answer the aisc command. The Workbench itself keeps using its bundled CLI."
+LangString PATH_TAKEOVER_SYSTEM ${LANG_SIMPCHINESE} "系统 PATH 中存在旧版 AISC CLI 遮挡本安装：$\r$\n$PathHit$\r$\n$\r$\n当前为按用户安装，无法覆盖系统 PATH。如需 aisc 命令使用 Workbench 自带 CLI，请手动删除或调整该系统条目。Workbench 内部不受影响。"
 
 Var PathType
 Var PathRaw
 Var PathNorm
 Var PathHit
+Var PathVer
 
 ; $0 in/out: normalize a directory entry - trim spaces, strip one matching
 ; quote pair, remove trailing backslashes, lowercase (Windows compare).
@@ -962,16 +974,6 @@ Function ${UN}AddInstDirToPath
         StrCpy $6 1
         ${Break}
       ${EndIf}
-      ; conflict probe: expand %VAR% only for the probe; skip UNC/network dirs
-      StrCpy $4 $3 2
-      ${If} $4 != "\\"
-        ExpandEnvStrings $4 $3
-        ${If} ${FileExists} "$4\aisc.exe"
-          ${If} $PathHit == ""
-            StrCpy $PathHit $4
-          ${EndIf}
-        ${EndIf}
-      ${EndIf}
     ${EndIf}
   ${Loop}
 
@@ -985,8 +987,49 @@ Function ${UN}AddInstDirToPath
     Return
   ${EndIf}
 
+  ; KI-5 (2026-08-19): effective-resolution conflict probe. $INSTDIR is not on
+  ; the user PATH — check whether ANY aisc.exe resolves first (system PATH,
+  ; then user PATH, exactly how a fresh terminal resolves).
+  Call WhereAiscProbe
   ${If} $PathHit != ""
-    ; Another aisc shadows us: never overwrite, reorder or append (05 §5.2.5).
+    Call PathConflictOlderSameOrigin
+    ${If} $R0 = 1
+      Call UserPathContainsHitDir
+      ${If} $R0 = 1
+        ; Older same-origin CLI shadowing from the USER PATH: offer takeover.
+        ; Takeover = PREPEND $INSTDIR (the old entry and files are untouched —
+        ; reversible); a per-user prepend does win over later user entries.
+        ${If} $PassiveMode = 1
+        ${OrIf} ${Silent}
+          DetailPrint "PATH conflict: older same-origin aisc at $PathHit; not added (passive/silent)"
+          Return
+        ${EndIf}
+        MessageBox MB_ICONQUESTION|MB_YESNO "$(PATH_TAKEOVER_ASK)" IDNO ki5_declined
+          ${If} $PathRaw == ""
+            StrCpy $PathRaw $INSTDIR
+          ${Else}
+            StrCpy $PathRaw "$INSTDIR;$PathRaw"
+          ${EndIf}
+          Call ${UN}PathWrite
+          WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "PathEntryOwned" 1
+          WriteRegStr HKCU "${MANUPRODUCTKEY}" "PathEntry" $INSTDIR
+          DetailPrint "$(PATH_TAKEOVER_DONE)"
+          Return
+        ki5_declined:
+          DetailPrint "PATH takeover declined; $INSTDIR not added"
+          Return
+      ${Else}
+        ; System-PATH shadow: a per-user prepend cannot override it.
+        ${If} $PassiveMode = 1
+        ${OrIf} ${Silent}
+          DetailPrint "PATH conflict: older same-origin aisc at $PathHit (system PATH); not added"
+        ${Else}
+          MessageBox MB_OK|MB_ICONINFORMATION "$(PATH_TAKEOVER_SYSTEM)"
+        ${EndIf}
+        Return
+      ${EndIf}
+    ${EndIf}
+    ; Any other aisc shadows us: never overwrite, reorder or append (05 §5.2.5).
     ${If} $PassiveMode = 1
     ${OrIf} ${Silent}
       DetailPrint "PATH conflict: aisc already at $PathHit; $INSTDIR not added"
@@ -1038,6 +1081,159 @@ FunctionEnd
 ; uninstaller-scope helpers (called from Section Uninstall; NSIS
 ; requires un. functions in the uninstall section)
 !insertmacro G18_PATH_FUNCS "un."
+
+; --- KI-5 (2026-08-19): same-origin takeover ask (user decision) ---
+; Three installer-scope probes backing AddInstDirToPath's KI-5 branch.
+
+; Effective-resolution conflict probe (pure registry scan, no subprocess):
+; walks the SYSTEM PATH entries then the USER PATH entries — the exact order
+; a fresh terminal resolves — and reports the first directory containing
+; aisc.exe that is not $INSTDIR. `where` is deliberately NOT used: the
+; installer's inherited process PATH (CI toolchains, setup-python Scripts
+; dirs) is not what a user terminal ever sees. Sets $PathHit to that dir's
+; aisc.exe ("" when we already resolve first or no aisc exists anywhere).
+Function WhereAiscProbe
+  StrCpy $PathHit ""
+  ReadRegStr $6 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
+  ${If} $6 == ""
+    StrCpy $6 $PathRaw
+  ${Else}
+    StrCpy $6 "$6;$PathRaw"
+  ${EndIf}
+  ${Do}
+    ${If} $6 == ""
+      ${Break}
+    ${EndIf}
+    StrCpy $3 ""
+    ${Do}
+      StrCpy $5 $6 1
+      ${If} $5 == ";"
+      ${OrIf} $5 == ""
+        ${Break}
+      ${EndIf}
+      StrCpy $3 "$3$5"
+      StrCpy $6 $6 "" 1
+    ${Loop}
+    StrCpy $5 $6 1
+    ${IfThen} $5 == ";" ${|} StrCpy $6 $6 "" 1 ${|}
+    ${If} $3 == ""
+      ${Continue}
+    ${EndIf}
+    ; skip UNC/network dirs (same as the legacy probe); expand %VAR% forms
+    StrCpy $4 $3 2
+    ${If} $4 == "\\"
+      ${Continue}
+    ${EndIf}
+    ExpandEnvStrings $4 $3
+    ${IfNot} ${FileExists} "$4\aisc.exe"
+      ${Continue}
+    ${EndIf}
+    StrCpy $0 $4
+    Call PathNormalizeDir
+    ${If} $0 == $PathNorm
+      StrCpy $PathHit ""   ; our own dir resolves first — no conflict
+    ${Else}
+      StrCpy $PathHit "$4\aisc.exe"
+    ${EndIf}
+    ${Break}               ; the first hit decides the effective resolution
+  ${Loop}
+FunctionEnd
+
+; Is $PathHit an OLDER release of our own CLI? Runs its version probe (the
+; same command Workbench negotiate uses) and requires: exit 0, the
+; aisc.cli/v1 envelope marker (same product family), and a cli_version that
+; SemverCompare ranks strictly below this installer. Sets $R0=1 when the
+; takeover ask is warranted; $PathVer carries the parsed version for the
+; prompt. No --format braces here — double braces are handlebars in this file.
+Function PathConflictOlderSameOrigin
+  StrCpy $R0 0
+  StrCpy $PathVer ""
+  nsExec::ExecToStack '"$PathHit" version --format json'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    Return
+  ${EndIf}
+  ${StrLoc} $2 $1 "aisc.cli/v1" ">"
+  ${If} $2 == ""
+    Return
+  ${EndIf}
+  ${StrLoc} $2 $1 '"cli_version"' ">"
+  ${If} $2 == ""
+    Return
+  ${EndIf}
+  IntOp $2 $2 + 15
+  StrCpy $3 $1 "" $2
+  ${Do}
+    StrCpy $4 $3 1
+    ${If} $4 == '"'
+    ${OrIf} $4 == ""
+      ${Break}
+    ${EndIf}
+    StrCpy $PathVer "$PathVer$4"
+    StrCpy $3 $3 "" 1
+  ${Loop}
+  ${If} $PathVer == ""
+    Return
+  ${EndIf}
+  nsis_tauri_utils::SemverCompare "${VERSION}" $PathVer
+  Pop $2
+  ${IfThen} $2 = 1 ${|} StrCpy $R0 1 ${|}
+FunctionEnd
+
+; Does the DIRECTORY of $PathHit appear as an entry in the user PATH
+; ($PathRaw)? If not, the shadow lives in the system PATH and a per-user
+; prepend can never override it. Sets $R0=1 when user-scoped. Entries are
+; compared normalized; %VAR% forms are expanded for the compare too.
+Function UserPathContainsHitDir
+  StrCpy $R0 0
+  StrCpy $0 $PathHit
+  Call PathNormalizeDir
+  StrCpy $5 $0
+  StrCpy $6 "\aisc.exe"
+  StrLen $7 $6
+  StrLen $8 $5
+  ${If} $8 < $7
+    Return
+  ${EndIf}
+  IntOp $8 $8 - $7
+  StrCpy $5 $5 $8              ; normalized dir of the hit
+  StrCpy $1 $PathRaw
+  ${Do}
+    ${If} $1 == ""
+      ${Break}
+    ${EndIf}
+    StrCpy $3 ""
+    ${Do}
+      StrCpy $2 $1 1
+      ${If} $2 == ";"
+      ${OrIf} $2 == ""
+        ${Break}
+      ${EndIf}
+      StrCpy $3 "$3$2"
+      StrCpy $1 $1 "" 1
+    ${Loop}
+    StrCpy $2 $1 1
+    ${IfThen} $2 == ";" ${|} StrCpy $1 $1 "" 1 ${|}
+    ${If} $3 != ""
+      StrCpy $0 $3
+      Call PathNormalizeDir
+      ${If} $0 == $5
+        StrCpy $R0 1
+        ${Break}
+      ${EndIf}
+      ExpandEnvStrings $4 $3
+      ${If} $4 != $3
+        StrCpy $0 $4
+        Call PathNormalizeDir
+        ${If} $0 == $5
+          StrCpy $R0 1
+          ${Break}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+FunctionEnd
 
 Section Install
   SetOutPath $INSTDIR
