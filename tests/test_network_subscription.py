@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import base64
 import json
 import os
 import shutil
@@ -153,6 +154,66 @@ class NodeNameUsageFallbackTests(unittest.TestCase):
             self.assertEqual(data["userinfo"], {"total": 10})
             shown = ns.show_subscription(env=hr.env)
             self.assertEqual(shown["userinfo_source"], "header")
+
+
+class StoreDownloadedTests(unittest.TestCase):
+    """挂账①: the persistence endpoint behind the Rust reqwest downloader."""
+
+    def _stdin(self, payload: str):
+        s = mock.Mock()
+        s.read.return_value = payload
+        return s
+
+    def test_header_path_persists_and_masks(self):
+        from aisc.cli.commands import network as nw
+        body = b"proxies: [ ]\n"
+        payload = json.dumps({
+            "url": "https://sub.example/api?token=SECRET",
+            "content_b64": base64.b64encode(body).decode(),
+            "userinfo": "upload=100; download=900; total=1000",
+        })
+        with HermeticDataRoot() as hr, \
+                mock.patch("sys.stdin", self._stdin(payload)), \
+                mock.patch.dict(os.environ, hr.env, clear=False):
+            data = nw.cmd_network_subscription_store_downloaded(mock.Mock())
+        self.assertEqual(data["source"], "download")
+        self.assertEqual(data["userinfo_source"], "header")
+        self.assertEqual(data["userinfo"]["total"], 1000)
+        self.assertEqual(data["url_masked"], "https://sub.example/api?****")
+
+    def test_node_name_fallback_when_header_absent(self):
+        from aisc.cli.commands import network as nw
+        body = NodeNameUsageFallbackTests.REAL_WORLD.encode("utf-8")
+        payload = json.dumps({
+            "url": None, "content_b64": base64.b64encode(body).decode(),
+            "userinfo": None,
+        })
+        with HermeticDataRoot() as hr, \
+                mock.patch("sys.stdin", self._stdin(payload)), \
+                mock.patch.dict(os.environ, hr.env, clear=False):
+            data = nw.cmd_network_subscription_store_downloaded(mock.Mock())
+        self.assertEqual(data["userinfo_source"], "node-names")
+        self.assertEqual(data["userinfo"]["download"], int(4.03e9))
+        self.assertIsNone(data["url_masked"])
+
+    def test_bad_base64_and_empty_content(self):
+        from aisc.cli.commands import network as nw
+        with mock.patch("sys.stdin", self._stdin(
+                json.dumps({"url": None, "content_b64": "!!!not-b64!!!"}))):
+            with self.assertRaises(CliError) as ctx:
+                nw.cmd_network_subscription_store_downloaded(mock.Mock())
+            self.assertEqual(ctx.exception.error_code, "AISC_ERR_USAGE")
+        with mock.patch("sys.stdin", self._stdin(
+                json.dumps({"url": None, "content_b64": ""}))):
+            with self.assertRaises(CliError) as ctx:
+                nw.cmd_network_subscription_store_downloaded(mock.Mock())
+            self.assertEqual(ctx.exception.error_code, ns.ERROR_EMPTY)
+
+    def test_parser_accepts_store_downloaded(self):
+        from aisc.cli.main import _build_parser
+        args = _build_parser().parse_args(
+            ["network", "subscription", "store-downloaded"])
+        self.assertEqual(args.subscription_command, "store-downloaded")
 
 
 class MaskUrlTests(unittest.TestCase):

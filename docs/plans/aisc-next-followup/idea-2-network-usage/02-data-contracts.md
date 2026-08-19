@@ -227,18 +227,31 @@ CREATE TABLE model_pricing (model_id TEXT PRIMARY KEY, display_name TEXT,
 
 ### 6.1 实测行为矩阵（103.14.76.98，IP 直连 HTTPS 订阅）
 
-| 客户端栈 | 路径 | 结果 |
-|---|---|---|
-| 直连 443 | 任意 | **TCP 拒绝**（必须经代理出口） |
-| HTTP 80 | clash UA | 308 → 同址 https（无 http 回退） |
-| curl(schannel) / openssl / python-urllib / .NET HttpWebRequest（经 7890 代理 CONNECT） | 任意 UA | **TLS ClientHello 后被服务端掐断**（EOF，无证书阶段） |
-| curl_cffi impersonate=chrome（经代理） | clash UA | 同上被掐（模拟不够深，疑似校验 PQ keyshare 等 ClientHello 细节） |
-| **真 Chrome headless**（经代理） | 浏览器 UA | **通过**，返回 190KB JS 壳 HTML（机场面板页，非配置） |
+> ⚠️ **2026-08-19 晚复核勘误（挂账① 落地时）**：原矩阵「真 Chrome headless 通过」
+> 系**误读**——dump-dom 捕获的 190KB "JS 壳 HTML" 实为 Chrome 自带的
+> `ERR_CONNECTION_CLOSED` 报错页（Lit 模板，两种 UA 下均同尺寸仅 nonce 异），
+> Chrome 当时即已被掐。且该源防护在 8/17→8/19 间进一步收紧：clash-verge
+> 自身的三级更新（直连→Clash 代理→系统代理，reqwest+rustls）8/17 12:50 经
+> 第二级成功拿到 userinfo 头（profiles.yaml `extra` 为证），8/19 12:15 与
+> 16:18 两轮**全灭**（verge 日志原文「所有重试均已失败」）。v1.2.3 时代
+> （2026-07）宿主 curl.exe 直拉订阅可用——该墙为后加且动态变化。
 
-结论：该类机场在 TLS 层做**客户端指纹白名单**（真浏览器/客户端栈放行，
-脚本栈一律掐）；HTTP 层再按 UA 分发（浏览器→HTML 页，clash 家族→配置）。
-Python urllib 默认传输**无法直连此类源**。`subscription-userinfo` 头在本源
-**未能实测**（拿不到配置响应）；解析契约按生态标准（§2，容错设计）。
+| 客户端栈 | 路径 | 结果（8/19 晚实探） |
+|---|---|---|
+| 直连 443 | 任意 | **TCP 拒绝**（os error 10061） |
+| HTTP 80 | clash UA | 308 → 同址 https（无 http 回退） |
+| curl(schannel)（经 7890 代理 CONNECT） | clash UA，tls1.1/1.2/1.3 各档 | **全灭**（无响应） |
+| reqwest+rustls(ring)（经 7890） | clash UA | **TLS handshake EOF**（错误链实证） |
+| 真 Chrome headless（经 7890） | 浏览器/clash UA | **ERR_CONNECTION_CLOSED**（见上勘误） |
+| clash-verge 自身更新器 | 三级全试 | 8/19 **全灭**；8/17 第二级（自身 mihomo）可过 |
+| 同机场域名端点（http://，经 7890） | curl + clash UA | **通过**：200 + 真实 `Subscription-Userinfo` 头 + 114KB yaml |
+
+结论（修订）：该机场 IP 源的墙是**动态收紧的黑名单/风控**（8/19 状态：一切
+客户端栈含 clash-verge 与浏览器皆灭），非可通过栈形状工程绕过的静态 JA3 白
+名单；其**域名 http 端点**对一切栈开放。工程含义：下载器按「clash 家族栈形
+状」（reqwest+rustls + clash UA + WinINET 系统代理）实现——墙回落到
+clash-verge 可过的档位时本传输自动受益；全杀档位下逐级降级（Python 传输 →
+粘贴导入），不误伤可用性。
 
 ### 6.2 契约修订：URL 与内容双导入（D4，2026-08-19）
 
@@ -253,10 +266,13 @@ Python urllib 默认传输**无法直连此类源**。`subscription-userinfo` �
   握手期 EOF/连接重置类 SSL 错误时映射（区别于网络不可达）→ UI 引导「该订阅
   源拒绝自动化下载，请改用粘贴配置内容导入」。
 - SubscriptionForm（UI）双模式：订阅链接输入 + 粘贴配置内容文本域。
-- **挂账（指纹防护源的自动下载）**：**用户确认（2026-08-19）其 clash-verge
-  客户端刷新该源正常 → Rust reqwest 栈实测可过 TLS 指纹墙** → 挂账首选
-  Rust 侧下载器（新增 reqwest 依赖，Workbench 直接拉，信封仍走 CLI）；次选
-  容器 mihomo（Go 栈）proxy-provider 代拉。本轮 D4 双导入已保证此类源可用。
+- **挂账（指纹防护源的自动下载）——2026-08-19 已落地（挂账①）**：Rust 侧
+  下载器上线：`workbench/src-tauri/src/subscription.rs`（reqwest+rustls、
+  clash 家族 UA、WinINET/环境双探测系统代理、30s+1 重试、10MB 上限、宽容自
+  签证书；捕获 `subscription-userinfo` 头）→ 经 stdin JSON（b64 内容）交给
+  新 CLI op `network subscription store-downloaded`，持久化/脱敏/假节点兜底
+  全留 Python。import/refresh 命令改为「Rust 下载优先，失败回落 Python 传输」。
+  墙态勘误与实探矩阵见 §6.1 修订。
 
 ### 6.3 2a 探针清单执行状态
 

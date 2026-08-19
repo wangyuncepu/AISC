@@ -38,6 +38,48 @@ def cmd_network_subscription_import_file(args: Any) -> Dict[str, Any]:
     return import_subscription_content(content)
 
 
+def cmd_network_subscription_store_downloaded(args: Any) -> Dict[str, Any]:
+    """挂账①: stdin carries a JSON document {url, content_b64, userinfo} —
+    the body of a Rust-side (reqwest) download. b64 keeps the payload
+    byte-exact through the text stdin channel."""
+    import base64
+    import json
+
+    from aisc.application.network_subscription import store_downloaded
+
+    raw = sys.stdin.read()
+    try:
+        request = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError as exc:
+        raise CliError(
+            message=f"store-downloaded request is not valid JSON: {exc}",
+            exit_code=2,
+            error_code="AISC_ERR_USAGE",
+        ) from exc
+    if not isinstance(request, dict):
+        raise CliError(
+            message="store-downloaded request must be a JSON object",
+            exit_code=2,
+            error_code="AISC_ERR_USAGE",
+        )
+    b64 = str(request.get("content_b64") or "")
+    try:
+        content = base64.b64decode(b64, validate=True) if b64 else b""
+    except Exception as exc:
+        raise CliError(
+            message=f"content_b64 is not valid base64: {exc}",
+            exit_code=2,
+            error_code="AISC_ERR_USAGE",
+        ) from exc
+    url = request.get("url")
+    userinfo = request.get("userinfo")
+    return store_downloaded(
+        str(url) if isinstance(url, str) and url else None,
+        content,
+        str(userinfo) if isinstance(userinfo, str) else "",
+    )
+
+
 def cmd_network_subscription_refresh(args: Any) -> Dict[str, Any]:
     from aisc.application.network_subscription import refresh_subscription
 

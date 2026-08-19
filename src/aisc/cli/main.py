@@ -368,6 +368,14 @@ def _build_parser() -> _AiscArgumentParser:
         "refresh", help="Re-fetch the stored subscription URL", allow_abbrev=False)
     _add_global_args(nwr, is_subparser=True)
 
+    # 挂账①: persistence endpoint for the Rust (reqwest) downloader.
+    nwsd = nwssub.add_parser(
+        "store-downloaded",
+        help="Persist a Rust-side download ({url, content_b64, userinfo} JSON "
+             "on stdin — the fingerprint-wall-safe transport)",
+        allow_abbrev=False)
+    _add_global_args(nwsd, is_subparser=True)
+
     nww = nwssub.add_parser(
         "show", help="Show subscription status (secret-free)", allow_abbrev=False)
     _add_global_args(nww, is_subparser=True)
@@ -1206,6 +1214,8 @@ def _cmd_network(
         data = nw_cmd.cmd_network_subscription_import(args)
     elif sub == "import-file":
         data = nw_cmd.cmd_network_subscription_import_file(args)
+    elif sub == "store-downloaded":
+        data = nw_cmd.cmd_network_subscription_store_downloaded(args)
     elif sub == "refresh":
         data = nw_cmd.cmd_network_subscription_refresh(args)
     elif sub == "show":
