@@ -301,8 +301,12 @@ def _build_parser() -> _AiscArgumentParser:
     csa = cssub.add_parser("add", help="Add a provider (request JSON on stdin)",
                            allow_abbrev=False)
     _cc_switch_common(csa)
-    csa.add_argument("--mode", choices=["simple", "custom"], default="simple",
-                     help="simple = preset provider + api key; custom = full fields")
+    # KI-7①: default None, NOT "simple" — the Workbench never passes --mode,
+    # and a truthy argparse default unconditionally clobbered the stdin
+    # document's "mode":"custom" (observed as "unknown preset provider").
+    csa.add_argument("--mode", choices=["simple", "custom"], default=None,
+                     help="simple = preset provider + api key; custom = full "
+                          "fields (the stdin request's mode wins unless set)")
     csa.add_argument("--provider", type=str, default=None,
                      help="Preset provider id (simple mode, e.g. deepseek)")
     csa.add_argument("--id", dest="new_id", type=str, default=None,

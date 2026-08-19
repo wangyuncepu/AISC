@@ -86,6 +86,46 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     w.unmount();
   });
 
+  it("custom add sends mode=custom with full fields (KI-7① UI regression)", async () => {
+    setup();
+    vi.mocked(ipc.ccSwitchAdd).mockResolvedValue(RESULT(["mine"]));
+    const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
+    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
+
+    await w.find("header .primary").trigger("click"); // 添加
+    // Switch the add form to 自定义 mode.
+    const modeBtn = w
+      .findAll("button")
+      .find((b) => b.text().includes("自定义"))!;
+    await modeBtn.trigger("click");
+    // Fill the custom fields (name + baseUrl required).
+    const inputs = w.findAll(".form-card input");
+    const setVal = async (el: typeof inputs[number], v: string) => {
+      (el.element as HTMLInputElement).value = v;
+      await el.trigger("input");
+    };
+    // Custom layout: id, name, baseUrl, model, apiKey(password).
+    await setVal(inputs[0]!, "mine");
+    await setVal(inputs[1]!, "My Provider");
+    await setVal(inputs[2]!, "https://example.com/api");
+    await setVal(inputs[3]!, "my-model");
+    const key = w.find('input[type="password"]');
+    await setVal(key, "sk-custom-secret-9");
+    await w.find(".form-card .primary").trigger("click");
+
+    await vi.waitFor(() => expect(ipc.ccSwitchAdd).toHaveBeenCalledTimes(1));
+    const arg = vi.mocked(ipc.ccSwitchAdd).mock.calls[0]![3];
+    expect(arg.mode).toBe("custom"); // the KI-7① regression
+    expect(arg.provider).toBeUndefined();
+    expect(arg.id).toBe("mine");
+    expect(arg.name).toBe("My Provider");
+    expect(arg.base_url).toBe("https://example.com/api");
+    expect(arg.model).toBe("my-model");
+    expect(arg.api_key).toBe("sk-custom-secret-9");
+    await vi.waitFor(() => expect(w.find(".form-card").exists()).toBe(false));
+    w.unmount();
+  });
+
   it("agent toggle refetches with the other agent", async () => {
     setup();
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
