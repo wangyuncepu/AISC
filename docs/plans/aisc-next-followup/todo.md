@@ -1,18 +1,12 @@
 # 待办与门禁
 
-## KI-7 Provider 管理页两处异常（2026-08-19 用户 IDEA-2 手测期间发现，挂账待查）
+## KI-7 Provider 管理页两处异常（2026-08-19 发现；**✅ 已修，随 IDEA-5 轮合并**）
 
-- **自定义添加供应商报错**：provider 页「自定义」方式添加时报
-  `unknown preset provider (simple mode uses preset ids)`——疑似 custom 模式的
-  mode 未正确传到容器 adapter（op_add 按 simple 走了 preset 查找）。
-  排查方向：CcSwitchUiTab 自定义表单构造的 request、Rust `cc_switch_add`
-  传参、adapter `op_add` 的 mode 分支。
-- **外部 cc-switch 改动不同步**：用户在 bash 里用 cc-switch（TUI）新增
-  provider / 改 api-key 后，provider 页不实时反映（无刷新或刷新粒度不含
-  list）。排查方向：ccSwitchUi store 的加载时机（tab 开时一次性？）、
-  useProviderPolling 只覆盖 provider current 不覆盖 list。
-- 归属：IDEA-4/Stage 8e 家族打磨，可与 IDEA-5（模型映射 UI + 切换视觉反馈）
-  同轮规划。
+- **①自定义添加供应商报错**：根因=`--mode default="simple"` 盖掉 stdin 的
+  custom（Rust 从不传该旗标）。修复=默认值改 None（5a，`af4998e`）。
+- **②外部 cc-switch 改动不同步**：根因=面板一次性加载。修复=可见性翻转即
+  重拉（5b，`d57db0b`）。用户手测均 PASS。
+
 
 ## KI-6 Docker 检测/操作受启动时 PATH 与安装位置影响（2026-08-19，IDEA-2 手测期间发现，随 `idea-2-network-usage` 修复）
 
@@ -117,16 +111,34 @@
   无密钥切换确认 + 隐藏不可切换占位行 + 侧栏状态联动。手测五轮 PASS
   （2026-08-18 用户确认）。打磨项拆到 IDEA-5。
 
-### IDEA-5 Provider 管理打磨（2026-08-18 用户提出，IDEA-4 手测瑕疵）
+### IDEA-5 Provider 管理打磨（2026-08-18 提出；**2026-08-19 实现，手测四轮 PASS，2e 收口**）
 
-- **模型映射**：claude 侧缺少模型映射设置项（MODEL/OPUS/SONNET/HAIKU/SUBAGENT 五个
-  角色位）。建议增加「从 API 拉取可用模型列表 → 用户下拉选择映射」的可选功能
-  （仿照 cc-switch 桌面版）。上游已有 `provider fetch-models` 子命令可作数据源；
-  preset 的官方默认集（8c）保持为初始值，用户映射覆盖后按 ownership 规则保留。
-- **切换视觉反馈**：切换 provider 时的视觉效果较差（当前只有 3 秒横幅）——需设计
-  更明显的过渡（行高亮动画/当前 chip 平滑移动/顶部 toast 样式），参照 cc-switch
-  桌面版观感。
-- **归属**：与 Provider 管理相关的独立小迭代，可与 IDEA-2/3 同轮规划。
+- **实现收束**（分支 `idea-5-ki7-provider-polish`，5a-5e 全阶段）：
+  - **5a KI-7①**：`--mode` 默认值修复 + CLI/UI 双层回归测试。
+  - **5b KI-7②**：provider 面板可见性翻转即重拉（v-show 常驻面板的外部同步）。
+  - **5c 数据面**：adapter `provider_view` 脱敏 `role_env`（白名单，凭据键
+    结构性缺席）+ `known_models`（预置历史∪现值）；`fetch-models` op（详见下）；
+    宿主 `aisc cc-switch fetch-models` + Rust `cc_switch_fetch_models`
+    （`cc_switch_call` 拆值返回核心）；**legacy 预置 ownership 扩展**
+    （zhipu/kimi/volcengine 的 MODEL 纳入 `_merged_claude_env` 合并，
+    `_model_history` 判据；BASE_URL 维持 legacy 重置语义）。
+  - **5d UI**：编辑表单五槽映射（保存五键全显式，空=null 删键；codex 单
+    model 位不变）+ datalist 三级降级 + 切换反馈三件套（行脉冲/chip 缓入/
+    顶部 toast，reduced-motion 退化）+ **[1m] 声明开关**（MODEL/OPUS/SONNET
+    行内复选框追加/剥离，datalist 自动补变体，与 cc-switch 映射同构）。
+  - **fetch-models 源码考古**（用户手测驱动的三轮迭代）：上游 CLI 子命令打
+    anthropic 兼容 base；**读 cc-switch 源码 `services/model_fetch.rs` 后原样
+    移植其多候选 URL 链**（版本段 base 先 `/models`；普通 base `/v1/models`；
+    anthropic 后缀剥除后根上 `/v1/models`+裸 `/models`——DeepSeek 官方即无
+    /v1）× 双认证头（Bearer/x-api-key）；**JSON 链为主路径**（确定性
+    data[].id），CLI 人读文本降为最后兜底并加词形过滤（真 id 须含数字/-/./_
+    或 ≥10 字符——修掉表头词混入 datalist 的手测问题）。
+  - **手测四轮**：自定义添加成功；bash TUI 改动回面板即见；拉取经新 key
+    全链真拉（旧 key 为 DeepSeek 端点级受限，聊天正常/models 全拒——文档
+    明列此场景）；[1m] 开关确认正常。
+- **挂账**：fetch-models 成功态输出格式按防御解析处理（未再实测冻结——
+  JSON 主路径已确定性）；上游 `provider quota`（配额查询）可作用量面板
+  增强数据源，待用户提出。
 
 ### IDEA-2 mihomo 订阅导入 + 「网络与用量」面板 + Provider token 统计（2026-08-17 提出；**2026-08-19 实现，手测三轮 PASS，2e 收口**）
 

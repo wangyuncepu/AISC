@@ -125,6 +125,63 @@ class FixtureDrivenPresetTests(unittest.TestCase):
                 H.load_deepseek_fixture(bad)
 
 
+def legacy(pid: str) -> dict:
+    """Deep copy of a legacy (non-claude_env) preset row."""
+    return json.loads(json.dumps(
+        next(p for p in H.PRESET_PROVIDERS if p["id"] == pid)
+    ))
+
+
+class LegacyModelOwnershipTests(unittest.TestCase):
+    """IDEA-5 (5c): legacy presets (zhipu/kimi/volcengine) give
+    ANTHROPIC_MODEL the same ownership merge — user mapping overrides
+    survive refresh; historical/absent values upgrade; BASE_URL keeps its
+    legacy reset semantics."""
+
+    def _merge(self, pid: str, existing_env: dict) -> dict:
+        raw = json.dumps({"env": existing_env})
+        return H._merged_settings("claude", legacy(pid), raw)["env"]
+
+    def test_zhipu_user_model_override_survives(self):
+        merged = self._merge("zhipu", {
+            "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+            "ANTHROPIC_MODEL": "glm-5.2",          # historical preset value
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.2-air",  # user-added role slot
+        })
+        # The preset default upgrades (in history).
+        self.assertEqual(merged["ANTHROPIC_MODEL"], "glm-5.2")
+        # User-added role keys outside the owned set survive untouched.
+        self.assertEqual(merged["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "glm-5.2-air")
+
+    def test_zhipu_mapping_override_survives_refresh(self):
+        merged = self._merge("zhipu", {
+            "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+            "ANTHROPIC_MODEL": "my-custom-glm",    # user override (not history)
+        })
+        self.assertEqual(merged["ANTHROPIC_MODEL"], "my-custom-glm")
+
+    def test_zhipu_model_upgrades_when_preset_default_changes(self):
+        provider = legacy("zhipu")
+        provider["model"] = "glm-6.0"              # a future official default
+        raw = json.dumps({"env": {
+            "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic",
+            "ANTHROPIC_MODEL": "glm-5.2",          # old default (in history)
+        }})
+        merged = H._merged_settings("claude", provider, raw)["env"]
+        self.assertEqual(merged["ANTHROPIC_MODEL"], "glm-6.0")
+
+    def test_volcengine_user_model_survives_and_base_url_resets(self):
+        merged = self._merge("volcengine-ark", {
+            "ANTHROPIC_BASE_URL": "https://user-endpoint.example",
+            "ANTHROPIC_MODEL": "ep-user-endpoint",  # user-set (preset has none)
+        })
+        # No preset model → the user's MODEL is never owned, never dropped.
+        self.assertEqual(merged["ANTHROPIC_MODEL"], "ep-user-endpoint")
+        # BASE_URL keeps the legacy semantics: preset resets it.
+        self.assertEqual(merged["ANTHROPIC_BASE_URL"],
+                         "https://ark.cn-beijing.volces.com/api/v3")
+
+
 class OwnershipRefreshTests(unittest.TestCase):
     def _merge(self, existing_env: dict) -> dict:
         raw = json.dumps({"env": existing_env})

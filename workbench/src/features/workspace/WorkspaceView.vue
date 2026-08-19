@@ -250,7 +250,10 @@ function setPaneTreeRef(tabId: string) {
             class="settings-pane"
             tabindex="-1"
           >
-            <CcSwitchUiTab />
+            <!-- KI-7②: `visible` lets the pane refetch when the user returns
+                 from a bash tab — the pane is kept alive (v-show), so mounts
+                 never re-run and external cc-switch edits stayed invisible. -->
+            <CcSwitchUiTab :visible="ccSwitchPaneVisible" />
           </div>
         </main>
       </div>

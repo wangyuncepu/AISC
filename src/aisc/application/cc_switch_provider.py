@@ -21,7 +21,7 @@ from aisc.domain.models import CliError, RuntimeExitCode
 PROTOCOL = "aisc.cc-switch-provider/v1"
 _ADAPTER_PATH = "/usr/local/bin/aisc-cc-provider"
 _AGENTS = ("claude", "codex")
-_OPS = ("list", "add", "edit", "switch", "delete")
+_OPS = ("list", "add", "edit", "switch", "delete", "fetch-models")
 
 
 def _validate(runtime_id: str, agent: str, op: str) -> None:
@@ -212,3 +212,25 @@ def delete_provider(runtime_id: str, agent: str, provider_id: str,
     )
     return {"agent": agent, "providers": envelope.get("providers") or [],
             "operation_id": envelope.get("operation_id")}
+
+
+def fetch_models(runtime_id: str, agent: str, provider_id: str,
+                 workspace: Optional[str], executor: Any) -> Dict[str, Any]:
+    """Remote model list for the mapping dropdown (IDEA-5 5c).
+
+    Never raises on upstream fetch failures — the adapter degrades to
+    ``available=False`` with the upstream message so the UI can fall back
+    to the known list + manual input."""
+    from aisc.application.data_root import workspace_state_dir
+    from pathlib import Path
+
+    ws_path = Path(workspace).resolve() if workspace else Path.cwd()
+    _validate(runtime_id, agent, "fetch-models")
+    envelope = _exec_adapter(
+        runtime_id, workspace_state_dir(ws_path), executor, "fetch-models",
+        agent, provider_id, None,
+    )
+    result = envelope.get("fetch_models")
+    return result if isinstance(result, dict) else {
+        "available": False, "models": [], "message": "unexpected adapter payload",
+    }

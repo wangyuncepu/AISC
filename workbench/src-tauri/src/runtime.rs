@@ -343,6 +343,18 @@ async fn cc_switch_call(
     argv: Vec<String>,
     input: Option<String>,
 ) -> Result<CcSwitchProvidersResult, WorkbenchError> {
+    let data = cc_switch_call_value(app, argv, input).await?;
+    serde_json::from_value::<CcSwitchProvidersResult>(data)
+        .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("cc-switch parse: {e}")))
+}
+
+/// Value-returning core (IDEA-5 5c): ops whose envelope data is not the
+/// providers snapshot (e.g. fetch-models) ride this directly.
+async fn cc_switch_call_value(
+    app: &AppHandle,
+    argv: Vec<String>,
+    input: Option<String>,
+) -> Result<Value, WorkbenchError> {
     let pin = crate::session::resolve_cli(app).await?;
     let env = match input {
         Some(text) => {
@@ -362,9 +374,7 @@ async fn cc_switch_call(
         }
         return Err(wb.with_detail(err.message.clone()));
     }
-    let data = env.data.unwrap_or(Value::Null);
-    serde_json::from_value::<CcSwitchProvidersResult>(data)
-        .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("cc-switch parse: {e}")))
+    Ok(env.data.unwrap_or(Value::Null))
 }
 
 /// Minimal UUID v4 shape check (8-4-4-4-12 hex, version nibble 4, variant
@@ -475,6 +485,22 @@ pub async fn cc_switch_delete(
     let mut argv = cc_switch_argv("delete", &runtime_id, &agent, &workspace, Some(&provider_id));
     argv.push("--confirm".into()); // the CLI gates delete on this flag
     cc_switch_call(&app, argv, None).await
+}
+
+/// Fetch the remote model list for a provider (IDEA-5 5c, mapping dropdown
+/// tier 1). Degrades to `available=false` on upstream failures — the UI
+/// falls back to known models + manual input, never an error state.
+#[tauri::command]
+pub async fn cc_switch_fetch_models(
+    app: AppHandle,
+    workspace: String,
+    runtime_id: String,
+    agent: String,
+    provider_id: String,
+) -> Result<Value, WorkbenchError> {
+    cc_switch_validate(&runtime_id, &agent)?;
+    let argv = cc_switch_argv("fetch-models", &runtime_id, &agent, &workspace, Some(&provider_id));
+    cc_switch_call_value(&app, argv, None).await
 }
 
 // --- IDEA-2 (2d): network subscription + usage overview IPC -----------------

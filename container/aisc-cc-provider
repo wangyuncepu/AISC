@@ -68,6 +68,21 @@ _MS_EPOCH_THRESHOLD = 10 ** 11
 _CLAUDE_SECRET_KEYS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
 _GENERIC_SECRET_RE = re.compile(r"sk-[A-Za-z0-9_\-]{6,}")
 
+#: IDEA-5 (5c): the five model-role slots the mapping UI edits, plus their
+#: companions — the SECRET-FREE whitelist `role_env` may carry. Credential
+#: keys are structurally absent, so the view can never leak them.
+_CLAUDE_MODEL_ROLE_KEYS = (
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+)
+_CLAUDE_ROLE_ENV_KEYS = _CLAUDE_MODEL_ROLE_KEYS + (
+    "CLAUDE_CODE_EFFORT_LEVEL",
+    "ANTHROPIC_BASE_URL",
+)
+
 
 class AdapterError(Exception):
     def __init__(self, code: str, message: str):
@@ -291,6 +306,29 @@ def _codex_provider_fields(settings: dict[str, Any], pid: str) -> dict[str, str]
     return fields
 
 
+def _preset_known_models(provider_id: str) -> list[str]:
+    """Offline dropdown tier (IDEA-5): historical preset-written model values
+    ∪ current official ones for a PRESET row. Custom rows → empty."""
+    try:
+        module = _preset_module()
+    except AdapterError:
+        return []
+    for provider in module.PRESET_PROVIDERS:
+        if provider.get("id") != provider_id:
+            continue
+        pool: list[str] = []
+        history = provider.get("_env_history") or {}
+        current = provider.get("claude_env") or {}
+        for key in _CLAUDE_MODEL_ROLE_KEYS:
+            for value in history.get(key) or []:
+                if value:
+                    pool.append(str(value))
+            if current.get(key):
+                pool.append(str(current[key]))
+        return list(dict.fromkeys(pool))
+    return []
+
+
 def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
     """The secret-free v1 view of one provider row."""
     settings = row["settings"]
@@ -304,11 +342,21 @@ def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
             if env.get(key):
                 secret = str(env[key])
                 break
+        # IDEA-5 (5c): the role-slot env the mapping UI edits — whitelist
+        # only; credential keys can never appear here.
+        role_env = {
+            key: str(value)
+            for key, value in env.items()
+            if key in _CLAUDE_ROLE_ENV_KEYS and value is not None
+        }
+        known_models = _preset_known_models(str(row["id"]))
     else:
         fields = _codex_provider_fields(settings, row["id"])
         base_url = fields["base_url"]
         model = fields["model"]
         secret = fields["api_key"]
+        role_env = {}
+        known_models = []
     return {
         "id": row["id"],
         "name": row["name"],
@@ -318,6 +366,8 @@ def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
         "has_api_key": bool(secret),
         "api_key_mask": mask_secret(secret) if secret else "",
         "is_current": row["is_current"],
+        "role_env": role_env,
+        "known_models": known_models,
     }
 
 
@@ -812,11 +862,181 @@ def op_delete(agent: str, provider_id: str) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# fetch-models (IDEA-5 5c): the remote model list for the mapping dropdown.
+# Upstream has no --json — stdout is human text and UNTRUSTED; parsing is
+# defensive and any failure degrades to available=false (the UI falls back
+# to known_models + manual input) instead of an error envelope.
+# ---------------------------------------------------------------------------
+
+# Bracket chars are model-id-legal (DeepSeek's `[1m]` context suffix).
+_MODEL_LINE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-\[\]]*$")
+_MODEL_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\-\[\]]{3,}")
+_LINE_NOISE_PREFIXES = (
+    "fetching", "fetched", "endpoint", "error", "http", "provider", "models",
+    "total", "found", "retrieved", "using", "model", "id", "name", "owned",
+    "object", "created",
+)
+
+
+def _looks_like_model_id(token: str) -> bool:
+    """Residual-CLI-text filter: real model ids are namespaced (contain a
+    digit, '-', '.' or '_') or long; table-header words like Model/Fetched/
+    model fail it. Bracket chars keep DeepSeek's `[1m]` suffix legal."""
+    if len(token) >= 10:
+        return True
+    return any(c in token for c in "0123456789-._")
+
+
+def _parse_model_lines(text: str) -> list[str]:
+    """LAST-RESORT extraction from upstream's human output (the JSON chain
+    is the primary path). Accepts one-id-per-line (with bullet/decoration)
+    and `label: id` pairs; skips noise lines and header words. Deduped,
+    order preserved, capped."""
+    out: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip().lstrip("-*•·—> ").strip()
+        if not line or len(line) > 120:
+            continue
+        low = line.lower()
+        if any(low.startswith(p) for p in _LINE_NOISE_PREFIXES):
+            continue
+        candidates: list[str] = []
+        if _MODEL_LINE_RE.match(line) and "/" not in line:
+            candidates = [line]
+        else:
+            # `label: value` / tab-separated — take tokens that look like ids.
+            tail = line.rsplit(":", 1)[-1] if ":" in line else line
+            candidates = _MODEL_TOKEN_RE.findall(tail)
+        for c in candidates:
+            if c.lower() in ("true", "false", "null", "none"):
+                continue
+            if not _looks_like_model_id(c):
+                continue
+            out.append(c)
+    return list(dict.fromkeys(out))[:200]
+
+
+def _http_get_json(url: str, headers: dict[str, str], timeout: float) -> tuple[int, Any]:
+    """Injectable HTTP GET returning (status, parsed-json-or-None). The
+    default uses stdlib urllib; tests stub this seam."""
+    import urllib.request
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            import json as _json
+            return int(resp.status), _json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), None
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0, None
+
+
+# Mirrors upstream cc-switch services/model_fetch.rs: anthropic-compat base
+# suffixes whose stripped root also serves OpenAI-style model lists.
+_KNOWN_COMPAT_SUFFIXES = ("/api/anthropic", "/apps/anthropic", "/anthropic")
+
+
+def _models_url_candidates(base_url: str) -> list[str]:
+    """Port of upstream build_models_url_candidates (dedup, order kept):
+
+    1. base ends with a version segment `/v{N}` (e.g. `/api/coding/paas/v4`)
+       → `{base}/models` first (and `{base}/v1/models` unless it IS `/v1`)
+    2. else `{base}/v1/models`
+    3. base ends with a KNOWN_COMPAT_SUFFIX → stripped root gains BOTH
+       `/v1/models` and bare `/models` (e.g. DeepSeek documents
+       `https://api.deepseek.com/models` WITHOUT /v1)."""
+    trimmed = base_url.strip().rstrip("/")
+    if not trimmed:
+        return []
+    candidates: list[str] = []
+    last = trimmed.rsplit("/", 1)[-1]
+    versioned = last.startswith("v") and last[1:].isdigit()
+    if versioned:
+        candidates.append(f"{trimmed}/models")
+        if not trimmed.endswith("/v1"):
+            candidates.append(f"{trimmed}/v1/models")
+    else:
+        candidates.append(f"{trimmed}/v1/models")
+    for suffix in _KNOWN_COMPAT_SUFFIXES:
+        if trimmed.endswith(suffix):
+            root = trimmed[: -len(suffix)].rstrip("/")
+            if root and "://" in root:
+                candidates.append(f"{root}/v1/models")
+                candidates.append(f"{root}/models")
+            break
+    return list(dict.fromkeys(candidates))
+
+
+def _openai_compatible_models(base_url: str, api_key: str) -> list[str] | None:
+    """The documented fetch path (user-manual 2.1 §自动获取模型), ported from
+    upstream services/model_fetch.rs: walk the candidate model-list URLs and
+    the two auth styles (Bearer default; x-api-key for anthropic-format
+    providers — we don't track api_format per row, so both are tried).
+    Returns None when every candidate rejects us; the caller degrades."""
+    if not base_url:
+        return None
+    header_sets: list[dict[str, str]] = []
+    if api_key:
+        header_sets.append({"Authorization": f"Bearer {api_key}"})
+        header_sets.append({"x-api-key": api_key, "anthropic-version": "2023-06-01"})
+    else:
+        header_sets.append({})
+    for url in _models_url_candidates(base_url):
+        for headers in header_sets:
+            status, payload = _http_get_json(url, headers, 15.0)
+            if status != 200 or not isinstance(payload, dict):
+                continue
+            data = payload.get("data")
+            if not isinstance(data, list):
+                continue
+            ids = [str(m.get("id")) for m in data if isinstance(m, dict) and m.get("id")]
+            if ids:
+                return ids
+    return None
+
+
+def op_fetch_models(agent: str, provider_id: str) -> dict[str, Any]:
+    snapshot = read_snapshot(agent)
+    row = next((r for r in snapshot if r["id"] == provider_id), None)
+    if row is None:
+        raise AdapterError(ERR_NOT_FOUND, f"provider not found: {provider_id}")
+
+    # PRIMARY: the JSON candidate chain (upstream services/model_fetch.rs
+    # semantics) — deterministic `data[].id` parsing, no human-text noise.
+    # The key is used transiently in-process and never enters the envelope.
+    env = row["settings"].get("env")
+    env = env if isinstance(env, dict) else {}
+    base_url = str(env.get("ANTHROPIC_BASE_URL") or "")
+    api_key = str(env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY") or "")
+    models = _openai_compatible_models(base_url, api_key) if base_url else None
+    if models:
+        return {"available": True, "models": models, "message": ""}
+
+    # FALLBACK: the upstream CLI subcommand (its own candidate chain), with
+    # the tightened last-resort text parse.
+    secrets = snapshot_secrets(agent, snapshot)
+    completed = run_cli(
+        ["-a", agent, "provider", "fetch-models", provider_id], "", secrets
+    )
+    combined = f"{completed.stdout or ''}\n{completed.stderr or ''}"
+    cli_failed = completed.returncode != 0 or "error" in combined.lower()
+    if not cli_failed:
+        parsed = _parse_model_lines(completed.stdout or "")
+        if parsed:
+            return {"available": True, "models": parsed, "message": ""}
+
+    lines = [l.strip() for l in combined.splitlines() if l.strip()]
+    detail = next((l for l in reversed(lines)), "") or f"exit {completed.returncode}"
+    return {"available": False, "models": [], "message": redact(detail, secrets)[:200]}
+
+
+# ---------------------------------------------------------------------------
 # Envelope + entry point
 # ---------------------------------------------------------------------------
 
 def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
               usage: Optional[dict] = None,
+              fetch_models: Optional[dict] = None,
               error: Optional[dict] = None) -> dict[str, Any]:
     out: dict[str, Any] = {
         "schema": PROTOCOL,
@@ -828,6 +1048,8 @@ def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
         out["providers"] = providers
     if usage is not None:
         out["usage"] = usage
+    if fetch_models is not None:
+        out["fetch_models"] = fetch_models
     if error is not None:
         out["error"] = error
     return out
@@ -836,7 +1058,7 @@ def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aisc-cc-provider")
     parser.add_argument("op", choices=["list", "add", "edit", "switch", "delete",
-                                       "usage"])
+                                       "usage", "fetch-models"])
     parser.add_argument("--agent", default=None, choices=list(AGENTS),
                         help="agent (required for every op except usage)")
     parser.add_argument("--id", default=None, help="provider id (add/edit/delete)")
@@ -849,6 +1071,30 @@ def main(argv: list[str] | None = None) -> int:
         try:
             print(json.dumps(_envelope(
                 args.op, True, usage=op_usage(args.since),
+            )))
+            return 0
+        except AdapterError as exc:
+            print(json.dumps(_envelope(
+                args.op, False, error={"code": exc.code, "message": exc.message},
+            )))
+            return 1
+
+    if args.op == "fetch-models":
+        if not args.agent:
+            print(json.dumps(_envelope(
+                args.op, False,
+                error={"code": ERR_BAD_REQUEST, "message": "fetch-models requires --agent"},
+            )))
+            return 2
+        if not args.id:
+            print(json.dumps(_envelope(
+                args.op, False,
+                error={"code": ERR_BAD_REQUEST, "message": "fetch-models requires --id"},
+            )))
+            return 2
+        try:
+            print(json.dumps(_envelope(
+                args.op, True, fetch_models=op_fetch_models(args.agent, args.id),
             )))
             return 0
         except AdapterError as exc:

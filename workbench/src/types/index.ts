@@ -280,6 +280,23 @@ export interface CcSwitchProvider {
   has_api_key: boolean;
   api_key_mask: string;
   is_current: boolean;
+  /** IDEA-5 (5c): secret-free whitelist view of the role-model env (five
+   * slots + effort + base URL); credential keys are structurally absent.
+   * Optional: older CLI envelopes predate it. */
+  role_env?: Record<string, string>;
+  /** Preset rows: historical ∪ current preset-written model ids (the
+   * offline dropdown tier); custom rows carry an empty list. Optional for
+   * the same envelope-compat reason. */
+  known_models?: string[];
+}
+
+/** `aisc cc-switch fetch-models` result — tier 1 of the mapping dropdown.
+ * `available=false` carries the upstream message (e.g. HTTP 401) as a hint;
+ * the UI falls back to known_models + manual input. */
+export interface FetchModelsResult {
+  available: boolean;
+  models: string[];
+  message: string;
 }
 
 export interface CcSwitchProvidersResult {

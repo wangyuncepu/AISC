@@ -301,8 +301,12 @@ def _build_parser() -> _AiscArgumentParser:
     csa = cssub.add_parser("add", help="Add a provider (request JSON on stdin)",
                            allow_abbrev=False)
     _cc_switch_common(csa)
-    csa.add_argument("--mode", choices=["simple", "custom"], default="simple",
-                     help="simple = preset provider + api key; custom = full fields")
+    # KI-7①: default None, NOT "simple" — the Workbench never passes --mode,
+    # and a truthy argparse default unconditionally clobbered the stdin
+    # document's "mode":"custom" (observed as "unknown preset provider").
+    csa.add_argument("--mode", choices=["simple", "custom"], default=None,
+                     help="simple = preset provider + api key; custom = full "
+                          "fields (the stdin request's mode wins unless set)")
     csa.add_argument("--provider", type=str, default=None,
                      help="Preset provider id (simple mode, e.g. deepseek)")
     csa.add_argument("--id", dest="new_id", type=str, default=None,
@@ -323,6 +327,13 @@ def _build_parser() -> _AiscArgumentParser:
     csd.add_argument("provider_id", type=str, help="Provider ID to delete")
     csd.add_argument("--confirm", action="store_true", default=False,
                      help="Required confirmation flag")
+
+    # IDEA-5 (5c): remote model list for the mapping dropdown.
+    csf = cssub.add_parser("fetch-models",
+                           help="Fetch the remote model list for a provider",
+                           allow_abbrev=False)
+    _cc_switch_common(csf)
+    csf.add_argument("provider_id", type=str, help="Provider ID to query")
 
     # --- network (IDEA-2: mihomo subscription data plane) ---
     nwp = sub.add_parser(
@@ -1164,6 +1175,8 @@ def _cmd_cc_switch(
         data = cs_cmd.cmd_cc_switch_switch(args)
     elif sub == "delete":
         data = cs_cmd.cmd_cc_switch_delete(args)
+    elif sub == "fetch-models":
+        data = cs_cmd.cmd_cc_switch_fetch_models(args)
     else:
         raise CliError(message="unknown cc-switch subcommand",
                        exit_code=2, error_code="AISC_ERR_USAGE")

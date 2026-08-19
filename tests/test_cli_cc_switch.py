@@ -93,12 +93,91 @@ class HostLayerTests(unittest.TestCase):
         host.delete_provider(RUNTIME, "claude", "kimi", self.tmp.name, self.exec)
         self.assertIn("delete --agent claude --id kimi", " ".join(self.exec.argv))
 
+
+class CommandLayerTests(unittest.TestCase):
+    """KI-7① regression: the CLI command layer must NOT clobber the stdin
+    request's ``mode`` with an argparse default (the Workbench never passes
+    --mode; a truthy default turned every custom add into a broken simple
+    add with an empty preset id)."""
+
+    def setUp(self):
+        # The host-layer tests that follow this class in the file share the
+        # same fixtures (they predate the class split).
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.exec = FakeExec(ENVELOPE_OK)
+        patcher = mock.patch.object(
+            host, "resolve_running_container", return_value="ct-1"
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _run(self, stdin_json: str, args_over: dict | None = None):
+        from types import SimpleNamespace
+
+        from aisc.cli.commands import cc_switch as cmd
+
+        args = SimpleNamespace(
+            runtime_id=RUNTIME, agent="claude", workspace="C:/ws",
+            mode=None, provider=None, new_id=None,
+        )
+        for k, v in (args_over or {}).items():
+            setattr(args, k, v)
+        with mock.patch("sys.stdin", SimpleNamespace(read=lambda: stdin_json)), \
+                mock.patch.object(host, "add_provider") as add:
+            add.return_value = {"providers": []}
+            data = cmd.cmd_cc_switch_add(args)
+        self.assertEqual(data, {"providers": []})
+        return add
+
+    def test_stdin_mode_custom_survives_without_flag(self):
+        add = self._run(json.dumps({
+            "mode": "custom", "id": "myprov", "name": "My Provider",
+            "base_url": "https://example.com", "api_key": "sk-x",
+        }))
+        sent = add.call_args.kwargs["request"]
+        self.assertEqual(sent["mode"], "custom")  # the KI-7① regression
+
+    def test_flag_still_overrides_and_default_is_simple(self):
+        # Explicit --mode custom with no stdin mode.
+        add = self._run(json.dumps({"id": "a", "api_key": "sk-x"}),
+                        args_over={"mode": "custom"})
+        self.assertEqual(add.call_args.kwargs["request"]["mode"], "custom")
+        # Neither flag nor stdin mode → simple.
+        add = self._run(json.dumps({"id": "deepseek", "api_key": "sk-x"}))
+        self.assertEqual(add.call_args.kwargs["request"]["mode"], "simple")
+
     def test_switch_addressing(self):
         self.exec.envelope = {**ENVELOPE_OK, "op": "switch"}
         host.switch_provider(RUNTIME, "claude", "zhipu",
                               self.tmp.name, self.exec)
         self.assertIn("switch --agent claude --id zhipu", " ".join(self.exec.argv))
         self.assertFalse(self.exec.input_text)  # no request body
+
+    def test_fetch_models_addressing_and_result(self):
+        # IDEA-5 (5c): the op addresses the adapter with --id and surfaces
+        # the envelope's fetch_models payload verbatim.
+        self.exec.envelope = {
+            **ENVELOPE_OK, "op": "fetch-models",
+            "fetch_models": {"available": True,
+                             "models": ["deepseek-chat", "deepseek-v4-pro[1m]"],
+                             "message": ""},
+        }
+        data = host.fetch_models(RUNTIME, "claude", "deepseek",
+                                 self.tmp.name, self.exec)
+        self.assertIn("fetch-models --agent claude --id deepseek",
+                      " ".join(self.exec.argv))
+        self.assertTrue(data["available"])
+        self.assertEqual(data["models"][1], "deepseek-v4-pro[1m]")
+
+    def test_fetch_models_degrades_when_payload_missing(self):
+        # Older adapter / unexpected payload → the documented empty degrade,
+        # never an exception.
+        self.exec.envelope = {**ENVELOPE_OK, "op": "fetch-models"}
+        data = host.fetch_models(RUNTIME, "claude", "deepseek",
+                                 self.tmp.name, self.exec)
+        self.assertFalse(data["available"])
+        self.assertEqual(data["models"], [])
 
     def test_adapter_error_maps_to_cli_error_with_stable_code(self):
         self.exec.envelope = {

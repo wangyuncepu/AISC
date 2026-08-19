@@ -123,6 +123,18 @@ def cmd_cc_switch_delete(args: Any) -> Dict[str, Any]:
     )
 
 
+def cmd_cc_switch_fetch_models(args: Any) -> Dict[str, Any]:
+    from aisc.application.cc_switch_provider import fetch_models
+
+    return fetch_models(
+        runtime_id=args.runtime_id,
+        agent=args.agent,
+        provider_id=args.provider_id,
+        workspace=args.workspace,
+        executor=None,
+    )
+
+
 def print_cc_switch_text(data: Optional[Dict[str, Any]]) -> None:
     """Human-readable output: one line per provider (secret-free)."""
     if not isinstance(data, dict):
