@@ -5,9 +5,9 @@
  * pass through as call arguments only (never stored here).
  */
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { reactive, ref } from "vue";
 import * as ipc from "../lib/ipc";
-import type { CcSwitchProvider, CcSwitchRequest } from "../types";
+import type { CcSwitchProvider, CcSwitchRequest, FetchModelsResult } from "../types";
 
 export type CcSwitchAgent = "claude" | "codex";
 
@@ -17,6 +17,9 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
   const loading = ref(false);
   const busy = ref("");
   const error = ref<string | null>(null);
+  /** IDEA-5 (5d): last fetch-models result per provider id (the dropdown's
+   * tier-1 source; unavailable results carry the upstream hint). */
+  const fetchedModels = reactive<Record<string, FetchModelsResult>>({});
 
   function _apply(result: { providers: CcSwitchProvider[] }): void {
     providers.value = result.providers;
@@ -80,8 +83,28 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
       ipc.ccSwitchDelete(ws, rt, agent.value, providerId));
   }
 
+  /** IDEA-5 (5d): tier 1 of the mapping dropdown. Never throws to the
+   * caller — failures land in the result (available=false + message) and
+   * the form falls back to known models + manual input. */
+  async function fetchModels(ws: string, rt: string, providerId: string): Promise<boolean> {
+    busy.value = `fetch:${providerId}`;
+    error.value = null;
+    try {
+      fetchedModels[providerId] = await ipc.ccSwitchFetchModels(ws, rt, agent.value, providerId);
+      return true;
+    } catch (e) {
+      fetchedModels[providerId] = {
+        available: false, models: [],
+        message: (e as { message?: string })?.message ?? String(e),
+      };
+      return false;
+    } finally {
+      busy.value = "";
+    }
+  }
+
   return {
-    agent, providers, loading, busy, error,
-    list, switchAgent, add, edit, activate, remove,
+    agent, providers, loading, busy, error, fetchedModels,
+    list, switchAgent, add, edit, activate, remove, fetchModels,
   };
 });

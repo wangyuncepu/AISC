@@ -16,7 +16,7 @@ import { useI18n } from "vue-i18n";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useCcSwitchUiStore } from "../../stores/ccSwitchUi";
-import type { CcSwitchProvider } from "../../types";
+import type { CcSwitchProvider, CcSwitchRequest } from "../../types";
 
 const props = withDefaults(defineProps<{ visible?: boolean }>(), { visible: true });
 
@@ -98,23 +98,75 @@ async function submitAdd(): Promise<void> {
 const editId = ref<string | null>(null);
 const editForm = reactive({ name: "", baseUrl: "", model: "", apiKey: "" });
 
+/** IDEA-5 (5d): the five claude role slots the mapping section edits.
+ * Upstream fans ANTHROPIC_MODEL out to the DEFAULT_* slots when they are
+ * unset — every save writes ALL FIVE explicitly (empty ⇒ null ⇒ the key is
+ * deleted and the server-side alias fallback applies). */
+const ROLE_SLOTS = [
+  { key: "ANTHROPIC_MODEL", labelKey: "ccswitch.role.model", titleKey: "ccswitch.role.modelEnv" },
+  { key: "ANTHROPIC_DEFAULT_OPUS_MODEL", labelKey: "ccswitch.role.opus", titleKey: "ccswitch.role.opusEnv" },
+  { key: "ANTHROPIC_DEFAULT_SONNET_MODEL", labelKey: "ccswitch.role.sonnet", titleKey: "ccswitch.role.sonnetEnv" },
+  { key: "ANTHROPIC_DEFAULT_HAIKU_MODEL", labelKey: "ccswitch.role.haiku", titleKey: "ccswitch.role.haikuEnv" },
+  { key: "CLAUDE_CODE_SUBAGENT_MODEL", labelKey: "ccswitch.role.subagent", titleKey: "ccswitch.role.subagentEnv" },
+] as const;
+const editRoles = reactive<Record<string, string>>({});
+
+/** The dropdown's option pool (three tiers): fetched remote models ∪ the
+ * preset's known list ∪ the provider's current slot values. */
+const modelOptions = computed<string[]>(() => {
+  const p = providers.value.find((x) => x.id === editId.value);
+  if (!p) return [];
+  const pool = [
+    ...(ui.fetchedModels[p.id]?.models ?? []),
+    ...(p.known_models ?? []),
+    ...ROLE_SLOTS.map((s) => editRoles[s.key]).filter(Boolean),
+  ];
+  return [...new Set(pool)];
+});
+const fetchHint = computed<string | null>(() => {
+  if (!editId.value) return null;
+  const r = ui.fetchedModels[editId.value];
+  if (!r || r.available) return null;
+  return r.message || t("ccswitch.fetchUnavailable");
+});
+
 function openEdit(p: CcSwitchProvider): void {
   editId.value = p.id;
   editForm.name = p.name;
   editForm.baseUrl = p.base_url;
   editForm.model = p.model;
   editForm.apiKey = "";
+  const env = p.role_env ?? {};
+  for (const slot of ROLE_SLOTS) {
+    editRoles[slot.key] = env[slot.key] ?? "";
+  }
+}
+
+async function fetchModelList(): Promise<void> {
+  if (!editId.value || busy.value) return;
+  await ui.fetchModels(store.workspace, store.runtimeId, editId.value);
 }
 
 async function submitEdit(): Promise<void> {
   if (!editId.value) return;
   const id = editId.value;
+  const isClaude = agent.value === "claude";
+  const patch: NonNullable<CcSwitchRequest["patch"]> = {
+    name: editForm.name.trim(),
+    base_url: editForm.baseUrl.trim(),
+    // Claude's model rides the five-slot env block (all five explicit);
+    // codex keeps the single TOML model field.
+    model: isClaude ? undefined : editForm.model.trim(),
+  };
+  if (isClaude) {
+    patch.env = {};
+    for (const slot of ROLE_SLOTS) {
+      const value = (editRoles[slot.key] ?? "").trim();
+      patch.env[slot.key] = value === "" ? null : value;
+    }
+  }
   const ok = await ui.edit(store.workspace, store.runtimeId, id, {
-    patch: {
-      name: editForm.name.trim(),
-      base_url: editForm.baseUrl.trim(),
-      model: editForm.model.trim(),
-    },
+    patch,
     api_key: editForm.apiKey || undefined,
   });
   editForm.apiKey = "";
@@ -124,6 +176,10 @@ async function submitEdit(): Promise<void> {
 // --- activate (IDEA-4): click a row to make that provider current ---
 const switchedTo = ref("");
 let switchFlashTimer: number | null = null;
+/** IDEA-5 (5d): the newly-current row pulses once (visual feedback trio);
+ * cleared after the keyframe so re-renders don't replay it. */
+const flashId = ref("");
+let rowFlashTimer: number | null = null;
 
 function canActivate(p: CcSwitchProvider): boolean {
   if (busy.value !== "") return false;
@@ -153,6 +209,9 @@ async function activate(p: CcSwitchProvider): Promise<void> {
       target === "official" ? t("ccswitch.officialDirect") : (p.name || p.id);
     if (switchFlashTimer !== null) window.clearTimeout(switchFlashTimer);
     switchFlashTimer = window.setTimeout(() => (switchedTo.value = ""), 3000);
+    flashId.value = target;
+    if (rowFlashTimer !== null) window.clearTimeout(rowFlashTimer);
+    rowFlashTimer = window.setTimeout(() => (flashId.value = ""), 1300);
     // Sidebar G-12 cache follows the live switch (both agents are valid).
     void store.loadProviderStatus(agent.value);
   }
@@ -182,6 +241,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   if (switchFlashTimer !== null) window.clearTimeout(switchFlashTimer);
+  if (rowFlashTimer !== null) window.clearTimeout(rowFlashTimer);
 });
 </script>
 
@@ -209,16 +269,24 @@ onBeforeUnmount(() => {
 
     <p v-if="!hasRuntime" class="banner warn">{{ t("ccswitch.noRuntime") }}</p>
     <p v-if="error" class="banner err" role="alert">{{ error }}</p>
-    <p v-if="switchedTo" class="banner ok" role="status">
-      ✓ {{ t("ccswitch.switchedTo", { name: switchedTo }) }}
-    </p>
+
+    <!-- IDEA-5 (5d): switch feedback — a floating top toast (teleported to
+         body so the pane's zoom/scroll never clips it), alongside the row
+         pulse + chip transition below. role=status keeps the SR path. -->
+    <Teleport to="body">
+      <Transition name="toast">
+        <p v-if="switchedTo" class="switch-toast" role="status">
+          ✓ {{ t("ccswitch.switchedTo", { name: switchedTo }) }}
+        </p>
+      </Transition>
+    </Teleport>
 
     <div class="list" v-if="visibleProviders.length">
       <div
         v-for="p in visibleProviders"
         :key="p.id"
         class="row"
-        :class="{ current: p.is_current, activatable: canActivate(p), cancelable: p.is_current && p.base_url }"
+        :class="{ current: p.is_current, flash: p.id === flashId, activatable: canActivate(p), cancelable: p.is_current && p.base_url }"
         :title="p.is_current
           ? t('ccswitch.cancelProxyHint')
           : p.base_url ? t('ccswitch.activateHint') : t('ccswitch.notConfiguredHint')"
@@ -293,7 +361,30 @@ onBeforeUnmount(() => {
       <h3>{{ t("ccswitch.edit") }}: {{ editId }}</h3>
       <label class="field"><span>{{ t("ccswitch.name") }}</span><input v-model="editForm.name" /></label>
       <label class="field"><span>{{ t("ccswitch.baseUrl") }}</span><input v-model="editForm.baseUrl" /></label>
-      <label class="field"><span>{{ t("ccswitch.model") }}</span><input v-model="editForm.model" /></label>
+      <!-- IDEA-5 (5d): the claude mapping section — five role slots with the
+           three-tier dropdown (fetched ∪ known ∪ current); codex keeps its
+           single TOML model field. -->
+      <template v-if="agent === 'claude'">
+        <div class="roles-head">
+          <span class="roles-title">{{ t("ccswitch.rolesTitle") }}</span>
+          <button
+            class="ghost"
+            :disabled="busy !== ''"
+            :title="t('ccswitch.fetchHint')"
+            @click="fetchModelList"
+          >{{ busy.startsWith("fetch:") ? t("ccswitch.fetching") : t("ccswitch.fetchModels") }}</button>
+        </div>
+        <datalist id="cc-model-options">
+          <option v-for="m in modelOptions" :key="m" :value="m" />
+        </datalist>
+        <label v-for="slot in ROLE_SLOTS" :key="slot.key" class="field">
+          <span :title="t(slot.titleKey)">{{ t(slot.labelKey) }}</span>
+          <input v-model="editRoles[slot.key]" list="cc-model-options" spellcheck="false" />
+        </label>
+        <p v-if="fetchHint" class="hint warn">{{ t("ccswitch.fetchFailed", { message: fetchHint }) }}</p>
+        <p class="hint">{{ t("ccswitch.rolesHint") }}</p>
+      </template>
+      <label v-else class="field"><span>{{ t("ccswitch.model") }}</span><input v-model="editForm.model" /></label>
       <label class="field">
         <span>{{ t("ccswitch.newKey") }}</span>
         <input v-model="editForm.apiKey" type="password" autocomplete="off" />
@@ -371,5 +462,46 @@ button.danger { background: var(--error-bg); color: var(--error-fg); }
   border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 4px 6px;
 }
 .hint { font-size: var(--font-xs); color: var(--text-faint); margin: 0; }
+.hint.warn { color: var(--warn, #b80); }
 .form-actions { display: flex; gap: 8px; }
+
+/* --- IDEA-5 (5d): the mapping section --- */
+.roles-head { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.roles-title { font-size: var(--font-sm); color: var(--text-2); font-weight: 600; }
+button.ghost { background: transparent; }
+
+/* --- IDEA-5 (5d): switch feedback trio --- */
+/* Row pulse: the newly-current row flashes once after the list repaint. */
+.row { transition: background 0.25s ease; }
+.row.flash { animation: row-pulse 1.2s ease-out; }
+@keyframes row-pulse {
+  0% { background: var(--accent-soft, rgba(59, 125, 216, 0.35)); }
+  100% { background: var(--surface-2); }
+}
+/* The「使用中」chip eases in instead of popping. */
+.cur { transition: opacity 0.25s ease, transform 0.25s ease; }
+.cur.on { animation: chip-in 0.3s ease; }
+@keyframes chip-in {
+  from { opacity: 0; transform: scale(0.85); }
+  to { opacity: 1; transform: scale(1); }
+}
+/* Floating toast: teleported to body (outside the zoomed/scrolling pane). */
+.switch-toast {
+  position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+  z-index: 1000; margin: 0; padding: 8px 18px;
+  background: var(--success-bg); color: var(--success);
+  border: 1px solid var(--success, #2a2); border-radius: var(--radius-lg);
+  font-size: var(--font-md); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.toast-enter-active { transition: opacity 0.2s ease, transform 0.2s ease; }
+.toast-leave-active { transition: opacity 0.25s ease; }
+.toast-enter-from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+.toast-leave-to { opacity: 0; }
+
+/* S3.6: users who ask the OS for less motion get instant state changes. */
+@media (prefers-reduced-motion: reduce) {
+  .row, .cur { transition: none; }
+  .row.flash, .cur.on { animation: none; }
+  .toast-enter-active, .toast-leave-active { transition: none; }
+}
 </style>
