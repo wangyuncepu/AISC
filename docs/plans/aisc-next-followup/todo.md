@@ -1,5 +1,17 @@
 # 待办与门禁
 
+## 挂账③ provider quota 接入面板——**已砍（用户决策 2026-08-19）**
+
+- 完整实现过一轮（adapter op + 宿主/Rust 命令 + provider 页行内余额按钮，
+  全门禁绿）后用户验收判定砍掉：**第三方供应商（我们的主力场景）需逐个
+  配置 usage-query 模板才有数**（`usage-query set --template general/newapi/
+  balance/custom`，官方订阅类才开箱即用），按钮对主力场景只会显示
+  「未配置」，价值不匹配。分支已弃。
+- 调研结论存档（如将来上游让第三方开箱即用可复活）：上游 `provider quota
+  <id> --json` 信封 `{app, providerId, status: ok|not_available|error,
+  available, queriedAt(ms), result(多态), error}`；模板机制见官方文档
+  2.5-usage-query。
+
 ## KI-7 Provider 管理页两处异常（2026-08-19 发现；**✅ 已修，随 IDEA-5 轮合并**）
 
 - **①自定义添加供应商报错**：根因=`--mode default="simple"` 盖掉 stdin 的
