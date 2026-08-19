@@ -1,18 +1,15 @@
 # 待办与门禁
 
-## KI-7 Provider 管理页两处异常（2026-08-19 用户 IDEA-2 手测期间发现，挂账待查）
+## KI-7 Provider 管理页两处异常（2026-08-19 用户 IDEA-2 手测期间发现；**根因已查明，随 IDEA-5 轮修复**，见 `idea-5-provider-polish/01-plan.md`）
 
-- **自定义添加供应商报错**：provider 页「自定义」方式添加时报
-  `unknown preset provider (simple mode uses preset ids)`——疑似 custom 模式的
-  mode 未正确传到容器 adapter（op_add 按 simple 走了 preset 查找）。
-  排查方向：CcSwitchUiTab 自定义表单构造的 request、Rust `cc_switch_add`
-  传参、adapter `op_add` 的 mode 分支。
-- **外部 cc-switch 改动不同步**：用户在 bash 里用 cc-switch（TUI）新增
-  provider / 改 api-key 后，provider 页不实时反映（无刷新或刷新粒度不含
-  list）。排查方向：ccSwitchUi store 的加载时机（tab 开时一次性？）、
-  useProviderPolling 只覆盖 provider current 不覆盖 list。
-- 归属：IDEA-4/Stage 8e 家族打磨，可与 IDEA-5（模型映射 UI + 切换视觉反馈）
-  同轮规划。
+- **①自定义添加供应商报错**（根因已钉死）：`main.py` 的 `--mode` 带
+  `default="simple"` 而 Rust 从不传该旗标 → `cc_switch.py:61` 中 stdin 文档的
+  `"mode":"custom"` 被 argparse 默认值覆盖 → adapter 按 simple 走空 preset 查找
+  报 `unknown preset provider`。修复=默认值改 None（5a）。
+- **②外部 cc-switch 改动不同步**（根因已钉死）：provider 页仅挂载时一次性拉
+  list，面板 v-show 常驻不重挂载；useProviderPolling 只覆盖 provider current。
+  修复=面板可见性 false→true 即重拉（5b）。
+
 
 ## KI-6 Docker 检测/操作受启动时 PATH 与安装位置影响（2026-08-19，IDEA-2 手测期间发现，随 `idea-2-network-usage` 修复）
 
@@ -117,16 +114,19 @@
   无密钥切换确认 + 隐藏不可切换占位行 + 侧栏状态联动。手测五轮 PASS
   （2026-08-18 用户确认）。打磨项拆到 IDEA-5。
 
-### IDEA-5 Provider 管理打磨（2026-08-18 用户提出，IDEA-4 手测瑕疵）
+### IDEA-5 Provider 管理打磨（2026-08-18 用户提出；**2026-08-19 已规划，与 KI-7 合并实现，进行中**）
 
-- **模型映射**：claude 侧缺少模型映射设置项（MODEL/OPUS/SONNET/HAIKU/SUBAGENT 五个
-  角色位）。建议增加「从 API 拉取可用模型列表 → 用户下拉选择映射」的可选功能
-  （仿照 cc-switch 桌面版）。上游已有 `provider fetch-models` 子命令可作数据源；
-  preset 的官方默认集（8c）保持为初始值，用户映射覆盖后按 ownership 规则保留。
-- **切换视觉反馈**：切换 provider 时的视觉效果较差（当前只有 3 秒横幅）——需设计
-  更明显的过渡（行高亮动画/当前 chip 平滑移动/顶部 toast 样式），参照 cc-switch
-  桌面版观感。
-- **归属**：与 Provider 管理相关的独立小迭代，可与 IDEA-2/3 同轮规划。
+- **用户拍板（2026-08-19）**：映射入口=**编辑表单内嵌五槽**（claude 侧；codex
+  单模型位不适用）；切换反馈=**行高亮脉冲 + chip 平滑 + 顶部浮动 toast**
+  （reduced-motion 退化）。
+- **关键事实**：五角色位↔五个 env 键（保存须五键全显式，防上游 MODEL 外溢）；
+  编辑链路 wire 已支持 patch.env 端到端；fetch-models 上游存在但无 --json 且
+  DeepSeek 实测 `/v1/models` 401 → 下拉三级降级（拉取∪known_models∪手动）；
+  legacy 预置（zhipu/kimi/volcengine）MODEL 刷新被无条件覆盖 → 需扩 history
+  ownership 机制。
+- **规划文档**：`idea-5-provider-polish/01-plan.md`（阶段 5a 自定义添加修复 →
+  5b 外部同步 → 5c 数据面（role_env 快照/fetch-models op/legacy ownership）→
+  5d UI（五槽/datalist/切换动效）→ 5e 收口）。分支 `idea-5-ki7-provider-polish`。
 
 ### IDEA-2 mihomo 订阅导入 + 「网络与用量」面板 + Provider token 统计（2026-08-17 提出；**2026-08-19 实现，手测三轮 PASS，2e 收口**）
 
