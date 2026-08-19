@@ -990,49 +990,51 @@ Function ${UN}AddInstDirToPath
   ; KI-5 (2026-08-19): effective-resolution conflict probe. $INSTDIR is not on
   ; the user PATH — check whether ANY aisc.exe resolves first (system PATH,
   ; then user PATH, exactly how a fresh terminal resolves). Installer scope
-  ; ONLY: the probe functions below are installer-side names, and this macro
-  ; also expands for the uninstaller (where a bare `Call WhereAiscProbe` does
-  ; not even compile — un.AddInstDirToPath is never called, it only has to).
+  ; ONLY (un.AddInstDirToPath is never called; it merely has to compile), and
+  ; deliberately RAW NSIS (StrCmp/IntCmp/relative jumps): LogicLib's generated
+  ; labels do not survive this macro's !if stripping (unresolved
+  ; _LogicLib_ElseLabel in the 2026-08-19 build).
 !if "${UN}" == ""
   Call WhereAiscProbe
-  ${If} $PathHit != ""
-    Call PathConflictOlderSameOrigin
-    ${If} $R0 = 1
-      Call UserPathContainsHitDir
-      ${If} $R0 = 1
-        ; Older same-origin CLI shadowing from the USER PATH: offer takeover.
-        ; Takeover = PREPEND $INSTDIR (the old entry and files are untouched —
-        ; reversible); a per-user prepend does win over later user entries.
-        ${If} $PassiveMode = 1
-        ${OrIf} ${Silent}
-          DetailPrint "PATH conflict: older same-origin aisc at $PathHit; not added (passive/silent)"
-          Return
-        ${EndIf}
-        MessageBox MB_ICONQUESTION|MB_YESNO "$(PATH_TAKEOVER_ASK)" IDNO ki5_declined
-          ${If} $PathRaw == ""
-            StrCpy $PathRaw $INSTDIR
-          ${Else}
-            StrCpy $PathRaw "$INSTDIR;$PathRaw"
-          ${EndIf}
-          Call ${UN}PathWrite
-          WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "PathEntryOwned" 1
-          WriteRegStr HKCU "${MANUPRODUCTKEY}" "PathEntry" $INSTDIR
-          DetailPrint "$(PATH_TAKEOVER_DONE)"
-          Return
-        ki5_declined:
-          DetailPrint "PATH takeover declined; $INSTDIR not added"
-          Return
-      ${Else}
-        ; System-PATH shadow: a per-user prepend cannot override it.
-        ${If} $PassiveMode = 1
-        ${OrIf} ${Silent}
-          DetailPrint "PATH conflict: older same-origin aisc at $PathHit (system PATH); not added"
-        ${Else}
-          MessageBox MB_OK|MB_ICONINFORMATION "$(PATH_TAKEOVER_SYSTEM)"
-        ${EndIf}
-        Return
-      ${EndIf}
-    ${EndIf}
+  StrCmp $PathHit "" ki5_append 0
+  Call PathConflictOlderSameOrigin
+  IntCmp $R0 1 ki5_maybe_ask 0 0
+  Goto ki5_legacy
+ki5_maybe_ask:
+  Call UserPathContainsHitDir
+  IntCmp $R0 1 ki5_user_ask ki5_system ki5_system
+ki5_user_ask:
+  ; Older same-origin CLI shadowing from the USER PATH: offer takeover.
+  ; Takeover = PREPEND $INSTDIR (old entry and files untouched — reversible);
+  ; a per-user prepend does win over later user entries.
+  StrCmp $PassiveMode 1 ki5_ask_quiet
+  IfSilent ki5_ask_quiet
+  MessageBox MB_ICONQUESTION|MB_YESNO "$(PATH_TAKEOVER_ASK)" IDNO ki5_declined
+  StrCmp $PathRaw "" 0 +3
+  StrCpy $PathRaw $INSTDIR
+  Goto +2
+  StrCpy $PathRaw "$INSTDIR;$PathRaw"
+  Call ${UN}PathWrite
+  WriteRegDWORD HKCU "${MANUPRODUCTKEY}" "PathEntryOwned" 1
+  WriteRegStr HKCU "${MANUPRODUCTKEY}" "PathEntry" $INSTDIR
+  DetailPrint "$(PATH_TAKEOVER_DONE)"
+  Return
+ki5_ask_quiet:
+  DetailPrint "PATH conflict: older same-origin aisc at $PathHit; not added (passive/silent)"
+  Return
+ki5_declined:
+  DetailPrint "PATH takeover declined; $INSTDIR not added"
+  Return
+ki5_system:
+  ; System-PATH shadow: a per-user prepend cannot override it.
+  StrCmp $PassiveMode 1 ki5_system_quiet
+  IfSilent ki5_system_quiet
+  MessageBox MB_OK|MB_ICONINFORMATION "$(PATH_TAKEOVER_SYSTEM)"
+  Return
+ki5_system_quiet:
+  DetailPrint "PATH conflict: older same-origin aisc at $PathHit (system PATH); not added"
+  Return
+ki5_legacy:
 !endif
     ; Any other aisc shadows us: never overwrite, reorder or append (05 §5.2.5).
     ${If} $PathHit != ""
@@ -1044,6 +1046,7 @@ Function ${UN}AddInstDirToPath
       ${EndIf}
       Return
     ${EndIf}
+ki5_append:
 
   ; Append once.
   ${If} $PathRaw == ""
