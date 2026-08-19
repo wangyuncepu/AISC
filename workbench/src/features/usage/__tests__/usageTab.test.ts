@@ -122,4 +122,27 @@ describe("NetworkUsageTab (IDEA-2 2d)", () => {
     expect(tab.text()).toContain("订阅未提供用量信息");
     tab.unmount();
   });
+
+  it("a successful import switches the panel back to the status view (2d round 2)", async () => {
+    const subNone: SubscriptionStatus = {
+      configured: false, source: null, url_masked: null, fetched_at: null,
+      config_sha256: null, has_config_file: false, userinfo: null,
+    };
+    mockIpc.usageOverview.mockResolvedValue(overview(subNone, false));
+    mockIpc.networkSubscriptionImport.mockResolvedValue(SUB_CONFIGURED);
+    const tab = mount(NetworkUsageTab, { global: { plugins: [i18n] } });
+    await flushPromises();
+    expect(tab.find(".sub-form").exists()).toBe(true);
+
+    await tab.find('input[type="url"]').setValue("https://sub.example/api?token=T");
+    await tab.find('form').trigger("submit");
+    await flushPromises();
+
+    // The form is gone; the freshly imported status (masked URL) is shown.
+    // (The form's own ✓ line matters where the form stays mounted — the
+    // wizard's inline copy; the panel's feedback IS the status view switch.)
+    expect(tab.find(".sub-form").exists()).toBe(false);
+    expect(tab.text()).toContain("https://sub.example/api?****");
+    tab.unmount();
+  });
 });

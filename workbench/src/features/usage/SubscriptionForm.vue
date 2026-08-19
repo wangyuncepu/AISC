@@ -17,18 +17,28 @@ const usage = useUsageStore();
 const mode = ref<"url" | "content">("url");
 const url = ref("");
 const content = ref("");
+/** Transient success line (2d round 2: the user gets explicit feedback the
+ * moment the import lands — the panel also switches to the status view). */
+const succeeded = ref(false);
 
 async function submit(): Promise<void> {
   if (usage.subBusy) return;
   if (mode.value === "url" && !url.value.trim()) return;
   if (mode.value === "content" && !content.value.trim()) return;
+  succeeded.value = false;
   const ok = mode.value === "url"
     ? await usage.importUrl(url.value.trim())
     : await usage.importContent(content.value);
   if (ok) {
     url.value = "";
     content.value = "";
+    succeeded.value = true;
   }
+}
+
+function switchMode(next: "url" | "content"): void {
+  mode.value = next;
+  succeeded.value = false;
 }
 </script>
 
@@ -40,14 +50,14 @@ async function submit(): Promise<void> {
         role="tab"
         :aria-selected="mode === 'url'"
         :class="{ on: mode === 'url' }"
-        @click="mode = 'url'"
+        @click="switchMode('url')"
       >{{ t("usage.form.modeUrl") }}</button>
       <button
         type="button"
         role="tab"
         :aria-selected="mode === 'content'"
         :class="{ on: mode === 'content' }"
-        @click="mode = 'content'"
+        @click="switchMode('content')"
       >{{ t("usage.form.modeContent") }}</button>
     </div>
 
@@ -83,6 +93,7 @@ async function submit(): Promise<void> {
       {{ usage.subError.code === "AISC_ERR_NETWORK_SUBSCRIPTION_TLS_REJECTED"
         ? t("usage.sub.tlsRejected") : usage.subError.message }}
     </p>
+    <p v-else-if="succeeded" class="ok" role="status">✓ {{ t("usage.form.success") }}</p>
 
     <button type="submit" class="primary" :disabled="usage.subBusy">
       {{ usage.subBusy ? t("usage.form.importing") : t("usage.form.submit") }}
@@ -108,5 +119,6 @@ input, textarea {
 textarea { font-family: var(--mono, monospace); resize: vertical; }
 .hint { font-size: 12px; color: var(--text-dim, #888); margin: 0; }
 .error { color: var(--danger, #d33); font-size: 13px; margin: 0; white-space: pre-wrap; }
+.ok { color: var(--status-ok, #2a2); font-size: 13px; margin: 0; }
 button.primary { align-self: flex-start; padding: 6px 18px; }
 </style>

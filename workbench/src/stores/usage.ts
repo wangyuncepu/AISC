@@ -84,6 +84,27 @@ export const useUsageStore = defineStore("usage", () => {
   const loading = ref(false);
   const usageError = ref<string | null>(null);
 
+  // --- display preferences (2d 手测 round 2: unit/currency toggles) -------
+  // Session-level (not persisted): token magnitude and cost currency are
+  // presentation choices over the same CLI numbers.
+
+  /** Token display unit: auto adapts (k/M/B) by magnitude; the fixed units
+   * always divide by their magnitude; raw shows the plain integer. */
+  const tokenUnit = ref<"auto" | "k" | "M" | "raw">("auto");
+  /** Cost display currency. cc-switch normalizes costs to USD; CNY is a
+   * fixed-rate conversion shown with a note (provider bills stay
+   * authoritative). */
+  const currency = ref<"USD" | "CNY">("USD");
+
+  const TOKEN_UNIT_CYCLE: Array<"auto" | "k" | "M" | "raw"> = ["auto", "k", "M", "raw"];
+  function cycleTokenUnit(): void {
+    const i = TOKEN_UNIT_CYCLE.indexOf(tokenUnit.value);
+    tokenUnit.value = TOKEN_UNIT_CYCLE[(i + 1) % TOKEN_UNIT_CYCLE.length];
+  }
+  function toggleCurrency(): void {
+    currency.value = currency.value === "USD" ? "CNY" : "USD";
+  }
+
   async function fetchOverview(): Promise<UsageOverview | null> {
     loading.value = true;
     usageError.value = null;
@@ -118,5 +139,9 @@ export const useUsageStore = defineStore("usage", () => {
     loading,
     usageError,
     fetchOverview,
+    tokenUnit,
+    currency,
+    cycleTokenUnit,
+    toggleCurrency,
   };
 });

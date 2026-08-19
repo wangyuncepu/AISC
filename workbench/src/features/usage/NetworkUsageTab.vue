@@ -30,6 +30,16 @@ function fmtDate(isoOrEpoch: string | number): string {
 
 /** Show the import form (not configured, or the user pressed 更换). */
 const replacing = ref(false);
+// 2d 手测 round 2: a successful import (form or wizard path) flips the
+// store's subscription immediately — switch back to the status view so the
+// state is visible without manual interaction.
+watch(
+  () => usage.subConfigured,
+  (on) => {
+    replacing.value = !on;
+  },
+  { immediate: true },
+);
 
 const usedBytes = computed(() => {
   const u = usage.subscription?.userinfo;
@@ -82,23 +92,41 @@ function fmtBytes(n: number): string {
   if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${n} B`;
 }
+/** Token display honors the unit toggle (2d round 2): auto adapts by
+ * magnitude; k/M always divide; raw is the plain integer. */
 function fmtTokens(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
-  return `${n}`;
+  switch (usage.tokenUnit) {
+    case "raw":
+      return `${n}`;
+    case "k":
+      return `${(n / 1e3).toFixed(n >= 1e5 ? 0 : 1)}k`;
+    case "M":
+      return `${(n / 1e6).toFixed(2)}M`;
+    default:
+      if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
+      if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+      if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+      return `${n}`;
+  }
+}
+/** cc-switch normalizes costs to USD; CNY is a fixed-rate conversion
+ * (presented as an estimate — provider bills stay authoritative). */
+const FX_USD_CNY = 7.25;
+function fmtCost(usd: number): string {
+  return usage.currency === "CNY"
+    ? `¥${(usd * FX_USD_CNY).toFixed(4)}`
+    : `$${usd.toFixed(4)}`;
+}
+/** Requests flowed but the cost stayed 0 → the model never hit cc-switch's
+ * pricing table (or is genuinely free); surface it instead of a silently
+ * confident $0. */
+function unpriced(row: { requests: number; cost_estimate: number }): boolean {
+  return row.requests > 0 && row.cost_estimate === 0;
 }
 
 watch(
   () => [usage.range, usage.scope],
   () => void usage.fetchOverview(),
-);
-watch(
-  () => usage.subscription?.configured,
-  (configured) => {
-    if (configured === false) replacing.value = true;
-  },
-  { immediate: true },
 );
 onMounted(() => void usage.fetchOverview());
 </script>
@@ -173,10 +201,19 @@ onMounted(() => void usage.fetchOverview());
             <option v-for="o in scopeOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
           </select>
         </label>
+        <button class="toggle" :title="t('usage.unitHint')"
+                @click="usage.cycleTokenUnit()">
+          {{ t("usage.unitLabel") }}: {{ t(`usage.unit.${usage.tokenUnit}`) }}
+        </button>
+        <button class="toggle" :title="t('usage.currencyHint')"
+                @click="usage.toggleCurrency()">
+          {{ usage.currency === "USD" ? "$ USD" : "¥ CNY" }}
+        </button>
         <button :disabled="usage.loading" @click="usage.fetchOverview()">
           {{ t("usage.reload") }}
         </button>
       </div>
+      <p v-if="usage.currency === 'CNY'" class="hint">{{ t("usage.cnyNote", { rate: FX_USD_CNY }) }}</p>
 
       <p v-if="usage.loading" class="dim">{{ t("usage.loading") }}</p>
       <p v-else-if="usage.usageError" class="error" role="alert">{{ usage.usageError }}</p>
@@ -200,7 +237,9 @@ onMounted(() => void usage.fetchOverview());
               <td class="num">{{ row.requests }}</td>
               <td class="num">{{ successRate(row.success, row.requests) }}</td>
               <td class="num">{{ fmtTokens(row.tokens_total) }}</td>
-              <td class="num">${{ row.cost_estimate.toFixed(4) }}</td>
+              <td class="num" :class="{ unpriced: unpriced(row) }" :title="unpriced(row) ? t('usage.costUnknown') : ''">
+                {{ fmtCost(row.cost_estimate) }}<span v-if="unpriced(row)" class="q">?</span>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -243,4 +282,7 @@ h2 { font-size: 15px; margin: 12px 0 2px; }
 .ws-states { margin: 0; padding-left: 18px; font-size: 12px; color: var(--text-dim, #888); }
 .hint { font-size: 12px; color: var(--text-dim, #888); margin: 0; max-width: 760px; }
 button.danger { color: var(--danger, #d33); }
+button.toggle { font-size: 12px; padding: 4px 10px; }
+td.unpriced { color: var(--warn, #b80); }
+td.unpriced .q { margin-left: 2px; cursor: help; font-weight: bold; }
 </style>
