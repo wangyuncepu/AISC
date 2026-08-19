@@ -918,28 +918,68 @@ def _http_get_json(url: str, headers: dict[str, str], timeout: float) -> tuple[i
         return 0, None
 
 
+# Mirrors upstream cc-switch services/model_fetch.rs: anthropic-compat base
+# suffixes whose stripped root also serves OpenAI-style model lists.
+_KNOWN_COMPAT_SUFFIXES = ("/api/anthropic", "/apps/anthropic", "/anthropic")
+
+
+def _models_url_candidates(base_url: str) -> list[str]:
+    """Port of upstream build_models_url_candidates (dedup, order kept):
+
+    1. base ends with a version segment `/v{N}` (e.g. `/api/coding/paas/v4`)
+       → `{base}/models` first (and `{base}/v1/models` unless it IS `/v1`)
+    2. else `{base}/v1/models`
+    3. base ends with a KNOWN_COMPAT_SUFFIX → stripped root gains BOTH
+       `/v1/models` and bare `/models` (e.g. DeepSeek documents
+       `https://api.deepseek.com/models` WITHOUT /v1)."""
+    trimmed = base_url.strip().rstrip("/")
+    if not trimmed:
+        return []
+    candidates: list[str] = []
+    last = trimmed.rsplit("/", 1)[-1]
+    versioned = last.startswith("v") and last[1:].isdigit()
+    if versioned:
+        candidates.append(f"{trimmed}/models")
+        if not trimmed.endswith("/v1"):
+            candidates.append(f"{trimmed}/v1/models")
+    else:
+        candidates.append(f"{trimmed}/v1/models")
+    for suffix in _KNOWN_COMPAT_SUFFIXES:
+        if trimmed.endswith(suffix):
+            root = trimmed[: -len(suffix)].rstrip("/")
+            if root and "://" in root:
+                candidates.append(f"{root}/v1/models")
+                candidates.append(f"{root}/models")
+            break
+    return list(dict.fromkeys(candidates))
+
+
 def _openai_compatible_models(base_url: str, api_key: str) -> list[str] | None:
-    """The documented fetch path (user-manual 2.1 §自动获取模型): the
-    OpenAI-compatible `/v1/models` endpoint. For anthropic-compat providers
-    (`…/anthropic` base) the native base is derived by stripping the suffix.
-    Returns None when the endpoint/auth rejects us — the caller degrades."""
-    base = base_url.rstrip("/")
-    if base.endswith("/anthropic"):
-        base = base[: -len("/anthropic")]
-    if not base:
+    """The documented fetch path (user-manual 2.1 §自动获取模型), ported from
+    upstream services/model_fetch.rs: walk the candidate model-list URLs and
+    the two auth styles (Bearer default; x-api-key for anthropic-format
+    providers — we don't track api_format per row, so both are tried).
+    Returns None when every candidate rejects us; the caller degrades."""
+    if not base_url:
         return None
-    status, payload = _http_get_json(
-        f"{base}/v1/models",
-        {"Authorization": f"Bearer {api_key}"} if api_key else {},
-        15.0,
-    )
-    if status != 200 or not isinstance(payload, dict):
-        return None
-    data = payload.get("data")
-    if not isinstance(data, list):
-        return None
-    ids = [str(m.get("id")) for m in data if isinstance(m, dict) and m.get("id")]
-    return ids or None
+    header_sets: list[dict[str, str]] = []
+    if api_key:
+        header_sets.append({"Authorization": f"Bearer {api_key}"})
+        header_sets.append({"x-api-key": api_key, "anthropic-version": "2023-06-01"})
+    else:
+        header_sets.append({})
+    for url in _models_url_candidates(base_url):
+        for headers in header_sets:
+            status, payload = _http_get_json(url, headers, 15.0)
+            if status != 200 or not isinstance(payload, dict):
+                continue
+            data = payload.get("data")
+            if not isinstance(data, list):
+                continue
+            ids = [str(m.get("id")) for m in data if isinstance(m, dict) and m.get("id")]
+            if ids:
+                return ids
+    return None
 
 
 def op_fetch_models(agent: str, provider_id: str) -> dict[str, Any]:

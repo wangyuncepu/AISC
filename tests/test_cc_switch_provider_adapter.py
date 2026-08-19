@@ -627,10 +627,9 @@ class RoleEnvAndFetchModelsTests(AdapterTestCase):
         self.assertIn("401", result["message"])
 
     def test_fetch_models_falls_back_to_openai_compatible_endpoint(self):
-        # The documented path (user-manual 2.1): the OpenAI-compatible
-        # /v1/models on the NATIVE base (…/anthropic suffix stripped). The
-        # CLI fails (401 on the anthropic-compat base) but the fallback
-        # delivers the list.
+        # Ported upstream chain (services/model_fetch.rs): the anthropic-compat
+        # candidate 401s, then the stripped-root /v1/models wins. The CLI also
+        # failed — only the fallback delivers.
         seed_provider(self.dir, "prov", {
             "ANTHROPIC_BASE_URL": "https://api.prov.example/anthropic",
             "ANTHROPIC_AUTH_TOKEN": "sk-live-abcdef123456",
@@ -642,8 +641,11 @@ class RoleEnvAndFetchModelsTests(AdapterTestCase):
 
         def fake_http(url, headers, timeout):
             calls.append(url)
-            self.assertIn("Bearer sk-live-abcdef123456", headers.get("Authorization", ""))
-            return 200, {"data": [{"id": "prov-xl"}, {"id": "prov-lite"}]}
+            if url == "https://api.prov.example/v1/models":
+                self.assertIn("Bearer sk-live-abcdef123456",
+                              headers.get("Authorization", ""))
+                return 200, {"data": [{"id": "prov-xl"}, {"id": "prov-lite"}]}
+            return 401, None
 
         orig_http = A._http_get_json
         A._http_get_json = fake_http
@@ -651,11 +653,56 @@ class RoleEnvAndFetchModelsTests(AdapterTestCase):
             result = A.op_fetch_models("claude", "prov")
         finally:
             A._http_get_json = orig_http
-        self.assertEqual(calls, ["https://api.prov.example/v1/models"])
+        self.assertEqual(calls[0], "https://api.prov.example/anthropic/v1/models")
         self.assertTrue(result["available"])
         self.assertEqual(result["models"], ["prov-xl", "prov-lite"])
         # The key never leaks into the envelope.
         self.assertNotIn("sk-live-abcdef123456", json.dumps(result))
+
+    def test_fetch_models_candidate_chain_includes_bare_models(self):
+        # DeepSeek-style: only the BARE /models (no /v1) on the stripped root
+        # answers — the last candidate in the upstream chain.
+        seed_provider(self.dir, "ds", {
+            "ANTHROPIC_BASE_URL": "https://api.ds.example/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": "sk-live-abcdef123456",
+        })
+        self.cli.stub_stdout("Fetching models for 'ds'...\nError: HTTP 401\n")
+
+        def fake_http(url, headers, timeout):
+            if url == "https://api.ds.example/models":
+                # Only answers with the anthropic-style header set.
+                if headers.get("x-api-key") == "sk-live-abcdef123456":
+                    return 200, {"data": [{"id": "ds-chat"}]}
+            return 401, None
+
+        orig_http = A._http_get_json
+        A._http_get_json = fake_http
+        try:
+            result = A.op_fetch_models("claude", "ds")
+        finally:
+            A._http_get_json = orig_http
+        self.assertTrue(result["available"])
+        self.assertEqual(result["models"], ["ds-chat"])
+
+    def test_models_url_candidates_rules(self):
+        # Plain base: single candidate.
+        self.assertEqual(
+            A._models_url_candidates("https://x.example"),
+            ["https://x.example/v1/models"],
+        )
+        # Versioned base (paas/v4): /models first.
+        self.assertEqual(
+            A._models_url_candidates("https://x.example/api/paas/v4"),
+            ["https://x.example/api/paas/v4/models",
+             "https://x.example/api/paas/v4/v1/models"],
+        )
+        # Anthropic-compat suffix: as-is + stripped root with BOTH forms.
+        self.assertEqual(
+            A._models_url_candidates("https://api.ds.example/anthropic/"),
+            ["https://api.ds.example/anthropic/v1/models",
+             "https://api.ds.example/v1/models",
+             "https://api.ds.example/models"],
+        )
 
     def test_fetch_models_unknown_provider_is_adapter_error(self):
         with self.assertRaises(A.AdapterError) as ctx:
