@@ -34,6 +34,10 @@ sha2 = "0.10"
 notify = "7"
 sys-locale = "0.3"
 tauri-plugin-notification = "2"
+# 挂账①: subscription downloader — reqwest+rustls is the clash-verge stack,
+# the only non-browser transport empirically passing airport TLS-fingerprint
+# walls (curl/openssl/python/.NET/curl_cffi all killed at the handshake).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 # winreg is Windows-only (locale.rs reads the HKCU locale); it must not compile
 # on Linux/macOS where the CI rust job builds the workbench lib.

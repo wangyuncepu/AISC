@@ -528,6 +528,39 @@ def _persist(
     )
 
 
+def store_downloaded(
+    url: Optional[str],
+    content: bytes,
+    userinfo_header: str = "",
+    *,
+    env: Optional[Mapping[str, str]] = None,
+) -> Dict[str, Any]:
+    """Persist a Rust-side download (挂账① transport split).
+
+    The Workbench's reqwest downloader (the clash-verge stack — the only
+    non-browser transport passing airport TLS-fingerprint walls) hands the
+    raw body and the captured ``subscription-userinfo`` header here; every
+    persistence/parsing rule stays in this module (snapshot, masking,
+    node-name fallback)."""
+    if not content or not content.strip():
+        raise CliError(
+            message="subscription content is empty",
+            exit_code=2,
+            error_code=ERROR_EMPTY,
+        )
+    userinfo = parse_userinfo(userinfo_header)
+    userinfo_source = "header" if userinfo else None
+    if userinfo is None:
+        userinfo = parse_node_name_userinfo(content.decode("utf-8", "replace"))
+        if userinfo is not None:
+            userinfo_source = "node-names"
+    return _persist(
+        url=url, body=content, userinfo=userinfo, userinfo_source=userinfo_source,
+        source="download", env=env,
+        fetched_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+    )
+
+
 def refresh_subscription(
     *,
     transport: Optional[Transport] = None,

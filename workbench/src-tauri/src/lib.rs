@@ -18,6 +18,7 @@ pub mod pty;
 pub mod runtime;
 pub mod session;
 pub mod settings;
+pub mod subscription;
 pub mod artifact;
 pub mod storage;
 pub mod trace;

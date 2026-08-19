@@ -575,12 +575,19 @@ async fn aisc_data_call(
 }
 
 /// Import a subscription from a URL (the URL is a credential — it rides the
-/// CLI child's STDIN, never argv/logs/disk).
+/// CLI child's STDIN, never argv/logs/disk). 挂账①: the Rust reqwest
+/// downloader runs FIRST (the clash-verge stack passes airport TLS-fingerprint
+/// walls that kill the Python transport); persistence stays in the CLI via
+/// store-downloaded. On download failure we fall back to the CLI's own fetch
+/// so un-walled sources and error reporting are unchanged.
 #[tauri::command]
 pub async fn network_subscription_import(
     app: AppHandle,
     url: String,
 ) -> Result<Value, WorkbenchError> {
+    if let Ok(dl) = crate::subscription::download(&url).await {
+        return crate::subscription::store_downloaded(&app, &url, dl).await;
+    }
     let argv = network_subscription_argv("import", false);
     aisc_data_call(&app, argv, Some(url), SUBSCRIPTION_TIMEOUT).await
 }
@@ -596,9 +603,26 @@ pub async fn network_subscription_import_file(
     aisc_data_call(&app, argv, Some(content), SUBSCRIPTION_TIMEOUT).await
 }
 
-/// Re-fetch the stored subscription URL.
+/// Re-fetch the stored subscription URL. 挂账①: same Rust-downloader-first
+/// flow as import — the stored URL is read from the data-root snapshot
+/// (never displayed; masked in every envelope) and downloaded with reqwest,
+/// falling back to the CLI's own fetch on download failure.
 #[tauri::command]
 pub async fn network_subscription_refresh(app: AppHandle) -> Result<Value, WorkbenchError> {
+    let stored_url = crate::session::config_dir(&app)
+        .ok()
+        .and_then(|dir| std::fs::read_to_string(dir.join("network-subscription.json")).ok())
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|snap| {
+            snap.get("url")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
+    if let Some(url) = stored_url {
+        if let Ok(dl) = crate::subscription::download(&url).await {
+            return crate::subscription::store_downloaded(&app, &url, dl).await;
+        }
+    }
     let argv = network_subscription_argv("refresh", false);
     aisc_data_call(&app, argv, None, SUBSCRIPTION_TIMEOUT).await
 }

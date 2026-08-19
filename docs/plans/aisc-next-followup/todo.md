@@ -1,5 +1,21 @@
 # 待办与门禁
 
+## 挂账① 指纹源自动下载（Rust reqwest）——✅ 已落地（2026-08-19，分支 `rust-subscription-download`）
+
+- **交付**：`workbench/src-tauri/src/subscription.rs`——Rust 下载器（reqwest+
+  rustls、clash 家族 UA、env→WinINET 双探测系统代理、30s+1 重试、10MB 上限、
+  宽容自签证书、捕获 `subscription-userinfo` 头）→ stdin JSON（b64）交给新
+  CLI op `network subscription store-downloaded`；持久化/脱敏/假节点兜底全留
+  Python。`network_subscription_import/refresh` 改「Rust 优先，失败回落
+  Python 传输」，末端仍是 TLS_REJECTED→粘贴导入引导。
+- **实探勘误（关键）**：原 2a 矩阵「真 Chrome 通过」系误读（dump-dom 捕获的
+  是 Chrome 自带 ERR_CONNECTION_CLOSED 报错页）；且 103.14.76.98 源 8/17→8/19
+  收紧为全杀（clash-verge 三级更新自身同日两轮全灭，其 8/17 日志曾成功）。
+  同机场域名 http 端点对一切栈开放（curl+clash UA 即 200+真实 userinfo 头）。
+  详见 `idea-2-network-usage/02-data-contracts.md` §6.1 修订。
+- **验收口径**：全杀档位下该源任何客户端都拉不到（非本传输缺陷）；墙回落
+  到 clash-verge 可过档位时本传输自动受益。域名 http 源今日即全链路可用。
+
 ## 挂账③ provider quota 接入面板——**已砍（用户决策 2026-08-19）**
 
 - 完整实现过一轮（adapter op + 宿主/Rust 命令 + provider 页行内余额按钮，
