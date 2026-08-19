@@ -589,20 +589,31 @@ class RoleEnvAndFetchModelsTests(AdapterTestCase):
         custom = {p["id"]: p for p in A.op_list("claude")}["mine"]
         self.assertEqual(custom["known_models"], [])
 
-    def test_fetch_models_parses_lines_and_label_pairs(self):
+    def test_fetch_models_cli_text_is_last_resort_and_filters_headers(self):
+        # Chain-first order: the JSON candidates all fail (stubbed), the CLI
+        # subcommand succeeds with a human TABLE — the tightened parse must
+        # keep the real ids and drop header words (Model/Fetched/model).
         seed_provider(self.dir, "deepseek", {"ANTHROPIC_BASE_URL": "https://x"})
         self.cli.stub_stdout(
-            "Fetching models for 'DeepSeek'...\n"
-            "Endpoint: https://api.deepseek.com/anthropic\n\n"
-            "- deepseek-chat\n"
-            "deepseek-reasoner\n"
+            "Fetched models for 'DeepSeek':\n"
+            "Endpoint: https://api.deepseek.com\n\n"
+            "  Model             ID\n"
+            "  deepseek-chat     deepseek-chat\n"
+            "  deepseek-reasoner\n"
             "  default: deepseek-v4-flash[1m]\n"
         )
-        result = A.op_fetch_models("claude", "deepseek")
+        orig_http = A._http_get_json
+        A._http_get_json = lambda url, headers, timeout: (404, None)
+        try:
+            result = A.op_fetch_models("claude", "deepseek")
+        finally:
+            A._http_get_json = orig_http
         self.assertTrue(result["available"])
         self.assertEqual(result["models"],
                          ["deepseek-chat", "deepseek-reasoner",
                           "deepseek-v4-flash[1m]"])
+        for junk in ("Model", "Fetched", "model", "Endpoint"):
+            self.assertNotIn(junk, result["models"])
         argv = self.cli.argv()
         self.assertIn(["-a", "claude", "provider", "fetch-models", "deepseek"],
                       argv)
