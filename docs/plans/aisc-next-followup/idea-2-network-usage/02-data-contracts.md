@@ -249,9 +249,10 @@ Python urllib 默认传输**无法直连此类源**。`subscription-userinfo` �
   握手期 EOF/连接重置类 SSL 错误时映射（区别于网络不可达）→ UI 引导「该订阅
   源拒绝自动化下载，请改用粘贴配置内容导入」。
 - SubscriptionForm（UI）双模式：订阅链接输入 + 粘贴配置内容文本域。
-- **挂账（指纹防护源的自动下载）**：候选方案——①容器内 mihomo（Go 栈）以
-  proxy-provider 方式代拉；②Rust 侧 reqwest（若验证 rustls 可过）；③Stage 9
-  C# 原生栈。待用户确认其日常客户端（哪条栈能过）后择期规划。
+- **挂账（指纹防护源的自动下载）**：**用户确认（2026-08-19）其 clash-verge
+  客户端刷新该源正常 → Rust reqwest 栈实测可过 TLS 指纹墙** → 挂账首选
+  Rust 侧下载器（新增 reqwest 依赖，Workbench 直接拉，信封仍走 CLI）；次选
+  容器 mihomo（Go 栈）proxy-provider 代拉。本轮 D4 双导入已保证此类源可用。
 
 ### 6.3 2a 探针清单执行状态
 
