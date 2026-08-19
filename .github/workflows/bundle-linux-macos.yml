@@ -24,6 +24,7 @@ on:
       - 'scripts/build-cli.*'
       - 'VERSION'
       - 'pyproject.toml'
+      - 'vendor/**'
 
 jobs:
   bundle:

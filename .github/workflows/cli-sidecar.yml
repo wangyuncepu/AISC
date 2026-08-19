@@ -11,6 +11,8 @@ on:
       - 'scripts/verify-*.py'
       - 'VERSION'
       - 'pyproject.toml'
+      - 'vendor/**'
+      - '.github/workflows/cli-sidecar.yml'
 
 jobs:
   sidecar:
