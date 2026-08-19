@@ -989,7 +989,11 @@ Function ${UN}AddInstDirToPath
 
   ; KI-5 (2026-08-19): effective-resolution conflict probe. $INSTDIR is not on
   ; the user PATH — check whether ANY aisc.exe resolves first (system PATH,
-  ; then user PATH, exactly how a fresh terminal resolves).
+  ; then user PATH, exactly how a fresh terminal resolves). Installer scope
+  ; ONLY: the probe functions below are installer-side names, and this macro
+  ; also expands for the uninstaller (where a bare `Call WhereAiscProbe` does
+  ; not even compile — un.AddInstDirToPath is never called, it only has to).
+!if "${UN}" == ""
   Call WhereAiscProbe
   ${If} $PathHit != ""
     Call PathConflictOlderSameOrigin
@@ -1029,15 +1033,17 @@ Function ${UN}AddInstDirToPath
         Return
       ${EndIf}
     ${EndIf}
+!endif
     ; Any other aisc shadows us: never overwrite, reorder or append (05 §5.2.5).
-    ${If} $PassiveMode = 1
-    ${OrIf} ${Silent}
-      DetailPrint "PATH conflict: aisc already at $PathHit; $INSTDIR not added"
-    ${Else}
-      MessageBox MB_OK|MB_ICONINFORMATION "$(PATH_CONFLICT)"
+    ${If} $PathHit != ""
+      ${If} $PassiveMode = 1
+      ${OrIf} ${Silent}
+        DetailPrint "PATH conflict: aisc already at $PathHit; $INSTDIR not added"
+      ${Else}
+        MessageBox MB_OK|MB_ICONINFORMATION "$(PATH_CONFLICT)"
+      ${EndIf}
+      Return
     ${EndIf}
-    Return
-  ${EndIf}
 
   ; Append once.
   ${If} $PathRaw == ""
