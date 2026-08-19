@@ -33,9 +33,13 @@ const replacing = ref(false);
 // 2d 手测 round 2: a successful import (form or wizard path) flips the
 // store's subscription immediately — switch back to the status view so the
 // state is visible without manual interaction.
+// 挂账① 手测: watching subConfigured alone misses the 更换 flow — an import
+// over an existing subscription keeps it true→true, so the watch never fires
+// and the form stays up. Key on fetched_at too: every successful op (import,
+// refresh) lands a new snapshot timestamp, which flips the view back.
 watch(
-  () => usage.subConfigured,
-  (on) => {
+  () => [usage.subConfigured, usage.subscription?.fetched_at] as const,
+  ([on]) => {
     replacing.value = !on;
   },
   { immediate: true },

@@ -165,4 +165,32 @@ describe("NetworkUsageTab (IDEA-2 2d)", () => {
     expect(tab.text()).toContain("https://sub.example/api?****");
     tab.unmount();
   });
+
+  it("更换 over an existing subscription flips back too (挂账① 手测: subConfigured stays true→true)", async () => {
+    mockIpc.usageOverview.mockResolvedValue(overview(SUB_CONFIGURED));
+    mockIpc.networkSubscriptionImport.mockResolvedValue({
+      ...SUB_CONFIGURED,
+      fetched_at: "2026-08-19T16:00:00+08:00",
+      url_masked: "http://sub2.example/api?****",
+    });
+    const tab = mount(NetworkUsageTab, { global: { plugins: [i18n] } });
+    await flushPromises();
+    expect(tab.find(".sub-form").exists()).toBe(false); // status view
+
+    // 更换 → the form appears while the old subscription stays configured.
+    const replace = tab.findAll("button").find((b) => b.text().includes("更换"));
+    expect(replace).toBeDefined();
+    await replace!.trigger("click");
+    expect(tab.find(".sub-form").exists()).toBe(true);
+
+    await tab.find('input[type="url"]').setValue("http://sub2.example/api?token=T2");
+    await tab.find("form").trigger("submit");
+    await flushPromises();
+
+    // subConfigured never changed (true→true) — the flip-back must key on
+    // the fresh snapshot (fetched_at), not the boolean alone.
+    expect(tab.find(".sub-form").exists()).toBe(false);
+    expect(tab.text()).toContain("http://sub2.example/api?****");
+    tab.unmount();
+  });
 });
