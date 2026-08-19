@@ -176,6 +176,15 @@ class TestResolvePathWindowsFallback(unittest.TestCase):
              ):
             self.assertEqual(RealDockerExecutor()._resolve_path(), "C:\\docker.exe")
 
+    def test_fallback_includes_per_user_install(self):
+        """KI-6: the per-user Docker Desktop layout (Programs\DockerDesktop)
+        must be probed — a pre-install terminal plus a per-user install made
+        direct CLI runs miss a running engine."""
+        self.assertIn(
+            r"%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin\docker.exe",
+            RealDockerExecutor._WINDOWS_FALLBACK_PATHS,
+        )
+
     def test_fallback_ignored_on_posix(self):
         with mock.patch("aisc.adapters.docker_.shutil.which", return_value=None), \
              mock.patch("aisc.adapters.docker_.os.name", "posix"), \
