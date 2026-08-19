@@ -35,13 +35,22 @@
   **非默认路径**识别不到 docker.exe——新增 `un.FindDockerCli` 探测链：`where
   docker`（PATH，覆盖自定义安装）→ 两个默认位 → Docker Desktop 卸载注册表
   InstallLocation 回退。
-- **KI-5 升级用户 PATH 冲突提示（2026-08-18 手测记录，待产品决策）**：用过
-  旧版（uv/pip 装过 aisc，如 `C:\Users\<user>\.local\bin\aisc.exe`）的机器
-  安装新 Workbench 时，G-18 冲突探测按设计（05 §5.2.5 never-shadow）拒绝把
-  安装目录加入 PATH 并弹提示。行为本身符合设计（不破坏用户现有环境），但
-  旧版升级用户永远拿不到 Workbench 自带的新 CLI on PATH。可选方向：保持现
-  状只记录 / 检测到"旧版本 aisc 同源"时询问接管 PATH / 文档说明。**需用户
-  拍板后另开一轮**。
+- **KI-5 升级用户 PATH 冲突提示**：✅ **已修并合并（2026-08-19，分支
+  `ki-5-path-takeover`，用户 VM 手测 PASS——2.1.4 旧装 + 新装弹窗接管成
+  功）**。用户拍板（2026-08-19）：**同源旧版 → 询问接管（覆盖式升级语义，
+  CLI 随 Workbench 同步升级——接管条目固定指向安装目录，升级原地替换
+  sidecar，PATH 无需再动）**。实现：冲突探测改为系统 PATH→用户 PATH 依序
+  注册表扫描（**不用 `where`：安装器进程 PATH 含 CI toolchain 目录，不代表
+  用户终端**）；同源判定双探针（`version --format json` 的 `aisc.cli/v1`
+  信封 + 分隔符无关的 `cli_version` 读取；前信封时代回退 `--version` 散文
+  扫首个数字）+ SemverCompare 严格更旧；接管 = 安装目录**前置**用户 PATH
+  （旧条目/文件不动，可逆；卸载移除自有条目后旧 CLI 自动恢复）。非同源/
+  同版/更新/静默安装维持 never-shadow；系统 PATH 遮挡弹手动指引。**三处
+  NSIS 教训**：①G18 宏双作用域展开时安装侧函数名不能裸 Call（`!if
+  "${UN}"==""` 只在安装侧展开）；②LogicLib 生成标签不能跨 `!if` 剥离区
+  （受保护区改纯原生 StrCmp/IntCmp/相对跳转）；③**json.dumps 分隔符是
+  `": "` 不是 `":"`**——硬编码偏移读出单个空格静默降级（改为跳到值的开引
+  号，实测 v2.1.4 信封输出校验）。
 - **挂账：容器随镜像同步更新**（KI-4 衍生，用户 2026-08-18 拍板本轮
   不动）：`config_fingerprint` 只含镜像名（`super-claude:latest`），同
   tag 重建镜像后旧容器照旧复用、继续跑旧镜像层。方向：fingerprint 纳入
