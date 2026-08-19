@@ -1148,40 +1148,105 @@ Function WhereAiscProbe
   ${Loop}
 FunctionEnd
 
-; Is $PathHit an OLDER release of our own CLI? Runs its version probe (the
-; same command Workbench negotiate uses) and requires: exit 0, the
-; aisc.cli/v1 envelope marker (same product family), and a cli_version that
-; SemverCompare ranks strictly below this installer. Sets $R0=1 when the
-; takeover ask is warranted; $PathVer carries the parsed version for the
-; prompt. No --format braces here — double braces are handlebars in this file.
+; Is $PathHit an OLDER release of our own CLI? Two probes: (1) the envelope —
+; `version --format json` must exit 0, carry the aisc.cli/v1 marker and a
+; parseable cli_version; (2) fallback for pre-envelope builds — `--version`
+; prose like "aisc 2.1.4" / "aisc, version 2.1.4". Either way the version
+; must rank strictly below this installer (SemverCompare). Sets $R0=1 when
+; the takeover ask is warranted; $PathVer carries the parsed version for the
+; prompt. NOTE the envelope parser is separator-AGNOSTIC (skips to the
+; value's opening quote): the 2026-08-19 VM repro failed because a hardcoded
+; +15 offset assumed `":"` while json.dumps emits `": "` — the parsed
+; "version" was a single space and the ask silently degraded to never-shadow.
+; No --format braces here — double braces are handlebars in this file.
 Function PathConflictOlderSameOrigin
   StrCpy $R0 0
   StrCpy $PathVer ""
   nsExec::ExecToStack '"$PathHit" version --format json'
   Pop $0
   Pop $1
-  ${If} $0 != 0
-    Return
-  ${EndIf}
-  ${StrLoc} $2 $1 "aisc.cli/v1" ">"
-  ${If} $2 == ""
-    Return
-  ${EndIf}
-  ${StrLoc} $2 $1 '"cli_version"' ">"
-  ${If} $2 == ""
-    Return
-  ${EndIf}
-  IntOp $2 $2 + 15
-  StrCpy $3 $1 "" $2
-  ${Do}
-    StrCpy $4 $3 1
-    ${If} $4 == '"'
-    ${OrIf} $4 == ""
-      ${Break}
+  ${If} $0 = 0
+    ${StrLoc} $2 $1 "aisc.cli/v1" ">"
+    ${If} $2 != ""
+      ${StrLoc} $2 $1 '"cli_version"' ">"
+      ${If} $2 != ""
+        IntOp $2 $2 + 13
+        StrCpy $3 $1 "" $2
+        ; skip to the value's opening quote; ,/}/end mean null or a number
+        ${Do}
+          StrCpy $4 $3 1
+          ${If} $4 == '"'
+            ${Break}
+          ${EndIf}
+          ${If} $4 == ","
+          ${OrIf} $4 == "}"
+          ${OrIf} $4 == ""
+            StrCpy $3 ""
+            ${Break}
+          ${EndIf}
+          StrCpy $3 $3 "" 1
+        ${Loop}
+        ${If} $3 != ""
+          StrCpy $3 $3 "" 1
+          ${Do}
+            StrCpy $4 $3 1
+            ${If} $4 == '"'
+            ${OrIf} $4 == ""
+              ${Break}
+            ${EndIf}
+            StrCpy $PathVer "$PathVer$4"
+            StrCpy $3 $3 "" 1
+          ${Loop}
+        ${EndIf}
+      ${EndIf}
     ${EndIf}
-    StrCpy $PathVer "$PathVer$4"
-    StrCpy $3 $3 "" 1
-  ${Loop}
+  ${EndIf}
+  ${If} $PathVer == ""
+    ; pre-envelope fallback: `--version` prose, first digit onward
+    nsExec::ExecToStack '"$PathHit" --version'
+    Pop $0
+    Pop $1
+    ${If} $0 = 0
+      ${StrCase} $1 $1 "L"
+      ${StrLoc} $2 $1 "aisc" ">"
+      ${If} $2 != ""
+        IntOp $2 $2 + 4
+        StrCpy $3 $1 "" $2
+      ki5v_scan:
+        StrCpy $4 $3 1
+        ${If} $4 == ""
+          Goto ki5v_done
+        ${EndIf}
+        ${If} $4 == "0"
+        ${OrIf} $4 == "1"
+        ${OrIf} $4 == "2"
+        ${OrIf} $4 == "3"
+        ${OrIf} $4 == "4"
+        ${OrIf} $4 == "5"
+        ${OrIf} $4 == "6"
+        ${OrIf} $4 == "7"
+        ${OrIf} $4 == "8"
+        ${OrIf} $4 == "9"
+          Goto ki5v_digit
+        ${EndIf}
+        StrCpy $3 $3 "" 1
+        Goto ki5v_scan
+      ki5v_digit:
+        ${Do}
+          StrCpy $4 $3 1
+          ${If} $4 == " "
+          ${OrIf} $4 == "\r"
+          ${OrIf} $4 == "\n"
+          ${OrIf} $4 == ""
+            ${Break}
+          ${EndIf}
+          StrCpy $PathVer "$PathVer$4"
+          StrCpy $3 $3 "" 1
+        ${Loop}
+      ki5v_done:
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
   ${If} $PathVer == ""
     Return
   ${EndIf}
