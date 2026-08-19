@@ -232,6 +232,8 @@ export const enUS: Record<string, string> = {
   "ccswitch.fetchHint": "Fetch the available models from the provider API (on failure pick from the known list or type one)",
   "ccswitch.fetchFailed": "Fetch failed: {message}. Pick from the known list or type a model id.",
   "ccswitch.fetchUnavailable": "This provider does not support fetching the model list.",
+  "ccswitch.oneMLabel": "1M context",
+  "ccswitch.oneMHint": "Append/remove the [1m] suffix (official rule: MODEL/OPUS/SONNET only; HAIKU/SUBAGENT do not support it)",
   "ccswitch.rolesHint": "All five role slots are written explicitly on save (empty = the key is deleted and the provider's server-side alias fallback applies). The [1m] long-context suffix applies to MODEL/OPUS/SONNET only.",
   "ccswitch.noKeyConfirm": "{name} has no API key yet — it will not work after switching. Switch anyway? (You can add the key via Edit later)",
   "tabbar.menu.splitH": "Split left/right",

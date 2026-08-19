@@ -103,16 +103,32 @@ const editForm = reactive({ name: "", baseUrl: "", model: "", apiKey: "" });
  * unset — every save writes ALL FIVE explicitly (empty ⇒ null ⇒ the key is
  * deleted and the server-side alias fallback applies). */
 const ROLE_SLOTS = [
-  { key: "ANTHROPIC_MODEL", labelKey: "ccswitch.role.model", titleKey: "ccswitch.role.modelEnv" },
-  { key: "ANTHROPIC_DEFAULT_OPUS_MODEL", labelKey: "ccswitch.role.opus", titleKey: "ccswitch.role.opusEnv" },
-  { key: "ANTHROPIC_DEFAULT_SONNET_MODEL", labelKey: "ccswitch.role.sonnet", titleKey: "ccswitch.role.sonnetEnv" },
-  { key: "ANTHROPIC_DEFAULT_HAIKU_MODEL", labelKey: "ccswitch.role.haiku", titleKey: "ccswitch.role.haikuEnv" },
-  { key: "CLAUDE_CODE_SUBAGENT_MODEL", labelKey: "ccswitch.role.subagent", titleKey: "ccswitch.role.subagentEnv" },
+  { key: "ANTHROPIC_MODEL", labelKey: "ccswitch.role.model", titleKey: "ccswitch.role.modelEnv", oneM: true },
+  { key: "ANTHROPIC_DEFAULT_OPUS_MODEL", labelKey: "ccswitch.role.opus", titleKey: "ccswitch.role.opusEnv", oneM: true },
+  { key: "ANTHROPIC_DEFAULT_SONNET_MODEL", labelKey: "ccswitch.role.sonnet", titleKey: "ccswitch.role.sonnetEnv", oneM: true },
+  { key: "ANTHROPIC_DEFAULT_HAIKU_MODEL", labelKey: "ccswitch.role.haiku", titleKey: "ccswitch.role.haikuEnv", oneM: false },
+  { key: "CLAUDE_CODE_SUBAGENT_MODEL", labelKey: "ccswitch.role.subagent", titleKey: "ccswitch.role.subagentEnv", oneM: false },
 ] as const;
 const editRoles = reactive<Record<string, string>>({});
+const ONE_M_SUFFIX = "[1m]";
+
+/** The fixture rule: the 1M-context suffix is legal on MODEL/OPUS/SONNET
+ * only. The toggle appends/strips it on the slot's current value — the
+ * stored string is exactly what cc-switch's mapping keeps. */
+function hasOneM(key: string): boolean {
+  return editRoles[key]?.endsWith(ONE_M_SUFFIX) ?? false;
+}
+function toggleOneM(key: string): void {
+  const value = editRoles[key] ?? "";
+  editRoles[key] = hasOneM(key)
+    ? value.slice(0, -ONE_M_SUFFIX.length)
+    : (value ? value + ONE_M_SUFFIX : value);
+}
 
 /** The dropdown's option pool (three tiers): fetched remote models ∪ the
- * preset's known list ∪ the provider's current slot values. */
+ * preset's known list ∪ the provider's current slot values — with the [1m]
+ * variant offered for every id (the suffix is a plain string part, exactly
+ * like cc-switch's mapping stores it). */
 const modelOptions = computed<string[]>(() => {
   const p = providers.value.find((x) => x.id === editId.value);
   if (!p) return [];
@@ -121,7 +137,9 @@ const modelOptions = computed<string[]>(() => {
     ...(p.known_models ?? []),
     ...ROLE_SLOTS.map((s) => editRoles[s.key]).filter(Boolean),
   ];
-  return [...new Set(pool)];
+  const withVariants = pool.flatMap((m) =>
+    m.endsWith(ONE_M_SUFFIX) ? [m] : [m, m + ONE_M_SUFFIX]);
+  return [...new Set(withVariants)];
 });
 const fetchHint = computed<string | null>(() => {
   if (!editId.value) return null;
@@ -380,6 +398,15 @@ onBeforeUnmount(() => {
         <label v-for="slot in ROLE_SLOTS" :key="slot.key" class="field">
           <span :title="t(slot.titleKey)">{{ t(slot.labelKey) }}</span>
           <input v-model="editRoles[slot.key]" list="cc-model-options" spellcheck="false" />
+          <input
+            v-if="slot.oneM"
+            class="one-m"
+            type="checkbox"
+            :checked="hasOneM(slot.key)"
+            :title="t('ccswitch.oneMHint')"
+            :aria-label="t('ccswitch.oneMLabel')"
+            @change="toggleOneM(slot.key)"
+          />
         </label>
         <p v-if="fetchHint" class="hint warn">{{ t("ccswitch.fetchFailed", { message: fetchHint }) }}</p>
         <p class="hint">{{ t("ccswitch.rolesHint") }}</p>
@@ -464,6 +491,8 @@ button.danger { background: var(--error-bg); color: var(--error-fg); }
 .hint { font-size: var(--font-xs); color: var(--text-faint); margin: 0; }
 .hint.warn { color: var(--warn, #b80); }
 .form-actions { display: flex; gap: 8px; }
+/* [1m] toggle rides inline at the end of the three applicable slots. */
+.field input.one-m { width: auto; flex: 0 0 auto; margin-left: 0; }
 
 /* --- IDEA-5 (5d): the mapping section --- */
 .roles-head { display: flex; align-items: center; gap: 10px; margin-top: 4px; }

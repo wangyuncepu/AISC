@@ -232,6 +232,8 @@ export const zhCN = {
   "ccswitch.fetchHint": "从供应商 API 拉取可用模型（失败时可从已知清单选择或手动输入）",
   "ccswitch.fetchFailed": "拉取失败：{message}。可从已知清单选择或手动输入。",
   "ccswitch.fetchUnavailable": "该供应商暂不支持拉取模型列表。",
+  "ccswitch.oneMLabel": "1M 长上下文",
+  "ccswitch.oneMHint": "追加/移除 [1m] 后缀（官方规则：仅 MODEL/OPUS/SONNET 适用，HAIKU/SUBAGENT 不支持）",
   "ccswitch.rolesHint": "五个角色位保存时全部显式写入（留空＝删除该键，走供应商服务端别名兜底）。[1m] 长上下文后缀仅 MODEL/OPUS/SONNET 适用。",
   "ccswitch.noKeyConfirm": "{name} 尚未配置 API 密钥，切换后仍无法使用。仍要切换吗？（可稍后在编辑中填写）",
   "tabbar.menu.splitH": "左右分屏",

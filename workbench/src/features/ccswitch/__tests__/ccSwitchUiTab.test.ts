@@ -272,6 +272,16 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     };
     await setVal(slots[3]!, "deepseek-v4-flash[1m]");
     await setVal(slots[4]!, "");
+    // [1m] declaration (round 4): the three applicable slots carry a
+    // checkbox; MODEL is prefilled WITH [1m] → checked; toggling strips it.
+    const oneMBoxes = w.findAll("input.one-m");
+    expect(oneMBoxes.length).toBe(3); // MODEL/OPUS/SONNET only
+    expect((oneMBoxes[0]!.element as HTMLInputElement).checked).toBe(true);
+    expect((oneMBoxes[2]!.element as HTMLInputElement).checked).toBe(false);
+    await oneMBoxes[0]!.trigger("change"); // strip from MODEL
+    expect((slots[0]!.element as HTMLInputElement).value).toBe("deepseek-v4-pro");
+    await oneMBoxes[0]!.trigger("change"); // re-append
+    expect((slots[0]!.element as HTMLInputElement).value).toBe("deepseek-v4-pro[1m]");
     await w.find(".form-card .primary").trigger("click");
 
     await vi.waitFor(() => expect(ipc.ccSwitchEdit).toHaveBeenCalledTimes(1));
