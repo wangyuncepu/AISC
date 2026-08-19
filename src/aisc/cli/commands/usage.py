@@ -34,11 +34,16 @@ def print_usage_overview_text(data: Optional[Dict[str, Any]]) -> None:
         return
     sub = data.get("subscription") or {}
     if sub.get("configured"):
-        userinfo = sub.get("userinfo") or {}
-        total = userinfo.get("total")
-        used = userinfo.get("upload", 0) + userinfo.get("download", 0)
-        usage_bit = (f"{_fmt_tokens(used)} / {_fmt_tokens(total)} bytes"
-                     if total else f"{_fmt_tokens(used)} bytes (unlimited)")
+        userinfo = sub.get("userinfo")
+        if isinstance(userinfo, dict):
+            total = userinfo.get("total")
+            used = userinfo.get("upload", 0) + userinfo.get("download", 0)
+            usage_bit = (f"{_fmt_tokens(used)} / {_fmt_tokens(total)} bytes"
+                         if total else f"{_fmt_tokens(used)} bytes (unlimited)")
+        else:
+            # null userinfo = the source provided no usage header (manual
+            # content import, or a provider that omits subscription-userinfo)
+            usage_bit = "no usage info"
         print(f"Subscription: {sub.get('url_masked') or '(manually imported)'}"
               f"  [{sub.get('source')}]  {usage_bit}")
     else:
