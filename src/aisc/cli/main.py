@@ -404,6 +404,27 @@ def _build_parser() -> _AiscArgumentParser:
     uso.add_argument("--workspace", type=str, default=None,
                      help="Limit to one workspace path (default: all)")
 
+    # --- logs (lifecycle-logging: the shared JSONL timeline) ---
+    lgp = sub.add_parser(
+        "logs", help="Lifecycle event log (full-flow debugging timeline)",
+        allow_abbrev=False,
+    )
+    _add_global_args(lgp, is_subparser=True)
+    lgsub = lgp.add_subparsers(dest="logs_command", title="logs commands",
+                               parser_class=_AiscArgumentParser, required=True)
+    lgs = lgsub.add_parser(
+        "show", help="Show recent lifecycle events (secret-free by construction)",
+        allow_abbrev=False)
+    _add_global_args(lgs, is_subparser=True)
+    lgs.add_argument("--lines", type=int, default=200, metavar="N",
+                     help="Number of recent events (default: 200; current file only)")
+    lgs.add_argument("--source", choices=["app", "cli", "all"], default="all",
+                     help="Filter by writer (default: all)")
+    lgt = lgsub.add_parser(
+        "path", help="Print the log file path (for scripts and the Workbench)",
+        allow_abbrev=False)
+    _add_global_args(lgt, is_subparser=True)
+
     # --- ps ---
     psp = sub.add_parser("ps", help="List all registered containers", allow_abbrev=False)
     _add_global_args(psp, is_subparser=True)
@@ -641,7 +662,7 @@ def _detect_events(argv: List[str]) -> bool:
 def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "profile",
              "status", "stop", "restart", "shell", "switch", "provider",
-             "cc-switch", "network", "usage", "ps", "runtime", "session",
+             "cc-switch", "network", "usage", "logs", "ps", "runtime", "session",
              "artifact", "data-root"}
     for arg in argv:
         if arg in known:
@@ -1244,6 +1265,28 @@ def _cmd_usage(
     data = usage_cmd.cmd_usage_overview(args)
     if effective_format == "text":
         usage_cmd.print_usage_overview_text(data)
+    return data, 0, []
+
+
+def _cmd_logs(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc logs`` subcommands (lifecycle-logging P2)."""
+    from aisc.cli.commands import logs as logs_cmd
+
+    sub = getattr(args, "logs_command", None)
+    if sub == "show":
+        data = logs_cmd.cmd_logs_show(args)
+        is_show = True
+    elif sub == "path":
+        data = logs_cmd.cmd_logs_path(args)
+        is_show = False
+    else:
+        raise CliError(message="unknown logs subcommand",
+                       exit_code=2, error_code="AISC_ERR_USAGE")
+    if effective_format == "text":
+        logs_cmd.print_logs_text(data, is_show=is_show)
     return data, 0, []
 
 
@@ -1897,6 +1940,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_network(args, effective_format)
         elif args.command == "usage":
             data, exit_code, errors = _cmd_usage(args, effective_format)
+        elif args.command == "logs":
+            data, exit_code, errors = _cmd_logs(args, effective_format)
         elif args.command == "ps":
             data, exit_code, errors = _cmd_ps(args, effective_format)
         elif args.command == "runtime":
