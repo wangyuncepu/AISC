@@ -92,6 +92,14 @@ class LogsCommandTests(unittest.TestCase):
         args = parser.parse_args(["logs", "path"])
         self.assertEqual(args.logs_command, "path")
 
+    def test_source_ui_filter(self):
+        # P4.5 writes source:"ui" events — the filter must accept them
+        with patch.dict(os.environ, {"AISC_DATA_ROOT": str(self.root)}):
+            append_event("ui_action", source="ui", action="doctor_run",
+                         outcome="ok")
+            data = logs_cmd.cmd_logs_show(_args_show(source="ui"))
+        self.assertEqual([e["event"] for e in data["lines"]], ["ui_action"])
+
     def test_text_rendering(self):
         import io
         from contextlib import redirect_stdout

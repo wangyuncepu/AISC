@@ -418,7 +418,8 @@ def _build_parser() -> _AiscArgumentParser:
     _add_global_args(lgs, is_subparser=True)
     lgs.add_argument("--lines", type=int, default=200, metavar="N",
                      help="Number of recent events (default: 200; current file only)")
-    lgs.add_argument("--source", choices=["app", "cli", "all"], default="all",
+    lgs.add_argument("--source", choices=["app", "cli", "ui", "all"],
+                     default="all",
                      help="Filter by writer (default: all)")
     lgt = lgsub.add_parser(
         "path", help="Print the log file path (for scripts and the Workbench)",
