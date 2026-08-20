@@ -1,5 +1,15 @@
 # 待办与门禁
 
+## 全流程全生命周期日志（2026-08-20 用户提出；**已规划**，`lifecycle-logging/01-plan.md`）
+
+新接口 `aisc logs` + 诊断对话框/诊断包双入口。用户三决策：单一时间线单文件
+（`<数据根>/logs/aisc.log`，JSONL，轮转 2MB×3）；CLI+界面双入口同轮交付；
+诊断包带容器日志尾随（managed 容器 docker logs --tail 50）。核心机制：
+Rust 每次调用生成 run_id 经 env `AISC_RUN_ID` 注入 CLI → envelope 复用 +
+双端日志行同值 → 一条 id 串全链。红线：字段允许清单制（stdin/URL/key/PTY/
+工作区绝对路径永不入日志）。阶段 P1 数据面（双端 appender+轮转+关联链）→
+P2 aisc logs 命令 → P3 界面入口+诊断包 → P4 容器尾随 → P5 收口。
+
 ## 挂账① 指纹源自动下载（Rust reqwest）——✅ 已落地（2026-08-19，分支 `rust-subscription-download`）
 
 - **交付**：`workbench/src-tauri/src/subscription.rs`——Rust 下载器（reqwest+
