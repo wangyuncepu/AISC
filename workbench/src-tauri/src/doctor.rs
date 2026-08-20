@@ -325,6 +325,56 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn diagnostic_bundle_serializes_every_section_key() {
+        // The export manifest promises all sections; a renamed/dropped field
+        // would silently shrink the bundle (手测 6: user reported
+        // recentOperations missing — pin the exact camelCase keys here).
+        let bundle = DiagnosticBundle {
+            generated_at_ms: 0,
+            app_version: "t".into(),
+            platform: "t".into(),
+            settings: serde_json::Value::Null,
+            env_readiness: crate::env::EnvReadiness {
+                cli: "unknown".into(),
+                docker: "unknown".into(),
+                engine: "unknown".into(),
+                webview2: "unknown".into(),
+                docker_desktop_path: String::new(),
+                cli_path: String::new(),
+                engine_detail: String::new(),
+            },
+            doctor: None,
+            recent_operations: vec![crate::trace::OpTrace {
+                operation_id: "op-1".into(),
+                source: "cli".into(),
+                phase: "version".into(),
+                duration_ms: 1,
+                outcome: "ok".into(),
+                error_code: None,
+                retryable: true,
+                action: None,
+                detail: None,
+            }],
+            recent_log_lines: vec![serde_json::json!({"event": "app_start"})],
+            container_logs: vec![ContainerLogTail {
+                name: "c".into(),
+                id: "i".into(),
+                status: "Up".into(),
+                tail: "line".into(),
+            }],
+            data_root: serde_json::Value::Null,
+            path: None,
+        };
+        let v = serde_json::to_value(&bundle).expect("serialize");
+        for key in ["generatedAtMs", "appVersion", "platform", "settings",
+                    "envReadiness", "doctor", "recentOperations",
+                    "recentLogLines", "containerLogs", "dataRoot"] {
+            assert!(v.get(key).is_some(), "missing bundle key: {key}");
+        }
+        assert_eq!(v["recentOperations"][0]["operationId"], "op-1");
+    }
+
+    #[test]
     fn parse_managed_ps_splits_tab_format() {
         let out = "aisc-wb-111\tabc123\tUp 2 hours\nbadline\naisc-wb-222\tdef456\tExited (0) 1s ago\textra";
         let rows = parse_managed_ps(out);

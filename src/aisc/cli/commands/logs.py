@@ -76,8 +76,9 @@ def print_logs_text(data: Dict[str, Any], is_show: bool) -> None:
         extras = []
         if rec.get("run_id"):
             extras.append(f"run={str(rec['run_id'])[:13]}")
-        for key in ("command", "phase", "container", "outcome", "exit_code",
-                    "duration_ms", "error_code", "state", "detail"):
+        for key in ("action", "command", "phase", "container", "outcome",
+                    "exit_code", "duration_ms", "error_code", "state",
+                    "detail"):
             if key in rec and rec[key] is not None:
                 extras.append(f"{key}={rec[key]}")
         suffix = " ".join(extras)

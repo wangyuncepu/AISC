@@ -69,8 +69,8 @@ const copied = ref(false);
 function logLine(e: LogEvent): string {
   const extras: string[] = [];
   if (e.run_id) extras.push(`run=${String(e.run_id).slice(0, 13)}`);
-  for (const key of ["command", "phase", "container", "outcome", "exit_code",
-    "duration_ms", "error_code", "state", "detail"] as const) {
+  for (const key of ["action", "command", "phase", "container", "outcome",
+    "exit_code", "duration_ms", "error_code", "state", "detail"] as const) {
     const v = e[key];
     if (v !== undefined && v !== null) extras.push(`${key}=${String(v)}`);
   }
