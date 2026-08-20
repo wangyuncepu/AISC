@@ -48,6 +48,7 @@ function makeTab(agent: LaunchAgent, state: TabSessionState, id: string): Tab {
 }
 
 vi.mock("../../../lib/ipc", () => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   closeSession: vi.fn().mockResolvedValue({ reason: "user_close", exitCode: null }),
   getProviderStatus: vi.fn().mockResolvedValue({}),
   loadHistory: vi.fn().mockResolvedValue({ schema_version: 1, revision: 0, workspaces: [] }),

@@ -7,6 +7,7 @@ import { useNetworkStore } from "../network";
 import { envReadiness } from "../../lib/ipc";
 
 vi.mock("../../lib/ipc", () => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   envReadiness: vi.fn(),
 }));
 

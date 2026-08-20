@@ -13,6 +13,7 @@ import type { DoctorReport } from "../../../types";
 import DoctorDialog from "../DoctorDialog.vue";
 
 const mockIpc = vi.hoisted(() => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   runDoctor: vi.fn(),
   opTraces: vi.fn(),
   logsTail: vi.fn(),

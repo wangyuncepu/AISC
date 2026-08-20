@@ -12,6 +12,7 @@ import type { SubscriptionStatus, UsageOverview } from "../../../types";
 import NetworkUsageTab from "../NetworkUsageTab.vue";
 
 const mockIpc = vi.hoisted(() => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   networkSubscriptionShow: vi.fn(),
   networkSubscriptionImport: vi.fn(),
   networkSubscriptionImportFile: vi.fn(),

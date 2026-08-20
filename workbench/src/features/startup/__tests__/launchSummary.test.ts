@@ -17,6 +17,7 @@ import LaunchSummary from "../LaunchSummary.vue";
 import type { PreflightReport, RecommendedAction } from "../../../types";
 
 vi.mock("../../../lib/ipc", () => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   buildImage: vi.fn(),
   negotiateCapabilities: vi.fn(),
 }));

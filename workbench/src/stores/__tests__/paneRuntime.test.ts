@@ -20,6 +20,7 @@ import { findLeaf, leafCount, leafDepth, listLeaves, singleLeaf, splitLeaf } fro
 const channels: Array<{ onmessage?: (ev: unknown) => void }> = [];
 
 const mockIpc = vi.hoisted(() => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   getProviderStatus: vi.fn().mockResolvedValue({}),
   closeSession: vi.fn().mockResolvedValue({ reason: "user_close", exitCode: null }),
   loadHistory: vi.fn().mockResolvedValue({ schema_version: 2, revision: 0, workspaces: [] }),

@@ -8,6 +8,7 @@ import { useEnvironmentStore } from "../environment";
 import { envPollEngine, envReadiness, startDocker } from "../../lib/ipc";
 
 vi.mock("../../lib/ipc", () => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   envReadiness: vi.fn(),
   envPollEngine: vi.fn(),
   startDocker: vi.fn(),

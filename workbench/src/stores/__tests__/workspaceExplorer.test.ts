@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
 vi.mock("../../lib/ipc", () => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   workspaceList: vi.fn(async (_ws: string, dir: string) => ({
     schema_version: 1,
     nodes:

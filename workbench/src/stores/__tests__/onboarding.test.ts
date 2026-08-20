@@ -7,6 +7,7 @@ import { useOnboardingStore } from "../onboarding";
 import { onboardingLoad, onboardingUpdate } from "../../lib/ipc";
 
 vi.mock("../../lib/ipc", () => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   onboardingLoad: vi.fn(),
   onboardingUpdate: vi.fn(),
 }));

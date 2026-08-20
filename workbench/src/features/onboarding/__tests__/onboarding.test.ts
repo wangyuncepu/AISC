@@ -16,6 +16,7 @@ import { useRuntimeStore } from "../../../stores/runtime";
 import OnboardingWizard from "../OnboardingWizard.vue";
 
 vi.mock("../../../lib/ipc", () => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   onboardingLoad: vi.fn(),
   onboardingUpdate: vi.fn(),
   envReadiness: vi.fn(),

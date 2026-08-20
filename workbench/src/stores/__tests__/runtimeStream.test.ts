@@ -26,6 +26,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("../../lib/ipc", () => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   openSession: vi.fn().mockResolvedValue({}),
   ackSessionExit: vi.fn().mockResolvedValue(null),
   closeSession: vi.fn().mockResolvedValue({ reason: "user_close", exitCode: null }),

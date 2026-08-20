@@ -10,6 +10,7 @@ import { useRuntimeStore } from "../runtime";
 import type { PreflightReport } from "../../types";
 
 const mockIpc = vi.hoisted(() => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   startDocker: vi.fn(),
   runtimePreflight: vi.fn(),
   listRuntimes: vi.fn().mockResolvedValue({ runtimes: [] }),

@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
   writeText: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../../../lib/ipc", () => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   workspaceList: vi.fn(async (_ws: string, dir: string) => ({
     schema_version: 1,
     nodes:
