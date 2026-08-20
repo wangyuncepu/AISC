@@ -311,6 +311,24 @@ def _check_image(image: str, executor: Any) -> Optional[str]:
         return RuntimeErrorCode.DOCKER_UNAVAILABLE
 
 
+def _resolve_image_id(image: str, executor: Any) -> Optional[str]:
+    """Content-addressed image ID (``docker image inspect .Id``) for the
+    image-sync conflict check (容器随镜像同步更新, KI-4 挂账).
+
+    Returns None whenever the ID cannot be observed — a transient probe
+    failure must never block reuse (unknown ≠ changed). Legacy registry
+    records without an ``image_id`` are likewise treated as unknown.
+    """
+    try:
+        result = executor.inspect_image(image)
+        from aisc.domain.models import ImageInspectStatus
+        if result.status != ImageInspectStatus.EXISTS:
+            return None
+        return (getattr(result, "image_id", "") or "").strip() or None
+    except Exception:
+        return None
+
+
 def _query_docker_labels(
     runtime_id: str,
     executor: Any,
@@ -408,6 +426,12 @@ def _check_runtime_conflict(
         proxy_config_sha256=_proxy_config_sha256(network, proxy_config),
     )
 
+    # 容器随镜像同步更新 (KI-4 挂账): the current image's content-addressed
+    # ID, compared against the one recorded at create time inside the reuse
+    # branch below. None (probe failure) disables the comparison — reuse is
+    # never blocked on a transient Docker hiccup.
+    current_image_id = _resolve_image_id(image, executor)
+
     # Query Docker for containers with matching runtime-id label
     docker_containers = _query_docker_labels(runtime_id, executor)
     registry_names = set(registry_containers.keys())
@@ -466,6 +490,24 @@ def _check_runtime_conflict(
                     "runtime_id": meta_runtime_id,
                     "container_name": container_name,
                     "reason": "Registered runtime container no longer exists (stale record)"
+                })
+                continue
+            # 容器随镜像同步更新: the fingerprint matches, but a rebuilt
+            # image under the same tag would keep this container running
+            # stale layers forever. A recorded image_id that differs from
+            # the current one means the image changed — surface a conflict
+            # so the existing recreate guidance takes over. Legacy records
+            # without an image_id stay reusable (unknown ≠ changed) and are
+            # healed by the next successful start.
+            meta_image_id = str(meta.get("image_id") or "").strip()
+            if meta_image_id and current_image_id and meta_image_id != current_image_id:
+                conflicts.append({
+                    "runtime_id": meta_runtime_id,
+                    "container_name": container_name,
+                    "reason": (
+                        "Runtime image updated (image ID changed) — "
+                        "remove and start again to recreate on the new image"
+                    ),
                 })
                 continue
             matching_runtime_id = meta_runtime_id
@@ -944,6 +986,11 @@ def start_runtime(
     _require_docker(executor)
     _require_image(image, executor)
 
+    # 容器随镜像同步更新 (KI-4 挂账): the image ID recorded at create time;
+    # "" when unobservable (transient probe failure) — the conflict check
+    # then simply skips the comparison for this start.
+    image_id_at_start = _resolve_image_id(image, executor) or ""
+
     # --- workspace lock covers conflict check -> create -> ready -> commit ---
     # Timeout must exceed ready_timeout so a concurrent project start on the same
     # workspace waits for the winner (then sees its registry entry -> conflict)
@@ -977,6 +1024,15 @@ def start_runtime(
                     reuse_name = nm
                     reuse_meta = meta
                     break
+            # 挂账 heal: legacy records carry no image_id — record the
+            # current image's ID in place so future rebuilds under the same
+            # tag are detected. set_default=False: a metadata fix must not
+            # steal the registry default from another container.
+            if reuse_name and not str(reuse_meta.get("image_id") or "").strip() \
+                    and image_id_at_start:
+                register(reg_root, reuse_name,
+                         {**reuse_meta, "image_id": image_id_at_start},
+                         set_default=False)
             state = matching_state or "unknown"
             ready = state == "running"
             # A stopped matching runtime cannot satisfy `start`'s running
@@ -1099,6 +1155,7 @@ def start_runtime(
                 "config_fingerprint": fingerprint,
                 "container_id": container_id,
                 "workspace_key": ws_key,
+                "image_id": image_id_at_start,
             })
         except CliError:
             # register raises CliError(STATE_LOCK_TIMEOUT) if the registry lock

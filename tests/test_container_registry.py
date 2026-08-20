@@ -98,5 +98,30 @@ class ContainerRegistryConcurrencyTests(unittest.TestCase):
                 os.close(holder_fd)
 
 
+class RegisterDefaultAndImageIdTests(unittest.TestCase):
+    """容器随镜像同步更新 (KI-4 挂账): the image_id whitelist key and the
+    set_default=False heal mode (a metadata back-fill must not steal the
+    registry's default target)."""
+
+    def test_register_persists_image_id_and_set_default_false_keeps_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            register(root, "aisc-a", {
+                "image": "super-claude:latest", "workspace": "/w", "network": "direct",
+                "image_id": "sha256:v1",
+            })
+            register(root, "aisc-b", {
+                "image": "super-claude:latest", "workspace": "/w", "network": "direct",
+                "image_id": "sha256:v1",
+            }, set_default=False)
+
+            entries = list_containers(root)
+            self.assertEqual(entries["aisc-a"]["image_id"], "sha256:v1")
+            self.assertEqual(entries["aisc-b"]["image_id"], "sha256:v1")
+
+            from aisc.adapters.container_registry import get_default
+            self.assertEqual(get_default(root), "aisc-a")
+
+
 if __name__ == "__main__":
     unittest.main()

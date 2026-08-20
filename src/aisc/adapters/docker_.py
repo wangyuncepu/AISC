@@ -302,9 +302,22 @@ class RealDockerExecutor:
             )
 
         if proc.returncode == 0:
+            # 容器随镜像同步更新 (KI-4 挂账): harvest the content-addressed
+            # .Id for the image-sync conflict check. Existence stays the
+            # primary answer — an unparseable body degrades to "" (unknown),
+            # never to a failure.
+            image_id = ""
+            try:
+                import json as _json
+                docs = _json.loads(proc.stdout or "[]")
+                if isinstance(docs, list) and docs and isinstance(docs[0], dict):
+                    image_id = str(docs[0].get("Id") or "")
+            except (ValueError, TypeError, IndexError):
+                image_id = ""
             return ImageInspectResult(
                 status=ImageInspectStatus.EXISTS,
                 image=image_name, message="",
+                image_id=image_id,
             )
 
         stderr_text = proc.stderr or ""

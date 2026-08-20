@@ -100,12 +100,14 @@
   （受保护区改纯原生 StrCmp/IntCmp/相对跳转）；③**json.dumps 分隔符是
   `": "` 不是 `":"`**——硬编码偏移读出单个空格静默降级（改为跳到值的开引
   号，实测 v2.1.4 信封输出校验）。
-- **挂账：容器随镜像同步更新**（KI-4 衍生，用户 2026-08-18 拍板本轮
-  不动）：`config_fingerprint` 只含镜像名（`super-claude:latest`），同
-  tag 重建镜像后旧容器照旧复用、继续跑旧镜像层。方向：fingerprint 纳入
-  image ID（`docker image inspect .Id`）→ 升级后下次 start 判为冲突 →
-  引导重建容器。触碰运行时身份/复用/冲突机制 + Python 全套测试，需独立
-  规划。
+- **挂账：容器随镜像同步更新——✅ 已落地（2026-08-20，分支 `container-image-sync`，用户手测 1-4 全 PASS）**：
+  additive `image_id` meta 字段（非 literal 改指纹公式——公式一变存量容器
+  全员假冲突）。registry meta 落 `docker image inspect .Id`；复用分支（指纹
+  匹配后）三态比较：存量无 id 放行 / 异值冲突（reason 精确标 image updated，
+  走既有重建引导，UI/Rust 零改动）/ 探测失败放行；`start_runtime` 复用分支
+  顺手 heal 补写（照 KI-3 stale-pin 哲学）。**手测实证**：存量工作区首次复
+  用即 heal（7c4762f5）；`docker commit` 同 tag 换 ID 后启动弹冲突 → 移除重
+  建落新档（dc9bcbc1），新容器实挂新镜像。python 全测 732 passed。
 
 ## 想法 / Ideas
 
