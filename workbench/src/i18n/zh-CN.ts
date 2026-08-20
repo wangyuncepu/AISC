@@ -294,7 +294,7 @@ export const zhCN = {
   "doctor.copyLogs": "复制日志",
   "doctor.logsCopied": "已复制",
   "doctor.export": "导出诊断包",
-  "doctor.exportConfirm": "诊断包仅包含以下内容：应用版本、平台、脱敏后的设置、环境就绪信息、诊断报告、最近操作耗时、最近日志。不含密钥、提示词或终端内容。确认导出？",
+  "doctor.exportConfirm": "诊断包仅包含以下内容：应用版本、平台、脱敏后的设置、环境就绪信息、诊断报告、最近操作耗时、最近日志、容器日志尾随。不含密钥、提示词或终端内容。确认导出？",
   "doctor.exported": "已导出：{path}",
   "doctor.exportFailed": "导出失败。",
   // --- 构建完成通知 (G-14, Step 13) ---

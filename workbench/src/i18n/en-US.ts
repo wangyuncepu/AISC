@@ -294,7 +294,7 @@ export const enUS: Record<string, string> = {
   "doctor.copyLogs": "Copy log",
   "doctor.logsCopied": "Copied",
   "doctor.export": "Export diagnostic bundle",
-  "doctor.exportConfirm": "The bundle contains only: app version, platform, redacted settings, environment readiness, doctor report, recent operation timings, recent log lines. No secrets, prompts, or terminal content. Export?",
+  "doctor.exportConfirm": "The bundle contains only: app version, platform, redacted settings, environment readiness, doctor report, recent operation timings, recent log lines, container log tails. No secrets, prompts, or terminal content. Export?",
   "doctor.exported": "Exported to {path}",
   "doctor.exportFailed": "Export failed.",
   // --- build completion notification (G-14, Step 13) ---

@@ -101,7 +101,9 @@ fn docker_cli_candidates() -> Vec<PathBuf> {
 /// paths (authoritative for the Desktop engine, and independent of the GUI's
 /// launch-time PATH), then fall back to the bare name resolved via PATH.
 /// Returns "" only when neither a candidate file nor a PATH fallback exists.
-fn resolve_docker_cli() -> PathBuf {
+/// (lifecycle-logging P4: the diagnostic bundle's container-log tail also
+/// spawns docker through this resolver.)
+pub(crate) fn resolve_docker_cli() -> PathBuf {
     for p in docker_cli_candidates() {
         if p.is_file() {
             return p;

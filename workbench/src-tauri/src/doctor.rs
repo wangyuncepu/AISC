@@ -140,6 +140,10 @@ pub struct DiagnosticBundle {
     /// lifecycle-logging (P3): the recent tail of the shared JSONL
     /// timeline — secret-free by construction (P1's allowlisted schema).
     pub recent_log_lines: Vec<serde_json::Value>,
+    /// lifecycle-logging (P4): `docker logs --tail 50` per managed
+    /// container — entrypoint/mihomo errors live here. Empty when docker
+    /// is unavailable (the bundle never fails on it).
+    pub container_logs: Vec<ContainerLogTail>,
     /// Stage 7 (DATA-04): the canonical data root facts (root path,
     /// origin, writability) so diagnostics and the CLI doctor agree.
     pub data_root: serde_json::Value,
@@ -180,6 +184,96 @@ pub struct LogsTail {
     pub lines: Vec<serde_json::Value>,
 }
 
+/// lifecycle-logging (P4): one managed container's `docker logs` tail.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerLogTail {
+    pub name: String,
+    pub id: String,
+    pub status: String,
+    /// Last lines, `--timestamps` so stdout/stderr keep one order.
+    pub tail: String,
+}
+
+const CONTAINER_LOG_TAIL_LINES: usize = 50;
+const CONTAINER_LOG_MAX_CONTAINERS: usize = 5;
+const DOCKER_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Parse `docker ps --format '{{.Names}}\t{{.ID}}\t{{.Status}}'` output.
+fn parse_managed_ps(stdout: &str) -> Vec<(String, String, String)> {
+    stdout
+        .lines()
+        .filter_map(|l| {
+            let parts: Vec<&str> = l.trim().split('\t').collect();
+            if parts.len() >= 3 && !parts[0].is_empty() {
+                Some((
+                    parts[0].to_string(),
+                    parts[1].to_string(),
+                    parts[2..].join("\t"),
+                ))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Run one docker command; None on any failure/timeout (the bundle's
+/// container section degrades to empty, never errors).
+async fn run_docker(args: &[&str]) -> Option<std::process::Output> {
+    let docker = crate::env::resolve_docker_cli();
+    let mut cmd = tokio::process::Command::new(&docker);
+    cmd.args(args);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW (cli.rs pattern)
+    let out = tokio::time::timeout(DOCKER_PROBE_TIMEOUT, cmd.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(out)
+}
+
+/// lifecycle-logging (P4): `docker logs --tail 50` for every managed
+/// container (cap 5). Docker unavailable → empty vec.
+async fn collect_container_logs() -> Vec<ContainerLogTail> {
+    let Some(ps) = run_docker(&[
+        "ps", "-a",
+        "--filter", "label=io.aisc.managed=true",
+        "--format", "{{.Names}}\\t{{.ID}}\\t{{.Status}}",
+    ])
+    .await
+    else {
+        return Vec::new();
+    };
+    let mut tails = Vec::new();
+    for (name, id, status) in parse_managed_ps(&String::from_utf8_lossy(&ps.stdout))
+        .into_iter()
+        .take(CONTAINER_LOG_MAX_CONTAINERS)
+    {
+        let Some(out) = run_docker(&[
+            "logs", "--timestamps", "--tail",
+            &CONTAINER_LOG_TAIL_LINES.to_string(), &name,
+        ])
+        .await
+        else {
+            continue;
+        };
+        let mut tail = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if !stderr.is_empty() {
+            if !tail.is_empty() && !tail.ends_with('\n') {
+                tail.push('\n');
+            }
+            tail.push_str(&stderr);
+        }
+        tails.push(ContainerLogTail { name, id, status, tail });
+    }
+    tails
+}
+
 #[tauri::command]
 pub async fn logs_tail(lines: Option<usize>) -> Result<LogsTail, WorkbenchError> {
     let n = lines.unwrap_or(100).clamp(1, 1000);
@@ -211,6 +305,7 @@ pub async fn diagnostic_bundle(
         doctor,
         recent_operations: crate::trace::snapshot(),
         recent_log_lines: crate::logging::recent_log_events(100),
+        container_logs: collect_container_logs().await,
         data_root: data_root_section(),
         path: None,
     };
@@ -228,6 +323,17 @@ pub async fn diagnostic_bundle(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn parse_managed_ps_splits_tab_format() {
+        let out = "aisc-wb-111\tabc123\tUp 2 hours\nbadline\naisc-wb-222\tdef456\tExited (0) 1s ago\textra";
+        let rows = parse_managed_ps(out);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], ("aisc-wb-111".into(), "abc123".into(), "Up 2 hours".into()));
+        // status keeps later tabs joined (defensive)
+        assert!(rows[1].2.starts_with("Exited (0) 1s ago"));
+        assert!(parse_managed_ps("").is_empty());
+    }
 
     fn host(checks: Value, summary: Value) -> Value {
         json!({ "meta": {"protocol": "aisc.cli/v1", "command": "doctor", "exit_code": 0},
