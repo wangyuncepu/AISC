@@ -22,13 +22,14 @@ pub const DATA_ROOT_SCHEMA_VERSION: u32 = 1;
 /// fields; directory names swap the colon for a dash (illegal on Windows).
 pub const WORKSPACE_HASH_ALGO: &str = "sha256-v1";
 
-pub const SHARED_SUBDIRS: [&str; 7] = [
+pub const SHARED_SUBDIRS: [&str; 8] = [
     "config",
     "state",
     "workspaces",
     "artifacts",
     "cache",
     "diagnostics",
+    "logs",
     "migrations",
 ];
 

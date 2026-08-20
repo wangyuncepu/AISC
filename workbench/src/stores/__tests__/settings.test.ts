@@ -10,6 +10,7 @@ import type { SettingsDocument } from "../../types";
 import { useSettingsStore } from "../settings";
 
 const mockIpc = vi.hoisted(() => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   loadSettings: vi.fn(),
   saveSettings: vi.fn(),
   resetGuiSettings: vi.fn(),

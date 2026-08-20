@@ -7,6 +7,7 @@
  */
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
+import * as ipc from "../lib/ipc";
 import {
   networkSubscriptionClear,
   networkSubscriptionImport,
@@ -65,9 +66,12 @@ export const useUsageStore = defineStore("usage", () => {
     try {
       subscription.value = await op();
       refreshedNote.value = true;
+      void ipc.logUiEvent?.("subscription_update", "ok");
       return true;
     } catch (e) {
       subError.value = e as WorkbenchError;
+      void ipc.logUiEvent?.("subscription_update", "error",
+        (e as WorkbenchError)?.code ?? undefined);
       return false;
     } finally {
       subBusy.value = false;

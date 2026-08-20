@@ -404,6 +404,28 @@ def _build_parser() -> _AiscArgumentParser:
     uso.add_argument("--workspace", type=str, default=None,
                      help="Limit to one workspace path (default: all)")
 
+    # --- logs (lifecycle-logging: the shared JSONL timeline) ---
+    lgp = sub.add_parser(
+        "logs", help="Lifecycle event log (full-flow debugging timeline)",
+        allow_abbrev=False,
+    )
+    _add_global_args(lgp, is_subparser=True)
+    lgsub = lgp.add_subparsers(dest="logs_command", title="logs commands",
+                               parser_class=_AiscArgumentParser, required=True)
+    lgs = lgsub.add_parser(
+        "show", help="Show recent lifecycle events (secret-free by construction)",
+        allow_abbrev=False)
+    _add_global_args(lgs, is_subparser=True)
+    lgs.add_argument("--lines", type=int, default=200, metavar="N",
+                     help="Number of recent events (default: 200; current file only)")
+    lgs.add_argument("--source", choices=["app", "cli", "ui", "all"],
+                     default="all",
+                     help="Filter by writer (default: all)")
+    lgt = lgsub.add_parser(
+        "path", help="Print the log file path (for scripts and the Workbench)",
+        allow_abbrev=False)
+    _add_global_args(lgt, is_subparser=True)
+
     # --- ps ---
     psp = sub.add_parser("ps", help="List all registered containers", allow_abbrev=False)
     _add_global_args(psp, is_subparser=True)
@@ -641,7 +663,7 @@ def _detect_events(argv: List[str]) -> bool:
 def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "profile",
              "status", "stop", "restart", "shell", "switch", "provider",
-             "cc-switch", "network", "usage", "ps", "runtime", "session",
+             "cc-switch", "network", "usage", "logs", "ps", "runtime", "session",
              "artifact", "data-root"}
     for arg in argv:
         if arg in known:
@@ -1247,6 +1269,28 @@ def _cmd_usage(
     return data, 0, []
 
 
+def _cmd_logs(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
+    """Execute ``aisc logs`` subcommands (lifecycle-logging P2)."""
+    from aisc.cli.commands import logs as logs_cmd
+
+    sub = getattr(args, "logs_command", None)
+    if sub == "show":
+        data = logs_cmd.cmd_logs_show(args)
+        is_show = True
+    elif sub == "path":
+        data = logs_cmd.cmd_logs_path(args)
+        is_show = False
+    else:
+        raise CliError(message="unknown logs subcommand",
+                       exit_code=2, error_code="AISC_ERR_USAGE")
+    if effective_format == "text":
+        logs_cmd.print_logs_text(data, is_show=is_show)
+    return data, 0, []
+
+
 def _cmd_provider(
     args: argparse.Namespace,
     effective_format: str,
@@ -1580,8 +1624,43 @@ def _cmd_data_root(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _log_cli_exit(
+    command: str,
+    exit_code: int,
+    started: float,
+    run_id: Optional[str],
+    *,
+    error_code: Optional[str] = None,
+) -> None:
+    """Lifecycle log line for a CLI invocation (lifecycle-logging P1).
+
+    One line per process exit at the three main() terminals — the same
+    ``run_id`` the envelope carries (env-injected by the Workbench), so
+    app-side op events and cli exits align on one timeline. Best-effort:
+    applog never raises.
+    """
+    import time as _time
+
+    from aisc.applog import append_event
+
+    level = "info" if exit_code == 0 else ("warn" if exit_code == 130 else "error")
+    append_event(
+        "cli_exit", level=level, source="cli", run_id=run_id,
+        command=command or "aisc", exit_code=exit_code,
+        duration_ms=int((_time.monotonic() - started) * 1000),
+        error_code=error_code,
+    )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     """Main CLI entry point."""
+    import time as _time
+
+    started = _time.monotonic()
+    # Same id the envelope will carry (env-injected by the Workbench;
+    # self-generated for standalone CLI use) — keeps the log timeline and
+    # envelope.meta.run_id identical.
+    _run_id = os.environ.get("AISC_RUN_ID") or str(__import__("uuid").uuid4())
     # Never let stdout's locale encoding (GBK on zh-CN Windows, cp1252 on
     # en-US) crash the CLI with UnicodeEncodeError. Protocol JSON is pure
     # ASCII by construction (ensure_ascii=True in emit_json/JsonlEmitter);
@@ -1862,6 +1941,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_network(args, effective_format)
         elif args.command == "usage":
             data, exit_code, errors = _cmd_usage(args, effective_format)
+        elif args.command == "logs":
+            data, exit_code, errors = _cmd_logs(args, effective_format)
         elif args.command == "ps":
             data, exit_code, errors = _cmd_ps(args, effective_format)
         elif args.command == "runtime":
@@ -1884,6 +1965,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             return
 
     except CliError as exc:
+        _log_cli_exit(args.command, exc.exit_code, started, _run_id,
+                      error_code=exc.error_code)
         # --- unified terminal: main owns the single terminal event ---
         if emitter is not None and not emitter.terminated:
             cmd = args.command or "aisc"
@@ -1903,6 +1986,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 version=__version__,
                 data=exc.data,  # structured outcome, not null
                 errors=[build_error(exc.error_code, exc.message, exc.hint)],
+                run_id=_run_id,
             )
             emit_json(envelope)
         else:
@@ -1911,6 +1995,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         return
 
     except KeyboardInterrupt:
+        _log_cli_exit(args.command, 130, started, _run_id)
         if emitter is not None and not emitter.terminated:
             cmd = args.command or "aisc"
             emitter.emit(f"{cmd}.cancelled", {"exit_code": 130}, terminal=True)
@@ -1919,6 +2004,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         sys.exit(130)
 
     # --- success: terminal event if events mode ---
+    _log_cli_exit(args.command, exit_code, started, _run_id)
     if emitter is not None and not emitter.terminated:
         cmd = args.command or "aisc"
         term_data = dict(data or {})
@@ -1931,6 +2017,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         envelope = build_envelope(
             command=args.command, exit_code=exit_code,
             version=__version__, data=data, errors=errors,
+            run_id=_run_id,
         )
         emit_json(envelope)
     else:

@@ -10,7 +10,11 @@ import type { DoctorReport, WorkbenchError } from "../../types";
 import { useDoctorStore } from "../doctor";
 
 const mockIpc = vi.hoisted(() => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   runDoctor: vi.fn(),
+  opTraces: vi.fn(),
+  logsTail: vi.fn(),
+  diagnosticBundle: vi.fn(),
 }));
 
 vi.mock("../../lib/ipc", () => mockIpc);
@@ -45,6 +49,8 @@ describe("run", () => {
     expect(s.report).toEqual(report);
     expect(s.error).toBeNull();
     expect(s.hasFailures).toBe(true);
+    // lifecycle-logging (P4.5): the UI action lands on the shared timeline
+    expect(mockIpc.logUiEvent).toHaveBeenCalledWith("doctor_run", "ok");
   });
 
   it("surfaces a structured error on failure", async () => {
@@ -55,6 +61,8 @@ describe("run", () => {
     expect(s.error?.code).toBe("WB_ERR_CLI_TIMEOUT");
     expect(s.error?.message).toBe("AISC CLI 响应超时");
     expect(s.report).toBeNull();
+    expect(mockIpc.logUiEvent).toHaveBeenCalledWith(
+      "doctor_run", "error", "WB_ERR_CLI_TIMEOUT");
   });
 
   it("never starts a second doctor while in flight (A-G13-3)", async () => {
@@ -95,5 +103,29 @@ describe("openDialog / closeDialog", () => {
     expect(s.open).toBe(false);
     // Status keeps the last result; nothing else in the app was touched.
     expect(s.status).toBe("done");
+  });
+});
+
+describe("loadLogs (lifecycle-logging P3)", () => {
+  it("fills the log tail from logs_tail(100)", async () => {
+    mockIpc.logsTail.mockResolvedValue({
+      path: "C:\\data\\logs\\aisc.log",
+      lines: [
+        { ts: "2026-08-20T05:00:00Z", level: "info", source: "app", event: "op" },
+        { ts: "2026-08-20T05:00:01Z", level: "info", source: "cli", event: "cli_exit" },
+      ],
+    });
+    const s = useDoctorStore();
+    await s.loadLogs();
+    expect(mockIpc.logsTail).toHaveBeenCalledWith(100);
+    expect(s.logs).toHaveLength(2);
+    expect(s.logs[1]?.event).toBe("cli_exit");
+  });
+
+  it("degrades to empty on IPC failure (log view never blocks the dialog)", async () => {
+    mockIpc.logsTail.mockRejectedValue(new Error("boom"));
+    const s = useDoctorStore();
+    await s.loadLogs();
+    expect(s.logs).toEqual([]);
   });
 });

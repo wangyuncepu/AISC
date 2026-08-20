@@ -1033,6 +1033,11 @@ def start_runtime(
                 register(reg_root, reuse_name,
                          {**reuse_meta, "image_id": image_id_at_start},
                          set_default=False)
+            from aisc.applog import append_event
+
+            append_event("container_reused", source="cli",
+                         container=reuse_name, runtime_id=runtime_id,
+                         state=matching_state or "unknown")
             state = matching_state or "unknown"
             ready = state == "running"
             # A stopped matching runtime cannot satisfy `start`'s running
@@ -1126,11 +1131,18 @@ def start_runtime(
             )
         container_id = proc.stdout.strip()
 
+        from aisc.applog import append_event
+
+        append_event("container_created", source="cli",
+                     container=container_name, runtime_id=runtime_id, image=image)
+
         # --- ready check ---
         ctx = _wait_ready(executor, container_name, runtime_id, ready_timeout)
         if ctx is None:
             # Best-effort cleanup; report partial identity.
             _safe_remove(executor, container_name)
+            append_event("container_ready_timeout", level="error", source="cli",
+                         container=container_name, runtime_id=runtime_id)
             raise CliError(
                 message=f"Runtime container did not become ready within {ready_timeout}s",
                 exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
@@ -1141,6 +1153,8 @@ def start_runtime(
                     "config_fingerprint": fingerprint,
                 },
             )
+        append_event("container_ready", source="cli",
+                     container=container_name, runtime_id=runtime_id)
 
         # --- commit registry entry (registry lock acquired inside register) ---
         try:
@@ -1529,6 +1543,11 @@ def remove_runtime(
             )
 
     unregister_by_runtime_id(registry_root, runtime_id)
+
+    from aisc.applog import append_event
+
+    append_event("container_removed", source="cli",
+                 container=name, runtime_id=runtime_id)
 
     return RuntimeSnapshot(
         runtime_id=runtime_id,

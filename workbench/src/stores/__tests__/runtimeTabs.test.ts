@@ -11,6 +11,7 @@ import { normalizePath } from "../tabLayout";
 import type { HistoryPatch, WorkbenchHistory } from "../../types";
 
 const mockIpc = vi.hoisted(() => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   closeSession: vi.fn().mockResolvedValue({ reason: "user_close", exitCode: null }),
   getProviderStatus: vi.fn().mockResolvedValue({}),
   loadHistory: vi.fn().mockResolvedValue({ schema_version: 2, revision: 0, workspaces: [] }),

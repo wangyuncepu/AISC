@@ -14,6 +14,7 @@ import type {
   OpTrace,
   HistoryPatch,
   InstallerHandoff,
+  LogsTail,
   OnboardingPatch,
   OnboardingState,
   PreflightReport,
@@ -234,6 +235,24 @@ export const runDoctor = () => invoke<DoctorReport>("run_doctor");
 export const opTraces = () => invoke<OpTrace[]>("op_traces");
 export const diagnosticBundle = (writePath?: string) =>
   invoke<DiagnosticBundle>("diagnostic_bundle", { writePath: writePath ?? null });
+
+/** lifecycle-logging (P3): recent tail of the shared JSONL timeline. */
+export const logsTail = (lines = 100) =>
+  invoke<LogsTail>("logs_tail", { lines });
+
+/** lifecycle-logging (P4.5): one frontend user action onto the shared
+ * timeline. Fire-and-forget — logging never blocks or fails a UI action. */
+export const logUiEvent = async (
+  action: string,
+  outcome: "ok" | "error",
+  errorCode?: string,
+): Promise<void> => {
+  try {
+    await invoke("log_ui_event", { action, outcome, errorCode: errorCode ?? null });
+  } catch {
+    /* best-effort by contract */
+  }
+};
 
 // --- G-16: tray availability (03 §A-G16-4, Step 15) ---
 

@@ -13,6 +13,7 @@ import CcSwitchUiTab from "../CcSwitchUiTab.vue";
 import type { CcSwitchProvidersResult } from "../../../types";
 
 vi.mock("../../../lib/ipc", () => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   ccSwitchProviders: vi.fn(),
   ccSwitchAdd: vi.fn(),
   ccSwitchEdit: vi.fn(),

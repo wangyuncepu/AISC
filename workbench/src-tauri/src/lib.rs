@@ -12,6 +12,7 @@ pub mod error;
 pub mod history;
 pub mod identity;
 pub mod installer;
+pub mod logging;
 pub mod onboarding;
 pub mod locale;
 pub mod pty;
@@ -31,7 +32,8 @@ use artifact::{artifact_inspect, artifact_list, artifact_refresh};
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use watcher::{workspace_rescan, workspace_watch_start, workspace_watch_stop, WatcherState};
 use workspace::{workspace_copy_path, workspace_list, workspace_open, workspace_preview, workspace_reveal};
-use doctor::{diagnostic_bundle, run_doctor};
+use doctor::{diagnostic_bundle, logs_tail, run_doctor};
+use logging::log_ui_event;
 use history::{load_history, save_history};
 use trace::op_traces;
 use locale::resolve_locale;
@@ -57,6 +59,15 @@ use window::{capture_window_geometry, restore_window_geometry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(cli_arg: Option<String>) {
+    // lifecycle-logging P1: app start opens the shared JSONL timeline
+    // (best-effort — never blocks startup).
+    logging::append_event(
+        "info",
+        "app",
+        "app_start",
+        None,
+        serde_json::json!({ "app_version": env!("CARGO_PKG_VERSION") }),
+    );
     let cli_arg_state = CliArg(std::sync::Arc::new(std::sync::Mutex::new(cli_arg)));
     tauri::Builder::default()
         .manage(WatcherState::default())
@@ -113,6 +124,8 @@ pub fn run(cli_arg: Option<String>) {
             capture_window_geometry,
             run_doctor,
             diagnostic_bundle,
+            logs_tail,
+            log_ui_event,
             op_traces,
             tray_available,
             tray_remove,

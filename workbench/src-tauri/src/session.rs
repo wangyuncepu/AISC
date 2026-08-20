@@ -165,7 +165,35 @@ pub(crate) fn pinned_cli(settings: &Settings) -> Option<PathBuf> {
 pub async fn resolve_cli(app: &AppHandle) -> Result<PathBuf, WorkbenchError> {
     match resolve_pin(app) {
         Ok(pin) => Ok(pin),
-        Err(_) => crate::cli::auto_select_and_pin(app).await,
+        Err(_) => {
+            // lifecycle-logging: pre-spawn resolution failure — without this
+            // line a "无法沟通 aisc CLI" state (stale pin + zero valid
+            // candidates) would leave the timeline completely silent, since
+            // the op logging lives inside run_control which is never reached.
+            let outcome = crate::cli::auto_select_and_pin(app).await;
+            match &outcome {
+                Err(e) => {
+                    crate::logging::append_event(
+                        "error", "app", "cli_resolve_failed", None,
+                        serde_json::json!({
+                            "error_code": e.code,
+                            "detail": e.technical_detail.as_deref().unwrap_or(""),
+                        }),
+                    );
+                }
+                Ok(path) => {
+                    // The KI-3 self-heal fired: a stale/deleted pin was
+                    // re-resolved. Say so on the timeline — the settings file
+                    // silently changing back is otherwise indistinguishable
+                    // from "nothing happened".
+                    crate::logging::append_event(
+                        "info", "app", "cli_pin_healed", None,
+                        serde_json::json!({ "pin": path.display().to_string() }),
+                    );
+                }
+            }
+            outcome
+        }
     }
 }
 

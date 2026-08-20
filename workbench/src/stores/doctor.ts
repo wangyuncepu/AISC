@@ -9,7 +9,7 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import * as ipc from "../lib/ipc";
-import type { DoctorReport, OpTrace, WorkbenchError } from "../types";
+import type { DoctorReport, LogEvent, OpTrace, WorkbenchError } from "../types";
 
 export type DoctorRunState = "idle" | "running" | "done" | "error";
 
@@ -21,6 +21,8 @@ export const useDoctorStore = defineStore("doctor", () => {
   const error = ref<WorkbenchError | null>(null);
   /** Stage 6 (REL-01): recent operation traces (Doctor dialog dev layer). */
   const traces = ref<OpTrace[]>([]);
+  /** lifecycle-logging (P3): recent tail of the shared JSONL timeline. */
+  const logs = ref<LogEvent[]>([]);
 
   const running = computed(() => status.value === "running");
   /** Non-zero failed checks / any warning - drives the summary styling. */
@@ -37,6 +39,7 @@ export const useDoctorStore = defineStore("doctor", () => {
     try {
       report.value = await ipc.runDoctor();
       status.value = "done";
+      void ipc.logUiEvent?.("doctor_run", "ok");
     } catch (e) {
       error.value = (e as WorkbenchError) ?? {
         code: "WB_ERR_UNKNOWN",
@@ -46,6 +49,7 @@ export const useDoctorStore = defineStore("doctor", () => {
         action: "retry",
       };
       status.value = "error";
+      void ipc.logUiEvent?.("doctor_run", "error", error.value?.code ?? undefined);
     }
   }
 
@@ -65,13 +69,21 @@ export const useDoctorStore = defineStore("doctor", () => {
     traces.value = await ipc.opTraces().catch(() => []);
   }
 
+  /** lifecycle-logging (P3): refresh the recent log tail (100 events). */
+  async function loadLogs(): Promise<void> {
+    logs.value = await ipc.logsTail(100).then((r) => r.lines).catch(() => []);
+  }
+
   /** Stage 6 (REL-01): export the redacted diagnostic bundle to `path`.
    *  Returns the final path (null on failure); the UI builds the message. */
   async function exportDiagnostic(path: string): Promise<string | null> {
     try {
       const bundle = await ipc.diagnosticBundle(path);
+      void ipc.logUiEvent?.("export_diagnostics", "ok");
       return bundle.path;
-    } catch {
+    } catch (e) {
+      void ipc.logUiEvent?.("export_diagnostics", "error",
+        (e as WorkbenchError)?.code ?? undefined);
       return null;
     }
   }
@@ -82,6 +94,7 @@ export const useDoctorStore = defineStore("doctor", () => {
     report,
     error,
     traces,
+    logs,
     running,
     hasFailures,
     hasWarnings,
@@ -89,6 +102,7 @@ export const useDoctorStore = defineStore("doctor", () => {
     openDialog,
     closeDialog,
     loadTraces,
+    loadLogs,
     exportDiagnostic,
   };
 });

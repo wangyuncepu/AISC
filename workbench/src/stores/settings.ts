@@ -92,10 +92,13 @@ export const useSettingsStore = defineStore("settings", () => {
       lastSaved.value = cloneDoc(doc.value);
       saveState.value = "saved";
       await applyLanguage();
+      void ipc.logUiEvent?.("settings_save", "ok");
       return outcome;
     } catch (e) {
       error.value = (e as { message?: string })?.message ?? String(e);
       saveState.value = "error";
+      void ipc.logUiEvent?.("settings_save", "error",
+        (e as { code?: string })?.code ?? undefined);
       return null;
     }
   }

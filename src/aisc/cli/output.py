@@ -46,10 +46,16 @@ def build_envelope(
     errors:
         List of error objects.  ``None`` is treated as ``[]``.
     run_id:
-        UUID v4.  Auto-generated when not provided.
+        UUID v4.  Auto-generated when not provided. Falls back to the
+        ``AISC_RUN_ID`` env var (lifecycle-logging P1: the Workbench injects
+        its operation id so app-side op events, the envelope and the log
+        timeline share one id).
     timestamp:
         ISO 8601 UTC string.  Auto-generated when not provided.
     """
+    import os
+
+    effective_run_id = run_id or os.environ.get("AISC_RUN_ID") or str(uuid.uuid4())
     return {
         "meta": {
             "protocol": PROTOCOL,
@@ -57,7 +63,7 @@ def build_envelope(
             "exit_code": exit_code,
             "timestamp": timestamp or _utc_now(),
             "version": version,
-            "run_id": run_id or str(uuid.uuid4()),
+            "run_id": effective_run_id,
         },
         "data": data,
         "errors": errors if errors is not None else [],

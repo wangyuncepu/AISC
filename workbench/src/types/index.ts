@@ -207,9 +207,40 @@ export interface DiagnosticBundle {
   envReadiness: EnvReadiness;
   doctor: DoctorReport | null;
   recentOperations: OpTrace[];
+  /** lifecycle-logging (P3): recent tail of the shared JSONL timeline
+   * (secret-free by construction — P1's allowlisted schema). */
+  recentLogLines: LogEvent[];
+  /** lifecycle-logging (P4): `docker logs --tail 50` per managed container
+   * (empty when docker is unavailable). */
+  containerLogs: ContainerLogTail[];
   /** Stage 7 (DATA-04): canonical data root { root, origin }. */
   dataRoot: { root: string; origin: string } | null;
   path: string | null;
+}
+
+/** lifecycle-logging: one event line on the shared timeline. Fixed core
+ * keys plus loose extras (command/phase/duration_ms/error_code …). */
+export interface LogEvent {
+  ts: string;
+  level: string;
+  source: string;
+  event: string;
+  run_id?: string;
+  [key: string]: unknown;
+}
+
+/** lifecycle-logging (P3): the `logs_tail` IPC payload. */
+export interface LogsTail {
+  path: string | null;
+  lines: LogEvent[];
+}
+
+/** lifecycle-logging (P4): one managed container's `docker logs` tail. */
+export interface ContainerLogTail {
+  name: string;
+  id: string;
+  status: string;
+  tail: string;
 }
 
 export type CheckStatus = "pass" | "warn" | "fail";
