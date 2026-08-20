@@ -115,7 +115,10 @@ class RuntimeFakeExecutor:
 
     def inspect_image(self, name):
         if self.image_exists:
-            return ImageInspectResult(status=ImageInspectStatus.EXISTS, image=name)
+            return ImageInspectResult(
+                status=ImageInspectStatus.EXISTS, image=name,
+                image_id=getattr(self, "image_id", "sha256:fake-image"),
+            )
         return ImageInspectResult(status=ImageInspectStatus.MISSING, image=name)
 
     def run_captured(self, argv, *, timeout=None):
@@ -258,6 +261,89 @@ class TestStartRuntime(unittest.TestCase):
                           "workbench", executor=ex, registry_root=ws / ".aisc",
                           ready_timeout=2.0)
         self.assertEqual(cm.exception.exit_code, RuntimeExitCode.RUNTIME_CONFLICT)
+
+    # -- 容器随镜像同步更新 (KI-4 挂账) ----------------------------------
+
+    def test_start_records_image_id_and_reuses_when_unchanged(self):
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        ex.image_id = "sha256:image-v1"
+        start_runtime(RID_A, str(ws), "super-claude:latest", "direct", "project",
+                      "workbench", executor=ex, registry_root=ws / ".aisc",
+                      ready_timeout=2.0)
+        meta = list_containers_readonly(ws / ".aisc")["aisc-wb-550e8400"]
+        self.assertEqual(meta["image_id"], "sha256:image-v1")
+
+        second = start_runtime(RID_A, str(ws), "super-claude:latest", "direct",
+                               "project", "workbench", executor=ex,
+                               registry_root=ws / ".aisc", ready_timeout=2.0)
+        self.assertTrue(second.reused)
+        self.assertEqual(len(ex.containers), 1)
+
+    def test_start_conflict_image_changed(self):
+        """Same tag rebuilt (image ID differs) → reuse is refused as a
+        conflict with a precise reason; the existing recreate guidance
+        takes over."""
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        ex.image_id = "sha256:image-v1"
+        start_runtime(RID_A, str(ws), "super-claude:latest", "direct", "project",
+                      "workbench", executor=ex, registry_root=ws / ".aisc",
+                      ready_timeout=2.0)
+        ex.image_id = "sha256:image-v2"  # image rebuilt under the same tag
+        with self.assertRaises(CliError) as cm:
+            start_runtime(RID_A, str(ws), "super-claude:latest", "direct",
+                          "project", "workbench", executor=ex,
+                          registry_root=ws / ".aisc", ready_timeout=2.0)
+        self.assertEqual(cm.exception.exit_code, RuntimeExitCode.RUNTIME_CONFLICT)
+        conflicts = cm.exception.data.get("conflicts", [])
+        self.assertEqual(len(conflicts), 1)
+        self.assertIn("image", conflicts[0]["reason"].lower())
+        # nothing was reused or created
+        self.assertEqual(len(ex.containers), 1)
+
+    def test_start_reuse_when_image_id_unobservable(self):
+        """A transient probe failure (current image ID unobservable) must
+        never block reuse — unknown ≠ changed."""
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        ex.image_id = "sha256:image-v1"
+        start_runtime(RID_A, str(ws), "super-claude:latest", "direct", "project",
+                      "workbench", executor=ex, registry_root=ws / ".aisc",
+                      ready_timeout=2.0)
+        with patch("aisc.application.runtime._resolve_image_id",
+                   return_value=None):
+            second = start_runtime(RID_A, str(ws), "super-claude:latest",
+                                   "direct", "project", "workbench", executor=ex,
+                                   registry_root=ws / ".aisc", ready_timeout=2.0)
+        self.assertTrue(second.reused)
+
+    def test_start_legacy_meta_heals_image_id(self):
+        """Records created before this change carry no image_id: they stay
+        reusable (no false conflict) and the reuse start back-fills the
+        field so future rebuilds are detected."""
+        from aisc.adapters.container_registry import register as reg_register
+
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        ex.image_id = "sha256:image-v1"
+        start_runtime(RID_A, str(ws), "super-claude:latest", "direct", "project",
+                      "workbench", executor=ex, registry_root=ws / ".aisc",
+                      ready_timeout=2.0)
+        name = "aisc-wb-550e8400"
+        reg = ws / ".aisc"
+        legacy_meta = dict(list_containers_readonly(reg)[name])
+        legacy_meta.pop("image_id")
+        reg_register(reg, name, legacy_meta, set_default=False)
+        self.assertEqual(
+            list_containers_readonly(reg)[name].get("image_id", ""), "")
+
+        second = start_runtime(RID_A, str(ws), "super-claude:latest", "direct",
+                               "project", "workbench", executor=ex,
+                               registry_root=ws / ".aisc", ready_timeout=2.0)
+        self.assertTrue(second.reused)
+        self.assertEqual(
+            list_containers_readonly(reg)[name]["image_id"], "sha256:image-v1")
 
     def test_start_ready_timeout_cleans_up(self):
         ws = _make_workspace()

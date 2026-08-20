@@ -241,7 +241,8 @@ def _write_registry(root: Path, data: Dict[str, Any]) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
-def register(root: Path, name: str, meta: Dict[str, Any]) -> None:
+def register(root: Path, name: str, meta: Dict[str, Any],
+             *, set_default: bool = True) -> None:
     """Register a container and mark it as the default target.
 
     Args:
@@ -258,6 +259,12 @@ def register(root: Path, name: str, meta: Dict[str, Any]) -> None:
             - config_fingerprint: Config hash for idempotent retry
             - container_id: Docker container ID (Workbench runtimes)
             - workspace_key: sha256 of canonical workspace (Workbench runtimes)
+            - image_id: Content-addressed image ID at create time
+              (容器随镜像同步更新, KI-4 挂账 — empty on legacy records)
+        set_default: also mark the container as the default target. The
+            image_id heal path (start_runtime reusing a legacy record)
+            re-registers with False so an in-place metadata fix never
+            steals the default from another container.
 
     Backward compatible: if old fields are missing, stores empty strings.
     """
@@ -274,11 +281,13 @@ def register(root: Path, name: str, meta: Dict[str, Any]) -> None:
         "config_fingerprint": meta.get("config_fingerprint", ""),
         "container_id": meta.get("container_id", ""),
         "workspace_key": meta.get("workspace_key", ""),
+        "image_id": meta.get("image_id", ""),
     }
     with _registry_lock(root):
         data = _read_registry(root)
         data["containers"][name] = entry
-        data["default"] = name
+        if set_default:
+            data["default"] = name
         _write_registry_unlocked(root, data)
 
 

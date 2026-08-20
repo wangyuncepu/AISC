@@ -280,11 +280,16 @@ class ImageInspectResult:
     Only ``status == MISSING`` maps to AISC_EXIT_IMAGE_NOT_FOUND(5);
     other non-ok statuses map to DOCKER_UNAVAILABLE(3), PERMISSION_DENIED(9),
     or GENERAL(1) depending on the underlying cause.
+
+    ``image_id`` (容器随镜像同步更新, KI-4 挂账) carries the content-addressed
+    ``.Id`` on the EXISTS path — empty when unparseable or non-ok; existence
+    remains the primary question, the ID is opportunistic metadata.
     """
 
     status: str = ImageInspectStatus.ERROR  # one of ImageInspectStatus
     image: str = ""
     message: str = ""
+    image_id: str = ""
 
 
 # ---------------------------------------------------------------------------
