@@ -137,6 +137,9 @@ pub struct DiagnosticBundle {
     pub env_readiness: crate::env::EnvReadiness,
     pub doctor: Option<DoctorReport>,
     pub recent_operations: Vec<crate::trace::OpTrace>,
+    /// lifecycle-logging (P3): the recent tail of the shared JSONL
+    /// timeline — secret-free by construction (P1's allowlisted schema).
+    pub recent_log_lines: Vec<serde_json::Value>,
     /// Stage 7 (DATA-04): the canonical data root facts (root path,
     /// origin, writability) so diagnostics and the CLI doctor agree.
     pub data_root: serde_json::Value,
@@ -168,6 +171,25 @@ fn rfc3339_now() -> String {
         .unwrap_or_else(|_| "0".into())
 }
 
+/// lifecycle-logging (P3): the「最近日志」view's data — the shared timeline's
+/// recent tail, read directly from the log file (no CLI subprocess).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogsTail {
+    pub path: Option<String>,
+    pub lines: Vec<serde_json::Value>,
+}
+
+#[tauri::command]
+pub async fn logs_tail(lines: Option<usize>) -> Result<LogsTail, WorkbenchError> {
+    let n = lines.unwrap_or(100).clamp(1, 1000);
+    let path = crate::logging::log_file_path();
+    Ok(LogsTail {
+        path: path.as_ref().map(|p| p.display().to_string()),
+        lines: crate::logging::recent_log_events(n),
+    })
+}
+
 #[tauri::command]
 pub async fn diagnostic_bundle(
     app: AppHandle,
@@ -188,6 +210,7 @@ pub async fn diagnostic_bundle(
         env_readiness: env,
         doctor,
         recent_operations: crate::trace::snapshot(),
+        recent_log_lines: crate::logging::recent_log_events(100),
         data_root: data_root_section(),
         path: None,
     };

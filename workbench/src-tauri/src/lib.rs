@@ -32,7 +32,7 @@ use artifact::{artifact_inspect, artifact_list, artifact_refresh};
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use watcher::{workspace_rescan, workspace_watch_start, workspace_watch_stop, WatcherState};
 use workspace::{workspace_copy_path, workspace_list, workspace_open, workspace_preview, workspace_reveal};
-use doctor::{diagnostic_bundle, run_doctor};
+use doctor::{diagnostic_bundle, logs_tail, run_doctor};
 use history::{load_history, save_history};
 use trace::op_traces;
 use locale::resolve_locale;
@@ -122,6 +122,7 @@ pub fn run(cli_arg: Option<String>) {
             capture_window_geometry,
             run_doctor,
             diagnostic_bundle,
+            logs_tail,
             op_traces,
             tray_available,
             tray_remove,

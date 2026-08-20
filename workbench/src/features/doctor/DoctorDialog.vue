@@ -12,9 +12,10 @@
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { confirm, save } from "@tauri-apps/plugin-dialog";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useDoctorStore } from "../../stores/doctor";
 import { useDialogA11y } from "../../composables/useDialogA11y";
-import type { DoctorStatus } from "../../types";
+import type { DoctorStatus, LogEvent } from "../../types";
 
 const { t } = useI18n();
 const store = useDoctorStore();
@@ -57,8 +58,34 @@ async function exportBundle() {
 
 onMounted(async () => {
   panel.value?.focus();
-  await store.loadTraces();
+  await Promise.all([store.loadTraces(), store.loadLogs()]);
 });
+
+// --- lifecycle-logging (P3): recent log tail, collapsed by default ---
+const logs = computed(() => store.logs);
+const copied = ref(false);
+
+/** One compact line per event (same shape as `aisc logs show --format text`). */
+function logLine(e: LogEvent): string {
+  const extras: string[] = [];
+  if (e.run_id) extras.push(`run=${String(e.run_id).slice(0, 13)}`);
+  for (const key of ["command", "phase", "container", "outcome", "exit_code",
+    "duration_ms", "error_code", "state", "detail"] as const) {
+    const v = e[key];
+    if (v !== undefined && v !== null) extras.push(`${key}=${String(v)}`);
+  }
+  return `${String(e.ts).slice(0, 19)} ${e.level.toUpperCase()} ${e.source} ${e.event}  ${extras.join(" ")}`.trimEnd();
+}
+
+async function copyLogs(): Promise<void> {
+  try {
+    await writeText(logs.value.map(logLine).join("\n"));
+    copied.value = true;
+    setTimeout(() => (copied.value = false), 1500);
+  } catch {
+    copied.value = false;
+  }
+}
 
 function onOverlayDown(e: MouseEvent) {
   if (e.target === e.currentTarget) store.closeDialog();
@@ -126,6 +153,15 @@ function onOverlayDown(e: MouseEvent) {
         </ul>
       </details>
 
+      <!-- lifecycle-logging (P3): recent timeline tail, collapsed by default -->
+      <details v-if="logs.length" class="logs">
+        <summary>{{ t("doctor.logs") }}</summary>
+        <button class="copy-logs" @click="copyLogs">
+          {{ copied ? t("doctor.logsCopied") : t("doctor.copyLogs") }}
+        </button>
+        <pre class="log-lines">{{ logs.map(logLine).join("\n") }}</pre>
+      </details>
+
       <p v-if="exportMsg" class="export-msg" :data-err="!exportOk">{{ exportMsg }}</p>
 
       <footer class="foot">
@@ -162,6 +198,17 @@ function onOverlayDown(e: MouseEvent) {
 }
 .traces { border-top: 1px solid var(--border); padding-top: 8px; }
 .traces summary { cursor: pointer; color: var(--text-muted); font-size: var(--font-sm); user-select: none; }
+.logs { border-top: 1px solid var(--border); padding-top: 8px; }
+.logs summary { cursor: pointer; color: var(--text-muted); font-size: var(--font-sm); user-select: none; }
+.copy-logs {
+  margin-top: 6px; padding: 2px 10px; font-size: var(--font-xs);
+}
+.log-lines {
+  margin: 6px 0 0; padding: 6px 8px; max-height: 200px; overflow: auto;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md);
+  font-family: monospace; font-size: var(--font-xs); color: var(--text-muted);
+  white-space: pre; user-select: text;
+}
 .traces ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: var(--font-xs); }
 .trace-row { display: flex; gap: 8px; align-items: center; color: var(--text-muted); }
 .t-phase { color: var(--text-2); min-width: 120px; }

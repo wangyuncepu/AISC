@@ -11,6 +11,9 @@ import { useDoctorStore } from "../doctor";
 
 const mockIpc = vi.hoisted(() => ({
   runDoctor: vi.fn(),
+  opTraces: vi.fn(),
+  logsTail: vi.fn(),
+  diagnosticBundle: vi.fn(),
 }));
 
 vi.mock("../../lib/ipc", () => mockIpc);
@@ -95,5 +98,29 @@ describe("openDialog / closeDialog", () => {
     expect(s.open).toBe(false);
     // Status keeps the last result; nothing else in the app was touched.
     expect(s.status).toBe("done");
+  });
+});
+
+describe("loadLogs (lifecycle-logging P3)", () => {
+  it("fills the log tail from logs_tail(100)", async () => {
+    mockIpc.logsTail.mockResolvedValue({
+      path: "C:\\data\\logs\\aisc.log",
+      lines: [
+        { ts: "2026-08-20T05:00:00Z", level: "info", source: "app", event: "op" },
+        { ts: "2026-08-20T05:00:01Z", level: "info", source: "cli", event: "cli_exit" },
+      ],
+    });
+    const s = useDoctorStore();
+    await s.loadLogs();
+    expect(mockIpc.logsTail).toHaveBeenCalledWith(100);
+    expect(s.logs).toHaveLength(2);
+    expect(s.logs[1]?.event).toBe("cli_exit");
+  });
+
+  it("degrades to empty on IPC failure (log view never blocks the dialog)", async () => {
+    mockIpc.logsTail.mockRejectedValue(new Error("boom"));
+    const s = useDoctorStore();
+    await s.loadLogs();
+    expect(s.logs).toEqual([]);
   });
 });

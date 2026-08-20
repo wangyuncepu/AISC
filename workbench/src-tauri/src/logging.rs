@@ -109,6 +109,38 @@ fn rotate(path: &std::path::Path, max_bytes: u64) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The last `n` events from the timeline (current file only; torn lines
+/// skipped). Shared by the `logs_tail` IPC and the diagnostic bundle.
+pub(crate) fn recent_log_events(n: usize) -> Vec<Value> {
+    log_file_path()
+        .map(|p| recent_log_events_from(&p, n))
+        .unwrap_or_default()
+}
+
+/// Path-parameterized core (testable without touching the real data root).
+pub(crate) fn recent_log_events_from(path: &std::path::Path, n: usize) -> Vec<Value> {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut events: Vec<Value> = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+            if v.is_object() {
+                events.push(v);
+            }
+        }
+    }
+    if events.len() > n {
+        events.split_off(events.len() - n)
+    } else {
+        events
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +167,25 @@ mod tests {
     fn max_bytes_matches_python_side() {
         // cross-side rotation parity — see aisc.applog.MAX_BYTES
         assert_eq!(MAX_BYTES, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn recent_log_events_tail_skips_torn_lines() {
+        let dir = std::env::temp_dir().join(format!("aisc-logtail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("aisc.log");
+        std::fs::write(
+            &f,
+            "{\"event\":\"a\"}\n{\"torn\n{\"event\":\"b\"}\nnot-json\n{\"event\":\"c\"}\n",
+        )
+        .unwrap();
+        let events = recent_log_events_from(&f, 2);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["event"], "b");
+        assert_eq!(events[1]["event"], "c");
+        assert_eq!(recent_log_events_from(&f, 10).len(), 3);
+        assert!(recent_log_events_from(&dir.join("missing.log"), 5).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

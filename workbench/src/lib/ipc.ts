@@ -14,6 +14,7 @@ import type {
   OpTrace,
   HistoryPatch,
   InstallerHandoff,
+  LogsTail,
   OnboardingPatch,
   OnboardingState,
   PreflightReport,
@@ -234,6 +235,10 @@ export const runDoctor = () => invoke<DoctorReport>("run_doctor");
 export const opTraces = () => invoke<OpTrace[]>("op_traces");
 export const diagnosticBundle = (writePath?: string) =>
   invoke<DiagnosticBundle>("diagnostic_bundle", { writePath: writePath ?? null });
+
+/** lifecycle-logging (P3): recent tail of the shared JSONL timeline. */
+export const logsTail = (lines = 100) =>
+  invoke<LogsTail>("logs_tail", { lines });
 
 // --- G-16: tray availability (03 §A-G16-4, Step 15) ---
 
