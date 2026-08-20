@@ -523,7 +523,20 @@ pub async fn run_control(
     cancel: CancellationToken,
 ) -> Result<Envelope, WorkbenchError> {
     let phase = argv.first().map(|s| s.as_str()).unwrap_or("cli").to_owned();
-    crate::trace::timed("cli", &phase, run_control_inner(executable, argv, None, timeout, cancel)).await
+    // lifecycle-logging P1: one run_id per call — injected into the child
+    // (env AISC_RUN_ID), reused by the envelope and the CLI's cli_exit log
+    // line, and carried by this app-side op line: one id threads the call
+    // across both process boundaries.
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let started_op = std::time::Instant::now();
+    let result = crate::trace::timed(
+        "cli",
+        &phase,
+        run_control_inner(executable, argv, None, timeout, cancel, &run_id),
+    )
+    .await;
+    log_cli_op(&phase, &run_id, started_op, &result);
+    result
 }
 
 /// `run_control` with a stdin payload (Stage 8e): the cc-switch provider data
@@ -537,7 +550,40 @@ pub async fn run_control_input(
     cancel: CancellationToken,
 ) -> Result<Envelope, WorkbenchError> {
     let phase = argv.first().map(|s| s.as_str()).unwrap_or("cli").to_owned();
-    crate::trace::timed("cli", &phase, run_control_inner(executable, argv, Some(input), timeout, cancel)).await
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let started_op = std::time::Instant::now();
+    let result = crate::trace::timed(
+        "cli",
+        &phase,
+        run_control_inner(executable, argv, Some(input), timeout, cancel, &run_id),
+    )
+    .await;
+    log_cli_op(&phase, &run_id, started_op, &result);
+    result
+}
+
+/// lifecycle-logging P1: the app-side line for one CLI call — best-effort,
+/// allowlisted fields only (phase/duration/outcome/error_code; never argv
+/// or stdin content).
+fn log_cli_op(
+    phase: &str,
+    run_id: &str,
+    started: std::time::Instant,
+    result: &Result<Envelope, WorkbenchError>,
+) {
+    let (level, outcome, error_code) = match result {
+        Ok(_) => ("info", "ok", None),
+        Err(e) => ("error", "error", Some(e.code.clone())),
+    };
+    let mut extra = serde_json::json!({
+        "phase": phase,
+        "outcome": outcome,
+        "duration_ms": started.elapsed().as_millis() as u64,
+    });
+    if let Some(code) = error_code {
+        extra["error_code"] = serde_json::json!(code);
+    }
+    crate::logging::append_event(level, "op", Some(run_id), extra);
 }
 
 async fn run_control_inner(
@@ -546,9 +592,11 @@ async fn run_control_inner(
     input: Option<String>,
     timeout: Duration,
     cancel: CancellationToken,
+    run_id: &str,
 ) -> Result<Envelope, WorkbenchError> {
     let mut cmd = Command::new(executable);
     cmd.args(&argv);
+    cmd.env("AISC_RUN_ID", run_id);
     // KI-6: the GUI process may carry a launch-time PATH snapshot without
     // Docker's bin (per-user installs register it in the USER PATH only
     // after install). Prepend the resolved docker bin dir so every docker

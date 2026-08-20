@@ -31,7 +31,7 @@ WORKSPACE_HASH_ALGO = "sha256-v1"
 
 # Shared-root layout (02-domain-contract.md "Canonical layout"). Order is the
 # contract order; consumers must not invent siblings.
-SHARED_SUBDIRS = ("config", "state", "workspaces", "artifacts", "cache", "diagnostics", "migrations")
+SHARED_SUBDIRS = ("config", "state", "workspaces", "artifacts", "cache", "diagnostics", "logs", "migrations")
 
 # Per-workspace layout under workspaces/<hash>/.
 WORKSPACE_SUBDIRS = ("claude", "codex", "cc-switch", "runtime", "logs")

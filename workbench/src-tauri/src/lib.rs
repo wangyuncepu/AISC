@@ -12,6 +12,7 @@ pub mod error;
 pub mod history;
 pub mod identity;
 pub mod installer;
+pub mod logging;
 pub mod onboarding;
 pub mod locale;
 pub mod pty;
@@ -57,6 +58,14 @@ use window::{capture_window_geometry, restore_window_geometry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(cli_arg: Option<String>) {
+    // lifecycle-logging P1: app start opens the shared JSONL timeline
+    // (best-effort — never blocks startup).
+    logging::append_event(
+        "info",
+        "app_start",
+        None,
+        serde_json::json!({ "app_version": env!("CARGO_PKG_VERSION") }),
+    );
     let cli_arg_state = CliArg(std::sync::Arc::new(std::sync::Mutex::new(cli_arg)));
     tauri::Builder::default()
         .manage(WatcherState::default())

@@ -5752,6 +5752,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "uuid",
  "winreg 0.55.0",
 ]
 

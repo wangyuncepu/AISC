@@ -1580,8 +1580,43 @@ def _cmd_data_root(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _log_cli_exit(
+    command: str,
+    exit_code: int,
+    started: float,
+    run_id: Optional[str],
+    *,
+    error_code: Optional[str] = None,
+) -> None:
+    """Lifecycle log line for a CLI invocation (lifecycle-logging P1).
+
+    One line per process exit at the three main() terminals — the same
+    ``run_id`` the envelope carries (env-injected by the Workbench), so
+    app-side op events and cli exits align on one timeline. Best-effort:
+    applog never raises.
+    """
+    import time as _time
+
+    from aisc.applog import append_event
+
+    level = "info" if exit_code == 0 else ("warn" if exit_code == 130 else "error")
+    append_event(
+        "cli_exit", level=level, source="cli", run_id=run_id,
+        command=command or "aisc", exit_code=exit_code,
+        duration_ms=int((_time.monotonic() - started) * 1000),
+        error_code=error_code,
+    )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     """Main CLI entry point."""
+    import time as _time
+
+    started = _time.monotonic()
+    # Same id the envelope will carry (env-injected by the Workbench;
+    # self-generated for standalone CLI use) — keeps the log timeline and
+    # envelope.meta.run_id identical.
+    _run_id = os.environ.get("AISC_RUN_ID") or str(__import__("uuid").uuid4())
     # Never let stdout's locale encoding (GBK on zh-CN Windows, cp1252 on
     # en-US) crash the CLI with UnicodeEncodeError. Protocol JSON is pure
     # ASCII by construction (ensure_ascii=True in emit_json/JsonlEmitter);
@@ -1884,6 +1919,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             return
 
     except CliError as exc:
+        _log_cli_exit(args.command, exc.exit_code, started, _run_id,
+                      error_code=exc.error_code)
         # --- unified terminal: main owns the single terminal event ---
         if emitter is not None and not emitter.terminated:
             cmd = args.command or "aisc"
@@ -1903,6 +1940,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 version=__version__,
                 data=exc.data,  # structured outcome, not null
                 errors=[build_error(exc.error_code, exc.message, exc.hint)],
+                run_id=_run_id,
             )
             emit_json(envelope)
         else:
@@ -1911,6 +1949,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         return
 
     except KeyboardInterrupt:
+        _log_cli_exit(args.command, 130, started, _run_id)
         if emitter is not None and not emitter.terminated:
             cmd = args.command or "aisc"
             emitter.emit(f"{cmd}.cancelled", {"exit_code": 130}, terminal=True)
@@ -1919,6 +1958,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         sys.exit(130)
 
     # --- success: terminal event if events mode ---
+    _log_cli_exit(args.command, exit_code, started, _run_id)
     if emitter is not None and not emitter.terminated:
         cmd = args.command or "aisc"
         term_data = dict(data or {})
@@ -1931,6 +1971,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         envelope = build_envelope(
             command=args.command, exit_code=exit_code,
             version=__version__, data=data, errors=errors,
+            run_id=_run_id,
         )
         emit_json(envelope)
     else:
