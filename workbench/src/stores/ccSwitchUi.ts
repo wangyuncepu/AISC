@@ -52,9 +52,12 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
     error.value = null;
     try {
       _apply(await fn());
+      void ipc.logUiEvent?.(`cc_switch_${op.split(":")[0]}`, "ok");
       return true;
     } catch (e) {
       error.value = (e as { message?: string })?.message ?? String(e);
+      void ipc.logUiEvent?.(`cc_switch_${op.split(":")[0]}`, "error",
+        (e as { code?: string })?.code ?? undefined);
       return false;
     } finally {
       busy.value = "";
@@ -91,12 +94,14 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
     error.value = null;
     try {
       fetchedModels[providerId] = await ipc.ccSwitchFetchModels(ws, rt, agent.value, providerId);
+      void ipc.logUiEvent?.("cc_switch_fetch", "ok");
       return true;
     } catch (e) {
       fetchedModels[providerId] = {
         available: false, models: [],
         message: (e as { message?: string })?.message ?? String(e),
       };
+      void ipc.logUiEvent?.("cc_switch_fetch", "error");
       return false;
     } finally {
       busy.value = "";

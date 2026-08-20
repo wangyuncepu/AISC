@@ -17,6 +17,7 @@ import ConflictManager from "../ConflictManager.vue";
 import type { RuntimeSnapshot } from "../../../types";
 
 vi.mock("../../../lib/ipc", () => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   listRuntimes: vi.fn().mockResolvedValue({ runtimes: [] }),
   removeRuntime: vi.fn().mockResolvedValue({}),
   stopRuntime: vi.fn().mockResolvedValue({}),

@@ -39,6 +39,7 @@ export const useDoctorStore = defineStore("doctor", () => {
     try {
       report.value = await ipc.runDoctor();
       status.value = "done";
+      void ipc.logUiEvent?.("doctor_run", "ok");
     } catch (e) {
       error.value = (e as WorkbenchError) ?? {
         code: "WB_ERR_UNKNOWN",
@@ -48,6 +49,7 @@ export const useDoctorStore = defineStore("doctor", () => {
         action: "retry",
       };
       status.value = "error";
+      void ipc.logUiEvent?.("doctor_run", "error", error.value?.code ?? undefined);
     }
   }
 
@@ -77,8 +79,11 @@ export const useDoctorStore = defineStore("doctor", () => {
   async function exportDiagnostic(path: string): Promise<string | null> {
     try {
       const bundle = await ipc.diagnosticBundle(path);
+      void ipc.logUiEvent?.("export_diagnostics", "ok");
       return bundle.path;
-    } catch {
+    } catch (e) {
+      void ipc.logUiEvent?.("export_diagnostics", "error",
+        (e as WorkbenchError)?.code ?? undefined);
       return null;
     }
   }

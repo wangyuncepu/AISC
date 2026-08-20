@@ -583,7 +583,7 @@ fn log_cli_op(
     if let Some(code) = error_code {
         extra["error_code"] = serde_json::json!(code);
     }
-    crate::logging::append_event(level, "op", Some(run_id), extra);
+    crate::logging::append_event(level, "app", "op", Some(run_id), extra);
 }
 
 async fn run_control_inner(

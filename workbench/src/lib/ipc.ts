@@ -240,6 +240,20 @@ export const diagnosticBundle = (writePath?: string) =>
 export const logsTail = (lines = 100) =>
   invoke<LogsTail>("logs_tail", { lines });
 
+/** lifecycle-logging (P4.5): one frontend user action onto the shared
+ * timeline. Fire-and-forget — logging never blocks or fails a UI action. */
+export const logUiEvent = async (
+  action: string,
+  outcome: "ok" | "error",
+  errorCode?: string,
+): Promise<void> => {
+  try {
+    await invoke("log_ui_event", { action, outcome, errorCode: errorCode ?? null });
+  } catch {
+    /* best-effort by contract */
+  }
+};
+
 // --- G-16: tray availability (03 §A-G16-4, Step 15) ---
 
 export const trayAvailable = () => invoke<boolean>("tray_available");

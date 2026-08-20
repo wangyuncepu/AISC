@@ -16,6 +16,7 @@ import { i18n } from "../../i18n";
 import { useRuntimeStore } from "../runtime";
 
 const mockIpc = vi.hoisted(() => ({
+  logUiEvent: vi.fn().mockResolvedValue(undefined),
   buildImage: vi.fn(),
 }));
 

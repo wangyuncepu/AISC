@@ -33,6 +33,7 @@ use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use watcher::{workspace_rescan, workspace_watch_start, workspace_watch_stop, WatcherState};
 use workspace::{workspace_copy_path, workspace_list, workspace_open, workspace_preview, workspace_reveal};
 use doctor::{diagnostic_bundle, logs_tail, run_doctor};
+use logging::log_ui_event;
 use history::{load_history, save_history};
 use trace::op_traces;
 use locale::resolve_locale;
@@ -62,6 +63,7 @@ pub fn run(cli_arg: Option<String>) {
     // (best-effort — never blocks startup).
     logging::append_event(
         "info",
+        "app",
         "app_start",
         None,
         serde_json::json!({ "app_version": env!("CARGO_PKG_VERSION") }),
@@ -123,6 +125,7 @@ pub fn run(cli_arg: Option<String>) {
             run_doctor,
             diagnostic_bundle,
             logs_tail,
+            log_ui_event,
             op_traces,
             tray_available,
             tray_remove,

@@ -354,11 +354,13 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       // user can review the log; "返回摘要" triggers re-preflight.
       if (op !== buildOpId) return; // superseded build: ignore late settle
       buildStatus.value = "complete";
+      void ipc.logUiEvent?.("build", "ok");
     } catch (e) {
       if (op !== buildOpId) return; // superseded build: ignore late settle
       const err = e as WorkbenchError;
       buildError.value = err;
       buildStatus.value = err.code === "WB_ERR_CLI_CANCELLED" ? "cancelled" : "failed";
+      void ipc.logUiEvent?.("build", "error", err.code ?? undefined);
     }
     freezeBuildDuration();
     if (buildStatus.value === "complete" || buildStatus.value === "failed") {
@@ -791,8 +793,10 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     if (!ok) return;
     try {
       await ipc.stopRuntime(workspace.value.trim(), id);
+      void ipc.logUiEvent?.("conflict_stop", "ok");
     } catch (e) {
       conflictError.value = e as WorkbenchError;
+      void ipc.logUiEvent?.("conflict_stop", "error", (e as WorkbenchError)?.code ?? undefined);
     }
     await loadConflicts();
   }
@@ -806,8 +810,10 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     if (!ok) return;
     try {
       await ipc.removeRuntime(workspace.value.trim(), id, force);
+      void ipc.logUiEvent?.("conflict_remove", "ok");
     } catch (e) {
       conflictError.value = e as WorkbenchError;
+      void ipc.logUiEvent?.("conflict_remove", "error", (e as WorkbenchError)?.code ?? undefined);
     }
     await loadConflicts();
   }
@@ -1348,15 +1354,18 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       if (!ok) {
         stopTimer();
         status.value = "conflict";
+        void ipc.logUiEvent?.("launch", "error", "WB_ERR_RUNTIME_CONFLICT");
         void loadConflicts();
         return;
       }
       stopTimer();
       runtimeReady.value = true;
       await initTabs(records, opts);
+      void ipc.logUiEvent?.("launch", "ok");
     } catch (e) {
       stopTimer();
       const err = e as WorkbenchError;
+      void ipc.logUiEvent?.("launch", "error", err?.code ?? undefined);
       if (err?.code === "WB_ERR_CLI_CANCELLED") {
         await handleCancelledStart();
       } else {
@@ -1475,6 +1484,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     } catch (e) {
       status.value = "error";
       error.value = e as WorkbenchError;
+      void ipc.logUiEvent?.("stop", "error", (e as WorkbenchError)?.code ?? undefined);
       return;
     }
     runtimeId.value = "";
@@ -1489,6 +1499,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     clearProviderStatuses();
     preflight.value = null;
     status.value = "picker";
+    void ipc.logUiEvent?.("stop", "ok");
   }
 
   return {

@@ -57,9 +57,11 @@ fn now_iso8601() -> String {
     iso8601_from_epoch_ms(ms)
 }
 
-/// Append one lifecycle event (`source: "app"`). Never panics on IO.
+/// Append one lifecycle event. `source`: "app" (Rust/backend), "ui"
+/// (frontend action via `log_ui_event`). Never panics on IO.
 pub(crate) fn append_event(
     level: &str,
+    source: &str,
     event: &str,
     run_id: Option<&str>,
     extra: Value,
@@ -68,7 +70,7 @@ pub(crate) fn append_event(
     let mut record = json!({
         "ts": now_iso8601(),
         "level": level,
-        "source": "app",
+        "source": source,
         "event": event,
     });
     if let Some(id) = run_id {
@@ -139,6 +141,24 @@ pub(crate) fn recent_log_events_from(path: &std::path::Path, n: usize) -> Vec<Va
     } else {
         events
     }
+}
+
+/// lifecycle-logging (P4.5): one frontend user action onto the shared
+/// timeline (`source: "ui"`) — the UI layer of "UI 操作与底层通信失败同
+/// 时间线". Fire-and-forget by contract; never fails the caller.
+#[tauri::command]
+pub async fn log_ui_event(
+    action: String,
+    outcome: String,
+    error_code: Option<String>,
+) -> Result<(), ()> {
+    let level = if outcome == "ok" { "info" } else { "error" };
+    let mut extra = json!({ "action": action, "outcome": outcome });
+    if let Some(code) = error_code {
+        extra["error_code"] = json!(code);
+    }
+    append_event(level, "ui", "ui_action", None, extra);
+    Ok(())
 }
 
 #[cfg(test)]
