@@ -476,7 +476,9 @@ onMounted(() => {
       if (!truncated) return;
       const bytes = store.paneStreamMeta[props.paneId]?.truncatedBytes ?? 0;
       term?.write(
-        `\r\n\x1b[33m${t("terminal.outputTruncated", { bytes: formatBytes(bytes) })}\x1b[0m\r\n`
+        // dim gray (手测反馈): the notice stays informative but must not read
+        // like a warning — truncation under sustained output is normal.
+        `\r\n\x1b[90m${t("terminal.outputTruncated", { bytes: formatBytes(bytes) })}\x1b[0m\r\n`
       );
     },
     { immediate: true }
@@ -620,18 +622,22 @@ defineExpose({
 }
 
 /* S1.3: persistent truncation notice pinned to the top edge (does not consume
- * terminal scrollback, so it cannot be pushed out of view). */
+ * terminal scrollback, so it cannot be pushed out of view).
+ * 手测反馈 (2026-08-20): truncation under sustained output is NORMAL — the
+ * notice must not read like a warning. Small muted corner chip, no bar. */
 .truncation-banner {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  top: 4px;
+  right: 10px;
   z-index: var(--z-overlay);
-  padding: 4px 10px;
-  font-size: var(--font-sm);
-  color: var(--warn-fg);
-  background: var(--warn-bg);
-  border-bottom: 1px solid var(--warn-border);
+  padding: 1px 8px;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  opacity: 0.55;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  pointer-events: none;
 }
 
 /* --- search overlay (top-right, above the terminal) --- */

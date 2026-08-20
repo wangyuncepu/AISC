@@ -425,7 +425,7 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
         # switch refuses rows without one).
         self.assertTrue(all("auth" in settings for settings in codex_settings))
         self.assertTrue(
-            all("wire_api = \"chat\"" in settings["config"]
+            all("wire_api = \"responses\"" in settings["config"]
                 for settings in codex_settings)
         )
         self.assertTrue(
@@ -453,19 +453,21 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
         settings = PROVIDER_HELPER._settings_config("claude", volc)
         self.assertEqual(settings["env"]["ANTHROPIC_BASE_URL"], volc["base_url"])
 
-    def test_codex_presets_use_openai_chat_completions(self):
-        # Third-party OpenAI-compatible providers implement Chat Completions,
-        # not OpenAI's proprietary Responses API.
+    def test_codex_presets_speak_responses_to_the_local_router(self):
+        # 用户实测工作形状 (2026-08-20): codex always speaks Responses to the
+        # cc-switch local router; the router translates per meta.apiFormat.
+        # DeepSeek additionally points at the Anthropic Messages endpoint.
         for provider in PROVIDER_HELPER.PRESET_PROVIDERS:
             settings = PROVIDER_HELPER._settings_config("codex", provider)
-            self.assertIn('wire_api = "chat"', settings["config"])
-            self.assertNotIn('wire_api = "responses"', settings["config"])
+            self.assertIn('wire_api = "responses"', settings["config"])
+        deepseek = next(p for p in PROVIDER_HELPER.PRESET_PROVIDERS if p["id"] == "deepseek")
+        self.assertIn(
+            'base_url = "https://api.deepseek.com/anthropic"',
+            PROVIDER_HELPER._settings_config("codex", deepseek)["config"],
+        )
+        for provider in PROVIDER_HELPER.PRESET_PROVIDERS:
+            settings = PROVIDER_HELPER._settings_config("codex", provider)
             self.assertNotIn("disable_response_storage", settings["config"])
-            # codex keeps using the OpenAI base_url, never the anthropic one.
-            if provider.get("anthropic_base_url"):
-                self.assertNotIn(
-                    provider["anthropic_base_url"], settings["config"]
-                )
 
     def test_codex_claude_preset_is_removed(self):
         ids = {p["id"] for p in PROVIDER_HELPER.PRESET_PROVIDERS}
@@ -549,12 +551,15 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
             self.assertEqual(rows["claude"][1], 1)
             self.assertNotEqual(rows["claude"][2], "old")  # notes refreshed
 
-            # Codex: new model + wire_api=chat, old responses gone, api_key +
-            # auth mirror preserved, is_current preserved.
+            # Codex: new model + anthropic endpoint + router wire (responses),
+            # api_key + auth mirror preserved, is_current preserved.
             codex_sc = json.loads(rows["codex"][0])
             self.assertIn('model = "deepseek-v4-pro"', codex_sc["config"])
-            self.assertIn('wire_api = "chat"', codex_sc["config"])
-            self.assertNotIn('wire_api = "responses"', codex_sc["config"])
+            self.assertIn('wire_api = "responses"', codex_sc["config"])
+            self.assertIn(
+                'base_url = "https://api.deepseek.com/anthropic"',
+                codex_sc["config"],
+            )
             self.assertIn(
                 'api_key = "sk-user-codex-secret"', codex_sc["config"]
             )

@@ -930,7 +930,16 @@ def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
         catalog_path = _codex_config_dir() / _CODEX_CATALOG_FILENAME
         text = config_path.read_text(encoding="utf-8") if config_path.is_file() else ""
 
+        # FULL DEFERENCE: when cc-switch's own catalog is active (user mapped
+        # models via the TUI), it owns the whole codex tail state — our window
+        # key would OVERRIDE its catalog rows (codex's with_config_overrides
+        # takes the config key over entry windows). Touch nothing.
+        current_key = _codex_catalog_key_value(text)
+        if current_key is not None and Path(current_key).name != _CODEX_CATALOG_FILENAME:
+            return
+
         models: list[dict[str, Any]] = []
+        api_format = None
         live_model = _codex_live_model(text)
         if row is not None:
             try:
@@ -940,6 +949,7 @@ def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
             raw = preset.get("model_catalog")
             if isinstance(raw, list) and raw:
                 models = [m for m in raw if isinstance(m, dict) and m.get("model")]
+            api_format = preset.get("codex_api_format")
         if not models and live_model:
             models = [{"model": live_model, "contextWindow": 128_000}]
 
@@ -965,9 +975,17 @@ def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
                 clean = live_model.replace("[1m]", "")
                 if clean in slugs:
                     new_text = _set_codex_model_line(new_text, clean)
+            # cc-switch's Anthropic transform drops the web_search hosted
+            # tool — never present it as a dead tool (upstream does the same
+            # for its anthropic-profile switches).
+            if api_format == "anthropic":
+                new_text = _set_codex_top_level_str(new_text, "web_search", "disabled")
+            else:
+                new_text = _set_codex_top_level_str(new_text, "web_search", None)
         else:
             new_text = _set_codex_catalog_key(text, None)
             new_text = _set_codex_top_level_int(new_text, "model_context_window", None)
+            new_text = _set_codex_top_level_str(new_text, "web_search", None)
             try:
                 catalog_path.unlink()
             except OSError:
@@ -996,6 +1014,38 @@ def _set_codex_model_line(config_text: str, value: str) -> str:
             replaced = True
         else:
             out.append(line)
+    return "\n".join(out)
+
+
+def _set_codex_top_level_str(config_text: str, key: str, value: Optional[str]) -> str:
+    """Set/remove a top-level string key. Only manages the sentinel values we
+    wrote ("disabled" for web_search) — anything else (a user's own setting)
+    survives untouched, mirroring cc-switch's ownership rule."""
+    key_re = re.compile(rf'^\s*{re.escape(key)}\s*=')
+    sentinel = "disabled"
+    lines = config_text.splitlines()
+    current = None
+    for line in lines:
+        m = key_re.match(line)
+        if m:
+            current = line.split("=", 1)[1].strip()
+            break
+    if current is not None and current != f'"{sentinel}"' and current != sentinel:
+        return config_text  # foreign value: not ours to touch
+    out: list[str] = []
+    inserted = False
+    for line in lines:
+        if key_re.match(line):
+            if value is not None and not inserted:
+                out.append(f'{key} = "{value}"')
+                inserted = True
+            continue
+        out.append(line)
+        if value is not None and not inserted and line.strip().startswith("["):
+            out.insert(len(out) - 1, f'{key} = "{value}"')
+            inserted = True
+    if value is not None and not inserted:
+        out.append(f'{key} = "{value}"')
     return "\n".join(out)
 
 

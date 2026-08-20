@@ -18,9 +18,13 @@ fi
 # 容器本身是外部沙箱（IS_SANDBOX=1），默认给 Codex 完全执行权限，
 # 与 Claude 的 --dangerously-skip-permissions 模式保持一致。
 # 若用户显式指定权限/沙箱参数，则尊重用户选择，不再追加默认值。
+#
+# codex-adapt (2026-08-20): --dangerously-bypass-hook-trust REMOVED — the
+# container image ships no codex hooks (probed live), so the flag changed
+# nothing except a startup warning every session ("Enabled hooks may run
+# without review"). Approval bypass alone keeps the headless behavior.
 full_access_flags=(
     "--dangerously-bypass-approvals-and-sandbox"
-    "--dangerously-bypass-hook-trust"
 )
 has_permission_flag=0
 for a in "$@"; do

@@ -145,12 +145,14 @@ class CodexModelCatalogTests(unittest.TestCase):
             [row["model"] for row in catalog],
             ["deepseek-v4-pro", "deepseek-v4-flash"],  # 主推 pro 在前
         )
-        # contextWindow：fixture "1M" → cc-switch 官方目录的精确值 1048576
-        self.assertEqual(catalog[0]["contextWindow"], 1_048_576)
-        self.assertEqual(catalog[1]["contextWindow"], 1_048_576)
-        # 既有形态不受影响
+        # contextWindow：fixture "1M" → 1_000_000（与用户实测 mapping 行一致）
+        self.assertEqual(catalog[0]["contextWindow"], 1_000_000)
+        self.assertEqual(catalog[1]["contextWindow"], 1_000_000)
+        # 既有形态 + 用户实测工作形状：anthropic 端点 + responses（本地路由接管）
         self.assertIn("auth", settings)
-        self.assertIn('wire_api = "chat"', settings["config"])
+        self.assertIn('base_url = "https://api.deepseek.com/anthropic"', settings["config"])
+        self.assertIn('wire_api = "responses"', settings["config"])
+        self.assertIn("model_context_window = 1000000", settings["config"])
 
     def test_providers_without_catalog_omit_the_key(self):
         legacy = {"id": "x", "base_url": "https://x", "model": "m"}

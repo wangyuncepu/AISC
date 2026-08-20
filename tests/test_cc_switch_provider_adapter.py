@@ -762,7 +762,7 @@ class CodexModelCatalogHookTests(unittest.TestCase):
             (self.dir / ".codex" / A._CODEX_CATALOG_FILENAME).read_text(encoding="utf-8"))
         slugs = [m["slug"] for m in catalog["models"]]
         self.assertEqual(slugs, ["deepseek-v4-pro", "deepseek-v4-flash"])
-        self.assertEqual(catalog["models"][0]["context_window"], 1048576)
+        self.assertEqual(catalog["models"][0]["context_window"], 1_000_000)
         self.assertEqual(catalog["models"][0]["priority"], 1000)
         # serde-required fields present on every entry
         for entry in catalog["models"]:
@@ -774,8 +774,10 @@ class CodexModelCatalogHookTests(unittest.TestCase):
         text = self._config_text()
         self.assertIn(f'model_catalog_json = "{self.dir / ".codex" / A._CODEX_CATALOG_FILENAME}"', text)
         self.assertLess(text.index("model_catalog_json"), text.index("[model_providers"))
-        # window fallback key also lands top-level
-        self.assertIn("model_context_window = 1048576", text)
+        # window fallback key also lands top-level; deepseek preset is
+        # anthropic-wire → the dead web_search tool is disabled
+        self.assertIn("model_context_window = 1000000", text)
+        self.assertIn('web_search = "disabled"', text)
 
     def test_live_model_1m_suffix_cleaned_to_catalog_slug(self):
         # the user's claude-convention typo ([1m]) is rewritten to the clean id

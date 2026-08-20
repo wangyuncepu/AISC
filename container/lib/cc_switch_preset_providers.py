@@ -116,6 +116,11 @@ def deepseek_provider_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         # contextWindow 同时取代 codex 的 fallback 元数据（消「Model
         # metadata not found」）。数值 fixture 冻结（context_length=1M）。
         "model_catalog": _codex_model_catalog(official_ids, fixture),
+        # 用户实测工作形状（2026-08-20）：DeepSeek 走 Anthropic Messages——
+        # store base_url=/anthropic + wire_api=responses，切换时 cc-switch
+        # 本地路由接管 live 并按 meta.apiFormat=anthropic 做 Responses→
+        # Anthropic 转换（preset 刷新写入该 meta，见 add_preset_providers）。
+        "codex_api_format": "anthropic",
         "claude_env": env,
         "_env_history": history,
         "_retired_env_keys": [],
@@ -147,16 +152,12 @@ def _codex_model_catalog(official_ids: list[str], fixture: dict[str, Any]) -> li
     """Catalog rows for cc-switch `modelCatalog.models` (codex side).
 
     Order = /model 列表优先级（cc-switch priority = 1000 + index）：主推
-    pro 在前。contextWindow 缺省 128k（与 cc-switch 的 neutral 模板同值）；
-    fixture 的 context_length（"1M"）折算 1_000_000，但 cc-switch 官方
-    DeepSeek 目录声明 1048576（2^20，指南实证有 4.8 万 token 差）——取
-    官方精确值。
+    pro 在前。contextWindow 取 fixture 的 context_length（"1M"→1_000_000，
+    与用户实测工作配置的 mapping 行一致）；缺省 128k。
     """
     context_window = _context_window_from_length(
         fixture.get("models", {}).get("context_length")
     ) or 128_000
-    if context_window == 1_000_000:
-        context_window = 1_048_576
     preferred = ["deepseek-v4-pro", "deepseek-v4-flash"]
     ordered = [m for m in preferred if m in official_ids]
     ordered += [m for m in official_ids if m not in ordered]
@@ -298,10 +299,11 @@ def _settings_config(
                 "",
                 f"[model_providers.{provider_id}]",
                 f"name = {_toml_string(provider_id)}",
-                f"base_url = {_toml_string(provider['base_url'])}",
-                # Third-party OpenAI-compatible providers implement Chat
-                # Completions, not OpenAI's proprietary Responses API.
-                'wire_api = "chat"',
+                # 用户实测工作形状：codex 始终对本地路由说 Responses；路由按
+                # meta.apiFormat（anthropic/chat）改写上游协议。DeepSeek 走
+                # Anthropic Messages 端点（fixture anthropic_base_url）。
+                f"base_url = {_toml_string(provider.get('anthropic_base_url') or provider['base_url'])}",
+                'wire_api = "responses"',
                 "requires_openai_auth = true",
             ]
         )
@@ -537,18 +539,37 @@ def add_preset_providers(
         conn.execute("BEGIN IMMEDIATE")
         _validate_schema(conn)
         existing = {
-            row[0]: row[1]
+            row[0]: (row[1], row[2])
             for row in conn.execute(
-                "SELECT id, settings_config FROM providers WHERE app_type = ?",
+                "SELECT id, settings_config, meta FROM providers WHERE app_type = ?",
                 (agent,),
             )
         }
         now = int(time.time() * 1000)
 
+        def _merged_meta(provider: dict[str, Any], raw_meta: str | None) -> str:
+            """codex-adapt: presets declare the upstream wire format
+            (``codex_api_format`` → cc-switch ``meta.apiFormat`` — the local
+            router's translation selector). Ownership: the key is only set
+            when ABSENT; a user/TUI-written meta (e.g. their mapping-page
+            saves) always wins, other meta keys are preserved verbatim."""
+            declared = provider.get("codex_api_format")
+            meta: dict[str, Any] = {}
+            if raw_meta:
+                try:
+                    parsed = json.loads(raw_meta)
+                    if isinstance(parsed, dict):
+                        meta = parsed
+                except json.JSONDecodeError:
+                    meta = {}
+            if declared and "apiFormat" not in meta:
+                meta["apiFormat"] = declared
+            return json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
+
         for sort_index, provider in enumerate(PRESET_PROVIDERS):
             provider_id = provider["id"]
             settings = json.dumps(
-                _merged_settings(agent, provider, existing.get(provider_id)),
+                _merged_settings(agent, provider, existing.get(provider_id, ("", None))[0]),
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
@@ -557,7 +578,7 @@ def add_preset_providers(
                     """
                     UPDATE providers
                     SET name = ?, settings_config = ?, website_url = ?,
-                        notes = ?, sort_index = ?
+                        notes = ?, sort_index = ?, meta = ?
                     WHERE id = ? AND app_type = ?
                     """,
                     (
@@ -566,6 +587,7 @@ def add_preset_providers(
                         provider["base_url"],
                         provider["description"],
                         sort_index,
+                        _merged_meta(provider, existing[provider_id][1]),
                         provider_id,
                         agent,
                     ),
@@ -596,7 +618,7 @@ def add_preset_providers(
                         provider["description"],
                         None,
                         None,
-                        "{}",
+                        _merged_meta(provider, None),
                         0,
                         0,
                     ),
@@ -604,7 +626,9 @@ def add_preset_providers(
                 print(f"Added provider: {provider_id} ({provider['name']})", file=log)
                 added += 1
 
-        removed = _remove_retired_providers(conn, agent, existing, log)
+        removed = _remove_retired_providers(
+            conn, agent, {k: v[0] for k, v in existing.items()}, log
+        )
 
         expected = {provider["id"] for provider in PRESET_PROVIDERS}
         persisted = {
