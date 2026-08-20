@@ -733,5 +733,90 @@ class RoleEnvAndFetchModelsTests(AdapterTestCase):
         self.assertEqual(envelope["fetch_models"]["models"][0], "deepseek-chat")
 
 
+class CodexModelCatalogHookTests(unittest.TestCase):
+    """codex-adapt 修复轮：切换后自动生成模型目录（零多余操作目标）——
+    catalog 文件写入 + config.toml 顶层键注入/回收，所有权规则不碰
+    cc-switch/用户的目录。"""
+
+    def setUp(self):
+        import os
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        os.environ["CODEX_CONFIG_DIR"] = str(self.dir / ".codex")
+        (self.dir / ".codex").mkdir(parents=True)
+        self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(os.environ.pop, "CODEX_CONFIG_DIR", None)
+
+    def _config(self, text: str):
+        (self.dir / ".codex" / "config.toml").write_text(text, encoding="utf-8")
+
+    def _config_text(self) -> str:
+        return (self.dir / ".codex" / "config.toml").read_text(encoding="utf-8")
+
+    ROW = {"id": "deepseek", "settings_config": {}}
+
+    def test_switch_writes_catalog_file_and_injects_key(self):
+        self._config('model = "deepseek-v4-pro"\n\n[model_providers.deepseek]\nname = "deepseek"\n')
+        A._apply_codex_model_catalog(self.ROW)
+        catalog = json.loads(
+            (self.dir / ".codex" / A._CODEX_CATALOG_FILENAME).read_text(encoding="utf-8"))
+        slugs = [m["slug"] for m in catalog["models"]]
+        self.assertEqual(slugs, ["deepseek-v4-pro", "deepseek-v4-flash"])
+        self.assertEqual(catalog["models"][0]["context_window"], 1048576)
+        self.assertEqual(catalog["models"][0]["priority"], 1000)
+        # serde-required fields present on every entry
+        for entry in catalog["models"]:
+            for key in ("slug", "display_name", "supported_reasoning_levels",
+                        "shell_type", "visibility", "supported_in_api", "priority",
+                        "truncation_policy"):
+                self.assertIn(key, entry)
+        # key injected top-level (before the first table header), absolute path
+        text = self._config_text()
+        self.assertIn(f'model_catalog_json = "{self.dir / ".codex" / A._CODEX_CATALOG_FILENAME}"', text)
+        self.assertLess(text.index("model_catalog_json"), text.index("[model_providers"))
+        # window fallback key also lands top-level
+        self.assertIn("model_context_window = 1048576", text)
+
+    def test_live_model_1m_suffix_cleaned_to_catalog_slug(self):
+        # the user's claude-convention typo ([1m]) is rewritten to the clean id
+        self._config('model = "deepseek-v4-flash[1m]"\n')
+        A._apply_codex_model_catalog(self.ROW)
+        self.assertIn('model = "deepseek-v4-flash"', self._config_text())
+        self.assertNotIn("[1m]", self._config_text())
+
+    def test_custom_provider_gets_single_row_catalog_from_live_model(self):
+        self._config('model = "my-custom-model"\n')
+        A._apply_codex_model_catalog({"id": "custom-thing", "settings_config": {}})
+        catalog = json.loads(
+            (self.dir / ".codex" / A._CODEX_CATALOG_FILENAME).read_text(encoding="utf-8"))
+        self.assertEqual([m["slug"] for m in catalog["models"]], ["my-custom-model"])
+        self.assertEqual(catalog["models"][0]["context_window"], 128_000)
+        self.assertIn("model_catalog_json", self._config_text())
+
+    def test_official_switch_removes_our_key_and_file(self):
+        self._config(
+            'model_catalog_json = "%s"\n\n[t]\na = 1\n'
+            % (self.dir / ".codex" / A._CODEX_CATALOG_FILENAME)
+        )
+        (self.dir / ".codex" / A._CODEX_CATALOG_FILENAME).write_text("{}", encoding="utf-8")
+        A._apply_codex_model_catalog(None)
+        self.assertNotIn("model_catalog_json", self._config_text())
+        self.assertFalse((self.dir / ".codex" / A._CODEX_CATALOG_FILENAME).exists())
+
+    def test_foreign_catalog_value_is_never_touched(self):
+        foreign = 'model_catalog_json = "cc-switch-model-catalog.json"\n'
+        self._config(foreign)
+        A._apply_codex_model_catalog(self.ROW)
+        self.assertIn("cc-switch-model-catalog.json", self._config_text())
+
+    def test_row_without_model_or_catalog_removes_our_stale_key(self):
+        self._config(
+            'model_catalog_json = "%s"\n'
+            % (self.dir / ".codex" / A._CODEX_CATALOG_FILENAME)
+        )
+        A._apply_codex_model_catalog({"id": "x", "settings_config": {}})
+        self.assertNotIn("model_catalog_json", self._config_text())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -537,7 +537,16 @@ def build_add_settings(
     if api_key:
         lines.append(f'api_key = "{api_key}"')
     lines.append("")
-    return str(request.get("name") or pid), {"auth": {}, "config": "\n".join(lines)}
+    settings: dict[str, Any] = {"auth": {}, "config": "\n".join(lines)}
+    # codex-adapt: a custom add may carry a model catalog (cc-switch
+    # `modelCatalog.models` — same effect as presets: /model lists the
+    # provider's models instead of Codex's built-ins). The UI form starts
+    # sending this in a follow-up round; passthrough is harmless before that.
+    catalog = request.get("modelCatalog")
+    if isinstance(catalog, dict) and isinstance(catalog.get("models"), list) \
+            and catalog["models"]:
+        settings["modelCatalog"] = catalog
+    return str(request.get("name") or pid), settings
 
 
 def _cli_add(
@@ -811,6 +820,206 @@ def _manage_codex_auth_placeholder(*, remove: bool) -> None:
             pass  # best-effort: the wizard stays, but the switch itself holds
 
 
+# ---------------------------------------------------------------------------
+# codex model catalog (codex-adapt 修复轮 2026-08-20)
+#
+# Zero-step goal (user decision): key in + switch = codex fully usable, /model
+# lists the provider's models, no metadata degradation. Upstream cc-switch
+# generates the catalog ONLY inside its TUI model-mapping workflow — the
+# headless CLI switch our adapter drives never does (binary-string + live
+# evidence). So the adapter generates it itself, anchored on CODEX's own
+# contract (models-manager's `model_catalog_json` config key + the ModelInfo
+# schema), NOT on cc-switch's template: a neutral entry carries exactly
+# codex's serde-required fields with identity/window overrides.
+# ---------------------------------------------------------------------------
+
+_CODEX_CATALOG_FILENAME = "aisc-model-catalog.json"
+
+
+def _codex_config_dir() -> Path:
+    root = os.environ.get("CODEX_CONFIG_DIR") or os.environ.get("CODEX_HOME")
+    if not root:
+        raise AdapterError(ERR_BAD_REQUEST, "CODEX_CONFIG_DIR is not set")
+    return Path(root)
+
+
+def _codex_neutral_catalog_entry(model: str, context_window: int, priority: int) -> dict[str, Any]:
+    """codex-rs protocol `ModelInfo` — serde-required fields only (probed
+    from codex 0.148's bundled gpt-5.5 entry; the heavy optional harness
+    fields are serde-defaulted and intentionally omitted)."""
+    return {
+        "slug": model,
+        "display_name": model,
+        "description": None,
+        "supported_reasoning_levels": [
+            {"effort": "high", "description": "High reasoning effort"}
+        ],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": True,
+        "priority": priority,
+        "availability_nux": None,
+        "upgrade": None,
+        "support_verbosity": False,
+        "default_verbosity": None,
+        "apply_patch_tool_type": None,
+        "truncation_policy": {"mode": "tokens", "limit": 10000},
+        "experimental_supported_tools": [],
+        "context_window": context_window,
+        "max_context_window": context_window,
+    }
+
+
+def _codex_catalog_key_value(config_text: str) -> Optional[str]:
+    for line in config_text.splitlines():
+        m = re.match(r'^\s*model_catalog_json\s*=\s*"([^"]+)"', line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _set_codex_catalog_key(config_text: str, new_value: Optional[str]) -> str:
+    """Set/remove OUR catalog key (top-level). Ownership rule (mirrors
+    cc-switch's): a foreign value (cc-switch's managed file or a user path)
+    is never touched; removal only ever drops our own filename."""
+    current = _codex_catalog_key_value(config_text)
+    if current is not None and Path(current).name != _CODEX_CATALOG_FILENAME:
+        return config_text
+    key_line_re = re.compile(r"^\s*model_catalog_json\s*=")
+    out: list[str] = []
+    inserted = False
+    for line in config_text.splitlines():
+        if key_line_re.match(line):
+            if new_value is not None and not inserted:
+                out.append(f'model_catalog_json = "{new_value}"')
+                inserted = True
+            continue
+        out.append(line)
+        # top-level only: insert right before the first table header
+        if new_value is not None and not inserted and line.strip().startswith("["):
+            out.insert(len(out) - 1, f'model_catalog_json = "{new_value}"')
+            inserted = True
+    if new_value is not None and not inserted:
+        out.append(f'model_catalog_json = "{new_value}"')
+    result = "\n".join(out)
+    if config_text.endswith("\n") and new_value is not None:
+        result += "\n"
+    return result
+
+
+def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
+    """Post-switch hook: write the catalog file + point config.toml at it.
+
+    Catalog source = the PRESET module by provider id, NOT the db row's
+    settings_config — upstream's codex switch round-trips the LIVE config
+    back into the stored settings (live-setting import), stripping unknown
+    keys like modelCatalog on every switch (live-verified 2026-08-20).
+
+    Custom providers (no preset entry): single-row catalog from the live
+    `model` line (default window) so /model at least lists the active model.
+    The live `model` value also gets its Claude-side ``[1m]`` suffix
+    stripped when the clean id matches a catalog slug — that suffix is a
+    Claude Code convention and not a valid wire id.
+
+    ``row`` None (official switch) or a provider without any model info →
+    remove OUR key/file so codex falls back to its bundled list. Best-effort:
+    a failure never fails the switch itself.
+    """
+    try:
+        config_path = _codex_config_dir() / "config.toml"
+        catalog_path = _codex_config_dir() / _CODEX_CATALOG_FILENAME
+        text = config_path.read_text(encoding="utf-8") if config_path.is_file() else ""
+
+        models: list[dict[str, Any]] = []
+        live_model = _codex_live_model(text)
+        if row is not None:
+            try:
+                preset = _preset_provider(str(row.get("id") or ""))
+            except AdapterError:
+                preset = {}
+            raw = preset.get("model_catalog")
+            if isinstance(raw, list) and raw:
+                models = [m for m in raw if isinstance(m, dict) and m.get("model")]
+        if not models and live_model:
+            models = [{"model": live_model, "contextWindow": 128_000}]
+
+        if models:
+            slugs = {str(m["model"]) for m in models}
+            entries = [
+                _codex_neutral_catalog_entry(
+                    str(m["model"]),
+                    int(m.get("contextWindow") or 128_000),
+                    1000 + i,
+                )
+                for i, m in enumerate(models)
+            ]
+            catalog_path.write_text(
+                json.dumps({"models": entries}, ensure_ascii=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            new_text = _set_codex_catalog_key(text, str(catalog_path))
+            # window fallback for the no-catalog path + [1m] cleanup
+            window = int(models[0].get("contextWindow") or 128_000)
+            new_text = _set_codex_top_level_int(new_text, "model_context_window", window)
+            if live_model and live_model not in slugs:
+                clean = live_model.replace("[1m]", "")
+                if clean in slugs:
+                    new_text = _set_codex_model_line(new_text, clean)
+        else:
+            new_text = _set_codex_catalog_key(text, None)
+            new_text = _set_codex_top_level_int(new_text, "model_context_window", None)
+            try:
+                catalog_path.unlink()
+            except OSError:
+                pass
+
+        if new_text != text:
+            config_path.write_text(new_text, encoding="utf-8")
+    except (OSError, ValueError, TypeError):
+        return  # best-effort by contract
+
+
+def _codex_live_model(config_text: str) -> Optional[str]:
+    for line in config_text.splitlines():
+        m = re.match(r'^\s*model\s*=\s*"([^"]+)"', line)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _set_codex_model_line(config_text: str, value: str) -> str:
+    out = []
+    replaced = False
+    for line in config_text.splitlines():
+        if not replaced and re.match(r'^\s*model\s*=', line):
+            out.append(f'model = "{value}"')
+            replaced = True
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _set_codex_top_level_int(config_text: str, key: str, value: Optional[int]) -> str:
+    """Set/remove a top-level integer key (before the first table header).
+    Unlike the catalog key this is plain config, ours to manage."""
+    key_re = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    out: list[str] = []
+    inserted = False
+    for line in config_text.splitlines():
+        if key_re.match(line):
+            if value is not None and not inserted:
+                out.append(f"{key} = {value}")
+                inserted = True
+            continue
+        out.append(line)
+        if value is not None and not inserted and line.strip().startswith("["):
+            out.insert(len(out) - 1, f"{key} = {value}")
+            inserted = True
+    if value is not None and not inserted:
+        out.append(f"{key} = {value}")
+    return "\n".join(out)
+
+
 def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
     """Activate a provider (IDEA-4): official non-interactive `provider switch`.
 
@@ -846,6 +1055,10 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
         _cli_switch(agent, provider_id, secrets)
     else:
         _cli_switch_empty_config(agent, provider_id)
+    if agent == "codex":
+        # Zero-step goal: /model lists the provider's models right after the
+        # switch (no TUI visit, no manual model entry).
+        _apply_codex_model_catalog(None if provider_id.endswith("-official") else row)
     return op_list(agent)
 
 

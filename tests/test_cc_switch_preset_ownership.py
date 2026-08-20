@@ -132,6 +132,40 @@ def legacy(pid: str) -> dict:
     ))
 
 
+class CodexModelCatalogTests(unittest.TestCase):
+    """codex-adapt 修复轮（2026-08-20）：codex settings 携带 cc-switch
+    `modelCatalog.models` —— 上游切换时生成模型目录文件并注入
+    `model_catalog_json`，codex /model 随之显示供应商模型列表（并取代
+    fallback 元数据，消「Model metadata not found」）。"""
+
+    def test_deepseek_codex_settings_carry_model_catalog(self):
+        settings = H._settings_config("codex", deepseek())
+        catalog = settings.get("modelCatalog", {}).get("models", [])
+        self.assertEqual(
+            [row["model"] for row in catalog],
+            ["deepseek-v4-pro", "deepseek-v4-flash"],  # 主推 pro 在前
+        )
+        # contextWindow：fixture "1M" → cc-switch 官方目录的精确值 1048576
+        self.assertEqual(catalog[0]["contextWindow"], 1_048_576)
+        self.assertEqual(catalog[1]["contextWindow"], 1_048_576)
+        # 既有形态不受影响
+        self.assertIn("auth", settings)
+        self.assertIn('wire_api = "chat"', settings["config"])
+
+    def test_providers_without_catalog_omit_the_key(self):
+        legacy = {"id": "x", "base_url": "https://x", "model": "m"}
+        settings = H._settings_config("codex", legacy)
+        self.assertNotIn("modelCatalog", settings)
+
+    def test_context_window_parsing(self):
+        f = lambda v: H._context_window_from_length(v)
+        self.assertEqual(f("1M"), 1_000_000)
+        self.assertEqual(f("384K"), 384_000)
+        self.assertEqual(f("131072"), 131072)
+        self.assertEqual(f(""), 0)
+        self.assertEqual(f("garbage"), 0)
+
+
 class LegacyModelOwnershipTests(unittest.TestCase):
     """IDEA-5 (5c): legacy presets (zhipu/kimi/volcengine) give
     ANTHROPIC_MODEL the same ownership merge — user mapping overrides

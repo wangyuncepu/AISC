@@ -109,6 +109,13 @@ def deepseek_provider_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         "anthropic_base_url": fixture["base_url_anthropic"],
         # Codex side keeps the official pro id (fixture-verified).
         "model": "deepseek-v4-pro" if "deepseek-v4-pro" in official_ids else official_ids[-1],
+        # Codex 模型目录（codex-adapt 修复轮 2026-08-20）：cc-switch 的
+        # `modelCatalog.models` 数据源——切换 codex 供应商时上游生成
+        # models 目录文件并向 ~/.codex/config.toml 注入 `model_catalog_json`，
+        # codex /model 随之显示本目录而非官方内置列表；目录条目的
+        # contextWindow 同时取代 codex 的 fallback 元数据（消「Model
+        # metadata not found」）。数值 fixture 冻结（context_length=1M）。
+        "model_catalog": _codex_model_catalog(official_ids, fixture),
         "claude_env": env,
         "_env_history": history,
         "_retired_env_keys": [],
@@ -117,6 +124,43 @@ def deepseek_provider_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
             "pro[1m] main + flash for haiku/subagent per official docs)"
         ),
     }
+
+
+def _context_window_from_length(raw: Any) -> int:
+    """Fixture `context_length` ("1M"/"384K"/"131072") → tokens."""
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    text = str(raw or "").strip().upper()
+    multipliers = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
+    if text and text[-1] in multipliers:
+        try:
+            return int(float(text[:-1]) * multipliers[text[-1]])
+        except ValueError:
+            return 0
+    try:
+        return int(text)
+    except ValueError:
+        return 0
+
+
+def _codex_model_catalog(official_ids: list[str], fixture: dict[str, Any]) -> list[dict[str, Any]]:
+    """Catalog rows for cc-switch `modelCatalog.models` (codex side).
+
+    Order = /model 列表优先级（cc-switch priority = 1000 + index）：主推
+    pro 在前。contextWindow 缺省 128k（与 cc-switch 的 neutral 模板同值）；
+    fixture 的 context_length（"1M"）折算 1_000_000，但 cc-switch 官方
+    DeepSeek 目录声明 1048576（2^20，指南实证有 4.8 万 token 差）——取
+    官方精确值。
+    """
+    context_window = _context_window_from_length(
+        fixture.get("models", {}).get("context_length")
+    ) or 128_000
+    if context_window == 1_000_000:
+        context_window = 1_048_576
+    preferred = ["deepseek-v4-pro", "deepseek-v4-flash"]
+    ordered = [m for m in preferred if m in official_ids]
+    ordered += [m for m in official_ids if m not in ordered]
+    return [{"model": m, "contextWindow": context_window} for m in ordered]
 
 
 def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, Any]]:
@@ -239,6 +283,15 @@ def _settings_config(
         ]
         if provider["model"]:
             lines.append(f"model = {_toml_string(provider['model'])}")
+        # codex-adapt: with a catalog the active entry's window wins; this
+        # top-level key is the no-catalog fallback (official codex config
+        # key — keeps token accounting sane even if the catalog file goes
+        # away), taken from the first catalog row.
+        catalog_rows = provider.get("model_catalog") or []
+        if catalog_rows and catalog_rows[0].get("contextWindow"):
+            lines.append(
+                f"model_context_window = {int(catalog_rows[0]['contextWindow'])}"
+            )
         lines.extend(
             [
                 'model_reasoning_effort = "high"',
@@ -260,7 +313,14 @@ def _settings_config(
         # Upstream `provider switch` refuses a codex settings_config without
         # an "auth" object ("Codex 供应商配置缺少 'auth' 字段"); its own
         # official rows seed {"auth":{},"config":""}.
-        return {"auth": {}, "config": "\n".join(lines)}
+        settings: dict[str, Any] = {"auth": {}, "config": "\n".join(lines)}
+        # codex-adapt 修复轮: providers carrying a model catalog get it into
+        # settings — cc-switch then generates the models file + injects
+        # `model_catalog_json` on switch (see _codex_model_catalog).
+        catalog = provider.get("model_catalog")
+        if isinstance(catalog, list) and catalog:
+            settings["modelCatalog"] = {"models": catalog}
+        return settings
 
     raise ValueError(f"unsupported agent: {agent}")
 
