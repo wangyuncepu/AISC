@@ -1006,6 +1006,16 @@ pub async fn auto_select_and_pin(app: &AppHandle) -> Result<PathBuf, WorkbenchEr
             .join("; ");
         err = err.with_detail(detail);
     }
+    // lifecycle-logging: the zero-candidate / all-invalid state never reaches
+    // run_control, so without this line the timeline stays silent exactly
+    // when the UI reports「没有找到 aisc cli」.
+    crate::logging::append_event(
+        "error", "app", "cli_discovery_failed", None,
+        serde_json::json!({
+            "candidates": probed.len(),
+            "detail": err.technical_detail.as_deref().unwrap_or("no candidates enumerated"),
+        }),
+    );
     Err(err)
 }
 
