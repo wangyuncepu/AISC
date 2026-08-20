@@ -1,14 +1,19 @@
 # 待办与门禁
 
-## 全流程全生命周期日志（2026-08-20 用户提出；**已规划**，`lifecycle-logging/01-plan.md`）
+## 全流程全生命周期日志——✅ 已落地（2026-08-20，分支 `lifecycle-logging`，用户手测全 PASS）
 
-新接口 `aisc logs` + 诊断对话框/诊断包双入口。用户三决策：单一时间线单文件
-（`<数据根>/logs/aisc.log`，JSONL，轮转 2MB×3）；CLI+界面双入口同轮交付；
-诊断包带容器日志尾随（managed 容器 docker logs --tail 50）。核心机制：
-Rust 每次调用生成 run_id 经 env `AISC_RUN_ID` 注入 CLI → envelope 复用 +
-双端日志行同值 → 一条 id 串全链。红线：字段允许清单制（stdin/URL/key/PTY/
-工作区绝对路径永不入日志）。阶段 P1 数据面（双端 appender+轮转+关联链）→
-P2 aisc logs 命令 → P3 界面入口+诊断包 → P4 容器尾随 → P5 收口。
+`<数据根>/logs/aisc.log` 单一 JSONL 时间线（轮转 2MB×3，双端同参），一条
+run_id 串 UI→CLI→容器全链。交付：P1 双端 appender + run_id 注入（env
+`AISC_RUN_ID`）；P2 `aisc logs show/path`（--lines/--source app|cli|ui|all/
+--format）；P3 诊断对话框「最近日志」折叠段+复制、诊断包 recentLogLines；
+P4 诊断包 managed 容器 docker logs --tail 50 尾随；P4.5 UI 动作打点
+（launch/stop/build/冲突面板/订阅/cc-switch/doctor/导出/设置保存，全在
+store 收口点）；预检失败打点（cli_resolve_failed/cli_discovery_failed/
+cli_pin_healed——"无法沟通 aisc CLI"全族时间线可见）。**手测实证**：TLS
+拒绝三层 error 链（ui_action error + op + cli_exit 同错误码）、容器链
+created→ready、自愈留痕、诊断包三键齐全。红线：字段允许清单制（stdin/
+URL/key/PTY/工作区绝对路径永不入日志）。门禁：python 743+/cargo 206/
+vitest 277/tsc 0。
 
 ## 挂账① 指纹源自动下载（Rust reqwest）——✅ 已落地（2026-08-19，分支 `rust-subscription-download`）
 
