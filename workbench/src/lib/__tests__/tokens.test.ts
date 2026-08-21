@@ -86,7 +86,7 @@ const REQUIRED_PRIMITIVES = [
 const RGBA_WHITELIST: Record<string, { max: number; reason: string; expiry: string }> = {
   "features/ccswitch/CcSwitchUiTab.vue": { max: 1, reason: "toast scrim", expiry: "10d → --scrim" },
   "features/doctor/DoctorDialog.vue": { max: 1, reason: "dialog scrim", expiry: "10d → --scrim" },
-  "features/terminal/PaneTree.vue": { max: 1, reason: "pane divider tint", expiry: "10c → token" },
+  "features/terminal/PaneTree.vue": { max: 1, reason: "pane-close 半透明悬浮钮（压终端内容需透底）", expiry: "10f 评估专用 token" },
   "features/workspace/WorkspaceBar.vue": { max: 1, reason: "overlay scrim", expiry: "10c → --scrim" },
   "features/workspace/WorkspaceView.vue": { max: 1, reason: "overlay scrim", expiry: "10c → --scrim" },
 };

@@ -324,22 +324,33 @@ function setPaneTreeRef(tabId: string) {
   flex-shrink: 0;
   display: flex;
   background: var(--surface);
-  border-right: 1px solid var(--border-strong);
+  border-right: var(--border-w) solid var(--border);
 }
 .explorer-dock > * { flex: 1; min-height: 0; min-width: 0; }
 /* 右缘弱化开关：幽灵样式，hover 才浮出 */
 .status-toggle {
   align-self: flex-start;
-  margin-top: 4px;
-  padding: 4px 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-2);
   background: none;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: var(--text-faint);
   cursor: pointer;
   font-size: var(--font-md);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
-.status-toggle:hover { background: var(--surface-2); color: var(--text-2); }
+.status-toggle:hover { background: var(--surface-hover); color: var(--text-2); }
+.status-toggle:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
 /* 状态信息栏：右侧悬浮抽屉（原资源管理器抽屉的浮层样式） */
 .status-drawer {
   position: absolute;
@@ -351,22 +362,27 @@ function setPaneTreeRef(tabId: string) {
   z-index: var(--z-drawer);
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border-left: 1px solid var(--border-strong);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+  background: var(--surface-2);
+  border-left: var(--border-w) solid var(--border-2);
+  box-shadow: var(--shadow-2);
 }
 .status-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: var(--border-w) solid var(--border);
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--font-xs);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 .status-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  min-height: 20px;
   background: none;
   border: none;
   border-radius: var(--radius-sm);
@@ -374,8 +390,14 @@ function setPaneTreeRef(tabId: string) {
   color: var(--text-muted);
   cursor: pointer;
   font-size: var(--font-sm);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
-.status-close:hover { background: var(--surface-2); color: var(--text); }
+.status-close:hover { background: var(--surface-hover); color: var(--text); }
+.status-close:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
 .empty-tabs {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 10px; color: var(--text-muted); font-size: var(--font-md);

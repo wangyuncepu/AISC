@@ -171,23 +171,31 @@ function closeMenus() {
 .actions { margin-left: auto; display: flex; gap: 8px; }
 .hint { font-size: var(--font-sm); color: var(--text-muted); }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
-  padding: 4px 12px; font-size: var(--font-sm); cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--control-h-sm);
+  background: var(--surface-3); color: var(--text-2);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-3); font-size: var(--font-sm); cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease), color var(--duration-normal) var(--ease);
 }
-button:hover:not(:disabled) { background: var(--surface-hover); }
-button.primary { background: var(--accent); border-color: var(--accent); }
+button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+button.primary { background: var(--accent); border-color: transparent; color: var(--accent-fg); font-weight: 600; }
 .ctx-backdrop {
   position: fixed; inset: 0; z-index: calc(var(--z-overlay) - 2);
 }
 .ctx-menu {
   position: fixed; z-index: var(--z-overlay);
   display: flex; flex-direction: column; min-width: 140px; padding: 4px;
-  background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--radius-md);
+  background: var(--surface-2); border: var(--border-w) solid var(--border-2); border-radius: var(--radius-md);
   box-shadow: var(--shadow-menu);
 }
 .ctx-menu button {
   background: transparent; color: var(--text-2); border: none; border-radius: var(--radius-sm);
   text-align: left; padding: 6px 12px; cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease);
 }
-.ctx-menu button:hover { background: var(--surface-active); }
+.ctx-menu button:hover { background: var(--surface-active); color: var(--text); }
 </style>

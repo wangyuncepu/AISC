@@ -556,30 +556,58 @@ function onTreeKeydown(e: KeyboardEvent) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border, #333);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: var(--border-w) solid var(--border);
 }
 .explorer-tabs {
   display: flex;
   gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
 }
 .explorer-tab {
   background: none;
   border: none;
-  color: inherit;
-  padding: 2px 8px;
+  color: var(--text-muted);
+  padding: 0 var(--space-2);
+  min-height: 22px;
+  border-radius: calc(var(--radius-sm) - 2px);
   cursor: pointer;
-  opacity: 0.7;
+  font-size: var(--font-sm);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
+}
+.explorer-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text-2);
 }
 .explorer-tab.active {
-  opacity: 1;
-  border-bottom: 2px solid var(--accent, #4a9eff);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+.explorer-tab:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
 }
 .explorer-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   background: none;
   border: none;
-  color: inherit;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
   cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
+}
+.explorer-refresh:hover {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 .explorer-body {
   flex: 1;
@@ -590,17 +618,26 @@ function onTreeKeydown(e: KeyboardEvent) {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  margin: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
   cursor: pointer;
   white-space: nowrap;
+  transition: background-color var(--duration-normal) var(--ease);
+}
+.explorer-row:hover {
+  background: var(--surface-hover);
 }
 .explorer-row.selected {
-  background: var(--selection, rgba(74, 158, 255, 0.18));
+  background: var(--accent-soft);
+  color: var(--text);
 }
 .explorer-icon {
   width: 14px;
   flex: none;
-  color: var(--muted, #888);
+  color: var(--text-muted);
 }
 .explorer-name {
   overflow: hidden;
@@ -610,14 +647,14 @@ function onTreeKeydown(e: KeyboardEvent) {
   padding-left: 24px;
 }
 .explorer-badge {
-  font-size: 10px;
-  padding: 0 4px;
-  border-radius: var(--radius-md);
-  background: var(--accent-dim, rgba(74, 158, 255, 0.15));
+  font-size: var(--font-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
 }
 .explorer-label {
-  font-size: 10px;
-  color: var(--muted, #888);
+  font-size: var(--font-xs);
+  color: var(--text-muted);
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -627,20 +664,20 @@ function onTreeKeydown(e: KeyboardEvent) {
 }
 .unattributed-badge,
 .change-badge {
-  background: var(--warn-dim, rgba(217, 164, 65, 0.15));
+  background: var(--warn-soft);
 }
 .explorer-stale,
 .explorer-error {
-  padding: 4px 8px;
-  color: var(--warn, #d9a441);
+  padding: var(--space-1) var(--space-2);
+  color: var(--warn);
   font-size: var(--font-sm);
 }
 .explorer-empty {
-  padding: 8px;
-  color: var(--muted, #888);
+  padding: var(--space-2);
+  color: var(--text-muted);
 }
 .explorer-more {
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
 }
 .explorer-menu-backdrop {
   position: fixed;
@@ -650,8 +687,11 @@ function onTreeKeydown(e: KeyboardEvent) {
 .explorer-menu {
   position: fixed;
   z-index: var(--z-overlay);
-  background: var(--surface, #1e1e1e);
-  border: 1px solid var(--border, #333);
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--border-2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
+  padding: var(--space-1);
   display: flex;
   flex-direction: column;
   min-width: 140px;
@@ -659,34 +699,44 @@ function onTreeKeydown(e: KeyboardEvent) {
 .explorer-menu button {
   background: none;
   border: none;
-  color: inherit;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
   text-align: left;
-  padding: 4px 10px;
+  min-height: 24px;
+  padding: 0 var(--space-2);
   cursor: pointer;
+  font-size: var(--font-sm);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
 .explorer-menu button:hover {
-  background: var(--selection, rgba(74, 158, 255, 0.18));
+  background: var(--surface-active);
+  color: var(--text);
+}
+.explorer-menu button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-ring-offset));
 }
 .explorer-preview {
-  border-top: 1px solid var(--border, #333);
+  border-top: var(--border-w) solid var(--border);
   max-height: 40%;
   overflow: auto;
 }
 .preview-head {
   display: flex;
-  gap: 8px;
-  padding: 4px 8px;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
   align-items: center;
 }
 .preview-path {
   font-weight: 600;
 }
 .preview-meta {
-  color: var(--muted, #888);
+  color: var(--text-muted);
   font-size: var(--font-xs);
 }
 .preview-text {
-  padding: 8px;
+  padding: var(--space-2);
   white-space: pre-wrap;
   word-break: break-all;
   font-size: var(--font-sm);
@@ -696,7 +746,7 @@ function onTreeKeydown(e: KeyboardEvent) {
   max-width: 100%;
   max-height: 300px;
   display: block;
-  margin: 8px auto;
+  margin: var(--space-2) auto;
 }
 .explorer-mini {
   background: none;
@@ -706,8 +756,8 @@ function onTreeKeydown(e: KeyboardEvent) {
   font-size: var(--font-xs);
 }
 .artifacts-group {
-  margin: 6px 8px 2px;
-  color: var(--muted, #888);
+  margin: var(--space-1) var(--space-2) 2px;
+  color: var(--text-muted);
   font-size: var(--font-xs);
   text-transform: uppercase;
 }

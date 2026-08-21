@@ -635,8 +635,8 @@ defineExpose({
   color: var(--text-muted);
   opacity: 0.55;
   background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-full);
   pointer-events: none;
 }
 
@@ -650,10 +650,10 @@ defineExpose({
   align-items: center;
   gap: 4px;
   padding: 6px 8px;
-  background: var(--surface);
-  border: 1px solid var(--border-2);
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--border-2);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--shadow-menu);
   font-size: var(--font-sm);
 }
 .search-overlay input {
@@ -696,8 +696,8 @@ defineExpose({
   flex-direction: column;
   min-width: 140px;
   padding: 4px;
-  background: var(--surface);
-  border: 1px solid var(--border-2);
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--border-2);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-menu);
 }
@@ -710,6 +710,7 @@ defineExpose({
   border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: var(--font-md);
+  transition: background-color var(--duration-normal) var(--ease);
 }
 .ctx-menu button:hover:not(:disabled) {
   background: var(--surface-active);

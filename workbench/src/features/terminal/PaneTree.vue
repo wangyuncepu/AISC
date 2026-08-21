@@ -216,8 +216,9 @@ defineExpose({ focusActivePane });
 .pane[data-active="true"] { background: var(--bg); }
 .pane-close {
   position: absolute; top: 4px; right: 4px; z-index: 2;
-  background: rgba(30, 30, 30, 0.8); border: 1px solid var(--border-2); color: var(--text-muted);
-  width: 20px; height: 20px; line-height: 1; border-radius: var(--radius-md);
+  /* 半透明：悬浮于终端输出之上需透底（rgba 白名单：pane-close overlay，10f 评估专用 token） */
+  background: rgba(30, 30, 30, 0.8); border: var(--border-w) solid var(--border-2); color: var(--text-muted);
+  width: 20px; height: 20px; line-height: 1; border-radius: var(--radius-sm);
   font-size: var(--font-base); cursor: pointer; display: flex; align-items: center; justify-content: center;
 }
 .pane-close:hover { background: var(--error-bg); border-color: var(--error-border); color: var(--error-fg); }
