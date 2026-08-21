@@ -467,6 +467,56 @@ class RouteGuardTests(AdapterTestCase):
                                                stderr="")
         A.run_cli = fake_cli
 
+    def test_guard_verifies_the_agents_own_port(self):
+        # `proxy show` lists EVERY app (claude's line first) — the guard
+        # must anchor to the switching agent's own line (report 2026-08-21:
+        # a codex switch verified claude's legitimately-closed 15721 and
+        # failed the whole dance).
+        listener, codex_port = self._open_listener()
+        self.addCleanup(listener.close)
+        claude_port = self._closed_port()
+
+        def show_stdout_fn(args):
+            if "show" not in args:
+                return None
+            return (
+                "Local Proxy\n"
+                f"- Claude: disabled, configured {claude_port}\n"
+                f"- Codex: enabled, configured {codex_port}\n"
+            )
+
+        self._install_show_cli(show_stdout_fn)
+        self._seed_codex_switch()
+        A.op_switch("codex", "deepseek")  # claude port CLOSED — must not matter
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertFalse(any("daemon" in a for a in argvs))
+
+    def test_already_current_row_heals_tail_state(self):
+        # A guard failure mid-dance leaves the row current WITHOUT the
+        # catalog applied — the user's re-click takes the idempotent path,
+        # which must re-run the cheap post-healing (route verify + catalog).
+        listener, port = self._open_listener()
+        self.addCleanup(listener.close)
+        self._install_show_cli(
+            lambda args: f"- Codex: enabled, configured {port}\n"
+            if "show" in args else None)
+        toml_cfg = ('model_provider = "deepseek"\n[model_providers.deepseek]\n'
+                    'base_url = "https://api.deepseek.com"\n')
+        seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": toml_cfg,
+                                "modelCatalog": {"models": [
+                                    {"model": "deepseek-v4-pro",
+                                     "contextWindow": 1000000}]}})
+        providers = A.op_switch("codex", "deepseek")
+        self.assertTrue(providers[0]["is_current"])
+        catalog = self.dir / "aisc-model-catalog.json"
+        self.assertTrue(catalog.is_file())
+        self.assertIn("deepseek-v4-pro",
+                      catalog.read_text(encoding="utf-8"))
+        config_toml = self.dir / "config.toml"
+        self.assertIn("model_catalog_json",
+                      config_toml.read_text(encoding="utf-8"))
+
     def test_listening_route_passes_without_recovery(self):
         listener, port = self._open_listener()
         self.addCleanup(listener.close)
@@ -700,10 +750,14 @@ class SwitchTests(AdapterTestCase):
         A.op_switch("codex", "official")
         self.assertIn("proxy -a codex disable", " ".join(self.cli.calls[0].args))
 
-    def test_switch_to_current_is_idempotent_no_cli(self):
+    def test_switch_to_current_is_idempotent_plus_tail_heal(self):
+        # Idempotent success for the current row — but the cheap post-heal
+        # (route verify) runs; unparseable show output skips verification
+        # and no other CLI call is made.
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
         A.op_switch("claude", "deepseek")
-        self.assertEqual(self.cli.calls, [])
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertEqual(argvs, ["proxy -a claude show"])
 
     def test_switch_to_empty_config_row_uses_pty_path(self):
         # Empty-config rows (official/direct placeholders) prompt upstream —

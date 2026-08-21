@@ -693,10 +693,17 @@ def _db_merge_meta(agent: str, provider_id: str, extra: dict[str, Any]) -> None:
 
 def _proxy_listen_port(agent: str) -> Optional[int]:
     """The agent's local-route port from `proxy show` ("configured NNNN" —
-    persisted route config, the same source the daemon binds from). CLI text
-    is untrusted: no parse → None → the caller skips verification."""
+    persisted route config, the same source the daemon binds from). The
+    output lists EVERY app's route ("- Claude: ... configured 15721" comes
+    first) — anchor to THIS agent's line or the guard verifies the wrong
+    port (user report 2026-08-21: a codex switch failed on claude's 15721,
+    which is legitimately closed when the claude route is off). CLI text is
+    untrusted: no parse → None → the caller skips verification."""
     completed = run_cli(["proxy", "-a", agent, "show"], "", [])
-    match = re.search(r"configured (\d{2,5})", completed.stdout or "")
+    match = re.search(
+        rf"(?im)^\s*-\s*{re.escape(agent)}\s*:[^\n]*\bconfigured\s+(\d{{2,5}})",
+        completed.stdout or "",
+    )
     return int(match.group(1)) if match else None
 
 
@@ -1355,7 +1362,18 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
     if row is None:
         raise AdapterError(ERR_NOT_FOUND, f"provider not found: {provider_id}")
     if row["is_current"]:
-        return op_list(agent)  # already active — idempotent success
+        # Already active — idempotent success. BUT a previous attempt may
+        # have died between the CLI switch and the post-hooks (a guard
+        # failure skips the route verify AND the codex catalog/auth tail),
+        # leaving the row current with a broken tail state — the user's
+        # re-click then "succeeded" while /model still showed codex's
+        # built-in official models (report 2026-08-21). Re-run the cheap
+        # post-healing for real provider rows before returning.
+        if _settings_are_real(agent, row):
+            _ensure_route_serving(agent, snapshot_secrets(agent, snapshot))
+            if agent == "codex":
+                _apply_codex_model_catalog(row)
+        return op_list(agent)
     secrets = snapshot_secrets(agent, snapshot)
     to_official = provider_id.endswith("-official")
     # The pre-switch disable is PRECAUTIONARY (worker token-capture timing

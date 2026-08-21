@@ -759,12 +759,17 @@ def _is_pristine_default_import(agent: str, pid: str, settings: dict[str, Any]) 
     return not any(env.values())
 
 
-def _proxy_port_from_show(text: str) -> "int | None":
-    """Route port from `proxy show` human output ("configured NNNN"). The
-    same persisted config the daemon binds from; no parse → None → skip."""
+def _proxy_port_from_show(text: str, agent: str) -> "int | None":
+    """THIS agent's route port from `proxy show` human output. The output
+    lists every app ("- Claude: ... configured 15721" first) — anchor to
+    the agent's own line or the verify checks the wrong port (user report
+    2026-08-21). No parse → None → skip."""
     import re
 
-    match = re.search(r"configured (\d{2,5})", text or "")
+    match = re.search(
+        rf"(?im)^\s*-\s*{re.escape(agent)}\s*:[^\n]*\bconfigured\s+(\d{{2,5}})",
+        text or "",
+    )
     return int(match.group(1)) if match else None
 
 
@@ -959,7 +964,7 @@ def reconcile_runtime_state(
             try:
                 show = runner(["cc-switch", "proxy", "-a", agent, "show"],
                               capture_output=True, text=True, timeout=30)
-                port = _proxy_port_from_show(show.stdout or "")
+                port = _proxy_port_from_show(show.stdout or "", agent)
             except Exception as exc:
                 print(f"route verify {agent}: show failed: {exc}", file=log)
                 port = None
