@@ -235,6 +235,53 @@ textarea:focus-visible {
   opacity: 1;
 }
 
+/* --- 10e unified motion (D10-09/D10-14) --------------------------------
+ * Shared Vue <Transition>/<TransitionGroup> classes, all token-driven.
+ * `pop`  — menus, tab enter/leave (scale+fade)
+ * `fade` — dialog overlays
+ * `slide-right` — the right-edge status drawer
+ * Reduced motion: the global prefers-reduced-motion override near the top
+ * collapses every duration to 0.01ms, so nothing here needs its own guard. */
+.pop-enter-active {
+  transition: opacity var(--duration-normal) var(--ease),
+    transform var(--duration-normal) var(--ease);
+}
+.pop-leave-active {
+  transition: opacity var(--duration-fast) var(--ease),
+    transform var(--duration-fast) var(--ease);
+}
+.pop-enter-from,
+.pop-leave-to {
+  opacity: 0;
+  transform: scale(0.92);
+}
+.pop-move {
+  transition: transform var(--duration-normal) var(--ease);
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--duration-normal) var(--ease);
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.slide-right-enter-active {
+  transition: transform var(--duration-slow) var(--ease),
+    opacity var(--duration-normal) var(--ease);
+}
+.slide-right-leave-active {
+  transition: transform var(--duration-fast) var(--ease),
+    opacity var(--duration-fast) var(--ease);
+}
+.slide-right-enter-from,
+.slide-right-leave-to {
+  transform: translateX(30%);
+  opacity: 0;
+}
+
 button:disabled {
   cursor: default;
 }

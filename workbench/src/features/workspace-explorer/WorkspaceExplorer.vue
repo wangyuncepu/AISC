@@ -515,7 +515,8 @@ function onTreeKeydown(e: KeyboardEvent) {
       </template>
     </div>
 
-    <!-- Context menu -->
+    <!-- Context menu (10e: unified pop motion) -->
+    <Transition name="pop">
     <div
       v-if="menuFor"
       class="explorer-menu"
@@ -531,6 +532,7 @@ function onTreeKeydown(e: KeyboardEvent) {
       <button role="menuitem" @click="onMenuCopy(menuFor!)">{{ t("explorer.copy") }}</button>
       <button class="menu-close" role="menuitem" @click="menuFor = null">✕</button>
     </div>
+    </Transition>
 
     <!-- Click-away backdrop: closes the menu without selecting a tree row. -->
     <div v-if="menuFor" class="explorer-menu-backdrop" @mousedown="menuFor = null" @contextmenu.prevent="menuFor = null" />

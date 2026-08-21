@@ -303,6 +303,8 @@ function canReopen(s: TabSessionState): boolean {
          and the close/reopen actions are sibling buttons (no nested button,
          which was invalid and broke focus semantics). The wrapper keeps the
          visual active/hover state; tab-main carries role=tab. -->
+    <!-- 10e: unified pop motion (D10-09) — enter/leave + FLIP move. -->
+    <TransitionGroup name="pop">
     <div
       v-for="(tab, i) in store.tabs"
       :key="tab.tabId"
@@ -339,9 +341,11 @@ function canReopen(s: TabSessionState): boolean {
         >↻</button>
       </span>
     </div>
+    </TransitionGroup>
 
     <!-- IDEA-1 + Stage 8e: virtual session-less tabs (Settings, cc-switch
          Provider UI). Keyboard model: appended after the session tabs. -->
+    <TransitionGroup name="pop">
     <div
       v-for="(v, vi) in virtualTabs"
       :key="v.id"
@@ -366,6 +370,7 @@ function canReopen(s: TabSessionState): boolean {
         >×</button>
       </span>
     </div>
+    </TransitionGroup>
 
     <!-- G-08 + IDEA-1: + split button. Main + creates the DEFAULT agent tab
          (ui.default_tab_agent) immediately; ▾ opens the full menu (any agent
@@ -392,6 +397,7 @@ function canReopen(s: TabSessionState): boolean {
         @keydown="onMenuKeydown"
       >▾</button>
       <Teleport to="body">
+        <Transition name="pop">
         <ul
           v-if="menuOpen"
           ref="menuRef"
@@ -416,6 +422,7 @@ function canReopen(s: TabSessionState): boolean {
             @click="chooseCcSwitchUi"
           >{{ t("tabbar.ccSwitchUi") }}</li>
         </ul>
+        </Transition>
       </Teleport>
     </div>
   </div>

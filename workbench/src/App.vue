@@ -433,8 +433,11 @@ onBeforeUnmount(() => {
       />
     </template>
 
-    <!-- G-13: diagnosis dialog, shared by blocked/error/ready entry points -->
-    <DoctorDialog v-if="doctorStore.open" />
+    <!-- G-13: diagnosis dialog, shared by blocked/error/ready entry points.
+         10e: unified fade motion (D10-09). -->
+    <Transition name="fade">
+      <DoctorDialog v-if="doctorStore.open" />
+    </Transition>
   </div>
 </template>
 

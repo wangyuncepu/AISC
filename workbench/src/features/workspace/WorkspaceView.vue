@@ -283,6 +283,8 @@ function setPaneTreeRef(tabId: string) {
         ⓘ
       </button>
       <!-- 状态信息栏：右侧悬浮抽屉（原资源管理器抽屉样式），默认收起 -->
+      <!-- 10e: unified slide-right motion (D10-09). -->
+      <Transition name="slide-right">
       <div v-show="showStatus" class="status-drawer">
         <div class="status-head">
           <span>{{ t("sidebar.drawerTitle") }}</span>
@@ -297,6 +299,7 @@ function setPaneTreeRef(tabId: string) {
         </div>
         <RuntimeSidebar />
       </div>
+      </Transition>
     </div>
 
     <!-- Instance error gate -->

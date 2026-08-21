@@ -378,6 +378,7 @@ function onBarKeydown(e: KeyboardEvent) {
         @keydown="onMenuKeydown"
       >▾</button>
       <Teleport to="body">
+        <Transition name="pop">
         <ul
           v-if="menuOpen"
           ref="menuRef"
@@ -397,6 +398,7 @@ function onBarKeydown(e: KeyboardEvent) {
             @click="menuOpenNetworkUsage"
           >{{ t("workspbar.networkUsage") }}</li>
         </ul>
+        </Transition>
       </Teleport>
     </div>
   </nav>

@@ -581,7 +581,8 @@ defineExpose({
       <button class="close" aria-label="Close" @click="closeSearch">×</button>
     </div>
 
-    <!-- G-11 context menu -->
+    <!-- G-11 context menu (10e: unified pop motion) -->
+    <Transition name="pop">
     <div
       v-if="ctxMenu"
       class="ctx-menu"
@@ -605,8 +606,10 @@ defineExpose({
         </button>
       </template>
     </div>
+    </Transition>
 
     <!-- G-17: choose the session type for the new split pane -->
+    <Transition name="pop">
     <div
       v-if="splitPicker"
       class="ctx-menu split-picker"
@@ -619,6 +622,7 @@ defineExpose({
         {{ t(`tabbar.menu.${a}`) }}
       </button>
     </div>
+    </Transition>
   </div>
 </template>
 
