@@ -382,17 +382,89 @@ class CodexEditShapeTests(AdapterTestCase):
         self.assertEqual(sent["auth"]["OPENAI_API_KEY"], "sk-rotate-99")
 
 
+class ClaudeSettingsBaseTests(AdapterTestCase):
+    """Retest round 2 (2026-08-21): upstream's claude switch REPLACES
+    settings.json with the row's settings_config wholesale — every claude
+    settings_config the adapter writes must carry the non-env base
+    (statusLine/enabledPlugins/...) or the user's setup is wiped on the
+    next switch (live-probed)."""
+
+    def _add_settings(self, request: dict) -> dict:
+        A.op_add("claude", request)
+        adds = [c for c in self.cli.calls if "add" in c.args]
+        self.assertEqual(len(adds), 1)
+        return json.loads(adds[0].stdin_text)
+
+    def test_simple_add_carries_settings_base(self):
+        sent = self._add_settings({
+            "mode": "simple", "id": "deepseek", "provider": "deepseek",
+            "api_key": "sk-new-secret-777",
+        })
+        self.assertIn("statusLine", sent)
+        self.assertIn("enabledPlugins", sent)
+        self.assertEqual(sent["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-new-secret-777")
+
+    def test_custom_add_carries_settings_base(self):
+        sent = self._add_settings({
+            "mode": "custom", "id": "my-endpoint", "name": "My Endpoint",
+            "base_url": "https://api.example.com", "api_key": "sk-k",
+        })
+        self.assertIn("statusLine", sent)
+        self.assertEqual(sent["env"]["ANTHROPIC_BASE_URL"], "https://api.example.com")
+
+    def test_edit_preserves_non_env_keys_through_the_dance(self):
+        statusline = {"type": "command", "command": "echo hi"}
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True,
+                      settings={"env": CLAUDE_ENV, "statusLine": statusline})
+        seed_provider(self.dir, "zhipu", {"ANTHROPIC_BASE_URL": "https://z"})
+        A.op_edit("claude", "deepseek", {"patch": {"name": "DS"}})
+        adds = [c for c in self.cli.calls if "add" in c.args]
+        self.assertEqual(len(adds), 1)  # the dance's re-add
+        sent = json.loads(adds[0].stdin_text)
+        self.assertEqual(sent["statusLine"], statusline)
+
+
 class SwitchTests(AdapterTestCase):
     def test_switch_runs_cli_switch_and_returns_snapshot(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
         seed_provider(self.dir, "zhipu", {"ANTHROPIC_BASE_URL": "https://z"})
         providers = A.op_switch("claude", "zhipu")
-        self.assertEqual(len(self.cli.calls), 1)
-        argv = self.cli.calls[0].args
-        self.assertIn("switch", argv)
-        self.assertEqual(argv[-1], "zhipu")
+        # Retest round 2 (2026-08-21): the provider-page choice owns the
+        # agent's proxy route — disable → switch → enable for BOTH agents.
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertEqual(len(argvs), 3)
+        self.assertIn("proxy -a claude disable", argvs[0])
+        self.assertIn("switch", argvs[1])
+        self.assertTrue(argvs[1].endswith("zhipu"))
+        self.assertIn("proxy -a claude enable", argvs[2])
         # snapshot returned unchanged (the CLI owns is_current truth)
         self.assertEqual([p["id"] for p in providers][0], "deepseek")
+
+    def test_claude_switch_reenables_proxy_route_after_switch(self):
+        # Symmetric with codex (retest round 2): activating a provider leaves
+        # the agent's local route ON (proxy on ⟺ third-party provider
+        # current); disable-first lets the switch write the row's direct env,
+        # enable re-arms the local-route stub (live-probed 2026-08-21).
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "zhipu", {"ANTHROPIC_BASE_URL": "https://z"})
+        A.op_switch("claude", "zhipu")
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertEqual(argvs[0], "proxy -a claude disable")
+        self.assertIn("switch", argvs[1])
+        self.assertEqual(argvs[2], "proxy -a claude enable")
+
+    def test_claude_switch_to_official_leaves_route_disabled(self):
+        # Cancel-proxy: official-direct rows leave the agent's route OFF —
+        # the invariant's other half (and the fix for "claude stuck on
+        # default with the proxy on").
+        seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
+        seed_provider(self.dir, "claude-official", {})
+        self.cli.stdout_for = None
+        A.op_switch("claude", "official")
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertIn("proxy -a claude disable", argvs[0])
+        self.assertTrue(any("provider switch claude-official" in a for a in argvs))
+        self.assertFalse(any("enable" in a for a in argvs))
 
     def test_codex_switch_reenables_proxy_route_after_switch(self):
         # Codex reaches third parties only through the local proxy route
@@ -476,16 +548,19 @@ class SwitchTests(AdapterTestCase):
         seed_provider(self.dir, "claude-official", {})
         self.cli.stdout_for = None
         A.op_switch("claude", "claude-official")
-        call = self.cli.calls[0]
-        self.assertEqual(call.args[0], "script")
+        pty_calls = [c for c in self.cli.calls if c.args[0] == "script"]
+        self.assertEqual(len(pty_calls), 1)
+        call = pty_calls[0]
         self.assertIn("provider switch claude-official", call.args[2])
         self.assertEqual(call.stdin_text, "y\ny\n")
 
     def test_switch_official_pseudo_target_maps_to_agent_row(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
         seed_provider(self.dir, "claude-official", {})
+        self.cli.stdout_for = None
         A.op_switch("claude", "official")
-        self.assertIn("provider switch claude-official", self.cli.calls[0].args[2])
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertTrue(any("provider switch claude-official" in a for a in argvs))
 
     def test_switch_injection_guard_rejects_bad_ids(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
@@ -493,7 +568,10 @@ class SwitchTests(AdapterTestCase):
         with self.assertRaises(A.AdapterError) as ctx:
             A.op_switch("claude", "bad; rm -rf /")
         self.assertEqual(ctx.exception.code, A.ERR_BAD_REQUEST)
-        self.assertEqual(self.cli.calls, [])
+        # The dance's route calls may run first — the GUARD is that the bad
+        # id never reaches any shell command string.
+        for call in self.cli.calls:
+            self.assertNotIn("bad; rm -rf /", " ".join(call.args))
 
     def test_switch_unknown_provider(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)

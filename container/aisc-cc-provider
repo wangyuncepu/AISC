@@ -482,6 +482,31 @@ def _preset_provider(provider_id: str) -> dict[str, Any]:
     )
 
 
+def _claude_settings_base() -> dict[str, Any]:
+    """The non-env template every claude settings_config must carry.
+
+    Live-probed 2026-08-21 (retest round 2): upstream's claude switch
+    REPLACES settings.json with the row's settings_config wholesale — an
+    env-only row (everything this adapter used to write) wipes the user's
+    statusLine/enabledPlugins. The preset module ships the image's
+    claude-settings.json as the base template; it rides along on every claude
+    settings_config built here. Unloadable → {} (rows degrade to env-only,
+    the historical behavior, never a failure).
+    """
+    try:
+        module = _preset_module()
+    except AdapterError:
+        return {}
+    loader = getattr(module, "load_claude_settings_base", None)
+    if callable(loader):
+        try:
+            base = loader()
+        except Exception:
+            return {}
+        return base if isinstance(base, dict) else {}
+    return {}
+
+
 # ---------------------------------------------------------------------------
 # settings_config builders
 # ---------------------------------------------------------------------------
@@ -502,7 +527,7 @@ def build_add_settings(
             })
             if api_key:
                 env["ANTHROPIC_AUTH_TOKEN"] = api_key
-            return provider["name"], {"env": env}
+            return provider["name"], {"env": env, **_claude_settings_base()}
         # custom
         env: dict[str, str] = {}
         if request.get("base_url"):
@@ -517,7 +542,7 @@ def build_add_settings(
                 env[str(key)] = str(value)
         if not env.get("ANTHROPIC_BASE_URL"):
             raise AdapterError(ERR_BAD_REQUEST, "custom claude add requires base_url")
-        return str(request.get("name") or ""), {"env": env}
+        return str(request.get("name") or ""), {"env": env, **_claude_settings_base()}
 
     # codex
     if mode == "simple":
@@ -759,7 +784,15 @@ def _merge_patch(
                     env[str(key)] = str(value)
         if api_key:
             env["ANTHROPIC_AUTH_TOKEN"] = api_key
-        return {"env": env}
+        # Live-probed 2026-08-21: claude switch replaces settings.json with
+        # the row's settings_config WHOLESALE — the rebuilt settings must
+        # carry every non-env key (statusLine/enabledPlugins/...) the row
+        # had, or the edit dance wipes them on re-add.
+        merged: dict[str, Any] = {"env": env}
+        for key_name, value in current_settings.items():
+            if key_name != "env":
+                merged[key_name] = value
+        return merged
     # codex: rebuild the provider TOML from the patched fields, preserving
     # the row's existing shape — preset rows carry wire_api="responses" +
     # model_context_window (the probed working shape; a blind rebuild used
@@ -1027,12 +1060,17 @@ def _set_codex_catalog_key(config_text: str, new_value: Optional[str]) -> str:
 def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
     """Post-switch hook: write the catalog file + point config.toml at it.
 
-    Catalog source = the PRESET module by provider id, NOT the db row's
-    settings_config — upstream's codex switch round-trips the LIVE config
-    back into the stored settings (live-setting import), stripping unknown
-    keys like modelCatalog on every switch (live-verified 2026-08-20).
+    Catalog source = the db row's ``settings_config.modelCatalog`` (the same
+    data the cc-switch TUI's model-mapping page edits — a user mapping wins),
+    falling back to the PRESET module's declared list for rows the preset
+    wrote before they carried one. The 2026-08-20 note about the switch
+    stripping ``modelCatalog`` was a misread: headless add/switch both
+    PRESERVE the key on cc-switch 5.10.2 (live-probed 2026-08-21); what the
+    headless switch never does is GENERATE the models file — catalog-file
+    generation only runs inside cc-switch's TUI mapping workflow, so the
+    adapter generates the file itself.
 
-    Custom providers (no preset entry): single-row catalog from the live
+    Custom providers (no catalog anywhere): single-row catalog from the live
     `model` line (default window) so /model at least lists the active model.
     The live `model` value also gets its Claude-side ``[1m]`` suffix
     stripped when the clean id matches a catalog slug — that suffix is a
@@ -1059,14 +1097,24 @@ def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
         api_format = None
         live_model = _codex_live_model(text)
         if row is not None:
+            stored = row.get("settings", {}).get("modelCatalog")
+            if isinstance(stored, dict) and isinstance(stored.get("models"), list):
+                models = [
+                    m for m in stored["models"]
+                    if isinstance(m, dict) and m.get("model")
+                ]
             try:
                 preset = _preset_provider(str(row.get("id") or ""))
             except AdapterError:
                 preset = {}
-            raw = preset.get("model_catalog")
-            if isinstance(raw, list) and raw:
-                models = [m for m in raw if isinstance(m, dict) and m.get("model")]
-            api_format = preset.get("codex_api_format")
+            if not models:
+                raw = preset.get("model_catalog")
+                if isinstance(raw, list) and raw:
+                    models = [m for m in raw if isinstance(m, dict) and m.get("model")]
+            # The router's protocol selector: the row's meta (user/TUI-written,
+            # restored by _db_merge_meta) wins over the preset declaration.
+            api_format = (row.get("meta") or {}).get("apiFormat") \
+                or preset.get("codex_api_format")
         if not models and live_model:
             models = [{"model": live_model, "contextWindow": 128_000}]
 
@@ -1194,6 +1242,18 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
     row — the "cancel proxy" affordance. Real-config targets use the plain
     CLI path; empty-config targets (official placeholders) go through the
     pty path. Switching to the already-current provider is idempotent.
+
+    Retest round 2 (2026-08-21): the provider-page choice owns BOTH agents'
+    proxy routes — the on/off invariant (proxy on ⟺ a third-party provider
+    is current; official-direct rows leave it off). The route is torn down
+    BEFORE the switch rewrites live files and re-armed AFTER only when a
+    provider row won. For codex the order is load-bearing: the worker serves
+    the upstream token it CAPTURES from live auth.json at enable time (it
+    neither passes the client bearer through nor reads the DB per request —
+    live-probed 2026-08-21). For claude it restores correctness:
+    ``proxy disable`` writes the current row's direct env back into live
+    settings.json and ``enable`` re-writes the local-route stub, so the
+    cancel-proxy path ends truly direct (live-probed 2026-08-21).
     """
     if provider_id == OFFICIAL_TARGET:
         provider_id = _OFFICIAL_ROW_ID[agent]
@@ -1205,28 +1265,19 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
         return op_list(agent)  # already active — idempotent success
     secrets = snapshot_secrets(agent, snapshot)
     to_official = provider_id.endswith("-official")
-    if agent == "codex":
-        # Codex only reaches third-party providers through cc-switch's LOCAL
-        # proxy route (default OFF — without it codex talks to api.openai.com
-        # regardless of model_provider; probed on the real container). The
-        # worker serves the upstream token it CAPTURES from live auth.json at
-        # enable time — it neither passes the client bearer through nor reads
-        # the DB per request (live-probed 2026-08-21) — so the route must be
-        # torn down BEFORE the switch rewrites live files and re-enabled
-        # AFTER, mirroring the manual disable→(fix)→enable sequence verified
-        # on the real container. Interactive codex ALSO demands an auth.json
-        # before it starts — a marker placeholder that never carries a secret
-        # and never touches a real ChatGPT login is managed post-switch.
-        _cli(["proxy", "-a", "codex", "disable"], secrets=secrets,
-             what="codex proxy route disable")
+    _cli(["proxy", "-a", agent, "disable"], secrets=secrets,
+         what=f"{agent} proxy route disable")
     if _settings_are_real(agent, row):
         _cli_switch(agent, provider_id, secrets)
     else:
         _cli_switch_empty_config(agent, provider_id)
+    if not to_official:
+        _cli(["proxy", "-a", agent, "enable"], secrets=secrets,
+             what=f"{agent} proxy route enable")
     if agent == "codex":
-        if not to_official:
-            _cli(["proxy", "-a", "codex", "enable"], secrets=secrets,
-                 what="codex proxy route enable")
+        # Interactive codex ALSO demands an auth.json before it starts — a
+        # marker placeholder that never carries a secret and never touches a
+        # real ChatGPT login is managed post-switch.
         _manage_codex_auth_placeholder(remove=to_official)
         # Zero-step goal: /model lists the provider's models right after the
         # switch (no TUI visit, no manual model entry).
