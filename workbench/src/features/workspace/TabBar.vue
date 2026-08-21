@@ -453,7 +453,12 @@ function canReopen(s: TabSessionState): boolean {
   outline: var(--focus-ring-width) solid var(--focus);
   outline-offset: var(--focus-ring-offset);
 }
-.tab .title { font-weight: 500; }
+.tab .title {
+  font-weight: 500;
+  max-width: 18ch; /* B-02: long workspace names must not eat the bar */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tab .state { font-size: var(--font-xs); color: var(--text-muted); }
 .tab.idle { color: var(--text-faint); }
 .tab.starting .state, .tab.closing .state { color: var(--warn); }

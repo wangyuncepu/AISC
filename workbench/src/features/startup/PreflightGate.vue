@@ -57,10 +57,10 @@ function statusText(c: PreflightCheck): string {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-lg);
 }
 .check {
   display: grid;

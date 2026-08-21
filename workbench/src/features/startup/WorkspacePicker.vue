@@ -66,12 +66,20 @@ function basename(p: string): string {
   width: 100%; display: flex; align-items: center; gap: 8px; text-align: left;
   background: var(--surface); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 6px 10px; font-size: var(--font-sm); cursor: pointer;
+  overflow: hidden; /* B-01: long folder names must truncate, not overflow */
   transition: background-color var(--duration-normal) var(--ease), border-color var(--duration-normal) var(--ease);
 }
 .recent:hover { background: var(--surface-2); border-color: var(--border-2); }
 .recent:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: var(--focus-ring-offset); }
-.r-name { color: var(--text-2); font-weight: 500; min-width: 80px; }
-.r-path { flex: 1; color: var(--text-muted); font-family: var(--font-mono); font-size: var(--font-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-name {
+  color: var(--text-2); font-weight: 500; min-width: 80px; max-width: 45%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.r-path {
+  flex: 1; min-width: 0; /* flex ellipsis needs min-width: 0 */
+  color: var(--text-muted); font-family: var(--font-mono); font-size: var(--font-xs);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .r-agent { color: var(--info); font-size: var(--font-xs); }
 .workspace {
   flex: 1; min-width: 0; background: var(--surface-3); color: var(--text);

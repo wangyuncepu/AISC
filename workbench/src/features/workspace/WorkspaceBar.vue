@@ -420,6 +420,11 @@ function onBarKeydown(e: KeyboardEvent) {
   color: var(--text);
 }
 .chip.launcher { border-style: dashed; }
+.chip .name {
+  max-width: 22ch; /* B-02: long workspace names must not eat the strip */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--text-faint); flex: none; }
 .dot[data-state="running"] { background: var(--success); }
 .dot[data-state="starting"], .dot[data-state="building"] { background: var(--info); }
