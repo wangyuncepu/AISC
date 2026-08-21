@@ -88,6 +88,28 @@ function activateRenderedTab(id: string): void {
   focusTabTerminal(id);
 }
 
+/** 10e r7 (user feedback): tab CONTENT now fades in on switch — the v-show
+ * panes stay mounted (buffer-safe design), so a display:none -> block swap
+ * can't CSS-transition; orchestrate manually: pin opacity 0, then release on
+ * the next frame so the 150ms ease runs. */
+const terminalAreaRef = ref<HTMLElement | null>(null);
+watch(
+  () => store.activeTabId,
+  (id) => {
+    if (!id || store.status !== "ready") return;
+    void nextTick(() => {
+      const area = terminalAreaRef.value;
+      const wrap = area?.querySelector<HTMLElement>(`.term-wrap[data-tab="${CSS.escape(id)}"]`)
+        ?? area?.querySelector<HTMLElement>(".settings-pane");
+      if (!wrap) return;
+      wrap.classList.add("pane-fade-in");
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => wrap.classList.remove("pane-fade-in")),
+      );
+    });
+  },
+);
+
 // G-08: every activation path moves keyboard focus into the terminal.
 watch(
   () => store.activeTabId,
@@ -243,7 +265,7 @@ function setPaneTreeRef(tabId: string) {
       </div>
       <div class="main">
         <TabBar />
-        <main class="terminal-area">
+        <main ref="terminalAreaRef" class="terminal-area">
           <div v-if="store.tabs.length === 0 && !ccSwitchPaneVisible" class="empty-tabs">
             <p>{{ t("tabs.empty") }}</p>
             <button class="ui-button primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
@@ -251,6 +273,7 @@ function setPaneTreeRef(tabId: string) {
           <div
             v-for="tb in paneTabs"
             :key="tb.tabId"
+            :data-tab="tb.tabId"
             class="term-wrap"
             :style="props.zoom"
             v-show="tb.tabId === store.activeTabId"
@@ -334,6 +357,9 @@ function setPaneTreeRef(tabId: string) {
 .ready { flex: 1; display: flex; min-height: 0; position: relative; }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: var(--bg); display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
+/* 10e: content fade on tab switch (opacity only — D10-09). */
+.term-wrap, .settings-pane { transition: opacity var(--duration-normal) var(--ease); }
+.term-wrap.pane-fade-in, .settings-pane.pane-fade-in { opacity: 0; }
 .settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }
 /* 2026-08-18 样式对调：Explorer 固定停靠左列（原 RuntimeSidebar 的 dock 样式） */
 .explorer-dock {
