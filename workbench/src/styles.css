@@ -14,8 +14,10 @@
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --space-10: 40px;
 
   --font-xs: 11px;
   --font-sm: 12px;
@@ -24,14 +26,33 @@
   --font-lg: 16px;
   --font-xl: 20px;
 
-  --radius-sm: 2px;
-  --radius-md: 4px;
-  --radius-lg: 6px;
+  /* 10b: line-height + mono family (UI chrome only — the terminal font comes
+   * from the `terminal.font_family` setting, never from this token). */
+  --leading-tight: 1.3;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.7;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+
+  /* 10b (D10-14, iOS direction): radius scale raised, controls get real
+   * minimum heights so tabs/buttons/sliders stay easy to hit. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
   --radius-full: 50%;
+
+  --control-h-sm: 26px;
+  --control-h-md: 32px;
+  --control-h-lg: 38px;
 
   --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.35);
   --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.5);
+
+  --border-w: 1px;
+  --border-w-strong: 2px;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
 
   --z-menu: 10;
   --z-overlay: 20;
@@ -41,12 +62,25 @@
 
   --duration-fast: 100ms;
   --duration-normal: 200ms;
+  --duration-slow: 300ms;
 
   /* --- status indicator colors (theme-independent; onboarding check dots /
    * probe / confirm) — distinct hues from the semantic text palette. --- */
   --status-ok: #4caf50;
   --status-err: #e5534b;
   --status-pending: #ffb300;
+
+  /* --- 10b compatibility aliases (legacy names kept resolving; migrate
+   * components to the canonical tokens in 10c/10d, drop these in 10f —
+   * see docs/plans/aisc-next-followup/stage-10-ui-visual-polish/token-mapping.md) --- */
+  --muted: var(--text-muted);
+  --text-dim: var(--text-muted);
+  --text-1: var(--text);
+  --danger: var(--error);
+  --accent-text: var(--accent-fg);
+  --accent-dim: var(--accent-soft);
+  --warn-dim: var(--warn-soft);
+  --mono: var(--font-mono);
 
   /* --- semantic tokens (dark) --- */
   --bg: #1e1e1e;                 /* app / terminal area background */
@@ -65,6 +99,7 @@
   --accent: #0e639c;             /* primary action */
   --accent-hover: #1177bb;
   --accent-fg: #ffffff;          /* text on accent */
+  --accent-soft: rgba(74, 158, 255, 0.25); /* tinted accent bg (badges, segmented on) */
   --info: #9cdcfe;               /* info / link-ish text */
   --success: #9cce9c;
   --warn: #cca84a;
@@ -81,6 +116,14 @@
   --info-border: #3a4a5a;
   --selection: #264f78;          /* text selection */
   --focus: #0e639c;              /* focus ring */
+  --scrim: rgba(0, 0, 0, 0.55);  /* dialog/drawer overlay backdrop (10b) */
+
+  /* 10b state "soft" family — translucent tints for badges/chips/selected
+   * rows; the solid *-bg tokens above stay for banners. */
+  --success-soft: rgba(76, 175, 80, 0.18);
+  --warn-soft: rgba(255, 179, 0, 0.16);
+  --error-soft: rgba(229, 83, 75, 0.16);
+  --info-soft: rgba(156, 220, 254, 0.14);
 
   color-scheme: dark;
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
@@ -109,6 +152,7 @@
   --accent: #0e639c;
   --accent-hover: #1177bb;
   --accent-fg: #ffffff;
+  --accent-soft: rgba(14, 99, 156, 0.12);
   --info: #005fb8;
   --success: #2e7d32;
   --warn: #9a6b00;
@@ -125,6 +169,12 @@
   --info-border: #b8c8da;
   --selection: #b4d5fe;
   --focus: #005fb8;
+  --scrim: rgba(0, 0, 0, 0.32);
+
+  --success-soft: rgba(46, 125, 50, 0.12);
+  --warn-soft: rgba(154, 107, 0, 0.12);
+  --error-soft: rgba(179, 38, 30, 0.10);
+  --info-soft: rgba(0, 95, 184, 0.10);
 
   color-scheme: light;
 }
@@ -144,12 +194,13 @@ body {
 }
 
 /* S3.3: keyboard-focus visibility (only for keyboard navigation, never on
- * mouse clicks). */
+ * mouse clicks). 10b: dimensions now tokenized. */
 button:focus-visible,
 input:focus-visible,
-select:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+select:focus-visible,
+textarea:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
 }
 
 /* Stage 6 (UX-03): reduced motion — collapse CSS transitions/animations.
