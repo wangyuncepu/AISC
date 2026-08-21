@@ -25,6 +25,16 @@
 
 遗留入 10c/10d：别名迁移、rgba 白名单 5 条、Settings chip 10px/TabBar icon 3px 等散点 radius。
 
-## 10c-shell（进行中）
+## 10c-shell ✅（2026-08-21，用户手测「全过」关门）
 
-- 10c-1：TabBar 重塑（pill 化、命中区 32、accent-soft active；保留横向滚动 + tablist 键盘硬门）
+| commit | 内容 |
+|---|---|
+| `4518adb` | 10c-1 TabBar：下划线 tab → pill（radius-sm/32 高/accent-soft active），图标钮 24px，横向滚动+tablist 键盘零改动 |
+| `d8d3b61` | 10c-2 顶栏/工作区条/侧栏：状态色文字、chip pill 化、mini 行/按钮对齐 |
+| `5394c6f`+`c1a1553` | 顶栏徽章过重回退为轻量彩色文字；**流程事故：grep 吞 build 退出码带病提交 5394c6f，c1a1553 修复**（后续一律显式 exit 检查） |
+| `1285b87` | 无容器 chip（设置/网络用量/启动器）隐藏恒灰状态灯 |
+| `c864b79` | 10c-3 Explorer 分段 tab/圆角行/pill badge/圆角阴影菜单；抽屉容器 surface-2+shadow-2；终端外围 chrome 统一；fallback 全清迁正主 token |
+
+手测硬门：Explorer 右键菜单坐标正、抽屉开合、终端输入/搜索/右键/复制、分屏 ×——用户确认全过。tab 新增动画按用户决策并入 10e 统一动效。CSS 68 kB 上下。
+
+## 10d-flows（待用户授权）
