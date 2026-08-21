@@ -174,13 +174,14 @@ onMounted(() => void usage.fetchOverview());
 
         <div class="actions">
           <button
+            class="ui-button"
             :disabled="usage.subBusy || usage.subscription?.source !== 'download'"
             @click="usage.refreshSubscription()"
           >{{ usage.subBusy ? t("usage.sub.refreshing") : t("usage.sub.refresh") }}</button>
-          <button :disabled="usage.subBusy" @click="replacing = true">
+          <button class="ui-button" :disabled="usage.subBusy" @click="replacing = true">
             {{ t("usage.sub.replace") }}
           </button>
-          <button class="danger" :disabled="usage.subBusy" @click="clearSubscription()">
+          <button class="ui-button danger" :disabled="usage.subBusy" @click="clearSubscription()">
             {{ t("usage.sub.clear") }}
           </button>
         </div>
@@ -207,15 +208,15 @@ onMounted(() => void usage.fetchOverview());
             <option v-for="o in scopeOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
           </select>
         </label>
-        <button class="toggle" :title="t('usage.unitHint')"
+        <button class="ui-button sm toggle" :title="t('usage.unitHint')"
                 @click="usage.cycleTokenUnit()">
           {{ t("usage.unitLabel") }}: {{ t(`usage.unit.${usage.tokenUnit}`) }}
         </button>
-        <button class="toggle" :title="t('usage.currencyHint')"
+        <button class="ui-button sm toggle" :title="t('usage.currencyHint')"
                 @click="usage.toggleCurrency()">
           {{ usage.currency === "USD" ? "$ USD" : "¥ CNY" }}
         </button>
-        <button :disabled="usage.loading" @click="usage.fetchOverview()">
+        <button class="ui-button" :disabled="usage.loading" @click="usage.fetchOverview()">
           {{ t("usage.reload") }}
         </button>
       </div>
@@ -268,27 +269,28 @@ onMounted(() => void usage.fetchOverview());
 .usage-tab { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column;
   background: var(--surface); }
 .scroll { flex: 1; overflow: auto; padding: 18px 22px; display: flex; flex-direction: column; gap: 12px; }
-h2 { font-size: 15px; margin: 12px 0 2px; }
-.dim { color: var(--text-dim, #888); font-size: 13px; }
+h2 { font-size: var(--font-lg); margin: var(--space-3) 0 2px; }
+.dim { color: var(--text-muted); font-size: var(--font-md); }
 .sub-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
 .sub-facts div { display: contents; }
-.sub-facts dt { color: var(--text-dim, #888); font-size: 12px; }
+.sub-facts dt { color: var(--text-muted); font-size: var(--font-sm); }
 .sub-facts dd { margin: 0; font-size: 13px; word-break: break-all; }
-.bar { height: 8px; border-radius: 4px; background: var(--surface-2, #ddd); overflow: hidden; max-width: 480px; }
-.bar-fill { height: 100%; background: var(--accent, #3b7dd8); }
+.bar { height: 8px; border-radius: var(--radius-full); background: var(--surface-3); overflow: hidden; max-width: 480px; }
+.bar-fill { height: 100%; background: var(--accent); transition: width var(--duration-slow) var(--ease); }
 .sub-usage { margin: 0; font-size: 13px; }
-.note { margin: 0; font-size: 12px; color: var(--warn, #b80); }
-.error { color: var(--danger, #d33); font-size: 13px; margin: 0; }
+.note { margin: 0; font-size: var(--font-sm); color: var(--warn); }
+.error { color: var(--error); font-size: var(--font-md); margin: 0; }
 .actions { display: flex; gap: 8px; }
 .controls { display: flex; gap: 14px; align-items: end; flex-wrap: wrap; }
-.controls label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-dim, #888); }
-.usage-table { border-collapse: collapse; font-size: 13px; max-width: 860px; }
-.usage-table th, .usage-table td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+.controls label { display: flex; flex-direction: column; gap: 3px; font-size: var(--font-sm); color: var(--text-muted); }
+.usage-table { border-collapse: collapse; font-size: var(--font-md); max-width: 860px; }
+.usage-table th { color: var(--text-muted); font-size: var(--font-xs); text-transform: uppercase; letter-spacing: 0.5px; }
+.usage-table th, .usage-table td { border-bottom: var(--border-w) solid var(--border); padding: var(--space-1) var(--space-2); text-align: left; }
 .usage-table .num { text-align: right; font-variant-numeric: tabular-nums; }
-.ws-states { margin: 0; padding-left: 18px; font-size: 12px; color: var(--text-dim, #888); }
-.hint { font-size: 12px; color: var(--text-dim, #888); margin: 0; max-width: 760px; }
-button.danger { color: var(--danger, #d33); }
-button.toggle { font-size: 12px; padding: 4px 10px; }
-td.unpriced { color: var(--warn, #b80); }
+.ws-states { margin: 0; padding-left: 18px; font-size: var(--font-sm); color: var(--text-muted); }
+.hint { font-size: var(--font-sm); color: var(--text-muted); margin: 0; max-width: 760px; }
+button.danger { color: var(--error-fg); }
+button.toggle { font-size: var(--font-sm); }
+td.unpriced { color: var(--warn); }
 td.unpriced .q { margin-left: 2px; cursor: help; font-weight: bold; }
 </style>
