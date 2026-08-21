@@ -409,9 +409,9 @@ function canReopen(s: TabSessionState): boolean {
 <style scoped>
 .tabbar {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 2px;
-  padding: 0 6px;
+  padding: 3px 6px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -419,29 +419,39 @@ function canReopen(s: TabSessionState): boolean {
   overflow-x: auto;
   scrollbar-width: thin;
 }
+/* 10c: pill tabs (D10-14) — the Stage 6 underline treatment gives way to
+ * rounded fills; min-height doubles the hit area (baseline B-04). */
 .tab {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 8px 6px 10px;
+  min-height: var(--control-h-md);
+  padding: 0 6px 0 12px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
-  border-bottom: 2px solid transparent;
   flex-shrink: 0; /* UX-02: keep tab content, let the bar scroll */
   white-space: nowrap;
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
-.tab:hover { background: var(--surface-2); color: var(--text-2); }
-.tab.active { color: var(--text-2); border-bottom-color: var(--accent); background: var(--bg); }
+.tab:hover { background: var(--surface-hover); color: var(--text-2); }
+.tab.active { background: var(--accent-soft); color: var(--text); }
 .tab-main {
   background: none;
   border: none;
   padding: 0;
   color: inherit;
-  font-size: var(--font-md);
+  font-size: var(--font-base);
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.tab-main:focus-visible,
+.icon:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
 }
 .tab .title { font-weight: 500; }
 .tab .state { font-size: var(--font-xs); color: var(--text-muted); }
@@ -452,6 +462,11 @@ function canReopen(s: TabSessionState): boolean {
 .tab.disconnected .state { color: var(--warn); }
 .actions { display: flex; gap: 2px; margin-left: 2px; }
 .icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   background: transparent;
   border: none;
   color: inherit;
@@ -459,7 +474,9 @@ function canReopen(s: TabSessionState): boolean {
   font-size: var(--font-base);
   line-height: 1;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
 .icon:hover { background: var(--surface-hover); color: var(--text); }
 .icon.reopen { color: var(--success); }
