@@ -8,7 +8,7 @@
  * id. ARIA tablist with arrow/Home/End navigation; the ▾ menu is a
  * keyboard-reachable popup.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { CC_SWITCH_UI_TAB_ID, useRuntimeStore } from "../../stores/runtime";
 import { useSettingsStore } from "../../stores/settings";
@@ -32,24 +32,6 @@ const defaultAgent = computed<LaunchAgent>(() => {
   const a = settingsStore.doc?.ui.default_tab_agent;
   return AGENTS.includes(a as LaunchAgent) ? (a as LaunchAgent) : "bash";
 });
-
-/** TEMP 10e probe (remove after diagnosis): logs the entering tab's real
- * rect/transform across the first frames — pins down where the first paint
- * lands before it settles left. */
-function onTabEnterProbe(el: Element): void {
-  const h = el as HTMLElement;
-  const label = h.querySelector(".title")?.textContent ?? "?";
-  const rows: string[] = [];
-  let n = 0;
-  const tick = (): void => {
-    const r = h.getBoundingClientRect();
-    rows.push(`f${n}: x=${r.left.toFixed(1)} w=${r.width.toFixed(1)} tf=${h.style.transform || "-"}`);
-    n += 1;
-    if (n < 6) requestAnimationFrame(tick);
-    else console.log("[tab-probe] enter " + label + " | " + rows.join(" || "));
-  };
-  requestAnimationFrame(tick);
-}
 
 function createDefaultTab() {
   store.createTab(defaultAgent.value);
@@ -305,6 +287,52 @@ function stateLabel(tab: Tab): string {
   }
 }
 
+/** 10e r6 (probe-confirmed): a bash tab flashes「启动中」for ~2 frames
+ * before the session turns running — the label widened the pill (118.9px)
+ * which then snapped back (79.9px) and read as an ugly right-then-left
+ * "jump". Only surface a state label once it has PERSISTED 150ms; the pill
+ * width then never breathes for transient states. */
+const STICKY_LABEL_DELAY = 150;
+const stickyLabels = ref(new Map<string, string>());
+const stickyTimers = new Map<string, number>();
+
+watch(
+  () => store.tabs.map((tb) => ({ id: tb.tabId, label: stateLabel(tb) })),
+  (entries) => {
+    const live = new Set(entries.map((e) => e.id));
+    for (const [id, timer] of stickyTimers) {
+      if (!live.has(id)) {
+        window.clearTimeout(timer);
+        stickyTimers.delete(id);
+        stickyLabels.value.delete(id);
+      }
+    }
+    for (const { id, label } of entries) {
+      if (label === stickyLabels.value.get(id)) continue;
+      if (label === "") {
+        // cleared state: drop immediately (running needs no residue)
+        window.clearTimeout(stickyTimers.get(id));
+        stickyTimers.delete(id);
+        stickyLabels.value.delete(id);
+      } else if (!stickyTimers.has(id)) {
+        const timer = window.setTimeout(() => {
+          stickyTimers.delete(id);
+          const tb = store.tabs.find((x) => x.tabId === id);
+          const current = tb ? stateLabel(tb) : "";
+          if (current) stickyLabels.value.set(id, current);
+        }, STICKY_LABEL_DELAY);
+        stickyTimers.set(id, timer);
+      }
+    }
+  },
+  { deep: false, immediate: true },
+);
+
+onBeforeUnmount(() => {
+  for (const timer of stickyTimers.values()) window.clearTimeout(timer);
+  stickyTimers.clear();
+});
+
 function canClose(s: TabSessionState): boolean {
   // guide tabs have no session to terminate but must stay removable (×).
   return s === "starting" || s === "running" || s === "closing" || s === "guide";
@@ -322,7 +350,7 @@ function canReopen(s: TabSessionState): boolean {
          which was invalid and broke focus semantics). The wrapper keeps the
          visual active/hover state; tab-main carries role=tab. -->
     <!-- 10e: tab motion — fade-in enter, out-of-flow leave so siblings FLIP at once. -->
-    <TransitionGroup tag="div" class="tab-group" name="tab-anim" @enter="onTabEnterProbe">
+    <TransitionGroup tag="div" class="tab-group" name="tab-anim">
     <div
       v-for="(tab, i) in store.tabs"
       :key="tab.tabId"
@@ -340,7 +368,7 @@ function canReopen(s: TabSessionState): boolean {
         @click="onTabClick(tab.tabId)"
       >
         <span class="title">{{ tab.title }}</span>
-        <span v-if="stateLabel(tab)" class="state">{{ stateLabel(tab) }}</span>
+        <span v-if="stickyLabels.get(tab.tabId)" class="state">{{ stickyLabels.get(tab.tabId) }}</span>
       </button>
       <span class="actions" v-if="canClose(tab.sessionState) || canReopen(tab.sessionState)">
         <button
