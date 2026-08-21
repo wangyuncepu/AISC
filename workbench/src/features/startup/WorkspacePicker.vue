@@ -66,14 +66,17 @@ function basename(p: string): string {
 .recents li { width: 100%; }
 .recents li:first-of-type .recent { border-top: none; }
 .recent {
-  width: 100%; display: flex; align-items: center; gap: var(--space-2); text-align: left;
+  /* Grid with fixed name column: every row aligns regardless of name/path
+   * length (user round-2 feedback — flex rows misaligned on long names). */
+  width: 100%; display: grid; grid-template-columns: minmax(0, 220px) minmax(0, 1fr) auto;
+  align-items: center; gap: var(--space-2); text-align: left;
   background: transparent; color: var(--text-2);
   border: none; font-size: var(--font-sm); cursor: pointer;
   overflow: hidden; /* B-01: long folder names must truncate, not overflow */
 }
 .recent:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: calc(-1 * var(--focus-ring-offset)); }
 .r-name {
-  color: var(--text-2); font-weight: 500; min-width: 80px; max-width: 45%;
+  color: var(--text-2); font-weight: 500;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .r-path {

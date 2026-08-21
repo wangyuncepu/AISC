@@ -45,22 +45,20 @@ function createDefaultTab() {
  * (`ui.font_scale` → `.app { zoom }`), so button-rect coordinates must be
  * divided by the live zoom — same pattern as the Explorer context menu.
  */
-function appZoom(): number {
-  const app = document.querySelector<HTMLElement>(".app");
-  if (!app) return 1;
-  const w = app.offsetWidth || 0;
-  return w > 0 ? app.getBoundingClientRect().width / w : 1;
-}
-
 function placeMenu(): boolean {
   const btn = caretBtnRef.value ?? addBtnRef.value;
   if (!btn) return false;
-  const zoom = appZoom() || 1;
   const rect = btn.getBoundingClientRect();
   // 10d: a detached / not-yet-laid-out ref reports an all-zero rect, and the
   // clamped minimum then parked the menu at the window's top-left corner
   // (user evidence 2.png). Refuse to open instead.
   if (rect.width === 0 && rect.height === 0) return false;
+  // 10d r3: engines disagree on whether gBCR inside a CSS-zoomed subtree
+  // returns visual (zoom-multiplied) or layout (unzoomed) coordinates.
+  // Calibrate against the button's own unzoomed offsetWidth: the ratio IS
+  // the zoom when the rect is visual, and 1 when it is layout space — so
+  // dividing by it is correct in both engine modes (and a no-op at zoom 1).
+  const zoom = btn.offsetWidth > 0 ? rect.width / btn.offsetWidth : 1;
   const menuWidth = 160;
   menuPos.value = {
     x: Math.max(4, Math.min(rect.left / zoom, window.innerWidth / zoom - menuWidth)),
