@@ -424,6 +424,120 @@ class ClaudeSettingsBaseTests(AdapterTestCase):
         self.assertEqual(sent["statusLine"], statusline)
 
 
+class RouteGuardTests(AdapterTestCase):
+    """Manual round 3 (2026-08-21): upstream `proxy enable` silently
+    no-ops when the daemon's supervisor state is stale or the daemon is
+    down (rc 0, "enabled" printed, nothing listening) — the switch must
+    verify the route actually serves and self-heal via a daemon restart."""
+
+    def _seed_codex_switch(self) -> None:
+        toml_cfg = (
+            'model_provider = "deepseek"\n[model_providers.deepseek]\n'
+            'base_url = "https://api.deepseek.com"\n'
+        )
+        seed_provider(self.dir, "codex-official", {}, agent="codex",
+                      is_current=True, settings={"auth": {}, "config": ""})
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"auth": {}, "config": toml_cfg})
+
+    @staticmethod
+    def _closed_port() -> int:
+        import socket as _socket
+        sock = _socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        return port
+
+    @staticmethod
+    def _open_listener():
+        import socket as _socket
+        listener = _socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(4)
+        return listener, listener.getsockname()[1]
+
+    def _install_show_cli(self, show_stdout_fn):
+        def fake_cli(args, stdin_text, secrets):
+            call = FakeCall(list(args), stdin_text)
+            self.cli.calls.append(call)
+            stdout = show_stdout_fn(args) or (
+                "Switched to provider 'x'\n✓ ok")
+            return subprocess.CompletedProcess(args, 0, stdout=stdout,
+                                               stderr="")
+        A.run_cli = fake_cli
+
+    def test_listening_route_passes_without_recovery(self):
+        listener, port = self._open_listener()
+        self.addCleanup(listener.close)
+        self._install_show_cli(
+            lambda args: f"Local Proxy\n- Codex: enabled, configured {port}\n"
+            if "show" in args else None)
+        self._seed_codex_switch()
+        A.op_switch("codex", "deepseek")
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertFalse(any("daemon" in a for a in argvs))
+        self.assertEqual(sum("enable" in a for a in argvs), 1)
+
+    def test_stale_route_recovered_via_daemon_restart(self):
+        port = self._closed_port()
+        import socket as _socket
+
+        def show_stdout_fn(args):
+            if "show" not in args:
+                return None
+            return f"- Codex: enabled, configured {port}\n"
+
+        original_cli = A.run_cli
+        enable_seen: list[int] = []
+
+        def fake_cli(args, stdin_text, secrets):
+            call = FakeCall(list(args), stdin_text)
+            self.cli.calls.append(call)
+            joined = " ".join(args)
+            if "enable" in joined and "proxy" in joined:
+                enable_seen.append(1)
+                if len(enable_seen) > 1:  # the recovery re-enable → route up
+                    sock = _socket.socket()
+                    sock.bind(("127.0.0.1", port))
+                    sock.listen(4)
+                    self.addCleanup(sock.close)
+            stdout = show_stdout_fn(args) or "Switched to provider 'x'\n✓ ok"
+            return subprocess.CompletedProcess(args, 0, stdout=stdout,
+                                               stderr="")
+        A.run_cli = fake_cli
+        self._seed_codex_switch()
+        A.op_switch("codex", "deepseek")  # must NOT raise
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertTrue(any("daemon" in a and "stop" in a for a in argvs))
+        self.assertTrue(any("daemon" in a and "start" in a for a in argvs))
+        self.assertEqual(sum("enable" in a for a in argvs), 2)
+
+    def test_unrecoverable_route_fails_the_switch(self):
+        port = self._closed_port()
+        self._install_show_cli(
+            lambda args: f"- Codex: enabled, configured {port}\n"
+            if "show" in args else None)
+        self._seed_codex_switch()
+        with mock.patch.object(A.time, "sleep", lambda s: None):
+            with self.assertRaises(A.AdapterError) as ctx:
+                A.op_switch("codex", "deepseek")
+        self.assertEqual(ctx.exception.code, A.ERR_SWITCH_FAILED)
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertTrue(any("daemon" in a and "start" in a for a in argvs))
+
+    def test_official_switch_skips_the_guard(self):
+        self._install_show_cli(lambda args: "should never be asked")
+        seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": 'model_provider = "d"\n'})
+        seed_provider(self.dir, "codex-official", {}, agent="codex",
+                      settings={"auth": {}, "config": ""})
+        A.op_switch("codex", "official")
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertFalse(any("show" in a for a in argvs))
+        self.assertFalse(any("daemon" in a for a in argvs))
+
+
 class SwitchTests(AdapterTestCase):
     def test_switch_runs_cli_switch_and_returns_snapshot(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
@@ -432,11 +546,14 @@ class SwitchTests(AdapterTestCase):
         # Retest round 2 (2026-08-21): the provider-page choice owns the
         # agent's proxy route — disable → switch → enable for BOTH agents.
         argvs = [" ".join(c.args) for c in self.cli.calls]
-        self.assertEqual(len(argvs), 3)
+        # Round 3: the enable is followed by a route liveness verify
+        # (`proxy show` for the port — unparseable output skips the check).
+        self.assertEqual(len(argvs), 4)
         self.assertIn("proxy -a claude disable", argvs[0])
         self.assertIn("switch", argvs[1])
         self.assertTrue(argvs[1].endswith("zhipu"))
         self.assertIn("proxy -a claude enable", argvs[2])
+        self.assertIn("proxy -a claude show", argvs[3])
         # snapshot returned unchanged (the CLI owns is_current truth)
         self.assertEqual([p["id"] for p in providers][0], "deepseek")
 

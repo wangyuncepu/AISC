@@ -523,7 +523,8 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(
             self.runner_calls,
             [["cc-switch", "proxy", "-a", "claude", "disable"],   # official row
-             ["cc-switch", "proxy", "-a", "codex", "enable"]])    # real row
+             ["cc-switch", "proxy", "-a", "codex", "enable"],     # real row
+             ["cc-switch", "proxy", "-a", "codex", "show"]])      # route verify
 
     def test_repurposed_default_is_kept(self):
         self._seed("default", "claude", {
@@ -558,7 +559,9 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(
             self.runner_calls,
             [["cc-switch", "proxy", "-a", "claude", "enable"],
-             ["cc-switch", "proxy", "-a", "codex", "enable"]])
+             ["cc-switch", "proxy", "-a", "claude", "show"],
+             ["cc-switch", "proxy", "-a", "codex", "enable"],
+             ["cc-switch", "proxy", "-a", "codex", "show"]])
 
     def test_second_run_is_steady(self):
         self._seed("claude-official", "claude", {"env": {}}, current=True)
@@ -578,6 +581,52 @@ class ReconcileTests(unittest.TestCase):
         self.assertFalse(any(a.startswith("proxy") for a in actions))
         # The DB steps still committed.
         self.assertIn("statusLine", self._rows("claude")["claude-official"][1])
+
+    def test_enable_verifies_route_and_recovers_via_daemon_restart(self):
+        # Manual round 3 (2026-08-21): enable can silently no-op with a
+        # stale/dead daemon — the reconcile verifies the port listens and
+        # recovers (daemon stop→start→re-enable), never failing boot.
+        import socket as _socket
+        import subprocess as _sp
+
+        sock = _socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        closed_port = sock.getsockname()[1]
+        sock.close()
+
+        self._seed("claude-official", "claude", {"env": {}}, current=True)
+        self._seed("deepseek", "codex", {
+            "auth": {}, "config": 'model_provider = "d"\n'
+                                  "[model_providers.d]\n"
+                                  'base_url = "https://x"\n'},
+            current=True)
+
+        listener: list = []
+        calls: list[list[str]] = []
+
+        def fake_runner(argv, **_kwargs):
+            calls.append(list(argv))
+            joined = " ".join(argv)
+            stdout = ""
+            if "show" in argv:
+                stdout = f"- Codex: enabled, configured {closed_port}\n"
+            if "enable" in joined and len(calls) > 3 and not listener:
+                # the recovery re-enable → bring the route up for real
+                server = _socket.socket()
+                server.bind(("127.0.0.1", closed_port))
+                server.listen(4)
+                listener.append(server)
+            return _sp.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+        self.addCleanup(lambda: listener and listener[0].close())
+        log_path = self.config_dir / "reconcile.log"
+        with log_path.open("w", encoding="utf-8") as log_io:
+            actions = H.reconcile_runtime_state(self.config_dir, log_io,
+                                                runner=fake_runner)
+        joined = [" ".join(c) for c in calls]
+        self.assertTrue(any("daemon" in a and "stop" in a for a in joined))
+        self.assertTrue(any("daemon" in a and "start" in a for a in joined))
+        self.assertTrue(any("recovered codex route" in a for a in actions))
 
 
 if __name__ == "__main__":

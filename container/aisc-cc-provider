@@ -691,6 +691,62 @@ def _db_merge_meta(agent: str, provider_id: str, extra: dict[str, Any]) -> None:
         conn.close()
 
 
+def _proxy_listen_port(agent: str) -> Optional[int]:
+    """The agent's local-route port from `proxy show` ("configured NNNN" —
+    persisted route config, the same source the daemon binds from). CLI text
+    is untrusted: no parse → None → the caller skips verification."""
+    completed = run_cli(["proxy", "-a", agent, "show"], "", [])
+    match = re.search(r"configured (\d{2,5})", completed.stdout or "")
+    return int(match.group(1)) if match else None
+
+
+def _tcp_listening(port: int, attempts: int = 4, delay: float = 0.4) -> bool:
+    """Ground truth for "the route serves": a TCP connect on the loopback
+    port (the daemon's own status snapshots are exactly what goes stale)."""
+    import socket
+    for _ in range(attempts):
+        sock = socket.socket()
+        sock.settimeout(1.0)
+        try:
+            sock.connect(("127.0.0.1", port))
+            return True
+        except OSError:
+            time.sleep(delay)
+        finally:
+            sock.close()
+    return False
+
+
+def _ensure_route_serving(agent: str, secrets: list[str]) -> None:
+    """Post-enable guard (manual round 3, live-probed 2026-08-21):
+
+    upstream `proxy enable` is a SILENT no-op when (a) the daemon's
+    supervisor state is stale — a dead worker still believed running — or
+    (b) the daemon is down entirely and the CLI degrades to DB-only writes;
+    both print "enabled" with rc 0 while nothing listens, and the agents
+    then die on "Connection refused". So: verify the route port actually
+    LISTENS; on failure restart the daemon (a fresh supervisor re-spawns on
+    the next enable) and re-enable; still down = hard error — a switch must
+    never "succeed" with a dead route.
+    """
+    port = _proxy_listen_port(agent)
+    if port is None or _tcp_listening(port):
+        return
+    run_cli(["daemon", "stop"], "", secrets)  # best-effort both ways
+    time.sleep(0.5)
+    run_cli(["daemon", "start", "--detach"], "", secrets)
+    time.sleep(1.0)
+    _cli(["proxy", "-a", agent, "enable"], secrets=secrets,
+         what=f"{agent} proxy route re-enable")
+    if not _tcp_listening(port):
+        raise AdapterError(
+            ERR_SWITCH_FAILED,
+            f"{agent} local proxy route did not come up (port {port} not "
+            "listening after daemon restart); cc-switch daemon may be "
+            "broken - check `cc-switch daemon logs`",
+        )
+
+
 def _cli_switch(agent: str, provider_id: str, secrets: list[str]) -> None:
     _cli(
         ["-a", agent, "provider", "switch", provider_id],
@@ -1274,6 +1330,10 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
     if not to_official:
         _cli(["proxy", "-a", agent, "enable"], secrets=secrets,
              what=f"{agent} proxy route enable")
+        # Manual round 3: enable can silently no-op (stale supervisor state
+        # / dead daemon) — verify the route actually serves before calling
+        # the switch a success.
+        _ensure_route_serving(agent, secrets)
     if agent == "codex":
         # Interactive codex ALSO demands an auth.json before it starts — a
         # marker placeholder that never carries a secret and never touches a

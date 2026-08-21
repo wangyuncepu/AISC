@@ -759,6 +759,33 @@ def _is_pristine_default_import(agent: str, pid: str, settings: dict[str, Any]) 
     return not any(env.values())
 
 
+def _proxy_port_from_show(text: str) -> "int | None":
+    """Route port from `proxy show` human output ("configured NNNN"). The
+    same persisted config the daemon binds from; no parse → None → skip."""
+    import re
+
+    match = re.search(r"configured (\d{2,5})", text or "")
+    return int(match.group(1)) if match else None
+
+
+def _tcp_listening(port: int, attempts: int = 3, delay: float = 0.4) -> bool:
+    """Ground truth for "the route serves" (the daemon's own status
+    snapshots are exactly what goes stale — manual round 3, 2026-08-21)."""
+    import socket
+
+    for _ in range(attempts):
+        sock = socket.socket()
+        sock.settimeout(1.0)
+        try:
+            sock.connect(("127.0.0.1", port))
+            return True
+        except OSError:
+            time.sleep(delay)
+        finally:
+            sock.close()
+    return False
+
+
 def reconcile_runtime_state(
     config_dir: Path, log: TextIO, runner=subprocess.run
 ) -> list[str]:
@@ -924,6 +951,42 @@ def reconcile_runtime_state(
             continue
         actions.append(f"proxy {agent} {verb}d")
         print(f"Proxy route {agent}: {verb}d", file=log)
+        if real:
+            # Manual round 3 (2026-08-21): enable can silently no-op (stale
+            # supervisor state / dead daemon) while printing success —
+            # verify the route port listens; recover via daemon restart +
+            # re-enable. Best-effort: boot never fails over this.
+            try:
+                show = runner(["cc-switch", "proxy", "-a", agent, "show"],
+                              capture_output=True, text=True, timeout=30)
+                port = _proxy_port_from_show(show.stdout or "")
+            except Exception as exc:
+                print(f"route verify {agent}: show failed: {exc}", file=log)
+                port = None
+            if port is not None and not _tcp_listening(port):
+                print(f"route {agent} port {port} not listening; "
+                      "restarting daemon + re-enabling", file=log)
+                recovery = [
+                    (0.5, ["cc-switch", "daemon", "stop"]),
+                    (1.0, ["cc-switch", "daemon", "start", "--detach"]),
+                    (0.0, ["cc-switch", "proxy", "-a", agent, "enable"]),
+                ]
+                for delay, recover_argv in recovery:
+                    if delay:
+                        time.sleep(delay)
+                    try:
+                        runner(recover_argv, capture_output=True,
+                               text=True, timeout=30)
+                    except Exception as exc:
+                        print(f"recovery step {recover_argv} failed: {exc}",
+                              file=log)
+                if _tcp_listening(port):
+                    actions.append(f"recovered {agent} route (daemon restart)")
+                    print(f"recovered {agent} route after daemon restart",
+                          file=log)
+                else:
+                    print(f"WARNING: {agent} route port {port} still not "
+                          "listening after daemon restart", file=log)
     return actions
 
 
