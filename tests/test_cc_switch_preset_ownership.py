@@ -111,6 +111,50 @@ class FixtureDrivenPresetTests(unittest.TestCase):
             self.assertIn("auth", settings)
             self.assertIsInstance(settings["auth"], dict)
 
+    def test_codex_api_key_rides_auth_channel(self):
+        # 2026-08-21 live probe: the local proxy worker serves the token it
+        # captures from live ~/.codex/auth.json at enable time — which is
+        # written from settings auth on switch. The key must live THERE,
+        # with the TOML api_key line as a legacy mirror.
+        settings = H._settings_config("codex", deepseek(), api_key="sk-x-1234")
+        self.assertEqual(settings["auth"], {"OPENAI_API_KEY": "sk-x-1234"})
+        self.assertIn('api_key = "sk-x-1234"', settings["config"])
+        self.assertEqual(H._settings_config("codex", deepseek())["auth"], {})
+
+    def test_codex_refresh_recovers_key_from_auth_channel(self):
+        # Rows written by upstream's own TUI carry the key in auth only —
+        # extraction is auth-first so a refresh never drops it back to the
+        # placeholder-401 shape.
+        existing = json.dumps({
+            "auth": {"OPENAI_API_KEY": "sk-auth-chan-1"},
+            "config": ('model_provider = "deepseek"\n'
+                       '[model_providers.deepseek]\n'
+                       'base_url = "https://api.deepseek.com/anthropic"\n'),
+        })
+        merged = H._merged_settings("codex", deepseek(), existing)
+        self.assertEqual(merged["auth"].get("OPENAI_API_KEY"), "sk-auth-chan-1")
+
+    def test_codex_refresh_keeps_key_alongside_oauth_mirror(self):
+        existing = json.dumps({
+            "auth": {"tokens": {"id_token": "tok"}},
+            "config": ('model_provider = "deepseek"\n'
+                       '[model_providers.deepseek]\nbase_url = "x"\n'
+                       'api_key = "sk-toml-9"\n'),
+        })
+        merged = H._merged_settings("codex", deepseek(), existing)
+        self.assertEqual(merged["auth"]["tokens"], {"id_token": "tok"})
+        self.assertEqual(merged["auth"]["OPENAI_API_KEY"], "sk-toml-9")
+
+    def test_codex_refresh_upgrades_legacy_toml_key_into_auth(self):
+        existing = json.dumps({
+            "auth": {},
+            "config": ('model_provider = "deepseek"\n'
+                       '[model_providers.deepseek]\nbase_url = "x"\n'
+                       'api_key = "sk-old-2"\n'),
+        })
+        merged = H._merged_settings("codex", deepseek(), existing)
+        self.assertEqual(merged["auth"].get("OPENAI_API_KEY"), "sk-old-2")
+
     def test_bad_fixture_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             bad = Path(tmp) / "bad.json"

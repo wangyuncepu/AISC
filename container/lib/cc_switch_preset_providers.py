@@ -314,8 +314,14 @@ def _settings_config(
         lines.append("")
         # Upstream `provider switch` refuses a codex settings_config without
         # an "auth" object ("Codex 供应商配置缺少 'auth' 字段"); its own
-        # official rows seed {"auth":{},"config":""}.
-        settings: dict[str, Any] = {"auth": {}, "config": "\n".join(lines)}
+        # official rows seed {"auth":{},"config":""}. The user's key rides
+        # auth.OPENAI_API_KEY — the channel live ~/.codex/auth.json is
+        # written from on switch, and the one the local proxy worker
+        # captures at enable time (live-probed 2026-08-21: the router
+        # neither reads the TOML api_key line nor passes the client bearer
+        # through) — mirrored into the TOML line for legacy rows/masks.
+        auth = {"OPENAI_API_KEY": api_key} if api_key else {}
+        settings: dict[str, Any] = {"auth": auth, "config": "\n".join(lines)}
         # codex-adapt 修复轮: providers carrying a model catalog get it into
         # settings — cc-switch then generates the models file + injects
         # `model_catalog_json` on switch (see _codex_model_catalog).
@@ -377,8 +383,17 @@ def _merged_claude_env(
 
 
 def _extract_codex_api_key(existing_raw: str | None) -> str:
-    """Pull the user's api_key out of an existing codex settings_config TOML."""
-    config_text = _parse_json_settings(existing_raw).get("config", "")
+    """Pull the user's api_key out of an existing codex settings_config.
+
+    auth.OPENAI_API_KEY is the live channel (synced to ~/.codex/auth.json);
+    the model_providers.<id>.api_key TOML line is the legacy mirror kept
+    for rows written before the auth channel existed.
+    """
+    existing = _parse_json_settings(existing_raw)
+    auth = existing.get("auth")
+    if isinstance(auth, dict) and auth.get("OPENAI_API_KEY"):
+        return str(auth["OPENAI_API_KEY"])
+    config_text = existing.get("config", "")
     if not isinstance(config_text, str) or not config_text:
         return ""
     try:
@@ -446,8 +461,12 @@ def _merged_settings(
         result = _settings_config(agent, provider, api_key=api_key)
         # Preserve a non-empty existing auth object (e.g. the codex OAuth
         # mirror) — only absent/empty auth gets the fresh {} placeholder.
+        # A key recovered from the row must ride along even here, or a
+        # refresh would silently drop it back to placeholder-401.
         if isinstance(existing.get("auth"), dict) and existing["auth"]:
-            result["auth"] = existing["auth"]
+            result["auth"] = dict(existing["auth"])
+            if api_key and not result["auth"].get("OPENAI_API_KEY"):
+                result["auth"]["OPENAI_API_KEY"] = api_key
     else:
         raise ValueError(f"unsupported agent: {agent}")
 

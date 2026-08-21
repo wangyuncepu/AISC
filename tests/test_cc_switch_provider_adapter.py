@@ -52,7 +52,7 @@ def create_db(dir_path: Path):
 
 
 def seed_provider(dir_path: Path, pid: str, env: dict, *, is_current=False,
-                  name=None, agent="claude", settings=None):
+                  name=None, agent="claude", settings=None, meta=None):
     if settings is None:
         raw = json.dumps({"env": env})
     elif isinstance(settings, str):
@@ -64,7 +64,8 @@ def seed_provider(dir_path: Path, pid: str, env: dict, *, is_current=False,
         conn.execute(
             "INSERT INTO providers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (pid, agent, name or pid, raw,
-             "https://x", "custom", 1, 0, "", None, None, "{}",
+             "https://x", "custom", 1, 0, "", None, None,
+             json.dumps(meta or {}),
              1 if is_current else 0, 0),
         )
         conn.commit()
@@ -166,6 +167,21 @@ class SnapshotAndRedactionTests(AdapterTestCase):
         self.assertTrue(p["has_api_key"])
         self.assertEqual(p["api_key_mask"], "****9888")
 
+    def test_codex_snapshot_prefers_auth_channel_over_toml(self):
+        # auth.OPENAI_API_KEY is the live channel; the TOML api_key line is
+        # the legacy fallback — when both exist, auth wins the mask.
+        toml_config = (
+            'model_provider = "deepseek"\n[model_providers.deepseek]\n'
+            'base_url = "https://api.deepseek.com"\n'
+            'api_key = "sk-toml-stale-1111"\n'
+        )
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"config": toml_config,
+                                "auth": {"OPENAI_API_KEY": "sk-auth-live-7788"}})
+        p = A.op_list("codex")[0]
+        self.assertTrue(p["has_api_key"])
+        self.assertEqual(p["api_key_mask"], "****7788")
+
 
 class AddTests(AdapterTestCase):
     def test_simple_add_uses_preset_env_and_stdin_secret(self):
@@ -205,6 +221,16 @@ class AddTests(AdapterTestCase):
         sent = json.loads(self.cli.calls[0].stdin_text)
         self.assertIn("auth", sent)
         self.assertIn("config", sent)
+
+    def test_custom_codex_add_key_rides_auth_channel(self):
+        # The key must land in auth.OPENAI_API_KEY (what live auth.json is
+        # written from — and what the proxy worker captures at enable).
+        A.op_add("codex", {"mode": "custom", "id": "mine", "name": "Mine",
+                           "base_url": "https://api.mine",
+                           "api_key": "sk-add-live-556677"})
+        sent = json.loads(self.cli.calls[0].stdin_text)
+        self.assertEqual(sent["auth"], {"OPENAI_API_KEY": "sk-add-live-556677"})
+        self.assertIn('api_key = "sk-add-live-556677"', sent["config"])
 
     def test_duplicate_id_rejected_before_any_cli_call(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV)
@@ -300,6 +326,62 @@ class EditDanceTests(AdapterTestCase):
         self.assertEqual(ctx.exception.code, A.ERR_NOT_FOUND)
 
 
+class CodexEditShapeTests(AdapterTestCase):
+    """codex auth-channel round (2026-08-21): the user's key rides
+    settings auth.OPENAI_API_KEY (the channel live ~/.codex/auth.json is
+    written from and the local proxy worker captures at enable), and an
+    edit no longer flattens the preset row's probed working shape."""
+
+    PRESET_TOML = (
+        'model_provider = "deepseek"\nmodel = "deepseek-v4-pro"\n'
+        'model_context_window = 1000000\nmodel_reasoning_effort = "high"\n\n'
+        '[model_providers.deepseek]\nname = "deepseek"\n'
+        'base_url = "https://api.deepseek.com/anthropic"\n'
+        'wire_api = "responses"\nrequires_openai_auth = true\n'
+    )
+
+    def _seed_row(self, settings: dict) -> None:
+        seed_provider(self.dir, "codex-official", {}, agent="codex",
+                      is_current=True, settings={"auth": {}, "config": ""})
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings=settings)
+
+    def _sent_settings(self) -> dict:
+        adds = [c for c in self.cli.calls if "add" in c.args]
+        self.assertEqual(len(adds), 1)
+        return json.loads(adds[0].stdin_text)
+
+    def test_edit_writes_auth_channel_and_preserves_shape(self):
+        self._seed_row({"auth": {}, "config": self.PRESET_TOML,
+                        "modelCatalog": {"models": [{"model": "deepseek-v4-pro"}]}})
+        A.op_edit("codex", "deepseek",
+                  {"patch": {"name": "DeepSeek"}, "api_key": "sk-live-112233"})
+        sent = self._sent_settings()
+        self.assertEqual(sent["auth"].get("OPENAI_API_KEY"), "sk-live-112233")
+        self.assertIn('api_key = "sk-live-112233"', sent["config"])
+        self.assertIn('wire_api = "responses"', sent["config"])
+        self.assertIn("model_context_window = 1000000", sent["config"])
+        self.assertIn('base_url = "https://api.deepseek.com/anthropic"',
+                      sent["config"])
+        self.assertEqual(sent["modelCatalog"],
+                         {"models": [{"model": "deepseek-v4-pro"}]})
+
+    def test_edit_upgrades_legacy_toml_key_into_auth(self):
+        self._seed_row({"auth": {},
+                        "config": self.PRESET_TOML + 'api_key = "sk-legacy-4455"\n'})
+        A.op_edit("codex", "deepseek", {"patch": {"name": "DeepSeek"}})
+        sent = self._sent_settings()
+        self.assertEqual(sent["auth"].get("OPENAI_API_KEY"), "sk-legacy-4455")
+
+    def test_edit_preserves_oauth_auth_mirror(self):
+        self._seed_row({"auth": {"tokens": {"id_token": "tok"}},
+                        "config": self.PRESET_TOML})
+        A.op_edit("codex", "deepseek", {"patch": {}, "api_key": "sk-rotate-99"})
+        sent = self._sent_settings()
+        self.assertEqual(sent["auth"]["tokens"], {"id_token": "tok"})
+        self.assertEqual(sent["auth"]["OPENAI_API_KEY"], "sk-rotate-99")
+
+
 class SwitchTests(AdapterTestCase):
     def test_switch_runs_cli_switch_and_returns_snapshot(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)
@@ -312,9 +394,12 @@ class SwitchTests(AdapterTestCase):
         # snapshot returned unchanged (the CLI owns is_current truth)
         self.assertEqual([p["id"] for p in providers][0], "deepseek")
 
-    def test_codex_switch_enables_proxy_route_first(self):
+    def test_codex_switch_reenables_proxy_route_after_switch(self):
         # Codex reaches third parties only through the local proxy route
-        # (default OFF) — the adapter enables it before switching.
+        # (default OFF). The worker serves the upstream token it captures
+        # from live auth.json at ENABLE time (live-probed 2026-08-21) — so
+        # the route is torn down first, the switch rewrites live files, and
+        # only then is it re-enabled to capture the new row's key.
         toml_cfg = (
             'model_provider = "deepseek"\n[model_providers.deepseek]\n'
             'base_url = "https://api.deepseek.com"\n'
@@ -324,9 +409,10 @@ class SwitchTests(AdapterTestCase):
         seed_provider(self.dir, "deepseek", {}, agent="codex",
                       settings={"auth": {}, "config": toml_cfg})
         A.op_switch("codex", "deepseek")
-        first = " ".join(self.cli.calls[0].args)
-        self.assertIn("proxy -a codex enable", first)
-        self.assertIn("switch", " ".join(self.cli.calls[1].args))
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertIn("proxy -a codex disable", argvs[0])
+        self.assertIn("switch", argvs[1])
+        self.assertIn("proxy -a codex enable", argvs[2])
 
     def test_codex_switch_manages_auth_placeholder(self):
         import os as _os
@@ -473,6 +559,41 @@ class SqliteBackedCliTests(AdapterTestCase):
     """A fake cc-switch that REALLY writes the temp DB — real BEGIN IMMEDIATE
     concurrency for the dance and parallel writers."""
 
+    def _row_meta(self, pid: str, agent: str) -> dict:
+        db = sqlite3.connect(self.dir / "cc-switch.db")
+        try:
+            return json.loads(db.execute(
+                "SELECT meta FROM providers WHERE id=? AND app_type=?",
+                (pid, agent),
+            ).fetchone()[0])
+        finally:
+            db.close()
+
+    def test_simple_codex_add_seeds_preset_api_format_meta(self):
+        # The router routes by meta.apiFormat; the preset declares anthropic
+        # (fixture endpoint) and upstream add seeds openai_responses — the
+        # adapter must fix the meta or the fresh row 404s (2026-08-21 probe).
+        self._install_sql_cli()
+        A.op_add("codex", {"mode": "simple", "id": "deepseek",
+                           "provider": "deepseek", "api_key": "sk-live-1"})
+        self.assertEqual(self._row_meta("deepseek", "codex").get("apiFormat"),
+                         "anthropic")
+
+    def test_codex_edit_restores_row_meta_through_the_dance(self):
+        # The re-add seeds upstream defaults (apiFormat=openai_responses);
+        # the original meta must be restored or every routed request 404s.
+        self._install_sql_cli()
+        seed_provider(self.dir, "codex-official", {}, agent="codex",
+                      is_current=True, settings={"auth": {}, "config": ""})
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"auth": {}, "config": (
+                          'model_provider = "deepseek"\n'
+                          '[model_providers.deepseek]\nbase_url = "https://x"\n'
+                      )}, meta={"apiFormat": "anthropic"})
+        A.op_edit("codex", "deepseek", {"patch": {"name": "DeepSeek"}})
+        self.assertEqual(self._row_meta("deepseek", "codex").get("apiFormat"),
+                         "anthropic")
+
     def _install_sql_cli(self):
         dir_path = self.dir
 
@@ -482,13 +603,21 @@ class SqliteBackedCliTests(AdapterTestCase):
                 if "add" in argv:
                     body = json.loads(stdin_text)
                     pid = argv[argv.index("--id") + 1]
+                    agent = argv[argv.index("-a") + 1]
+                    # Mirror upstream's seeded defaults: codex rows get
+                    # apiFormat=openai_responses unless someone fixes it.
+                    seeded_meta = (
+                        '{"commonConfigEnabled":false,'
+                        '"apiFormat":"openai_responses"}'
+                        if agent == "codex" else "{}"
+                    )
                     conn = sqlite3.connect(dir_path / "cc-switch.db", timeout=15)
                     conn.execute("BEGIN IMMEDIATE")
                     conn.execute(
                         "INSERT INTO providers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (pid, argv[argv.index("-a") + 1], pid,
+                        (pid, agent, pid,
                          json.dumps(body), "https://x", "custom", 1, 0, "",
-                         None, None, "{}", 1, 0),
+                         None, None, seeded_meta, 1, 0),
                     )
                     conn.commit()
                     conn.close()
@@ -768,8 +897,15 @@ class CodexModelCatalogHookTests(unittest.TestCase):
         for entry in catalog["models"]:
             for key in ("slug", "display_name", "supported_reasoning_levels",
                         "shell_type", "visibility", "supported_in_api", "priority",
-                        "truncation_policy"):
+                        "truncation_policy", "base_instructions"):
                 self.assertIn(key, entry)
+        # codex's post-parse validation requires instructions; the value
+        # mirrors cc-switch's own catalog (live-probed 2026-08-21)
+        self.assertEqual(
+            catalog["models"][0]["base_instructions"],
+            "You are Codex, a coding agent. You and the user share the same "
+            "workspace and collaborate to achieve the user's goals.",
+        )
         # key injected top-level (before the first table header), absolute path
         text = self._config_text()
         self.assertIn(f'model_catalog_json = "{self.dir / ".codex" / A._CODEX_CATALOG_FILENAME}"', text)

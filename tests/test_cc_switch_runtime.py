@@ -552,7 +552,10 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
             self.assertNotEqual(rows["claude"][2], "old")  # notes refreshed
 
             # Codex: new model + anthropic endpoint + router wire (responses),
-            # api_key + auth mirror preserved, is_current preserved.
+            # api_key + auth mirror preserved, is_current preserved. The key
+            # also rides auth.OPENAI_API_KEY — the live channel auth.json is
+            # written from (2026-08-21 probe; without it a refresh silently
+            # reverts the row to the placeholder-401 shape).
             codex_sc = json.loads(rows["codex"][0])
             self.assertIn('model = "deepseek-v4-pro"', codex_sc["config"])
             self.assertIn('wire_api = "responses"', codex_sc["config"])
@@ -563,7 +566,11 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
             self.assertIn(
                 'api_key = "sk-user-codex-secret"', codex_sc["config"]
             )
-            self.assertEqual(codex_sc["auth"], {"token": "oauth-mirror"})
+            self.assertEqual(
+                codex_sc["auth"],
+                {"token": "oauth-mirror",
+                 "OPENAI_API_KEY": "sk-user-codex-secret"},
+            )
             self.assertEqual(rows["codex"][1], 1)
 
     def test_refresh_removes_retired_codex_claude(self):
