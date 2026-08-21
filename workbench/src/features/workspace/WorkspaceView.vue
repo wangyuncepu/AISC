@@ -48,6 +48,8 @@ const doctorStore = useDoctorStore();
  * RuntimeSidebar 的固定列样式，无开关），状态信息栏变右侧悬浮抽屉
  * （原资源管理器抽屉样式）——默认收起，右缘弱化 ⓘ 开关 + 抽屉内 ✕ 关闭。 */
 const showStatus = ref(false);
+/** 10e (B-07): Escape-close returns focus here (opener restore). */
+const drawerToggleRef = ref<HTMLButtonElement | null>(null);
 
 // Stage 8e: the cc-switch Provider UI virtual pane — kept alive while hidden
 // so unsaved state survives switches. (The Settings pane is workspace-layer
@@ -176,6 +178,18 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(() => window.addEventListener("keydown", onKeydown, { capture: true }));
 onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown, { capture: true }));
 
+// 10e (B-07): Escape closes the status drawer — the ghost ⓘ toggle and the
+// header ✕ were the only close paths; keyboard users had none.
+function onDrawerEscape(e: KeyboardEvent): void {
+  if (e.key === "Escape" && showStatus.value) {
+    e.preventDefault();
+    showStatus.value = false;
+    drawerToggleRef.value?.focus();
+  }
+}
+onMounted(() => window.addEventListener("keydown", onDrawerEscape));
+onBeforeUnmount(() => window.removeEventListener("keydown", onDrawerEscape));
+
 function isStartingView(s: string): boolean {
   return s === "starting" || s === "cancelled";
 }
@@ -259,6 +273,7 @@ function setPaneTreeRef(tabId: string) {
       </div>
       <!-- 弱化开关：右缘幽灵 ⓘ（抽屉打开时被抽屉覆盖，经抽屉内 ✕ 关闭） -->
       <button
+        ref="drawerToggleRef"
         class="status-toggle"
         :title="t('sidebar.drawerOpen')"
         :aria-label="t('sidebar.drawerOpen')"
