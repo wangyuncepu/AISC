@@ -516,7 +516,7 @@ async function finish() {
   text-align: center;
 }
 .ob-title { font-size: var(--font-xl); margin: 0; }
-.ob-subtitle { color: var(--muted, #888); margin: 0; }
+.ob-subtitle { color: var(--text-muted); margin: 0; }
 
 /* 10b: network-choice segmented selected state (the .ui-button primitive
  * carries the base look; ob-btn stays as this page's hook). */
@@ -526,29 +526,29 @@ async function finish() {
   border-color: transparent;
 }
 .ob-step { color: var(--text-2); font-size: var(--font-md); margin: 0; }
-.ob-error { color: var(--error, var(--status-err)); font-size: var(--font-md); }
-.ob-finished { color: var(--muted, #888); }
+.ob-error { color: var(--error); font-size: var(--font-md); }
+.ob-finished { color: var(--text-muted); }
 .ob-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; justify-content: center; }
-.ob-btn { padding: 6px 16px; border-radius: var(--radius-md); border: 1px solid var(--border-strong, #444); background: var(--surface-3, #262626); color: inherit; cursor: pointer; }
-.ob-btn.primary { background: var(--accent, #4a9eff); border-color: var(--accent, #4a9eff); color: var(--accent-fg); }
+.ob-btn { padding: 6px 16px; border-radius: var(--radius-md); border: 1px solid var(--border-strong); background: var(--surface-3); color: inherit; cursor: pointer; }
+.ob-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
 .ob-btn.ghost { background: none; }
 .ob-btn:disabled { opacity: 0.5; cursor: default; }
 .ob-check-list { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; text-align: left; font-size: var(--font-md); }
 .ob-recents { display: flex; flex-direction: column; gap: 4px; max-width: 420px; width: 100%; }
 .ws-recent { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ob-net-options { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
-.ob-btn.active { border-color: var(--accent, #4a9eff); color: var(--accent, #4a9eff); }
-.ob-note { color: var(--muted, #888); font-size: var(--font-sm); max-width: 420px; }
+.ob-btn.active { border-color: var(--accent); color: var(--accent); }
+.ob-note { color: var(--text-muted); font-size: var(--font-sm); max-width: 420px; }
 /* KI-1 UX: wake-up progress + terminal success (wizard parity with the
    summary page's banner). */
 .ob-progress {
   display: inline-flex; align-items: center; gap: 8px;
-  color: var(--info, #4a9eff);
+  color: var(--info);
 }
 .spinner {
   width: 12px; height: 12px; flex-shrink: 0;
-  border: 2px solid var(--border-strong, #444);
-  border-top-color: var(--info, #4a9eff);
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--info);
   border-radius: 50%;
   animation: ob-spin 0.9s linear infinite;
 }
@@ -570,8 +570,8 @@ async function finish() {
 .ob-sub-ok { color: var(--status-ok); font-size: var(--font-sm); }
 .ob-btn.confirm { border-color: var(--status-pending); color: var(--status-pending); }
 .ob-conflicts { max-width: 420px; }
-.ob-conflict-row { color: var(--muted, #888); font-size: var(--font-sm); margin: 2px 0; }
-.ob-check-dot { display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-full); margin-right: 8px; background: var(--muted, #888); }
+.ob-conflict-row { color: var(--text-muted); font-size: var(--font-sm); margin: 2px 0; }
+.ob-check-dot { display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-full); margin-right: 8px; background: var(--text-muted); }
 .ob-check-dot[data-state="ready"] { background: var(--status-ok); }
 .ob-check-dot[data-state="starting"], .ob-check-dot[data-state="installing"] { background: var(--status-pending); }
 .ob-check-dot[data-state="unavailable"], .ob-check-dot[data-state="not_installed"], .ob-check-dot[data-state="missing"], .ob-check-dot[data-state="blocked"] { background: var(--status-err); }

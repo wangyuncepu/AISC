@@ -492,7 +492,7 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   z-index: var(--z-onboarding);
-  background: var(--surface, #1e1e1e);
+  background: var(--surface);
   display: flex;
 }
 .actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }

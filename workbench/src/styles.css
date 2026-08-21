@@ -74,18 +74,6 @@
   --status-err: #e5534b;
   --status-pending: #ffb300;
 
-  /* --- 10b compatibility aliases (legacy names kept resolving; migrate
-   * components to the canonical tokens in 10c/10d, drop these in 10f —
-   * see docs/plans/aisc-next-followup/stage-10-ui-visual-polish/token-mapping.md) --- */
-  --muted: var(--text-muted);
-  --text-dim: var(--text-muted);
-  --text-1: var(--text);
-  --danger: var(--error);
-  --accent-text: var(--accent-fg);
-  --accent-dim: var(--accent-soft);
-  --warn-dim: var(--warn-soft);
-  --mono: var(--font-mono);
-
   /* --- semantic tokens (dark) --- */
   --bg: #1e1e1e;                 /* app / terminal area background */
   --surface: #252526;            /* tabbar, sidebar, menus, dialogs */

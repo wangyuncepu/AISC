@@ -212,7 +212,7 @@ input, select {
 }
 .spinner {
   width: 12px; height: 12px; flex-shrink: 0;
-  border: 2px solid var(--info-border, var(--border-2));
+  border: 2px solid var(--info-border);
   border-top-color: var(--info);
   border-radius: 50%;
   animation: docker-spin 0.9s linear infinite;

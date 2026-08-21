@@ -75,14 +75,21 @@ function placeMenu(): boolean {
 function toggleMenu() {
   menuOpen.value = !menuOpen.value;
   if (menuOpen.value) {
-    // Place after the menu mounts so the anchor rect is measured against the
-    // live layout (and bail out cleanly when the anchor is not measurable).
+    // Place after the menu mounts AND after the next paint: opening the
+    // menu right after closing a tab catches the +/▾ mid-FLIP, and transforms
+    // DO land in getBoundingClientRect — the menu then anchored at the
+    // transient position (occasional repro, user evidence 1.png). Double
+    // rAF measures the settled layout.
     void nextTick(() => {
-      if (!placeMenu()) {
-        menuOpen.value = false;
-        return;
-      }
-      menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (!placeMenu()) {
+            menuOpen.value = false;
+            return;
+          }
+          menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+        }),
+      );
     });
   }
 }
