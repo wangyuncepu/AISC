@@ -33,6 +33,24 @@ const defaultAgent = computed<LaunchAgent>(() => {
   return AGENTS.includes(a as LaunchAgent) ? (a as LaunchAgent) : "bash";
 });
 
+/** TEMP 10e probe (remove after diagnosis): logs the entering tab's real
+ * rect/transform across the first frames — pins down where the first paint
+ * lands before it settles left. */
+function onTabEnterProbe(el: Element): void {
+  const h = el as HTMLElement;
+  const label = h.querySelector(".title")?.textContent ?? "?";
+  const rows: string[] = [];
+  let n = 0;
+  const tick = (): void => {
+    const r = h.getBoundingClientRect();
+    rows.push(`f${n}: x=${r.left.toFixed(1)} w=${r.width.toFixed(1)} tf=${h.style.transform || "-"}`);
+    n += 1;
+    if (n < 6) requestAnimationFrame(tick);
+    else console.log("[tab-probe] enter " + label + " | " + rows.join(" || "));
+  };
+  requestAnimationFrame(tick);
+}
+
 function createDefaultTab() {
   store.createTab(defaultAgent.value);
 }
@@ -304,7 +322,7 @@ function canReopen(s: TabSessionState): boolean {
          which was invalid and broke focus semantics). The wrapper keeps the
          visual active/hover state; tab-main carries role=tab. -->
     <!-- 10e: tab motion — fade-in enter, out-of-flow leave so siblings FLIP at once. -->
-    <TransitionGroup tag="div" class="tab-group" name="tab-anim">
+    <TransitionGroup tag="div" class="tab-group" name="tab-anim" @enter="onTabEnterProbe">
     <div
       v-for="(tab, i) in store.tabs"
       :key="tab.tabId"
