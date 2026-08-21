@@ -260,15 +260,13 @@ textarea:focus-visible {
   transition: transform var(--duration-normal) var(--ease);
 }
 
-/* Tab-specific (TransitionGroup): pure fade-in (a scale on enter plus the
- * siblings' FLIP move reads as flicker — user feedback); leave goes
- * position:absolute so siblings start their FLIP move immediately instead
- * of waiting the leave out then jumping (user feedback: 「+ 和 ▾ 延迟后左移」). */
+/* Tab-specific (TransitionGroup). r4: NO enter animation — every enter
+ * treatment to date (scale+fade, pure fade) read as a flickering blue block
+ * (the new tab is instantly ACTIVE with its accent fill); the tab now simply
+ * appears in place. Leave goes out-of-flow so siblings FLIP at once, and the
+ * FLIP move itself stays springy. */
 .tab-anim-enter-active {
-  transition: opacity var(--duration-slow) var(--ease-pop);
-}
-.tab-anim-enter-from {
-  opacity: 0;
+  transition: none;
 }
 .tab-anim-leave-active {
   transition: opacity var(--duration-fast) var(--ease);
