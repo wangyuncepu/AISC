@@ -62,7 +62,7 @@ function switchMode(next: "url" | "content"): void {
     </div>
 
     <template v-if="mode === 'url'">
-      <label class="field">
+      <label class="ui-field">
         <span>{{ t("usage.form.urlLabel") }}</span>
         <input
           v-model="url"
@@ -76,7 +76,7 @@ function switchMode(next: "url" | "content"): void {
       <p class="hint">{{ t("usage.form.urlHint") }}</p>
     </template>
     <template v-else>
-      <label class="field">
+      <label class="ui-field mono">
         <span>{{ t("usage.form.contentLabel") }}</span>
         <textarea
           v-model="content"
@@ -89,36 +89,47 @@ function switchMode(next: "url" | "content"): void {
       <p class="hint">{{ t("usage.form.contentHint") }}</p>
     </template>
 
-    <p v-if="usage.subError" class="error" role="alert">
+    <p v-if="usage.subError" class="ui-feedback error" role="alert">
       {{ usage.subError.code === "AISC_ERR_NETWORK_SUBSCRIPTION_TLS_REJECTED"
         ? t("usage.sub.tlsRejected") : usage.subError.message }}
     </p>
-    <p v-else-if="succeeded" class="ok" role="status">✓ {{ t("usage.form.success") }}</p>
+    <p v-else-if="succeeded" class="ui-feedback success" role="status">✓ {{ t("usage.form.success") }}</p>
 
-    <button type="submit" class="primary" :disabled="usage.subBusy">
+    <button type="submit" class="ui-button primary" :disabled="usage.subBusy">
       {{ usage.subBusy ? t("usage.form.importing") : t("usage.form.submit") }}
     </button>
   </form>
 </template>
 
 <style scoped>
-.sub-form { display: flex; flex-direction: column; gap: 10px; max-width: 640px; }
-.mode-row { display: inline-flex; gap: 6px; }
+/* 10b pilot: field/button/feedback surfaces come from the native primitives
+ * (styles.css .ui-*); only the segmented mode switch and layout stay local. */
+.sub-form { display: flex; flex-direction: column; gap: var(--space-3); max-width: 640px; }
+.mode-row {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  align-self: flex-start;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+}
 .mode-row button {
-  padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--surface); color: var(--text); cursor: pointer;
+  min-height: 22px;
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: background-color var(--duration-fast), color var(--duration-fast);
 }
-.mode-row button.on { background: var(--accent-soft, #2a4d7a); color: var(--accent-text, #fff); }
-.field { display: flex; flex-direction: column; gap: 4px; }
-.field span { font-size: 12px; color: var(--text-dim, #888); }
-input, textarea {
-  padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--surface-2, var(--surface)); color: var(--text);
-  font-family: inherit; font-size: 13px;
+.mode-row button:hover { background: var(--surface-hover); color: var(--text); }
+.mode-row button.on { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.mode-row button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
 }
-textarea { font-family: var(--mono, monospace); resize: vertical; }
-.hint { font-size: 12px; color: var(--text-dim, #888); margin: 0; }
-.error { color: var(--danger, #d33); font-size: 13px; margin: 0; white-space: pre-wrap; }
-.ok { color: var(--status-ok, #2a2); font-size: 13px; margin: 0; }
-button.primary { align-self: flex-start; padding: 6px 18px; }
+.hint { font-size: var(--font-sm); color: var(--text-muted); margin: 0; }
+.sub-form > .ui-button { align-self: flex-start; }
 </style>

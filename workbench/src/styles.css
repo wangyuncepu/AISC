@@ -359,7 +359,8 @@ input[type="range"] {
   gap: var(--space-1);
   min-width: 0;
 }
-.ui-field > label {
+.ui-field > label,
+.ui-field > span {
   font-size: var(--font-sm);
   color: var(--text-muted);
 }
