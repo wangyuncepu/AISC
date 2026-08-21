@@ -46,3 +46,18 @@
 | `a9636dd` | 10d-3 Provider 行截断修 B-03、分段控件/表单卡/toast 对齐 + 动效数值 token 化；Usage 6 裸按钮上 primitive、表格 hairline 化 |
 
 基线 B-01/B-02/B-03 全部修复。NetworkUsageTab 发现第三处抽组件丢按钮样式（同 a64abc3 类）。
+
+## 10e-a11y ✅（2026-08-22，用户手测关门）
+
+| commit | 内容 |
+|---|---|
+| `bdf3771` | **B-07/B-08 根因**：focus trap 可见性过滤器用 offsetParent——fixed 祖先下恒 null → trap 静默失效 → Tab 漏进终端、终端吞 Esc。改盒测试 + composable 契约测试 ×4；抽屉补 Esc；终端 Shift+Esc 跳出 |
+| `7f37487` | 统一动效库：pop/fade/slide-right 全局类（token 驱动），tab TransitionGroup、抽屉滑入、Doctor 淡入、四面菜单 pop |
+| `7475c51` | trap 改全量拦截（边界判断对 items 外焦点失效=Shift+Tab 漏抽屉根因）；tab 离场脱流 + FLIP；ease-pop 弹性曲线；Explorer 面板 out-in 淡切 |
+| `745032a` | **tab 动效从未生效的真因**：scoped .tab[data-v]（0,2,0）transition 整属性压过全局动效类（0,1,0）——过渡收进基类；dialog 内 :focus 恒显环（程序化 focus() 拿不到 :focus-visible） |
+| `6a79d31`/`e4d2f04` | 入场动画反复不过 → 砍掉；TransitionGroup 包实体容器 |
+| `30d48b3`+`e8eb28b` | **探针实证**：x 六帧不动、w 118.9→79.9——「左移」是宽度跳变错觉（启动中标签撑宽两帧）。修：状态标签延迟 150ms（spinner-delay），pill 宽度恒稳 |
+| `cde0e32` | active 高亮交接瞬时定格（200ms 双蓝并存拖影=用户定位的丑源） |
+| `6bcf331` | tab 内容区切换 150ms 淡入（v-show 常挂保缓冲，双 rAF class 编排） |
+
+手测：Esc 三面 ✅、终端回归 ✅、reduced-motion ✅、tab 动效勉强通过（观感调优记 follow-up）。**教训**：①grep 管道吞退出码（5394c6f）②Vite HMR 失稳给用户陈旧代码（重启 dev 才见真效）③「位置移动」投诉先上探针量 rect，视觉直觉会骗人（六帧 x 不动而 w 跳变）。
