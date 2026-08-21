@@ -48,26 +48,35 @@
 7. Usage / 网络用量页
 8. 状态 Drawer 打开态
 
-### 2.3 现状问题表（边截图边记）
+### 2.3 现状问题表（2026-08-21 用户手测回填）
 
-| # | 位置 | 维度 | 现象 | 截图文件名 |
+截图存档：18 张，`C:\Users\VE111\Documents\AISC\screenshoot\`（仓外目录，不入库）。
+
+| # | 位置 | 维度 | 现象 | 证据/处置 |
 |---|---|---|---|---|
-| B-01 | 待填 | | | |
+| B-01 | 「选择工作区」界面 | 长文案 | 超长文件夹名超出 UI 边界 | 10d 修（truncate/wrap） |
+| B-02 | WorkspaceBar/TabBar | 长文案 | 超长工作区名占满 tab 栏，挤压其他 tab | 10c 修 |
+| B-03 | Provider 页 | 长文案 | 超长 provider 名与后续内容重叠 | `C:\Users\VE111\Pictures\Screenshots\C-08.png`；10d 修 |
+| B-04 | 全局（tab/按钮/滑块） | 密度/观感 | tab 过小难点中；组件观感差（用户主观，诉求 iOS 风格） | 10b token 层解决；决策 D10-14 |
+| B-05 | 终端输入 | 行为 | 长输入不换行、同线覆盖；布局恢复时 prompt 串行一次（root@...# 断行，未复现） | 非视觉缺陷，登记 todo，Stage 10 仅要求无回归 |
+| B-06 | 终端 fit | 行为 | resize 列数不实时跟随，缓慢逐步挤压 | 同上 |
+| B-07 | 全局 dialog/menu/drawer | 键盘 | Escape 全部无响应，无法键盘关闭 | UI 层缺陷，10e 独立行为修复提交收口 |
+| B-08 | 键盘导航 | 键盘 | Tab 进入终端后被拦截无法穿越；Usage 页 Tab 仅在内部按钮循环 | 同上 |
 
 ## 3. 交互现状记录（用户执行，逐项 PASS/FAIL/备注）
 
 | # | 检查项 | 步骤 | 结果 |
 |---|---|---|---|
-| C-01 | terminal 输入/粘贴 | 打开 session，键入与粘贴长行 | 待测 |
-| C-02 | terminal fit | 拖拽窗口宽窄各一次，列数随宽度变化、无溢出 | 待测 |
-| C-03 | terminal 复制/搜索 | 选中文本复制；Ctrl+F 搜索 | 待测 |
-| C-04 | 右键菜单（Teleport） | 终端区与 tab 区各右键一次，菜单完整出现在视口内 | 待测 |
-| C-05 | tablist 键盘 | Tab 进入 tab 栏，左右箭头切换，Enter 激活 | 待测 |
-| C-06 | Escape | dialog/menu/drawer 打开后 Escape 关闭，焦点回到触发元素 | 待测 |
-| C-07 | focus-visible | 键盘 Tab 遍历顶栏→workspace→tab→explorer→terminal，焦点环可见 | 待测 |
-| C-08 | 长文案 | 英文界面 + 长路径 workspace/长 provider 名，主操作不被挤压出视口 | 待测 |
-| C-09 | 主题切换 | settings 切 dark/light/system，首帧无闪白/闪黑 | 待测 |
-| C-10 | reduced-motion | 系统开启"显示动画效果=关"，无阻塞性动画 | 待测 |
+| C-01 | terminal 输入/粘贴 | 打开 session，键入与粘贴长行 | ❌ 长输入同线覆盖不换行；布局恢复时 prompt 串行一次（B-05，未复现） |
+| C-02 | terminal fit | 拖拽窗口宽窄各一次，列数随宽度变化、无溢出 | ⚠️ 列数不实时跟随，缓慢挤压（B-06） |
+| C-03 | terminal 复制/搜索 | 选中文本复制；Ctrl+F 搜索 | ✅ |
+| C-04 | 右键菜单（Teleport） | 终端区与 tab 区各右键一次，菜单完整出现在视口内 | ✅ |
+| C-05 | tablist 键盘 | Tab 进入 tab 栏，左右箭头切换，Enter 激活 | ❌ 终端拦截 Tab 无法穿越；Usage 页仅内部循环（B-08） |
+| C-06 | Escape | dialog/menu/drawer 打开后 Escape 关闭，焦点回到触发元素 | ❌ 全部无响应（B-07） |
+| C-07 | focus-visible | 键盘 Tab 遍历顶栏→workspace→tab→explorer→terminal，焦点环可见 | ❌ 同 C-05（B-08） |
+| C-08 | 长文案 | 英文界面 + 长路径 workspace/长 provider 名，主操作不被挤压出视口 | ❌ 三处溢出/重叠（B-01/02/03，截图 C-08.png） |
+| C-09 | 主题切换 | settings 切 dark/light/system，首帧无闪白/闪黑 | ✅ 一次成功 |
+| C-10 | reduced-motion | 系统开启"显示动画效果=关"，无阻塞性动画 | ✅ 未出现阻塞动画 |
 
 ## 4. 本阶段允许修改文件清单
 
