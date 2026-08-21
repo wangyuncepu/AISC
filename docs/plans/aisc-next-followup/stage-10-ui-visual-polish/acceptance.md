@@ -1,6 +1,6 @@
 # Stage 10 验收台账
 
-> 结果状态：**PASS-WITH-FOLLOWUPS（待用户最终确认）**
+> 结果状态：**PASS-WITH-FOLLOWUPS（已归档 2026-08-22：用户确认 + CI 三线全绿）**
 > 结论枚举：`PASS` / `PASS-WITH-FOLLOWUPS` / `STOP`
 > 证据要求：记录 commit、Workbench 版本、Windows/WebView2、主题、语言、有效宽度、font scale 和脱敏日志/截图路径。
 
@@ -50,7 +50,7 @@
 
 ## 结论记录
 
-- 最终结论：PASS-WITH-FOLLOWUPS（待用户确认后归档）
+- 最终结论：PASS-WITH-FOLLOWUPS（用户确认 2026-08-22；merge `d902374`；CI Workbench/Bundle/NSIS 全绿）
 - 通过提交范围：`9c5aa37`（develop 规划）+ `stage-10-ui-polish` 38+ 提交（10a–10f）
 - 遗留项：见上表，均已在 todo.md / stage-log.md 立案
 - 下一步授权：用户确认 → 10g merge --no-ff 回 develop + push + CI
