@@ -360,9 +360,12 @@ function onTreeKeydown(e: KeyboardEvent) {
       {{ t("explorer.stale") }}
     </div>
 
+    <!-- 10e: cross-fade between the tree and artifacts panels (out-in). -->
+    <Transition name="fade" mode="out-in">
     <!-- Explorer tree -->
     <div
       v-if="artifactFilter === 'explorer'"
+      key="tree"
       class="explorer-body"
       role="tree"
       aria-orientation="vertical"
@@ -425,7 +428,7 @@ function onTreeKeydown(e: KeyboardEvent) {
     </div>
 
     <!-- Artifacts panel -->
-    <div v-else class="explorer-body artifacts-panel">
+    <div v-else key="artifacts" class="explorer-body artifacts-panel">
       <p v-if="explorer.artifactsLoading">{{ t("explorer.loading") }}</p>
       <template v-else>
         <p
@@ -514,6 +517,7 @@ function onTreeKeydown(e: KeyboardEvent) {
         </div>
       </template>
     </div>
+    </Transition>
 
     <!-- Context menu (10e: unified pop motion) -->
     <Transition name="pop">

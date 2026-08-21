@@ -66,6 +66,7 @@
   --duration-normal: 200ms;
   --duration-slow: 300ms;
   --ease: cubic-bezier(0.25, 1, 0.5, 1); /* 10b: soft iOS-style ease-out */
+  --ease-pop: cubic-bezier(0.34, 1.35, 0.5, 1); /* 10e: slight overshoot for enters */
 
   /* --- status indicator colors (theme-independent; onboarding check dots /
    * probe / confirm) — distinct hues from the semantic text palette. --- */
@@ -243,8 +244,8 @@ textarea:focus-visible {
  * Reduced motion: the global prefers-reduced-motion override near the top
  * collapses every duration to 0.01ms, so nothing here needs its own guard. */
 .pop-enter-active {
-  transition: opacity var(--duration-normal) var(--ease),
-    transform var(--duration-normal) var(--ease);
+  transition: opacity var(--duration-normal) var(--ease-pop),
+    transform var(--duration-normal) var(--ease-pop);
 }
 .pop-leave-active {
   transition: opacity var(--duration-fast) var(--ease),
@@ -257,6 +258,27 @@ textarea:focus-visible {
 }
 .pop-move {
   transition: transform var(--duration-normal) var(--ease);
+}
+
+/* Tab-specific (TransitionGroup): pure fade-in (a scale on enter plus the
+ * siblings' FLIP move reads as flicker — user feedback); leave goes
+ * position:absolute so siblings start their FLIP move immediately instead
+ * of waiting the leave out then jumping (user feedback: 「+ 和 ▾ 延迟后左移」). */
+.tab-anim-enter-active {
+  transition: opacity var(--duration-slow) var(--ease-pop);
+}
+.tab-anim-enter-from {
+  opacity: 0;
+}
+.tab-anim-leave-active {
+  transition: opacity var(--duration-fast) var(--ease);
+  position: absolute;
+}
+.tab-anim-leave-to {
+  opacity: 0;
+}
+.tab-anim-move {
+  transition: transform var(--duration-slow) var(--ease-pop);
 }
 
 .fade-enter-active,

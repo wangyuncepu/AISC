@@ -303,8 +303,8 @@ function canReopen(s: TabSessionState): boolean {
          and the close/reopen actions are sibling buttons (no nested button,
          which was invalid and broke focus semantics). The wrapper keeps the
          visual active/hover state; tab-main carries role=tab. -->
-    <!-- 10e: unified pop motion (D10-09) — enter/leave + FLIP move. -->
-    <TransitionGroup name="pop">
+    <!-- 10e: tab motion — fade-in enter, out-of-flow leave so siblings FLIP at once. -->
+    <TransitionGroup name="tab-anim">
     <div
       v-for="(tab, i) in store.tabs"
       :key="tab.tabId"
@@ -345,7 +345,7 @@ function canReopen(s: TabSessionState): boolean {
 
     <!-- IDEA-1 + Stage 8e: virtual session-less tabs (Settings, cc-switch
          Provider UI). Keyboard model: appended after the session tabs. -->
-    <TransitionGroup name="pop">
+    <TransitionGroup name="tab-anim">
     <div
       v-for="(v, vi) in virtualTabs"
       :key="v.id"
@@ -430,6 +430,7 @@ function canReopen(s: TabSessionState): boolean {
 
 <style scoped>
 .tabbar {
+  position: relative; /* 10e: tab-anim leave anchors here (position:absolute) */
   display: flex;
   align-items: center;
   gap: 2px;

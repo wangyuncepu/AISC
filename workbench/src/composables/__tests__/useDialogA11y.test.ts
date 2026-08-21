@@ -67,6 +67,19 @@ describe("useDialogA11y (B-07)", () => {
     wrapper.unmount();
   });
 
+  it("Tab from focus outside the panel pulls back inside (full trap)", () => {
+    const onClose = vi.fn();
+    const { wrapper } = mountDialog(onClose);
+    // Focus somewhere under the dialog (the drawer toggle outside the panel).
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+    window.dispatchEvent(keyEvent("Tab"));
+    expect(document.activeElement?.id).toBe("first");
+    outside.remove();
+    wrapper.unmount();
+  });
+
   it("focus returns to the opener on unmount", () => {
     const openerEl = document.createElement("button");
     document.body.appendChild(openerEl);
