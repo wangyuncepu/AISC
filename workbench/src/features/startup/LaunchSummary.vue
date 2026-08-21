@@ -212,7 +212,7 @@ input, select {
 }
 .spinner {
   width: 12px; height: 12px; flex-shrink: 0;
-  border: 2px solid var(--info-border, var(--border-2));
+  border: 2px solid var(--info-border);
   border-top-color: var(--info);
   border-radius: 50%;
   animation: docker-spin 0.9s linear infinite;
@@ -223,12 +223,18 @@ input, select {
 }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
-  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--control-h-sm);
+  background: var(--surface-3); color: var(--text-2); border: var(--border-w) solid var(--border); border-radius: var(--radius-sm);
+  padding: 0 var(--space-3); font-size: var(--font-sm); cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease), color var(--duration-normal) var(--ease);
 }
-button:hover:not(:disabled) { background: var(--surface-hover); }
+button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+button:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: var(--focus-ring-offset); }
 button:disabled { opacity: 0.45; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: transparent; color: var(--accent-fg); font-weight: 600; }
 button.primary:hover:not(:disabled) { background: var(--accent-hover); }
-button.danger { background: var(--error-bg); border-color: var(--error-border); }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+button.danger { background: var(--error-bg); border-color: var(--error-border); color: var(--error-fg); }
+button.danger:hover:not(:disabled) { background: var(--error-hover); }
 </style>

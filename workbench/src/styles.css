@@ -14,8 +14,10 @@
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
+  --space-10: 40px;
 
   --font-xs: 11px;
   --font-sm: 12px;
@@ -24,14 +26,35 @@
   --font-lg: 16px;
   --font-xl: 20px;
 
-  --radius-sm: 2px;
-  --radius-md: 4px;
-  --radius-lg: 6px;
+  /* 10b: line-height + mono family (UI chrome only — the terminal font comes
+   * from the `terminal.font_family` setting, never from this token). */
+  --leading-tight: 1.3;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.7;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+
+  /* 10b (D10-14, iOS direction): radius scale raised, controls get real
+   * minimum heights so tabs/buttons/sliders stay easy to hit. sm=8 after
+   * pilot feedback (6px read as stiff next to lg panels). */
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
   --radius-full: 50%;
+
+  --control-h-sm: 26px;
+  --control-h-md: 32px;
+  --control-h-lg: 38px;
 
   --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.35);
   --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.35); /* 10b: gentle control lift */
+
+  --border-w: 1px;
+  --border-w-strong: 2px;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
 
   --z-menu: 10;
   --z-overlay: 20;
@@ -41,6 +64,9 @@
 
   --duration-fast: 100ms;
   --duration-normal: 200ms;
+  --duration-slow: 300ms;
+  --ease: cubic-bezier(0.25, 1, 0.5, 1); /* 10b: soft iOS-style ease-out */
+  --ease-pop: cubic-bezier(0.34, 1.35, 0.5, 1); /* 10e: slight overshoot for enters */
 
   /* --- status indicator colors (theme-independent; onboarding check dots /
    * probe / confirm) — distinct hues from the semantic text palette. --- */
@@ -65,6 +91,7 @@
   --accent: #0e639c;             /* primary action */
   --accent-hover: #1177bb;
   --accent-fg: #ffffff;          /* text on accent */
+  --accent-soft: rgba(74, 158, 255, 0.25); /* tinted accent bg (badges, segmented on) */
   --info: #9cdcfe;               /* info / link-ish text */
   --success: #9cce9c;
   --warn: #cca84a;
@@ -81,6 +108,14 @@
   --info-border: #3a4a5a;
   --selection: #264f78;          /* text selection */
   --focus: #0e639c;              /* focus ring */
+  --scrim: rgba(0, 0, 0, 0.55);  /* dialog/drawer overlay backdrop (10b) */
+
+  /* 10b state "soft" family — translucent tints for badges/chips/selected
+   * rows; the solid *-bg tokens above stay for banners. */
+  --success-soft: rgba(76, 175, 80, 0.18);
+  --warn-soft: rgba(255, 179, 0, 0.16);
+  --error-soft: rgba(229, 83, 75, 0.16);
+  --info-soft: rgba(156, 220, 254, 0.14);
 
   color-scheme: dark;
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
@@ -109,6 +144,7 @@
   --accent: #0e639c;
   --accent-hover: #1177bb;
   --accent-fg: #ffffff;
+  --accent-soft: rgba(14, 99, 156, 0.12);
   --info: #005fb8;
   --success: #2e7d32;
   --warn: #9a6b00;
@@ -125,6 +161,13 @@
   --info-border: #b8c8da;
   --selection: #b4d5fe;
   --focus: #005fb8;
+  --scrim: rgba(0, 0, 0, 0.32);
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.12);
+
+  --success-soft: rgba(46, 125, 50, 0.12);
+  --warn-soft: rgba(154, 107, 0, 0.12);
+  --error-soft: rgba(179, 38, 30, 0.10);
+  --info-soft: rgba(0, 95, 184, 0.10);
 
   color-scheme: light;
 }
@@ -144,12 +187,13 @@ body {
 }
 
 /* S3.3: keyboard-focus visibility (only for keyboard navigation, never on
- * mouse clicks). */
+ * mouse clicks). 10b: dimensions now tokenized. */
 button:focus-visible,
 input:focus-visible,
-select:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+select:focus-visible,
+textarea:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
 }
 
 /* Stage 6 (UX-03): reduced motion — collapse CSS transitions/animations.
@@ -163,4 +207,426 @@ select:focus-visible {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* =====================================================================
+ * Stage 10 (10b) native UI primitives — D10-14 iOS-leaning: rounded,
+ * grouped, generous hit areas. Opt-in classes; components adopt them in
+ * 10c/10d. Visual only: .ui-menu never positions (Teleport coordinates
+ * stay component-owned), nothing here may reach the xterm DOM (no bare
+ * element sizing rules — the global layer below touches color/cursor
+ * only, and the terminal font comes from `terminal.font_family`).
+ * ===================================================================== */
+
+/* --- global unification layer (safe subset: color/cursor only) --- */
+::placeholder {
+  color: var(--text-faint);
+  opacity: 1;
+}
+
+/* --- 10e unified motion (D10-09/D10-14) --------------------------------
+ * Shared Vue <Transition>/<TransitionGroup> classes, all token-driven.
+ * `pop`  — menus, tab enter/leave (scale+fade)
+ * `fade` — dialog overlays
+ * `slide-right` — the right-edge status drawer
+ * Reduced motion: the global prefers-reduced-motion override near the top
+ * collapses every duration to 0.01ms, so nothing here needs its own guard. */
+.pop-enter-active {
+  transition: opacity var(--duration-normal) var(--ease-pop),
+    transform var(--duration-normal) var(--ease-pop);
+}
+.pop-leave-active {
+  transition: opacity var(--duration-fast) var(--ease),
+    transform var(--duration-fast) var(--ease);
+}
+.pop-enter-from,
+.pop-leave-to {
+  opacity: 0;
+  transform: scale(0.92);
+}
+.pop-move {
+  transition: transform var(--duration-normal) var(--ease);
+}
+
+/* Tab-specific (TransitionGroup). r4: NO enter animation — every enter
+ * treatment to date (scale+fade, pure fade) read as a flickering blue block
+ * (the new tab is instantly ACTIVE with its accent fill); the tab now simply
+ * appears in place. Leave goes out-of-flow so siblings FLIP at once, and the
+ * FLIP move itself stays springy. */
+.tab-anim-enter-active {
+  transition: none;
+}
+.tab-anim-leave-active {
+  transition: opacity var(--duration-fast) var(--ease);
+  position: absolute;
+}
+.tab-anim-leave-to {
+  opacity: 0;
+}
+.tab-anim-move {
+  transition: transform var(--duration-slow) var(--ease-pop);
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--duration-normal) var(--ease);
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* 10e r3: inside a modal dialog every focus move comes from the trap (a
+ * keydown handler), and browsers deny the first hops :focus-visible because
+ * the focus() calls are programmatic — the ring only appeared after the
+ * second keypress (user feedback). Dialogs are keyboard contexts: show the
+ * ring on plain :focus there. */
+[role="dialog"] :focus {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.slide-right-enter-active {
+  transition: transform var(--duration-slow) var(--ease),
+    opacity var(--duration-normal) var(--ease);
+}
+.slide-right-leave-active {
+  transition: transform var(--duration-fast) var(--ease),
+    opacity var(--duration-fast) var(--ease);
+}
+.slide-right-enter-from,
+.slide-right-leave-to {
+  transform: translateX(30%);
+  opacity: 0;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+input[type="checkbox"],
+input[type="range"] {
+  accent-color: var(--accent);
+}
+
+/* --- .ui-button --- */
+.ui-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: var(--control-h-md);
+  padding: 0 var(--space-4);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: var(--font-base);
+  line-height: var(--leading-tight);
+  cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease),
+    border-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease),
+    box-shadow var(--duration-normal) var(--ease);
+}
+.ui-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.ui-button:active:not(:disabled) {
+  background: var(--surface-active);
+}
+.ui-button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+.ui-button:disabled {
+  opacity: 0.45;
+}
+.ui-button.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  box-shadow: var(--shadow-soft);
+}
+.ui-button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  box-shadow: var(--shadow-1);
+}
+.ui-button.primary:active:not(:disabled) {
+  background: var(--accent);
+  box-shadow: var(--shadow-soft);
+}
+.ui-button.quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-2);
+}
+.ui-button.quiet:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.ui-button.danger {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-fg);
+}
+.ui-button.danger:hover:not(:disabled) {
+  background: var(--error-hover);
+}
+.ui-button.sm {
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  font-size: var(--font-sm);
+}
+.ui-button.lg {
+  min-height: var(--control-h-lg);
+  padding: 0 var(--space-5);
+  font-size: var(--font-lg);
+}
+
+/* --- .ui-icon-button (square hit area; state via aria where relevant) --- */
+.ui-icon-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-md);
+  height: var(--control-h-md);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--font-lg);
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
+}
+.ui-icon-button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.ui-icon-button:active:not(:disabled) {
+  background: var(--surface-active);
+}
+.ui-icon-button[aria-expanded="true"] {
+  background: var(--surface-active);
+  color: var(--text);
+}
+.ui-icon-button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+.ui-icon-button:disabled {
+  opacity: 0.45;
+}
+.ui-icon-button.sm {
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  font-size: var(--font-base);
+}
+
+/* --- .ui-field (label + control column) --- */
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.ui-field > label,
+.ui-field > span {
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+}
+.ui-field > input,
+.ui-field > select,
+.ui-field > textarea {
+  box-sizing: border-box;
+  min-height: var(--control-h-md);
+  padding: var(--space-1) var(--space-3);
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: var(--font-base);
+  line-height: var(--leading-normal);
+}
+.ui-field > textarea {
+  min-height: calc(var(--control-h-md) * 3);
+  resize: vertical;
+}
+.ui-field.mono > textarea,
+.ui-field.mono > input {
+  font-family: var(--font-mono);
+}
+.ui-field > input:disabled,
+.ui-field > select:disabled,
+.ui-field > textarea:disabled {
+  opacity: 0.45;
+}
+.ui-field.invalid > input,
+.ui-field.invalid > select,
+.ui-field.invalid > textarea {
+  border-color: var(--error);
+}
+
+/* --- .ui-panel (card surface) --- */
+.ui-panel {
+  box-sizing: border-box;
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  min-width: 0;
+}
+.ui-panel.elevated {
+  background: var(--surface-2);
+  box-shadow: var(--shadow-soft);
+}
+
+/* --- .ui-section (iOS inset-grouped list) --- */
+.ui-section {
+  box-sizing: border-box;
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  min-width: 0;
+}
+.ui-section-title {
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+.ui-section-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-h-md);
+  padding: var(--space-2) var(--space-4);
+  border-top: var(--border-w) solid var(--border);
+  min-width: 0;
+}
+.ui-section-row:first-of-type {
+  border-top: none;
+}
+.ui-section-row.interactive {
+  cursor: pointer;
+}
+.ui-section-row.interactive:hover {
+  background: var(--surface-hover);
+}
+.ui-section-row.selected {
+  background: var(--accent-soft);
+}
+
+/* --- .ui-badge (status pill) --- */
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 20px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--surface-hover);
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+}
+.ui-badge.ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.ui-badge.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.ui-badge.error {
+  background: var(--error-soft);
+  color: var(--error);
+}
+.ui-badge.info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+.ui-badge.accent {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* --- .ui-menu (visual only — positioning stays with the Teleport owner) --- */
+.ui-menu {
+  box-sizing: border-box;
+  min-width: 160px;
+  max-width: 280px;
+  padding: var(--space-1);
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--border-2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
+}
+.ui-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--font-base);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease);
+}
+.ui-menu-item:hover,
+.ui-menu-item:active {
+  background: var(--surface-active);
+  color: var(--text);
+}
+.ui-menu-item[aria-checked="true"] {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.ui-menu-item:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-ring-offset));
+}
+
+/* --- .ui-feedback (inline banner) --- */
+.ui-feedback {
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--font-md);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+.ui-feedback.info {
+  background: var(--info-bg);
+  border-color: var(--info-border);
+  color: var(--text);
+}
+.ui-feedback.success {
+  background: var(--success-bg);
+  border-color: var(--success);
+}
+.ui-feedback.warn {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn-fg);
+}
+.ui-feedback.error {
+  background: var(--error-bg);
+  border-color: var(--error-border);
+  color: var(--error-fg);
 }

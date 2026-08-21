@@ -374,6 +374,9 @@ export const zhCN = {
   "explorer.empty.files": "此目录中没有文件。",
   "explorer.empty.artifacts": "Agent 生成可交付文件后会显示在这里。",
   "explorer.loading": "加载中…",
+  "explorer.change.created": "新建",
+  "explorer.change.modified": "修改",
+  "explorer.change.deleted": "删除",
   "explorer.artifacts.deliverables": "可交付文件",
   "explorer.artifacts.workspaceChanges": "工作区变化（未归因）",
 

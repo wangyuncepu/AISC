@@ -48,6 +48,8 @@ const doctorStore = useDoctorStore();
  * RuntimeSidebar 的固定列样式，无开关），状态信息栏变右侧悬浮抽屉
  * （原资源管理器抽屉样式）——默认收起，右缘弱化 ⓘ 开关 + 抽屉内 ✕ 关闭。 */
 const showStatus = ref(false);
+/** 10e (B-07): Escape-close returns focus here (opener restore). */
+const drawerToggleRef = ref<HTMLButtonElement | null>(null);
 
 // Stage 8e: the cc-switch Provider UI virtual pane — kept alive while hidden
 // so unsaved state survives switches. (The Settings pane is workspace-layer
@@ -85,6 +87,28 @@ function activateRenderedTab(id: string): void {
   else store.activateTab(id);
   focusTabTerminal(id);
 }
+
+/** 10e r7 (user feedback): tab CONTENT now fades in on switch — the v-show
+ * panes stay mounted (buffer-safe design), so a display:none -> block swap
+ * can't CSS-transition; orchestrate manually: pin opacity 0, then release on
+ * the next frame so the 150ms ease runs. */
+const terminalAreaRef = ref<HTMLElement | null>(null);
+watch(
+  () => store.activeTabId,
+  (id) => {
+    if (!id || store.status !== "ready") return;
+    void nextTick(() => {
+      const area = terminalAreaRef.value;
+      const wrap = area?.querySelector<HTMLElement>(`.term-wrap[data-tab="${CSS.escape(id)}"]`)
+        ?? area?.querySelector<HTMLElement>(".settings-pane");
+      if (!wrap) return;
+      wrap.classList.add("pane-fade-in");
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => wrap.classList.remove("pane-fade-in")),
+      );
+    });
+  },
+);
 
 // G-08: every activation path moves keyboard focus into the terminal.
 watch(
@@ -176,6 +200,18 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(() => window.addEventListener("keydown", onKeydown, { capture: true }));
 onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown, { capture: true }));
 
+// 10e (B-07): Escape closes the status drawer — the ghost ⓘ toggle and the
+// header ✕ were the only close paths; keyboard users had none.
+function onDrawerEscape(e: KeyboardEvent): void {
+  if (e.key === "Escape" && showStatus.value) {
+    e.preventDefault();
+    showStatus.value = false;
+    drawerToggleRef.value?.focus();
+  }
+}
+onMounted(() => window.addEventListener("keydown", onDrawerEscape));
+onBeforeUnmount(() => window.removeEventListener("keydown", onDrawerEscape));
+
 function isStartingView(s: string): boolean {
   return s === "starting" || s === "cancelled";
 }
@@ -229,14 +265,15 @@ function setPaneTreeRef(tabId: string) {
       </div>
       <div class="main">
         <TabBar />
-        <main class="terminal-area">
+        <main ref="terminalAreaRef" class="terminal-area">
           <div v-if="store.tabs.length === 0 && !ccSwitchPaneVisible" class="empty-tabs">
             <p>{{ t("tabs.empty") }}</p>
-            <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
+            <button class="ui-button primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
           </div>
           <div
             v-for="tb in paneTabs"
             :key="tb.tabId"
+            :data-tab="tb.tabId"
             class="term-wrap"
             :style="props.zoom"
             v-show="tb.tabId === store.activeTabId"
@@ -259,6 +296,7 @@ function setPaneTreeRef(tabId: string) {
       </div>
       <!-- 弱化开关：右缘幽灵 ⓘ（抽屉打开时被抽屉覆盖，经抽屉内 ✕ 关闭） -->
       <button
+        ref="drawerToggleRef"
         class="status-toggle"
         :title="t('sidebar.drawerOpen')"
         :aria-label="t('sidebar.drawerOpen')"
@@ -268,6 +306,8 @@ function setPaneTreeRef(tabId: string) {
         ⓘ
       </button>
       <!-- 状态信息栏：右侧悬浮抽屉（原资源管理器抽屉样式），默认收起 -->
+      <!-- 10e: unified slide-right motion (D10-09). -->
+      <Transition name="slide-right">
       <div v-show="showStatus" class="status-drawer">
         <div class="status-head">
           <span>{{ t("sidebar.drawerTitle") }}</span>
@@ -282,6 +322,7 @@ function setPaneTreeRef(tabId: string) {
         </div>
         <RuntimeSidebar />
       </div>
+      </Transition>
     </div>
 
     <!-- Instance error gate -->
@@ -290,9 +331,9 @@ function setPaneTreeRef(tabId: string) {
       <p class="err">{{ store.error?.message }}</p>
       <p class="detail">{{ store.error?.technical_detail }}</p>
       <div class="actions">
-        <button @click="store.negotiate()">{{ t("app.error.retry") }}</button>
-        <button @click="store.backToPicker()">{{ t("app.error.back") }}</button>
-        <button class="diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
+        <button class="ui-button" @click="store.negotiate()">{{ t("app.error.retry") }}</button>
+        <button class="ui-button" @click="store.backToPicker()">{{ t("app.error.back") }}</button>
+        <button class="ui-button diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
       </div>
     </div>
   </div>
@@ -316,6 +357,9 @@ function setPaneTreeRef(tabId: string) {
 .ready { flex: 1; display: flex; min-height: 0; position: relative; }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: var(--bg); display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
+/* 10e: content fade on tab switch (opacity only — D10-09). */
+.term-wrap, .settings-pane { transition: opacity var(--duration-normal) var(--ease); }
+.term-wrap.pane-fade-in, .settings-pane.pane-fade-in { opacity: 0; }
 .settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }
 /* 2026-08-18 样式对调：Explorer 固定停靠左列（原 RuntimeSidebar 的 dock 样式） */
 .explorer-dock {
@@ -324,22 +368,33 @@ function setPaneTreeRef(tabId: string) {
   flex-shrink: 0;
   display: flex;
   background: var(--surface);
-  border-right: 1px solid var(--border-strong);
+  border-right: var(--border-w) solid var(--border);
 }
 .explorer-dock > * { flex: 1; min-height: 0; min-width: 0; }
 /* 右缘弱化开关：幽灵样式，hover 才浮出 */
 .status-toggle {
   align-self: flex-start;
-  margin-top: 4px;
-  padding: 4px 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-2);
   background: none;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: var(--text-faint);
   cursor: pointer;
   font-size: var(--font-md);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
-.status-toggle:hover { background: var(--surface-2); color: var(--text-2); }
+.status-toggle:hover { background: var(--surface-hover); color: var(--text-2); }
+.status-toggle:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
 /* 状态信息栏：右侧悬浮抽屉（原资源管理器抽屉的浮层样式） */
 .status-drawer {
   position: absolute;
@@ -351,22 +406,27 @@ function setPaneTreeRef(tabId: string) {
   z-index: var(--z-drawer);
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border-left: 1px solid var(--border-strong);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+  background: var(--surface-2);
+  border-left: var(--border-w) solid var(--border-2);
+  box-shadow: var(--shadow-2);
 }
 .status-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: var(--border-w) solid var(--border);
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--font-xs);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 .status-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  min-height: 20px;
   background: none;
   border: none;
   border-radius: var(--radius-sm);
@@ -374,8 +434,14 @@ function setPaneTreeRef(tabId: string) {
   color: var(--text-muted);
   cursor: pointer;
   font-size: var(--font-sm);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
-.status-close:hover { background: var(--surface-2); color: var(--text); }
+.status-close:hover { background: var(--surface-hover); color: var(--text); }
+.status-close:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
 .empty-tabs {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 10px; color: var(--text-muted); font-size: var(--font-md);

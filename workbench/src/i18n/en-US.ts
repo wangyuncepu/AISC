@@ -374,6 +374,9 @@ export const enUS: Record<string, string> = {
   "explorer.empty.files": "No files in this directory.",
   "explorer.empty.artifacts": "Artifacts the agent generates will appear here.",
   "explorer.loading": "Loading…",
+  "explorer.change.created": "new",
+  "explorer.change.modified": "edited",
+  "explorer.change.deleted": "deleted",
   "explorer.artifacts.deliverables": "Deliverables",
   "explorer.artifacts.workspaceChanges": "Workspace changes (unattributed)",
 

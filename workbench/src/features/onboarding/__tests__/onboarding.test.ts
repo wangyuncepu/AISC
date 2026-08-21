@@ -99,7 +99,7 @@ describe("OnboardingWizard (ONB-01/07)", () => {
   it("skip checkpoints to skipped status", async () => {
     const wrapper = mount(OnboardingWizard, { global: { plugins: [i18n] } });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    await wrapper.find(".ob-btn.ghost").trigger("click");
+    await wrapper.find(".ob-btn.quiet").trigger("click");
     expect(onboardingUpdate).toHaveBeenCalledWith({ status: "skipped" });
     wrapper.unmount();
   });

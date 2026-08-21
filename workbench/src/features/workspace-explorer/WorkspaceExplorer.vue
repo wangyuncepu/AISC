@@ -15,7 +15,7 @@ import { useWorkspaceExplorerStore } from "../../stores/workspaceExplorer";
 import { useRuntimeStore } from "../../stores/runtime";
 import type { WorkspaceNode } from "../../types";
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const explorer = useWorkspaceExplorerStore();
 const runtime = useRuntimeStore();
 
@@ -165,6 +165,16 @@ async function onMenuCopy(relativePath: string) {
  * is the standard way to read CSS zoom in Chromium) rather than re-deriving
  * the settings formula. Falls back to 1 when the app root is not measurable.
  */
+/**
+ * The app chrome is CSS-zoomed (`ui.font_scale` → `.app { zoom }`). Under a
+ * non-1 zoom, `position: fixed`'s containing block becomes the zoomed ancestor,
+ * so `clientX/clientY` (1:1 viewport px) must be divided by the live zoom to
+ * land at the pointer. Measure it from the `.app` box (rect.width/offsetWidth
+ * is the standard way to read CSS zoom in Chromium) rather than re-deriving
+ * the settings formula. Falls back to 1 when the app root is not measurable.
+ * (10d r4 note: this menu lives INSIDE the zoomed .app — keep dividing. Only
+ * menus teleported OUTSIDE .app use raw viewport px; see TabBar/WorkspaceBar.)
+ */
 function appZoom(): number {
   const app = document.querySelector<HTMLElement>(".app");
   if (!app) return 1;
@@ -175,15 +185,19 @@ function appZoom(): number {
 function openMenu(node: WorkspaceNode, event: MouseEvent) {
   menuFor.value = node.relative_path;
   const zoom = appZoom();
-  // Clamp to the viewport in the menu's own (zoom-adjusted) coordinate space:
-  // the Explorer drawer sits at the window's right edge, so an unclamped
-  // clientX would push the fixed-position menu off-screen.
   const menuWidth = 160;
   const menuHeight = 160;
   menuPos.value = {
     x: Math.max(4, Math.min(event.clientX / zoom, window.innerWidth / zoom - menuWidth)),
     y: Math.max(4, Math.min(event.clientY / zoom, window.innerHeight / zoom - menuHeight)),
   };
+}
+
+/** Watcher change type → localized quiet label (raw enum never hits the UI). */
+function changeLabel(change: string): string {
+  const key = `explorer.change.${change}`;
+  const known = ["created", "modified", "deleted"];
+  return known.includes(change) ? te(key) ? t(key) : change : change;
 }
 
 function formatBytes(n: number): string {
@@ -346,9 +360,12 @@ function onTreeKeydown(e: KeyboardEvent) {
       {{ t("explorer.stale") }}
     </div>
 
+    <!-- 10e: cross-fade between the tree and artifacts panels (out-in). -->
+    <Transition name="fade" mode="out-in">
     <!-- Explorer tree -->
     <div
       v-if="artifactFilter === 'explorer'"
+      key="tree"
       class="explorer-body"
       role="tree"
       aria-orientation="vertical"
@@ -389,8 +406,8 @@ function onTreeKeydown(e: KeyboardEvent) {
           >
           <span
             v-if="node.change_state && node.change_state !== 'unknown' && node.change_state !== 'artifact'"
-            class="explorer-badge change-badge"
-            >{{ node.change_state }}</span
+            class="change-label"
+            >{{ changeLabel(node.change_state) }}</span
           >
         </div>
 
@@ -411,7 +428,7 @@ function onTreeKeydown(e: KeyboardEvent) {
     </div>
 
     <!-- Artifacts panel -->
-    <div v-else class="explorer-body artifacts-panel">
+    <div v-else key="artifacts" class="explorer-body artifacts-panel">
       <p v-if="explorer.artifactsLoading">{{ t("explorer.loading") }}</p>
       <template v-else>
         <p
@@ -496,12 +513,14 @@ function onTreeKeydown(e: KeyboardEvent) {
           @contextmenu.prevent="openMenu(pseudoNode(u.relative_path), $event)"
         >
           <span class="explorer-name" :title="hostPath(u.relative_path)">{{ artifactLabel(u.relative_path) }}</span>
-          <span class="explorer-badge unattributed-badge">{{ u.change_type }}</span>
+          <span class="change-label">{{ changeLabel(u.change_type) }}</span>
         </div>
       </template>
     </div>
+    </Transition>
 
-    <!-- Context menu -->
+    <!-- Context menu (10e: unified pop motion) -->
+    <Transition name="pop">
     <div
       v-if="menuFor"
       class="explorer-menu"
@@ -517,6 +536,7 @@ function onTreeKeydown(e: KeyboardEvent) {
       <button role="menuitem" @click="onMenuCopy(menuFor!)">{{ t("explorer.copy") }}</button>
       <button class="menu-close" role="menuitem" @click="menuFor = null">✕</button>
     </div>
+    </Transition>
 
     <!-- Click-away backdrop: closes the menu without selecting a tree row. -->
     <div v-if="menuFor" class="explorer-menu-backdrop" @mousedown="menuFor = null" @contextmenu.prevent="menuFor = null" />
@@ -556,30 +576,58 @@ function onTreeKeydown(e: KeyboardEvent) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border, #333);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: var(--border-w) solid var(--border);
 }
 .explorer-tabs {
   display: flex;
   gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
 }
 .explorer-tab {
   background: none;
   border: none;
-  color: inherit;
-  padding: 2px 8px;
+  color: var(--text-muted);
+  padding: 0 var(--space-2);
+  min-height: 22px;
+  border-radius: calc(var(--radius-sm) - 2px);
   cursor: pointer;
-  opacity: 0.7;
+  font-size: var(--font-sm);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
+}
+.explorer-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text-2);
 }
 .explorer-tab.active {
-  opacity: 1;
-  border-bottom: 2px solid var(--accent, #4a9eff);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+.explorer-tab:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
 }
 .explorer-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   background: none;
   border: none;
-  color: inherit;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
   cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
+}
+.explorer-refresh:hover {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 .explorer-body {
   flex: 1;
@@ -590,17 +638,26 @@ function onTreeKeydown(e: KeyboardEvent) {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  margin: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
   cursor: pointer;
   white-space: nowrap;
+  transition: background-color var(--duration-normal) var(--ease);
+}
+.explorer-row:hover {
+  background: var(--surface-hover);
 }
 .explorer-row.selected {
-  background: var(--selection, rgba(74, 158, 255, 0.18));
+  background: var(--accent-soft);
+  color: var(--text);
 }
 .explorer-icon {
   width: 14px;
   flex: none;
-  color: var(--muted, #888);
+  color: var(--text-muted);
 }
 .explorer-name {
   overflow: hidden;
@@ -610,14 +667,14 @@ function onTreeKeydown(e: KeyboardEvent) {
   padding-left: 24px;
 }
 .explorer-badge {
-  font-size: 10px;
-  padding: 0 4px;
-  border-radius: var(--radius-md);
-  background: var(--accent-dim, rgba(74, 158, 255, 0.15));
+  font-size: var(--font-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
 }
 .explorer-label {
-  font-size: 10px;
-  color: var(--muted, #888);
+  font-size: var(--font-xs);
+  color: var(--text-muted);
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -625,22 +682,26 @@ function onTreeKeydown(e: KeyboardEvent) {
 .unattributed {
   opacity: 0.75;
 }
-.unattributed-badge,
-.change-badge {
-  background: var(--warn-dim, rgba(217, 164, 65, 0.15));
+/* 10d r4: watcher change states are QUIET text labels — a warn pill on
+ * every changed row read as noise (user feedback). Attribution badges
+ * (.explorer-badge) keep their pills; change kind does not. */
+.change-label {
+  font-size: var(--font-xs);
+  color: var(--warn);
+  white-space: nowrap;
 }
 .explorer-stale,
 .explorer-error {
-  padding: 4px 8px;
-  color: var(--warn, #d9a441);
+  padding: var(--space-1) var(--space-2);
+  color: var(--warn);
   font-size: var(--font-sm);
 }
 .explorer-empty {
-  padding: 8px;
-  color: var(--muted, #888);
+  padding: var(--space-2);
+  color: var(--text-muted);
 }
 .explorer-more {
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
 }
 .explorer-menu-backdrop {
   position: fixed;
@@ -650,8 +711,11 @@ function onTreeKeydown(e: KeyboardEvent) {
 .explorer-menu {
   position: fixed;
   z-index: var(--z-overlay);
-  background: var(--surface, #1e1e1e);
-  border: 1px solid var(--border, #333);
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--border-2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
+  padding: var(--space-1);
   display: flex;
   flex-direction: column;
   min-width: 140px;
@@ -659,34 +723,44 @@ function onTreeKeydown(e: KeyboardEvent) {
 .explorer-menu button {
   background: none;
   border: none;
-  color: inherit;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
   text-align: left;
-  padding: 4px 10px;
+  min-height: 24px;
+  padding: 0 var(--space-2);
   cursor: pointer;
+  font-size: var(--font-sm);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
 .explorer-menu button:hover {
-  background: var(--selection, rgba(74, 158, 255, 0.18));
+  background: var(--surface-active);
+  color: var(--text);
+}
+.explorer-menu button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: calc(-1 * var(--focus-ring-offset));
 }
 .explorer-preview {
-  border-top: 1px solid var(--border, #333);
+  border-top: var(--border-w) solid var(--border);
   max-height: 40%;
   overflow: auto;
 }
 .preview-head {
   display: flex;
-  gap: 8px;
-  padding: 4px 8px;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
   align-items: center;
 }
 .preview-path {
   font-weight: 600;
 }
 .preview-meta {
-  color: var(--muted, #888);
+  color: var(--text-muted);
   font-size: var(--font-xs);
 }
 .preview-text {
-  padding: 8px;
+  padding: var(--space-2);
   white-space: pre-wrap;
   word-break: break-all;
   font-size: var(--font-sm);
@@ -696,7 +770,7 @@ function onTreeKeydown(e: KeyboardEvent) {
   max-width: 100%;
   max-height: 300px;
   display: block;
-  margin: 8px auto;
+  margin: var(--space-2) auto;
 }
 .explorer-mini {
   background: none;
@@ -706,8 +780,8 @@ function onTreeKeydown(e: KeyboardEvent) {
   font-size: var(--font-xs);
 }
 .artifacts-group {
-  margin: 6px 8px 2px;
-  color: var(--muted, #888);
+  margin: var(--space-1) var(--space-2) 2px;
+  color: var(--text-muted);
   font-size: var(--font-xs);
   text-transform: uppercase;
 }

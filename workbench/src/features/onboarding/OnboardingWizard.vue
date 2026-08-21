@@ -258,8 +258,8 @@ async function finish() {
     <template v-else-if="step === 'welcome' || onboarding.status === 'not_started'">
       <p class="ob-subtitle">{{ t("onboarding.subtitle") }}</p>
       <div class="ob-actions">
-        <button class="ob-btn primary" @click="begin">{{ t("onboarding.begin") }}</button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+        <button class="ob-btn ui-button primary" @click="begin">{{ t("onboarding.begin") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.skip") }}</button>
       </div>
     </template>
 
@@ -315,7 +315,7 @@ async function finish() {
       <div class="ob-actions">
         <button
           v-if="environment.dockerInstalling"
-          class="ob-btn primary"
+          class="ob-btn ui-button primary"
           :disabled="dockerBusy"
           @click="startDocker"
         >
@@ -330,17 +330,17 @@ async function finish() {
         <!-- Never disabled: envReadiness is a cheap idempotent read, and the
              auto-poll already keeps this live. Disabling on `loading` made
              "Re-check" dead ~4s of every 5s (manual test 2026-08-16). -->
-        <button class="ob-btn ghost" @click="retryEnv">
+        <button class="ob-btn ui-button quiet" @click="retryEnv">
           {{ t("onboarding.env.retry") }}
         </button>
         <button
-          class="ob-btn primary"
+          class="ob-btn ui-button primary"
           :disabled="!environment.allReady"
           @click="continueFromEnv"
         >
           {{ t("onboarding.continue") }}
         </button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.skip") }}</button>
       </div>
     </template>
 
@@ -352,7 +352,7 @@ async function finish() {
         <button
           v-for="rec in runtime.recentWorkspaces.slice(0, 5)"
           :key="rec.path"
-          class="ob-btn ws-recent"
+          class="ob-btn ui-button quiet ws-recent"
           @click="selectRecent(rec.path)"
         >
           {{ rec.path }}
@@ -360,16 +360,16 @@ async function finish() {
       </div>
 
       <div class="ob-actions">
-        <button class="ob-btn primary" @click="pickWorkspace">{{ t("onboarding.ws.pick") }}</button>
+        <button class="ob-btn ui-button primary" @click="pickWorkspace">{{ t("onboarding.ws.pick") }}</button>
         <button
           v-if="chosenWorkspace"
-          class="ob-btn primary"
+          class="ob-btn ui-button primary"
           :disabled="!chosenWorkspace"
           @click="continueFromWorkspace"
         >
           {{ t("onboarding.continue") }}
         </button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.skip") }}</button>
       </div>
     </template>
 
@@ -389,8 +389,8 @@ async function finish() {
       </ul>
 
       <div class="ob-actions">
-        <button class="ob-btn primary" @click="continueFromAgent">{{ t("onboarding.continue") }}</button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+        <button class="ob-btn ui-button primary" @click="continueFromAgent">{{ t("onboarding.continue") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.skip") }}</button>
       </div>
     </template>
 
@@ -400,17 +400,17 @@ async function finish() {
 
       <div class="ob-net-options">
         <button
-          class="ob-btn"
+          class="ob-btn ui-button"
           :class="{ active: network.choice === 'direct' }"
           @click="pickNetwork('direct')"
         >{{ t("onboarding.net.direct") }}</button>
         <button
-          class="ob-btn"
+          class="ob-btn ui-button"
           :class="{ active: network.choice === 'host_proxy' }"
           @click="pickNetwork('host_proxy')"
         >{{ t("onboarding.net.hostProxy") }}</button>
         <button
-          class="ob-btn"
+          class="ob-btn ui-button"
           :class="{ active: network.choice === 'container_tun' }"
           @click="pickNetwork('container_tun')"
         >{{ t("onboarding.net.containerTun") }}</button>
@@ -430,18 +430,18 @@ async function finish() {
       </div>
 
       <div class="ob-actions">
-        <button class="ob-btn ghost" :disabled="network.probing" @click="probeNetwork">
+        <button class="ob-btn ui-button quiet" :disabled="network.probing" @click="probeNetwork">
           {{ network.probing ? t("onboarding.net.probing") : t("onboarding.net.probe") }}
         </button>
         <span v-if="network.probeResult" class="ob-probe" :data-result="network.probeResult">
           {{ network.probeResult === "ok" ? t("onboarding.net.probeOk") : t("onboarding.net.probeFail") }}
         </span>
         <button
-          class="ob-btn primary"
+          class="ob-btn ui-button primary"
           :disabled="network.choice === 'direct' ? false : !network.confirmed"
           @click="confirmNetwork"
         >{{ t("onboarding.continue") }}</button>
-        <button class="ob-btn ghost" @click="network.revoke(); continueFromNetwork()">
+        <button class="ob-btn ui-button quiet" @click="network.revoke(); continueFromNetwork()">
           {{ t("onboarding.net.skip") }}
         </button>
       </div>
@@ -449,7 +449,7 @@ async function finish() {
       <!-- Explicit confirm before applying a non-direct choice -->
       <button
         v-if="network.choice !== 'direct' && !network.confirmed"
-        class="ob-btn confirm"
+        class="ob-btn ui-button primary confirm"
         @click="network.confirm()"
       >{{ t("onboarding.net.confirm") }}</button>
     </template>
@@ -475,12 +475,12 @@ async function finish() {
 
       <div class="ob-actions">
         <button
-          class="ob-btn primary"
+          class="ob-btn ui-button primary"
           :disabled="runtime.status === 'preflight' || runtime.status === 'starting' || runtime.preflight?.recommended_action === 'resolve_conflict'"
           @click="continueFromRuntime"
         >{{ t("onboarding.continue") }}</button>
-        <button class="ob-btn ghost" @click="runtime.runPreflight()">{{ t("onboarding.runtime.retry") }}</button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+        <button class="ob-btn ui-button quiet" @click="runtime.runPreflight()">{{ t("onboarding.runtime.retry") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.skip") }}</button>
       </div>
     </template>
 
@@ -489,8 +489,8 @@ async function finish() {
       <p class="ob-subtitle">{{ t("onboarding.complete.title") }}</p>
       <p class="ob-note">{{ t("onboarding.complete.note") }}</p>
       <div class="ob-actions">
-        <button class="ob-btn primary" @click="finish">{{ t("onboarding.complete.enter") }}</button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.complete.later") }}</button>
+        <button class="ob-btn ui-button primary" @click="finish">{{ t("onboarding.complete.enter") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.complete.later") }}</button>
       </div>
     </template>
 
@@ -498,7 +498,7 @@ async function finish() {
     <template v-else>
       <p class="ob-step" role="status">{{ t("onboarding.currentStep", { step }) }}</p>
       <div class="ob-actions">
-        <button class="ob-btn primary" @click="skip">{{ t("onboarding.complete.later") }}</button>
+        <button class="ob-btn ui-button primary" @click="skip">{{ t("onboarding.complete.later") }}</button>
       </div>
     </template>
   </div>
@@ -516,31 +516,39 @@ async function finish() {
   text-align: center;
 }
 .ob-title { font-size: var(--font-xl); margin: 0; }
-.ob-subtitle { color: var(--muted, #888); margin: 0; }
+.ob-subtitle { color: var(--text-muted); margin: 0; }
+
+/* 10b: network-choice segmented selected state (the .ui-button primitive
+ * carries the base look; ob-btn stays as this page's hook). */
+.ob-btn.active {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-color: transparent;
+}
 .ob-step { color: var(--text-2); font-size: var(--font-md); margin: 0; }
-.ob-error { color: var(--error, var(--status-err)); font-size: var(--font-md); }
-.ob-finished { color: var(--muted, #888); }
+.ob-error { color: var(--error); font-size: var(--font-md); }
+.ob-finished { color: var(--text-muted); }
 .ob-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; justify-content: center; }
-.ob-btn { padding: 6px 16px; border-radius: var(--radius-md); border: 1px solid var(--border-strong, #444); background: var(--surface-3, #262626); color: inherit; cursor: pointer; }
-.ob-btn.primary { background: var(--accent, #4a9eff); border-color: var(--accent, #4a9eff); color: var(--accent-fg); }
+.ob-btn { padding: 6px 16px; border-radius: var(--radius-md); border: 1px solid var(--border-strong); background: var(--surface-3); color: inherit; cursor: pointer; }
+.ob-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
 .ob-btn.ghost { background: none; }
 .ob-btn:disabled { opacity: 0.5; cursor: default; }
 .ob-check-list { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; text-align: left; font-size: var(--font-md); }
 .ob-recents { display: flex; flex-direction: column; gap: 4px; max-width: 420px; width: 100%; }
 .ws-recent { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ob-net-options { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
-.ob-btn.active { border-color: var(--accent, #4a9eff); color: var(--accent, #4a9eff); }
-.ob-note { color: var(--muted, #888); font-size: var(--font-sm); max-width: 420px; }
+.ob-btn.active { border-color: var(--accent); color: var(--accent); }
+.ob-note { color: var(--text-muted); font-size: var(--font-sm); max-width: 420px; }
 /* KI-1 UX: wake-up progress + terminal success (wizard parity with the
    summary page's banner). */
 .ob-progress {
   display: inline-flex; align-items: center; gap: 8px;
-  color: var(--info, #4a9eff);
+  color: var(--info);
 }
 .spinner {
   width: 12px; height: 12px; flex-shrink: 0;
-  border: 2px solid var(--border-strong, #444);
-  border-top-color: var(--info, #4a9eff);
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--info);
   border-radius: 50%;
   animation: ob-spin 0.9s linear infinite;
 }
@@ -562,8 +570,8 @@ async function finish() {
 .ob-sub-ok { color: var(--status-ok); font-size: var(--font-sm); }
 .ob-btn.confirm { border-color: var(--status-pending); color: var(--status-pending); }
 .ob-conflicts { max-width: 420px; }
-.ob-conflict-row { color: var(--muted, #888); font-size: var(--font-sm); margin: 2px 0; }
-.ob-check-dot { display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-full); margin-right: 8px; background: var(--muted, #888); }
+.ob-conflict-row { color: var(--text-muted); font-size: var(--font-sm); margin: 2px 0; }
+.ob-check-dot { display: inline-block; width: 8px; height: 8px; border-radius: var(--radius-full); margin-right: 8px; background: var(--text-muted); }
 .ob-check-dot[data-state="ready"] { background: var(--status-ok); }
 .ob-check-dot[data-state="starting"], .ob-check-dot[data-state="installing"] { background: var(--status-pending); }
 .ob-check-dot[data-state="unavailable"], .ob-check-dot[data-state="not_installed"], .ob-check-dot[data-state="missing"], .ob-check-dot[data-state="blocked"] { background: var(--status-err); }

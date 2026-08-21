@@ -167,6 +167,10 @@ describe("WorkspaceBar (3c)", () => {
     const ws = useWorkspacesStore();
     await launchWorkspace(ws, "C:/alpha");
     const bar = mount(WorkspaceBar, { global: { plugins: [i18n] }, attachTo: document.body });
+    // 10d: menu placement measures the anchor rect — jsdom has no layout, so
+    // stub a real one (the zero-rect guard would otherwise refuse to open).
+    (bar.element.querySelector(".add-group .add-caret") as HTMLElement).getBoundingClientRect = () =>
+      ({ left: 400, right: 420, top: 40, bottom: 60, width: 20, height: 20, x: 400, y: 40 }) as DOMRect;
     // + activates the launcher (default new workspace).
     await bar.find(".add-group .add").trigger("click");
     expect(ws.activeId).toBe(ws.launcher.id);
@@ -212,6 +216,10 @@ describe("WorkspaceBar (3c)", () => {
     const ws = useWorkspacesStore();
     await launchWorkspace(ws, "C:/alpha");
     const bar = mount(WorkspaceBar, { global: { plugins: [i18n] }, attachTo: document.body });
+    // 10d: menu placement measures the anchor rect — jsdom has no layout, so
+    // stub a real one (the zero-rect guard would otherwise refuse to open).
+    (bar.element.querySelector(".add-group .add-caret") as HTMLElement).getBoundingClientRect = () =>
+      ({ left: 400, right: 420, top: 40, bottom: 60, width: 20, height: 20, x: 400, y: 40 }) as DOMRect;
     await bar.find(".add-group .add-caret").trigger("click");
     const items = [...document.querySelectorAll(".wsp-menu.menu [role=menuitem]")];
     const usage = items.find((el) => el.textContent?.includes("网络与用量"));

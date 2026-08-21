@@ -178,6 +178,10 @@ describe("IDEA-1 + split button (S3)", () => {
   it("▾ menu lists 3 agents + Provider 管理; agent entry creates that tab", async () => {
     const s = setupStore();
     const wrapper = mount(TabBar, { global: { plugins: [i18n] } });
+    // 10d: menu placement measures the anchor rect — jsdom has no layout, so
+    // stub a real one (the zero-rect guard would otherwise refuse to open).
+    (wrapper.element.querySelector(".menu-wrap .add-caret") as HTMLElement).getBoundingClientRect = () =>
+      ({ left: 400, right: 420, top: 40, bottom: 60, width: 20, height: 20, x: 400, y: 40 }) as DOMRect;
     await wrapper.find(".menu-wrap .add-caret").trigger("click");
 
     const menu = document.querySelector(".tab-new-menu");

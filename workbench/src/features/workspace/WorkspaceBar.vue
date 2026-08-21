@@ -10,7 +10,7 @@
  * every workspace, not just the active one). Full APG roving-focus polish is
  * 3e; this ships the correct roles/labels.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspacesStore, MAX_WORKSPACES } from "../../stores/workspaces";
 import { useSettingsStore } from "../../stores/settings";
@@ -30,30 +30,52 @@ const addBtnRef = ref<HTMLButtonElement | null>(null);
 const caretBtnRef = ref<HTMLButtonElement | null>(null);
 const menuPos = ref({ x: 0, y: 0 });
 
-function appZoom(): number {
-  const app = document.querySelector<HTMLElement>(".app");
-  if (!app) return 1;
-  const w = app.offsetWidth || 0;
-  return w > 0 ? app.getBoundingClientRect().width / w : 1;
-}
-
-function placeMenu() {
+function placeMenu(): boolean {
   const btn = caretBtnRef.value ?? addBtnRef.value;
-  if (!btn) return;
-  const zoom = appZoom();
+  if (!btn) return false;
   const rect = btn.getBoundingClientRect();
+  // 10d: a detached / not-yet-laid-out ref reports an all-zero rect, and the
+  // clamped minimum then parked the menu at the window's top-left corner
+  // (user evidence 2.png). Refuse to open instead.
+  if (rect.width === 0 && rect.height === 0) return false;
+  // The teleported menu lives OUTSIDE the zoomed .app, so its fixed px are
+  // viewport (VISUAL) px. r4: .app is sized width:100vw/scale, so the live
+  // scale is innerWidth / app.offsetWidth regardless of engine. A visual-space
+  // rect (modern engines: ratio == scale) is already correct; a layout-space
+  // rect (legacy: ratio == 1) must be MULTIPLIED by the scale. Never divided —
+  // dividing made the offset grow with the caret's distance from the left
+  // edge (user evidence: more tabs → bigger drift at font_scale 1.5).
+  const app = document.querySelector<HTMLElement>(".app");
+  const scale = app && app.offsetWidth > 0 ? window.innerWidth / app.offsetWidth : 1;
+  const ratio = btn.offsetWidth > 0 ? rect.width / btn.offsetWidth : 1;
+  const z = Math.abs(scale - 1) < 0.02 ? 1 : (Math.abs(ratio - scale) < 0.05 ? 1 : scale);
   const menuWidth = 180;
   menuPos.value = {
-    x: Math.max(4, Math.min(rect.left / zoom, window.innerWidth / zoom - menuWidth)),
-    y: rect.bottom / zoom + 2,
+    x: Math.max(4, Math.min(rect.left * z, window.innerWidth - menuWidth)),
+    y: rect.bottom * z + 2,
   };
+  return true;
 }
 
 function toggleMenu() {
   menuOpen.value = !menuOpen.value;
   if (menuOpen.value) {
-    placeMenu();
-    window.setTimeout(() => menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus(), 0);
+    // Place after the menu mounts AND after the next paint: opening the
+    // menu right after closing a tab catches the +/▾ mid-FLIP, and transforms
+    // DO land in getBoundingClientRect — the menu then anchored at the
+    // transient position (occasional repro, user evidence 1.png). Double
+    // rAF measures the settled layout.
+    void nextTick(() => {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (!placeMenu()) {
+            menuOpen.value = false;
+            return;
+          }
+          menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+        }),
+      );
+    });
   }
 }
 
@@ -304,7 +326,14 @@ function onBarKeydown(e: KeyboardEvent) {
       @keydown.enter.prevent="onChip(c)"
       @keydown.space.prevent="onChip(c)"
     >
-      <span class="dot" :data-state="dotState(c)" />
+      <!-- 10c: the runtime-state dot only exists for real workspace chips —
+           settings/network-usage/launcher pages have no container behind
+           them, so a permanently-grey dot is noise (user feedback d.png). -->
+      <span
+        v-if="!c.launcher && !c.settings && !c.networkUsage"
+        class="dot"
+        :data-state="dotState(c)"
+      />
       <span class="name">{{ c.label }}</span>
       <button
         v-if="c.settings && ws.settingsTabOpen"
@@ -356,6 +385,7 @@ function onBarKeydown(e: KeyboardEvent) {
         @keydown="onMenuKeydown"
       >▾</button>
       <Teleport to="body">
+        <Transition name="pop">
         <ul
           v-if="menuOpen"
           ref="menuRef"
@@ -375,6 +405,7 @@ function onBarKeydown(e: KeyboardEvent) {
             @click="menuOpenNetworkUsage"
           >{{ t("workspbar.networkUsage") }}</li>
         </ul>
+        </Transition>
       </Teleport>
     </div>
   </nav>
@@ -383,62 +414,85 @@ function onBarKeydown(e: KeyboardEvent) {
 <style scoped>
 .workspbar {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 2px;
-  padding: 2px 8px;
+  padding: 3px 8px;
   background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--border-w) solid var(--border);
   overflow-x: auto;
 }
+/* 10c: chips follow the TabBar pill language (D10-14), one tier thinner. */
 .chip {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px;
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-  border: 1px solid transparent;
-  border-bottom: none;
+  min-height: var(--control-h-sm);
+  padding: 0 6px 0 10px;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid transparent;
   color: var(--text-muted);
   font-size: var(--font-sm);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+  /* 10e r7: active hand-off snaps (no 200ms dual-highlight smear — see TabBar). */
+  transition: opacity var(--duration-normal) var(--ease);
 }
-.chip:hover { background: var(--surface-2); color: var(--text-2); }
+.chip:hover { background: var(--surface-hover); color: var(--text-2); }
 .chip.active {
-  background: var(--surface-2);
-  border-color: var(--border-strong);
-  color: var(--text-1);
+  background: var(--accent-soft);
+  color: var(--text);
 }
 .chip.launcher { border-style: dashed; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); flex: none; }
+.chip .name {
+  max-width: 22ch; /* B-02: long workspace names must not eat the strip */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--text-faint); flex: none; }
 .dot[data-state="running"] { background: var(--success); }
 .dot[data-state="starting"], .dot[data-state="building"] { background: var(--info); }
 .dot[data-state="stopped"], .dot[data-state="not_found"] { background: var(--text-faint); }
 .dot[data-state="error"], .dot[data-state="conflict"], .dot[data-state="cancelled"] { background: var(--error); }
 .close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  min-height: 20px;
   padding: 0 3px;
   background: none;
   border: none;
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
   font-size: var(--font-md);
   line-height: 1;
   cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
-.close:hover { color: var(--error-fg); }
+.close:hover { color: var(--error-fg); background: var(--surface-hover); }
 
 /* + split button (mirrors TabBar's, one tier thinner). */
 .add-group { display: flex; align-items: center; margin-left: 4px; }
 .add, .add-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   background: none;
   border: none;
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
   font-size: var(--font-md);
   line-height: 1;
   padding: 3px 6px;
   cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
-.add:hover:not(:disabled), .add-caret:hover { color: var(--text-2); background: var(--surface-2); border-radius: var(--radius-md); }
+.add:hover:not(:disabled), .add-caret:hover { color: var(--text-2); background: var(--surface-hover); }
 .add:disabled { opacity: 0.45; cursor: default; }
 .menu {
   position: fixed;
@@ -447,15 +501,15 @@ function onBarKeydown(e: KeyboardEvent) {
   margin: 0;
   padding: 4px;
   list-style: none;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--border-2);
   border-radius: var(--radius-md);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-menu);
 }
 .menu li {
   padding: 6px 10px;
   border-radius: var(--radius-sm);
-  font-size: var(--font-sm);
+  font-size: var(--font-md);
   color: var(--text-2);
   cursor: pointer;
 }

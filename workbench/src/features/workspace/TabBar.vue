@@ -8,7 +8,7 @@
  * id. ARIA tablist with arrow/Home/End navigation; the ▾ menu is a
  * keyboard-reachable popup.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { CC_SWITCH_UI_TAB_ID, useRuntimeStore } from "../../stores/runtime";
 import { useSettingsStore } from "../../stores/settings";
@@ -45,30 +45,52 @@ function createDefaultTab() {
  * (`ui.font_scale` → `.app { zoom }`), so button-rect coordinates must be
  * divided by the live zoom — same pattern as the Explorer context menu.
  */
-function appZoom(): number {
-  const app = document.querySelector<HTMLElement>(".app");
-  if (!app) return 1;
-  const w = app.offsetWidth || 0;
-  return w > 0 ? app.getBoundingClientRect().width / w : 1;
-}
-
-function placeMenu() {
+function placeMenu(): boolean {
   const btn = caretBtnRef.value ?? addBtnRef.value;
-  if (!btn) return;
-  const zoom = appZoom();
+  if (!btn) return false;
   const rect = btn.getBoundingClientRect();
+  // 10d: a detached / not-yet-laid-out ref reports an all-zero rect, and the
+  // clamped minimum then parked the menu at the window's top-left corner
+  // (user evidence 2.png). Refuse to open instead.
+  if (rect.width === 0 && rect.height === 0) return false;
+  // The teleported menu lives OUTSIDE the zoomed .app, so its fixed px are
+  // viewport (VISUAL) px. r4: .app is sized width:100vw/scale, so the live
+  // scale is innerWidth / app.offsetWidth regardless of engine. A visual-space
+  // rect (modern engines: ratio == scale) is already correct; a layout-space
+  // rect (legacy: ratio == 1) must be MULTIPLIED by the scale. Never divided —
+  // dividing made the offset grow with the caret's distance from the left
+  // edge (user evidence: more tabs → bigger drift at font_scale 1.5).
+  const app = document.querySelector<HTMLElement>(".app");
+  const scale = app && app.offsetWidth > 0 ? window.innerWidth / app.offsetWidth : 1;
+  const ratio = btn.offsetWidth > 0 ? rect.width / btn.offsetWidth : 1;
+  const z = Math.abs(scale - 1) < 0.02 ? 1 : (Math.abs(ratio - scale) < 0.05 ? 1 : scale);
   const menuWidth = 160;
   menuPos.value = {
-    x: Math.max(4, Math.min(rect.left / zoom, window.innerWidth / zoom - menuWidth)),
-    y: rect.bottom / zoom + 2,
+    x: Math.max(4, Math.min(rect.left * z, window.innerWidth - menuWidth)),
+    y: rect.bottom * z + 2,
   };
+  return true;
 }
 
 function toggleMenu() {
   menuOpen.value = !menuOpen.value;
   if (menuOpen.value) {
-    placeMenu();
-    window.setTimeout(() => menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus(), 0);
+    // Place after the menu mounts AND after the next paint: opening the
+    // menu right after closing a tab catches the +/▾ mid-FLIP, and transforms
+    // DO land in getBoundingClientRect — the menu then anchored at the
+    // transient position (occasional repro, user evidence 1.png). Double
+    // rAF measures the settled layout.
+    void nextTick(() => {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (!placeMenu()) {
+            menuOpen.value = false;
+            return;
+          }
+          menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+        }),
+      );
+    });
   }
 }
 
@@ -272,6 +294,52 @@ function stateLabel(tab: Tab): string {
   }
 }
 
+/** 10e r6 (probe-confirmed): a bash tab flashes「启动中」for ~2 frames
+ * before the session turns running — the label widened the pill (118.9px)
+ * which then snapped back (79.9px) and read as an ugly right-then-left
+ * "jump". Only surface a state label once it has PERSISTED 150ms; the pill
+ * width then never breathes for transient states. */
+const STICKY_LABEL_DELAY = 150;
+const stickyLabels = ref(new Map<string, string>());
+const stickyTimers = new Map<string, number>();
+
+watch(
+  () => store.tabs.map((tb) => ({ id: tb.tabId, label: stateLabel(tb) })),
+  (entries) => {
+    const live = new Set(entries.map((e) => e.id));
+    for (const [id, timer] of stickyTimers) {
+      if (!live.has(id)) {
+        window.clearTimeout(timer);
+        stickyTimers.delete(id);
+        stickyLabels.value.delete(id);
+      }
+    }
+    for (const { id, label } of entries) {
+      if (label === stickyLabels.value.get(id)) continue;
+      if (label === "") {
+        // cleared state: drop immediately (running needs no residue)
+        window.clearTimeout(stickyTimers.get(id));
+        stickyTimers.delete(id);
+        stickyLabels.value.delete(id);
+      } else if (!stickyTimers.has(id)) {
+        const timer = window.setTimeout(() => {
+          stickyTimers.delete(id);
+          const tb = store.tabs.find((x) => x.tabId === id);
+          const current = tb ? stateLabel(tb) : "";
+          if (current) stickyLabels.value.set(id, current);
+        }, STICKY_LABEL_DELAY);
+        stickyTimers.set(id, timer);
+      }
+    }
+  },
+  { deep: false, immediate: true },
+);
+
+onBeforeUnmount(() => {
+  for (const timer of stickyTimers.values()) window.clearTimeout(timer);
+  stickyTimers.clear();
+});
+
 function canClose(s: TabSessionState): boolean {
   // guide tabs have no session to terminate but must stay removable (×).
   return s === "starting" || s === "running" || s === "closing" || s === "guide";
@@ -288,6 +356,8 @@ function canReopen(s: TabSessionState): boolean {
          and the close/reopen actions are sibling buttons (no nested button,
          which was invalid and broke focus semantics). The wrapper keeps the
          visual active/hover state; tab-main carries role=tab. -->
+    <!-- 10e: tab motion — fade-in enter, out-of-flow leave so siblings FLIP at once. -->
+    <TransitionGroup tag="div" class="tab-group" name="tab-anim">
     <div
       v-for="(tab, i) in store.tabs"
       :key="tab.tabId"
@@ -305,7 +375,7 @@ function canReopen(s: TabSessionState): boolean {
         @click="onTabClick(tab.tabId)"
       >
         <span class="title">{{ tab.title }}</span>
-        <span v-if="stateLabel(tab)" class="state">{{ stateLabel(tab) }}</span>
+        <span v-if="stickyLabels.get(tab.tabId)" class="state">{{ stickyLabels.get(tab.tabId) }}</span>
       </button>
       <span class="actions" v-if="canClose(tab.sessionState) || canReopen(tab.sessionState)">
         <button
@@ -324,9 +394,11 @@ function canReopen(s: TabSessionState): boolean {
         >↻</button>
       </span>
     </div>
+    </TransitionGroup>
 
     <!-- IDEA-1 + Stage 8e: virtual session-less tabs (Settings, cc-switch
          Provider UI). Keyboard model: appended after the session tabs. -->
+    <TransitionGroup tag="div" class="tab-group" name="tab-anim">
     <div
       v-for="(v, vi) in virtualTabs"
       :key="v.id"
@@ -351,6 +423,7 @@ function canReopen(s: TabSessionState): boolean {
         >×</button>
       </span>
     </div>
+    </TransitionGroup>
 
     <!-- G-08 + IDEA-1: + split button. Main + creates the DEFAULT agent tab
          (ui.default_tab_agent) immediately; ▾ opens the full menu (any agent
@@ -377,6 +450,7 @@ function canReopen(s: TabSessionState): boolean {
         @keydown="onMenuKeydown"
       >▾</button>
       <Teleport to="body">
+        <Transition name="pop">
         <ul
           v-if="menuOpen"
           ref="menuRef"
@@ -401,6 +475,7 @@ function canReopen(s: TabSessionState): boolean {
             @click="chooseCcSwitchUi"
           >{{ t("tabbar.ccSwitchUi") }}</li>
         </ul>
+        </Transition>
       </Teleport>
     </div>
   </div>
@@ -408,10 +483,12 @@ function canReopen(s: TabSessionState): boolean {
 
 <style scoped>
 .tabbar {
+  position: relative; /* 10e: tab-anim leave anchors here (position:absolute) */
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  align-items: center;
   gap: 2px;
-  padding: 0 6px;
+  padding: 3px 6px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -419,31 +496,54 @@ function canReopen(s: TabSessionState): boolean {
   overflow-x: auto;
   scrollbar-width: thin;
 }
+/* 10c: pill tabs (D10-14) — the Stage 6 underline treatment gives way to
+ * rounded fills; min-height doubles the hit area (baseline B-04). */
+.tab-group { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .tab {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 8px 6px 10px;
+  min-height: var(--control-h-md);
+  padding: 0 6px 0 12px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
-  border-bottom: 2px solid transparent;
   flex-shrink: 0; /* UX-02: keep tab content, let the bar scroll */
   white-space: nowrap;
+  /* opacity/transform ride the BASE rule: scoped `.tab[data-v]` specificity
+   * (0,2,0) out-cases the global motion classes (0,1,0) — a transition on
+   * .tab-anim-enter-active alone never applied (10e r3 root cause).
+   * background/color deliberately NOT transitioned (10e r7): the active
+   * highlight hand-off between tabs cross-faded for 200ms — two accent pills
+   * coexisting read as a smeared moving blob (user feedback). State changes
+   * snap; only real motion animates. */
+  transition: opacity var(--duration-slow) var(--ease-pop),
+    transform var(--duration-slow) var(--ease-pop);
 }
-.tab:hover { background: var(--surface-2); color: var(--text-2); }
-.tab.active { color: var(--text-2); border-bottom-color: var(--accent); background: var(--bg); }
+.tab:hover { background: var(--surface-hover); color: var(--text-2); }
+.tab.active { background: var(--accent-soft); color: var(--text); }
 .tab-main {
   background: none;
   border: none;
   padding: 0;
   color: inherit;
-  font-size: var(--font-md);
+  font-size: var(--font-base);
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.tab .title { font-weight: 500; }
+.tab-main:focus-visible,
+.icon:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+.tab .title {
+  font-weight: 500;
+  max-width: 18ch; /* B-02: long workspace names must not eat the bar */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .tab .state { font-size: var(--font-xs); color: var(--text-muted); }
 .tab.idle { color: var(--text-faint); }
 .tab.starting .state, .tab.closing .state { color: var(--warn); }
@@ -452,6 +552,11 @@ function canReopen(s: TabSessionState): boolean {
 .tab.disconnected .state { color: var(--warn); }
 .actions { display: flex; gap: 2px; margin-left: 2px; }
 .icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   background: transparent;
   border: none;
   color: inherit;
@@ -459,7 +564,9 @@ function canReopen(s: TabSessionState): boolean {
   font-size: var(--font-base);
   line-height: 1;
   cursor: pointer;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
 .icon:hover { background: var(--surface-hover); color: var(--text); }
 .icon.reopen { color: var(--success); }

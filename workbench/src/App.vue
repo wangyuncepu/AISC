@@ -414,8 +414,8 @@ onBeforeUnmount(() => {
         <p class="err">{{ store.error?.message ?? t("app.blocked.cli") }}</p>
         <p class="detail">{{ store.error?.technical_detail }}</p>
         <div class="actions">
-          <button @click="store.pickAndPinCli()">{{ t("app.blocked.pickCli") }}</button>
-          <button class="diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
+          <button class="ui-button" @click="store.pickAndPinCli()">{{ t("app.blocked.pickCli") }}</button>
+          <button class="ui-button diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
         </div>
       </div>
 
@@ -433,8 +433,11 @@ onBeforeUnmount(() => {
       />
     </template>
 
-    <!-- G-13: diagnosis dialog, shared by blocked/error/ready entry points -->
-    <DoctorDialog v-if="doctorStore.open" />
+    <!-- G-13: diagnosis dialog, shared by blocked/error/ready entry points.
+         10e: unified fade motion (D10-09). -->
+    <Transition name="fade">
+      <DoctorDialog v-if="doctorStore.open" />
+    </Transition>
   </div>
 </template>
 
@@ -459,15 +462,16 @@ onBeforeUnmount(() => {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 12px;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   background: var(--surface);
   color: var(--text-2);
-  font-size: var(--font-md);
-  border-bottom: 1px solid var(--border);
+  font-size: var(--font-base);
+  border-bottom: var(--border-w) solid var(--border);
 }
 .brand { font-weight: 600; }
 .spacer { flex: 1; }
+/* 10c round 2: quiet colored text — the badge pill was too heavy up here. */
 .status { font-size: var(--font-sm); color: var(--text-muted); }
 .status[data-status="ready"] { color: var(--success); }
 .status[data-status="error"], .status[data-status="blocked"] { color: var(--error); }
@@ -488,21 +492,13 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   z-index: var(--z-onboarding);
-  background: var(--surface, #1e1e1e);
+  background: var(--surface);
   display: flex;
 }
-.actions { display: flex; gap: 8px; margin-top: 8px; }
-button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
-  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
-}
-button:hover:not(:disabled) { background: var(--surface-hover); }
-button:disabled { opacity: 0.45; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
-button.primary:hover:not(:disabled) { background: var(--accent-hover); }
-button.danger { background: var(--error-bg); border-color: var(--border-strong); color: var(--error-fg); }
-button.danger:hover:not(:disabled) { background: var(--error-hover); }
-.diagnose { background: var(--info-bg); border-color: var(--info-border); }
+.actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+/* 10c: buttons are .ui-button primitives now; only the info-tinted diagnose
+ * variant stays local. */
+.diagnose { background: var(--info-bg); border-color: var(--info-border); color: var(--text); }
 
 /* Stage 6 (UX-02): layout tiers driven by the effective app-box width. */
 .app[data-tier="compact"] .topbar { gap: var(--space-2); padding: 4px var(--space-2); }
