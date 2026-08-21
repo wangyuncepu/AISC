@@ -233,6 +233,20 @@ const statusLabel = computed(() =>
     : t(STATUS_KEY[store.status] ?? "app.unknown")
 );
 
+/** 10c: the topbar status renders as a .ui-badge — ok/error tints, neutral
+ * otherwise (semantic colors stay driven by data-status). */
+const statusBadge = computed(() => {
+  switch (store.status) {
+    case "ready":
+      return "ok";
+    case "error":
+    case "blocked":
+      return "error";
+    default:
+      return "";
+  }
+});
+
 // KI-1 UX: announce the wake-up start and its SUCCESS.
 watch(
   () => store.dockerStarting,
@@ -375,7 +389,7 @@ onBeforeUnmount(() => {
   <div class="app" :style="uiZoom" :data-tier="layoutTier">
     <header class="topbar">
       <span class="brand">AISC Workbench</span>
-      <span class="status" :data-status="store.status">{{ statusLabel }}</span>
+      <span class="status ui-badge" :class="statusBadge" :data-status="store.status">{{ statusLabel }}</span>
       <span class="spacer" />
     </header>
 
@@ -414,8 +428,8 @@ onBeforeUnmount(() => {
         <p class="err">{{ store.error?.message ?? t("app.blocked.cli") }}</p>
         <p class="detail">{{ store.error?.technical_detail }}</p>
         <div class="actions">
-          <button @click="store.pickAndPinCli()">{{ t("app.blocked.pickCli") }}</button>
-          <button class="diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
+          <button class="ui-button" @click="store.pickAndPinCli()">{{ t("app.blocked.pickCli") }}</button>
+          <button class="ui-button diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
         </div>
       </div>
 
@@ -459,18 +473,15 @@ onBeforeUnmount(() => {
 .topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 12px;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   background: var(--surface);
   color: var(--text-2);
-  font-size: var(--font-md);
-  border-bottom: 1px solid var(--border);
+  font-size: var(--font-base);
+  border-bottom: var(--border-w) solid var(--border);
 }
 .brand { font-weight: 600; }
 .spacer { flex: 1; }
-.status { font-size: var(--font-sm); color: var(--text-muted); }
-.status[data-status="ready"] { color: var(--success); }
-.status[data-status="error"], .status[data-status="blocked"] { color: var(--error); }
 .settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }
 .gate.blocked, .center {
   flex: 1;
@@ -491,18 +502,10 @@ onBeforeUnmount(() => {
   background: var(--surface, #1e1e1e);
   display: flex;
 }
-.actions { display: flex; gap: 8px; margin-top: 8px; }
-button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
-  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
-}
-button:hover:not(:disabled) { background: var(--surface-hover); }
-button:disabled { opacity: 0.45; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
-button.primary:hover:not(:disabled) { background: var(--accent-hover); }
-button.danger { background: var(--error-bg); border-color: var(--border-strong); color: var(--error-fg); }
-button.danger:hover:not(:disabled) { background: var(--error-hover); }
-.diagnose { background: var(--info-bg); border-color: var(--info-border); }
+.actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+/* 10c: buttons are .ui-button primitives now; only the info-tinted diagnose
+ * variant stays local. */
+.diagnose { background: var(--info-bg); border-color: var(--info-border); color: var(--text); }
 
 /* Stage 6 (UX-02): layout tiers driven by the effective app-box width. */
 .app[data-tier="compact"] .topbar { gap: var(--space-2); padding: 4px var(--space-2); }

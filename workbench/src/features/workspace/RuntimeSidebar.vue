@@ -285,10 +285,10 @@ function copyDone(key: string): boolean {
 .label { color: var(--text-faint); text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
 .value { color: var(--text-2); font-size: var(--font-md); word-break: break-all; }
 .muted { color: var(--text-muted); }
-.copyable { cursor: pointer; transition: color var(--duration-fast); }
+.copyable { cursor: pointer; transition: color var(--duration-normal) var(--ease); }
 .copyable:hover { color: var(--text); }
 .copied { color: var(--success); margin-left: 4px; }
-.mono { font-family: monospace; color: var(--info); font-size: var(--font-xs); }
+.mono { font-family: var(--font-mono); color: var(--info); font-size: var(--font-xs); }
 .kv { color: var(--text-muted); display: flex; gap: 6px; flex-wrap: wrap; }
 .kv span { color: var(--text-2); word-break: break-all; }
 .runtime-row { display: flex; align-items: center; gap: 6px; }
@@ -313,9 +313,9 @@ function copyDone(key: string): boolean {
 }
 .sessions-btn:hover { color: var(--text); }
 .mini { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.mini li { display: flex; gap: 6px; padding: 2px 4px; cursor: pointer; border-radius: 3px; }
-.mini li:hover { background: var(--surface-2); }
-.mini li.active { background: var(--bg); }
+.mini li { display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 0 6px; cursor: pointer; border-radius: var(--radius-sm); transition: background-color var(--duration-normal) var(--ease); }
+.mini li:hover { background: var(--surface-hover); }
+.mini li.active { background: var(--accent-soft); }
 .t-title { color: var(--text-2); }
 .t-state { font-size: 10px; color: var(--text-muted); margin-left: auto; }
 .t-state[data-state="running"] { color: var(--success); }
@@ -323,14 +323,24 @@ function copyDone(key: string): boolean {
 .t-state[data-state="failed"] { color: var(--error); }
 .details { margin-top: auto; }
 .details summary { cursor: pointer; user-select: none; }
-.diagnose { background: var(--info-bg); border-color: var(--info-border); margin-top: 8px; }
+.diagnose { background: var(--info-bg); border-color: var(--info-border); color: var(--text); margin-top: 8px; }
 .dev { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
-  padding: 4px 10px; font-size: var(--font-sm); cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  background: var(--surface-3); color: var(--text-2);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm); cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
-button:hover:not(:disabled) { background: var(--surface-hover); }
+button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+button:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: var(--focus-ring-offset); }
 button:disabled { opacity: 0.45; cursor: default; }
-button.danger { background: var(--error-bg); border-color: var(--error-border); }
+button.danger { background: var(--error-bg); border-color: var(--error-border); color: var(--error-fg); }
 .err { font-size: var(--font-xs); color: var(--error); }
 </style>

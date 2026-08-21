@@ -383,62 +383,80 @@ function onBarKeydown(e: KeyboardEvent) {
 <style scoped>
 .workspbar {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   gap: 2px;
-  padding: 2px 8px;
+  padding: 3px 8px;
   background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--border-w) solid var(--border);
   overflow-x: auto;
 }
+/* 10c: chips follow the TabBar pill language (D10-14), one tier thinner. */
 .chip {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px;
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-  border: 1px solid transparent;
-  border-bottom: none;
+  min-height: var(--control-h-sm);
+  padding: 0 6px 0 10px;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid transparent;
   color: var(--text-muted);
   font-size: var(--font-sm);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
-.chip:hover { background: var(--surface-2); color: var(--text-2); }
+.chip:hover { background: var(--surface-hover); color: var(--text-2); }
 .chip.active {
-  background: var(--surface-2);
-  border-color: var(--border-strong);
-  color: var(--text-1);
+  background: var(--accent-soft);
+  color: var(--text);
 }
 .chip.launcher { border-style: dashed; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); flex: none; }
+.dot { width: 8px; height: 8px; border-radius: var(--radius-full); background: var(--text-faint); flex: none; }
 .dot[data-state="running"] { background: var(--success); }
 .dot[data-state="starting"], .dot[data-state="building"] { background: var(--info); }
 .dot[data-state="stopped"], .dot[data-state="not_found"] { background: var(--text-faint); }
 .dot[data-state="error"], .dot[data-state="conflict"], .dot[data-state="cancelled"] { background: var(--error); }
 .close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  min-height: 20px;
   padding: 0 3px;
   background: none;
   border: none;
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
   font-size: var(--font-md);
   line-height: 1;
   cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
-.close:hover { color: var(--error-fg); }
+.close:hover { color: var(--error-fg); background: var(--surface-hover); }
 
 /* + split button (mirrors TabBar's, one tier thinner). */
 .add-group { display: flex; align-items: center; margin-left: 4px; }
 .add, .add-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   background: none;
   border: none;
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
   font-size: var(--font-md);
   line-height: 1;
   padding: 3px 6px;
   cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
-.add:hover:not(:disabled), .add-caret:hover { color: var(--text-2); background: var(--surface-2); border-radius: var(--radius-md); }
+.add:hover:not(:disabled), .add-caret:hover { color: var(--text-2); background: var(--surface-hover); }
 .add:disabled { opacity: 0.45; cursor: default; }
 .menu {
   position: fixed;
@@ -447,15 +465,15 @@ function onBarKeydown(e: KeyboardEvent) {
   margin: 0;
   padding: 4px;
   list-style: none;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--border-2);
   border-radius: var(--radius-md);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-menu);
 }
 .menu li {
   padding: 6px 10px;
   border-radius: var(--radius-sm);
-  font-size: var(--font-sm);
+  font-size: var(--font-md);
   color: var(--text-2);
   cursor: pointer;
 }
