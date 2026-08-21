@@ -10,7 +10,7 @@
  * every workspace, not just the active one). Full APG roving-focus polish is
  * 3e; this ships the correct roles/labels.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspacesStore, MAX_WORKSPACES } from "../../stores/workspaces";
 import { useSettingsStore } from "../../stores/settings";
@@ -37,23 +37,35 @@ function appZoom(): number {
   return w > 0 ? app.getBoundingClientRect().width / w : 1;
 }
 
-function placeMenu() {
+function placeMenu(): boolean {
   const btn = caretBtnRef.value ?? addBtnRef.value;
-  if (!btn) return;
-  const zoom = appZoom();
+  if (!btn) return false;
+  const zoom = appZoom() || 1;
   const rect = btn.getBoundingClientRect();
+  // 10d: a detached / not-yet-laid-out ref reports an all-zero rect, and the
+  // clamped minimum then parked the menu at the window's top-left corner
+  // (user evidence 2.png). Refuse to open instead.
+  if (rect.width === 0 && rect.height === 0) return false;
   const menuWidth = 180;
   menuPos.value = {
     x: Math.max(4, Math.min(rect.left / zoom, window.innerWidth / zoom - menuWidth)),
     y: rect.bottom / zoom + 2,
   };
+  return true;
 }
 
 function toggleMenu() {
   menuOpen.value = !menuOpen.value;
   if (menuOpen.value) {
-    placeMenu();
-    window.setTimeout(() => menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus(), 0);
+    // Place after the menu mounts so the anchor rect is measured against the
+    // live layout (and bail out cleanly when the anchor is not measurable).
+    void nextTick(() => {
+      if (!placeMenu()) {
+        menuOpen.value = false;
+        return;
+      }
+      menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+    });
   }
 }
 
