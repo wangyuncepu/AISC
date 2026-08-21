@@ -290,6 +290,16 @@ textarea:focus-visible {
   opacity: 0;
 }
 
+/* 10e r3: inside a modal dialog every focus move comes from the trap (a
+ * keydown handler), and browsers deny the first hops :focus-visible because
+ * the focus() calls are programmatic — the ring only appeared after the
+ * second keypress (user feedback). Dialogs are keyboard contexts: show the
+ * ring on plain :focus there. */
+[role="dialog"] :focus {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
 .slide-right-enter-active {
   transition: transform var(--duration-slow) var(--ease),
     opacity var(--duration-normal) var(--ease);

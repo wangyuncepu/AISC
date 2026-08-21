@@ -455,8 +455,13 @@ function canReopen(s: TabSessionState): boolean {
   color: var(--text-muted);
   flex-shrink: 0; /* UX-02: keep tab content, let the bar scroll */
   white-space: nowrap;
+  /* opacity/transform ride the BASE rule: scoped `.tab[data-v]` specificity
+   * (0,2,0) out-cases the global motion classes (0,1,0) — a transition on
+   * .tab-anim-enter-active alone never applied (10e r3 root cause). */
   transition: background-color var(--duration-normal) var(--ease),
-    color var(--duration-normal) var(--ease);
+    color var(--duration-normal) var(--ease),
+    opacity var(--duration-slow) var(--ease-pop),
+    transform var(--duration-slow) var(--ease-pop);
 }
 .tab:hover { background: var(--surface-hover); color: var(--text-2); }
 .tab.active { background: var(--accent-soft); color: var(--text); }
