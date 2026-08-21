@@ -15,7 +15,7 @@ import { useWorkspaceExplorerStore } from "../../stores/workspaceExplorer";
 import { useRuntimeStore } from "../../stores/runtime";
 import type { WorkspaceNode } from "../../types";
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const explorer = useWorkspaceExplorerStore();
 const runtime = useRuntimeStore();
 
@@ -191,6 +191,13 @@ function openMenu(node: WorkspaceNode, event: MouseEvent) {
     x: Math.max(4, Math.min(event.clientX / zoom, window.innerWidth / zoom - menuWidth)),
     y: Math.max(4, Math.min(event.clientY / zoom, window.innerHeight / zoom - menuHeight)),
   };
+}
+
+/** Watcher change type → localized quiet label (raw enum never hits the UI). */
+function changeLabel(change: string): string {
+  const key = `explorer.change.${change}`;
+  const known = ["created", "modified", "deleted"];
+  return known.includes(change) ? te(key) ? t(key) : change : change;
 }
 
 function formatBytes(n: number): string {
@@ -396,8 +403,8 @@ function onTreeKeydown(e: KeyboardEvent) {
           >
           <span
             v-if="node.change_state && node.change_state !== 'unknown' && node.change_state !== 'artifact'"
-            class="explorer-badge change-badge"
-            >{{ node.change_state }}</span
+            class="change-label"
+            >{{ changeLabel(node.change_state) }}</span
           >
         </div>
 
@@ -503,7 +510,7 @@ function onTreeKeydown(e: KeyboardEvent) {
           @contextmenu.prevent="openMenu(pseudoNode(u.relative_path), $event)"
         >
           <span class="explorer-name" :title="hostPath(u.relative_path)">{{ artifactLabel(u.relative_path) }}</span>
-          <span class="explorer-badge unattributed-badge">{{ u.change_type }}</span>
+          <span class="change-label">{{ changeLabel(u.change_type) }}</span>
         </div>
       </template>
     </div>
@@ -669,9 +676,13 @@ function onTreeKeydown(e: KeyboardEvent) {
 .unattributed {
   opacity: 0.75;
 }
-.unattributed-badge,
-.change-badge {
-  background: var(--warn-soft);
+/* 10d r4: watcher change states are QUIET text labels — a warn pill on
+ * every changed row read as noise (user feedback). Attribution badges
+ * (.explorer-badge) keep their pills; change kind does not. */
+.change-label {
+  font-size: var(--font-xs);
+  color: var(--warn);
+  white-space: nowrap;
 }
 .explorer-stale,
 .explorer-error {
