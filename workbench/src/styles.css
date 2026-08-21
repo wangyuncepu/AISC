@@ -34,8 +34,9 @@
   --font-mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
 
   /* 10b (D10-14, iOS direction): radius scale raised, controls get real
-   * minimum heights so tabs/buttons/sliders stay easy to hit. */
-  --radius-sm: 6px;
+   * minimum heights so tabs/buttons/sliders stay easy to hit. sm=8 after
+   * pilot feedback (6px read as stiff next to lg panels). */
+  --radius-sm: 8px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-xl: 20px;
@@ -48,6 +49,7 @@
   --shadow-1: 0 2px 8px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.35);
   --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.35); /* 10b: gentle control lift */
 
   --border-w: 1px;
   --border-w-strong: 2px;
@@ -63,6 +65,7 @@
   --duration-fast: 100ms;
   --duration-normal: 200ms;
   --duration-slow: 300ms;
+  --ease: cubic-bezier(0.25, 1, 0.5, 1); /* 10b: soft iOS-style ease-out */
 
   /* --- status indicator colors (theme-independent; onboarding check dots /
    * probe / confirm) — distinct hues from the semantic text palette. --- */
@@ -170,6 +173,7 @@
   --selection: #b4d5fe;
   --focus: #005fb8;
   --scrim: rgba(0, 0, 0, 0.32);
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.12);
 
   --success-soft: rgba(46, 125, 50, 0.12);
   --warn-soft: rgba(154, 107, 0, 0.12);
@@ -249,15 +253,17 @@ input[type="range"] {
   gap: var(--space-1);
   min-height: var(--control-h-md);
   padding: 0 var(--space-4);
-  border: var(--border-w) solid var(--border-strong);
+  border: var(--border-w) solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-3);
   color: var(--text-2);
   font-size: var(--font-base);
   line-height: var(--leading-tight);
   cursor: pointer;
-  transition: background-color var(--duration-fast),
-    border-color var(--duration-fast), color var(--duration-fast);
+  transition: background-color var(--duration-normal) var(--ease),
+    border-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease),
+    box-shadow var(--duration-normal) var(--ease);
 }
 .ui-button:hover:not(:disabled) {
   background: var(--surface-hover);
@@ -277,12 +283,15 @@ input[type="range"] {
   background: var(--accent);
   color: var(--accent-fg);
   font-weight: 600;
+  box-shadow: var(--shadow-soft);
 }
 .ui-button.primary:hover:not(:disabled) {
   background: var(--accent-hover);
+  box-shadow: var(--shadow-1);
 }
 .ui-button.primary:active:not(:disabled) {
   background: var(--accent);
+  box-shadow: var(--shadow-soft);
 }
 .ui-button.quiet {
   border-color: transparent;
@@ -327,7 +336,8 @@ input[type="range"] {
   font-size: var(--font-lg);
   line-height: 1;
   cursor: pointer;
-  transition: background-color var(--duration-fast), color var(--duration-fast);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
 .ui-icon-button:hover:not(:disabled) {
   background: var(--surface-hover);
@@ -407,7 +417,7 @@ input[type="range"] {
 }
 .ui-panel.elevated {
   background: var(--surface-2);
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--shadow-soft);
 }
 
 /* --- .ui-section (iOS inset-grouped list) --- */
@@ -505,7 +515,7 @@ input[type="range"] {
   font-size: var(--font-base);
   text-align: left;
   cursor: pointer;
-  transition: background-color var(--duration-fast);
+  transition: background-color var(--duration-normal) var(--ease);
 }
 .ui-menu-item:hover,
 .ui-menu-item:active {

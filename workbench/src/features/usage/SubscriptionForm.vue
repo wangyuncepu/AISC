@@ -122,7 +122,8 @@ function switchMode(next: "url" | "content"): void {
   color: var(--text-2);
   font-size: var(--font-sm);
   cursor: pointer;
-  transition: background-color var(--duration-fast), color var(--duration-fast);
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
 }
 .mode-row button:hover { background: var(--surface-hover); color: var(--text); }
 .mode-row button.on { background: var(--accent-soft); color: var(--text); font-weight: 600; }
