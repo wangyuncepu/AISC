@@ -304,7 +304,14 @@ function onBarKeydown(e: KeyboardEvent) {
       @keydown.enter.prevent="onChip(c)"
       @keydown.space.prevent="onChip(c)"
     >
-      <span class="dot" :data-state="dotState(c)" />
+      <!-- 10c: the runtime-state dot only exists for real workspace chips —
+           settings/network-usage/launcher pages have no container behind
+           them, so a permanently-grey dot is noise (user feedback d.png). -->
+      <span
+        v-if="!c.launcher && !c.settings && !c.networkUsage"
+        class="dot"
+        :data-state="dotState(c)"
+      />
       <span class="name">{{ c.label }}</span>
       <button
         v-if="c.settings && ws.settingsTabOpen"
