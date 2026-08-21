@@ -258,8 +258,8 @@ async function finish() {
     <template v-else-if="step === 'welcome' || onboarding.status === 'not_started'">
       <p class="ob-subtitle">{{ t("onboarding.subtitle") }}</p>
       <div class="ob-actions">
-        <button class="ob-btn primary" @click="begin">{{ t("onboarding.begin") }}</button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+        <button class="ob-btn ui-button primary" @click="begin">{{ t("onboarding.begin") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.skip") }}</button>
       </div>
     </template>
 
@@ -315,7 +315,7 @@ async function finish() {
       <div class="ob-actions">
         <button
           v-if="environment.dockerInstalling"
-          class="ob-btn primary"
+          class="ob-btn ui-button primary"
           :disabled="dockerBusy"
           @click="startDocker"
         >
@@ -330,17 +330,17 @@ async function finish() {
         <!-- Never disabled: envReadiness is a cheap idempotent read, and the
              auto-poll already keeps this live. Disabling on `loading` made
              "Re-check" dead ~4s of every 5s (manual test 2026-08-16). -->
-        <button class="ob-btn ghost" @click="retryEnv">
+        <button class="ob-btn ui-button quiet" @click="retryEnv">
           {{ t("onboarding.env.retry") }}
         </button>
         <button
-          class="ob-btn primary"
+          class="ob-btn ui-button primary"
           :disabled="!environment.allReady"
           @click="continueFromEnv"
         >
           {{ t("onboarding.continue") }}
         </button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.skip") }}</button>
       </div>
     </template>
 
@@ -352,7 +352,7 @@ async function finish() {
         <button
           v-for="rec in runtime.recentWorkspaces.slice(0, 5)"
           :key="rec.path"
-          class="ob-btn ws-recent"
+          class="ob-btn ui-button quiet ws-recent"
           @click="selectRecent(rec.path)"
         >
           {{ rec.path }}
@@ -360,16 +360,16 @@ async function finish() {
       </div>
 
       <div class="ob-actions">
-        <button class="ob-btn primary" @click="pickWorkspace">{{ t("onboarding.ws.pick") }}</button>
+        <button class="ob-btn ui-button primary" @click="pickWorkspace">{{ t("onboarding.ws.pick") }}</button>
         <button
           v-if="chosenWorkspace"
-          class="ob-btn primary"
+          class="ob-btn ui-button primary"
           :disabled="!chosenWorkspace"
           @click="continueFromWorkspace"
         >
           {{ t("onboarding.continue") }}
         </button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.skip") }}</button>
       </div>
     </template>
 
@@ -389,8 +389,8 @@ async function finish() {
       </ul>
 
       <div class="ob-actions">
-        <button class="ob-btn primary" @click="continueFromAgent">{{ t("onboarding.continue") }}</button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+        <button class="ob-btn ui-button primary" @click="continueFromAgent">{{ t("onboarding.continue") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.skip") }}</button>
       </div>
     </template>
 
@@ -400,17 +400,17 @@ async function finish() {
 
       <div class="ob-net-options">
         <button
-          class="ob-btn"
+          class="ob-btn ui-button"
           :class="{ active: network.choice === 'direct' }"
           @click="pickNetwork('direct')"
         >{{ t("onboarding.net.direct") }}</button>
         <button
-          class="ob-btn"
+          class="ob-btn ui-button"
           :class="{ active: network.choice === 'host_proxy' }"
           @click="pickNetwork('host_proxy')"
         >{{ t("onboarding.net.hostProxy") }}</button>
         <button
-          class="ob-btn"
+          class="ob-btn ui-button"
           :class="{ active: network.choice === 'container_tun' }"
           @click="pickNetwork('container_tun')"
         >{{ t("onboarding.net.containerTun") }}</button>
@@ -430,18 +430,18 @@ async function finish() {
       </div>
 
       <div class="ob-actions">
-        <button class="ob-btn ghost" :disabled="network.probing" @click="probeNetwork">
+        <button class="ob-btn ui-button quiet" :disabled="network.probing" @click="probeNetwork">
           {{ network.probing ? t("onboarding.net.probing") : t("onboarding.net.probe") }}
         </button>
         <span v-if="network.probeResult" class="ob-probe" :data-result="network.probeResult">
           {{ network.probeResult === "ok" ? t("onboarding.net.probeOk") : t("onboarding.net.probeFail") }}
         </span>
         <button
-          class="ob-btn primary"
+          class="ob-btn ui-button primary"
           :disabled="network.choice === 'direct' ? false : !network.confirmed"
           @click="confirmNetwork"
         >{{ t("onboarding.continue") }}</button>
-        <button class="ob-btn ghost" @click="network.revoke(); continueFromNetwork()">
+        <button class="ob-btn ui-button quiet" @click="network.revoke(); continueFromNetwork()">
           {{ t("onboarding.net.skip") }}
         </button>
       </div>
@@ -449,7 +449,7 @@ async function finish() {
       <!-- Explicit confirm before applying a non-direct choice -->
       <button
         v-if="network.choice !== 'direct' && !network.confirmed"
-        class="ob-btn confirm"
+        class="ob-btn ui-button primary confirm"
         @click="network.confirm()"
       >{{ t("onboarding.net.confirm") }}</button>
     </template>
@@ -475,12 +475,12 @@ async function finish() {
 
       <div class="ob-actions">
         <button
-          class="ob-btn primary"
+          class="ob-btn ui-button primary"
           :disabled="runtime.status === 'preflight' || runtime.status === 'starting' || runtime.preflight?.recommended_action === 'resolve_conflict'"
           @click="continueFromRuntime"
         >{{ t("onboarding.continue") }}</button>
-        <button class="ob-btn ghost" @click="runtime.runPreflight()">{{ t("onboarding.runtime.retry") }}</button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.skip") }}</button>
+        <button class="ob-btn ui-button quiet" @click="runtime.runPreflight()">{{ t("onboarding.runtime.retry") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.skip") }}</button>
       </div>
     </template>
 
@@ -489,8 +489,8 @@ async function finish() {
       <p class="ob-subtitle">{{ t("onboarding.complete.title") }}</p>
       <p class="ob-note">{{ t("onboarding.complete.note") }}</p>
       <div class="ob-actions">
-        <button class="ob-btn primary" @click="finish">{{ t("onboarding.complete.enter") }}</button>
-        <button class="ob-btn ghost" @click="skip">{{ t("onboarding.complete.later") }}</button>
+        <button class="ob-btn ui-button primary" @click="finish">{{ t("onboarding.complete.enter") }}</button>
+        <button class="ob-btn ui-button quiet" @click="skip">{{ t("onboarding.complete.later") }}</button>
       </div>
     </template>
 
@@ -498,7 +498,7 @@ async function finish() {
     <template v-else>
       <p class="ob-step" role="status">{{ t("onboarding.currentStep", { step }) }}</p>
       <div class="ob-actions">
-        <button class="ob-btn primary" @click="skip">{{ t("onboarding.complete.later") }}</button>
+        <button class="ob-btn ui-button primary" @click="skip">{{ t("onboarding.complete.later") }}</button>
       </div>
     </template>
   </div>
@@ -517,6 +517,14 @@ async function finish() {
 }
 .ob-title { font-size: var(--font-xl); margin: 0; }
 .ob-subtitle { color: var(--muted, #888); margin: 0; }
+
+/* 10b: network-choice segmented selected state (the .ui-button primitive
+ * carries the base look; ob-btn stays as this page's hook). */
+.ob-btn.active {
+  background: var(--accent-soft);
+  color: var(--text);
+  border-color: transparent;
+}
 .ob-step { color: var(--text-2); font-size: var(--font-md); margin: 0; }
 .ob-error { color: var(--error, var(--status-err)); font-size: var(--font-md); }
 .ob-finished { color: var(--muted, #888); }

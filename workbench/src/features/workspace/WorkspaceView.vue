@@ -232,7 +232,7 @@ function setPaneTreeRef(tabId: string) {
         <main class="terminal-area">
           <div v-if="store.tabs.length === 0 && !ccSwitchPaneVisible" class="empty-tabs">
             <p>{{ t("tabs.empty") }}</p>
-            <button class="primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
+            <button class="ui-button primary" @click="store.createTab('bash')">{{ t("tabs.newTab") }}</button>
           </div>
           <div
             v-for="tb in paneTabs"
@@ -290,9 +290,9 @@ function setPaneTreeRef(tabId: string) {
       <p class="err">{{ store.error?.message }}</p>
       <p class="detail">{{ store.error?.technical_detail }}</p>
       <div class="actions">
-        <button @click="store.negotiate()">{{ t("app.error.retry") }}</button>
-        <button @click="store.backToPicker()">{{ t("app.error.back") }}</button>
-        <button class="diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
+        <button class="ui-button" @click="store.negotiate()">{{ t("app.error.retry") }}</button>
+        <button class="ui-button" @click="store.backToPicker()">{{ t("app.error.back") }}</button>
+        <button class="ui-button diagnose" @click="doctorStore.openDialog()">{{ t("doctor.run") }}</button>
       </div>
     </div>
   </div>
