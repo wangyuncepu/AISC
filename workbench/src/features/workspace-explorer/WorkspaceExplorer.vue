@@ -165,6 +165,16 @@ async function onMenuCopy(relativePath: string) {
  * is the standard way to read CSS zoom in Chromium) rather than re-deriving
  * the settings formula. Falls back to 1 when the app root is not measurable.
  */
+/**
+ * The app chrome is CSS-zoomed (`ui.font_scale` → `.app { zoom }`). Under a
+ * non-1 zoom, `position: fixed`'s containing block becomes the zoomed ancestor,
+ * so `clientX/clientY` (1:1 viewport px) must be divided by the live zoom to
+ * land at the pointer. Measure it from the `.app` box (rect.width/offsetWidth
+ * is the standard way to read CSS zoom in Chromium) rather than re-deriving
+ * the settings formula. Falls back to 1 when the app root is not measurable.
+ * (10d r4 note: this menu lives INSIDE the zoomed .app — keep dividing. Only
+ * menus teleported OUTSIDE .app use raw viewport px; see TabBar/WorkspaceBar.)
+ */
 function appZoom(): number {
   const app = document.querySelector<HTMLElement>(".app");
   if (!app) return 1;
@@ -175,9 +185,6 @@ function appZoom(): number {
 function openMenu(node: WorkspaceNode, event: MouseEvent) {
   menuFor.value = node.relative_path;
   const zoom = appZoom();
-  // Clamp to the viewport in the menu's own (zoom-adjusted) coordinate space:
-  // the Explorer drawer sits at the window's right edge, so an unclamped
-  // clientX would push the fixed-position menu off-screen.
   const menuWidth = 160;
   const menuHeight = 160;
   menuPos.value = {
