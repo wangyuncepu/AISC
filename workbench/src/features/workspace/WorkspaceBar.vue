@@ -298,6 +298,7 @@ function onBarKeydown(e: KeyboardEvent) {
       :aria-selected="ws.activeId === c.id"
       :aria-label="chipTitle(c)"
       :title="chipTitle(c)"
+      :aria-label="chipTitle(c)"
       :data-dot="dotState(c)"
       :tabindex="chipTabIndex(i)"
       @click="onChip(c)"

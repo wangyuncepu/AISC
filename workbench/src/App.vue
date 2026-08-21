@@ -233,20 +233,6 @@ const statusLabel = computed(() =>
     : t(STATUS_KEY[store.status] ?? "app.unknown")
 );
 
-/** 10c: the topbar status renders as a .ui-badge — ok/error tints, neutral
- * otherwise (semantic colors stay driven by data-status). */
-const statusBadge = computed(() => {
-  switch (store.status) {
-    case "ready":
-      return "ok";
-    case "error":
-    case "blocked":
-      return "error";
-    default:
-      return "";
-  }
-});
-
 // KI-1 UX: announce the wake-up start and its SUCCESS.
 watch(
   () => store.dockerStarting,
@@ -389,7 +375,7 @@ onBeforeUnmount(() => {
   <div class="app" :style="uiZoom" :data-tier="layoutTier">
     <header class="topbar">
       <span class="brand">AISC Workbench</span>
-      <span class="status ui-badge" :class="statusBadge" :data-status="store.status">{{ statusLabel }}</span>
+      <span class="status" :data-status="store.status">{{ statusLabel }}</span>
       <span class="spacer" />
     </header>
 
@@ -482,6 +468,10 @@ onBeforeUnmount(() => {
 }
 .brand { font-weight: 600; }
 .spacer { flex: 1; }
+/* 10c round 2: quiet colored text — the badge pill was too heavy up here. */
+.status { font-size: var(--font-sm); color: var(--text-muted); }
+.status[data-status="ready"] { color: var(--success); }
+.status[data-status="error"], .status[data-status="blocked"] { color: var(--error); }
 .settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }
 .gate.blocked, .center {
   flex: 1;
