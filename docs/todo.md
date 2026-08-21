@@ -91,6 +91,22 @@
 
 
 # 手测异常/问题
-- [ ] 欢迎使用 AISC Workbench的初次运行环境失败，没有找到aisc cli（多次出现，从之前的版本里就有出现，但是当时没有重视）
-- [ ] 初次进入选择工作区页面时，显示没有aisc cli能力，点击重新检测后恢复正常（同上，多次出现，之前没有重视）
+- [x] 欢迎使用 AISC Workbench的初次运行环境失败，没有找到aisc cli（多次出现，从之前的版本里就有出现，但是当时没有重视）
+- [x] 初次进入选择工作区页面时，显示没有aisc cli能力，点击重新检测后恢复正常（同上，多次出现，之前没有重视）
 - [ ] aisc卸载、升级，要同步删除、重建docker的镜像、数据文件等配套资源，如果能同步更新container就更好了。
+
+
+
+# UI美术动效
+- 当前情况：
+  - 纯 CSS，无框架无预处理器：
+    - 每组件 \<style scoped\>：样式随 SFC 就地管理（App.vue / TabBar / WorkspaceBar 等都是）
+    - 设计令牌 = CSS 自定义属性（Stage 6 UX-01 落的）：间距/字号/圆角/阴影/层级/时长统一为 --surface、--text-2、--radius-md、--space-2 这类变量，组件只消费变量不写死值
+    - 主题：src/theme.ts 按 settings 的 ui.theme 在根元素打 data-theme（system/dark/light），变量在全局样式表里按主题重定义
+    - 字号缩放：ui.font_scale 用 CSS zoom 实现（App 的 uiZoom + 终端区 1/scale 反向补偿）
+
+
+- 界面截图，使用流程
+- 安装开始->开启正常工作
+- 功能区域
+- 
