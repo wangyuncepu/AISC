@@ -4,7 +4,7 @@ Active/in-progress implementation plans live here. Completed plans are archived 
 
 ## Current active plan
 
-- [`aisc-next-followup/`](aisc-next-followup/README.md) — Windows data root, latest stable cc-switch, container Provider UI and C# Workbench POC follow-up plan.
+- [`aisc-next-followup/`](aisc-next-followup/README.md) — Windows data root, latest stable cc-switch, container Provider UI, C# Workbench POC and Stage 10 Workbench UI visual polish follow-up plan.
 
 The completed `aisc-next` plan (Stages 0–6, final commit `f5a74e5`) is archived at [`docs/archive/completed/aisc-next/`](../archive/completed/aisc-next/README.md).
 
