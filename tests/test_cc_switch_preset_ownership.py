@@ -376,5 +376,206 @@ class OwnershipRefreshTests(unittest.TestCase):
             self.assertEqual(is_current, 1)
 
 
+class ClaudeSettingsBaseTests(unittest.TestCase):
+    """Retest round 2 (2026-08-21): upstream's claude switch replaces
+    settings.json with the row's settings_config WHOLESALE — preset rows must
+    carry the non-env base (statusLine/enabledPlugins/...) or the user's
+    setup is wiped on the first switch."""
+
+    def test_base_loads_the_repo_template(self):
+        base = H.load_claude_settings_base()
+        self.assertIn("statusLine", base)
+        self.assertIn("enabledPlugins", base)
+        self.assertIn("extraKnownMarketplaces", base)
+        self.assertNotIn("env", base)
+
+    def test_fresh_claude_settings_carry_base(self):
+        settings = H._settings_config("claude", deepseek())
+        self.assertIn("statusLine", settings)
+        self.assertIn("enabledPlugins", settings)
+        self.assertTrue(settings["env"]["ANTHROPIC_BASE_URL"])
+
+    def test_custom_preset_path_carries_base_too(self):
+        kimi = next(p for p in H.PRESET_PROVIDERS if p["id"] == "kimi")
+        settings = H._settings_config("claude", kimi)
+        self.assertIn("statusLine", settings)
+
+    def test_refresh_seeds_base_only_when_absent(self):
+        custom_statusline = {"type": "command", "command": "user-custom"}
+        raw = json.dumps({
+            "env": {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+                    "ANTHROPIC_AUTH_TOKEN": "sk-user"},
+            "statusLine": custom_statusline,
+        })
+        merged = H._merged_settings("claude", deepseek(), raw)
+        # The user's own statusLine survives every refresh…
+        self.assertEqual(merged["statusLine"], custom_statusline)
+        # …while base keys the row lacks are seeded.
+        self.assertIn("enabledPlugins", merged)
+
+    def test_refresh_upgrades_env_only_rows(self):
+        raw = json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "sk-user"}})
+        merged = H._merged_settings("claude", deepseek(), raw)
+        self.assertIn("statusLine", merged)
+        self.assertIn("enabledPlugins", merged)
+
+
+class ReconcileTests(unittest.TestCase):
+    """Post-init invariant (retest round 2): proxy on ⟺ the current
+    provider is a real third-party endpoint; a PRISTINE imported 'default'
+    row is removed with current re-pointed to the named official row."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.config_dir = Path(self.tmp.name)
+        db = sqlite3.connect(self.config_dir / "cc-switch.db")
+        db.execute(
+            "CREATE TABLE providers (id TEXT, app_type TEXT, name TEXT, "
+            "settings_config TEXT, website_url TEXT, category TEXT, "
+            "created_at INTEGER, sort_index INTEGER, notes TEXT, icon TEXT, "
+            "icon_color TEXT, meta TEXT, is_current INTEGER, "
+            "in_failover_queue INTEGER)"
+        )
+        db.commit()
+        db.close()
+        self.runner_calls: list[list[str]] = []
+
+    def _seed(self, pid: str, agent: str, settings: dict, *, current=False,
+              name=None):
+        db = sqlite3.connect(self.config_dir / "cc-switch.db")
+        db.execute(
+            "INSERT INTO providers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (pid, agent, name or pid, json.dumps(settings),
+             "", "custom", 1, 0, "", None, None, "{}",
+             1 if current else 0, 0),
+        )
+        db.commit()
+        db.close()
+
+    def _rows(self, agent: str) -> dict:
+        db = sqlite3.connect(self.config_dir / "cc-switch.db")
+        try:
+            return {
+                row[0]: (row[1], json.loads(row[2]))
+                for row in db.execute(
+                    "SELECT id, is_current, settings_config FROM providers "
+                    "WHERE app_type = ?", (agent,))
+            }
+        finally:
+            db.close()
+
+    def _reconcile(self, rc=0):
+        import subprocess as _sp
+
+        def fake_runner(argv, **_kwargs):
+            self.runner_calls.append(list(argv))
+            return _sp.CompletedProcess(argv, rc, stdout="", stderr="boom"
+                                        if rc else "")
+
+        log_path = self.config_dir / "reconcile.log"
+        with log_path.open("w", encoding="utf-8") as log_io:
+            return H.reconcile_runtime_state(self.config_dir, log_io,
+                                             runner=fake_runner)
+
+    def test_pristine_default_removed_and_routes_disabled(self):
+        # The legacy volume shape: claude sitting on cc-switch's imported
+        # 'default' snapshot with the route force-enabled by the old
+        # entrypoint; codex already on its official placeholder.
+        self._seed("default", "claude",
+                   {"statusLine": {"type": "command", "command": "x"}},
+                   current=True, name="default")
+        self._seed("claude-official", "claude", {"env": {}})
+        self._seed("deepseek", "claude", {
+            "env": {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+                    "ANTHROPIC_AUTH_TOKEN": "sk-user"}})
+        self._seed("codex-official", "codex", {"auth": {}, "config": ""},
+                   current=True)
+        actions = self._reconcile()
+
+        rows = self._rows("claude")
+        self.assertNotIn("default", rows)                       # artifact gone
+        self.assertEqual(rows["claude-official"][0], 1)         # re-pointed
+        self.assertIn("statusLine", rows["claude-official"][1])  # base seeded
+        self.assertEqual(rows["deepseek"][0], 0)                # untouched
+        # Invariant: both current rows are non-real → both routes off.
+        self.assertEqual(
+            self.runner_calls,
+            [["cc-switch", "proxy", "-a", "claude", "disable"],
+             ["cc-switch", "proxy", "-a", "codex", "disable"]])
+        self.assertTrue(any("default" in a for a in actions))
+
+    def test_real_current_provider_enables_route(self):
+        self._seed("claude-official", "claude", {"env": {}}, current=True)
+        self._seed("deepseek", "claude", {
+            "env": {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"}},
+            current=False)
+        self._seed("codex-official", "codex", {"auth": {}, "config": ""})
+        self._seed("deepseek", "codex", {
+            "auth": {}, "config": 'model_provider = "deepseek"\n'
+                                  "[model_providers.deepseek]\n"
+                                  'base_url = "https://api.deepseek.com"\n'},
+            current=True)
+        self._reconcile()
+        self.assertEqual(
+            self.runner_calls,
+            [["cc-switch", "proxy", "-a", "claude", "disable"],   # official row
+             ["cc-switch", "proxy", "-a", "codex", "enable"]])    # real row
+
+    def test_repurposed_default_is_kept(self):
+        self._seed("default", "claude", {
+            "env": {"ANTHROPIC_BASE_URL": "https://my-proxy.example.com",
+                    "ANTHROPIC_AUTH_TOKEN": "sk-mine"}}, current=True)
+        self._seed("claude-official", "claude", {"env": {}})
+        self._seed("codex-official", "codex", {"auth": {}, "config": ""},
+                   current=True)
+        self._reconcile()
+        rows = self._rows("claude")
+        self.assertIn("default", rows)                    # user's row survives
+        self.assertEqual(rows["default"][0], 1)           # …and stays current
+        self.assertEqual(rows["claude-official"][0], 0)
+        self.assertIn(["cc-switch", "proxy", "-a", "claude", "enable"],
+                      self.runner_calls)                  # real row → route on
+
+    def test_missing_official_rows_are_created(self):
+        self._seed("deepseek", "claude", {
+            "env": {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"}},
+            current=True)
+        self._seed("deepseek", "codex", {
+            "auth": {}, "config": 'model_provider = "d"\n'
+                                  "[model_providers.d]\n"
+                                  'base_url = "https://x"\n'},
+            current=True)
+        self._reconcile()
+        rows = self._rows("claude")
+        self.assertIn("claude-official", rows)
+        self.assertIn("statusLine", rows["claude-official"][1])
+        self.assertEqual(rows["claude-official"][0], 0)   # current untouched
+        self.assertIn("codex-official", self._rows("codex"))
+        self.assertEqual(
+            self.runner_calls,
+            [["cc-switch", "proxy", "-a", "claude", "enable"],
+             ["cc-switch", "proxy", "-a", "codex", "enable"]])
+
+    def test_second_run_is_steady(self):
+        self._seed("claude-official", "claude", {"env": {}}, current=True)
+        self._seed("codex-official", "codex", {"auth": {}, "config": ""},
+                   current=True)
+        self._reconcile()
+        self._reconcile()
+        rows = self._rows("claude")
+        self.assertEqual(list(rows), ["claude-official"])
+        self.assertEqual(rows["claude-official"][0], 1)
+
+    def test_runner_failure_never_raises(self):
+        self._seed("claude-official", "claude", {"env": {}}, current=True)
+        self._seed("codex-official", "codex", {"auth": {}, "config": ""},
+                   current=True)
+        actions = self._reconcile(rc=1)
+        self.assertFalse(any(a.startswith("proxy") for a in actions))
+        # The DB steps still committed.
+        self.assertIn("statusLine", self._rows("claude")["claude-official"][1])
+
+
 if __name__ == "__main__":
     unittest.main()

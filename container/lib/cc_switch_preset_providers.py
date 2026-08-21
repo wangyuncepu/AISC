@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import sqlite3
+import subprocess
 import sys
 import time
 import tomllib
@@ -37,6 +38,33 @@ _REQUIRED_FIXTURE_ENV_KEYS = (
 )
 # The user's token env key — preset-owned env never includes it.
 USER_ONLY_ENV_KEYS = frozenset({"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"})
+
+# Retest round 2 (2026-08-21): upstream's claude switch REPLACES settings.json
+# with the provider row's settings_config wholesale (live-probed) — an
+# env-only row wipes the user's statusLine/enabledPlugins. Every claude
+# settings_config this module (or the adapter) builds therefore carries the
+# image's non-env base template. In the image it ships next to this module;
+# in the repo/tests it is container/claude-settings.json one level up.
+CLAUDE_SETTINGS_BASE_CANDIDATES = (
+    Path(__file__).parent / "aisc-claude-settings-base.json",
+    Path(__file__).parent.parent / "claude-settings.json",
+)
+
+
+def load_claude_settings_base() -> dict[str, Any]:
+    """Non-env base template for claude settings_config (env never included).
+
+    Unreadable/missing candidates → {} — rows degrade to env-only (the
+    historical shape), never a startup failure.
+    """
+    for path in CLAUDE_SETTINGS_BASE_CANDIDATES:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if k != "env"}
+    return {}
 
 
 def load_deepseek_fixture(path: Path = FIXTURE_PATH) -> dict[str, Any]:
@@ -263,7 +291,7 @@ def _settings_config(
     if agent == "claude":
         # Fixture-driven providers (Stage 8c) carry the full official env set.
         if "claude_env" in provider:
-            return {"env": dict(provider["claude_env"])}
+            return {"env": dict(provider["claude_env"]), **load_claude_settings_base()}
         # Third-party providers expose a separate Anthropic-compatible endpoint
         # (e.g. /anthropic) distinct from their OpenAI base_url. Prefer it when
         # present so Claude Code speaks the Messages API to the right URL.
@@ -275,7 +303,7 @@ def _settings_config(
         claude_model = provider.get("anthropic_model") or provider["model"]
         if claude_model:
             env["ANTHROPIC_MODEL"] = claude_model
-        return {"env": env}
+        return {"env": env, **load_claude_settings_base()}
 
     if agent == "codex":
         provider_id = provider["id"]
@@ -456,6 +484,14 @@ def _merged_settings(
                 {k: v for k, v in preset_env.items() if k != "ANTHROPIC_MODEL"}
             )
         result: dict[str, Any] = {"env": merged_env}
+        # Seed-style base ownership (retest round 2): base keys are added
+        # only when the stored row doesn't carry them — a row the user
+        # customized in the TUI keeps its own statusLine/enabledPlugins on
+        # every refresh; the tail loop below carries any other existing
+        # keys forward untouched.
+        for key, value in load_claude_settings_base().items():
+            if key not in existing:
+                result[key] = value
     elif agent == "codex":
         api_key = _extract_codex_api_key(existing_raw)
         result = _settings_config(agent, provider, api_key=api_key)
@@ -676,6 +712,217 @@ def add_preset_providers(
     return added, refreshed, removed
 
 
+# ---------------------------------------------------------------------------
+# Post-init reconcile (retest round 2, 2026-08-21): the provider-page choice
+# owns BOTH agents' local proxy routes. Container start re-asserts the
+# invariant so volumes created by older images (claude route force-enabled
+# while sitting on the imported "default" row) self-heal.
+# ---------------------------------------------------------------------------
+
+OFFICIAL_ROW_IDS = {"claude": "claude-official", "codex": "codex-official"}
+
+
+def _claude_row_real(settings: dict[str, Any]) -> bool:
+    env = settings.get("env")
+    return isinstance(env, dict) and bool(env.get("ANTHROPIC_BASE_URL"))
+
+
+def _codex_row_real(settings: dict[str, Any]) -> bool:
+    text = settings.get("config")
+    if not isinstance(text, str) or not text:
+        return False
+    try:
+        toml = tomllib.loads(text)
+    except Exception:
+        return False
+    providers = toml.get("model_providers")
+    if isinstance(providers, dict):
+        for entry in providers.values():
+            if isinstance(entry, dict) and entry.get("base_url"):
+                return True
+    return False
+
+
+def _is_pristine_default_import(agent: str, pid: str, settings: dict[str, Any]) -> bool:
+    """cc-switch's first-init import row ("default") before any user input:
+    a settings.json snapshot with NO env (no endpoint, no token). Any env the
+    user added means the row was repurposed — never touch it."""
+    if agent != "claude" or pid != "default":
+        return False
+    env = settings.get("env")
+    if not isinstance(env, dict):
+        return True
+    return not any(env.values())
+
+
+def reconcile_runtime_state(
+    config_dir: Path, log: TextIO, runner=subprocess.run
+) -> list[str]:
+    """Re-assert the proxy/default invariants at container start.
+
+    1. Official rows exist for both agents (the cancel-proxy targets) —
+       created when missing; claude-official gets the settings base keys
+       while it is still cc-switch's bare seed shape (the claude switch
+       replaces settings.json wholesale, so even the official row must
+       carry the statusLine/plugin base).
+    2. A PRISTINE imported "default" row is deleted; when it was current,
+       current re-points to claude-official (user decision 2026-08-21 —
+       "claude 出现 default 配置" was the confusing symptom). A row the
+       user configured is never touched.
+    3. Per agent: proxy route ON iff the current provider row is a real
+       third-party endpoint. enable/disable are idempotent (live-probed
+       2026-08-21), so unconditional calls converge legacy states.
+
+    Best-effort by contract: a failing cc-switch call logs and continues;
+    returns the actions taken (entrypoint echo + tests).
+    """
+    actions: list[str] = []
+    db_path = config_dir / "cc-switch.db"
+    if not db_path.is_file():
+        return actions
+    conn = sqlite3.connect(db_path, timeout=15)
+    try:
+        conn.execute("PRAGMA busy_timeout=15000")
+        conn.execute("BEGIN IMMEDIATE")
+        current: dict[str, tuple[str, dict[str, Any]]] = {}
+        for agent in SUPPORTED_AGENTS:
+            row = conn.execute(
+                "SELECT id, settings_config FROM providers "
+                "WHERE app_type = ? AND is_current = 1 LIMIT 1",
+                (agent,),
+            ).fetchone()
+            if row is not None:
+                current[agent] = (str(row[0]), _parse_json_settings(row[1]))
+
+        now = int(time.time() * 1000)
+        for agent in SUPPORTED_AGENTS:
+            official_id = OFFICIAL_ROW_IDS[agent]
+            existing = conn.execute(
+                "SELECT settings_config FROM providers "
+                "WHERE id = ? AND app_type = ?",
+                (official_id, agent),
+            ).fetchone()
+            if existing is None:
+                settings = (
+                    {"env": {}, **load_claude_settings_base()}
+                    if agent == "claude"
+                    else {"auth": {}, "config": ""}
+                )
+                next_sort = conn.execute(
+                    "SELECT COALESCE(MAX(sort_index), -1) + 1 FROM providers "
+                    "WHERE app_type = ?",
+                    (agent,),
+                ).fetchone()[0]
+                conn.execute(
+                    "INSERT INTO providers ("
+                    "id, app_type, name, settings_config, website_url, "
+                    "category, created_at, sort_index, notes, icon, "
+                    "icon_color, meta, is_current, in_failover_queue"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        official_id, agent,
+                        "Claude Official" if agent == "claude" else "OpenAI Official",
+                        json.dumps(settings, ensure_ascii=False,
+                                   separators=(",", ":")),
+                        "", "custom", now, next_sort, "", None, None,
+                        "{}", 0, 0,
+                    ),
+                )
+                if agent not in current:
+                    # No current row at all — the fresh official row is the
+                    # only candidate (env-less → proxy stays off).
+                    current[agent] = (official_id, settings)
+                actions.append(f"created {agent} official row")
+                print(f"Created missing official row: {official_id}", file=log)
+            elif agent == "claude":
+                settings = _parse_json_settings(existing[0])
+                if set(settings.keys()) <= {"env"}:
+                    settings = {"env": settings.get("env") or {},
+                                **load_claude_settings_base()}
+                    conn.execute(
+                        "UPDATE providers SET settings_config = ? "
+                        "WHERE id = ? AND app_type = ?",
+                        (json.dumps(settings, ensure_ascii=False,
+                                    separators=(",", ":")),
+                         official_id, agent),
+                    )
+                    if current.get(agent, ("", {}))[0] == official_id:
+                        current[agent] = (official_id, settings)
+                    actions.append("seeded claude-official settings base")
+                    print("Seeded settings base into claude-official", file=log)
+
+        claude_row = current.get("claude")
+        if claude_row is not None and _is_pristine_default_import(
+            "claude", claude_row[0], claude_row[1]
+        ):
+            conn.execute(
+                "UPDATE providers SET is_current = 0 WHERE app_type = 'claude'"
+            )
+            conn.execute(
+                "UPDATE providers SET is_current = 1 "
+                "WHERE id = ? AND app_type = 'claude'",
+                (OFFICIAL_ROW_IDS["claude"],),
+            )
+            conn.execute(
+                "DELETE FROM providers WHERE id = 'default' AND app_type = 'claude'"
+            )
+            current["claude"] = (OFFICIAL_ROW_IDS["claude"], {})
+            actions.append("removed imported claude 'default' row "
+                           "(current -> claude-official)")
+            print("Removed pristine 'default' import; current -> claude-official",
+                  file=log)
+        else:
+            # Leftover sweep: a pristine non-current 'default' import (the
+            # user already switched away) is deleted too — the TUI clutter
+            # was the complaint. Repurposed rows survive, as above.
+            for pid, raw in conn.execute(
+                "SELECT id, settings_config FROM providers "
+                "WHERE app_type = 'claude'"
+            ).fetchall():
+                if _is_pristine_default_import(
+                    "claude", str(pid), _parse_json_settings(raw)
+                ):
+                    conn.execute(
+                        "DELETE FROM providers "
+                        "WHERE id = ? AND app_type = 'claude'",
+                        (str(pid),),
+                    )
+                    actions.append("removed leftover claude 'default' row")
+                    print("Removed leftover pristine 'default' import", file=log)
+        conn.commit()
+    except sqlite3.Error as exc:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        print(f"Reconcile DB step failed (continuing to proxy calls): {exc}",
+              file=log)
+    finally:
+        conn.close()
+
+    real_check = {"claude": _claude_row_real, "codex": _codex_row_real}
+    for agent in SUPPORTED_AGENTS:
+        row = current.get(agent)
+        real = row is not None and real_check[agent](row[1])
+        verb = "enable" if real else "disable"
+        try:
+            completed = runner(
+                ["cc-switch", "proxy", "-a", agent, verb],
+                capture_output=True, text=True, timeout=30,
+            )
+        except Exception as exc:  # timeout / spawn failure — best-effort
+            print(f"proxy {verb} {agent} could not run: {exc}", file=log)
+            continue
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()[:200]
+            print(f"proxy {verb} {agent} failed (exit "
+                  f"{completed.returncode}): {detail}", file=log)
+            continue
+        actions.append(f"proxy {agent} {verb}d")
+        print(f"Proxy route {agent}: {verb}d", file=log)
+    return actions
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Preconfigure cc-switch providers without API keys"
@@ -684,6 +931,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--agent", choices=SUPPORTED_AGENTS, default="claude")
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--mode", default="auto")
+    parser.add_argument(
+        "--reconcile", action="store_true",
+        help="post-init invariant pass only (official rows, pristine default "
+             "import, proxy on/off per current provider); no preset refresh",
+    )
     return parser.parse_args(argv)
 
 
@@ -691,6 +943,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     args.config_dir.mkdir(parents=True, exist_ok=True)
     args.log.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.reconcile:
+        with args.log.open("a", encoding="utf-8") as log:
+            try:
+                actions = reconcile_runtime_state(args.config_dir, log)
+            except Exception as exc:  # never fail container start
+                print(f"Runtime state reconcile failed: {exc}", file=log)
+                return 1
+            print("reconciled" if actions else "current")
+            for action in actions:
+                print(f"  - {action}", file=log)
+            return 0
+
     revision = preset_revision(args.agent)
 
     mode = args.mode.lower()
