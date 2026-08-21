@@ -1,4 +1,4 @@
-# local-gates.ps1 — 一键本地全门禁（2026-08-20 用户决策：能本地跑的全部本地跑，
+﻿# local-gates.ps1 — 一键本地全门禁（2026-08-20 用户决策：能本地跑的全部本地跑，
 # 远程 CI 只作环境差异兜底；安装包产物改为本地构建）。
 #
 # 覆盖 Workbench CI + CLI sidecar 两条远程 CI 的全部可本地检查项：
@@ -30,13 +30,15 @@ Step "python full tests" {
 
 Step "cargo test --lib" {
     Set-Location "$root\workbench\src-tauri"
-    cargo test --lib 2>&1 | Select-Object -Last 3
+    # PS 5.1：native stderr 经 2>&1 会包成 ErrorRecord，叠加 $ErrorAction
+    # =Stop 即致命——cargo 重编译的 "Compiling…" 行会假失败。直接放行输出。
+    cargo test --lib
     Set-Location $root
 }
 
 Step "vitest run" {
     Set-Location "$root\workbench"
-    npx vitest run 2>&1 | Select-Object -Last 4
+    npx vitest run
     Set-Location $root
 }
 
