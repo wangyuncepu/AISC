@@ -526,6 +526,37 @@ class RouteGuardTests(AdapterTestCase):
         argvs = [" ".join(c.args) for c in self.cli.calls]
         self.assertTrue(any("daemon" in a and "start" in a for a in argvs))
 
+    def test_disable_failure_still_switches_and_forces_recovery(self):
+        # Live-probed worst mode (2026-08-21): zombie worker → the dance's
+        # precautionary disable itself errors ("managed proxy session did
+        # not exit") — the switch must proceed, and because the disable
+        # failed, recovery runs UNCONDITIONALLY (an orphaned old worker can
+        # hold the port open while serving a stale route).
+        listener, port = self._open_listener()
+        self.addCleanup(listener.close)
+
+        def fake_cli(args, stdin_text, secrets):
+            call = FakeCall(list(args), stdin_text)
+            self.cli.calls.append(call)
+            joined = " ".join(args)
+            if "disable" in joined and "proxy" in joined:
+                return subprocess.CompletedProcess(
+                    args, 1, stdout="",
+                    stderr="Error: managed proxy session did not exit")
+            stdout = (f"- Codex: enabled, configured {port}\n"
+                      if "show" in args else "Switched to provider 'x'\n✓ ok")
+            return subprocess.CompletedProcess(args, 0, stdout=stdout,
+                                               stderr="")
+
+        A.run_cli = fake_cli
+        self._seed_codex_switch()
+        A.op_switch("codex", "deepseek")  # must NOT raise
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertIn("switch", argvs[1])  # the switch itself ran
+        self.assertTrue(any("daemon" in a and "stop" in a for a in argvs))
+        self.assertTrue(any("daemon" in a and "start" in a for a in argvs))
+        self.assertEqual(sum("enable" in a for a in argvs), 2)  # forced
+
     def test_official_switch_skips_the_guard(self):
         self._install_show_cli(lambda args: "should never be asked")
         seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,

@@ -717,6 +717,36 @@ def _tcp_listening(port: int, attempts: int = 4, delay: float = 0.4) -> bool:
     return False
 
 
+def _run_cli_quiet(args: list[str], secrets: list[str]) -> bool:
+    """Best-effort CLI call: True iff exit 0. For precautionary steps whose
+    failure must not abort the switch (the end-state guard owns correctness)."""
+    completed = run_cli(args, "", secrets)
+    return completed.returncode == 0
+
+
+def _recover_route(agent: str, secrets: list[str]) -> None:
+    """Unconditional route recovery: fresh daemon + re-enable + verify.
+
+    A restarted daemon has EMPTY supervisor state, so the re-enable can no
+    longer no-op on stale "already running" beliefs (live-probed 2026-08-21:
+    daemon restart + enable reliably re-spawns workers).
+    """
+    port = _proxy_listen_port(agent)
+    run_cli(["daemon", "stop"], "", secrets)  # best-effort both ways
+    time.sleep(0.5)
+    run_cli(["daemon", "start", "--detach"], "", secrets)
+    time.sleep(1.0)
+    _cli(["proxy", "-a", agent, "enable"], secrets=secrets,
+         what=f"{agent} proxy route re-enable")
+    if port is not None and not _tcp_listening(port):
+        raise AdapterError(
+            ERR_SWITCH_FAILED,
+            f"{agent} local proxy route did not come up (port {port} not "
+            "listening after daemon restart); cc-switch daemon may be "
+            "broken - check `cc-switch daemon logs`",
+        )
+
+
 def _ensure_route_serving(agent: str, secrets: list[str]) -> None:
     """Post-enable guard (manual round 3, live-probed 2026-08-21):
 
@@ -732,19 +762,7 @@ def _ensure_route_serving(agent: str, secrets: list[str]) -> None:
     port = _proxy_listen_port(agent)
     if port is None or _tcp_listening(port):
         return
-    run_cli(["daemon", "stop"], "", secrets)  # best-effort both ways
-    time.sleep(0.5)
-    run_cli(["daemon", "start", "--detach"], "", secrets)
-    time.sleep(1.0)
-    _cli(["proxy", "-a", agent, "enable"], secrets=secrets,
-         what=f"{agent} proxy route re-enable")
-    if not _tcp_listening(port):
-        raise AdapterError(
-            ERR_SWITCH_FAILED,
-            f"{agent} local proxy route did not come up (port {port} not "
-            "listening after daemon restart); cc-switch daemon may be "
-            "broken - check `cc-switch daemon logs`",
-        )
+    _recover_route(agent, secrets)
 
 
 def _cli_switch(agent: str, provider_id: str, secrets: list[str]) -> None:
@@ -1321,8 +1339,14 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
         return op_list(agent)  # already active — idempotent success
     secrets = snapshot_secrets(agent, snapshot)
     to_official = provider_id.endswith("-official")
-    _cli(["proxy", "-a", agent, "disable"], secrets=secrets,
-         what=f"{agent} proxy route disable")
+    # The pre-switch disable is PRECAUTIONARY (worker token-capture timing
+    # for codex) — in broken states (dead daemon, zombie worker) the CLI
+    # itself errors ("managed proxy session did not exit", live-probed
+    # 2026-08-21) and that must not abort the switch: correctness is owned
+    # by the end-state guard below, and a failed disable forces the
+    # unconditional recovery there (an orphaned old worker can hold the
+    # port OPEN while serving a STALE route).
+    disable_ok = _run_cli_quiet(["proxy", "-a", agent, "disable"], secrets)
     if _settings_are_real(agent, row):
         _cli_switch(agent, provider_id, secrets)
     else:
@@ -1333,7 +1357,15 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
         # Manual round 3: enable can silently no-op (stale supervisor state
         # / dead daemon) — verify the route actually serves before calling
         # the switch a success.
-        _ensure_route_serving(agent, secrets)
+        if disable_ok:
+            _ensure_route_serving(agent, secrets)
+        else:
+            _recover_route(agent, secrets)
+    elif not disable_ok:
+        # Official/direct target: one plain retry — the live files were
+        # already rewritten to direct by the switch, so a lingering worker
+        # is unreachable cruft, only the route state needs settling.
+        _run_cli_quiet(["proxy", "-a", agent, "disable"], secrets)
     if agent == "codex":
         # Interactive codex ALSO demands an auth.json before it starts — a
         # marker placeholder that never carries a secret and never touches a
