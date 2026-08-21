@@ -304,7 +304,7 @@ function canReopen(s: TabSessionState): boolean {
          which was invalid and broke focus semantics). The wrapper keeps the
          visual active/hover state; tab-main carries role=tab. -->
     <!-- 10e: tab motion — fade-in enter, out-of-flow leave so siblings FLIP at once. -->
-    <TransitionGroup name="tab-anim">
+    <TransitionGroup tag="div" class="tab-group" name="tab-anim">
     <div
       v-for="(tab, i) in store.tabs"
       :key="tab.tabId"
@@ -345,7 +345,7 @@ function canReopen(s: TabSessionState): boolean {
 
     <!-- IDEA-1 + Stage 8e: virtual session-less tabs (Settings, cc-switch
          Provider UI). Keyboard model: appended after the session tabs. -->
-    <TransitionGroup name="tab-anim">
+    <TransitionGroup tag="div" class="tab-group" name="tab-anim">
     <div
       v-for="(v, vi) in virtualTabs"
       :key="v.id"
@@ -433,6 +433,7 @@ function canReopen(s: TabSessionState): boolean {
   position: relative; /* 10e: tab-anim leave anchors here (position:absolute) */
   display: flex;
   align-items: center;
+  align-items: center;
   gap: 2px;
   padding: 3px 6px;
   background: var(--surface);
@@ -444,6 +445,7 @@ function canReopen(s: TabSessionState): boolean {
 }
 /* 10c: pill tabs (D10-14) — the Stage 6 underline treatment gives way to
  * rounded fills; min-height doubles the hit area (baseline B-04). */
+.tab-group { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .tab {
   display: flex;
   align-items: center;
