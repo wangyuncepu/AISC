@@ -27,8 +27,8 @@ function basename(p: string): string {
         :placeholder="t('picker.placeholder')"
         @keyup.enter="store.runPreflight()"
       />
-      <button @click="store.pickWorkspace()">{{ t("picker.browse") }}</button>
-      <button class="primary" :disabled="!store.workspace.trim()" @click="store.runPreflight()">{{ t("picker.next") }}</button>
+      <button class="ui-button" @click="store.pickWorkspace()">{{ t("picker.browse") }}</button>
+      <button class="ui-button primary" :disabled="!store.workspace.trim()" @click="store.runPreflight()">{{ t("picker.next") }}</button>
     </div>
     <p class="hint">{{ t("picker.hint") }}</p>
     <div v-if="store.recentWorkspaces.length" class="recents">
@@ -64,15 +64,18 @@ function basename(p: string): string {
 .recents li { width: 100%; }
 .recent {
   width: 100%; display: flex; align-items: center; gap: 8px; text-align: left;
-  background: var(--surface); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
   padding: 6px 10px; font-size: var(--font-sm); cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease), border-color var(--duration-normal) var(--ease);
 }
 .recent:hover { background: var(--surface-2); border-color: var(--border-2); }
+.recent:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: var(--focus-ring-offset); }
 .r-name { color: var(--text-2); font-weight: 500; min-width: 80px; }
-.r-path { flex: 1; color: var(--text-muted); font-family: monospace; font-size: var(--font-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-path { flex: 1; color: var(--text-muted); font-family: var(--font-mono); font-size: var(--font-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .r-agent { color: var(--info); font-size: var(--font-xs); }
 .workspace {
-  flex: 1; min-width: 0; background: var(--surface); color: var(--text-2);
-  border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 6px 8px; font-size: var(--font-md);
+  flex: 1; min-width: 0; background: var(--surface-3); color: var(--text);
+  border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
+  min-height: var(--control-h-md); padding: var(--space-1) var(--space-3); font-size: var(--font-base);
 }
 </style>
