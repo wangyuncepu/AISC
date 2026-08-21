@@ -37,4 +37,12 @@
 
 手测硬门：Explorer 右键菜单坐标正、抽屉开合、终端输入/搜索/右键/复制、分屏 ×——用户确认全过。tab 新增动画按用户决策并入 10e 统一动效。CSS 68 kB 上下。
 
-## 10d-flows（待用户授权）
+## 10d-flows（2026-08-21，自动化完成，待用户手测关门）
+
+| commit | 内容 |
+|---|---|
+| `d9308eb` | 10d-1 startup 5 屏按钮族对齐 + PreflightGate 卡片化；B-01 picker 长名截断（r-path 补 min-width:0）；B-02 tab 18ch/chip 22ch 截断 |
+| `9ecdf6c` | 10d-2 SettingsForm 控件/chip/banner 对齐；DoctorDialog scrim token 化（白名单-1）、检查行/状态 pill/mono token |
+| `a9636dd` | 10d-3 Provider 行截断修 B-03、分段控件/表单卡/toast 对齐 + 动效数值 token 化；Usage 6 裸按钮上 primitive、表格 hairline 化 |
+
+基线 B-01/B-02/B-03 全部修复。NetworkUsageTab 发现第三处抽组件丢按钮样式（同 a64abc3 类）。
