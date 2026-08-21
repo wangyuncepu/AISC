@@ -1,7 +1,7 @@
 # Stage 10 Token 映射表（10b）
 
-> 用途：新旧 token 对照 + 兼容别名处置计划。别名定义在 `workbench/src/styles.css` :root。
-> 生命周期：10b 定义别名 → 10c/10d 迁移组件到规范名 → 10f 删别名。
+> 用途：新旧 token 对照 + 兼容别名处置计划。
+> 生命周期（已闭环）：10b 定义别名 → 10c/10d 迁移组件 → **10f（`62f5361`）别名全部删除**，最后使用者 OnboardingWizard --muted 迁正 --text-muted。
 
 ## 1. 旧名 → 规范名（别名已生效）
 
