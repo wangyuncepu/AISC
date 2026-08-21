@@ -364,6 +364,10 @@ COPY container/lib/cc_switch_preset_providers.py /usr/local/bin/lib/cc_switch_pr
 # Stage 8c (D8-06): the DeepSeek preset consumes this official-docs fixture
 # at runtime — models/endpoints/[1m] rules never live in code.
 COPY container/lib/deepseek-official-facts.json /usr/local/bin/lib/deepseek-official-facts.json
+# 复测第 2 轮（2026-08-21）：claude 的 provider switch 整文件替换 settings.json，
+# 每条 claude settings_config 都要带非 env 基模板（statusLine/enabledPlugins），
+# 否则切换即抹掉用户插件/状态栏。preset 模块在运行时读取本文件。
+COPY container/claude-settings.json /usr/local/bin/lib/aisc-claude-settings-base.json
 
 # cc-switch 离线 skills：元技能说明 + 已暂存插件中的实际 skill 内容。
 COPY container/cc-switch-skills/ /opt/aisc/skills/

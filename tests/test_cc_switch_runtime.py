@@ -64,8 +64,14 @@ class CcSwitchRuntimeTests(unittest.TestCase):
             entrypoint,
         )
         readiness_check = entrypoint.index('CC_SWITCH_DAEMON_READY=1', daemon_start)
-        proxy_enable = entrypoint.index("cc-switch proxy -a claude enable", daemon_start)
-        self.assertLess(readiness_check, proxy_enable)
+        # 复测第 2 轮（2026-08-21）：无条件 `proxy -a claude enable` 已被
+        # preset 模块的 --reconcile 对账取代（proxy 跟随当前 provider）。
+        reconcile = entrypoint.index(
+            "cc_switch_preset_providers.py", daemon_start
+        )
+        self.assertLess(readiness_check, reconcile)
+        self.assertIn("--reconcile", entrypoint)
+        self.assertNotIn("cc-switch proxy -a claude enable", entrypoint)
         self.assertIn('if [ "$CC_SWITCH_DAEMON_READY" = "1" ]; then', entrypoint)
 
     def test_entrypoint_menu_opens_cc_switch_management_tui(self):
@@ -107,10 +113,10 @@ class CcSwitchRuntimeTests(unittest.TestCase):
             if line.strip().startswith("cc-switch proxy -a codex enable")
         ]
         self.assertEqual([], codex_proxy_enable_commands)
-        self.assertIn(
-            "Codex 未自动启用 cc-switch 代理",
-            entrypoint,
-        )
+        # 两个 agent 的路由都由 --reconcile 按当前 provider 对账（复测第 2
+        # 轮）：不再有「Codex 未自动启用」的提示——真实 provider 当前时
+        # reconcile 会显式 enable。
+        self.assertIn("--reconcile", entrypoint)
 
     def test_entrypoint_registers_factory_skills_for_claude_and_codex(self):
         entrypoint = (ROOT / "container" / "entrypoint.sh").read_text(encoding="utf-8")

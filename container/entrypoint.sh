@@ -255,7 +255,8 @@ fi
 # 3.1. 启动 cc-switch 默认后台服务
 #   使用 cc-switch 自带的 detach 模式，避免 shell 后台任务与 proxy enable
 #   同时争抢 pidfile/socket。必须确认 daemon 可达并初始化 Codex provider；
-#   启动时只自动启用 Claude 路由，Codex 路由保持按需手动启用。
+#   启动末尾做一次状态对账（--reconcile）：proxy 路由跟随当前 provider
+#   （不变量：真实三方 provider ⟺ 路由 on，官方直连 ⟺ off）。
 # ==========================================
 CC_SWITCH_DAEMON_LOG="/tmp/cc-switch-daemon.log"
 CC_SWITCH_CODEX_INIT_LOG="/tmp/cc-switch-codex-init.log"
@@ -390,8 +391,28 @@ if command -v cc-switch >/dev/null 2>&1; then
             echo "⚠️  cc-switch Codex provider 预配置失败；日志: $CC_SWITCH_PRESET_CODEX_LOG" >&2
         fi
 
-        cc-switch proxy -a claude enable >/dev/null 2>&1 || true
-        echo "ℹ️  Codex 未自动启用 cc-switch 代理；需要时可手动运行 cc-switch proxy -a codex enable。"
+        # 复测第 2 轮（2026-08-21）：provider 页的选择拥有两个 agent 的
+        # proxy 路由。启动时对账一次（best-effort）：旧镜像无条件 enable
+        # 的 claude 路由、cc-switch import 的 pristine "default" 行，在
+        # 存量卷上自愈；官方行缺失时补建。
+        CC_SWITCH_RECONCILE_LOG="/tmp/cc-switch-reconcile.log"
+        if CC_SWITCH_RECONCILE_RESULT="$(
+            python3 /usr/local/bin/lib/cc_switch_preset_providers.py \
+                --config-dir "$CC_SWITCH_CONFIG_DIR" \
+                --log "$CC_SWITCH_RECONCILE_LOG" \
+                --reconcile
+        )"; then
+            case "$CC_SWITCH_RECONCILE_RESULT" in
+                reconciled)
+                    echo "✅ cc-switch 已对齐代理路由与 provider 状态（$CC_SWITCH_RECONCILE_LOG）"
+                    ;;
+                current)
+                    echo "ℹ️  cc-switch 代理路由与 provider 状态已对齐，跳过。"
+                    ;;
+            esac
+        else
+            echo "⚠️  cc-switch 状态对账失败；日志: $CC_SWITCH_RECONCILE_LOG" >&2
+        fi
     else
         echo "⚠️  cc-switch 后台服务启动失败；启动日志: $CC_SWITCH_DAEMON_LOG" >&2
         [ ! -s "$CC_SWITCH_DAEMON_LOG" ] || sed -n '1,20p' "$CC_SWITCH_DAEMON_LOG" >&2
