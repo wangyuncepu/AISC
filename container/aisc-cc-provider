@@ -1015,7 +1015,12 @@ def _manage_codex_auth_placeholder(*, remove: bool) -> None:
     live-synced by the switch itself, and that is the token the proxy worker
     captures at enable (it does NOT inject one of its own — live-probed
     2026-08-21). A REAL login file is never touched, and the marker is
-    removed again when switching back to official."""
+    removed again when switching back to official.
+
+    Cancel-proxy (remove=True) additionally drops a BARE third-party key
+    left in auth.json — useless against the official endpoint and it
+    silenced the not-configured guide (user report 2026-08-21). The
+    provider row keeps its key copy, so switching back restores it."""
     path = _codex_auth_path()
     try:
         existing = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
@@ -1023,6 +1028,20 @@ def _manage_codex_auth_placeholder(*, remove: bool) -> None:
         return
     if remove:
         if existing == _AUTH_PLACEHOLDER:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            return
+        # A BARE third-party key synced from a provider row is useless
+        # against the official endpoint and silences the not-configured
+        # guide (user report 2026-08-21) — remove it so the guide shows.
+        # A {"tokens": ...} ChatGPT login is NEVER touched.
+        try:
+            data = json.loads(existing)
+        except (json.JSONDecodeError, ValueError):
+            return
+        if isinstance(data, dict) and set(data.keys()) <= {"OPENAI_API_KEY"}:
             try:
                 path.unlink()
             except OSError:

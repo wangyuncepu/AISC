@@ -676,6 +676,22 @@ class SwitchTests(AdapterTestCase):
         A.op_switch("codex", "official")
         self.assertTrue(auth.exists())
 
+        # User report 2026-08-21: a BARE third-party key left in auth.json
+        # silences the not-configured guide under official-direct — removed
+        # on cancel (the provider row keeps its copy for switch-back); a
+        # tokens login (with or without a key) is never touched.
+        set_current("deepseek")
+        auth.write_text('{"OPENAI_API_KEY":"sk-third-party-42"}',
+                        encoding="utf-8")
+        A.op_switch("codex", "official")
+        self.assertFalse(auth.exists())
+        set_current("deepseek")
+        auth.write_text(
+            '{"OPENAI_API_KEY":"sk-third-party-42","tokens":{"id_token":"t"}}',
+            encoding="utf-8")
+        A.op_switch("codex", "official")
+        self.assertTrue(auth.exists())
+
     def test_codex_switch_to_official_disables_route(self):
         seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,
                       settings={"auth": {}, "config": 'model_provider = "d"\n'})

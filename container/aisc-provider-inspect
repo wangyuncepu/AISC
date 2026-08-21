@@ -42,8 +42,8 @@ AGENT_CLAUDE = "claude"
 AGENT_CODEX = "codex"
 AGENTS = (AGENT_CLAUDE, AGENT_CODEX)
 
-# Sentinel cc-switch writes when its proxy manages auth upstream; not a real key.
-PLACEHOLDER_TOKENS = {"", "PROXY_MANAGED"}
+# Sentinels cc-switch/AISC write when a proxy manages auth upstream; not real keys.
+PLACEHOLDER_TOKENS = {"", "PROXY_MANAGED", "AISC_PROXY_PLACEHOLDER"}
 
 OFFICIAL_HOSTS = {"api.anthropic.com", "api.openai.com"}
 
@@ -204,19 +204,33 @@ def _inspect_codex(ctx: Dict[str, Any], cc_dir: str) -> Dict[str, Any]:
                     toml_api_key = _mp["api_key"]
 
     codex_dir = ctx.get("codex_config_dir", "")
-    auth_json = os.path.exists(os.path.join(codex_dir, "auth.json"))
+    # A genuine ChatGPT login rides auth.tokens (a bare OPENAI_API_KEY is
+    # API-key auth — under a third-party route that's the provider's key and
+    # counts; under official-direct it is a leftover from a provider row /
+    # our placeholder and must NOT silence the guide, or codex skips the
+    # 未配置/登录 guide and opens into a broken official session (user
+    # report 2026-08-21: claude 被拦截而 codex 不拦截).
+    live_auth = _read_json_file(os.path.join(codex_dir, "auth.json"))
+    oauth_login = bool(isinstance(live_auth.get("tokens"), dict)
+                      and live_auth["tokens"])
+    live_key = _real_token(str(live_auth.get("OPENAI_API_KEY") or ""))
     openai_env = bool(os.environ.get("OPENAI_API_KEY"))
-    # cc-switch may mirror codex OAuth under settings_config.auth; non-empty => configured.
     sc_auth = sc.get("auth")
-    # Only a real (truthy) token value counts, not an empty-valued auth dict.
-    sc_auth_present = isinstance(sc_auth, dict) and any(bool(v) for v in sc_auth.values())
+    sc_auth = sc_auth if isinstance(sc_auth, dict) else {}
+    sc_oauth = bool(isinstance(sc_auth.get("tokens"), dict)
+                    and sc_auth["tokens"])
+    sc_key = _real_token(str(sc_auth.get("OPENAI_API_KEY") or ""))
 
     route = _route_from_host(_host(db_base))
 
-    if toml_api_key or auth_json or openai_env or sc_auth_present:
+    if route == "official-direct":
+        # Only a real ChatGPT login (or an explicitly user-set env key)
+        # authenticates against api.openai.com; anything else → the guide.
+        configured = oauth_login or sc_oauth or openai_env
+        auth = "configured" if configured else "login_required"
+    elif (toml_api_key and _real_token(toml_api_key)) or live_key \
+            or oauth_login or openai_env or sc_key or sc_oauth:
         auth = "configured"
-    elif route == "official-direct":
-        auth = "login_required"
     else:
         auth = "not_configured"
 

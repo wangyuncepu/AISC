@@ -168,10 +168,48 @@ class TestCodex(unittest.TestCase):
     def test_official_oauth_is_configured(self):
         _make_db(self.lay.cc, [("codex-official", "codex", "OpenAI Official", True,
                                 {"auth": {}, "config": ""})])
-        with open(os.path.join(self.lay.codex, "auth.json"), "w") as f:
-            f.write("{}")
+        # A genuine ChatGPT login rides auth.tokens — valid against the
+        # official endpoint.
+        _write_json(os.path.join(self.lay.codex, "auth.json"),
+                    {"tokens": {"id_token": "tok", "access_token": "at"}})
         out = inspector.inspect("codex", self.lay.ctx())
         assert out["route_mode"] == "official-direct"
+        assert out["auth_status"] == "configured"
+
+    def test_official_with_bare_third_party_key_is_login_required(self):
+        # User report 2026-08-21: cancel-proxy leaves the provider row's key
+        # in live auth.json (and on the official row's auth) — a third-party
+        # key cannot authenticate against api.openai.com and must NOT
+        # silence the guide (claude was intercepted, codex was not).
+        _make_db(self.lay.cc, [("codex-official", "codex", "OpenAI Official", True,
+                                {"auth": {"OPENAI_API_KEY": "sk-third-party-1234"},
+                                 "config": ""})])
+        _write_json(os.path.join(self.lay.codex, "auth.json"),
+                    {"OPENAI_API_KEY": "sk-third-party-1234"})
+        out = inspector.inspect("codex", self.lay.ctx())
+        assert out["route_mode"] == "official-direct"
+        assert out["auth_status"] == "login_required"
+
+    def test_official_placeholder_key_is_login_required(self):
+        _make_db(self.lay.cc, [("codex-official", "codex", "OpenAI Official", True,
+                                {"auth": {}, "config": ""})])
+        _write_json(os.path.join(self.lay.codex, "auth.json"),
+                    {"OPENAI_API_KEY": "AISC_PROXY_PLACEHOLDER"})
+        out = inspector.inspect("codex", self.lay.ctx())
+        assert out["auth_status"] == "login_required"
+
+    def test_proxy_route_with_live_auth_key_is_configured(self):
+        # Under a third-party route the bare key IS the provider's key —
+        # configured stays true (regression guard for the report fix).
+        _make_db(self.lay.cc, [
+            ("codex-official", "codex", "OpenAI Official", False,
+             {"auth": {}, "config": ""}),
+            ("deepseek", "codex", "DeepSeek", True, {"config": self._DEEPSEEK_TOML}),
+        ])
+        _write_json(os.path.join(self.lay.codex, "auth.json"),
+                    {"OPENAI_API_KEY": "sk-provider-key-9988"})
+        out = inspector.inspect("codex", self.lay.ctx())
+        assert out["route_mode"] == "cc-switch-proxy"
         assert out["auth_status"] == "configured"
 
     def test_no_current_row_falls_back_to_codex_official(self):
