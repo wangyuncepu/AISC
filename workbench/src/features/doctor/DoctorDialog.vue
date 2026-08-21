@@ -177,7 +177,7 @@ function onOverlayDown(e: MouseEvent) {
 
 <style scoped>
 .overlay {
-  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
+  position: fixed; inset: 0; background: var(--scrim);
   display: flex; align-items: center; justify-content: center; z-index: var(--z-dialog);
 }
 .panel {
@@ -189,7 +189,7 @@ function onOverlayDown(e: MouseEvent) {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; border-bottom: 1px solid var(--border);
 }
-.head h2 { margin: 0; font-size: 15px; color: var(--text-2); }
+.head h2 { margin: 0; font-size: var(--font-lg); color: var(--text); }
 .body { padding: 12px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .foot {
   display: flex; justify-content: flex-end; gap: 8px;
@@ -205,8 +205,8 @@ function onOverlayDown(e: MouseEvent) {
 }
 .log-lines {
   margin: 6px 0 0; padding: 6px 8px; max-height: 200px; overflow: auto;
-  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md);
-  font-family: monospace; font-size: var(--font-xs); color: var(--text-muted);
+  background: var(--surface-2); border: var(--border-w) solid var(--border); border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-muted);
   white-space: pre; user-select: text;
 }
 .traces ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: var(--font-xs); }
@@ -215,20 +215,20 @@ function onOverlayDown(e: MouseEvent) {
 .t-dur { color: var(--info); min-width: 48px; text-align: right; }
 .t-out[data-out="ok"] { color: var(--success); }
 .t-out[data-out="error"] { color: var(--error); }
-.t-code { color: var(--warn); font-family: monospace; }
+.t-code { color: var(--warn); font-family: var(--font-mono); }
 .export-msg { font-size: var(--font-xs); color: var(--success); word-break: break-all; }
 .export-msg[data-err="true"] { color: var(--error); }
 .running { color: var(--warn); }
 .muted { color: var(--text-muted); }
 .err-title { color: var(--error); font-weight: 600; }
 .err { color: var(--text-2); }
-.code { color: var(--text-muted); font-family: monospace; font-size: var(--font-xs); }
+.code { color: var(--text-muted); font-family: var(--font-mono); font-size: var(--font-xs); }
 .detail { color: var(--text-muted); font-size: var(--font-sm); word-break: break-all; }
 .hint-text { color: var(--text-muted); font-size: var(--font-sm); }
 
 .summary { display: flex; gap: 12px; font-size: var(--font-md); flex-wrap: wrap; }
-.summary[data-fail="true"] { padding: 8px 10px; background: var(--error-bg); border: 1px solid var(--error-border); border-radius: var(--radius-md); }
-.summary[data-fail="false"][data-warn="true"] { padding: 8px 10px; background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: var(--radius-md); }
+.summary[data-fail="true"] { padding: var(--space-2) var(--space-3); background: var(--error-bg); border: var(--border-w) solid var(--error-border); border-radius: var(--radius-sm); }
+.summary[data-fail="false"][data-warn="true"] { padding: var(--space-2) var(--space-3); background: var(--warn-bg); border: var(--border-w) solid var(--warn-border); border-radius: var(--radius-sm); }
 .sum-item.fail { color: var(--error); }
 .sum-item.warn { color: var(--warn-fg); }
 .sum-item.skip { color: var(--text-muted); }
@@ -236,7 +236,7 @@ function onOverlayDown(e: MouseEvent) {
 
 .checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .check {
-  border: 1px solid var(--border-2); border-radius: var(--radius-md); padding: 8px 10px;
+  border: var(--border-w) solid var(--border-2); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3);
   display: flex; flex-direction: column; gap: 2px; font-size: var(--font-sm);
 }
 .check[data-status="fail"] { border-left: 3px solid var(--error); }
@@ -244,21 +244,26 @@ function onOverlayDown(e: MouseEvent) {
 .check[data-status="pass"] { border-left: 3px solid var(--success); }
 .check[data-status="skip"] { border-left: 3px solid var(--border-strong); }
 .c-row { display: flex; align-items: center; gap: 8px; }
-.c-status { font-size: 10px; text-transform: uppercase; padding: 1px 6px; border-radius: 3px; }
+.c-status { font-size: var(--font-xs); text-transform: uppercase; padding: 1px var(--space-2); border-radius: var(--radius-full); }
 .c-status[data-status="pass"] { background: var(--success-bg); color: var(--success); }
 .c-status[data-status="warn"] { background: var(--warn-bg); color: var(--warn-fg); }
 .c-status[data-status="fail"] { background: var(--error-bg); color: var(--error); }
 .c-status[data-status="skip"] { background: var(--surface-2); color: var(--text-muted); }
-.c-name { color: var(--text-2); font-family: monospace; }
+.c-name { color: var(--text-2); font-family: var(--font-mono); }
 .c-message { color: var(--text-muted); }
 .c-detail { color: var(--text-muted); word-break: break-all; }
 .c-hint { color: var(--info); }
 button {
-  background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-md);
-  padding: 6px 14px; font-size: var(--font-md); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: var(--control-h-sm);
+  background: var(--surface-3); color: var(--text-2);
+  border: var(--border-w) solid var(--border); border-radius: var(--radius-sm);
+  padding: 0 var(--space-3); font-size: var(--font-sm); cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease), color var(--duration-normal) var(--ease);
 }
-button:hover:not(:disabled) { background: var(--surface-hover); }
+button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+button:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: var(--focus-ring-offset); }
 button:disabled { opacity: 0.45; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: transparent; color: var(--accent-fg); font-weight: 600; }
 button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 </style>
