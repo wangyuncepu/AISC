@@ -233,7 +233,11 @@ PRESET_PROVIDERS = build_preset_providers()
 
 SUPPORTED_AGENTS = ("claude", "codex")
 MARKER_TEMPLATE = ".aisc-preset-providers-{agent}.sha256"
-PRESET_FORMAT_VERSION = 5
+# v6 (retest round 2, 2026-08-21): claude settings_config gains the non-env
+# base template (statusLine/enabledPlugins) — the revision must bump so
+# EXISTING volumes refresh their rows instead of keeping env-only shapes
+# (an env-only row wipes the user's setup on the next switch).
+PRESET_FORMAT_VERSION = 6
 # Preset provider ids removed from PRESET_PROVIDERS, mapped to a fingerprint
 # that identifies the old preset's settings_config. On refresh an id is deleted
 # only if its stored config still carries the fingerprint, so a user who

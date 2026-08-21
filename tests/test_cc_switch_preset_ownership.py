@@ -85,7 +85,10 @@ class FixtureDrivenPresetTests(unittest.TestCase):
             self.assertNotIn(key, env)
 
     def test_preset_format_bumped_and_revision_is_fixture_sensitive(self):
-        self.assertEqual(H.PRESET_FORMAT_VERSION, 5)
+        # v6 (retest round 2): claude rows carry the settings base template —
+        # existing volumes must refresh, so the format version is part of the
+        # revision hash.
+        self.assertEqual(H.PRESET_FORMAT_VERSION, 6)
         base_revision = H.preset_revision("claude")
         # A mutated fixture must yield a different revision (refresh triggers).
         mutated = json.loads(json.dumps(deepseek()))
