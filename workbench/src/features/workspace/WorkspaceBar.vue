@@ -428,8 +428,8 @@ function onBarKeydown(e: KeyboardEvent) {
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
-  transition: background-color var(--duration-normal) var(--ease),
-    color var(--duration-normal) var(--ease);
+  /* 10e r7: active hand-off snaps (no 200ms dual-highlight smear — see TabBar). */
+  transition: opacity var(--duration-normal) var(--ease);
 }
 .chip:hover { background: var(--surface-hover); color: var(--text-2); }
 .chip.active {
