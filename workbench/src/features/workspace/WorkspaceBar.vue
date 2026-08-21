@@ -38,16 +38,21 @@ function placeMenu(): boolean {
   // clamped minimum then parked the menu at the window's top-left corner
   // (user evidence 2.png). Refuse to open instead.
   if (rect.width === 0 && rect.height === 0) return false;
-  // 10d r3: engines disagree on whether gBCR inside a CSS-zoomed subtree
-  // returns visual (zoom-multiplied) or layout (unzoomed) coordinates.
-  // Calibrate against the button's own unzoomed offsetWidth: the ratio IS
-  // the zoom when the rect is visual, and 1 when it is layout space — so
-  // dividing by it is correct in both engine modes (and a no-op at zoom 1).
-  const zoom = btn.offsetWidth > 0 ? rect.width / btn.offsetWidth : 1;
+  // The teleported menu lives OUTSIDE the zoomed .app, so its fixed px are
+  // viewport (VISUAL) px. r4: .app is sized width:100vw/scale, so the live
+  // scale is innerWidth / app.offsetWidth regardless of engine. A visual-space
+  // rect (modern engines: ratio == scale) is already correct; a layout-space
+  // rect (legacy: ratio == 1) must be MULTIPLIED by the scale. Never divided —
+  // dividing made the offset grow with the caret's distance from the left
+  // edge (user evidence: more tabs → bigger drift at font_scale 1.5).
+  const app = document.querySelector<HTMLElement>(".app");
+  const scale = app && app.offsetWidth > 0 ? window.innerWidth / app.offsetWidth : 1;
+  const ratio = btn.offsetWidth > 0 ? rect.width / btn.offsetWidth : 1;
+  const z = Math.abs(scale - 1) < 0.02 ? 1 : (Math.abs(ratio - scale) < 0.05 ? 1 : scale);
   const menuWidth = 180;
   menuPos.value = {
-    x: Math.max(4, Math.min(rect.left / zoom, window.innerWidth / zoom - menuWidth)),
-    y: rect.bottom / zoom + 2,
+    x: Math.max(4, Math.min(rect.left * z, window.innerWidth - menuWidth)),
+    y: rect.bottom * z + 2,
   };
   return true;
 }
