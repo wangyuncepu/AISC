@@ -31,11 +31,11 @@ function basename(p: string): string {
       <button class="ui-button primary" :disabled="!store.workspace.trim()" @click="store.runPreflight()">{{ t("picker.next") }}</button>
     </div>
     <p class="hint">{{ t("picker.hint") }}</p>
-    <div v-if="store.recentWorkspaces.length" class="recents">
-      <div class="recents-label">{{ t("picker.recents") }}</div>
+    <div v-if="store.recentWorkspaces.length" class="recents ui-section">
+      <div class="recents-label ui-section-title">{{ t("picker.recents") }}</div>
       <ul>
         <li v-for="w in store.recentWorkspaces" :key="w.path">
-          <button class="recent" :title="w.path" @click="store.selectRecentWorkspace(w.path)">
+          <button class="recent ui-section-row interactive" :title="w.path" @click="store.selectRecentWorkspace(w.path)">
             <span class="r-name">{{ basename(w.path) }}</span>
             <span class="r-path">{{ w.path }}</span>
             <span class="r-agent">{{ w.last_agent || "-" }}</span>
@@ -53,24 +53,25 @@ function basename(p: string): string {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: var(--space-4);
   color: var(--text-2);
 }
-.picker .row { display: flex; gap: 8px; width: 560px; max-width: 90vw; }
-.picker .hint { font-size: var(--font-sm); color: var(--text-muted); }
-.recents { width: 560px; max-width: 90vw; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
-.recents-label { font-size: var(--font-xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
-.recents ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.picker h2 { margin: 0; font-size: var(--font-xl); font-weight: 600; color: var(--text); }
+.picker .row { display: flex; gap: var(--space-2); width: 560px; max-width: 90vw; }
+.picker .hint { font-size: var(--font-sm); color: var(--text-muted); margin: 0; }
+/* 10d: recents reuse the .ui-section inset-grouped card; rows come from
+ * .ui-section-row (padding/hover/dividers), so only content styles stay. */
+.recents { width: 560px; max-width: 90vw; }
+.recents ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; }
 .recents li { width: 100%; }
+.recents li:first-of-type .recent { border-top: none; }
 .recent {
-  width: 100%; display: flex; align-items: center; gap: 8px; text-align: left;
-  background: var(--surface); color: var(--text-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  padding: 6px 10px; font-size: var(--font-sm); cursor: pointer;
+  width: 100%; display: flex; align-items: center; gap: var(--space-2); text-align: left;
+  background: transparent; color: var(--text-2);
+  border: none; font-size: var(--font-sm); cursor: pointer;
   overflow: hidden; /* B-01: long folder names must truncate, not overflow */
-  transition: background-color var(--duration-normal) var(--ease), border-color var(--duration-normal) var(--ease);
 }
-.recent:hover { background: var(--surface-2); border-color: var(--border-2); }
-.recent:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: var(--focus-ring-offset); }
+.recent:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: calc(-1 * var(--focus-ring-offset)); }
 .r-name {
   color: var(--text-2); font-weight: 500; min-width: 80px; max-width: 45%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
