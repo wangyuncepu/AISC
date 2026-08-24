@@ -27,6 +27,30 @@ vi.mock("../../lib/ipc", () => ({
     truncated: false,
   })),
   workspaceOpen: vi.fn().mockResolvedValue(undefined),
+  workspaceCreateFile: vi.fn().mockResolvedValue({
+    schema_version: 1,
+    operation: "create_file",
+    relative_path: "new.md",
+    kind: "file",
+  }),
+  workspaceCreateDir: vi.fn().mockResolvedValue({
+    schema_version: 1,
+    operation: "create_dir",
+    relative_path: "newdir",
+    kind: "dir",
+  }),
+  workspaceCopyEntry: vi.fn().mockResolvedValue({
+    schema_version: 1,
+    operation: "copy",
+    relative_path: "src/a.md",
+    kind: "file",
+  }),
+  workspaceRename: vi.fn().mockResolvedValue({
+    schema_version: 1,
+    operation: "rename",
+    relative_path: "renamed.md",
+    kind: "file",
+  }),
   workspacePreview: vi.fn().mockResolvedValue({
     relative_path: "a.md",
     media_type: "text/markdown",
@@ -130,6 +154,94 @@ describe("workspaceExplorer store", () => {
     expect(s.rootNodes.length).toBeGreaterThan(0);
     s.setWorkspace("/other");
     expect(s.rootNodes).toHaveLength(0);
+  });
+});
+
+describe("workspaceExplorer mutations (Stage 11, 11c)", () => {
+  it("createEntry calls create_file and force-reloads the parent dir", async () => {
+    const { workspaceCreateFile, workspaceList } = await import("../../lib/ipc");
+    const s = useWorkspaceExplorerStore();
+    s.setWorkspace("/ws");
+    await s.loadDir("");
+    vi.mocked(workspaceList).mockClear();
+
+    const result = await s.createEntry("src", "made.md", false);
+    expect(workspaceCreateFile).toHaveBeenCalledWith("/ws", "src", "made.md");
+    expect(result.relative_path).toBe("new.md"); // passthrough of backend result
+    // Directed refresh of the affected parent (02 §3). The module mock has
+    // no default-parameter sugar, so the store's 3-arg call is what lands.
+    expect(workspaceList).toHaveBeenCalledWith("/ws", "src", null);
+  });
+
+  it("createEntry forwards backend error codes", async () => {
+    const { workspaceCreateFile } = await import("../../lib/ipc");
+    vi.mocked(workspaceCreateFile).mockRejectedValueOnce({
+      code: "WB_ERR_WORKSPACE_CONFLICT",
+      message: "target exists",
+    });
+    const s = useWorkspaceExplorerStore();
+    s.setWorkspace("/ws");
+    await expect(s.createEntry("", "a.md", false)).rejects.toMatchObject({
+      code: "WB_ERR_WORKSPACE_CONFLICT",
+    });
+  });
+
+  it("in-app clipboard: set, canPaste, cleared on workspace switch", async () => {
+    const s = useWorkspaceExplorerStore();
+    s.setWorkspace("/ws");
+    expect(s.canPaste()).toBe(false);
+    s.setClipboardEntry("src/a.md", "file");
+    expect(s.canPaste()).toBe(true);
+    expect(s.clipboard).toMatchObject({ workspace: "/ws", sourceRelativePath: "src/a.md", kind: "file" });
+
+    s.setWorkspace("/other");
+    expect(s.clipboard).toBeNull();
+    expect(s.canPaste()).toBe(false);
+  });
+
+  it("pasteEntry refuses a clipboard from another workspace", async () => {
+    const s = useWorkspaceExplorerStore();
+    s.setWorkspace("/ws");
+    s.clipboard = { workspace: "/other", sourceRelativePath: "a.md", kind: "file", generation: 1 };
+    await expect(s.pasteEntry("")).rejects.toMatchObject({ code: "WB_ERR_WORKSPACE_INVALID" });
+  });
+
+  it("pasteEntry copies and refreshes the destination", async () => {
+    const { workspaceCopyEntry } = await import("../../lib/ipc");
+    const s = useWorkspaceExplorerStore();
+    s.setWorkspace("/ws");
+    await s.loadDir("");
+    s.setClipboardEntry("a.md", "file");
+    const result = await s.pasteEntry("src");
+    expect(workspaceCopyEntry).toHaveBeenCalledWith("/ws", "a.md", "src");
+    expect(result.kind).toBe("file");
+  });
+
+  it("renameEntry re-keys a renamed dir's expansion and unattributed children", async () => {
+    const { workspaceRename } = await import("../../lib/ipc");
+    vi.mocked(workspaceRename).mockResolvedValueOnce({
+      schema_version: 1,
+      operation: "rename",
+      relative_path: "renamed",
+      kind: "dir",
+    });
+    const s = useWorkspaceExplorerStore();
+    s.setWorkspace("/ws");
+    s.tree["d"] = [
+      { relative_path: "d/f.txt", name: "f.txt", kind: "file", expandable: false, artifact_badges: [], change_state: "unknown" },
+    ];
+    s.expanded.add("d");
+    s.unattributed["d/f.txt"] = "created";
+    s.unattributed["d"] = "modified";
+
+    await s.renameEntry("d", "renamed");
+    expect(s.expanded.has("renamed")).toBe(true);
+    expect(s.expanded.has("d")).toBe(false);
+    expect(s.tree["d"]).toBeUndefined(); // stale subtree cache dropped
+    expect(s.unattributed["renamed/f.txt"]).toBe("created");
+    expect(s.unattributed["renamed"]).toBe("modified");
+    expect(s.unattributed["d/f.txt"]).toBeUndefined();
+    expect(workspaceRename).toHaveBeenCalledWith("/ws", "d", "renamed");
   });
 });
 

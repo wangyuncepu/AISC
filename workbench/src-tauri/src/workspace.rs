@@ -305,6 +305,389 @@ pub fn copy_path(workspace: &Path, relative: &str) -> Result<WorkspaceCopyResult
 }
 
 // ---------------------------------------------------------------------------
+// Stage 11 (11b): contained filesystem mutations
+//
+// All four operations share the same safety model:
+//   * every path arrives as workspace-relative; the frontend NEVER passes an
+//     absolute target (D11-04);
+//   * existing paths go through `resolve_contained` (symlink/junction/case/
+//     UNC canonicalized and containment-checked);
+//   * new targets resolve a CONTAINED parent + a validated single basename,
+//     then re-check containment of the joined result;
+//   * same-name destinations are always refused (D11-05) — no overwrite, no
+//     `(1)` suffixing;
+//   * directory copies are bounded and staged into a temp entry that is
+//     cleaned up on failure (D11-18).
+// ---------------------------------------------------------------------------
+
+/// Result envelope for every Explorer mutation command (02 §2).
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceMutationResult {
+    pub schema_version: u64,
+    /// create_file | create_dir | copy | rename
+    pub operation: String,
+    /// Resulting workspace-relative path.
+    pub relative_path: String,
+    /// "dir" | "file"
+    pub kind: String,
+}
+
+/// Bounded recursive copy (D11-18): at most this many entries (files +
+/// directories) are copied per operation; exceeding it fails with
+/// `workspace_io` and the staged temp target is removed.
+const COPY_ENTRY_LIMIT: usize = 10_000;
+
+/// Windows reserved device names — invalid as a file/dir stem in any
+/// extension form (`CON`, `CON.txt`, …). Enforced on every platform so a
+/// workspace stays portable (D11-22).
+const WINDOWS_RESERVED_STEMS: &[&str] = &[
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+fn is_windows_reserved_stem(stem: &str) -> bool {
+    WINDOWS_RESERVED_STEMS.contains(&stem.to_ascii_uppercase().as_str())
+}
+
+/// Validate a single basename for create/rename (D11-22). Only a basename is
+/// accepted: empty/whitespace, `.`/`..`, separators, control chars, Windows
+/// reserved stems (with or without extension) and Windows-illegal trailing
+/// dots/spaces are rejected. Non-ASCII (e.g. Chinese) is accepted as-is; no
+/// unicode normalization is applied.
+fn validate_basename(name: &str) -> Result<String, WorkbenchError> {
+    let invalid = |detail: &str| {
+        Err(WorkbenchError::workspace_invalid().with_detail(detail.to_string()))
+    };
+    if name.is_empty() || name.trim().is_empty() {
+        return invalid("empty name");
+    }
+    if name == "." || name == ".." {
+        return invalid("dot name");
+    }
+    if name.contains('/') || name.contains('\\') {
+        return invalid("path separator in name");
+    }
+    if name.contains('\0') || name.chars().any(|c| c.is_control()) {
+        return invalid("control character in name");
+    }
+    // Windows filesystems reject names ending in a dot or space; enforcing
+    // everywhere keeps the workspace Windows-portable.
+    if name.ends_with('.') || name.ends_with(' ') {
+        return invalid("trailing dot or space");
+    }
+    let stem = name.split('.').next().unwrap_or("");
+    if is_windows_reserved_stem(stem) {
+        return invalid("reserved device name");
+    }
+    Ok(name.to_string())
+}
+
+/// Resolve an existing contained directory (`""` = the workspace root).
+/// Symlinked dirs resolving outside the workspace fail inside
+/// `resolve_contained` (existing containment policy).
+fn resolve_contained_dir(workspace: &Path, relative_dir: &str) -> Result<PathBuf, WorkbenchError> {
+    if relative_dir.is_empty() {
+        let ws = canonicalize_lenient(workspace)?;
+        if !ws.is_dir() {
+            return Err(WorkbenchError::workspace_not_found().with_detail("workspace missing"));
+        }
+        return Ok(ws);
+    }
+    let dir = resolve_contained(workspace, relative_dir)?;
+    if !dir.is_dir() {
+        return Err(
+            WorkbenchError::workspace_not_found().with_detail("parent is not a directory")
+        );
+    }
+    Ok(dir)
+}
+
+/// Map a raw I/O error to a stable mutation error code (D11-20).
+fn map_io_err(e: std::io::Error) -> WorkbenchError {
+    use std::io::ErrorKind;
+    match e.kind() {
+        ErrorKind::AlreadyExists => WorkbenchError::workspace_conflict(),
+        ErrorKind::NotFound => WorkbenchError::workspace_not_found().with_detail(e.to_string()),
+        ErrorKind::PermissionDenied => {
+            WorkbenchError::workspace_read_only().with_detail(e.to_string())
+        }
+        _ => WorkbenchError::workspace_io().with_detail(e.to_string()),
+    }
+}
+
+/// Exists-check that does NOT follow the final symlink: a dangling or
+/// escaping link at the destination must read as "occupied", never be
+/// silently clobbered by create/copy.
+fn exists_nofollow(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+/// Resolve a contained NEW target: `relative_dir` must be an existing
+/// contained directory, `name` a validated basename. Returns the joined
+/// absolute target (re-canonicalized and containment-checked) plus the
+/// resulting workspace-relative display path.
+fn resolve_new_target(
+    workspace: &Path,
+    relative_dir: &str,
+    name: &str,
+) -> Result<(PathBuf, String), WorkbenchError> {
+    let clean = validate_basename(name)?;
+    let dir = resolve_contained_dir(workspace, relative_dir)?;
+    let target = dir.join(&clean);
+    // The joined target may traverse a symlinked parent that escapes the
+    // workspace: canonicalize and re-check containment before any write.
+    let canon = canonicalize_lenient(&target)?;
+    let ws = canonicalize_lenient(workspace)?;
+    if !is_inside(&ws, &canon) || path_eq(&canon, &ws) {
+        return Err(
+            WorkbenchError::workspace_invalid().with_detail("target escapes workspace")
+        );
+    }
+    let relative = if relative_dir.is_empty() {
+        clean.clone()
+    } else {
+        format!("{relative_dir}/{clean}")
+    };
+    Ok((canon, relative))
+}
+
+/// Create an empty file (`dir == false`) or a single directory, refusing to
+/// overwrite anything already at the target (D11-05). `create_new` /
+/// `create_dir` fail atomically on an occupied target.
+pub fn create_entry(
+    workspace: &Path,
+    relative_dir: &str,
+    name: &str,
+    dir: bool,
+) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    let (target, relative) = resolve_new_target(workspace, relative_dir, name)?;
+    // Occupied target (file, dir, or dangling symlink) -> stable conflict
+    // code. Windows reports `create_new` onto an existing DIRECTORY as
+    // PermissionDenied (not AlreadyExists), so the explicit check keeps the
+    // error code stable; create_new/create_dir below remain the atomic
+    // no-clobber backstop for any race in between.
+    if exists_nofollow(&target) {
+        return Err(WorkbenchError::workspace_conflict());
+    }
+    if dir {
+        fs::create_dir(&target).map_err(map_io_err)?;
+    } else {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(map_io_err)?;
+    }
+    Ok(WorkspaceMutationResult {
+        schema_version: 1,
+        operation: if dir { "create_dir" } else { "create_file" }.into(),
+        relative_path: relative,
+        kind: if dir { "dir" } else { "file" }.into(),
+    })
+}
+
+/// Rename an entry inside its own parent directory (same-parent only, no
+/// move), refusing to clobber an existing sibling. Case-only renames
+/// (`a.md` → `A.md`) are allowed on case-insensitive filesystems.
+pub fn rename_entry(
+    workspace: &Path,
+    relative_path: &str,
+    new_name: &str,
+) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    // The empty relative IS the workspace root (resolve_contained allows it
+    // for listings); renaming/copying the root itself must never happen.
+    if relative_path.is_empty() {
+        return Err(
+            WorkbenchError::workspace_invalid().with_detail("cannot rename the workspace root")
+        );
+    }
+    let source = resolve_existing(workspace, relative_path)?;
+    let parent = source
+        .parent()
+        .ok_or_else(|| WorkbenchError::workspace_invalid().with_detail("no parent"))?
+        .to_path_buf();
+    let clean = validate_basename(new_name)?;
+    let target = parent.join(&clean);
+    let canon = canonicalize_lenient(&target)?;
+    let ws = canonicalize_lenient(workspace)?;
+    if !is_inside(&ws, &canon) || path_eq(&canon, &ws) {
+        return Err(
+            WorkbenchError::workspace_invalid().with_detail("rename escapes workspace")
+        );
+    }
+    let is_dir = source.is_dir();
+    // Same resolved path (case-insensitive on Windows) ⇒ case-only rename;
+    // otherwise an occupied destination is a conflict. `fs::rename` replaces
+    // an existing target on POSIX, so the pre-check is load-bearing there.
+    let same_target = path_eq(&source, &canon);
+    if !same_target && exists_nofollow(&canon) {
+        return Err(WorkbenchError::workspace_conflict());
+    }
+    fs::rename(&source, &canon).map_err(map_io_err)?;
+    let parent_rel = match relative_path.rfind('/') {
+        Some(idx) => relative_path[..idx].to_string(),
+        None => String::new(),
+    };
+    let relative = if parent_rel.is_empty() {
+        clean.clone()
+    } else {
+        format!("{parent_rel}/{clean}")
+    };
+    Ok(WorkspaceMutationResult {
+        schema_version: 1,
+        operation: "rename".into(),
+        relative_path: relative,
+        kind: if is_dir { "dir" } else { "file" }.into(),
+    })
+}
+
+/// Monotonic suffix for staged copy temp names (best-effort uniqueness
+/// within one process).
+static COPY_TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Staged temp name inside the destination directory. The `.tmp` suffix keeps
+/// it hidden from the Explorer listing and the watcher's unattributed
+/// projection even if a change event fires mid-copy (mirrors `is_temp_file`).
+fn copy_temp_name(name: &str) -> String {
+    let n = COPY_TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!(
+        ".{name}.aisc-copy-{}-{n}.tmp",
+        std::process::id()
+    )
+}
+
+/// Copy a file or a directory (recursively, bounded) inside the workspace.
+/// The payload is staged at a temp entry in the destination directory and
+/// atomically renamed into place on success; any failure removes the temp
+/// entry so no half-written copy survives (R11: 复制中途失败).
+///
+/// While walking, symlinks/junctions/reparse points are resolved: entries
+/// pointing OUTSIDE the workspace are skipped (not followed, not copied,
+/// not an error — D11-18); entries pointing inside are copied as their
+/// resolved target.
+pub fn copy_entry(
+    workspace: &Path,
+    source_relative: &str,
+    destination_relative_dir: &str,
+) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    if source_relative.is_empty() {
+        return Err(
+            WorkbenchError::workspace_invalid().with_detail("cannot copy the workspace root")
+        );
+    }
+    let source = resolve_existing(workspace, source_relative)?;
+    let ws = canonicalize_lenient(workspace)?;
+    let dest_dir = resolve_contained_dir(workspace, destination_relative_dir)?;
+    let is_dir = source.is_dir();
+    // A directory must not be copied into itself (or any descendant).
+    if is_dir && (path_eq(&dest_dir, &source) || is_inside(&source, &dest_dir)) {
+        return Err(
+            WorkbenchError::workspace_invalid().with_detail("cannot copy a directory into itself")
+        );
+    }
+    let name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| WorkbenchError::workspace_invalid().with_detail("unreadable name"))?
+        .to_string();
+    let final_target = dest_dir.join(&name);
+    if exists_nofollow(&final_target) {
+        return Err(WorkbenchError::workspace_conflict());
+    }
+    let temp = dest_dir.join(copy_temp_name(&name));
+    let result = if is_dir {
+        let mut budget: usize = 0;
+        fs::create_dir(&temp).map_err(map_io_err)?;
+        copy_dir_recursive(&source, &temp, &ws, &mut budget)
+    } else {
+        fs::copy(&source, &temp).map(|_| ()).map_err(map_io_err)
+    };
+    if let Err(e) = result {
+        // Failure cleanup: remove the staged temp entry, keep the destination
+        // exactly as it was.
+        if temp.is_dir() {
+            let _ = fs::remove_dir_all(&temp);
+        } else {
+            let _ = fs::remove_file(&temp);
+        }
+        return Err(e);
+    }
+    if let Err(e) = fs::rename(&temp, &final_target) {
+        if temp.is_dir() {
+            let _ = fs::remove_dir_all(&temp);
+        } else {
+            let _ = fs::remove_file(&temp);
+        }
+        return Err(map_io_err(e));
+    }
+    let relative = if destination_relative_dir.is_empty() {
+        name.clone()
+    } else {
+        format!("{destination_relative_dir}/{name}")
+    };
+    Ok(WorkspaceMutationResult {
+        schema_version: 1,
+        operation: "copy".into(),
+        relative_path: relative,
+        kind: if is_dir { "dir" } else { "file" }.into(),
+    })
+}
+
+/// Bounded recursive directory copy. Plain dirs/files copy directly; symlink
+/// and reparse entries resolve first — outside-workspace targets are skipped,
+/// inside-workspace targets copy as their resolved kind.
+fn copy_dir_recursive(
+    src: &Path,
+    dst: &Path,
+    ws: &Path,
+    budget: &mut usize,
+) -> Result<(), WorkbenchError> {
+    for entry in fs::read_dir(src).map_err(map_io_err)?.flatten() {
+        let ftype = entry.file_type().map_err(map_io_err)?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if ftype.is_dir() {
+            *budget += 1;
+            check_copy_budget(*budget)?;
+            fs::create_dir(&to).map_err(map_io_err)?;
+            copy_dir_recursive(&from, &to, ws, budget)?;
+        } else if ftype.is_file() {
+            *budget += 1;
+            check_copy_budget(*budget)?;
+            fs::copy(&from, &to).map_err(map_io_err)?;
+        } else {
+            // Symlink / junction / other reparse point: resolve; a dangling
+            // link (canonicalize fails) is skipped like an outside target.
+            match fs::canonicalize(&from) {
+                Ok(canon) if is_inside(ws, &canon) => {
+                    *budget += 1;
+                    check_copy_budget(*budget)?;
+                    if canon.is_dir() {
+                        fs::create_dir(&to).map_err(map_io_err)?;
+                        copy_dir_recursive(&canon, &to, ws, budget)?;
+                    } else {
+                        fs::copy(&canon, &to).map_err(map_io_err)?;
+                    }
+                }
+                _ => {
+                    // Outside the workspace or dangling: skip (D11-18).
+                    continue;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_copy_budget(used: usize) -> Result<(), WorkbenchError> {
+    if used > COPY_ENTRY_LIMIT {
+        return Err(WorkbenchError::workspace_io()
+            .with_detail(format!("copy exceeds entry budget {COPY_ENTRY_LIMIT}")));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
 
@@ -395,6 +778,51 @@ pub async fn workspace_copy_path(
     relative_path: String,
 ) -> Result<WorkspaceCopyResult, WorkbenchError> {
     copy_path(Path::new(&workspace), &relative_path)
+}
+
+// --- Stage 11 (11b): Explorer mutation commands ------------------------------
+// The frontend only ever passes workspace-relative paths + a single basename;
+// containment and basename validation happen again here regardless of what
+// the UI already checked (06 §2).
+
+#[tauri::command]
+pub async fn workspace_create_file(
+    workspace: String,
+    relative_dir: String,
+    name: String,
+) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    create_entry(Path::new(&workspace), &relative_dir, &name, false)
+}
+
+#[tauri::command]
+pub async fn workspace_create_dir(
+    workspace: String,
+    relative_dir: String,
+    name: String,
+) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    create_entry(Path::new(&workspace), &relative_dir, &name, true)
+}
+
+#[tauri::command]
+pub async fn workspace_copy_entry(
+    workspace: String,
+    source_relative_path: String,
+    destination_relative_dir: String,
+) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    copy_entry(
+        Path::new(&workspace),
+        &source_relative_path,
+        &destination_relative_dir,
+    )
+}
+
+#[tauri::command]
+pub async fn workspace_rename(
+    workspace: String,
+    relative_path: String,
+    new_name: String,
+) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    rename_entry(Path::new(&workspace), &relative_path, &new_name)
 }
 
 #[cfg(test)]
@@ -762,5 +1190,326 @@ mod tests {
         // inside ws — so it must succeed, NOT prefix-collide with sibling.
         let got = resolve_contained(&ws, "wspace/x").unwrap();
         assert!(got.ends_with("ws/wspace/x"));
+    }
+}
+
+/// Stage 11 (11b): contained mutation helpers — success, conflict, containment
+/// and cleanup paths. All fixtures use tempdirs, never a real user directory.
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn code_of(r: Result<WorkspaceMutationResult, WorkbenchError>) -> String {
+        match r {
+            Ok(_) => "OK".into(),
+            Err(e) => e.code.clone(),
+        }
+    }
+
+    #[test]
+    fn create_file_and_dir_succeed() {
+        let dir = tempdir().unwrap();
+        let r = create_entry(dir.path(), "", "notes.md", false).unwrap();
+        assert_eq!(r.operation, "create_file");
+        assert_eq!(r.relative_path, "notes.md");
+        assert_eq!(r.kind, "file");
+        assert_eq!(fs::read(dir.path().join("notes.md")).unwrap(), b"");
+
+        let sub = create_entry(dir.path(), "src", "lib", true);
+        // Parent "src" does not exist yet -> not_found, no dir created.
+        assert_eq!(code_of(sub), "WB_ERR_WORKSPACE_NOT_FOUND");
+        assert!(!dir.path().join("src/lib").exists());
+
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        let r2 = create_entry(dir.path(), "src", "lib", true).unwrap();
+        assert_eq!(r2.operation, "create_dir");
+        assert_eq!(r2.relative_path, "src/lib");
+        assert_eq!(r2.kind, "dir");
+    }
+
+    #[test]
+    fn create_conflict_refuses_overwrite_and_keeps_original() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), "original").unwrap();
+        let err = create_entry(dir.path(), "", "a.md", false).unwrap_err();
+        assert_eq!(err.code, "WB_ERR_WORKSPACE_CONFLICT");
+        // The existing file is untouched.
+        assert_eq!(fs::read(dir.path().join("a.md")).unwrap(), b"original");
+
+        fs::create_dir(dir.path().join("d")).unwrap();
+        let err2 = create_entry(dir.path(), "", "d", true).unwrap_err();
+        assert_eq!(err2.code, "WB_ERR_WORKSPACE_CONFLICT");
+        // Dir-over-file and file-over-dir also refuse.
+        assert_eq!(
+            code_of(create_entry(dir.path(), "", "d", false)),
+            "WB_ERR_WORKSPACE_CONFLICT"
+        );
+        assert_eq!(
+            code_of(create_entry(dir.path(), "", "a.md", true)),
+            "WB_ERR_WORKSPACE_CONFLICT"
+        );
+    }
+
+    #[test]
+    fn invalid_basename_is_rejected() {
+        let dir = tempdir().unwrap();
+        for bad in [
+            "", " ", ".", "..", "a/b", "a\\b", "a\u{0}b", "a\u{7}b", "CON", "con",
+            "CON.txt", "NUL.bin", "com1", "LPT9.log", "name.", "name ",
+        ] {
+            let r = create_entry(dir.path(), "", bad, false);
+            assert!(
+                r.is_err(),
+                "basename {bad:?} must be rejected"
+            );
+            assert_eq!(code_of(r), "WB_ERR_WORKSPACE_INVALID", "basename {bad:?}");
+        }
+        // No file was created by any rejected attempt.
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn unicode_and_special_basenames_round_trip() {
+        let dir = tempdir().unwrap();
+        for name in ["报告 (终稿).md", "文件 名 字.txt", "a(b)c.rs", "日本語メモ.md"] {
+            let r = create_entry(dir.path(), "", name, false)
+                .unwrap_or_else(|e| panic!("{name} must be creatable: {}", e.code));
+            assert_eq!(r.relative_path, name);
+        }
+        fs::create_dir(dir.path().join("archive")).unwrap();
+        fs::write(dir.path().join("报告 (终稿).md"), "x").unwrap();
+        let c = copy_entry(dir.path(), "报告 (终稿).md", "archive").unwrap();
+        assert_eq!(c.operation, "copy");
+        assert_eq!(c.relative_path, "archive/报告 (终稿).md");
+        assert!(dir.path().join("archive/报告 (终稿).md").exists());
+        let r = rename_entry(dir.path(), "报告 (终稿).md", "新名字 (v2).md").unwrap();
+        assert_eq!(r.relative_path, "新名字 (v2).md");
+    }
+
+    #[test]
+    fn rename_file_and_dir_succeed() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("old.md"), "content").unwrap();
+        let r = rename_entry(dir.path(), "old.md", "new.md").unwrap();
+        assert_eq!(r.operation, "rename");
+        assert_eq!(r.kind, "file");
+        assert!(!dir.path().join("old.md").exists());
+        assert_eq!(fs::read(dir.path().join("new.md")).unwrap(), b"content");
+
+        fs::create_dir_all(dir.path().join("d/inner")).unwrap();
+        fs::write(dir.path().join("d/inner/f.txt"), "x").unwrap();
+        let r2 = rename_entry(dir.path(), "d", "renamed").unwrap();
+        assert_eq!(r2.kind, "dir");
+        assert!(dir.path().join("renamed/inner/f.txt").exists());
+        // Resulting relative path keeps the parent prefix.
+        let r3 = rename_entry(dir.path(), "renamed/inner/f.txt", "g.txt").unwrap();
+        assert_eq!(r3.relative_path, "renamed/inner/g.txt");
+    }
+
+    #[test]
+    fn rename_conflicts_and_invalid_targets() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), "a").unwrap();
+        fs::write(dir.path().join("b.md"), "b").unwrap();
+        // Occupied sibling destination: refuse, keep both.
+        assert_eq!(
+            code_of(rename_entry(dir.path(), "a.md", "b.md")),
+            "WB_ERR_WORKSPACE_CONFLICT"
+        );
+        assert_eq!(fs::read(dir.path().join("b.md")).unwrap(), b"b");
+        // Traversal / separator / reserved names in new_name.
+        assert_eq!(
+            code_of(rename_entry(dir.path(), "a.md", "../escape")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+        assert_eq!(
+            code_of(rename_entry(dir.path(), "a.md", "x/y")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+        assert_eq!(
+            code_of(rename_entry(dir.path(), "a.md", "CON")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+        // Missing source.
+        assert_eq!(
+            code_of(rename_entry(dir.path(), "ghost.md", "n.md")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rename_case_only_is_allowed() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("readme.md"), "x").unwrap();
+        let r = rename_entry(dir.path(), "readme.md", "README.md").unwrap();
+        assert_eq!(r.relative_path, "README.md");
+        assert!(dir.path().join("README.md").exists());
+    }
+
+    #[test]
+    fn copy_file_and_dir_succeed() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src/nested")).unwrap();
+        fs::write(dir.path().join("src/a.txt"), "aaa").unwrap();
+        fs::write(dir.path().join("src/nested/b.md"), "bbb").unwrap();
+        fs::write(dir.path().join("src/报告 (1).md"), "ccc").unwrap();
+
+        // File copy into a subdirectory.
+        let r = copy_entry(dir.path(), "src/a.txt", "src/nested").unwrap();
+        assert_eq!(r.operation, "copy");
+        assert_eq!(r.relative_path, "src/nested/a.txt");
+        assert_eq!(fs::read(dir.path().join("src/nested/a.txt")).unwrap(), b"aaa");
+
+        // Directory copy: recursive, contents preserved, name preserved.
+        let r2 = copy_entry(dir.path(), "src/nested", "").unwrap();
+        assert_eq!(r2.relative_path, "nested");
+        assert_eq!(r2.kind, "dir");
+        assert!(dir.path().join("nested/b.md").exists());
+        assert!(dir.path().join("nested/a.txt").exists());
+        // No staged temp entry survives a successful copy.
+        for e in fs::read_dir(dir.path()).unwrap().flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            assert!(!n.contains("aisc-copy"), "temp leaked: {n}");
+        }
+    }
+
+    #[test]
+    fn copy_conflict_and_invalid_targets() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("d/sub")).unwrap();
+        fs::write(dir.path().join("d/x.txt"), "x").unwrap();
+
+        // Same-name destination refuses and keeps the original.
+        assert_eq!(
+            code_of(copy_entry(dir.path(), "d/x.txt", "d")),
+            "WB_ERR_WORKSPACE_CONFLICT"
+        );
+        assert_eq!(fs::read(dir.path().join("d/x.txt")).unwrap(), b"x");
+
+        // Copying a directory into itself / a descendant is refused.
+        assert_eq!(
+            code_of(copy_entry(dir.path(), "d", "d")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+        assert_eq!(
+            code_of(copy_entry(dir.path(), "d", "d/sub")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+
+        // Missing source / missing destination parent.
+        assert_eq!(
+            code_of(copy_entry(dir.path(), "ghost.txt", "")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+        assert_eq!(
+            code_of(copy_entry(dir.path(), "d/x.txt", "nope")),
+            "WB_ERR_WORKSPACE_NOT_FOUND"
+        );
+
+        // Traversal in the relative forms is rejected by validate_relative.
+        assert_eq!(
+            code_of(copy_entry(dir.path(), "../outside.txt", "")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+        assert_eq!(
+            code_of(copy_entry(dir.path(), "d/x.txt", "../other")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+    }
+
+    #[test]
+    fn copy_cannot_cross_workspaces() {
+        // Two distinct temp workspaces: copying from A into B must fail
+        // containment before any byte is written — a relative destination can
+        // only address A (traversal rejected), so B is unreachable by design.
+        let a = tempdir().unwrap();
+        let b = tempdir().unwrap();
+        fs::write(a.path().join("secret.txt"), "x").unwrap();
+        assert_eq!(
+            code_of(copy_entry(a.path(), "secret.txt", "../../")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+        assert_eq!(
+            fs::read_dir(b.path()).unwrap().count(),
+            0,
+            "nothing may be written into another workspace"
+        );
+        assert!(a.path().join("secret.txt").exists());
+    }
+
+    #[test]
+    fn copy_budget_exceeded_cleans_temp() {
+        let dir = tempdir().unwrap();
+        let big = dir.path().join("big");
+        fs::create_dir_all(&big).unwrap();
+        fs::create_dir_all(dir.path().join("dest")).unwrap();
+        // COPY_ENTRY_LIMIT + 1 files guarantees the budget trips mid-copy.
+        for i in 0..=(COPY_ENTRY_LIMIT as u64) {
+            fs::write(big.join(format!("f{i:05}.txt")), "x").unwrap();
+        }
+        let err = copy_entry(dir.path(), "big", "dest").unwrap_err();
+        assert_eq!(err.code, "WB_ERR_WORKSPACE_IO");
+        // The staged temp entry is removed: the destination stays empty.
+        let leftovers: Vec<String> = fs::read_dir(dir.path().join("dest"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(leftovers.is_empty(), "copy left artifacts: {leftovers:?}");
+        // The source is untouched.
+        assert!(big.join("f00000.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_skips_symlinks_escaping_workspace() {
+        use std::os::unix::fs::symlink;
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("proj/dup")).unwrap();
+        fs::write(dir.path().join("proj/inside.txt"), "x").unwrap();
+        fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
+        symlink(outside.path().join("secret.txt"), dir.path().join("proj/escape.txt")).unwrap();
+        symlink(dir.path().join("proj/inside.txt"), dir.path().join("proj/alias.txt")).unwrap();
+
+        let r = copy_entry(dir.path(), "proj", "proj/dup").unwrap();
+        assert_eq!(r.relative_path, "proj/dup/proj");
+        // The outside link was skipped; the inside link copied its target.
+        assert!(!dir.path().join("proj/dup/proj/escape.txt").exists());
+        assert!(dir.path().join("proj/dup/proj/inside.txt").exists());
+        assert_eq!(
+            fs::read(dir.path().join("proj/dup/proj/inside.txt")).unwrap(),
+            b"x"
+        );
+        // The secret never landed inside the workspace.
+        assert!(!dir.path().join("proj/dup/proj/secret.txt").exists());
+        // Copying the escaping symlink itself resolves outside -> invalid.
+        assert_eq!(
+            code_of(copy_entry(dir.path(), "proj/escape.txt", "proj/dup")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_and_rename_through_escaping_dir_symlink_fail() {
+        use std::os::unix::fs::symlink;
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::create_dir_all(outside.path().join("victim")).unwrap();
+        symlink(outside.path().join("victim"), dir.path().join("linked")).unwrap();
+        // A dir symlink resolving outside the workspace is rejected by
+        // resolve_contained, so create/rename/copy cannot write through it.
+        assert_eq!(
+            code_of(create_entry(dir.path(), "linked", "x.txt", false)),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+        assert_eq!(
+            code_of(copy_entry(dir.path(), "linked", "")),
+            "WB_ERR_WORKSPACE_INVALID"
+        );
+        assert!(!outside.path().join("victim/x.txt").exists());
     }
 }

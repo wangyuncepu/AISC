@@ -22,10 +22,13 @@
 | 8 | `stage-8-cc-switch-provider-ui/` | 最新稳定版 cc-switch、可复现版本记录、官方 DeepSeek preset、容器内 Provider UI 和共享数据库 | Stage 7 路径契约 |
 | 9 | `stage-9-csharp-workbench-poc/` | 在独立分支用 C# + 原生 Windows terminal control 实现功能等价 POC；Tauri + Vue 继续正式主线 | Stage 7；复用 Stage 8 契约 |
 | 10 | `stage-10-ui-visual-polish/` | 将 `docs/plan/ui-visual-polish-upgrade.md` 转化为可分提交、可验收、可回滚的 Workbench UI 视觉升级 | Stage 6 UI 决策；当前 Workbench 基线 |
+| 11 | `stage-11-workspace-explorer-operations/` | 资源管理器操作升级、VS Code 风格图标、文件系统操作和文件拖入终端 | 当前 Workbench Explorer/Terminal 基线 |
 
 Stage 9 的实现可以在 Stage 8 的协议冻结后与 Stage 8 的剩余实现并行，但不得复制 Docker、Provider 或 Python CLI 业务逻辑。
 
 Stage 10 只修改正式 Tauri + Vue Workbench 的视觉层和测试证据，复用 Stage 6 的 UI/a11y/zoom 决策，不修改业务协议；可与 Stage 9 POC 并行，但必须避免同一前端文件的未协调并发修改。
+
+Stage 11 修改正式 Tauri + Vue Workbench 的 Explorer 行为、受 containment 保护的文件操作 IPC 和终端拖入适配；不重写 xterm/PTY，不替换既有 watcher/artifact 契约。若与其他 Workbench 前端阶段并行，必须协调 `WorkspaceExplorer.vue`、`workspaceExplorer` store 和 `Terminal.vue` 的修改边界。
 
 ## 总体交付门
 
