@@ -11,16 +11,25 @@ import { listen } from "@tauri-apps/api/event";
 import {
   artifactList,
   artifactRefresh,
+  workspaceCopyEntry,
   workspaceCopyPath,
+  workspaceCreateDir,
+  workspaceCreateFile,
   workspaceList,
   workspaceOpen,
   workspacePreview,
+  workspaceRename,
   workspaceReveal,
   workspaceWatchStart,
   workspaceWatchStop,
 } from "../lib/ipc";
 import { useSettingsStore } from "./settings";
-import type { ArtifactRecord, WorkspaceNode, WorkspacePreviewResult } from "../types";
+import type {
+  ArtifactRecord,
+  WorkspaceMutationResult,
+  WorkspaceNode,
+  WorkspacePreviewResult,
+} from "../types";
 
 interface WorkspaceChangeBatch {
   /** The WATCHED workspace path (IDEA-3 3e): lets the frontend drop batches
@@ -52,6 +61,33 @@ interface ExplorerCache {
 }
 
 export type ExplorerKind = "explorer" | "artifacts";
+
+/** Stage 11 (D11-02/D11-03): the in-app file clipboard. Short-lived store
+ *  state — copy never touches the OS text clipboard. Single source entry
+ *  only; invalidated on workspace switch or when the source disappears. */
+export interface ExplorerClipboard {
+  workspace: string;
+  sourceRelativePath: string;
+  kind: "file" | "dir";
+  generation: number;
+}
+
+/** Extract the stable WB_ERR_* code from an invoke rejection. The Rust side
+ *  rejects with the serialized WorkbenchError struct; UI routing must key on
+ *  the code, never on message text (06 §2). */
+export function errorCodeOf(e: unknown): string {
+  if (e && typeof e === "object" && "code" in e) {
+    const code = (e as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+  }
+  return "";
+}
+
+/** Parent directory of a workspace-relative path ("" = root). */
+function parentDirOf(relativePath: string): string {
+  const idx = relativePath.lastIndexOf("/");
+  return idx >= 0 ? relativePath.slice(0, idx) : "";
+}
 
 /** User-configured Explorer ignore names (`ui.explorer_ignore`). Matched
  *  against any path component (mirrors the Rust listing/watcher ignore). */
@@ -127,6 +163,10 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
     /** Inline preview for the selected file. */
     preview: null as WorkspacePreviewResult | null,
     previewLoading: false,
+    /** Stage 11: in-app file clipboard (copy action). Cleared when the
+     *  workspace changes so a stale source can never be pasted elsewhere. */
+    clipboard: null as ExplorerClipboard | null,
+    clipboardGeneration: 0,
   }),
 
   getters: {
@@ -241,6 +281,9 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
         this.artifacts = [];
         this.artifactsNextCursor = null;
         this.preview = null;
+        // A copied entry belongs to its workspace; pasting into another
+        // workspace must be refused (02 §3), so drop the buffer on switch.
+        this.clipboard = null;
         void this.startWatching(workspace);
       }
     },
@@ -545,6 +588,91 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
 
     clearPreview() {
       this.preview = null;
+    },
+
+    // --- Stage 11 (11c): contained mutations + in-app clipboard ---
+    // All actions re-check `workspace`, let Rust validate again, then do a
+    // directed refresh of the affected parent directory. The watcher stays a
+    // supplementary signal (02 §3, 05 §2).
+
+    /** Copy action: only records the in-app clipboard (D11-02). */
+    setClipboardEntry(sourceRelativePath: string, kind: "file" | "dir") {
+      if (!this.workspace) return;
+      this.clipboardGeneration += 1;
+      this.clipboard = {
+        workspace: this.workspace,
+        sourceRelativePath,
+        kind,
+        generation: this.clipboardGeneration,
+      };
+    },
+
+    /** True when the clipboard holds a pasteable entry for THIS workspace. */
+    canPaste(): boolean {
+      const c = this.clipboard;
+      return !!c && !!this.workspace && c.workspace === this.workspace;
+    },
+
+    /** Paste: copy the clipboard entry into `destinationDir`. Rejects when
+     *  the buffer is empty, from another workspace, or the source vanished.
+     *  Never overwrites — conflicts surface as WB_ERR_WORKSPACE_CONFLICT. */
+    async pasteEntry(destinationDir: string): Promise<WorkspaceMutationResult> {
+      const c = this.clipboard;
+      if (!c || !this.workspace || c.workspace !== this.workspace) {
+        throw { code: "WB_ERR_WORKSPACE_INVALID" };
+      }
+      const result = await workspaceCopyEntry(
+        this.workspace,
+        c.sourceRelativePath,
+        destinationDir,
+      );
+      await this.loadDir(destinationDir, true);
+      return result;
+    },
+
+    /** Create an empty file or a directory in `relativeDir`. */
+    async createEntry(
+      relativeDir: string,
+      name: string,
+      isDir: boolean,
+    ): Promise<WorkspaceMutationResult> {
+      if (!this.workspace) throw { code: "WB_ERR_WORKSPACE_INVALID" };
+      const result = isDir
+        ? await workspaceCreateDir(this.workspace, relativeDir, name)
+        : await workspaceCreateFile(this.workspace, relativeDir, name);
+      await this.loadDir(relativeDir, true);
+      return result;
+    },
+
+    /** Rename an entry inside its own parent directory. Directory caches and
+     *  expansion state move to the new key (children reload lazily). */
+    async renameEntry(relativePath: string, newName: string): Promise<WorkspaceMutationResult> {
+      if (!this.workspace) throw { code: "WB_ERR_WORKSPACE_INVALID" };
+      const result = await workspaceRename(this.workspace, relativePath, newName);
+      const parent = parentDirOf(relativePath);
+      if (result.kind === "dir") {
+        // Re-key the renamed dir's cached subtree/expanded/unattributed state;
+        // a stale `tree[old]` would render phantom rows on next expansion.
+        delete this.tree[relativePath];
+        delete this.nextCursors[relativePath];
+        delete this.truncatedDirs[relativePath];
+        if (this.expanded.has(relativePath)) {
+          this.expanded.delete(relativePath);
+          this.expanded.add(result.relative_path);
+          await this.loadDir(result.relative_path);
+        }
+        const movedUnattributed: Record<string, string> = {};
+        for (const [path, change] of Object.entries(this.unattributed)) {
+          if (path === relativePath || path.startsWith(`${relativePath}/`)) {
+            delete this.unattributed[path];
+            const next = `${result.relative_path}${path.slice(relativePath.length)}`;
+            movedUnattributed[next] = change;
+          }
+        }
+        Object.assign(this.unattributed, movedUnattributed);
+      }
+      await this.loadDir(parent, true);
+      return result;
     },
   },
 });
