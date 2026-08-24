@@ -1,8 +1,15 @@
 # Stage 11 验收台账
 
-> 结果状态：实施中
+> 结果状态：已完成
 > 结论枚举：`PASS` / `PASS-WITH-FOLLOWUPS` / `STOP`
 > 证据要求：记录 commit、Workbench 版本、Windows/WebView2、主题、语言、有效宽度、font scale、测试 workspace 和脱敏日志/截图路径。
+
+## 结论记录
+
+- 最终结论：**PASS**（用户手测确认 2026-08-24；merge `d30cdfa` + CI 修复 `9cf9534`/`dd613bd`；CI 三线全绿：Workbench CI / Bundle Linux/macOS / NSIS installer）
+- 通过提交范围：`stage-11-explorer-ops` 13 提交（`03a3717`..`25e320f`，11a–11e + 手测修复）
+- 手测发现并修复：① rename Enter 冒泡打开旧路径（`368b4ad`）；② Tauri `dragDropEnabled` 吞页内拖拽（`a9198a5`）；③ `#[cfg(unix)]` symlink 测试两轮 CI 修复（`9cf9534`/`dd613bd`，本地 Windows 不执行此类测试）
+- 遗留项：无（遗留表三项——递归复制上限已按 D11-18 落地、宿主识别按 D11-14 定案、原生系统剪贴板维持不做）
 
 ## 基线记录（11a，2026-08-24）
 
