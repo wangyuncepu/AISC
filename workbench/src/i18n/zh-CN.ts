@@ -271,6 +271,7 @@ export const zhCN = {
   "terminal.copy": "复制",
   "terminal.paste": "粘贴",
   "terminal.clear": "清屏",
+  "terminal.dropRejected": "无法插入路径：终端不可用或拖入内容无效。",
   "terminal.clipboardError": "剪贴板不可用：{message}",
   // --- 一键诊断 (G-13, Step 12) ---
   "doctor.title": "诊断",

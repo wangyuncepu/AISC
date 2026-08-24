@@ -31,6 +31,8 @@ import { computeDisplayFrom } from "../../domain/streamBuffer";
 import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import { resizeSession, writeSession } from "../../lib/ipc";
+import { WORKSPACE_PATH_MIME } from "../../lib/workspaceDnd";
+import { containerPathFor, quoteForTerminal } from "./dropPath";
 import { resolveRenderer, terminalTheme } from "./renderer";
 import { effectiveTheme } from "../../theme";
 import { findLeaf } from "../../stores/paneTree";
@@ -307,6 +309,48 @@ async function doCopy() {
   }
 }
 
+/** Stage 11 (11d): drop target for a file dragged from the Explorer.
+ *
+ * Only the controlled workspace-path MIME is accepted (external/OS file
+ * drags are ignored — the handler does not preventDefault for them, so the
+ * browser keeps its default behaviour). The drop writes the shell-quoted
+ * CONTAINER path (`/root/app/...`, D11-15) into the session via the existing
+ * writeSession path — no Enter is appended, nothing executes (D11-09), and
+ * the terminal regains focus so typing continues after the token. */
+const dropActive = ref(false);
+
+function onDragOver(e: DragEvent) {
+  if (!e.dataTransfer) return;
+  // Array.from: `types` is a DOMStringList on some engines, an array on others.
+  if (!Array.from(e.dataTransfer.types).includes(WORKSPACE_PATH_MIME)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+  dropActive.value = true;
+}
+
+function onDragLeave() {
+  dropActive.value = false;
+}
+
+async function onDrop(e: DragEvent) {
+  e.preventDefault();
+  dropActive.value = false;
+  const relativePath = e.dataTransfer?.getData(WORKSPACE_PATH_MIME) ?? "";
+  const sid = sessionId.value;
+  if (!relativePath || !sid || !sessionLive.value) {
+    // Refuse quietly: local view message only, the PTY is untouched (02 §4).
+    term?.write(`\r\n\x1b[90m${t("terminal.dropRejected")}\x1b[0m\r\n`);
+    return;
+  }
+  const token = quoteForTerminal(containerPathFor(relativePath));
+  try {
+    await writeSession(sid, Array.from(new TextEncoder().encode(token)));
+    term?.focus();
+  } catch {
+    term?.write(`\r\n\x1b[90m${t("terminal.dropRejected")}\x1b[0m\r\n`);
+  }
+}
+
 /** A-G03-2/A-G11-4: paste clipboard text into the session (1 MiB cap). */
 async function doPaste() {
   try {
@@ -543,9 +587,13 @@ defineExpose({
   <div
     ref="container"
     class="terminal"
+    :class="{ 'drop-target': dropActive }"
     @contextmenu="onContextMenu"
     @keydown="onTerminalKeydown"
     @click="onTerminalClick"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
   >
     <!-- S1.3: fixed, persistent truncation notice (the terminal-flow note
          scrolls away under sustained output). -->
@@ -631,6 +679,12 @@ defineExpose({
   height: 100%;
   width: 100%;
   position: relative;
+}
+/* Stage 11 (11d): lightweight drop-target affordance while a workspace file
+ * hovers over this pane (03 §6). */
+.terminal.drop-target {
+  outline: var(--focus-ring-width) dashed var(--accent);
+  outline-offset: calc(-2 * var(--focus-ring-width));
 }
 
 /* S1.3: persistent truncation notice pinned to the top edge (does not consume

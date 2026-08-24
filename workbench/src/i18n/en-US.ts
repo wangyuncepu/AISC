@@ -271,6 +271,7 @@ export const enUS: Record<string, string> = {
   "terminal.copy": "Copy",
   "terminal.paste": "Paste",
   "terminal.clear": "Clear screen",
+  "terminal.dropRejected": "Cannot insert path: terminal unavailable or invalid drop payload.",
   "terminal.clipboardError": "Clipboard unavailable: {message}",
   // --- one-click diagnosis (G-13, Step 12) ---
   "doctor.title": "Diagnostics",

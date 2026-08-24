@@ -19,7 +19,9 @@ import { useI18n } from "vue-i18n";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { errorCodeOf, useWorkspaceExplorerStore } from "../../stores/workspaceExplorer";
 import { useRuntimeStore } from "../../stores/runtime";
+import { WORKSPACE_PATH_MIME } from "../../lib/workspaceDnd";
 import { validateBasename } from "./basename";
+import TypeIcon from "./TypeIcon.vue";
 import type { WorkspaceNode } from "../../types";
 
 const { t, te } = useI18n();
@@ -220,6 +222,28 @@ function nodeOf(rel: string): WorkspaceNode | null {
     if (hit) return hit;
   }
   return null;
+}
+
+// --- Stage 11 (11d): drag a FILE row into the terminal (D11-09/10) ---
+// The payload is ONLY the workspace-relative path under the controlled MIME;
+// the container-path mapping and quoting happen at the terminal drop edge.
+
+const draggingPath = ref<string | null>(null);
+
+function onDragStart(node: WorkspaceNode, e: DragEvent) {
+  // Dirs never start a terminal drag (misreading a folder as a file argument
+  // is exactly what D11-09 avoids).
+  if (node.kind !== "file" || !e.dataTransfer) {
+    e.preventDefault();
+    return;
+  }
+  e.dataTransfer.setData(WORKSPACE_PATH_MIME, node.relative_path);
+  e.dataTransfer.effectAllowed = "copy";
+  draggingPath.value = node.relative_path;
+}
+
+function onDragEnd() {
+  draggingPath.value = null;
 }
 
 function selectedNode(): WorkspaceNode | null {
@@ -777,7 +801,7 @@ function onTreeKeydown(e: KeyboardEvent) {
 
         <template v-for="(node, i) in explorer.visibleNodes" :key="node.relative_path">
           <div
-            :class="['explorer-row', { selected: selected === node.relative_path }]"
+            :class="['explorer-row', { selected: selected === node.relative_path, dragging: draggingPath === node.relative_path }]"
             :data-path="node.relative_path"
             role="treeitem"
             :aria-selected="selected === node.relative_path"
@@ -785,14 +809,23 @@ function onTreeKeydown(e: KeyboardEvent) {
             :aria-level="depthOf(node) + 1"
             :tabindex="i === focusIndex ? 0 : -1"
             :style="{ paddingLeft: `${8 + depthOf(node) * 16}px` }"
+            :draggable="node.kind === 'file'"
             @click="onSelect(node)"
             @dblclick="onOpen(node)"
             @contextmenu.prevent.stop="onRowContextMenu(node, $event)"
+            @dragstart="onDragStart(node, $event)"
+            @dragend="onDragEnd"
             @focus="focusIndex = i"
           >
-            <span class="explorer-icon" aria-hidden="true">
-              {{ node.kind === "dir" ? (isExpanded(node) ? "▾" : "▸") : "·" }}
+            <span class="explorer-twisty" aria-hidden="true">
+              {{ node.kind === "dir" ? (isExpanded(node) ? "▾" : "▸") : "" }}
             </span>
+            <TypeIcon
+              class="explorer-typeicon"
+              :name="node.name"
+              :dir="node.kind === 'dir'"
+              :expanded="isExpanded(node)"
+            />
             <!-- Stage 11 (11c): rename swaps the name span for the inline
                  input; the row itself (indent, icon) stays in place. -->
             <template v-if="isRenaming(node)">
@@ -1099,10 +1132,19 @@ function onTreeKeydown(e: KeyboardEvent) {
   background: var(--accent-soft);
   color: var(--text);
 }
-.explorer-icon {
+/* Stage 11 (11d): twisty slot (dirs only) + fixed-size type icon slot so
+ * every row keeps the same two-slot rhythm without changing row height. */
+.explorer-twisty {
   width: 14px;
   flex: none;
   color: var(--text-muted);
+}
+.explorer-typeicon {
+  flex: none;
+  color: var(--text-muted);
+}
+.explorer-row.dragging {
+  opacity: 0.5;
 }
 .explorer-name {
   overflow: hidden;
