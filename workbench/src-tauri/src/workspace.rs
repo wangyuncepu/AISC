@@ -1474,6 +1474,7 @@ mod mutation_tests {
         // (symlink creation), i.e. on the Linux CI runners — it is invisible
         // to a local Windows `cargo test`.
         fs::create_dir_all(dir.path().join("dup")).unwrap();
+        fs::create_dir_all(dir.path().join("proj")).unwrap();
         fs::write(dir.path().join("proj/inside.txt"), "x").unwrap();
         fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
         symlink(outside.path().join("secret.txt"), dir.path().join("proj/escape.txt")).unwrap();
