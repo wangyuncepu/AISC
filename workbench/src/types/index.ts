@@ -772,3 +772,12 @@ export interface WorkspaceCopyResult {
   relative_path: string;
   absolute_path: string;
 }
+
+/** Stage 11 (11b): result of a contained Explorer mutation. The UI routes
+ *  errors by the stable WB_ERR_* code, never by message text. */
+export interface WorkspaceMutationResult {
+  schema_version: number;
+  operation: "create_file" | "create_dir" | "copy" | "rename";
+  relative_path: string;
+  kind: "dir" | "file";
+}

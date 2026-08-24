@@ -304,6 +304,42 @@ export const workspaceCopyPath = (workspace: string, relativePath: string) =>
     relativePath,
   });
 
+// --- Stage 11 (11b): contained Explorer mutations -----------------------------
+// Only workspace-relative paths + a single basename cross the IPC boundary;
+// containment and basename validation are re-done in Rust (D11-04).
+
+export const workspaceCreateFile = (workspace: string, relativeDir: string, name: string) =>
+  invoke<import("../types").WorkspaceMutationResult>("workspace_create_file", {
+    workspace,
+    relativeDir,
+    name,
+  });
+
+export const workspaceCreateDir = (workspace: string, relativeDir: string, name: string) =>
+  invoke<import("../types").WorkspaceMutationResult>("workspace_create_dir", {
+    workspace,
+    relativeDir,
+    name,
+  });
+
+export const workspaceCopyEntry = (
+  workspace: string,
+  sourceRelativePath: string,
+  destinationRelativeDir: string,
+) =>
+  invoke<import("../types").WorkspaceMutationResult>("workspace_copy_entry", {
+    workspace,
+    sourceRelativePath,
+    destinationRelativeDir,
+  });
+
+export const workspaceRename = (workspace: string, relativePath: string, newName: string) =>
+  invoke<import("../types").WorkspaceMutationResult>("workspace_rename", {
+    workspace,
+    relativePath,
+    newName,
+  });
+
 // --- Stage 3 (3d): workspace watcher ---
 
 export const workspaceWatchStart = (workspace: string) =>
