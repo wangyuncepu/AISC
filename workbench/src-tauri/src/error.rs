@@ -107,6 +107,45 @@ impl WorkbenchError {
         )
     }
 
+    // -- Stage 11 (11b): contained filesystem mutation errors --
+    // Stable codes so the Explorer UI routes by code, never by message
+    // (02-domain-contract.md §2 / D11-20).
+
+    /// Mutation source/parent directory does not exist.
+    pub fn workspace_not_found() -> Self {
+        Self::new(
+            "WB_ERR_WORKSPACE_NOT_FOUND",
+            "目标不存在",
+            false,
+            Action::Refresh,
+        )
+    }
+
+    /// Destination/name already exists — never silently overwritten (D11-05).
+    pub fn workspace_conflict() -> Self {
+        Self::new(
+            "WB_ERR_WORKSPACE_CONFLICT",
+            "目标已存在",
+            false,
+            Action::None,
+        )
+    }
+
+    /// No write permission in the workspace.
+    pub fn workspace_read_only() -> Self {
+        Self::new(
+            "WB_ERR_WORKSPACE_READ_ONLY",
+            "工作区不可写",
+            false,
+            Action::None,
+        )
+    }
+
+    /// Other filesystem I/O failure (incl. copy budget exceeded, D11-18).
+    pub fn workspace_io() -> Self {
+        Self::new("WB_ERR_WORKSPACE_IO", "文件操作失败", true, Action::Retry)
+    }
+
     pub fn settings_error() -> Self {
         Self::new(
             "WB_ERR_SETTINGS",

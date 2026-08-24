@@ -31,7 +31,10 @@ pub mod workspace;
 use artifact::{artifact_inspect, artifact_list, artifact_refresh};
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use watcher::{workspace_rescan, workspace_watch_start, workspace_watch_stop, WatcherState};
-use workspace::{workspace_copy_path, workspace_list, workspace_open, workspace_preview, workspace_reveal};
+use workspace::{
+    workspace_copy_entry, workspace_copy_path, workspace_create_dir, workspace_create_file,
+    workspace_list, workspace_open, workspace_preview, workspace_rename, workspace_reveal,
+};
 use doctor::{diagnostic_bundle, logs_tail, run_doctor};
 use logging::log_ui_event;
 use history::{load_history, save_history};
@@ -137,6 +140,10 @@ pub fn run(cli_arg: Option<String>) {
             workspace_preview,
             workspace_reveal,
             workspace_copy_path,
+            workspace_create_file,
+            workspace_create_dir,
+            workspace_copy_entry,
+            workspace_rename,
             workspace_rescan,
             workspace_watch_start,
             workspace_watch_stop,
