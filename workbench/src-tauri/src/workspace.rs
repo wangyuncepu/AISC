@@ -1468,26 +1468,31 @@ mod mutation_tests {
         use std::os::unix::fs::symlink;
         let dir = tempdir().unwrap();
         let outside = tempdir().unwrap();
-        fs::create_dir_all(dir.path().join("proj/dup")).unwrap();
+        // NOTE: the destination must be a SIBLING of the source, never a
+        // descendant — copying a dir into its own subtree is (correctly)
+        // refused by the into-itself guard. This test only runs on Unix
+        // (symlink creation), i.e. on the Linux CI runners — it is invisible
+        // to a local Windows `cargo test`.
+        fs::create_dir_all(dir.path().join("dup")).unwrap();
         fs::write(dir.path().join("proj/inside.txt"), "x").unwrap();
         fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
         symlink(outside.path().join("secret.txt"), dir.path().join("proj/escape.txt")).unwrap();
         symlink(dir.path().join("proj/inside.txt"), dir.path().join("proj/alias.txt")).unwrap();
 
-        let r = copy_entry(dir.path(), "proj", "proj/dup").unwrap();
-        assert_eq!(r.relative_path, "proj/dup/proj");
+        let r = copy_entry(dir.path(), "proj", "dup").unwrap();
+        assert_eq!(r.relative_path, "dup/proj");
         // The outside link was skipped; the inside link copied its target.
-        assert!(!dir.path().join("proj/dup/proj/escape.txt").exists());
-        assert!(dir.path().join("proj/dup/proj/inside.txt").exists());
+        assert!(!dir.path().join("dup/proj/escape.txt").exists());
+        assert!(dir.path().join("dup/proj/inside.txt").exists());
         assert_eq!(
-            fs::read(dir.path().join("proj/dup/proj/inside.txt")).unwrap(),
+            fs::read(dir.path().join("dup/proj/inside.txt")).unwrap(),
             b"x"
         );
         // The secret never landed inside the workspace.
-        assert!(!dir.path().join("proj/dup/proj/secret.txt").exists());
+        assert!(!dir.path().join("dup/proj/secret.txt").exists());
         // Copying the escaping symlink itself resolves outside -> invalid.
         assert_eq!(
-            code_of(copy_entry(dir.path(), "proj/escape.txt", "proj/dup")),
+            code_of(copy_entry(dir.path(), "proj/escape.txt", "dup")),
             "WB_ERR_WORKSPACE_INVALID"
         );
     }
