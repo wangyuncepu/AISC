@@ -561,6 +561,28 @@ describe("WorkspaceExplorer inline naming (11c)", () => {
     wrapper.unmount();
   });
 
+  it("Enter inside the rename input does not leak to the tree (open)", async () => {
+    // 手测回归 1: renaming a focused row and pressing Enter ALSO bubbled to
+    // the tree handler, which opened the OLD path and errored. The input now
+    // stops propagation and the tree handler ignores input-originated keys.
+    const { workspaceOpen, workspaceRename } = await import("../../../lib/ipc");
+    await setup();
+    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+    const rows = wrapper.findAll("[role=treeitem]");
+    await rows[1].trigger("focus"); // roving focus on the row being renamed
+    stubViewport();
+    await rows[1].trigger("contextmenu", { clientX: 300, clientY: 300 }); // a.md
+    await wrapper.find('[data-action="rename"]').trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const input = wrapper.find("[data-testid=name-input]");
+    await input.setValue("b.md");
+    await input.trigger("keydown.enter");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(workspaceRename).toHaveBeenCalledWith("/ws", "a.md", "b.md");
+    expect(workspaceOpen).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it("rename conflict keeps the input open with the stable error", async () => {
     const { workspaceRename } = await import("../../../lib/ipc");
     vi.mocked(workspaceRename).mockRejectedValueOnce({

@@ -185,13 +185,17 @@ function onSelect(node: WorkspaceNode) {
   }
 }
 
-/** Double-click / Enter: files open with the system app, dirs toggle. */
+/** Double-click / Enter: files open with the system app, dirs toggle. A
+ *  failed open (file vanished externally, no association) surfaces as the
+ *  transient error chip instead of an unhandled rejection. */
 function onOpen(node: WorkspaceNode) {
   if (node.kind === "dir") {
     void explorer.toggleDir(node.relative_path);
     return;
   }
-  void explorer.openFile(node.relative_path);
+  void explorer.openFile(node.relative_path).catch((e) => {
+    flash(errorI18nKey(e), undefined, "warn");
+  });
 }
 
 async function copyRelativePath(relativePath: string) {
@@ -635,6 +639,10 @@ function focusNode(index: number) {
  *  toggle, D11-19); Space selects only; Shift+F10 / Menu open the context
  *  menu on the focused row. */
 function onTreeKeydown(e: KeyboardEvent) {
+  // The inline name input owns its keystrokes while it exists — typed
+  // characters (including Enter/Space/Arrows) must never move tree focus or
+  // activate rows (rename-Enter used to re-open the OLD path, 手测 1).
+  if ((e.target as HTMLElement | null)?.tagName === "INPUT") return;
   if (e.key === "Escape") {
     menu.value = null;
     return;
@@ -792,7 +800,7 @@ function onTreeKeydown(e: KeyboardEvent) {
             :placeholder="pending.isDir ? t('explorer.nameInput.folder') : t('explorer.nameInput.file')"
             :aria-label="pending.isDir ? t('explorer.nameInput.folder') : t('explorer.nameInput.file')"
             @input="onNameInput"
-            @keydown.enter.prevent="submitName"
+            @keydown.enter.stop.prevent="submitName"
             @keydown.esc.stop.prevent="cancelName"
             @blur="onNameBlur"
           />
@@ -838,7 +846,7 @@ function onTreeKeydown(e: KeyboardEvent) {
                 :placeholder="pending?.isDir ? t('explorer.nameInput.folder') : t('explorer.nameInput.file')"
                 :aria-label="t('explorer.menu.rename')"
                 @input="onNameInput"
-                @keydown.enter.prevent="submitName"
+                @keydown.enter.stop.prevent="submitName"
                 @keydown.esc.stop.prevent="cancelName"
                 @blur="onNameBlur"
               />
@@ -875,7 +883,7 @@ function onTreeKeydown(e: KeyboardEvent) {
               :placeholder="pending?.mode === 'create' && pending.isDir ? t('explorer.nameInput.folder') : t('explorer.nameInput.file')"
               :aria-label="pending?.mode === 'create' && pending.isDir ? t('explorer.nameInput.folder') : t('explorer.nameInput.file')"
               @input="onNameInput"
-              @keydown.enter.prevent="submitName"
+              @keydown.enter.stop.prevent="submitName"
               @keydown.esc.stop.prevent="cancelName"
               @blur="onNameBlur"
             />
