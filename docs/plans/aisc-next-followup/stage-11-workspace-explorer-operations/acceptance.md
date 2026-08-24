@@ -38,9 +38,17 @@
 - [x] 不覆盖同名用户文件（create_new/存在检查 + conflict 测试）；
 - [x] 复制失败无半成品（临时目标清理 + 预算超限清理测试）；
 - [x] drop 不执行命令、不追加 Enter（writeSession 单次调用，无 \r\n）；
-- [ ] xterm/PTY/fit/resize 无回归（真机手测待执行）；
-- [ ] 菜单和输入在 CSS zoom/Compact 下可见（真机手测待执行）；
-- [ ] 既有 artifact、watcher、ignore 和键盘树行为无回归（真机手测待执行）。
+- [x] xterm/PTY/fit/resize 无回归（手测拖入/终端交互无反馈问题，2026-08-24）；
+- [x] 菜单和输入在 CSS zoom/Compact 下可见（手测无反馈问题，2026-08-24）；
+- [x] 既有 artifact、watcher、ignore 和键盘树行为无回归（手测无反馈问题，2026-08-24）。
+
+## 手测记录
+
+| 轮次 | 日期 | 结果 | 说明 |
+|---|---|---|---|
+| 1 | 2026-08-24 | 发现 2 缺陷 → 修复 → 用户复测确认通过；其余清单项无反馈问题 | ① rename 输入框 Enter 冒泡到树处理器，打开旧路径报"不存在"——输入框 Enter 加 `.stop` + 树处理器忽略 input 来源按键 + open 失败改错误 chip（`368b4ad`，含回归测试）；② Tauri v2 默认 `dragDropEnabled: true` 在 WebView2 装 OS 级拖放目标，页内 dragover/drop 进不了 webview，拖入终端恒显示禁止光标——`tauri.conf.json` 关闭之，需重启 dev 生效（`a9198a5`） |
+
+> 结论：`PASS`（手测 + 自动化全过；两项手测缺陷已修复并有回归测试/复测确认）。
 
 ## 回滚点
 
