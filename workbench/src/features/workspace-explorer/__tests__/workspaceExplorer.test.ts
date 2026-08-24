@@ -631,3 +631,42 @@ describe("WorkspaceExplorer inline naming (11c)", () => {
     wrapper.unmount();
   });
 });
+
+/** Stage 11 (11d): drag payload + type icons (D11-09/10). */
+describe("WorkspaceExplorer drag & icons (11d)", () => {
+  it("file dragstart sets ONLY the controlled relative-path MIME", async () => {
+    await setup();
+    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+    const rows = wrapper.findAll("[role=treeitem]");
+    const dt = { setData: vi.fn(), effectAllowed: "", types: [] as string[] };
+    await rows[1].trigger("dragstart", { dataTransfer: dt }); // a.md
+    expect(dt.setData).toHaveBeenCalledTimes(1);
+    expect(dt.setData).toHaveBeenCalledWith("application/x-aisc-workspace-path", "a.md");
+    expect(dt.effectAllowed).toBe("copy");
+    wrapper.unmount();
+  });
+
+  it("dir rows never drag into the terminal", async () => {
+    await setup();
+    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+    const rows = wrapper.findAll("[role=treeitem]");
+    expect(rows[0].attributes("draggable")).toBe("false"); // src (dir)
+    expect(rows[1].attributes("draggable")).toBe("true"); // a.md (file)
+    const dt = { setData: vi.fn(), effectAllowed: "", types: [] as string[] };
+    await rows[0].trigger("dragstart", { dataTransfer: dt });
+    expect(dt.setData).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("every row renders a fixed-size type icon (dirs show open/closed state)", async () => {
+    await setup();
+    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+    const icons = wrapper.findAll(".explorer-typeicon");
+    expect(icons.length).toBe(2); // one per row, dirs included
+    // The twisty column stays dir-only (files render an empty slot).
+    const twisties = wrapper.findAll(".explorer-twisty");
+    expect(twisties[0].text()).toBe("▸"); // collapsed dir
+    expect(twisties[1].text()).toBe("");
+    wrapper.unmount();
+  });
+});
