@@ -353,8 +353,13 @@ function setPaneTreeRef(tabId: string) {
 .gate .err { color: var(--text-2); }
 .gate .detail { font-size: var(--font-sm); color: var(--text-muted); }
 .center .msg { color: var(--text-muted); }
-.main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.ready { flex: 1; display: flex; min-height: 0; position: relative; }
+/* B-05: min-width:0 is LOAD-BEARING on both — without it the flex
+ * min-width:auto floor makes the terminal column content-sized by the
+ * xterm screen, so a shrinking window could only release layout ONE FIT
+ * AT A TIME (the 14px-per-150ms staircase squeeze; growing snapped
+ * instantly, which is why the two directions behaved differently). */
+.main { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.ready { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: var(--bg); display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
 /* 10e: content fade on tab switch (opacity only — D10-09). */
