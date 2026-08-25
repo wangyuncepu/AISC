@@ -24,6 +24,9 @@ import type {
   RuntimeServicesResult,
   RuntimeSnapshot,
   RuntimeStartResult,
+  LeaseClaimResult,
+  ReconcilePayload,
+  ShutdownRequest,
   SaveOutcome,
   SessionExit,
   SessionSnapshot,
@@ -141,6 +144,29 @@ export const runtimeServices = (workspace: string, runtimeId: string) =>
  * the URL that was opened (for toasts), rejects with a WorkbenchError. */
 export const openRuntimeServiceUrl = (workspace: string, runtimeId: string, port: number) =>
   invoke<string>("open_runtime_service_url", { workspace, runtimeId, port });
+
+// --- runtime-lifecycle-ux Stage 2: reconcile + lease supervisor ---
+// The lease heartbeat lives Rust-side (D-RUNTIME-12); claim/release here
+// only start/stop it. The backend rejects foreign classifications
+// (protocol error), so the payload type is trustworthy past this seam.
+
+export const runtimeReconcile = (workspace: string, instanceId?: string) =>
+  invoke<ReconcilePayload>("runtime_reconcile", { workspace, instanceId: instanceId ?? null });
+
+export const leaseClaim = (workspace: string) =>
+  invoke<LeaseClaimResult>("lease_claim", { workspace });
+
+export const leaseRelease = (workspace: string) =>
+  invoke<boolean>("lease_release", { workspace });
+
+export const leaseSupervisorInfo = () =>
+  invoke<{ instance_id: string }>("lease_supervisor_info");
+
+/** Structured shutdown (02 §4): sessions -> per-runtime cleanup honoring
+ * retention -> lease release -> flush. The legacy shutdownWorkbench stays
+ * until Stage 3 migrates every exit path onto this. */
+export const shutdownWorkbenchV2 = (request: ShutdownRequest) =>
+  invoke<ShutdownReport>("shutdown_workbench_v2", { request });
 
 // --- Stage 8e: cc-switch provider data plane (aisc.cc-switch-provider/v1) ---
 // The request document (with any API key) rides the CLI child's stdin via the

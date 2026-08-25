@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{ipc::Channel, AppHandle, Manager};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -703,12 +703,77 @@ pub struct ShutdownReport {
     pub reap_timed_out: usize,
     pub unreaped_session_ids: Vec<String>,
     pub flush_errors: Vec<String>,
+    /// runtime-lifecycle-ux Stage 2 (02 §4): per-runtime cleanup outcome.
+    /// Empty on the legacy sessions-only path.
+    #[serde(default)]
+    pub runtime_cleanup: Vec<RuntimeCleanup>,
 }
 
+/// One workspace's runtime target in a structured shutdown request
+/// (runtime-lifecycle-ux 02 §4). `retention` follows the registry metadata
+/// policy: remove_on_close (default) | keep_stopped | keep_running.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShutdownTarget {
+    pub workspace: String,
+    pub runtime_id: String,
+    #[serde(default = "default_retention")]
+    pub retention: String,
+}
+
+fn default_retention() -> String {
+    "remove_on_close".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShutdownRequest {
+    pub workspaces: Vec<ShutdownTarget>,
+    pub reason: String, // window_close | tray_exit | app_exit
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct RuntimeCleanup {
+    pub workspace: String,
+    pub runtime_id: String,
+    pub action: String, // removed | kept | skipped | failed
+    pub state: String,  // stopped | not_found | unknown
+    pub error_code: Option<String>,
+}
+
+/// Legacy sessions-only shutdown (G-07 shape). The `stop_runtime` flag was
+/// never wired (runtime stop lands in G-07 Step 2 — superseded by the
+/// structured v2 below); the frontend migrates onto v2 in
+/// runtime-lifecycle-ux Stage 3, after which this wrapper can go.
 #[tauri::command]
 pub async fn shutdown_workbench(
     app: AppHandle,
     stop_runtime: bool,
+) -> Result<ShutdownReport, WorkbenchError> {
+    let _ = stop_runtime;
+    run_shutdown(app, None).await
+}
+
+/// Structured shutdown (runtime-lifecycle-ux 02 §4): sessions first, then
+/// per-runtime stop→remove honoring each target's retention, then lease
+/// release, then flush. One runtime's failure never blocks the others;
+/// per-target budget caps a hung Docker CLI call.
+#[tauri::command]
+pub async fn shutdown_workbench_v2(
+    app: AppHandle,
+    request: ShutdownRequest,
+) -> Result<ShutdownReport, WorkbenchError> {
+    run_shutdown(app, Some(request)).await
+}
+
+/// Budget for one runtime's stop+remove during shutdown (02 §4: cleanup
+/// timeout must not block exit forever; leftovers reconcile next start).
+const RUNTIME_CLEANUP_TIMEOUT: Duration = Duration::from_secs(45);
+
+async fn run_shutdown(
+    app: AppHandle,
+    request: Option<ShutdownRequest>,
 ) -> Result<ShutdownReport, WorkbenchError> {
     let reg = registry(&app);
     reg.reject_new();
@@ -809,6 +874,16 @@ pub async fn shutdown_workbench(
         report.unreaped_session_ids = still_alive;
     }
 
+    // runtime-lifecycle-ux Stage 2 (02 §4): AFTER session cleanup, BEFORE
+    // flush — per-runtime stop→remove under each target's retention, then
+    // release every lease this process holds. Targets run concurrently with
+    // a per-target budget; a failure or timeout lands in the report and
+    // next-startup reconcile sweeps the remainder.
+    if let Some(req) = &request {
+        report.runtime_cleanup = runtime_cleanup_phase(&app, req).await;
+        release_all_leases(&app).await;
+    }
+
     // Flush settings (pin) so no dirty state is left behind (03 §4.3).
     if let Ok(dir) = config_dir(&app) {
         match Settings::load(&dir).and_then(|s| s.save(&dir)) {
@@ -817,24 +892,155 @@ pub async fn shutdown_workbench(
         }
     }
 
-    let _ = stop_runtime; // runtime stop lands in G-07 (Step 2)
-
     // G-07 refinement (2026-08-09): the frontend hides the window before
     // invoking this command, so the user sees an instant close while cleanup
     // continues here. Once done, exit the process - nothing may linger
     // invisibly. Sessions that refused to die within the budgets are logged
-    // and dropped; the runtime container keeps running either way (by design).
+    // and dropped; the runtime container keeps running either way (by design;
+    // v2 requests additionally remove containers per retention above).
     eprintln!(
-        "[shutdown] closed={} force_reaped={} terminate_timed_out={} reap_timed_out={} unreaped={} flush_errors={}",
+        "[shutdown] closed={} force_reaped={} terminate_timed_out={} reap_timed_out={} unreaped={} flush_errors={} runtime_cleanup={}",
         report.graceful_closed,
         report.force_reaped,
         report.terminate_timed_out,
         report.reap_timed_out,
         report.unreaped_session_ids.len(),
-        report.flush_errors.len()
+        report.flush_errors.len(),
+        report
+            .runtime_cleanup
+            .iter()
+            .map(|c| format!("{}/{}/{}", c.runtime_id, c.action, c.state))
+            .collect::<Vec<_>>()
+            .join(",")
     );
     app.exit(0);
     Ok(report)
+}
+
+/// Concurrent per-target runtime cleanup (runtime-lifecycle-ux 02 §4):
+/// stop → (unless keep_stopped) remove. Same-runtime serialization rides
+/// the existing per-runtime op mutex inside stop/remove; cross-process
+/// safety rides the CLI's workspace/maintenance locks.
+async fn runtime_cleanup_phase(app: &AppHandle, request: &ShutdownRequest) -> Vec<RuntimeCleanup> {
+    let mut handles = Vec::new();
+    for target in &request.workspaces {
+        let app = app.clone();
+        let target = target.clone();
+        handles.push(tokio::spawn(async move {
+            match tokio::time::timeout(
+                RUNTIME_CLEANUP_TIMEOUT,
+                cleanup_one_runtime(&app, &target),
+            )
+            .await
+            {
+                Ok(entry) => entry,
+                Err(_) => RuntimeCleanup {
+                    workspace: target.workspace,
+                    runtime_id: target.runtime_id,
+                    action: "failed".into(),
+                    state: "unknown".into(),
+                    error_code: Some("AISC_ERR_RUNTIME_RECONCILE_FAILED".into()),
+                },
+            }
+        }));
+    }
+    let mut out = Vec::new();
+    for h in handles {
+        if let Ok(entry) = h.await {
+            out.push(entry);
+        }
+    }
+    out
+}
+
+async fn cleanup_one_runtime(app: &AppHandle, target: &ShutdownTarget) -> RuntimeCleanup {
+    use crate::runtime::{remove_runtime, stop_runtime};
+
+    if target.retention == "keep_running" {
+        return RuntimeCleanup {
+            workspace: target.workspace.clone(),
+            runtime_id: target.runtime_id.clone(),
+            action: "skipped".into(),
+            state: "unknown".into(),
+            error_code: None,
+        };
+    }
+
+    // Stop (idempotent; a not_found runtime surfaces as an error whose code
+    // we keep for classification).
+    let stop = stop_runtime(
+        app.clone(),
+        target.runtime_id.clone(),
+        target.workspace.clone(),
+    )
+    .await;
+    if target.retention == "keep_stopped" {
+        return match stop {
+            Ok(snap) => RuntimeCleanup {
+                workspace: target.workspace.clone(),
+                runtime_id: target.runtime_id.clone(),
+                action: "kept".into(),
+                state: normalize_state(&snap.state),
+                error_code: None,
+            },
+            Err(e) => RuntimeCleanup {
+                workspace: target.workspace.clone(),
+                runtime_id: target.runtime_id.clone(),
+                action: "failed".into(),
+                state: "unknown".into(),
+                error_code: Some(e.code),
+            },
+        };
+    }
+
+    let remove = remove_runtime(
+        app.clone(),
+        target.runtime_id.clone(),
+        target.workspace.clone(),
+        true, // stopped above (or already gone) — force covers a racing start
+    )
+    .await;
+    match remove {
+        Ok(snap) => RuntimeCleanup {
+            workspace: target.workspace.clone(),
+            runtime_id: target.runtime_id.clone(),
+            action: "removed".into(),
+            state: normalize_state(&snap.state),
+            error_code: None,
+        },
+        Err(e) => RuntimeCleanup {
+            workspace: target.workspace.clone(),
+            runtime_id: target.runtime_id.clone(),
+            action: "failed".into(),
+            state: "unknown".into(),
+            error_code: Some(e.code),
+        },
+    }
+}
+
+/// Map a CLI snapshot state onto the report's three-state vocabulary
+/// (02 §4): not_found stays; stopped-ish states collapse to stopped;
+/// anything else (starting/unknown/…) reports unknown.
+fn normalize_state(state: &str) -> String {
+    match state {
+        "not_found" => "not_found".into(),
+        "stopped" | "stopping" | "removing" => "stopped".into(),
+        _ => "unknown".into(),
+    }
+}
+
+/// Release every lease this process holds (best-effort — an un-released
+/// lease expires by TTL in 45s, which is the designed safety net, so a
+/// failure here never blocks exit).
+async fn release_all_leases(app: &AppHandle) {
+    let workspaces = app
+        .state::<crate::lease::LeaseSupervisor>()
+        .active_workspaces();
+    for ws in workspaces {
+        if let Err(e) = crate::lease::lease_release(app.clone(), ws.clone()).await {
+            eprintln!("[shutdown] lease release failed for {}: {}", ws, e.code);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1106,5 +1312,51 @@ mod tests {
         assert!(json.contains(r#""runtimeId":"rid""#));
         assert!(json.contains(r#""state":"running""#));
         assert!(json.contains(r#""generation":3"#));
+
+    // --- runtime-lifecycle-ux Stage 2: structured shutdown (02 §4) ---------
+
+    #[test]
+    fn shutdown_request_decodes_camel_case_and_defaults_retention() {
+        let req: ShutdownRequest = serde_json::from_str(
+            r#"{"workspaces":[{"workspace":"C:\\ws","runtimeId":"rid-1"},
+                            {"workspace":"C:\w2","runtimeId":"rid-2",
+                             "retention":"keep_stopped"}],
+               "reason":"window_close"}"#,
+        )
+        .unwrap();
+        assert_eq!(req.reason, "window_close");
+        assert_eq!(req.workspaces.len(), 2);
+        assert_eq!(req.workspaces[0].retention, "remove_on_close"); // default
+        assert_eq!(req.workspaces[1].retention, "keep_stopped");
+    }
+
+    #[test]
+    fn runtime_cleanup_report_serializes_snake_case() {
+        let entry = RuntimeCleanup {
+            workspace: "C:\\ws".into(),
+            runtime_id: "rid-1".into(),
+            action: "removed".into(),
+            state: "not_found".into(),
+            error_code: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains(r#""runtime_id":"rid-1""#));
+        assert!(json.contains(r#""error_code":null"#));
+        // The legacy report keeps its shape + gains the (defaulted) field.
+        let report = ShutdownReport::default();
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains(r#""runtime_cleanup":[]"#));
+    }
+
+    #[test]
+    fn normalize_state_maps_the_report_vocabulary() {
+        assert_eq!(normalize_state("not_found"), "not_found");
+        assert_eq!(normalize_state("stopped"), "stopped");
+        assert_eq!(normalize_state("stopping"), "stopped");
+        assert_eq!(normalize_state("removing"), "stopped");
+        assert_eq!(normalize_state("running"), "unknown");
+        assert_eq!(normalize_state("starting"), "unknown");
+        assert_eq!(normalize_state("unknown"), "unknown");
+    }
     }
 }

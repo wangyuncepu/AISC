@@ -8,6 +8,7 @@ pub mod cli;
 pub mod data_root;
 pub mod docker_ownership;
 pub mod doctor;
+pub mod lease;
 pub mod env;
 pub mod error;
 pub mod history;
@@ -52,12 +53,14 @@ use runtime::{
     network_subscription_clear, network_subscription_import, network_subscription_import_file,
     network_subscription_refresh, network_subscription_show, usage_overview,
     open_runtime_service_url, remove_runtime, runtime_inspect, runtime_preflight,
-    runtime_restart, runtime_services, start_docker, start_runtime, stop_runtime,
+    runtime_reconcile, runtime_restart, runtime_services, start_docker, start_runtime,
+    stop_runtime,
     BuildOps, OpMutexes, StartOps,
 };
+use lease::{lease_claim, lease_release, lease_supervisor_info, LeaseSupervisor};
 use session::{
     ack_session_exit, close_session, open_session, resize_session, shutdown_workbench,
-    write_session, SessionRegistry,
+    shutdown_workbench_v2, write_session, SessionRegistry,
 };
 use settings::{load_settings, reset_gui_settings, save_settings};
 use tray::{build_tray, tray_available, tray_remove};
@@ -85,6 +88,7 @@ pub fn run(cli_arg: Option<String>) {
         .manage(StartOps::default())
         .manage(BuildOps::default())
         .manage(OpMutexes::default())
+        .manage(LeaseSupervisor::default())
         .invoke_handler(tauri::generate_handler![
             cli_discover,
             cli_pin,
@@ -96,10 +100,12 @@ pub fn run(cli_arg: Option<String>) {
             close_session,
             ack_session_exit,
             shutdown_workbench,
+            shutdown_workbench_v2,
             start_runtime,
             stop_runtime,
             runtime_preflight,
             runtime_inspect,
+            runtime_reconcile,
             runtime_restart,
             cancel_runtime_start,
             list_runtimes,
@@ -107,6 +113,9 @@ pub fn run(cli_arg: Option<String>) {
             get_provider_status,
             runtime_services,
             open_runtime_service_url,
+            lease_claim,
+            lease_release,
+            lease_supervisor_info,
             cc_switch_providers,
             cc_switch_add,
             cc_switch_edit,

@@ -123,7 +123,9 @@ export interface SessionSnapshot {
 
 export type AckResult = "acknowledged" | "already_acknowledged";
 
-/** Result of the unified exit coordinator (03 §4.3). */
+/** Result of the unified exit coordinator (03 §4.3; runtime-lifecycle-ux
+ * 02 §4 adds the per-runtime cleanup entries — absent on the legacy
+ * sessions-only path). */
 export interface ShutdownReport {
   graceful_closed: number;
   force_reaped: number;
@@ -131,6 +133,7 @@ export interface ShutdownReport {
   reap_timed_out: number;
   unreaped_session_ids: string[];
   flush_errors: string[];
+  runtime_cleanup?: RuntimeCleanupEntry[];
 }
 
 export interface SessionExit {
@@ -329,6 +332,65 @@ export interface RuntimeServicesResult {
   gateway: WebGatewayInfo;
   services: WebServiceInfo[];
   observed_at: string;
+}
+
+// --- runtime-lifecycle-ux Stage 2: reconcile + lease + structured shutdown ---
+// Field names mirror the Python payloads verbatim (snake_case); a blocked
+// classification is a VALID answer — can_proceed=false is not an error.
+
+export type ReconcileClassification =
+  | "clean"
+  | "active_same_instance"
+  | "stale_ephemeral"
+  | "active_other_instance"
+  | "unknown_owner"
+  | "stale_registry"
+  | "docker_unavailable";
+
+export interface ReconcileCleanupInfo {
+  attempted: boolean;
+  stopped: boolean;
+  removed: boolean;
+  registry_pruned: boolean;
+}
+
+export interface ReconcilePayload {
+  schema_version: string;
+  workspace_key: string;
+  classification: ReconcileClassification;
+  runtime_id: string | null;
+  can_proceed: boolean;
+  cleanup: ReconcileCleanupInfo;
+  observed_at: string;
+  error_code: string | null;
+  technical_detail: string | null;
+}
+
+export interface LeaseClaimResult {
+  outcome: "claimed" | "claimed_stale" | "reclaimed";
+  lease_id: string;
+  workspace_key: string;
+}
+
+export type RuntimeRetention = "remove_on_close" | "keep_stopped" | "keep_running";
+
+export interface ShutdownTarget {
+  workspace: string;
+  runtimeId: string;
+  retention?: RuntimeRetention;
+}
+
+export interface ShutdownRequest {
+  workspaces: ShutdownTarget[];
+  reason: "window_close" | "tray_exit" | "app_exit";
+}
+
+export interface RuntimeCleanupEntry {
+  workspace: string;
+  runtime_id: string;
+  action: "removed" | "kept" | "skipped" | "failed";
+  state: "stopped" | "not_found" | "unknown";
+  error_code: string | null;
 }
 
 /** `aisc provider current` snapshot (05 §七). Secret-free: routing/auth only.
