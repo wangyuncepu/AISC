@@ -222,20 +222,37 @@ function rebuildTerminal() {
  *  immediately (the drag is followed live); the trailing timer catches the
  *  resting position and re-arms the leading edge — at most one send per
  *  150ms under continuous dragging, instead of nothing until it ends. */
-function scheduleResize() {
+function scheduleResize(reason: string) {
   if (!visible.value || resizeTimer !== null) return;
-  doResize();
+  doResize(`ev:${reason}`);
   resizeTimer = window.setTimeout(() => {
     resizeTimer = null;
-    doResize();
+    doResize(`evT:${reason}`);
   }, 150);
 }
 
-function doResize() {
-  if (!visible.value || !term || !fit || !sessionLive.value) return;
+/** Named wrapper so removeEventListener stays paired after the reason
+ *  parameter was added for the B-05 probe. */
+function onWindowResize() {
+  scheduleResize("window");
+}
+
+function doResize(reason = "tick") {
+  if (!visible.value || !term || !fit || !sessionLive.value) {
+    // B-05 TEMP probe: a real event that got blocked (not the 2s tick).
+    if (reason !== "tick") {
+      store.logTerminalProbe(`blocked:${reason}:vis=${visible.value}:live=${sessionLive.value}`);
+    }
+    return;
+  }
   try {
+    const before = `${term.cols}x${term.rows}`;
+    const boxW = container.value?.clientWidth ?? -1;
     fit.fit();
     termCols.value = term.cols; // narrow-TUI guard tracks the fitted grid
+    if (before !== `${term.cols}x${term.rows}`) {
+      store.logTerminalProbe(`fit:${reason}:${before}->${term.cols}x${term.rows}:box=${boxW}`);
+    }
     const sid = sessionId.value;
     // B-05 (fix F1): only send when the backend session is Running — a
     // Starting/Closing entry makes resize_session fail, which would just
@@ -245,10 +262,12 @@ function doResize() {
     // F5: idempotent skip — nothing to do when the PTY already confirmed
     // this exact grid and the last send succeeded.
     if (!shouldSendSize(lastConfirmedSize, size, resizeSyncFailed)) return;
+    store.logTerminalProbe(`send:${reason}:${size.cols}x${size.rows}`);
     resizeSession(sid, size.cols, size.rows)
       .then(() => {
         lastConfirmedSize = size;
         resizeSyncFailed = false;
+        store.logTerminalProbe(`ok:${size.cols}x${size.rows}`);
       })
       .catch((err: unknown) => {
         // B-05 (fix F2): a swallowed failure used to leave the PTY stuck at
@@ -261,9 +280,11 @@ function doResize() {
             ? String((err as { code?: unknown }).code)
             : undefined;
         store.logTerminalResizeError(code);
+        store.logTerminalProbe(`fail:${code ?? "unknown"}`);
       });
-  } catch {
+  } catch (e) {
     /* container not laid out yet */
+    store.logTerminalProbe(`throw:${reason}:${String(e)}`);
   }
 }
 
@@ -514,14 +535,14 @@ onMounted(() => {
   fit.fit();
   termCols.value = term?.cols ?? 80;
 
-  resizeObserver = new ResizeObserver(scheduleResize);
+  resizeObserver = new ResizeObserver(() => scheduleResize("observer"));
   if (container.value) resizeObserver.observe(container.value);
-  window.addEventListener("resize", scheduleResize);
+  window.addEventListener("resize", onWindowResize);
 
   // B-05 (fix F1, remount case): a Terminal that mounts onto an
   // ALREADY-running pane (pane restructure remount) gets no state
   // transition, so sync immediately.
-  if (pane.value?.sessionState === "running") doResize();
+  if (pane.value?.sessionState === "running") doResize("mount");
 
   // B-05 (fix F3): self-heal tick. The size mismatch shows up randomly (no
   // reproducible trigger), so convergence cannot rely on user-driven resize
@@ -538,7 +559,7 @@ onMounted(() => {
   watch(visible, (v) => {
     if (v) {
       setTimeout(() => {
-        doResize();
+        doResize("show");
         term?.refresh(0, term.rows - 1);
       }, 0);
     }
@@ -581,7 +602,7 @@ onMounted(() => {
       // the first resize lands the PTY runs at the 80×24 spawn default while
       // xterm shows the fitted width — every readline/TUI redraw then lands
       // on the wrong columns (long-input overwrite).
-      if (st === "running") doResize();
+      if (st === "running") doResize("running");
       if (st === "exited" || st === "disconnected") {
         const exit = pane.value?.exit;
         term?.write(
@@ -642,7 +663,7 @@ onBeforeUnmount(() => {
   if (resizeObserver) resizeObserver.disconnect();
   if (resizeTimer !== null) window.clearTimeout(resizeTimer);
   if (healTimer !== null) window.clearInterval(healTimer);
-  window.removeEventListener("resize", scheduleResize);
+  window.removeEventListener("resize", onWindowResize);
   term?.dispose(); // disposes fit/webgl/search addons + custom key handler (03 §七)
   term = null;
   fit = null;

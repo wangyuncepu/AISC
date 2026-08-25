@@ -1509,6 +1509,16 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     void ipc.logUiEvent?.("terminal_resize", "error", code);
   }
 
+  /**
+   * B-05 TEMPORARY probe (removed once the resize break is localized):
+   * every resize-pipeline stage lands on the shared timeline so a machine
+   * run can be read back from aisc.log without opening devtools. The stage
+   * string rides the errorCode field (fire-and-forget, never blocks UI).
+   */
+  function logTerminalProbe(stage: string): void {
+    void ipc.logUiEvent?.("terminal_resize_probe", "ok", stage);
+  }
+
   return {
     id,
     status,
@@ -1518,6 +1528,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     runtimeReady,
     preflight,
     logTerminalResizeError,
+    logTerminalProbe,
     launch,
     showAdvanced,
     startElapsedMs,
