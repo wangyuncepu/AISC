@@ -497,9 +497,11 @@ function doResize(reason = "tick") {
     const before = `${term.cols}x${term.rows}`;
     // Review P1: pin the veil BEFORE fitGrid — term.resize() reflows
     // synchronously inside it, and the intermediate frame must never paint
-    // uncovered. (The 2s heal tick skips the pin: an unchanged fit is a
-    // pure no-op and must not flash.)
-    if (reason !== "tick") veilHold(veilGrace());
+    // uncovered. Exceptions: the 2s heal tick (an unchanged fit must not
+    // flash) and SHOW — the visible-watcher already pinned PRE-PAINT
+    // (earlier than this call), and re-pinning here would bump the
+    // generation and strand the watcher's fallback release.
+    if (reason !== "tick" && reason !== "show") veilHold(veilGrace());
     fitGrid();
     if (before !== `${term.cols}x${term.rows}`) {
       // Walk the whole ancestor chain: the first element that shrinks while
@@ -514,9 +516,11 @@ function doResize(reason = "tick") {
       store.logTerminalProbe(
         `fit:${reason}:${before}->${term.cols}x${term.rows}:win=${window.innerWidth}:${chain.join("|")}`,
       );
-    } else if (reason !== "tick") {
+    } else if (reason !== "tick" && reason !== "show") {
       // Grid already correct — nothing to mask; release instantly (the
-      // same-tick pin never painted, so there is no fade flash).
+      // same-tick pin never painted, so there is no fade flash). SHOW is
+      // exempt: every tab switch keeps the veil (手测十一轮) and lets the
+      // watcher's fallback timer fade it out after the grace.
       veilRelease();
     }
     const sid = sessionId.value;
@@ -811,12 +815,15 @@ onMounted(() => {
   // viewport repaint after the re-fit.
   watch(visible, (v) => {
     if (v) {
-      // B-05 手测九轮: pin the veil BEFORE the first paint. Hidden panes
-      // keep a stale grid (they never fit), and that stale frame IS the
-      // visible garble on tab switch; the show doResize runs a tick later.
-      // It releases the veil — instantly when the grid is already correct,
-      // after backend-confirm + grace when a resize must land.
-      if (sessionLive.value) veilHold(veilGrace());
+      // B-05 手测十一轮: pin the veil BEFORE the first paint — on EVERY
+      // tab switch (hidden panes keep a stale grid; and even an unchanged
+      // grid repaints on show). Release paths: a resize send confirms →
+      // ok+grace (sendResize); no resize happens → the fallback timer
+      // below fades the veil after the grace (token-guarded, so it can
+      // never expose a veil held by a newer show).
+      veilHold(veilGrace());
+      const gen = veilGen;
+      window.setTimeout(() => veilRelease(gen), veilGraceMs + 120);
       setTimeout(() => {
         doResize("show");
         term?.refresh(0, term.rows - 1);

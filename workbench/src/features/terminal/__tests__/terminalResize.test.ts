@@ -364,6 +364,29 @@ describe("resize veil (review P0/P1)", () => {
     wrapper.unmount();
   });
 
+  it("plain tab switch (no size change) still shows and clears the veil", async () => {
+    // 手测十一轮: the veil applies to EVERY tab switch — unchanged grids
+    // repaint on show, and the watcher's fallback timer fades the veil.
+    vi.useFakeTimers();
+    const { runtime, wrapper } = await mountTerminal("running");
+    await vi.advanceTimersByTimeAsync(0);
+
+    runtime.activeTabId = "other";
+    await vi.advanceTimersByTimeAsync(10);
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(false);
+
+    runtime.activeTabId = "t1";
+    await nextTick();
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
+    // The show doResize finds an unchanged grid — no instant release.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
+    // The fallback (grace + 120ms) fades it out.
+    await vi.advanceTimersByTimeAsync(600);
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("a stale ok-grace cannot release a newer hold (review P1)", async () => {
     vi.useFakeTimers();
     let releaseA!: (v: undefined) => void;
