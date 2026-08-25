@@ -125,6 +125,15 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
       onReady: () => {
         if (self) onInstanceReady(self);
       },
+      // runtime-lifecycle-ux (01 §1.3): the launcher's reconcile found this
+      // process already materialized the workspace — focus it, tell the
+      // launcher to reset silently.
+      focusExistingWorkspace: (path: string) => {
+        const dup = runtimes.value.find((r) => sameWorkspace(r.workspace.value, path));
+        if (!dup) return false;
+        activate(dup.id);
+        return true;
+      },
     });
     self = rt;
     // markRaw: pinia deeply proxies returned state; through that proxy the
@@ -270,8 +279,9 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     activate(neighbor.id);
     void (async () => {
       // Staged concurrent stop (03 §4.2): start every session close in
-      // parallel, wait at most 400ms for the terminate spawns, then stop the
-      // runtime; stop-confirmed by a follow-up inspect.
+      // parallel, wait at most 400ms for the terminate spawns, then tear the
+      // ephemeral runtime down (runtime-lifecycle-ux 01 §2.2: stop ->
+      // verify -> remove -> lease release).
       const closing = inst.tabs.value.filter(
         (t) => t.sessionId && !TERMINAL_STATES.includes(t.sessionState) && t.sessionState !== "closing"
       );
@@ -286,25 +296,18 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
       // The workspace-level Settings sentinel deliberately survives (3d).
       try {
         if (inst.runtimeId.value) {
-          const snap = await ipc.stopRuntime(inst.workspace.value.trim(), inst.runtimeId.value);
-          if (["running", "stopping", "unknown"].includes(snap.state)) {
-            const insp = await ipc.runtimeInspect(inst.workspace.value.trim(), inst.runtimeId.value);
-            if (!["stopped", "not_found"].includes(insp.state)) {
-              throw {
-                code: "WB_ERR_RUNTIME_NOT_STOPPED",
-                message: i18n.global.t("runtime.notStopped", { state: insp.state }),
-                technical_detail: null,
-                retryable: true,
-                action: "retry",
-              } as WorkbenchError;
-            }
-          }
+          await inst.teardownRuntimeAndRelease(
+            inst.workspace.value.trim(), inst.runtimeId.value
+          );
         }
       } catch (e) {
-        // The chip is already gone; a background stop failure is logged, and
-        // the next launch of this workspace surfaces the leftover through the
-        // runtime_conflict gate (the safety net for a silently-failed stop).
-        console.error("[workspaces] background stop failed (runtime_conflict gate will surface it):", e);
+        // The chip is already gone; a background cleanup failure is logged
+        // and the next launch's reconcile auto-recycles the leftover — it
+        // never resurfaces as a user-facing conflict (01 §2.2 失败路径).
+        console.error("[workspaces] background cleanup failed (next reconcile recycles):", e);
+        void ipc.logUiEvent?.(
+          "close_cleanup", "error", (e as WorkbenchError)?.code ?? undefined
+        );
       }
       inst.dispose();
       dirtyIds.delete(inst.id);
@@ -326,8 +329,22 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     if (live === 0) return true;
     const ok = await confirm(i18n.global.t("runtime.exitConfirm", { count: live }));
     if (!ok) return false;
-    // Cleanup is owned by shutdown_workbench (03 §4.3); no fire-and-forget here.
+    // Cleanup is owned by the shutdown coordinator (03 §4.3); no
+    // fire-and-forget here.
     return true;
+  }
+
+  /** runtime-lifecycle-ux Stage 3 (02 §4): the structured shutdown request's
+   * runtime targets — every materialized workspace with a live runtime id.
+   * Retention is the registry default (remove_on_close); the backend maps
+   * per-target behavior. */
+  function shutdownTargets(): Array<{ workspace: string; runtimeId: string }> {
+    return runtimes.value
+      .filter((r) => r.workspace.value.trim() && r.runtimeId.value)
+      .map((r) => ({
+        workspace: r.workspace.value.trim(),
+        runtimeId: r.runtimeId.value,
+      }));
   }
 
   // --- merged history save cycle (shell-owned; see saveTimer above) ---
@@ -423,6 +440,7 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     closeWorkspace,
     livePaneCount,
     confirmExit,
+    shutdownTargets,
     flushSave,
     loadHistory,
     byId,

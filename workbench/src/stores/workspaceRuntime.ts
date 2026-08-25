@@ -21,6 +21,7 @@ import type {
   ProviderStatus,
   RuntimeRef,
   RuntimeServicesResult,
+  ReconcilePayload,
   RuntimeSnapshot,
   RuntimeState,
   SplitAxis,
@@ -123,6 +124,10 @@ export interface WorkspaceRuntimeDeps {
   /** IDEA-3 (3c): fired once when this instance reaches status "ready"
    * (initTabs settle). The launcher instance materializes into a workspace. */
   onReady?(): void;
+  /** runtime-lifecycle-ux (01 §1.3): when reconcile reports the SAME process
+   * already materialized this workspace, the shell focuses that instance and
+   * returns true (the launcher then resets silently). */
+  focusExistingWorkspace?(path: string): boolean;
 }
 
 /** IDEA-3 (3a): one workspace's runtime state machine — status, tabs, panes,
@@ -195,6 +200,10 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   });
 
   const preflight = ref<PreflightReport | null>(null);
+  // runtime-lifecycle-ux Stage 3: the reconcile pass that precedes preflight
+  // (02 §3). Null while never run / transport-failed; a blocked
+  // classification parks here for the (Stage 4) block page.
+  const reconcile = ref<ReconcilePayload | null>(null);
   const launch = ref<LaunchConfig>({ ...DEFAULT_LAUNCH });
   const showAdvanced = ref(false);
   const startElapsedMs = ref(0);
@@ -449,23 +458,41 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   async function runPreflight() {
     if (!workspace.value.trim()) return;
     scheduleSave(); // record workspace selection (path/last_used/last_agent)
-    if (!runtimeId.value) {
-      // S2.2.b: discover an existing workbench project runtime in this
-      // workspace so preflight can match it (reuse/restart) instead of always
-      // generating a fresh id - a fresh id never matches an existing project
-      // runtime and would spuriously report resolve_conflict. Full history
-      // reconciliation (orphan detection, multi-window) lands in S2.4.
-      try {
-        const res = await ipc.listRuntimes(workspace.value.trim(), "workbench");
-        const existing = res.runtimes.find((r) => r.config.scope === "project");
-        if (existing) runtimeId.value = existing.runtime_id;
-      } catch {
-        /* Docker/CLI unavailable - preflight will report the real error */
-      }
-    }
-    if (!runtimeId.value) runtimeId.value = uuid();
+    // runtime-lifecycle-ux Stage 3 (01 §1.1, 02 §3/§5): reconcile FIRST —
+    // stale Workbench runtimes auto-recycle; the conflict page stops being
+    // the normal launch path. Every launch uses a FRESH runtime id (history
+    // runtime refs never drive reuse; the old listRuntimes discovery would
+    // re-couple us to the recycled container).
+    runtimeId.value = uuid();
+    reconcile.value = null;
     status.value = "preflight";
     error.value = null;
+    try {
+      const payload = await ipc.runtimeReconcile(workspace.value.trim());
+      reconcile.value = payload;
+      if (!payload.can_proceed) {
+        if (
+          payload.classification === "active_same_instance" &&
+          deps.focusExistingWorkspace?.(workspace.value.trim())
+        ) {
+          // Same process already materialized this workspace: it got focused
+          // — this launcher resets silently (01 §1.3).
+          resetWorkspace();
+          status.value = "picker";
+          return;
+        }
+        // active_other_instance / unknown_owner: the (Stage 4) block page;
+        // the conflict status renders it until then.
+        status.value = "conflict";
+        void loadConflicts();
+        void ipc.logUiEvent?.("reconcile_block", "error", payload.error_code ?? undefined);
+        return;
+      }
+    } catch {
+      // Reconcile transport failure: fall through to preflight — its docker
+      // gate surfaces the real problem (the reconcile CLI shares it).
+      reconcile.value = null;
+    }
     try {
       const report = await ipc.runtimePreflight(
         workspace.value.trim(),
@@ -1412,6 +1439,16 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       }
       stopTimer();
       runtimeReady.value = true;
+      // runtime-lifecycle-ux Stage 3 (01 §2.1): materialize = claim the
+      // workspace lease; the Rust supervisor starts heartbeating (never JS
+      // timers — they throttle under tray-hide). A claim loss after this
+      // surfaces via the workspace-lease-conflict event; failure here is
+      // logged, not fatal (the next reconcile short-circuits us out).
+      try {
+        await ipc.leaseClaim(workspace.value.trim());
+      } catch (e) {
+        void ipc.logUiEvent?.("lease_claim", "error", (e as WorkbenchError)?.code ?? undefined);
+      }
       await initTabs(records, opts);
       void ipc.logUiEvent?.("launch", "ok");
     } catch (e) {
@@ -1465,6 +1502,36 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     }
   }
 
+  /** runtime-lifecycle-ux Stage 3 (01 §2.2/§7): the ephemeral teardown —
+   * stop -> inspect-verify -> REMOVE (container + registry) -> release the
+   * workspace lease. Idempotent (not_found is success); failures throw for
+   * the caller to log — a leftover is auto-recycled by the next reconcile,
+   * never re-surfaced as a user-facing conflict. */
+  async function teardownRuntimeAndRelease(wsPath: string, rid: string): Promise<void> {
+    if (!rid) {
+      void ipc.leaseRelease(wsPath).catch(() => null);
+      return;
+    }
+    const snap = await ipc.stopRuntime(wsPath, rid);
+    // Only trust an observation: inspect until stopped/not_found.
+    if (["running", "stopping", "unknown"].includes(snap.state)) {
+      const insp = await ipc.runtimeInspect(wsPath, rid);
+      if (!["stopped", "not_found"].includes(insp.state)) {
+        throw {
+          code: "WB_ERR_RUNTIME_NOT_STOPPED",
+          message: i18n.global.t("runtime.notStopped", { state: insp.state }),
+          technical_detail: null,
+          retryable: true,
+          action: "retry",
+        } as WorkbenchError;
+      }
+    }
+    // remove is idempotent (not_found -> success); force covers a racing
+    // start between the stop above and here.
+    await ipc.removeRuntime(wsPath, rid, true);
+    void ipc.leaseRelease(wsPath).catch(() => null);
+  }
+
   async function keepCancelledRuntime() {
     // Keep the runtime, return to summary (it will show as reuse next preflight).
     cancelInspect.value = null;
@@ -1476,9 +1543,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   async function stopCancelledRuntime() {
     if (!runtimeId.value) return;
     try {
-      await ipc.stopRuntime(workspace.value.trim(), runtimeId.value);
+      await teardownRuntimeAndRelease(workspace.value.trim(), runtimeId.value);
     } catch {
-      /* best-effort */
+      /* best-effort: next reconcile auto-recycles the leftover */
     }
     cancelInspect.value = null;
     resetWorkspace();
@@ -1517,22 +1584,10 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     activeTabId.value = null;
     ccSwitchUiTabOpen.value = false;
     try {
-      if (runtimeId.value) {
-        const snap = await ipc.stopRuntime(workspace.value.trim(), runtimeId.value);
-        // Only trust an observation: inspect until stopped/not_found.
-        if (["running", "stopping", "unknown"].includes(snap.state)) {
-          const insp = await ipc.runtimeInspect(workspace.value.trim(), runtimeId.value);
-          if (!["stopped", "not_found"].includes(insp.state)) {
-            throw {
-              code: "WB_ERR_RUNTIME_NOT_STOPPED",
-              message: i18n.global.t("runtime.notStopped", { state: insp.state }),
-              technical_detail: null,
-              retryable: true,
-              action: "retry",
-            } as WorkbenchError;
-          }
-        }
-      }
+      // runtime-lifecycle-ux Stage 3: stop-only became the ephemeral teardown
+      // (stop -> verify -> remove -> lease release) — a manually stopped
+      // workspace leaves nothing behind to conflict with the next launch.
+      await teardownRuntimeAndRelease(workspace.value.trim(), runtimeId.value);
     } catch (e) {
       status.value = "error";
       error.value = e as WorkbenchError;
@@ -1571,6 +1626,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     runtimeId,
     runtimeReady,
     preflight,
+    reconcile,
     logTerminalResizeError,
     launch,
     showAdvanced,
@@ -1621,6 +1677,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     keepCancelledRuntime,
     stopCancelledRuntime,
     stopRuntime,
+    teardownRuntimeAndRelease,
     initTabs,
     openTab,
     splitTabPane,

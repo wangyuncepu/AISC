@@ -114,6 +114,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
     pickAndPinCli,
     setExitError,
     confirmExit: () => ws.confirmExit(),
+    /** runtime-lifecycle-ux Stage 3 (02 §4): structured-shutdown runtime
+     * targets for the App exit flow. */
+    shutdownTargets: () => ws.shutdownTargets(),
     flushSave: () => ws.flushSave(),
     loadHistory: () => ws.loadHistory(),
     // IDEA-3 (3d): Settings is a WORKSPACE-layer sentinel now — forwarded

@@ -46,7 +46,7 @@ const ALLOWED_IN_COMPONENTS = new Set([
   "resizeSession",
   "captureWindowGeometry",
   "resolveLocale",
-  "shutdownWorkbench",
+  "shutdownWorkbenchV2",
   "trayRemove",
   "trayAvailable",
 ]);
