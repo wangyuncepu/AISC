@@ -544,6 +544,29 @@ case "${AI_BRIEF_ON_START,,}" in
 esac
 
 # ==========================================
+# 3.7 容器内 Web 服务网关（svc-1，docs/plans/container-service-access.md）
+#   aisc-web-gateway 监听 0.0.0.0:45871，按 Host: p<port>.localhost 把请求
+#   双向字节转发到容器内 127.0.0.1:<port>；只转发已注册端口
+#   （/run/aisc/web-services/*.json，由 aisc-web-expose 注册）。
+#   宿主经 Docker loopback publish（runtime start / aisc run 注入）访问。
+#   idle 与交互模式一律启动；失败只告警不阻断 —— runtime ready 以
+#   runtime-context.json 为准，gateway 崩溃不许让 runtime 假报或漏报 ready。
+#   无 python3 的极端镜像跳过（与 cc-switch 守护同门槛）。
+# ==========================================
+if command -v aisc-web-gateway >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    mkdir -p /run/aisc/web-services
+    chmod 700 /run/aisc/web-services 2>/dev/null || true
+    bash -c "exec aisc-web-gateway >/tmp/aisc-web-gateway.log 2>&1" &
+    AISC_WEB_GW_PID=$!
+    sleep 0.3
+    if kill -0 "$AISC_WEB_GW_PID" 2>/dev/null; then
+        echo "✅ AISC Web 网关已启动 (容器端口 45871；Agent 注册服务用: aisc-web-expose <端口>)"
+    else
+        echo "⚠️  AISC Web 网关启动失败；日志: /tmp/aisc-web-gateway.log" >&2
+    fi
+fi
+
+# ==========================================
 # 4. 智能引导：CLI 选择
 # ==========================================
 # 支持直接启动 codex

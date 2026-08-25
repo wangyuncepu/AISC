@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""aisc-web-expose <port> [--name <label>] — register a container web service.
+
+Idempotent; re-registering updates the label. The helper only edits the
+in-container manifest (/run/aisc/web-services/<port>.json) — it never
+guesses the host port and never prints a URL; the host CLI / Workbench
+generates the canonical URL from Docker inspect data.
+
+Contract: docs/plans/container-service-access/decisions.md §5.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+_lib_dir = os.environ.get("AISC_WEB_LIB_DIR") or "/usr/local/bin/lib"
+if _lib_dir not in sys.path:
+    sys.path.insert(0, _lib_dir)
+
+from aisc_web_registry import main_expose  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main_expose(sys.argv[1:]))
