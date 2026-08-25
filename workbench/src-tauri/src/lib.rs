@@ -6,6 +6,7 @@
 
 pub mod cli;
 pub mod data_root;
+pub mod docker_ownership;
 pub mod doctor;
 pub mod env;
 pub mod error;

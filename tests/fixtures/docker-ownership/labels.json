@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "comment": "Frozen ownership-label contract (docker-ownership-foundation A0). Python src/aisc/domain/docker_ownership.py is authoritative; Rust docker_ownership.rs and tests/test_docker_ownership.py must decode this file and agree on every value. example_* entries are complete builder outputs — mirrors must reproduce them exactly.",
+  "container_labels": {
+    "managed": "io.aisc.managed",
+    "kind": "io.aisc.kind",
+    "owner": "io.aisc.owner",
+    "schema_version": "io.aisc.schema-version",
+    "workspace_key": "io.aisc.workspace-key",
+    "runtime_id": "io.aisc.runtime-id"
+  },
+  "image_labels": {
+    "managed": "org.aisc.managed",
+    "kind": "org.aisc.kind",
+    "schema_version": "org.aisc.schema-version",
+    "source_version": "org.aisc.source-version"
+  },
+  "kind_values": {
+    "runtime": "runtime",
+    "one_shot": "one-shot",
+    "toolchain": "toolchain"
+  },
+  "owner_values": {
+    "workbench": "workbench",
+    "cli": "cli"
+  },
+  "image_kind_workstation": "workstation-image",
+  "label_schema_v1": "1",
+  "envelope_schema_v1": 1,
+  "example_runtime_labels": {
+    "io.aisc.managed": "true",
+    "io.aisc.kind": "runtime",
+    "io.aisc.owner": "workbench",
+    "io.aisc.schema-version": "1",
+    "io.aisc.runtime-id": "11111111-1111-4111-8111-111111111111",
+    "io.aisc.workspace-key": "abcd1234"
+  },
+  "example_one_shot_labels": {
+    "io.aisc.managed": "true",
+    "io.aisc.kind": "one-shot",
+    "io.aisc.owner": "cli",
+    "io.aisc.schema-version": "1"
+  },
+  "example_toolchain_volume_labels": {
+    "io.aisc.managed": "true",
+    "io.aisc.kind": "toolchain",
+    "io.aisc.owner": "workbench",
+    "io.aisc.schema-version": "1",
+    "io.aisc.workspace-key": "abcd1234"
+  },
+  "example_image_labels": {
+    "org.aisc.managed": "true",
+    "org.aisc.kind": "workstation-image",
+    "org.aisc.schema-version": "1",
+    "org.aisc.source-version": "2.1.6"
+  },
+  "example_label_args": [
+    "--label", "io.aisc.kind=one-shot",
+    "--label", "io.aisc.managed=true",
+    "--label", "io.aisc.owner=cli",
+    "--label", "io.aisc.schema-version=1"
+  ],
+  "example_managed_filter": "label=io.aisc.managed=true",
+  "example_kind_filter": "label=io.aisc.kind=toolchain"
+}
