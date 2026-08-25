@@ -804,6 +804,16 @@ onMounted(() => {
   // transition, so sync immediately.
   if (pane.value?.sessionState === "running") doResize("mount");
 
+  // B-05 手测十三轮: a NEWLY CREATED tab mounts straight into view —
+  // cover its first frames (welcome line / starting blank) with the same
+  // veil. The starting→running hop re-pins via doResize("running") and
+  // releases on ok+grace; the fallback below fades the quiet case.
+  if (visible.value) {
+    veilHold(veilGrace());
+    const gen = veilGen;
+    window.setTimeout(() => veilRelease(gen), veilGraceMs + 160);
+  }
+
   // B-05 (fix F3): self-heal tick. The size mismatch shows up randomly (no
   // reproducible trigger), so convergence cannot rely on user-driven resize
   // events. While live + visible, re-check every 2s; already converged is a

@@ -345,7 +345,7 @@ describe("resize veil (review P0/P1)", () => {
   it("pins on tab show BEFORE the show doResize runs (stale-grid frame covered)", async () => {
     vi.useFakeTimers();
     const { runtime, wrapper } = await mountTerminal("running");
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1000); // past the mount veil window
 
     // Hide the tab, then re-show with a DIFFERENT fitted size waiting: the
     // watcher pins pre-paint; doResize("show") sits in a setTimeout(0)
@@ -364,12 +364,24 @@ describe("resize veil (review P0/P1)", () => {
     wrapper.unmount();
   });
 
+  it("a newly created tab mounts under the veil (手测十三轮)", async () => {
+    vi.useFakeTimers();
+    const { wrapper } = await mountTerminal("starting");
+    await nextTick();
+    // Mounted straight into view: the veil covers the first frames.
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
+    // Quiet case (never goes running here): the fallback fades it out.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("plain tab switch (no size change) still shows and clears the veil", async () => {
     // 手测十一轮: the veil applies to EVERY tab switch — unchanged grids
     // repaint on show, and the watcher's fallback timer fades the veil.
     vi.useFakeTimers();
     const { runtime, wrapper } = await mountTerminal("running");
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1000); // past the mount veil window
 
     runtime.activeTabId = "other";
     await vi.advanceTimersByTimeAsync(10);
