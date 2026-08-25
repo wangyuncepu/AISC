@@ -151,8 +151,14 @@ impl TraceOutcome for crate::error::WorkbenchError {
 mod tests {
     use super::*;
 
+    /// The ring is process-global and both tests below assert on
+    /// `snapshot().last()`, so they must not interleave (CI flake 2026-08-25:
+    /// the docker test's snapshot caught the cli test's event as last).
+    static TEST_ORDER: OnceLock<Mutex<()>> = OnceLock::new();
+
     #[tokio::test]
     async fn timed_records_ok_and_bounds_the_ring() {
+        let _serial = TEST_ORDER.get_or_init(|| Mutex::new(())).lock().unwrap();
         for _ in 0..(MAX_TRACES + 20) {
             let _: Result<(), crate::error::WorkbenchError> =
                 timed("cli", "version", async { Ok(()) }).await;
@@ -165,6 +171,7 @@ mod tests {
 
     #[tokio::test]
     async fn timed_records_error_outcome() {
+        let _serial = TEST_ORDER.get_or_init(|| Mutex::new(())).lock().unwrap();
         let err: Result<(), crate::error::WorkbenchError> =
             timed("docker", "env_readiness", async { Err(crate::error::WorkbenchError::cli_timeout()) }).await;
         assert!(err.is_err());
