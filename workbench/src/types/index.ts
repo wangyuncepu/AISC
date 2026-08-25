@@ -286,6 +286,14 @@ export interface RuntimeSnapshot {
   stale: boolean;
   /** svc-0: absent on old CLI payloads → treat as unavailable (legacy). */
   web_access?: WebGatewayInfo | null;
+  /** runtime-lifecycle-ux 3a: advisory policy + toolchain health (absent on
+   *  old CLIs — consumers render nothing). */
+  dependency_policy?: string;
+  toolchain?: {
+    mounted: boolean;
+    storage: string;
+    compatibility: "compatible" | "warning" | "unknown";
+  };
 }
 
 /** `aisc runtime list` envelope data (05 §5.3). */

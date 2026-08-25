@@ -30,6 +30,15 @@ const doctorStore = useDoctorStore();
 
 const snap = computed(() => store.runtimeSnapshot);
 
+/** runtime-lifecycle-ux 3a: policy label (persistent | ephemeral toolchain). */
+const dependencyPolicyLabel = computed(() => {
+  const policy = snap.value?.dependency_policy;
+  if (!policy) return "";
+  return policy === "persistent_toolchain"
+    ? t("sidebar.toolchainPersistent")
+    : t("sidebar.toolchainEphemeral");
+});
+
 // --- observed time: no ticker; cached per snapshot, refreshed on details open
 const agoCache = new Map<string, string>();
 function agoFor(iso: string | undefined): string {
@@ -201,6 +210,16 @@ function copyDone(key: string): boolean {
              inspectInFlight: the 5s poll holds that flag for 1-3s per cycle
              and a gated stop reads as a dead button (2026-08-25 report). -->
         <button class="danger" @click="workspaces.closeWorkspace(store.id)">{{ t("sidebar.stopRuntime") }}</button>
+      </div>
+    </section>
+
+    <!-- runtime-lifecycle-ux 3a (task 11): advisory dependency policy +
+         toolchain health — never a startup option, read-only display. -->
+    <section v-if="store.runtimeSnapshot?.dependency_policy" class="block">
+      <div class="label">{{ t("sidebar.toolchain") }}</div>
+      <div class="value">{{ dependencyPolicyLabel }}</div>
+      <div class="muted" :data-compat="store.runtimeSnapshot?.toolchain?.compatibility">
+        {{ t("sidebar.toolchainHealth." + (store.runtimeSnapshot?.toolchain?.compatibility ?? "unknown")) }}
       </div>
     </section>
 
