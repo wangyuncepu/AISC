@@ -44,7 +44,7 @@
 | 项 | 处置 |
 |---|---|
 | B-05 族终端三症（长输入不换行/fit 迟滞/快速切 tab 行错乱） | todo.md「UI10 终端非视觉缺陷」挂账，待专项排期（xterm/PTY 边界，D10-08） |
-| tab 动效观感 | 用户「勉强通过」；motion token 已集中（--duration*/--ease*），后续调值一处生效 |
+| tab 动效观感 | 用户「勉强通过」；motion token 已集中（--duration*/--ease*），后续调值一处生效。**已关闭（2026-08-25 用户确认）**：B-05 专项的终端切换遮罩动效（十三轮打磨）实质完成该项收口 |
 | Settings chip 10px/DoctorDialog 残留散点 radius | 随 10f 清理已大部分收敛，余量低风险 |
 | Vite HMR 失稳给陈旧代码 | 开发期坑已记录；重启 dev 即解 |
 
