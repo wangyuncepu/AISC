@@ -306,9 +306,17 @@ function doResize(reason = "tick") {
     const before = `${term.cols}x${term.rows}`;
     fitGrid();
     if (before !== `${term.cols}x${term.rows}`) {
-      const rect = container.value?.getBoundingClientRect();
+      // Walk the whole ancestor chain: the first element that shrinks while
+      // its parent does not is the content-coupled culprit.
+      const chain: string[] = [];
+      let el: HTMLElement | null = container.value;
+      for (let i = 0; el && i < 7; i += 1) {
+        const cls = (el.className && String(el.className).split(" ")[0]) || el.tagName.toLowerCase();
+        chain.push(`${cls}:${Math.round(el.getBoundingClientRect().width)}`);
+        el = el.parentElement;
+      }
       store.logTerminalProbe(
-        `fit:${reason}:${before}->${term.cols}x${term.rows}:rect=${Math.round(rect?.width ?? -1)}x${Math.round(rect?.height ?? -1)}:win=${window.innerWidth}`,
+        `fit:${reason}:${before}->${term.cols}x${term.rows}:win=${window.innerWidth}:${chain.join("|")}`,
       );
     }
     const sid = sessionId.value;
