@@ -124,6 +124,16 @@ def plan_run(
             exclude = set()
     web_gateway_port = allocate_gateway_host_port(exclude=exclude)
 
+    # runtime-lifecycle-ux 3a: one-shot runs are project-scoped by definition
+    # (agent state mounts from the data root) — they mount the persistent
+    # toolchain exactly like managed runtimes (host_bind backend).
+    toolchain_root = ""
+    if ws_state_dir is not None:
+        from aisc.application.toolchain import prepare_toolchain, toolchain_dir_for
+
+        prepare_toolchain(ws_state_dir)
+        toolchain_root = str(toolchain_dir_for(ws_state_dir)).replace("\\", "/")
+
     return RunPlan(
         image=image,
         workspace=str(ws_path),
@@ -137,6 +147,7 @@ def plan_run(
         keep_alive=keep_alive,
         agent_state_root=str(ws_state_dir),
         web_gateway_host_port=web_gateway_port,
+        toolchain_root=toolchain_root,
     )
 
 

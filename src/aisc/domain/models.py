@@ -380,6 +380,10 @@ class RunPlan:
     # allocates one — one-shot `aisc run` containers get the same capability
     # as managed runtimes.
     web_gateway_host_port: int = 0
+    # runtime-lifecycle-ux 3a: host-side persistent toolchain dir (project
+    # scope one-shots get the same capability as managed runtimes); empty =
+    # no toolchain mount (temporary mode -> container-side /tmp layout).
+    toolchain_root: str = ""
 
     @property
     def docker_argv(self) -> list:
@@ -419,6 +423,10 @@ class RunPlan:
                 "-v", f"{base}/cc-switch:/root/.cc-switch",
                 "-v", f"{base}/runtime:/root/.local/state/cc-switch",
             ])
+            if self.toolchain_root:
+                from aisc.domain.toolchain import TOOLCHAIN_MOUNT_TARGET
+
+                argv.extend(["-v", f"{self.toolchain_root}:{TOOLCHAIN_MOUNT_TARGET}"])
         if self.non_interactive:
             argv.extend([
                 "-e", "AISC_NON_INTERACTIVE=1",
@@ -484,6 +492,12 @@ class RuntimeSnapshot:
     # consumers treat absent as unavailable, never as a parse failure.
     web_access: Optional[Dict[str, Any]] = None
 
+    # runtime-lifecycle-ux 3a: scope-derived dependency policy
+    # (persistent_toolchain | ephemeral_toolchain; "" on legacy records) and
+    # the host-side toolchain health summary. Both advisory — never gates.
+    dependency_policy: str = ""
+    toolchain: Optional[Dict[str, Any]] = None
+
     # Last operation error (None if last operation succeeded)
     last_operation_error: Optional[Dict[str, Any]] = None
 
@@ -516,6 +530,10 @@ class RuntimeSnapshot:
             result["started_at"] = self.started_at
         if self.web_access is not None:
             result["web_access"] = self.web_access
+        if self.dependency_policy:
+            result["dependency_policy"] = self.dependency_policy
+        if self.toolchain is not None:
+            result["toolchain"] = self.toolchain
         if self.last_operation_error:
             result["last_operation_error"] = self.last_operation_error
 

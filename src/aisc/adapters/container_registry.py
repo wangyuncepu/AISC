@@ -299,6 +299,9 @@ def register(root: Path, name: str, meta: Dict[str, Any],
         "retention": meta.get("retention", ""),
         "dependency_policy": meta.get("dependency_policy", ""),
         "workbench_instance_id": meta.get("workbench_instance_id", ""),
+        # runtime-lifecycle-ux 3a: which storage backend this runtime's
+        # persistent toolchain uses ("" on legacy/non-project records).
+        "toolchain_storage": meta.get("toolchain_storage", ""),
         "last_state_change_at": meta.get("last_state_change_at") or time.time(),
     }
     with _registry_lock(root):

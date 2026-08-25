@@ -187,6 +187,68 @@ export CODEX_CONFIG_DIR
 export CODEX_HOME="$CODEX_CONFIG_DIR"
 export CC_SWITCH_CONFIG_DIR
 
+# --- runtime-lifecycle-ux 3a: 持久/临时 toolchain --------------------------------
+# project 模式：宿主 toolchain 目录挂载在 /opt/aisc/toolchain（跨容器保留）。
+# temporary 模式：容器内等价布局 /tmp/aisc-toolchain（随容器消亡）。
+# 两种模式注入完全一致的用户级包管理器路径：
+#   npm -g      → $TC/npm-global（持久）
+#   pip --user  → $TC/python（PYTHONUSERBASE；不强制 PIP_USER——会破坏 venv）
+#   cargo install → $TC/cargo
+if [ -d /opt/aisc/toolchain ]; then
+    TC="/opt/aisc/toolchain"
+else
+    TC="/tmp/aisc-toolchain"
+    mkdir -p "$TC/bin" "$TC/npm-global" "$TC/python" "$TC/cargo" "$TC/cache"
+fi
+export PATH="$TC/bin:$TC/npm-global/bin:$TC/cargo/bin:$PATH"
+export NPM_CONFIG_PREFIX="$TC/npm-global"
+export PYTHONUSERBASE="$TC/python"
+export CARGO_HOME="$TC/cargo"
+
+# 轻量环境基线（02 §8.3）：容器侧事实合并进 environment.json（首次写入）；
+# 与既有基线的关键版本不符 → 只写 warning 文件（inspect 侧显示为非阻断提
+# 示），绝不阻断、不自动删除（D-RUNTIME-11）。
+if [ -w "$TC" ]; then
+    python3 - "$TC" "$AISC_IMAGE_ID" <<'PYTC' 2>/dev/null || true
+import json, os, platform, subprocess, sys
+tc, image_id = sys.argv[1], os.environ.get("AISC_IMAGE_ID", "")
+def probe(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        return ""
+facts = {
+    "os": "linux",
+    "arch": platform.machine(),
+    "glibc": probe(["ldd", "--version"]).splitlines()[0] if probe(["ldd", "--version"]) else "",
+    "node": probe(["node", "--version"]),
+    "python": platform.python_version(),
+    "image_id": image_id,
+}
+marker_path = os.path.join(sys.argv[1], "environment.json")
+baseline = {}
+if os.path.exists(marker_path):
+    try:
+        baseline = json.load(open(marker_path, encoding="utf-8"))
+    except Exception:
+        baseline = {}
+known = baseline.get("container") or {}
+changed = any(facts.get(k) and known.get(k) != facts[k] for k in ("glibc", "node", "python"))
+if not baseline:
+    baseline = {"schema": "aisc.toolchain-environment/v1", "schema_version": 1}
+if not known:
+    baseline["container"] = facts
+    tmp = marker_path + ".tmp"
+    open(tmp, "w", encoding="utf-8").write(json.dumps(baseline, indent=2) + "\n")
+    os.replace(tmp, marker_path)
+elif changed:
+    open(os.path.join(sys.argv[1], "toolchain-incompatible.txt"), "w", encoding="utf-8").write(
+        "toolchain baseline differs from this image; reinstall tools if they misbehave\n"
+        f"baseline={json.dumps(known)}\ncurrent={json.dumps(facts)}\n"
+    )
+PYTC
+fi
+
 # Claude 用户态 .claude.json 持久化（2026-08-25，auto-mode 排障）：
 # Claude Code 把 onboarding/特性开关缓存等用户态写在 $HOME/.claude.json；
 # 项目态只挂载 CLAUDE_CONFIG_DIR（/root/.claude），HOME 不落盘 —— 容器重建
