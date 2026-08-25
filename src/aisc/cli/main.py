@@ -430,6 +430,38 @@ def _build_parser() -> _AiscArgumentParser:
     psp = sub.add_parser("ps", help="List all registered containers", allow_abbrev=False)
     _add_global_args(psp, is_subparser=True)
 
+    # --- maintenance (docker-resource-lifecycle B) ---
+    mtp = sub.add_parser("maintenance", help="Installer-facing Docker lifecycle ops",
+                         allow_abbrev=False)
+    _add_global_args(mtp, is_subparser=True)
+    mtsub = mtp.add_subparsers(dest="maintenance_command", title="maintenance commands",
+                               parser_class=_AiscArgumentParser)
+
+    mts = mtsub.add_parser("docker-scan", help="Read-only ownership classification",
+                           allow_abbrev=False)
+    _add_global_args(mts, is_subparser=True)
+    mts.add_argument("--context", choices=["first_install", "upgrade", "uninstall"],
+                     default="upgrade",
+                     help="Install context drives legacy-image evidence rules")
+    mts.add_argument("--old-image-id", action="append", default=[],
+                     help="Upgrade-captured old image ID (temporary evidence; repeatable)")
+
+    mtc = mtsub.add_parser("docker-cleanup", help="Remove owned/legacy containers+images",
+                           allow_abbrev=False)
+    _add_global_args(mtc, is_subparser=True)
+    mtc.add_argument("--context", choices=["first_install", "upgrade", "uninstall"],
+                     default="uninstall")
+    mtc.add_argument("--old-image-id", action="append", default=[])
+
+    mtr = mtsub.add_parser("docker-rebuild", help="No-cache rebuild with old-ID handoff",
+                           allow_abbrev=False)
+    _add_global_args(mtr, is_subparser=True)
+    mtr.add_argument("--root", required=True, help="Bundle root (contains Dockerfile)")
+    mtr.add_argument("--tag", default="super-claude:latest")
+    mtr.add_argument("--old-image-id", default="")
+    mtr.add_argument("--no-cache", action="store_true", default=True)
+    mtr.add_argument("--pull", action="store_true", default=False)
+
     # --- runtime ---
     rtp = sub.add_parser("runtime", help="Runtime control plane (Workbench Phase 0)", allow_abbrev=False)
     _add_global_args(rtp, is_subparser=True)
@@ -750,7 +782,7 @@ def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "profile",
              "status", "stop", "restart", "shell", "switch", "provider",
              "cc-switch", "network", "usage", "logs", "ps", "runtime", "session",
-             "artifact", "data-root"}
+             "artifact", "data-root", "maintenance"}
     for arg in argv:
         if arg in known:
             return arg
@@ -1476,6 +1508,44 @@ def _cmd_ps(
     return data, 0, []
 
 
+def _cmd_maintenance(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Any, int, List[Dict[str, Any]]]:
+    """Execute ``aisc maintenance`` subcommands (docker-resource-lifecycle B).
+
+    Exit codes (02 §3): 0 all-ok/absent · 3 docker unavailable · 1 partial
+    resource failures · 2 usage. stdout carries ONLY the JSON envelope;
+    Docker noise rides stderr via run_captured.
+    """
+    from aisc.adapters.docker_ import RealDockerExecutor
+    from aisc.application.docker_lifecycle import (
+        docker_cleanup, docker_rebuild, docker_scan,
+    )
+    from aisc.domain.models import CliError
+
+    sub = args.maintenance_command
+    executor = RealDockerExecutor()
+    if sub == "docker-scan":
+        data = docker_scan(executor, context=args.context,
+                           old_image_ids=args.old_image_id)
+        return data, 0, []
+    if sub == "docker-cleanup":
+        try:
+            data = docker_cleanup(executor, context=args.context,
+                                  old_image_ids=args.old_image_id)
+        except CliError as exc:
+            raise
+        failed = bool(data["containers"]["failed"] or data["images"]["failed"])
+        return data, (1 if failed else 0), []
+    if sub == "docker-rebuild":
+        data = docker_rebuild(executor, root=args.root, tag=args.tag,
+                              old_image_id=args.old_image_id,
+                              no_cache=args.no_cache, pull=args.pull)
+        return data, (1 if data.get("failed") else 0), []
+    return None, 2, [build_error("AISC_ERR_USAGE", f"Unknown maintenance subcommand: {sub}")]
+
+
 def _cmd_runtime(
     args: argparse.Namespace,
     effective_format: str,
@@ -2091,6 +2161,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_logs(args, effective_format)
         elif args.command == "ps":
             data, exit_code, errors = _cmd_ps(args, effective_format)
+        elif args.command == "maintenance":
+            data, exit_code, errors = _cmd_maintenance(args, effective_format)
         elif args.command == "runtime":
             data, exit_code, errors = _cmd_runtime(args, effective_format)
         elif args.command == "session":

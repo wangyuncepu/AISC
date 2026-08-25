@@ -336,10 +336,16 @@ class BuildPlan:
             argv.append("--no-cache")
         if self.pull:
             argv.append("--pull")
+        from aisc.domain.docker_ownership import image_labels, label_args
+
         argv.extend([
             "--build-arg", f"USE_CN_MIRROR={self.build_arg_use_cn_mirror}",
             "--build-arg", f"NODE_IMAGE={self.build_arg_node_image}",
         ])
+        # docker-resource-lifecycle A2: provenance labels injected by the
+        # unified build argv (org.aisc.*; 02 §1.2 — never only host logs).
+        import aisc as _aisc
+        argv.extend(label_args(image_labels(getattr(_aisc, "__version__", "") or "dev")))
         if self.cc_switch_version:
             argv.extend([
                 "--build-arg", f"CC_SWITCH_RESOLVED_VERSION={self.cc_switch_version}",
@@ -410,9 +416,14 @@ class RunPlan:
             argv.append("-d")
         elif self.interactive and not self.non_interactive:
             argv.append("-it")
+        from aisc.domain.docker_ownership import label_args, one_shot_labels
+
         argv.extend([
             "-e", "TERM=xterm-256color",
             "--name", self.name,
+            # runtime-lifecycle A2 / docker-ownership A0: labels prove
+            # ownership for the maintenance classifier (kind=one-shot).
+            *label_args(one_shot_labels()),
             "-v", f"{self.workspace}:/root/app",
         ])
         if self.agent_state_root:

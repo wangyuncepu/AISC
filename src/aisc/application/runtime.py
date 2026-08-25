@@ -1095,14 +1095,12 @@ def start_runtime(
             )
 
         # --- create detached idle container ---
+        from aisc.domain.docker_ownership import label_args, runtime_labels
+
         argv = [
             "run", "-d",
             "--name", container_name,
-            "--label", "io.aisc.managed=true",
-            "--label", "io.aisc.kind=runtime",
-            "--label", f"io.aisc.runtime-id={runtime_id}",
-            "--label", f"io.aisc.owner={owner}",
-            "--label", f"io.aisc.workspace-key={ws_key}",
+            *label_args(runtime_labels(runtime_id, owner, ws_key)),
             "-e", f"CLI_SCOPE={scope}",
             "-e", "AISC_RUNTIME_MODE=idle",
             "-e", f"AISC_RUNTIME_ID={runtime_id}",

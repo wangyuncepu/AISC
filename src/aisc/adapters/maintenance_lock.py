@@ -25,6 +25,7 @@ they know the contention window is short.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator
 
 from aisc.adapters.data_root_store import SCOPE_SHARED, DataRootStore
@@ -65,6 +66,24 @@ def docker_maintenance_lock(
 def maintenance_lock_path(store: DataRootStore):
     """Canonical lock file path (contract: ``state/locks/<name>.lock``)."""
     return store.lock_path_for(MAINTENANCE_LOCK_NAME, scope=SCOPE_SHARED)
+
+
+@contextmanager
+def docker_maintenance_lock_at_root(
+    data_root,
+    timeout: float = MAINTENANCE_LOCK_TIMEOUT,
+) -> Iterator[None]:
+    """Same lock, addressed by the data ROOT directly (installer-side
+    callers have no workspace to resolve a store with). Identical file —
+    both entries serialize against each other."""
+    from aisc.adapters.data_root_store import file_lock
+    from aisc.domain.data_root import LOCKS_SUBDIR
+
+    lock_path = Path(str(data_root)).joinpath(*LOCKS_SUBDIR.split("/")) / (
+        MAINTENANCE_LOCK_NAME + ".lock"
+    )
+    with file_lock(lock_path, timeout, error_code=ERR_MAINTENANCE_LOCK_TIMEOUT):
+        yield
 
 
 # Re-exported for callers that construct their own timeout errors.
