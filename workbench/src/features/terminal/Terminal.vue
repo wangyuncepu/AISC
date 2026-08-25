@@ -277,23 +277,46 @@ function measureCell(): { w: number; h: number } | null {
   return { w: r.width / 10, h: r.height };
 }
 
+/**
+ * The REAL cell width as xterm itself renders it: `.xterm-screen` is sized
+ * to cols × actual-cell (device-pixel snapped by the renderer). A CSS text
+ * probe can differ by a fraction of a pixel per cell — across 140+ columns
+ * that overflows the container by several columns, which overflow:hidden
+ * then clips (right-edge text cut, 手测六轮红框). Prefer this; the probe
+ * only bootstraps the very first grid before any screen exists.
+ */
+function actualCellWidth(): number | null {
+  const screen = container.value?.querySelector<HTMLElement>(".xterm-screen");
+  if (!screen || !term || term.cols <= 0) return null;
+  const w = screen.getBoundingClientRect().width;
+  if (w <= 0) return null;
+  return w / term.cols;
+}
+
 function fitGrid(): void {
   if (!term) return;
   const host = container.value;
-  const cell = host ? measureCell() : null;
   const rect = host?.getBoundingClientRect();
-  let cols: number;
-  let rows: number;
-  if (!cell || !rect || rect.width <= 0 || rect.height <= 0) {
+  if (!rect || rect.width <= 0 || rect.height <= 0) {
     // jsdom / not laid out yet: fall back to the addon (tests drive it).
     fit?.fit();
-    if (!term) return;
-    cols = term.cols;
-    rows = term.rows;
-  } else {
-    cols = Math.max(2, Math.floor((rect.width + 0.5) / cell.w));
-    rows = Math.max(1, Math.floor((rect.height + 0.5) / cell.h));
+    if (term) termCols.value = term.cols;
+    return;
   }
+  // Bootstrap cell estimate from a settings-font probe (same zoom subtree).
+  const probe = measureCell();
+  let cellW = probe?.w ?? 0;
+  let cellH = probe?.h ?? 0;
+  // Self-calibrate against xterm's own rendered screen whenever available.
+  const real = actualCellWidth();
+  if (real && real > 0) cellW = real;
+  if (cellW <= 0 || cellH <= 0) {
+    fit?.fit();
+    if (term) termCols.value = term.cols;
+    return;
+  }
+  const cols = Math.max(2, Math.floor(rect.width / cellW));
+  const rows = Math.max(1, Math.floor(rect.height / cellH));
   termCols.value = cols; // narrow-overlay truth: the FITTED width
   // B-05 手测四轮: TUI floor. Below the readable minimum the overlay
   // covers the pane, and BOTH grids (xterm + PTY) hold at the floor — the
@@ -308,6 +331,22 @@ function fitGrid(): void {
       : cols;
   if (grid !== term.cols || rows !== term.rows) {
     term.resize(grid, rows);
+    // One correction pass: the resize may have re-snapped the cell (rare);
+    // re-derive once so the settled grid never overflows the container.
+    const real2 = actualCellWidth();
+    if (real2 && real2 > 0 && Math.abs(real2 - cellW) > 0.01) {
+      const cols2 = Math.max(2, Math.floor(rect.width / real2));
+      const grid2 =
+        leafSessionType.value !== null &&
+        leafSessionType.value !== "bash" &&
+        cols2 < NARROW_TUI_MIN_COLS
+          ? NARROW_TUI_MIN_COLS
+          : cols2;
+      if (grid2 !== term.cols) {
+        term.resize(grid2, rows);
+        termCols.value = cols2;
+      }
+    }
   }
 }
 
