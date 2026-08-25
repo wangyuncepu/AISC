@@ -88,10 +88,14 @@ function activateRenderedTab(id: string): void {
   focusTabTerminal(id);
 }
 
-/** 10e r7 (user feedback): tab CONTENT now fades in on switch — the v-show
+/** 10e r7 (user feedback): tab CONTENT fades in on switch — the v-show
  * panes stay mounted (buffer-safe design), so a display:none -> block swap
  * can't CSS-transition; orchestrate manually: pin opacity 0, then release on
- * the next frame so the 150ms ease runs. */
+ * the next frame so the ease runs.
+ * B-05 手测十二/十三轮: LIVE terminal panes are excluded — the terminal's
+ * resize veil owns their switch motion (a second opacity ramp on top read
+ * as flicker). GUIDE/IDLE panes and the settings pane have no veil and keep
+ * this fade. */
 const terminalAreaRef = ref<HTMLElement | null>(null);
 watch(
   () => store.activeTabId,
@@ -99,13 +103,25 @@ watch(
     if (!id || store.status !== "ready") return;
     void nextTick(() => {
       const area = terminalAreaRef.value;
-      const wrap = area?.querySelector<HTMLElement>(`.term-wrap[data-tab="${CSS.escape(id)}"]`)
-        ?? area?.querySelector<HTMLElement>(".settings-pane");
-      if (!wrap) return;
-      wrap.classList.add("pane-fade-in");
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => wrap.classList.remove("pane-fade-in")),
-      );
+      if (!area) return;
+      const tb = store.tabs.find((x) => x.tabId === id);
+      const st = tb ? tb.panes[tb.activePaneId]?.sessionState : undefined;
+      const targets: HTMLElement[] = [];
+      if (st === undefined || st === "guide" || st === "idle") {
+        // No terminal veil on this pane (guide/idle, or a sentinel tab).
+        const wrap = area.querySelector<HTMLElement>(
+          `.term-wrap[data-tab="${CSS.escape(id)}"]`,
+        );
+        if (wrap) targets.push(wrap);
+        const settings = area.querySelector<HTMLElement>(".settings-pane");
+        if (settings) targets.push(settings);
+      }
+      for (const wrap of targets) {
+        wrap.classList.add("pane-fade-in");
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => wrap.classList.remove("pane-fade-in")),
+        );
+      }
     });
   },
 );
@@ -353,11 +369,18 @@ function setPaneTreeRef(tabId: string) {
 .gate .err { color: var(--text-2); }
 .gate .detail { font-size: var(--font-sm); color: var(--text-muted); }
 .center .msg { color: var(--text-muted); }
-.main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.ready { flex: 1; display: flex; min-height: 0; position: relative; }
+/* B-05: min-width:0 is LOAD-BEARING on both — without it the flex
+ * min-width:auto floor makes the terminal column content-sized by the
+ * xterm screen, so a shrinking window could only release layout ONE FIT
+ * AT A TIME (the 14px-per-150ms staircase squeeze; growing snapped
+ * instantly, which is why the two directions behaved differently). */
+.main { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.ready { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: var(--bg); display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
-/* 10e: content fade on tab switch (opacity only — D10-09). */
+/* 10e: content fade on tab switch (opacity only — D10-09). Applied to
+ * guide/idle panes and the settings pane only (B-05 手测十二轮): live
+ * terminal panes are faded by the terminal's own resize veil instead. */
 .term-wrap, .settings-pane { transition: opacity var(--duration-normal) var(--ease); }
 .term-wrap.pane-fade-in, .settings-pane.pane-fade-in { opacity: 0; }
 .settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }

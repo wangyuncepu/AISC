@@ -1502,6 +1502,13 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     void ipc.logUiEvent?.("stop", "ok");
   }
 
+  /** B-05 (terminal stability): a rejected resize_session on the shared
+   *  timeline. Store choke point per the P4.5 layer contract — components
+   *  never import logUiEvent directly. */
+  function logTerminalResizeError(code?: string): void {
+    void ipc.logUiEvent?.("terminal_resize", "error", code);
+  }
+
   return {
     id,
     status,
@@ -1510,6 +1517,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     runtimeId,
     runtimeReady,
     preflight,
+    logTerminalResizeError,
     launch,
     showAdvanced,
     startElapsedMs,

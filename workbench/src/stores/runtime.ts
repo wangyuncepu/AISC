@@ -228,6 +228,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     retryFromConflict: fwdFn("retryFromConflict"),
     openCcSwitchUiTab: fwdFn("openCcSwitchUiTab"),
     closeCcSwitchUiTab: fwdFn("closeCcSwitchUiTab"),
+    logTerminalResizeError: fwdFn("logTerminalResizeError"),
     dispose: fwdFn("dispose"),
   };
 });

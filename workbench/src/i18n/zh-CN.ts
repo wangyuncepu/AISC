@@ -272,6 +272,8 @@ export const zhCN = {
   "terminal.paste": "粘贴",
   "terminal.clear": "清屏",
   "terminal.dropRejected": "无法插入路径：终端不可用或拖入内容无效。",
+  "terminal.narrowTui.title": "窗口太窄",
+  "terminal.narrowTui.detail": "{agent} 界面至少需要约 {min} 列，当前约 {cols} 列。请放大窗口——会话仍在后台运行，放大后自动恢复显示。",
   "terminal.clipboardError": "剪贴板不可用：{message}",
   // --- 一键诊断 (G-13, Step 12) ---
   "doctor.title": "诊断",

@@ -272,6 +272,8 @@ export const enUS: Record<string, string> = {
   "terminal.paste": "Paste",
   "terminal.clear": "Clear screen",
   "terminal.dropRejected": "Cannot insert path: terminal unavailable or invalid drop payload.",
+  "terminal.narrowTui.title": "Window too narrow",
+  "terminal.narrowTui.detail": "The {agent} UI needs about {min} columns; currently ~{cols}. Please widen the window — the session keeps running and reappears once it is wide enough.",
   "terminal.clipboardError": "Clipboard unavailable: {message}",
   // --- one-click diagnosis (G-13, Step 12) ---
   "doctor.title": "Diagnostics",

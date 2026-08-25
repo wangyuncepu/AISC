@@ -45,6 +45,31 @@ from aisc.domain.models import (
 # Executor protocol — single injectable abstraction
 # ---------------------------------------------------------------------------
 
+def _poll_resize_step(resize_file, last_size, apply_resize):
+    """One resize-file poll step (G-02): read ``"<cols> <rows>"``; when it
+    changed, call *apply_resize* with ``(cols, rows)`` and return the new
+    size, otherwise return *last_size* unchanged. A missing/garbage file is
+    tolerated (returns *last_size*).
+
+    Hoisted out of the interactive watch threads so the update semantics are
+    unit-testable. The previous INLINE version assigned the closed-over
+    ``last_size`` without ``nonlocal`` -- Python made it a thread-local, so
+    every iteration raised UnboundLocalError (silently swallowed by the
+    broad except) and NO resize after the sidecar's initial read ever
+    reached the container (B-05: terminals stuck at their startup size).
+    """
+    try:
+        content = open(resize_file).read().strip().split()
+        if len(content) == 2:
+            cur = (int(content[0]), int(content[1]))
+            if cur != last_size:
+                apply_resize(cur)
+                return cur
+    except Exception:  # noqa: BLE001
+        pass
+    return last_size
+
+
 @runtime_checkable
 class DockerExecutor(Protocol):
     """Narrow interface for all Docker operations.
@@ -573,18 +598,17 @@ class RealDockerExecutor:
             """Poll the resize file; forward size changes to exec_resize."""
             if not resize_file:
                 return
+            # Local copy + module-level step helper: immune to the closure
+            # trap that previously dropped every post-initial resize (B-05).
+            last = last_size
             while not stop.is_set():
-                try:
-                    content = open(resize_file).read().strip().split()
-                    if len(content) == 2:
-                        cur = (int(content[0]), int(content[1]))
-                        if cur != last_size:
-                            last_size = cur  # type: ignore[misc]
-                            client.api.exec_resize(
-                                exec_id, height=cur[1], width=cur[0]
-                            )
-                except Exception:  # noqa: BLE001
-                    pass
+                last = _poll_resize_step(
+                    resize_file,
+                    last,
+                    lambda size: client.api.exec_resize(
+                        exec_id, height=size[1], width=size[0]
+                    ),
+                )
                 stop.wait(0.1)
 
         t_drain = threading.Thread(target=drain, daemon=True)

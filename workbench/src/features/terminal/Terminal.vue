@@ -31,6 +31,7 @@ import { computeDisplayFrom } from "../../domain/streamBuffer";
 import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import { resizeSession, writeSession } from "../../lib/ipc";
+import { sameTermSize, shouldSendSize, type TermSize } from "./resizeSync";
 import { WORKSPACE_PATH_MIME } from "../../lib/workspaceDnd";
 import { containerPathFor, quoteForTerminal } from "./dropPath";
 import { resolveRenderer, terminalTheme } from "./renderer";
@@ -61,10 +62,13 @@ const sessionLive = computed(() => {
   const st = pane.value?.sessionState;
   return st === "starting" || st === "running" || st === "closing";
 });
-/** G-17: cc-switch panes are a config TUI - no split offered (user feedback). */
-const isCcSwitch = computed(
-  () => (tab.value ? findLeaf(tab.value.tree, props.paneId)?.sessionType === "cc-switch" : false)
+/** G-17: the session type of this pane's leaf (bash / claude / codex /
+ *  cc-switch) — drives TUI-specific behaviors. */
+const leafSessionType = computed(
+  () => (tab.value ? findLeaf(tab.value.tree, props.paneId)?.sessionType ?? null : null)
 );
+/** G-17: cc-switch panes are a config TUI - no split offered (user feedback). */
+const isCcSwitch = computed(() => leafSessionType.value === "cc-switch");
 
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
@@ -72,6 +76,27 @@ let webgl: WebglAddon | null = null;
 let searchAddon: SearchAddon | null = null;
 let resizeTimer: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
+// B-05: size-convergence state. `lastConfirmedSize` is the size the PTY
+// actually accepted (not merely what fit proposed); `resizeSyncFailed`
+// forces the heal tick to retry after a rejected resize_session.
+let lastConfirmedSize: TermSize | null = null;
+let resizeSyncFailed = false;
+let healTimer: number | null = null;
+
+// B-05 手测 2 (narrow-TUI guard): full-screen TUIs (claude/codex/cc-switch)
+// render structural garbage below a minimum width; instead of showing the
+// wreckage, cover the pane with a "widen the window" hint. The session keeps
+// running underneath — widening lifts the overlay and the final WINCH-driven
+// redraw lands cleanly. bash wraps fine and is exempt.
+const NARROW_TUI_MIN_COLS = 60;
+const termCols = ref(80);
+const narrowTui = computed(
+  () =>
+    leafSessionType.value !== null &&
+    leafSessionType.value !== "bash" &&
+    visible.value &&
+    termCols.value < NARROW_TUI_MIN_COLS,
+);
 
 // G-03 search overlay state.
 const searchOpen = ref(false);
@@ -193,20 +218,308 @@ function rebuildTerminal() {
   setTimeout(doResize, 0);
 }
 
-function scheduleResize() {
-  if (!visible.value || resizeTimer !== null) return;
+/** B-06: settle-once resize. Windows restore/maximize animates the window
+ *  through a burst of intermediate sizes; acting on each step reflows the
+ *  whole scrollback + forces a full TUI redraw per step (visible squeeze +
+ *  flicker, 手测三轮). Reset the timer on every event and do ONE fit+send
+ *  after 150ms of quiet — a discrete maximize lands ~150ms later, a drag
+ *  snaps once on pause. The 2s heal tick backstops anything missed. */
+function scheduleResize(reason: string) {
+  if (resizeTimer !== null) window.clearTimeout(resizeTimer);
   resizeTimer = window.setTimeout(() => {
     resizeTimer = null;
-    doResize();
+    if (!visible.value) return;
+    doResize(`settle:${reason}`);
   }, 150);
 }
 
-function doResize() {
+/** Named wrapper so removeEventListener stays paired after the reason
+ *  parameter was added for the B-05 probe. */
+function onWindowResize() {
+  scheduleResize("window");
+}
+
+/**
+ * B-05: zoom-immune grid sizing. FitAddon mixes clientWidth (local layout
+ * units) with character metrics across the app-zoom / counter-zoom boundary;
+ * whenever effectiveScale < 1 (windows below 800×600 — the small-window
+ * state) the mismatch feeds back on itself: fit → screen width → layout →
+ * ResizeObserver → fit …, one column lost per round — the visible
+ * 14px-per-150ms staircase squeeze (探针 02:18 轮实锤).
+ *
+ * Instead, BOTH numbers come from getBoundingClientRect on elements inside
+ * the SAME zoomed subtree (a hidden probe span shares the terminal's font
+ * settings), so every zoom factor cancels and the grid is exact. The addon
+ * path stays as a fallback for jsdom / pre-layout zero-size boxes.
+ */
+function measureCell(): { w: number; h: number } | null {
+  const host = container.value;
+  if (!host) return null;
+  const s = settingsStore.doc?.terminal;
+  let probe = host.querySelector<HTMLElement>(".cell-probe");
+  if (!probe) {
+    probe = document.createElement("div");
+    probe.className = "cell-probe";
+    probe.setAttribute("aria-hidden", "true");
+    host.appendChild(probe);
+  }
+  probe.textContent = "0000000000";
+  const st = probe.style;
+  st.position = "absolute";
+  st.visibility = "hidden";
+  st.whiteSpace = "pre";
+  st.fontFamily = s?.font_family || "monospace";
+  st.fontSize = `${s?.font_size ?? 14}px`;
+  st.letterSpacing = `${s?.letter_spacing ?? 0}px`;
+  st.lineHeight = String(s?.line_height ?? 1.2);
+  const r = probe.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  return { w: r.width / 10, h: r.height };
+}
+
+/**
+ * The REAL cell metrics as xterm itself renders them: `.xterm-screen` is
+ * sized to cols × cellW and rows × rowH, device-pixel snapped by the
+ * renderer. A CSS text probe can differ by a fraction of a pixel per cell
+ * — across 140+ columns that clips text at the right edge (手测六轮红框),
+ * and across 40+ rows it pushes the bottom rows (the input line) out of
+ * the box (手测七轮 seq 1 100). Prefer this; the probe only bootstraps
+ * the very first grid before any screen exists.
+ */
+function actualCell(): { w: number; h: number } | null {
+  const screen = container.value?.querySelector<HTMLElement>(".xterm-screen");
+  if (!screen || !term || term.cols <= 0 || term.rows <= 0) return null;
+  const r = screen.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  const cell = { w: r.width / term.cols, h: r.height / term.rows };
+  // Garbage guard: mid-transition screens can report absurd metrics.
+  if (cell.w < 3 || cell.w > 80 || cell.h < 6 || cell.h > 100) return null;
+  return cell;
+}
+
+/** B-05 手测四轮: TUI floor — below the readable minimum BOTH grids (xterm
+ *  + PTY) hold at the floor: the TUI never sees an absurd width (renderers
+ *  wedge) and never renders into a mismatched xterm (garbled buffer).
+ *  Widening then produces a DIFFERENT size, so the send fires, WINCH
+ *  arrives and the TUI repaints cleanly. bash wraps fine and is exempt. */
+function clampToFloor(cols: number): number {
+  return leafSessionType.value !== null &&
+    leafSessionType.value !== "bash" &&
+    cols < NARROW_TUI_MIN_COLS
+    ? NARROW_TUI_MIN_COLS
+    : cols;
+}
+
+function applyGrid(cols: number, rows: number): void {
+  if (!term) return;
+  // Sanitize: show-transition frames have produced garbage measurements
+  // (3468x435, 6x3 — probe 03:08/02:54 轮) — clamp to sane terminal bounds
+  // before the grid, the overlay or the PTY ever sees them.
+  cols = Math.min(Math.max(cols, 2), 512);
+  rows = Math.min(Math.max(rows, 1), 256);
+  termCols.value = cols; // narrow-overlay truth: the FITTED width
+  const grid = clampToFloor(cols);
+  if (grid !== term.cols || rows !== term.rows) {
+    term.resize(grid, rows);
+  }
+}
+
+function fitGrid(): void {
+  if (!term) return;
+  const host = container.value;
+  const rect = host?.getBoundingClientRect();
+  if (!rect || rect.width <= 0 || rect.height <= 0) {
+    // jsdom / not laid out yet: fall back to the addon (tests drive it).
+    fit?.fit();
+    if (term) applyGrid(term.cols, term.rows);
+    return;
+  }
+  // Cell metrics: xterm's own rendered screen first (self-calibrating),
+  // the settings-font probe as the first-screen bootstrap. Both live in
+  // the same zoom subtree, so every zoom factor cancels.
+  const probe = measureCell();
+  const real = actualCell();
+  const cellW = real?.w ?? probe?.w ?? 0;
+  const cellH = real?.h ?? probe?.h ?? 0;
+  if (cellW <= 0 || cellH <= 0) {
+    fit?.fit();
+    if (term) applyGrid(term.cols, term.rows);
+    return;
+  }
+  const cols = Math.max(2, Math.floor(rect.width / cellW));
+  const rows = Math.max(1, Math.floor(rect.height / cellH));
+  applyGrid(cols, rows);
+  // One correction pass: the resize may have re-snapped the rendered cell
+  // (rare); re-derive once so the settled grid never overflows the box.
+  const real2 = actualCell();
+  if (
+    real2 &&
+    (Math.abs(real2.w - cellW) > 0.01 || Math.abs(real2.h - cellH) > 0.01)
+  ) {
+    const cols2 = Math.max(2, Math.floor(rect.width / real2.w));
+    const rows2 = Math.max(1, Math.floor(rect.height / real2.h));
+    if (cols2 !== cols || rows2 !== rows) applyGrid(cols2, rows2);
+  }
+}
+
+/**
+ * B-05 手测十轮(审查 terminal-render-review.md P0/P1): mask resize
+ * repaints with a DECLARATIVE veil (template node → carries the scoped
+ * data-v attribute; the previous imperative createElement node matched no
+ * scoped rule and was invisible). Pin BEFORE any term.resize() so the
+ * reflow frame never paints uncovered; release only after the backend
+ * confirms the resize plus a PTY-redraw grace (bash 160ms / TUI 320ms),
+ * guarded by a generation token so stale async releases cannot expose a
+ * newer hold; 900ms failsafe; reduced motion skips the veil entirely.
+ */
+// 手测十二轮(对标 Explorer↔产物栏 200ms cross-fade 的柔和度): fade
+// rides var(--duration-slow) (300ms) with the shared ease — keep
+// VEIL_FADE_MS in sync with that token; graces lengthened accordingly.
+const VEIL_FADE_MS = 300;
+const VEIL_GRACE_BASH_MS = 320;
+const VEIL_GRACE_TUI_MS = 480;
+const VEIL_FAILSAFE_MS = 1200;
+const veilOn = ref(false);
+const veilFading = ref(false);
+let veilGen = 0; // generation token: stale async releases no-op
+let veilPainted = false; // has the veil actually painted (≥1 frame on)
+let veilFailsafe: number | null = null;
+let veilGraceMs = VEIL_GRACE_BASH_MS;
+
+function veilGrace(): number {
+  return leafSessionType.value !== null && leafSessionType.value !== "bash"
+    ? VEIL_GRACE_TUI_MS
+    : VEIL_GRACE_BASH_MS;
+}
+
+/** Pin the veil (opaque, instant). Safe to call repeatedly. */
+function veilHold(graceMs?: number): void {
+  if (prefersReducedMotion()) return;
+  if (graceMs !== undefined) veilGraceMs = graceMs;
+  veilGen += 1;
+  veilFading.value = false;
+  veilOn.value = true;
+  veilPainted = false;
+  const gen = veilGen;
+  // Painted after two frames — releases before that are instant (the veil
+  // never met the eye, so fading it out would itself be a flash).
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      if (gen === veilGen) veilPainted = true;
+    }),
+  );
+  if (veilFailsafe !== null) window.clearTimeout(veilFailsafe);
+  veilFailsafe = window.setTimeout(() => veilRelease(gen), VEIL_FAILSAFE_MS);
+}
+
+/** Release the veil: fade out if it has painted, flip off instantly if it
+ *  never did. `fromGen` discards releases belonging to an older hold. */
+function veilRelease(fromGen?: number): void {
+  const gen = fromGen ?? veilGen;
+  if (gen !== veilGen) return; // stale — a newer hold owns the veil
+  if (veilFailsafe !== null) {
+    window.clearTimeout(veilFailsafe);
+    veilFailsafe = null;
+  }
+  if (!veilOn.value) return;
+  if (!veilPainted) {
+    veilOn.value = false; // never painted → instant off, no fade flash
+    return;
+  }
+  veilFading.value = true; // CSS transition to 0 (see .resize-veil.fading)
+  window.setTimeout(() => {
+    if (gen !== veilGen) return; // re-held mid-fade (hold() reset state)
+    veilOn.value = false;
+    veilFading.value = false;
+  }, VEIL_FADE_MS + 60);
+}
+
+/**
+ * B-05 手测九轮: serialize PTY resizes. Two resize_session invokes in
+ * flight (e.g. the show-triggered sync racing a settle) can apply out of
+ * order — the resize FILE then ends at the OLDER size while the frontend
+ * records the newer one as confirmed, the mismatch is permanent (the heal
+ * tick sees "converged" and never resends). One in flight; newer sizes
+ * queue; only the LATEST queued size is sent when the current lands.
+ */
+let resizeInFlight = false;
+let resizeQueued: TermSize | null = null;
+
+function sendResize(sid: string, size: TermSize): void {
+  if (resizeInFlight) {
+    resizeQueued = size;
+    return;
+  }
+  resizeInFlight = true;
+  // Review P1 (方案 C): capture the veil generation AT SEND TIME. The ok
+  // of an OLDER resize must never release a veil pinned by a newer hold —
+  // capturing at ok-time would pick up the newer hold's token and fire.
+  const veilGenAtSend = veilGen;
+  resizeSession(sid, size.cols, size.rows)
+    .then(() => {
+      lastConfirmedSize = size;
+      resizeSyncFailed = false;
+      // Veil release: the PTY has the size; give its redraw the grace,
+      // then fade.
+      window.setTimeout(() => veilRelease(veilGenAtSend), veilGraceMs);
+    })
+    .catch((err: unknown) => {
+      // B-05 (fix F2): a swallowed failure used to leave the PTY stuck at
+      // the 80×24 spawn default forever. Record it on the shared timeline
+      // (store choke point per the P4.5 layer contract) and let the heal
+      // tick retry.
+      resizeSyncFailed = true;
+      const code =
+        err && typeof err === "object" && "code" in err
+          ? String((err as { code?: unknown }).code)
+          : undefined;
+      store.logTerminalResizeError(code);
+    })
+    .finally(() => {
+      resizeInFlight = false;
+      const next = resizeQueued;
+      resizeQueued = null;
+      if (next && sessionId.value && pane.value?.sessionState === "running") {
+        sendResize(sessionId.value, next);
+      }
+    });
+}
+
+function doResize(reason = "tick") {
   if (!visible.value || !term || !fit || !sessionLive.value) return;
   try {
-    fit.fit();
+    const before = `${term.cols}x${term.rows}`;
+    // Review P1: pin the veil BEFORE fitGrid — term.resize() reflows
+    // synchronously inside it, and the intermediate frame must never paint
+    // uncovered. Exceptions: the 2s heal tick (an unchanged fit must not
+    // flash) and SHOW — the visible-watcher already pinned PRE-PAINT
+    // (earlier than this call), and re-pinning here would bump the
+    // generation and strand the watcher's fallback release.
+    if (reason !== "tick" && reason !== "show") veilHold(veilGrace());
+    fitGrid();
+    if (before === `${term.cols}x${term.rows}` && reason !== "tick" && reason !== "show") {
+      // Grid already correct — nothing to mask; release instantly (the
+      // same-tick pin never painted, so there is no fade flash). SHOW is
+      // exempt: every tab switch keeps the veil (手测十一轮) and lets the
+      // watcher's fallback timer fade it out after the grace.
+      veilRelease();
+    }
     const sid = sessionId.value;
-    if (sid) resizeSession(sid, term.cols, term.rows).catch(() => {});
+    // B-05 (fix F1): only send when the backend session is Running — a
+    // Starting/Closing entry makes resize_session fail, which would just
+    // noise the sync state. Fitting the xterm side above is still correct.
+    if (!sid || pane.value?.sessionState !== "running") return;
+    const size: TermSize = { cols: term.cols, rows: term.rows };
+    // F5 + queue-aware skip: nothing to do when the PTY already confirmed
+    // this grid, a queued send already carries it, and the last send
+    // succeeded.
+    if (
+      !shouldSendSize(lastConfirmedSize, size, resizeSyncFailed) ||
+      sameTermSize(resizeQueued, size)
+    ) {
+      return;
+    }
+    sendResize(sid, size);
   } catch {
     /* container not laid out yet */
   }
@@ -456,11 +769,35 @@ onMounted(() => {
   term.attachCustomKeyEventHandler(onTermCustomKey);
   mountWebgl();
   mountSearch();
-  fit.fit();
+  fitGrid();
+  termCols.value = term?.cols ?? 80;
 
-  resizeObserver = new ResizeObserver(scheduleResize);
+  resizeObserver = new ResizeObserver(() => scheduleResize("observer"));
   if (container.value) resizeObserver.observe(container.value);
-  window.addEventListener("resize", scheduleResize);
+  window.addEventListener("resize", onWindowResize);
+
+  // B-05 (fix F1, remount case): a Terminal that mounts onto an
+  // ALREADY-running pane (pane restructure remount) gets no state
+  // transition, so sync immediately.
+  if (pane.value?.sessionState === "running") doResize("mount");
+
+  // B-05 手测十三轮: a NEWLY CREATED tab mounts straight into view —
+  // cover its first frames (welcome line / starting blank) with the same
+  // veil. The starting→running hop re-pins via doResize("running") and
+  // releases on ok+grace; the fallback below fades the quiet case.
+  if (visible.value) {
+    veilHold(veilGrace());
+    const gen = veilGen;
+    window.setTimeout(() => veilRelease(gen), veilGraceMs + 160);
+  }
+
+  // B-05 (fix F3): self-heal tick. The size mismatch shows up randomly (no
+  // reproducible trigger), so convergence cannot rely on user-driven resize
+  // events. While live + visible, re-check every 2s; already converged is a
+  // zero-IPC no-op, drift or a failed send triggers one resend.
+  healTimer = window.setInterval(() => {
+    if (sessionLive.value && visible.value) doResize();
+  }, 2000);
 
   // Re-fit when this tab becomes the active (visible) view. v-show toggles
   // display:none; xterm does not repaint automatically on re-display, which
@@ -468,8 +805,17 @@ onMounted(() => {
   // viewport repaint after the re-fit.
   watch(visible, (v) => {
     if (v) {
+      // B-05 手测十一轮: pin the veil BEFORE the first paint — on EVERY
+      // tab switch (hidden panes keep a stale grid; and even an unchanged
+      // grid repaints on show). Release paths: a resize send confirms →
+      // ok+grace (sendResize); no resize happens → the fallback timer
+      // below fades the veil after the grace (token-guarded, so it can
+      // never expose a veil held by a newer show).
+      veilHold(veilGrace());
+      const gen = veilGen;
+      window.setTimeout(() => veilRelease(gen), veilGraceMs + 160);
       setTimeout(() => {
-        doResize();
+        doResize("show");
         term?.refresh(0, term.rows - 1);
       }, 0);
     }
@@ -507,6 +853,12 @@ onMounted(() => {
     () => pane.value?.sessionState,
     (st, prev) => {
       if (!prev || st === prev) return;
+      // B-05 (fix F1): the moment the backend accepts the session, sync the
+      // fitted grid to the PTY immediately (bypassing the debounce). Until
+      // the first resize lands the PTY runs at the 80×24 spawn default while
+      // xterm shows the fitted width — every readline/TUI redraw then lands
+      // on the wrong columns (long-input overwrite).
+      if (st === "running") doResize("running");
       if (st === "exited" || st === "disconnected") {
         const exit = pane.value?.exit;
         term?.write(
@@ -566,7 +918,12 @@ watch(
 onBeforeUnmount(() => {
   if (resizeObserver) resizeObserver.disconnect();
   if (resizeTimer !== null) window.clearTimeout(resizeTimer);
-  window.removeEventListener("resize", scheduleResize);
+  if (healTimer !== null) window.clearInterval(healTimer);
+  if (veilFailsafe !== null) window.clearTimeout(veilFailsafe);
+  veilGen += 1; // invalidate any in-flight veil callbacks (review P1)
+  veilOn.value = false;
+  veilFading.value = false;
+  window.removeEventListener("resize", onWindowResize);
   term?.dispose(); // disposes fit/webgl/search addons + custom key handler (03 §七)
   term = null;
   fit = null;
@@ -599,6 +956,32 @@ defineExpose({
          scrolls away under sustained output). -->
     <div v-if="streamTruncated" class="truncation-banner" role="status">
       {{ t("terminal.outputTruncated", { bytes: formatBytes(streamTruncatedBytes) }) }}
+    </div>
+    <!-- B-05 手测十轮: DECLARATIVE resize veil (review P0 — an imperative
+         createElement node carries no data-v scope attribute and matches no
+         scoped rule). v-if keeps the node in the DOM exactly while the veil
+         is on; .fading drives the fade-out transition. -->
+    <div
+      v-if="veilOn"
+      class="resize-veil"
+      :class="{ fading: veilFading }"
+      aria-hidden="true"
+      data-testid="resize-veil"
+    ></div>
+    <!-- B-05 手测 2: a full-screen TUI below the minimum width renders
+         structural garbage — cover it with a widen-the-window hint instead.
+         The session keeps running underneath; widening lifts the overlay
+         and the final WINCH redraw lands at the readable size. -->
+    <div
+      v-if="narrowTui"
+      class="narrow-overlay"
+      data-testid="narrow-tui-overlay"
+      role="status"
+    >
+      <p class="narrow-title">{{ t("terminal.narrowTui.title") }}</p>
+      <p class="narrow-detail">
+        {{ t("terminal.narrowTui.detail", { cols: termCols, min: NARROW_TUI_MIN_COLS, agent: leafSessionType }) }}
+      </p>
     </div>
     <!-- G-03 search overlay -->
     <div v-if="searchOpen" class="search-overlay" @click.stop>
@@ -679,6 +1062,10 @@ defineExpose({
   height: 100%;
   width: 100%;
   position: relative;
+  /* B-05 手测五轮: while the TUI floor holds the grid at 60 cols inside a
+   * narrower pane, the xterm screen is wider than this box — clip it, or it
+   * leaks out past the narrow overlay into the neighbouring chrome. */
+  overflow: hidden;
 }
 /* Stage 11 (11d): lightweight drop-target affordance while a workspace file
  * hovers over this pane (03 §6). */
@@ -704,6 +1091,52 @@ defineExpose({
   border: var(--border-w) solid var(--border);
   border-radius: var(--radius-full);
   pointer-events: none;
+}
+
+/* B-05 手测十轮: repaint veil (declarative node — carries the scoped
+ * attribute, unlike the old imperative createElement one). Base state is
+ * opaque with NO transition (re-pinning must be instant); .fading carries
+ * the transition so only the fade-out animates. */
+.resize-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--bg);
+  pointer-events: none;
+  opacity: 1;
+}
+.resize-veil.fading {
+  opacity: 0;
+  /* --duration-slow (300ms) — matches VEIL_FADE_MS; the Explorer↔产物
+   * cross-fade feel (手测十二轮). */
+  transition: opacity var(--duration-slow) var(--ease);
+}
+
+/* B-05 手测 2: opaque cover for a TUI below its minimum readable width. */
+.narrow-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  text-align: center;
+  background: var(--bg);
+}
+.narrow-title {
+  margin: 0;
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.narrow-detail {
+  margin: 0;
+  max-width: 40ch;
+  font-size: var(--font-sm);
+  color: var(--text-muted);
 }
 
 /* --- search overlay (top-right, above the terminal) --- */
