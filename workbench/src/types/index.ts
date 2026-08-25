@@ -76,6 +76,7 @@ export interface Capabilities {
   session: string | null;
   providerStatus: string | null;
   buildEvents: string | null;
+  runtimeServices?: string | null;
 }
 
 export interface CapabilityReport {
@@ -84,6 +85,8 @@ export interface CapabilityReport {
   session: boolean;
   provider_status: boolean;
   build_events: boolean;
+  /** svc-4 (web gateway): optional — gates the Services panel. */
+  runtime_services: boolean;
   missing_required: string[];
   missing_optional: string[];
   version_info: VersionInfo | null;

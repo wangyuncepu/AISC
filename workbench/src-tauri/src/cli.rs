@@ -37,6 +37,8 @@ const EXPECTED_RUNTIME: &str = "aisc.runtime/v1";
 const EXPECTED_SESSION: &str = "aisc.session/v1";
 const EXPECTED_PROVIDER: &str = "aisc.provider-status/v1";
 const EXPECTED_BUILD: &str = "aisc.build-events/v1";
+/// svc-2/4 (web gateway): optional capability — `runtime services`.
+const EXPECTED_RUNTIME_SERVICES: &str = "aisc.runtime-services/v1";
 
 // ---------------------------------------------------------------------------
 // Envelope (aisc.cli/v1)
@@ -133,6 +135,8 @@ pub struct Capabilities {
     pub provider_status: Option<String>,
     #[serde(rename = "buildEvents", default)]
     pub build_events: Option<String>,
+    #[serde(rename = "runtimeServices", default)]
+    pub runtime_services: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default, Serialize)]
@@ -158,6 +162,7 @@ pub struct CapabilityReport {
     pub session: bool,
     pub provider_status: bool,
     pub build_events: bool,
+    pub runtime_services: bool,
     pub missing_required: Vec<String>,
     pub missing_optional: Vec<String>,
     pub version_info: Option<VersionInfo>,
@@ -171,6 +176,7 @@ pub fn classify(caps: &Capabilities) -> (bool, Vec<String>, Vec<String>) {
     let session_ok = caps.session.as_deref() == Some(EXPECTED_SESSION);
     let provider_ok = caps.provider_status.as_deref() == Some(EXPECTED_PROVIDER);
     let build_ok = caps.build_events.as_deref() == Some(EXPECTED_BUILD);
+    let runtime_services_ok = caps.runtime_services.as_deref() == Some(EXPECTED_RUNTIME_SERVICES);
 
     let mut missing_required = Vec::new();
     if !runtime_ok {
@@ -185,6 +191,9 @@ pub fn classify(caps: &Capabilities) -> (bool, Vec<String>, Vec<String>) {
     }
     if !build_ok {
         missing_optional.push("buildEvents".into());
+    }
+    if !runtime_services_ok {
+        missing_optional.push("runtimeServices".into());
     }
     (missing_required.is_empty(), missing_required, missing_optional)
 }
@@ -210,6 +219,7 @@ fn report_from_envelope(env: Envelope) -> CapabilityReport {
         session: caps.session.as_deref() == Some(EXPECTED_SESSION),
         provider_status: caps.provider_status.as_deref() == Some(EXPECTED_PROVIDER),
         build_events: caps.build_events.as_deref() == Some(EXPECTED_BUILD),
+        runtime_services: caps.runtime_services.as_deref() == Some(EXPECTED_RUNTIME_SERVICES),
         missing_required,
         missing_optional,
         version_info: Some(vi),
@@ -224,8 +234,9 @@ fn failed_report(error: Option<WorkbenchError>) -> CapabilityReport {
         session: false,
         provider_status: false,
         build_events: false,
+        runtime_services: false,
         missing_required: vec!["runtime".into(), "session".into()],
-        missing_optional: vec!["providerStatus".into(), "buildEvents".into()],
+        missing_optional: vec!["providerStatus".into(), "buildEvents".into(), "runtimeServices".into()],
         version_info: None,
         error,
     }
@@ -1052,12 +1063,13 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    fn caps(runtime: Option<&str>, session: Option<&str>, provider: Option<&str>, build: Option<&str>) -> Capabilities {
+    fn caps(runtime: Option<&str>, session: Option<&str>, provider: Option<&str>, build: Option<&str>, services: Option<&str>) -> Capabilities {
         Capabilities {
             runtime: runtime.map(str::to_string),
             session: session.map(str::to_string),
             provider_status: provider.map(str::to_string),
             build_events: build.map(str::to_string),
+            runtime_services: services.map(str::to_string),
         }
     }
 
@@ -1068,6 +1080,7 @@ mod tests {
             Some(EXPECTED_SESSION),
             Some(EXPECTED_PROVIDER),
             Some(EXPECTED_BUILD),
+            Some(EXPECTED_RUNTIME_SERVICES),
         ));
         assert!(ok);
         assert!(mr.is_empty());
@@ -1076,7 +1089,7 @@ mod tests {
 
     #[test]
     fn classify_missing_required_blocks() {
-        let (ok, mr, mo) = classify(&caps(None, Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD)));
+        let (ok, mr, mo) = classify(&caps(None, Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), Some(EXPECTED_RUNTIME_SERVICES)));
         assert!(!ok);
         assert_eq!(mr, vec!["runtime"]);
         assert!(mo.is_empty());
@@ -1084,7 +1097,7 @@ mod tests {
 
     #[test]
     fn classify_missing_optional_does_not_block() {
-        let (ok, mr, mo) = classify(&caps(Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), None, None));
+        let (ok, mr, mo) = classify(&caps(Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), None, None, Some(EXPECTED_RUNTIME_SERVICES)));
         assert!(ok);
         assert!(mr.is_empty());
         assert_eq!(mo, vec!["providerStatus", "buildEvents"]);
@@ -1092,33 +1105,36 @@ mod tests {
 
     #[test]
     fn classify_wrong_version_is_missing() {
-        let (ok, _, _) = classify(&caps(Some("aisc.runtime/v2"), Some(EXPECTED_SESSION), None, None));
+        let (ok, _, _) = classify(&caps(Some("aisc.runtime/v2"), Some(EXPECTED_SESSION), None, None, None));
         assert!(!ok);
     }
 
     // --- Stage 2 (S2.3, CLI-A03): systematic capability matrix ---
 
-    /// (runtime, session, provider, build, required_ok, missing_required, missing_optional)
-    const CAP_MATRIX: [(&str, Option<&str>, Option<&str>, Option<&str>, Option<&str>, bool, &[&str], &[&str]); 8] = [
+    /// (runtime, session, provider, build, services, required_ok, missing_required, missing_optional)
+    const CAP_MATRIX: [(&str, Option<&str>, Option<&str>, Option<&str>, Option<&str>, Option<&str>, bool, &[&str], &[&str]); 10] = [
         // all present at v1
-        ("all-v1", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), true, &[], &[]),
+        ("all-v1", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), Some(EXPECTED_RUNTIME_SERVICES), true, &[], &[]),
         // each required missing blocks
-        ("no-runtime", None, Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["runtime"], &[]),
-        ("no-session", Some(EXPECTED_RUNTIME), None, Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["session"], &[]),
+        ("no-runtime", None, Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), Some(EXPECTED_RUNTIME_SERVICES), false, &["runtime"], &[]),
+        ("no-session", Some(EXPECTED_RUNTIME), None, Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), Some(EXPECTED_RUNTIME_SERVICES), false, &["session"], &[]),
         // old version counts as missing (fail closed, no guessing)
-        ("old-runtime", Some("aisc.runtime/v2"), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["runtime"], &[]),
-        ("old-session", Some(EXPECTED_RUNTIME), Some("aisc.session/v2"), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), false, &["session"], &[]),
+        ("old-runtime", Some("aisc.runtime/v2"), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), Some(EXPECTED_RUNTIME_SERVICES), false, &["runtime"], &[]),
+        ("old-session", Some(EXPECTED_RUNTIME), Some("aisc.session/v2"), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), Some(EXPECTED_RUNTIME_SERVICES), false, &["session"], &[]),
         // optional missing does not block
-        ("no-provider", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), None, Some(EXPECTED_BUILD), true, &[], &["providerStatus"]),
-        ("no-build", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), None, true, &[], &["buildEvents"]),
+        ("no-provider", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), None, Some(EXPECTED_BUILD), Some(EXPECTED_RUNTIME_SERVICES), true, &[], &["providerStatus"]),
+        ("no-build", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), None, Some(EXPECTED_RUNTIME_SERVICES), true, &[], &["buildEvents"]),
+        // svc-4: runtimeServices is optional; absent or wrong version degrades the UI
+        ("no-services", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), None, true, &[], &["runtimeServices"]),
+        ("old-services", Some(EXPECTED_RUNTIME), Some(EXPECTED_SESSION), Some(EXPECTED_PROVIDER), Some(EXPECTED_BUILD), Some("aisc.runtime-services/v2"), true, &[], &["runtimeServices"]),
         // everything absent
-        ("all-absent", None, None, None, None, false, &["runtime", "session"], &["providerStatus", "buildEvents"]),
+        ("all-absent", None, None, None, None, None, false, &["runtime", "session"], &["providerStatus", "buildEvents", "runtimeServices"]),
     ];
 
     #[test]
     fn capability_matrix_is_systematic() {
-        for (name, runtime, session, provider, build, ok, mr, mo) in CAP_MATRIX {
-            let caps = caps(runtime, session, provider, build);
+        for (name, runtime, session, provider, build, services, ok, mr, mo) in CAP_MATRIX {
+            let caps = caps(runtime, session, provider, build, services);
             let (got_ok, got_mr, got_mo) = classify(&caps);
             assert_eq!(got_ok, ok, "[{name}] required_ok");
             assert_eq!(got_mr, mr, "[{name}] missing_required");
