@@ -18,7 +18,16 @@ from pathlib import Path
 
 
 def get_aisc_executable():
-    venv_bin = Path(__import__("sys").executable).parent
+    """The CLI under test — venv `aisc` by default, or ``AISC_CLI_EXECUTABLE``
+    (same convention as tests/test_cli_fixtures.py: point it at the frozen
+    sidecar to exercise the shipped binary)."""
+    import os
+    import sys
+
+    override = os.environ.get("AISC_CLI_EXECUTABLE")
+    if override:
+        return override
+    venv_bin = Path(sys.executable).parent
     aisc_path = venv_bin / "aisc"
     if not aisc_path.exists():
         raise unittest.SkipTest("aisc executable not found in venv")

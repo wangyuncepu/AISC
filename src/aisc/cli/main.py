@@ -518,10 +518,16 @@ def _build_parser() -> _AiscArgumentParser:
                       help="Remove even if the runtime is running")
 
     # --- runtime services (svc-2, aisc.runtime-services/v1) ---
+    # NOTE: the parent keeps --runtime-id/--workspace OPTIONAL and each
+    # subcommand redefines them required — Python 3.14 argparse rejects
+    # "services list --runtime-id X" when the parent marks the same option
+    # required (the subparser's parse no longer satisfies the parent's
+    # required check). The bare form is validated in _cmd_runtime dispatch.
     rtsv = rtsub.add_parser("services", help="Web service gateway info + registered services",
                             allow_abbrev=False)
     _add_global_args(rtsv, is_subparser=True)
-    rtsv.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    rtsv.add_argument("--runtime-id", type=str, default=None,
+                      help="Runtime ID (UUID v4)")
     rtsv.add_argument("--workspace", type=str, default=None,
                       help="Workspace path (default: current directory)")
     rtsvsub = rtsv.add_subparsers(dest="runtime_services_command",
@@ -1506,6 +1512,11 @@ def _cmd_runtime(
         return data, 0, []
     elif sub == "services":
         sub2 = getattr(args, "runtime_services_command", None)
+        if not getattr(args, "runtime_id", None):
+            return None, 2, [build_error(
+                "AISC_ERR_USAGE",
+                "runtime services requires --runtime-id",
+            )]
         if sub2 == "expose":
             data = cmd_runtime_services_expose(
                 runtime_id=args.runtime_id,
