@@ -135,12 +135,7 @@ ENV LANG=C.UTF-8 \
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
         npm config set registry https://registry.npmmirror.com/ ; echo "npm: 淘宝镜像" ; \
     else echo "npm: 官方源" ; fi \
-    # claude-code 恒走官方源取真·latest：淘宝镜像滞后（2026-08-25 实证镜像源
-    # latest=2.1.235 vs 官方 2.1.245），用户重建 runtime 会"降级"。官方源不可
-    # 达时回落到当前 registry（淘宝），保证离线/受限网络仍可构建。
-    && (npm install -g --no-cache @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-            --registry=https://registry.npmjs.org/ \
-        || npm install -g --no-cache @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}) \
+    && npm install -g --no-cache @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm install -g --no-cache @openai/codex@${CODEX_VERSION} \
     && claude --version \
     && codex --version
