@@ -260,7 +260,7 @@ describe("Terminal PTY size convergence (B-05)", () => {
     wrapper.unmount();
   });
 
-  it("narrow-TUI guard: a claude TUI below 60 cols is covered and the PTY keeps its floor", async () => {
+  it("narrow-TUI guard: both grids hold at the floor; widening forces a repaint send", async () => {
     vi.useFakeTimers();
     h.fitSize.cols = 40;
     const { wrapper } = await mountTerminal("running", "claude");
@@ -268,16 +268,19 @@ describe("Terminal PTY size convergence (B-05)", () => {
     const overlay = wrapper.find('[data-testid="narrow-tui-overlay"]');
     expect(overlay.exists()).toBe(true);
     expect(overlay.text()).toContain("claude");
-    // Floor: the PTY is never dragged below the readable minimum — the TUI
-    // renderers wedge at absurd widths and stop responding to WINCH.
-    expect(h.resizeSession).not.toHaveBeenCalled();
+    // Floor: xterm AND the PTY hold at the readable minimum (the TUI never
+    // sees 40 cols, and its 60-col output is not shredded by a 40-col xterm).
+    expect(h.resizeSession).toHaveBeenCalledTimes(1);
+    expect(h.resizeSession).toHaveBeenLastCalledWith("sid-1", 60, 30);
 
-    // Widen: after the settle the overlay lifts and ONE clean resize lands.
+    // Widen: the grid leaves the floor → a DIFFERENT size must be sent
+    // (same-size would be idempotently skipped and the TUI would never get
+    // its WINCH repaint — 手测四轮) → overlay lifts.
     h.fitSize.cols = 118;
     window.dispatchEvent(new Event("resize"));
     await vi.advanceTimersByTimeAsync(200);
     expect(wrapper.find('[data-testid="narrow-tui-overlay"]').exists()).toBe(false);
-    expect(h.resizeSession).toHaveBeenCalledTimes(1);
+    expect(h.resizeSession).toHaveBeenCalledTimes(2);
     expect(h.resizeSession).toHaveBeenLastCalledWith("sid-1", 118, 30);
     wrapper.unmount();
   });

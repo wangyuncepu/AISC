@@ -282,16 +282,33 @@ function fitGrid(): void {
   const host = container.value;
   const cell = host ? measureCell() : null;
   const rect = host?.getBoundingClientRect();
+  let cols: number;
+  let rows: number;
   if (!cell || !rect || rect.width <= 0 || rect.height <= 0) {
     // jsdom / not laid out yet: fall back to the addon (tests drive it).
     fit?.fit();
-    termCols.value = term.cols;
-    return;
+    if (!term) return;
+    cols = term.cols;
+    rows = term.rows;
+  } else {
+    cols = Math.max(2, Math.floor((rect.width + 0.5) / cell.w));
+    rows = Math.max(1, Math.floor((rect.height + 0.5) / cell.h));
   }
-  const cols = Math.max(2, Math.floor((rect.width + 0.5) / cell.w));
-  const rows = Math.max(1, Math.floor((rect.height + 0.5) / cell.h));
-  term.resize(cols, rows);
-  termCols.value = cols;
+  termCols.value = cols; // narrow-overlay truth: the FITTED width
+  // B-05 手测四轮: TUI floor. Below the readable minimum the overlay
+  // covers the pane, and BOTH grids (xterm + PTY) hold at the floor — the
+  // TUI never sees an absurd width (renderers wedge) and never renders into
+  // a mismatched xterm (garbled buffer). Widening then produces a DIFFERENT
+  // size, so the send fires, WINCH arrives and the TUI repaints cleanly.
+  const grid =
+    leafSessionType.value !== null &&
+    leafSessionType.value !== "bash" &&
+    cols < NARROW_TUI_MIN_COLS
+      ? NARROW_TUI_MIN_COLS
+      : cols;
+  if (grid !== term.cols || rows !== term.rows) {
+    term.resize(grid, rows);
+  }
 }
 
 function doResize(reason = "tick") {
@@ -325,15 +342,6 @@ function doResize(reason = "tick") {
     // noise the sync state. Fitting the xterm side above is still correct.
     if (!sid || pane.value?.sessionState !== "running") return;
     const size: TermSize = { cols: term.cols, rows: term.rows };
-    // B-05 手测三轮: never drag a full-screen TUI below its readable floor.
-    // claude/codex renderers WEDGE at absurd widths and stop responding to
-    // WINCH — after that even maximizing cannot revive them. Below the floor
-    // the narrow overlay covers the pane visually while the PTY keeps its
-    // last usable size (or the 80-col spawn default). bash wraps fine.
-    if (leafSessionType.value !== null && leafSessionType.value !== "bash" && size.cols < NARROW_TUI_MIN_COLS) {
-      store.logTerminalProbe(`floor:${reason}:${size.cols}x${size.rows}`);
-      return;
-    }
     // F5: idempotent skip — nothing to do when the PTY already confirmed
     // this exact grid and the last send succeeded.
     if (!shouldSendSize(lastConfirmedSize, size, resizeSyncFailed)) return;
