@@ -278,19 +278,20 @@ function measureCell(): { w: number; h: number } | null {
 }
 
 /**
- * The REAL cell width as xterm itself renders it: `.xterm-screen` is sized
- * to cols × actual-cell (device-pixel snapped by the renderer). A CSS text
- * probe can differ by a fraction of a pixel per cell — across 140+ columns
- * that overflows the container by several columns, which overflow:hidden
- * then clips (right-edge text cut, 手测六轮红框). Prefer this; the probe
- * only bootstraps the very first grid before any screen exists.
+ * The REAL cell metrics as xterm itself renders them: `.xterm-screen` is
+ * sized to cols × cellW and rows × rowH, device-pixel snapped by the
+ * renderer. A CSS text probe can differ by a fraction of a pixel per cell
+ * — across 140+ columns that clips text at the right edge (手测六轮红框),
+ * and across 40+ rows it pushes the bottom rows (the input line) out of
+ * the box (手测七轮 seq 1 100). Prefer this; the probe only bootstraps
+ * the very first grid before any screen exists.
  */
-function actualCellWidth(): number | null {
+function actualCell(): { w: number; h: number } | null {
   const screen = container.value?.querySelector<HTMLElement>(".xterm-screen");
-  if (!screen || !term || term.cols <= 0) return null;
-  const w = screen.getBoundingClientRect().width;
-  if (w <= 0) return null;
-  return w / term.cols;
+  if (!screen || !term || term.cols <= 0 || term.rows <= 0) return null;
+  const r = screen.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  return { w: r.width / term.cols, h: r.height / term.rows };
 }
 
 /** B-05 手测四轮: TUI floor — below the readable minimum BOTH grids (xterm
@@ -325,12 +326,13 @@ function fitGrid(): void {
     if (term) applyGrid(term.cols, term.rows);
     return;
   }
-  // Cell width: xterm's own rendered screen first (self-calibrating), the
-  // settings-font probe as the first-screen bootstrap. Both live in the
-  // same zoom subtree, so every zoom factor cancels.
+  // Cell metrics: xterm's own rendered screen first (self-calibrating),
+  // the settings-font probe as the first-screen bootstrap. Both live in
+  // the same zoom subtree, so every zoom factor cancels.
   const probe = measureCell();
-  const cellW = actualCellWidth() ?? probe?.w ?? 0;
-  const cellH = probe?.h ?? 0;
+  const real = actualCell();
+  const cellW = real?.w ?? probe?.w ?? 0;
+  const cellH = real?.h ?? probe?.h ?? 0;
   if (cellW <= 0 || cellH <= 0) {
     fit?.fit();
     if (term) applyGrid(term.cols, term.rows);
@@ -341,10 +343,14 @@ function fitGrid(): void {
   applyGrid(cols, rows);
   // One correction pass: the resize may have re-snapped the rendered cell
   // (rare); re-derive once so the settled grid never overflows the box.
-  const real2 = actualCellWidth();
-  if (real2 && Math.abs(real2 - cellW) > 0.01) {
-    const cols2 = Math.max(2, Math.floor(rect.width / real2));
-    if (cols2 !== cols) applyGrid(cols2, rows);
+  const real2 = actualCell();
+  if (
+    real2 &&
+    (Math.abs(real2.w - cellW) > 0.01 || Math.abs(real2.h - cellH) > 0.01)
+  ) {
+    const cols2 = Math.max(2, Math.floor(rect.width / real2.w));
+    const rows2 = Math.max(1, Math.floor(rect.height / real2.h));
+    if (cols2 !== cols || rows2 !== rows) applyGrid(cols2, rows2);
   }
 }
 
