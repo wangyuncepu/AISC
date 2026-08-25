@@ -561,6 +561,48 @@ def _build_parser() -> _AiscArgumentParser:
     rtsvu.add_argument("--workspace", type=str, default=None,
                        help="Workspace path (default: current directory)")
 
+    # --- runtime reconcile (runtime-lifecycle-ux Stage 1, 02 §3) ---
+    rtrc = rtsub.add_parser("reconcile",
+                            help="Classify + auto-recycle stale runtimes for a workspace",
+                            allow_abbrev=False)
+    _add_global_args(rtrc, is_subparser=True)
+    rtrc.add_argument("--workspace", type=str, default=None,
+                      help="Workspace path (default: current directory)")
+    rtrc.add_argument("--instance-id", type=str, required=True,
+                      help="This Workbench instance's UUID v4")
+    rtrc.add_argument("--workspace-key", type=str, default=None,
+                      help="Optional cross-check: expected sha256 workspace key")
+
+    # --- runtime lease (runtime-lifecycle-ux Stage 1, 02 §2) ---
+    # Same py3.14 pattern as `services`: shared options on the group are
+    # optional, children re-require them; the bare form is usage-rejected
+    # in dispatch.
+    rtlg = rtsub.add_parser("lease", help="Workspace lease claim/heartbeat/release/inspect",
+                            allow_abbrev=False)
+    _add_global_args(rtlg, is_subparser=True)
+    rtlg.add_argument("--workspace", type=str, default=None,
+                      help="Workspace path (default: current directory)")
+    rtlg.add_argument("--instance-id", type=str, default=None,
+                      help="This Workbench instance's UUID v4")
+    rtlgsub = rtlg.add_subparsers(dest="runtime_lease_command",
+                                  title="runtime lease commands",
+                                  parser_class=_AiscArgumentParser)
+    for _name, _help in (
+        ("claim", "Claim the workspace lease"),
+        ("heartbeat", "Refresh the lease last-seen timestamp"),
+        ("release", "Release the workspace lease"),
+        ("inspect", "Show the current lease"),
+    ):
+        _p = rtlgsub.add_parser(_name, help=_help, allow_abbrev=False)
+        _add_global_args(_p, is_subparser=True)
+        _req = _name in ("claim", "heartbeat", "release")
+        _p.add_argument("--workspace", type=str, default=None,
+                        help="Workspace path (default: current directory)")
+        _p.add_argument("--instance-id", type=str, required=_req,
+                        help="This Workbench instance's UUID v4")
+        _p.add_argument("--lease-id", type=str, default=None,
+                        help="Lease ID (heartbeat/release match guard)")
+
     # --- session ---
     ssp = sub.add_parser("session", help="Session data plane (Workbench Phase 0)", allow_abbrev=False)
     _add_global_args(ssp, is_subparser=True)
@@ -1450,6 +1492,8 @@ def _cmd_runtime(
         cmd_runtime_services,
         cmd_runtime_services_expose,
         cmd_runtime_services_unexpose,
+        cmd_runtime_reconcile,
+        cmd_runtime_lease,
     )
 
     sub = args.runtime_command
@@ -1535,6 +1579,27 @@ def _cmd_runtime(
                 runtime_id=args.runtime_id,
                 workspace=args.workspace,
             )
+        return data, 0, []
+    elif sub == "reconcile":
+        data = cmd_runtime_reconcile(
+            workspace=args.workspace,
+            instance_id=args.instance_id,
+            workspace_key=args.workspace_key,
+        )
+        return data, 0, []
+    elif sub == "lease":
+        action = getattr(args, "runtime_lease_command", None) or "inspect"
+        if action != "inspect" and not getattr(args, "instance_id", None):
+            return None, 2, [build_error(
+                "AISC_ERR_USAGE",
+                f"runtime lease {action} requires --instance-id",
+            )]
+        data = cmd_runtime_lease(
+            action=action,
+            workspace=args.workspace,
+            instance_id=getattr(args, "instance_id", "") or "",
+            lease_id=getattr(args, "lease_id", None),
+        )
         return data, 0, []
     else:
         # Unknown runtime subcommand
@@ -1812,7 +1877,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             # command that supports --format json must emit a JSON usage error,
             # not fall back to argparse text — matches the session propagation).
             for _sub in ("preflight", "start", "list", "inspect", "stop",
-                         "restart", "remove"):
+                         "restart", "remove", "reconcile", "lease"):
                 if _sub in args_list:
                     try:
                         _sp = [a for a in runtime_parser._subparsers._group_actions

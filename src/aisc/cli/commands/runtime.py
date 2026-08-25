@@ -289,6 +289,98 @@ def cmd_runtime_services_unexpose(
     ).to_dict()
 
 
+def cmd_runtime_reconcile(
+    workspace: Optional[str] = None,
+    instance_id: str = "",
+    workspace_key: Optional[str] = None,
+    executor: Optional[DockerExecutor] = None,
+) -> Dict[str, Any]:
+    """Execute ``aisc runtime reconcile`` (runtime-lifecycle-ux 02 §3).
+
+    One idempotent classification+cleanup pass. The command succeeds
+    (exit 0) even when ``can_proceed`` is false — a blocked classification
+    is a valid answer, not a transport error.
+    """
+    from aisc.application.workspace_reconcile import reconcile_workspace
+
+    exec_ = executor or RealDockerExecutor()
+    ws, reg_root = _resolve_workspace_and_registry(workspace)
+    payload = reconcile_workspace(ws, instance_id, exec_, registry_root=reg_root)
+    if workspace_key and payload.get("workspace_key") != workspace_key:
+        raise CliError(
+            message=(
+                "workspace key mismatch: caller-supplied key does not match "
+                "the canonical workspace (wrong workspace path?)"
+            ),
+            exit_code=RuntimeExitCode.USAGE_ERROR,
+            error_code=RuntimeErrorCode.WORKSPACE_INVALID,
+            data={"expected": workspace_key, "actual": payload.get("workspace_key")},
+        )
+    return payload
+
+
+def cmd_runtime_lease(
+    action: str,
+    workspace: Optional[str] = None,
+    instance_id: str = "",
+    lease_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Execute ``aisc runtime lease {claim,heartbeat,release,inspect}``.
+
+    The lease rides the data-root layout (02 §2.3); the Rust heartbeat
+    task (D-RUNTIME-12) calls ``heartbeat`` through this command on its
+    interval. ``claim`` conflicts raise AISC_ERR_ACTIVE_WORKSPACE_LEASE;
+    ``heartbeat`` after a takeover raises AISC_ERR_RUNTIME_LEASE_CONFLICT.
+    """
+    import uuid as _uuid
+
+    from aisc.adapters.data_root_store import DataRootStore
+    from aisc.adapters.workspace_lease_store import WorkspaceLeaseStore
+    from aisc.application.data_root import DataRootResolver
+    from aisc.application.runtime import workspace_key_for
+
+    ws = str(Path(workspace or os.getcwd()).resolve())
+    resolved = DataRootResolver().resolve(Path(ws))
+    store = DataRootStore(resolved)
+    store.prepare()
+    leases = WorkspaceLeaseStore(store, workspace_key_for(ws))
+
+    if action == "inspect":
+        lease = leases.inspect()
+        payload = lease.to_dict() if lease else {"lease": None}
+        return {"action": "inspect", "workspace_key": workspace_key_for(ws), **payload}
+    if action == "claim":
+        if not instance_id:
+            raise CliError(
+                message="lease claim requires --instance-id",
+                exit_code=RuntimeExitCode.USAGE_ERROR,
+                error_code=RuntimeErrorCode.RUNTIME_LEASE_CONFLICT,
+            )
+        lease, outcome = leases.claim(instance_id, lease_id=lease_id)
+        return {
+            "action": "claim", "outcome": outcome,
+            "workspace_key": workspace_key_for(ws), **lease.to_dict(),
+        }
+    if action == "heartbeat":
+        lease = leases.heartbeat(instance_id, lease_id or "")
+        return {
+            "action": "heartbeat",
+            "workspace_key": workspace_key_for(ws),
+            **(lease.to_dict() if lease else {"lease": None}),
+        }
+    if action == "release":
+        released = leases.release(instance_id, lease_id or "")
+        return {
+            "action": "release", "released": released,
+            "workspace_key": workspace_key_for(ws),
+        }
+    raise CliError(
+        message=f"unknown lease action: {action}",
+        exit_code=RuntimeExitCode.USAGE_ERROR,
+        error_code=RuntimeErrorCode.RUNTIME_LEASE_CONFLICT,
+    )
+
+
 def print_runtime_text(subcommand: str, data: Any, errors: list) -> None:
     """Minimal human-readable output for ``aisc runtime`` text mode."""
     if errors:
