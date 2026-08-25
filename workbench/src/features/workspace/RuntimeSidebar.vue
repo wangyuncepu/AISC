@@ -141,36 +141,6 @@ const sessionsText = computed(() => {
   return t("sidebar.sessionsCount", { count: n, type: active ?? "-" });
 });
 
-// --- svc-4: web services (aisc.runtime-services/v1) ---
-const servicesSupported = computed(() => store.capability?.runtime_services ?? false);
-const webServices = computed(() => store.webServices);
-/** Semantic key: gateway shape + service identity, so an unchanged set
- * leaves the DOM subtree untouched (A-G05-1 pattern). */
-const servicesKey = computed(
-  () =>
-    `${webServices.value?.gateway.state ?? "none"}|${webServices.value?.gateway.host_port ?? 0}` +
-    `|${(webServices.value?.services ?? []).map((s) => `${s.port}:${s.name}:${s.state}`).join(",")}` +
-    `|${store.freshness}`,
-);
-const WEB_REASON_KEY: Record<string, string> = {
-  legacy_runtime: "sidebar.webReason.legacy_runtime",
-  runtime_not_running: "sidebar.webReason.runtime_not_running",
-  gateway_unreachable: "sidebar.webReason.gateway_unreachable",
-  docker_unavailable: "sidebar.webReason.docker_unavailable",
-  no_mapping: "sidebar.webReason.no_mapping",
-};
-const gatewayReasonText = computed(() => {
-  const reason = webServices.value?.gateway.reason;
-  if (!reason) return null;
-  return t(WEB_REASON_KEY[reason] ?? "sidebar.webReason.no_mapping");
-});
-function serviceLabel(port: number, name: string): string {
-  return name || t("sidebar.servicePort", { port });
-}
-function copyServiceUrl(key: string, url: string): void {
-  copy(key, url);
-}
-
 function short(id: string): string {
   return id.slice(0, 8);
 }
@@ -227,7 +197,9 @@ function copyDone(key: string): boolean {
           {{ store.userRefreshInFlight ? t("sidebar.refreshing") : t("sidebar.refresh") }}
         </button>
         <!-- IDEA-3 (3c): stopping now closes THIS workspace only (真并行:
-             other workspaces' runtimes keep running). -->
+             other workspaces' runtimes keep running). Never disabled by
+             inspectInFlight: the 5s poll holds that flag for 1-3s per cycle
+             and a gated stop reads as a dead button (2026-08-25 report). -->
         <button class="danger" @click="workspaces.closeWorkspace(store.id)">{{ t("sidebar.stopRuntime") }}</button>
       </div>
     </section>
@@ -244,34 +216,6 @@ function copyDone(key: string): boolean {
         </div>
         <div v-if="store.providerError" class="err">{{ store.providerError.message }}</div>
       </template>
-    </section>
-
-    <!-- svc-4: Web services (gateway URL display / copy / restricted open) -->
-    <section class="block" :key="servicesKey">
-      <div class="label">{{ t("sidebar.webServices") }}</div>
-      <div v-if="!servicesSupported" class="muted">{{ t("sidebar.webServicesUnsupported") }}</div>
-      <template v-else-if="webServices">
-        <div v-if="webServices.gateway.state === 'ready'" class="value gateway-ok">
-          {{ t("sidebar.webGatewayReady") }} <span class="mono">:{{ webServices.gateway.host_port }}</span>
-        </div>
-        <div v-else class="muted">{{ gatewayReasonText ?? t("sidebar.webReason.runtime_not_running") }}</div>
-        <ul v-if="webServices.services.length" class="services">
-          <li v-for="s in webServices.services" :key="s.port">
-            <span class="s-name copyable" :title="s.url" @click="copyServiceUrl(`svc-${s.port}`, s.url)">
-              {{ serviceLabel(s.port, s.name) }}
-              <span v-if="copyDone(`svc-${s.port}`)" class="copied">{{ t("sidebar.copied") }}</span>
-            </span>
-            <span class="s-port mono">{{ s.port }}</span>
-            <span class="s-actions">
-              <button class="mini-btn" :title="t('sidebar.serviceCopyUrl', { url: s.url })" @click="copyServiceUrl(`svc-${s.port}`, s.url)">{{ t("sidebar.copy") }}</button>
-              <button class="mini-btn" :title="t('sidebar.serviceOpen')" @click="store.openWebService(s.port)">{{ t("sidebar.serviceOpen") }}</button>
-            </span>
-          </li>
-        </ul>
-        <div v-else-if="webServices.gateway.state === 'ready'" class="muted">{{ t("sidebar.webServicesNone") }}</div>
-        <div v-if="store.webServicesError" class="err">{{ store.webServicesError.message }}</div>
-      </template>
-      <div v-else class="muted">{{ store.webServicesInFlight ? t("sidebar.loading") : t("sidebar.webServicesNone") }}</div>
     </section>
 
     <section class="block" :key="sessionsKey">
@@ -371,22 +315,6 @@ function copyDone(key: string): boolean {
 }
 .sessions-btn:hover { color: var(--text); }
 .mini { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-/* svc-4: web services rows */
-.gateway-ok { display: flex; align-items: center; gap: 4px; }
-.services { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.services li { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 0 4px; border-radius: var(--radius-sm); }
-.services li:hover { background: var(--surface-hover); }
-.s-name { color: var(--text-2); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.s-port { font-size: 10px; color: var(--text-faint); }
-.s-actions { display: inline-flex; gap: 4px; }
-.mini-btn {
-  min-height: 20px; padding: 0 6px; font-size: 10px;
-  background: var(--surface-3); color: var(--text-2);
-  border: var(--border-w) solid var(--border); border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-.mini-btn:hover { background: var(--surface-hover); color: var(--text); }
-.mini-btn:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: var(--focus-ring-offset); }
 .mini li { display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 0 6px; cursor: pointer; border-radius: var(--radius-sm); transition: background-color var(--duration-normal) var(--ease); }
 .mini li:hover { background: var(--surface-hover); }
 .mini li.active { background: var(--accent-soft); }

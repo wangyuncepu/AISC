@@ -383,6 +383,8 @@ export const zhCN = {
   // --- workspace explorer (Stage 3, 3c) ---
   "explorer.tab.files": "文件",
   "explorer.tab.artifacts": "产物",
+  "explorer.tab.services": "服务",
+  "explorer.status.urlCopied": "已复制服务链接",
   "explorer.refresh": "刷新",
   "explorer.stale": "文件状态可能已过期，已执行受限重扫。",
   "explorer.empty.workspace": "请先选择工作区。",

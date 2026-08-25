@@ -73,6 +73,7 @@ class ServicesFakeExecutor:
         self.bind_conflicts = bind_conflicts  # first N run attempts fail
         self.run_calls: list[list[str]] = []
         self.exec_calls: list[list[str]] = []
+        self.inspect_calls = 0
         self.manifest: dict[int, dict] = {}
         self.containers: dict[str, dict] = {}
 
@@ -200,6 +201,7 @@ class ServicesFakeExecutor:
         return 0
 
     def inspect_container(self, name):
+        self.inspect_calls += 1
         c = self.containers.get(name)
         if c is None:
             return ProcessResult(stdout="", stderr="No such container", exit_code=1)
@@ -369,12 +371,14 @@ class WebAccessSnapshotTests(unittest.TestCase):
         finally:
             server.close()
 
-    def test_stopped_reports_runtime_not_running(self):
+    def test_stopped_reports_runtime_not_running_without_extra_inspect(self):
         ex, name = self._ex_with(state="stopped")
+        calls_before = ex.inspect_calls
         gw = snapshot_web_access(ex, name, "stopped", registry_has_gateway=True)
         self.assertEqual(gw.state, "unavailable")
         self.assertEqual(gw.reason, "runtime_not_running")
-        self.assertEqual(gw.host_port, 47831)
+        # the 5s poll must not pay a mapping inspect for stopped runtimes
+        self.assertEqual(ex.inspect_calls, calls_before)
 
     def test_legacy_runtime_without_mapping(self):
         ex, name = self._ex_with(host_port=0)

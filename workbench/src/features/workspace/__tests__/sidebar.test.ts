@@ -17,7 +17,7 @@ import { i18n } from "../../../i18n";
 import { useRuntimeStore } from "../../../stores/runtime";
 import { AGENT_TITLE, newPaneTab } from "../../../stores/tabLayout";
 import RuntimeSidebar from "../RuntimeSidebar.vue";
-import type { LaunchAgent, RuntimeSnapshot, RuntimeServicesResult, Tab, TabSessionState } from "../../../types";
+import type { LaunchAgent, RuntimeSnapshot, Tab, TabSessionState } from "../../../types";
 
 /** Build a tab with a single running/guide pane (G-17: tabs carry a PaneTree). */
 function makeTab(
@@ -223,77 +223,3 @@ describe("A-G12 auth labels and actions", () => {
   });
 });
 
-// --- svc-4 (web services): Services panel -----------------------------------
-
-const SERVICES: RuntimeServicesResult = {
-  schema_version: "aisc.runtime-services/v1",
-  runtime_id: SNAP.runtime_id,
-  gateway: { state: "ready", container_port: 45871, host_port: 47831, host: "127.0.0.1" },
-  services: [
-    { port: 3000, protocol: "http", name: "docs preview", state: "registered", url: "http://p3000.localhost:47831/" },
-    { port: 5173, protocol: "http", name: "", state: "registered", url: "http://p5173.localhost:47831/" },
-  ],
-  observed_at: "2026-08-25T00:00:00Z",
-};
-
-describe("svc-4 web services panel", () => {
-  it("gates on the runtimeServices capability", async () => {
-    const s = setupStore();
-    s.capability = { runtime_services: false } as never;
-    s.webServices = SERVICES;
-    const wrapper = mount(RuntimeSidebar, { global: { plugins: [i18n] } });
-    expect(wrapper.text()).toContain("当前 CLI 不支持服务访问");
-    expect(wrapper.findAll(".services li")).toHaveLength(0);
-    wrapper.unmount();
-  });
-
-  it("renders service rows with labels, ports and gateway port", async () => {
-    const s = setupStore();
-    s.capability = { runtime_services: true } as never;
-    s.webServices = SERVICES;
-    const wrapper = mount(RuntimeSidebar, { global: { plugins: [i18n] } });
-    expect(wrapper.find(".gateway-ok").text()).toContain("47831");
-    const rows = wrapper.findAll(".services li");
-    expect(rows).toHaveLength(2);
-    expect(rows[0].text()).toContain("docs preview");
-    expect(rows[0].text()).toContain("3000");
-    // unnamed service falls back to the 端口 label
-    expect(rows[1].text()).toContain("端口 5173");
-    wrapper.unmount();
-  });
-
-  it("open click routes through the store with ids only", async () => {
-    const s = setupStore();
-    s.capability = { runtime_services: true } as never;
-    s.webServices = SERVICES;
-    const wrapper = mount(RuntimeSidebar, { global: { plugins: [i18n] } });
-    const open = vi.spyOn(s, "openWebService");
-    await wrapper.findAll(".services li .mini-btn")[1]!.trigger("click");
-    expect(open).toHaveBeenCalledWith(3000);
-    open.mockRestore();
-    wrapper.unmount();
-  });
-
-  it("shows the unavailable reason instead of dead links when the gateway is down", async () => {
-    const s = setupStore();
-    s.capability = { runtime_services: true } as never;
-    s.webServices = {
-      ...SERVICES,
-      gateway: { state: "unavailable", container_port: 45871, host_port: 0, host: "127.0.0.1", reason: "legacy_runtime" },
-      services: [],
-    };
-    const wrapper = mount(RuntimeSidebar, { global: { plugins: [i18n] } });
-    expect(wrapper.text()).toContain("该运行时创建于服务访问功能之前");
-    expect(wrapper.findAll(".services li")).toHaveLength(0);
-    wrapper.unmount();
-  });
-
-  it("shows the empty hint when the gateway is ready with no services", async () => {
-    const s = setupStore();
-    s.capability = { runtime_services: true } as never;
-    s.webServices = { ...SERVICES, services: [] };
-    const wrapper = mount(RuntimeSidebar, { global: { plugins: [i18n] } });
-    expect(wrapper.text()).toContain("暂无已注册服务");
-    wrapper.unmount();
-  });
-});

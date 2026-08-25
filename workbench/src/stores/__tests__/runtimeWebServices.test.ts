@@ -129,33 +129,4 @@ describe("svc-4 web services cache", () => {
     expect(store.webServicesError).toBeNull();
     expect(store.webServicesInFlight).toBe(false);
   });
-
-  it("auto-polls every 8s while ready+running+capable, not otherwise", async () => {
-    vi.useFakeTimers();
-    try {
-      const store = setup();
-      store.capability = { runtime_services: true } as never;
-      store.status = "ready";
-      store.runtimeState = "running";
-      vi.mocked(ipc.runtimeServices).mockResolvedValue(PAYLOAD);
-
-      // not polled before the interval elapses
-      expect(ipc.runtimeServices).toHaveBeenCalledTimes(0);
-      await vi.advanceTimersByTimeAsync(8_000);
-      expect(ipc.runtimeServices).toHaveBeenCalledTimes(1);
-
-      // capability missing → the next tick is a no-op
-      store.capability = { runtime_services: false } as never;
-      await vi.advanceTimersByTimeAsync(16_000);
-      expect(ipc.runtimeServices).toHaveBeenCalledTimes(1);
-
-      // stopped runtime → still a no-op
-      store.capability = { runtime_services: true } as never;
-      store.runtimeState = "stopped";
-      await vi.advanceTimersByTimeAsync(16_000);
-      expect(ipc.runtimeServices).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });

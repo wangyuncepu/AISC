@@ -97,10 +97,44 @@ function setNameInputEl(el: Element | ComponentPublicInstance | null) {
 
 const artifactFilter = computed(() => explorer.activeKind);
 
-async function switchKind(kind: "explorer" | "artifacts") {
+async function switchKind(kind: "explorer" | "artifacts" | "services") {
   explorer.activeKind = kind;
   if (kind === "artifacts") {
     await explorer.refreshArtifacts();
+  }
+  if (kind === "services") {
+    // Fresh list on activation; the 5s runtime poll keeps it fresh after.
+    void runtime.refreshWebServices();
+  }
+}
+
+// --- svc-4+: Web services tab (parallel to files/artifacts) ---
+
+const servicesSupported = computed(() => runtime.capability?.runtime_services ?? false);
+
+const WEB_REASON_KEY: Record<string, string> = {
+  legacy_runtime: "sidebar.webReason.legacy_runtime",
+  runtime_not_running: "sidebar.webReason.runtime_not_running",
+  gateway_unreachable: "sidebar.webReason.gateway_unreachable",
+  docker_unavailable: "sidebar.webReason.docker_unavailable",
+  no_mapping: "sidebar.webReason.no_mapping",
+};
+const gatewayReasonText = computed(() => {
+  const reason = runtime.webServices?.gateway.reason;
+  return reason ? t(WEB_REASON_KEY[reason] ?? "sidebar.webReason.no_mapping") : null;
+});
+
+function serviceLabel(port: number, name: string): string {
+  return name || t("sidebar.servicePort", { port });
+}
+
+/** Copy the canonical service URL (A-G11-3: same clipboard plugin everywhere). */
+async function copyServiceUrl(url: string) {
+  try {
+    await writeText(url);
+    flash("explorer.status.urlCopied");
+  } catch {
+    /* clipboard unavailable */
   }
 }
 
@@ -713,6 +747,17 @@ function onTreeKeydown(e: KeyboardEvent) {
         >
           {{ t("explorer.tab.artifacts") }}
         </button>
+        <!-- svc-4+: runtime web services, parallel to files/artifacts -->
+        <button
+          v-if="servicesSupported"
+          role="tab"
+          :aria-selected="explorer.activeKind === 'services'"
+          class="explorer-tab"
+          :class="{ active: explorer.activeKind === 'services' }"
+          @click="switchKind('services')"
+        >
+          {{ t("explorer.tab.services") }}
+        </button>
       </div>
       <!-- Stage 11 (11c): VS Code-density action row. Icon-only so Compact
            widths never squeeze the tabs (03 §2). -->
@@ -908,7 +953,7 @@ function onTreeKeydown(e: KeyboardEvent) {
     </div>
 
     <!-- Artifacts panel -->
-    <div v-else key="artifacts" class="explorer-body artifacts-panel">
+    <div v-else-if="artifactFilter === 'artifacts'" key="artifacts" class="explorer-body artifacts-panel">
       <p v-if="explorer.artifactsLoading">{{ t("explorer.loading") }}</p>
       <template v-else>
         <p
@@ -996,6 +1041,63 @@ function onTreeKeydown(e: KeyboardEvent) {
           <span class="change-label">{{ changeLabel(u.change_type) }}</span>
         </div>
       </template>
+    </div>
+
+    <!-- svc-4+: Web services panel (gateway state + registered services) -->
+    <div v-else key="services" class="explorer-body services-panel">
+      <p v-if="!servicesSupported" class="explorer-empty">{{ t("sidebar.webServicesUnsupported") }}</p>
+      <template v-else-if="runtime.webServices">
+        <p v-if="runtime.webServices.gateway.state !== 'ready'" class="explorer-empty">
+          {{ gatewayReasonText ?? t("sidebar.webReason.runtime_not_running") }}
+        </p>
+        <p
+          v-else-if="runtime.webServices.services.length === 0"
+          class="explorer-empty"
+        >
+          {{ t("sidebar.webServicesNone") }}
+        </p>
+        <template v-else>
+          <div class="services-gateway">{{ t("sidebar.webGatewayReady") }} <span class="mono">:{{ runtime.webServices.gateway.host_port }}</span></div>
+          <div
+            v-for="s in runtime.webServices.services"
+            :key="s.port"
+            class="explorer-row service-row"
+            :title="t('sidebar.serviceCopyUrl', { url: s.url })"
+          >
+            <span class="explorer-name">{{ serviceLabel(s.port, s.name) }}</span>
+            <span class="service-port mono">{{ s.port }}</span>
+            <span class="service-actions">
+              <button
+                class="ui-icon-button sm"
+                type="button"
+                :aria-label="t('sidebar.copy')"
+                :title="t('sidebar.copy')"
+                @click="copyServiceUrl(s.url)"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                  <path d="M10.5 3.5h-7a1 1 0 0 0-1 1v7" />
+                </svg>
+              </button>
+              <button
+                class="ui-icon-button sm"
+                type="button"
+                :aria-label="t('sidebar.serviceOpen')"
+                :title="t('sidebar.serviceOpen')"
+                @click="runtime.openWebService(s.port)"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <path d="M6.5 9.5 13 3" />
+                  <path d="M9 3h4v4" />
+                  <path d="M13 9.5v3a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 2 12.5v-8A1.5 1.5 0 0 1 3.5 3h3" />
+                </svg>
+              </button>
+            </span>
+          </div>
+        </template>
+        <p v-if="runtime.webServicesError" class="explorer-error">{{ runtime.webServicesError.message }}</p>
+      </template>
+      <p v-else class="explorer-empty">{{ t("explorer.loading") }}</p>
     </div>
     </Transition>
 
@@ -1236,6 +1338,16 @@ function onTreeKeydown(e: KeyboardEvent) {
 .explorer-more {
   padding: var(--space-1) var(--space-2);
 }
+/* svc-4+: web services panel */
+.services-gateway {
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-xs);
+}
+.services-gateway .mono { font-family: var(--font-mono); color: var(--info); }
+.service-row .service-port { font-size: 10px; color: var(--text-faint); font-family: var(--font-mono); }
+.service-row .service-actions { margin-left: auto; display: inline-flex; gap: 2px; opacity: 0; transition: opacity var(--duration-normal) var(--ease); }
+.service-row:hover .service-actions, .service-row:focus-within .service-actions { opacity: 1; }
 .explorer-menu-backdrop {
   position: fixed;
   inset: 0;

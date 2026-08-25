@@ -107,18 +107,6 @@ export const useRuntimeStore = defineStore("runtime", () => {
     inst.value.status.value = "error";
   }
 
-  // svc-4+ (user request 2026-08-25): poll the ACTIVE workspace's web
-  // services so a freshly registered service appears in the sidebar without
-  // a manual refresh — "ask the agent, open the drawer, click open". One
-  // app-lifetime timer, gated per tick (capability + ready + running); the
-  // per-instance in-flight guard dedupes with the snapshot-refresh path.
-  window.setInterval(() => {
-    if (!capability.value?.runtime_services) return;
-    if (!inst.value || inst.value.status.value !== "ready") return;
-    if (inst.value.runtimeState.value !== "running" || !inst.value.runtimeId.value) return;
-    void inst.value.refreshWebServices();
-  }, 8_000);
-
   return {
     // shell-owned
     capability,

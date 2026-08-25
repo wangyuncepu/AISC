@@ -383,6 +383,8 @@ export const enUS: Record<string, string> = {
   // --- workspace explorer (Stage 3, 3c) ---
   "explorer.tab.files": "Files",
   "explorer.tab.artifacts": "Artifacts",
+  "explorer.tab.services": "Services",
+  "explorer.status.urlCopied": "Service URL copied",
   "explorer.refresh": "Refresh",
   "explorer.stale": "File state may be stale; a bounded rescan was performed.",
   "explorer.empty.workspace": "Select a workspace first.",

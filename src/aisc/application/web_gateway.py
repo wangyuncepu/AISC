@@ -190,28 +190,29 @@ def snapshot_web_access(executor: Any,
                         docker_state: Optional[str],
                         registry_has_gateway: bool,
                         probe: bool = True) -> WebGatewayInfo:
-    """Compose the ``web_access`` view (decisions.md §3.2 reason rules)."""
+    """Compose the ``web_access`` view (decisions.md §3.2 reason rules).
+
+    Non-running containers return immediately — the 5s inspect poll calls
+    this for every workspace, so a stopped/not-found runtime must not pay
+    the extra mapping docker-inspect (host_port stays 0; the registry
+    still knows the reserved port).
+    """
     if docker_state is None or docker_state == "unknown":
         return WebGatewayInfo(state="unavailable", reason="docker_unavailable")
-    if docker_state == "not_found":
+    if docker_state != "running":
         return WebGatewayInfo(state="unavailable", reason="runtime_not_running")
 
     mapping = read_gateway_mapping(executor, container_name) if container_name else None
-    host_port = mapping["host_port"] if mapping else 0
-
-    if docker_state != "running":
-        return WebGatewayInfo(state="unavailable", reason="runtime_not_running",
-                              host_port=host_port)
     if mapping is None:
         reason = "no_mapping" if registry_has_gateway else "legacy_runtime"
         return WebGatewayInfo(state="unavailable", reason=reason)
     if not mapping["active"]:
         return WebGatewayInfo(state="unavailable", reason="no_mapping",
-                              host_port=host_port)
+                              host_port=mapping["host_port"])
     if probe and not probe_gateway(mapping["host_port"]):
         return WebGatewayInfo(state="unavailable", reason="gateway_unreachable",
-                              host_port=host_port)
-    return WebGatewayInfo(state="ready", host_port=host_port)
+                              host_port=mapping["host_port"])
+    return WebGatewayInfo(state="ready", host_port=mapping["host_port"])
 
 
 # ---------------------------------------------------------------------------
