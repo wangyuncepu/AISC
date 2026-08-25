@@ -1,57 +1,55 @@
 <script setup lang="ts">
 /**
- * ConflictManager (S2.2.b): shown when preflight returns `resolve_conflict`.
- * Lists Workbench-owned runtimes in the workspace (via `aisc runtime list`)
- * with their live state, and lets the user stop / remove the incompatible
- * one before re-preflighting (03 §三; 02 §四.2 runtime_conflict config gate).
+ * runtime-lifecycle-ux Stage 4 (01 §3.1): the old conflict manager became
+ * the minimal BLOCK page. Stale runtimes never land here — reconcile
+ * auto-recycled them before preflight — so only two real blockers remain:
+ * another ACTIVE Workbench instance holding the lease, and ownership that
+ * cannot be verified. Exactly three actions (重新检测 / 返回 / 打开诊断);
+ * the destructive stop/remove/force-remove list is gone — advanced
+ * cleanup lives in the Runtime sidebar / Doctor (task 7).
  */
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
+import { useDoctorStore } from "../../stores/doctor";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
+const doctor = useDoctorStore();
 
-function short(id: string): string {
-  return id.slice(0, 8);
-}
+const classification = computed(() => store.reconcile?.classification ?? "");
+
+const titleKey = computed(() => {
+  if (classification.value === "active_other_instance") return "conflict.title.otherInstance";
+  if (classification.value === "unknown_owner") return "conflict.title.unknownOwner";
+  return "conflict.title.blocked";
+});
+
+const descKey = computed(() => {
+  if (classification.value === "active_other_instance") return "conflict.desc.otherInstance";
+  if (classification.value === "unknown_owner") return "conflict.desc.unknownOwner";
+  return "conflict.desc.blocked";
+});
+
+/** unknown_owner: how many unverifiable resources sit in this workspace
+ * (reported only — nothing is deleted without proof of ownership). */
+const unverifiedCount = computed(() =>
+  classification.value === "unknown_owner" ? store.conflicts.length : 0
+);
 </script>
 
 <template>
   <div class="conflict">
-    <h2>{{ t("conflict.title") }}</h2>
-    <p class="hint">{{ t("conflict.desc") }}</p>
-
-    <ul class="list">
-      <li v-for="r in store.conflicts" :key="r.runtime_id">
-        <span class="rid" :title="r.runtime_id">{{ short(r.runtime_id) }}</span>
-        <span class="state" :data-state="r.state">{{ r.state }}</span>
-        <span class="cfg">{{ r.config.image || "?" }} · {{ r.config.scope || "?" }}</span>
-        <span class="act">
-          <button
-            v-if="r.state === 'running' || r.state === 'starting'"
-            @click="store.stopConflictRuntime(r.runtime_id)"
-          >{{ t("conflict.stop") }}</button>
-          <button
-            v-if="r.state === 'running' || r.state === 'starting'"
-            class="danger"
-            :title="t('conflict.forceRemoveTitle')"
-            @click="store.removeConflictRuntime(r.runtime_id, true)"
-          >{{ t("conflict.forceRemove") }}</button>
-          <button
-            v-else-if="r.state === 'stopped' || r.state === 'stopping' || r.state === 'not_found'"
-            class="danger"
-            @click="store.removeConflictRuntime(r.runtime_id, false)"
-          >{{ t("conflict.remove") }}</button>
-        </span>
-      </li>
-      <li v-if="store.conflicts.length === 0" class="empty">{{ t("conflict.empty") }}</li>
-    </ul>
-
-    <p v-if="store.conflictError" class="err">{{ store.conflictError.message }}</p>
+    <h2>{{ t(titleKey) }}</h2>
+    <p class="hint">{{ t(descKey) }}</p>
+    <p v-if="unverifiedCount > 0" class="hint sub" data-testid="unverified-count">
+      {{ t("conflict.unverifiedCount", { count: unverifiedCount }) }}
+    </p>
 
     <div class="actions">
-      <button class="primary" @click="store.retryFromConflict()">{{ t("conflict.repreflight") }}</button>
+      <button class="primary" @click="store.retryFromConflict()">{{ t("conflict.recheck") }}</button>
       <button @click="store.backToPicker()">{{ t("conflict.back") }}</button>
+      <button @click="doctor.openDialog()">{{ t("conflict.diagnostics") }}</button>
     </div>
   </div>
 </template>
@@ -69,35 +67,7 @@ function short(id: string): string {
 }
 .conflict h2 { color: var(--text-2); margin: 0; }
 .hint { font-size: var(--font-sm); color: var(--text-muted); max-width: 480px; text-align: center; margin: 0; }
-.list {
-  list-style: none;
-  padding: 0;
-  margin: 8px 0;
-  width: 560px;
-  max-width: 90vw;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.list li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  font-size: var(--font-md);
-}
-.rid { font-family: monospace; color: var(--info); }
-.state { font-size: var(--font-xs); color: var(--text-muted); min-width: 70px; }
-.state[data-state="running"] { color: var(--success); }
-.state[data-state="stopped"] { color: var(--warn); }
-.state[data-state="unknown"] { color: var(--text-muted); }
-.cfg { flex: 1; color: var(--text-muted); font-size: var(--font-sm); }
-.act { display: flex; gap: 4px; }
-.empty { color: var(--text-muted); font-size: var(--font-sm); justify-content: center; }
-.err { color: var(--error); font-size: var(--font-sm); }
+.hint.sub { font-size: var(--font-xs); }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
   display: inline-flex; align-items: center; justify-content: center;
@@ -110,9 +80,4 @@ button:hover:not(:disabled) { background: var(--surface-hover); color: var(--tex
 button:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: var(--focus-ring-offset); }
 button.primary { background: var(--accent); border-color: transparent; color: var(--accent-fg); font-weight: 600; }
 button.primary:hover:not(:disabled) { background: var(--accent-hover); }
-button.primary:hover { background: var(--accent-hover); }
-button.danger { background: var(--error-bg); border-color: var(--error-border); color: var(--error-fg); }
-button.danger:hover:not(:disabled) { background: var(--error-hover); }
-button.danger:hover { background: var(--error-hover); }
-button:disabled { opacity: 0.45; cursor: default; }
 </style>

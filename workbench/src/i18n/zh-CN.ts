@@ -65,9 +65,8 @@ export const zhCN = {
   "summary.dockerDown": "Docker 引擎未运行。点击「启动 Docker」会打开 Docker Desktop（首次启动需接受协议），启动后自动重新检测。",
   "summary.hardBlocked": "Hard gate 未通过，无法启动。请修复 Docker / workspace 权限后重试。",
   "summary.conflictGate": "工作区已有不兼容 Runtime，需先停止或复用它。",
-  "summary.restorable": "检测到上次的标签布局。「恢复布局」会为各标签启动新的 Agent 会话，不会续接上次终端内容。",
+  "summary.reconcileRecycled": "已自动回收上次未正常关闭的运行环境。",
   "summary.start": "Start",
-  "summary.restoreLayout": "恢复布局",
   "summary.startDocker": "启动 Docker",
   "summary.startingDocker": "正在启动 Docker…",
   "summary.toggleSettings": "收起设置",
@@ -105,15 +104,16 @@ export const zhCN = {
   "build.backToSummary": "返回摘要",
 
   // --- conflict manager (ConflictManager.vue) ---
-  "conflict.title": "工作区已有 Runtime",
-  "conflict.desc": "工作区已有不兼容的 Workbench Runtime。可先停止或移除，然后再继续。",
-  "conflict.stop": "停止",
-  "conflict.forceRemove": "强制移除",
-  "conflict.forceRemoveTitle": "强制移除选中的 Runtime",
-  "conflict.remove": "移除",
-  "conflict.empty": "无 Runtime 可操作（重新预检）",
-  "conflict.repreflight": "重新预检",
+  "conflict.title.otherInstance": "此工作区正在另一个 Workbench 实例中使用",
+  "conflict.desc.otherInstance": "另一个 Workbench 实例正在使用此工作区。请先在那边关闭它，或稍后重新检测。",
+  "conflict.title.unknownOwner": "无法确认运行环境的归属",
+  "conflict.desc.unknownOwner": "此工作区存在无法证明属于 AISC 的运行环境，为避免误删未做任何处理。可打开诊断查看详情；这里不会自动删除。",
+  "conflict.title.blocked": "启动已被阻断",
+  "conflict.desc.blocked": "当前无法启动此工作区。可重新检测，或打开诊断查看详情。",
+  "conflict.unverifiedCount": "检测到 {count} 个无法确认归属的资源（仅报告，未删除）",
+  "conflict.recheck": "重新检测",
   "conflict.back": "返回",
+  "conflict.diagnostics": "打开诊断",
 
   // --- runtime sidebar (RuntimeSidebar.vue) ---
   "sidebar.workspace": "工作区",
@@ -369,9 +369,6 @@ export const zhCN = {
   "settings.window.geometryMaximized": "（最大化）",
 
   // --- runtime store dialogs / errors (runtime.ts) ---
-  "runtime.stopConfirm": "停止 Runtime {id}？残留容器将在下次打开该工作区时自动回收。",
-  "runtime.forceRemoveConfirm": "强制移除选中的 Runtime {id}？容器与数据将一并删除。",
-  "runtime.removeConfirm": "移除 Runtime {id}？容器与数据将一并删除。",
   "runtime.exitConfirm": "有 {count} 个活动会话，退出将结束它们，并删除各工作区的临时运行环境（工作区文件不受影响）。继续？",
   "runtime.stopWithSessions": "将结束 {count} 个活动会话，并删除此工作区的临时运行环境。继续？",
   "runtime.stopPlain": "将删除此工作区的临时运行环境（工作区文件不受影响）。继续？",

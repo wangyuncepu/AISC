@@ -65,9 +65,8 @@ export const enUS: Record<string, string> = {
   "summary.dockerDown": "Docker engine is not running. 「Start Docker」 opens Docker Desktop (first run requires accepting the agreement); detection resumes automatically.",
   "summary.hardBlocked": "Hard gate failed, cannot start. Fix Docker / workspace permissions and retry.",
   "summary.conflictGate": "An incompatible Runtime exists in this workspace; stop or reuse it first.",
-  "summary.restorable": "A previous tab layout was found. 「Restore layout」 starts fresh Agent sessions per tab; it does not resume previous terminal content.",
+  "summary.reconcileRecycled": "The leftover runtime from the last session was auto-recycled.",
   "summary.start": "Start",
-  "summary.restoreLayout": "Restore layout",
   "summary.startDocker": "Start Docker",
   "summary.startingDocker": "Starting Docker…",
   "summary.toggleSettings": "Hide settings",
@@ -105,15 +104,16 @@ export const enUS: Record<string, string> = {
   "build.backToSummary": "Back to summary",
 
   // --- conflict manager (ConflictManager.vue) ---
-  "conflict.title": "Runtime already exists in this workspace",
-  "conflict.desc": "This workspace has an incompatible Workbench Runtime. Stop or remove it first, then continue.",
-  "conflict.stop": "Stop",
-  "conflict.forceRemove": "Force remove",
-  "conflict.forceRemoveTitle": "Force-remove the selected Runtime",
-  "conflict.remove": "Remove",
-  "conflict.empty": "No Runtime to act on (re-preflight)",
-  "conflict.repreflight": "Re-preflight",
+  "conflict.title.otherInstance": "This workspace is in use by another Workbench instance",
+  "conflict.desc.otherInstance": "Another Workbench instance is actively using this workspace. Close it there first, or wait and re-check.",
+  "conflict.title.unknownOwner": "Cannot verify the leftover runtime's ownership",
+  "conflict.desc.unknownOwner": "Some runtime resources in this workspace cannot be proven to belong to AISC, so nothing was deleted. Diagnostics can show the details; nothing here is auto-removed.",
+  "conflict.title.blocked": "Startup is blocked",
+  "conflict.desc.blocked": "This workspace cannot be started right now. Re-check, or open diagnostics for details.",
+  "conflict.unverifiedCount": "{count} unverifiable resource(s) found (reported only, not deleted)",
+  "conflict.recheck": "Re-check",
   "conflict.back": "Back",
+  "conflict.diagnostics": "Open diagnostics",
 
   // --- runtime sidebar (RuntimeSidebar.vue) ---
   "sidebar.workspace": "Workspace",
@@ -369,9 +369,6 @@ export const enUS: Record<string, string> = {
   "settings.window.geometryMaximized": " (maximized)",
 
   // --- runtime store dialogs / errors (runtime.ts) ---
-  "runtime.stopConfirm": "Stop Runtime {id}? The leftover container is auto-recycled next time this workspace opens.",
-  "runtime.forceRemoveConfirm": "Force-remove Runtime {id}? The container and its data will be deleted.",
-  "runtime.removeConfirm": "Remove Runtime {id}? The container and its data will be deleted.",
   "runtime.exitConfirm": "{count} active sessions - exiting will end them and delete each workspace's temporary runtime (workspace files are unaffected). Continue?",
   "runtime.stopWithSessions": "This will end {count} active sessions and delete this workspace's temporary runtime. Continue?",
   "runtime.stopPlain": "This will delete this workspace's temporary runtime (workspace files are unaffected). Continue?",

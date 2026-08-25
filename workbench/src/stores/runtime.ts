@@ -188,7 +188,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     dockerStartedAt: fwdRef("dockerStartedAt"),
 
     // instance computed (read-only forward)
-    restorableLayout: computed(() => inst.value.restorableLayout.value),
+    reconcile: fwdRef("reconcile"),
 
     // instance methods (call-time re-lookup -> ACTIVE workspace)
     buildPatch: fwdFn("buildPatch"),
@@ -201,7 +201,6 @@ export const useRuntimeStore = defineStore("runtime", () => {
     recomputePreflightNeeded: fwdFn("recomputePreflightNeeded"),
     startDockerAndRepreflight: fwdFn("startDockerAndRepreflight"),
     startFromSummary: fwdFn("startFromSummary"),
-    resumeLayout: fwdFn("resumeLayout"),
     cancelStart: fwdFn("cancelStart"),
     keepCancelledRuntime: fwdFn("keepCancelledRuntime"),
     stopCancelledRuntime: fwdFn("stopCancelledRuntime"),
@@ -232,8 +231,6 @@ export const useRuntimeStore = defineStore("runtime", () => {
     clearWebServices: fwdFn("clearWebServices"),
     selectRecentWorkspace: fwdFn("selectRecentWorkspace"),
     loadConflicts: fwdFn("loadConflicts"),
-    stopConflictRuntime: fwdFn("stopConflictRuntime"),
-    removeConflictRuntime: fwdFn("removeConflictRuntime"),
     retryFromConflict: fwdFn("retryFromConflict"),
     openCcSwitchUiTab: fwdFn("openCcSwitchUiTab"),
     closeCcSwitchUiTab: fwdFn("closeCcSwitchUiTab"),

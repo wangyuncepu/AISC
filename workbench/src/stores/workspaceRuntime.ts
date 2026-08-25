@@ -1,4 +1,4 @@
-import { computed, ref } from "vue";
+import { ref } from "vue";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -184,21 +184,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   /** Last runtime started for this workspace; remembered across stops so S2.4.b
    * resume can find it (not cleared on stop). */
   const lastRuntimeRef = ref<RuntimeRef | null>(null);
-  /** S2.4.b: a restorable tab layout for the current workspace - non-null only
-   * when preflight says the runtime exists (reuse/restart) and history has open
-   * tabs. Drives the 恢复布局 button in LaunchSummary (02 §2.3). The input is
-   * the complete TabRecord list (position-sorted), not an agent list; the
-   * active tab is mapped by saved tab_id (A-INFRA-1). */
-  const restorableLayout = computed<{ records: TabRecord[]; activeSavedId: string | null } | null>(() => {
-    const report = preflight.value;
-    if (!report || !["reuse", "restart"].includes(report.recommended_action)) return null;
-    const rec = (deps.getHistory()?.workspaces ?? []).find((w) => sameWorkspace(w.path, workspace.value));
-    const histTabs = rec?.layout?.tabs ?? [];
-    if (histTabs.length === 0) return null;
-    const records = [...histTabs].sort((a, b) => a.position - b.position);
-    return { records, activeSavedId: rec?.layout?.active_tab_id ?? null };
-  });
-
   const preflight = ref<PreflightReport | null>(null);
   // runtime-lifecycle-ux Stage 3: the reconcile pass that precedes preflight
   // (02 §3). Null while never run / transport-failed; a blocked
@@ -867,36 +852,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     }
   }
 
-  async function stopConflictRuntime(id: string) {
-    const ok = await confirm(i18n.global.t("runtime.stopConfirm", { id: id.slice(0, 8) }));
-    if (!ok) return;
-    try {
-      await ipc.stopRuntime(workspace.value.trim(), id);
-      void ipc.logUiEvent?.("conflict_stop", "ok");
-    } catch (e) {
-      conflictError.value = e as WorkbenchError;
-      void ipc.logUiEvent?.("conflict_stop", "error", (e as WorkbenchError)?.code ?? undefined);
-    }
-    await loadConflicts();
-  }
-
-  async function removeConflictRuntime(id: string, force = false) {
-    const ok = await confirm(
-      force
-        ? i18n.global.t("runtime.forceRemoveConfirm", { id: id.slice(0, 8) })
-        : i18n.global.t("runtime.removeConfirm", { id: id.slice(0, 8) })
-    );
-    if (!ok) return;
-    try {
-      await ipc.removeRuntime(workspace.value.trim(), id, force);
-      void ipc.logUiEvent?.("conflict_remove", "ok");
-    } catch (e) {
-      conflictError.value = e as WorkbenchError;
-      void ipc.logUiEvent?.("conflict_remove", "error", (e as WorkbenchError)?.code ?? undefined);
-    }
-    await loadConflicts();
-  }
-
   function retryFromConflict() {
     conflicts.value = [];
     conflictError.value = null;
@@ -1378,7 +1333,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   /** Ensure the runtime is ready per preflight's recommended_action (start /
    * reuse / restart). Returns false for resolve_conflict (Start is disabled by
-   * the config gate; defensive). Shared by startFromSummary + resumeLayout.
+   * the config gate; defensive). Used by startFromSummary.
    * Control ops bump the request seq so in-flight stale polls are superseded
    * (04 §六.2). */
   async function ensureRuntime(): Promise<boolean> {
@@ -1472,15 +1427,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       { tab_id: uuid(), agent: "bash", title: AGENT_TITLE["bash"], position: 0 },
     ];
     await launchRuntime(records, { openAgents: ["bash"], activeAgent: "bash" });
-  }
-
-  /** S2.4.b: restore the history layout's open tabs with fresh sessions
-   * (02 §2.3). Per-record restore (A-INFRA-1); each tab gets a new session_id;
-   * PTY content is not reattached. */
-  async function resumeLayout() {
-    const layout = restorableLayout.value;
-    if (!layout) return;
-    await launchRuntime(layout.records, { activeSavedId: layout.activeSavedId });
   }
 
   async function handleCancelledStart() {
@@ -1659,7 +1605,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     refreshWebServices,
     openWebService,
     clearWebServices,
-    restorableLayout,
     buildPatch,
     pickWorkspace,
     backToPicker,
@@ -1672,7 +1617,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     dockerStarting,
     dockerStartedAt,
     startFromSummary,
-    resumeLayout,
     cancelStart,
     keepCancelledRuntime,
     stopCancelledRuntime,
@@ -1705,8 +1649,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     clearProviderStatuses,
     selectRecentWorkspace,
     loadConflicts,
-    stopConflictRuntime,
-    removeConflictRuntime,
     retryFromConflict,
     resetWorkspace,
     dispose,

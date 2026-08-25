@@ -150,11 +150,14 @@ const dockerElapsedSec = computed(() =>
     <p v-else-if="hardBlocking" class="gate-msg hard">{{ t("summary.hardBlocked") }}</p>
     <p v-else-if="action === 'resolve_conflict'" class="gate-msg hard">{{ t("summary.conflictGate") }}</p>
 
-    <p v-if="store.restorableLayout" class="gate-msg resume">{{ t("summary.restorable") }}</p>
+    <!-- runtime-lifecycle-ux Stage 4 (01 §1.2): reconcile recycled a leftover
+         runtime before this summary — state it once, non-blocking. -->
+    <p v-if="store.reconcile?.cleanup?.attempted" class="gate-msg recycled" role="status">
+      {{ t("summary.reconcileRecycled") }}
+    </p>
 
     <div class="actions">
       <button class="primary" :disabled="!startEnabled" @click="store.startFromSummary()">{{ t("summary.start") }}</button>
-      <button v-if="store.restorableLayout" class="primary" :disabled="!startEnabled" @click="store.resumeLayout()">{{ t("summary.restoreLayout") }}</button>
       <button v-if="dockerDown" class="primary" :disabled="store.dockerStarting" @click="store.startDockerAndRepreflight()">
         {{ store.dockerStarting ? t("summary.startingDocker") : t("summary.startDocker") }}
       </button>
