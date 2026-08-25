@@ -354,6 +354,55 @@ function fitGrid(): void {
   }
 }
 
+/**
+ * B-05 手测八轮(视觉打磨): mask the resize repaint with a short veil.
+ * The grid change paints two visually jarring passes — the xterm reflow
+ * and (for TUI agents) the PTY's async clear+redraw ~100-250ms later. A
+ * background-colored veil appears on the SAME frame as the reflow, holds
+ * briefly (longer for TUIs, to cover the PTY repaint too), then fades out
+ * — the eye sees old content → brief veil → new content fading in instead
+ * of a flicker. Reduced motion: no veil (instant, as before).
+ */
+const VEIL_FADE_MS = 160;
+const TUI_REPAINT_GRACE_MS = 240;
+let resizeVeil: HTMLDivElement | null = null;
+let veilTimer: number | null = null;
+
+function veilResize(isTui: boolean): void {
+  if (prefersReducedMotion()) return;
+  const host = container.value;
+  if (!host) return;
+  // Re-arm an existing veil (back-to-back settles) instead of stacking.
+  if (veilTimer !== null) {
+    window.clearTimeout(veilTimer);
+    veilTimer = null;
+  }
+  if (resizeVeil) {
+    resizeVeil.style.transition = "none";
+    resizeVeil.style.opacity = "1";
+  } else {
+    const veil = document.createElement("div");
+    veil.className = "resize-veil";
+    host.appendChild(veil);
+    resizeVeil = veil;
+  }
+  const veil = resizeVeil;
+  // Two RAFs: let the resized grid paint a real frame underneath first.
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      veilTimer = window.setTimeout(() => {
+        veil.style.transition = `opacity ${VEIL_FADE_MS}ms ease`;
+        veil.style.opacity = "0";
+        veilTimer = window.setTimeout(() => {
+          veil.remove();
+          if (resizeVeil === veil) resizeVeil = null;
+          veilTimer = null;
+        }, VEIL_FADE_MS + 60);
+      }, isTui ? TUI_REPAINT_GRACE_MS : 30);
+    }),
+  );
+}
+
 function doResize(reason = "tick") {
   if (!visible.value || !term || !fit || !sessionLive.value) {
     // B-05 TEMP probe: a real event that got blocked (not the 2s tick).
@@ -366,6 +415,7 @@ function doResize(reason = "tick") {
     const before = `${term.cols}x${term.rows}`;
     fitGrid();
     if (before !== `${term.cols}x${term.rows}`) {
+      veilResize(leafSessionType.value !== null && leafSessionType.value !== "bash");
       // Walk the whole ancestor chain: the first element that shrinks while
       // its parent does not is the content-coupled culprit.
       const chain: string[] = [];
@@ -789,6 +839,9 @@ onBeforeUnmount(() => {
   if (resizeObserver) resizeObserver.disconnect();
   if (resizeTimer !== null) window.clearTimeout(resizeTimer);
   if (healTimer !== null) window.clearInterval(healTimer);
+  if (veilTimer !== null) window.clearTimeout(veilTimer);
+  resizeVeil?.remove();
+  resizeVeil = null;
   window.removeEventListener("resize", onWindowResize);
   term?.dispose(); // disposes fit/webgl/search addons + custom key handler (03 §七)
   term = null;
@@ -945,6 +998,16 @@ defineExpose({
   background: var(--surface-2);
   border: var(--border-w) solid var(--border);
   border-radius: var(--radius-full);
+  pointer-events: none;
+}
+
+/* B-05 手测八轮: repaint veil — covers the resize reflow / TUI redraw
+ * frames, then fades out (JS-driven; see veilResize). */
+.resize-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--bg);
   pointer-events: none;
 }
 
