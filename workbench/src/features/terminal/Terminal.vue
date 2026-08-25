@@ -218,16 +218,18 @@ function rebuildTerminal() {
   setTimeout(doResize, 0);
 }
 
-/** B-06 (fix F4): leading + trailing debounce. The first event fires
- *  immediately (the drag is followed live); the trailing timer catches the
- *  resting position and re-arms the leading edge — at most one send per
- *  150ms under continuous dragging, instead of nothing until it ends. */
+/** B-06: settle-once resize. Windows restore/maximize animates the window
+ *  through a burst of intermediate sizes; acting on each step reflows the
+ *  whole scrollback + forces a full TUI redraw per step (visible squeeze +
+ *  flicker, 手测三轮). Reset the timer on every event and do ONE fit+send
+ *  after 150ms of quiet — a discrete maximize lands ~150ms later, a drag
+ *  snaps once on pause. The 2s heal tick backstops anything missed. */
 function scheduleResize(reason: string) {
-  if (!visible.value || resizeTimer !== null) return;
-  doResize(`ev:${reason}`);
+  if (resizeTimer !== null) window.clearTimeout(resizeTimer);
   resizeTimer = window.setTimeout(() => {
     resizeTimer = null;
-    doResize(`evT:${reason}`);
+    if (!visible.value) return;
+    doResize(`settle:${reason}`);
   }, 150);
 }
 
@@ -259,6 +261,15 @@ function doResize(reason = "tick") {
     // noise the sync state. Fitting the xterm side above is still correct.
     if (!sid || pane.value?.sessionState !== "running") return;
     const size: TermSize = { cols: term.cols, rows: term.rows };
+    // B-05 手测三轮: never drag a full-screen TUI below its readable floor.
+    // claude/codex renderers WEDGE at absurd widths and stop responding to
+    // WINCH — after that even maximizing cannot revive them. Below the floor
+    // the narrow overlay covers the pane visually while the PTY keeps its
+    // last usable size (or the 80-col spawn default). bash wraps fine.
+    if (leafSessionType.value !== null && leafSessionType.value !== "bash" && size.cols < NARROW_TUI_MIN_COLS) {
+      store.logTerminalProbe(`floor:${reason}:${size.cols}x${size.rows}`);
+      return;
+    }
     // F5: idempotent skip — nothing to do when the PTY already confirmed
     // this exact grid and the last send succeeded.
     if (!shouldSendSize(lastConfirmedSize, size, resizeSyncFailed)) return;

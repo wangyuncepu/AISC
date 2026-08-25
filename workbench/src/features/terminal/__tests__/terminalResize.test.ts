@@ -233,28 +233,30 @@ describe("Terminal PTY size convergence (B-05)", () => {
     wrapper.unmount();
   });
 
-  it("F4: a resize event follows immediately (leading) and only sends on change", async () => {
+  it("F4: resize events settle once after 150ms of quiet (no mid-burst steps)", async () => {
     vi.useFakeTimers();
     const { wrapper } = await mountTerminal("running");
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.resizeSession).toHaveBeenCalledTimes(1);
+    expect(h.resizeSession).toHaveBeenCalledTimes(1); // initial running-sync
 
-    // Layout changed (drag): the fake fit now proposes a narrower grid.
+    // Layout changed (drag / restore animation burst): every event resets
+    // the settle timer — nothing fires mid-burst (each intermediate step
+    // used to reflow the whole scrollback and flicker, 手测三轮).
     h.fitSize.cols = 100;
     window.dispatchEvent(new Event("resize"));
-    await vi.advanceTimersByTimeAsync(0);
-    // Leading fire: the new size went out in the same tick — no waiting for
-    // the drag to end (the old pure-trailing debounce froze during drags).
-    expect(h.resizeSession).toHaveBeenCalledTimes(2);
-    expect(h.resizeSession).toHaveBeenLastCalledWith("sid-1", 100, 30);
+    await vi.advanceTimersByTimeAsync(100);
+    window.dispatchEvent(new Event("resize"));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(h.resizeSession).toHaveBeenCalledTimes(1);
 
-    // Trailing catch-up fires 150ms later but the size is already confirmed.
+    // 150ms of quiet → ONE settle fire with the resting size.
     await vi.advanceTimersByTimeAsync(200);
     expect(h.resizeSession).toHaveBeenCalledTimes(2);
+    expect(h.resizeSession).toHaveBeenLastCalledWith("sid-1", 100, 30);
     wrapper.unmount();
   });
 
-  it("narrow-TUI guard: a claude TUI below 60 cols is covered by a widen hint", async () => {
+  it("narrow-TUI guard: a claude TUI below 60 cols is covered and the PTY keeps its floor", async () => {
     vi.useFakeTimers();
     h.fitSize.cols = 40;
     const { wrapper } = await mountTerminal("running", "claude");
@@ -262,12 +264,17 @@ describe("Terminal PTY size convergence (B-05)", () => {
     const overlay = wrapper.find('[data-testid="narrow-tui-overlay"]');
     expect(overlay.exists()).toBe(true);
     expect(overlay.text()).toContain("claude");
+    // Floor: the PTY is never dragged below the readable minimum — the TUI
+    // renderers wedge at absurd widths and stop responding to WINCH.
+    expect(h.resizeSession).not.toHaveBeenCalled();
 
-    // Widen: the overlay lifts on the next fitted resize.
+    // Widen: after the settle the overlay lifts and ONE clean resize lands.
     h.fitSize.cols = 118;
     window.dispatchEvent(new Event("resize"));
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(200);
     expect(wrapper.find('[data-testid="narrow-tui-overlay"]').exists()).toBe(false);
+    expect(h.resizeSession).toHaveBeenCalledTimes(1);
+    expect(h.resizeSession).toHaveBeenLastCalledWith("sid-1", 118, 30);
     wrapper.unmount();
   });
 
