@@ -88,10 +88,14 @@ function activateRenderedTab(id: string): void {
   focusTabTerminal(id);
 }
 
-/** 10e r7 (user feedback): tab CONTENT now fades in on switch — the v-show
+/** 10e r7 (user feedback): tab CONTENT fades in on switch — the v-show
  * panes stay mounted (buffer-safe design), so a display:none -> block swap
  * can't CSS-transition; orchestrate manually: pin opacity 0, then release on
- * the next frame so the 150ms ease runs. */
+ * the next frame so the ease runs.
+ * B-05 手测十二轮: TERMINAL panes are excluded — the terminal's own resize
+ * veil now carries that transition with one curve; layering this opacity
+ * ramp on top of the veil fade read as flicker. Settings/cc-switch panes
+ * (no terminal veil) keep the original fade. */
 const terminalAreaRef = ref<HTMLElement | null>(null);
 watch(
   () => store.activeTabId,
@@ -99,8 +103,7 @@ watch(
     if (!id || store.status !== "ready") return;
     void nextTick(() => {
       const area = terminalAreaRef.value;
-      const wrap = area?.querySelector<HTMLElement>(`.term-wrap[data-tab="${CSS.escape(id)}"]`)
-        ?? area?.querySelector<HTMLElement>(".settings-pane");
+      const wrap = area?.querySelector<HTMLElement>(".settings-pane");
       if (!wrap) return;
       wrap.classList.add("pane-fade-in");
       requestAnimationFrame(() =>
@@ -362,9 +365,11 @@ function setPaneTreeRef(tabId: string) {
 .ready { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; }
 .terminal-area { flex: 1; min-height: 0; padding: 4px; background: var(--bg); display: flex; }
 .term-wrap { flex: 1; min-height: 0; min-width: 0; }
-/* 10e: content fade on tab switch (opacity only — D10-09). */
-.term-wrap, .settings-pane { transition: opacity var(--duration-normal) var(--ease); }
-.term-wrap.pane-fade-in, .settings-pane.pane-fade-in { opacity: 0; }
+/* 10e: content fade on tab switch (opacity only — D10-09). Terminal panes
+ * excluded (B-05 手测十二轮): the terminal resize veil owns their switch
+ * motion; a second opacity ramp here compounded into a flicker. */
+.settings-pane { transition: opacity var(--duration-normal) var(--ease); }
+.settings-pane.pane-fade-in { opacity: 0; }
 .settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }
 /* 2026-08-18 样式对调：Explorer 固定停靠左列（原 RuntimeSidebar 的 dock 样式） */
 .explorer-dock {

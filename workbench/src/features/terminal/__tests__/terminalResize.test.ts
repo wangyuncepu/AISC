@@ -336,8 +336,8 @@ describe("resize veil (review P0/P1)", () => {
     await vi.advanceTimersByTimeAsync(200); // settle fit + send + ok
     expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
 
-    // ok landed; grace (160ms) + fade/instant release clears it.
-    await vi.advanceTimersByTimeAsync(600);
+    // ok landed; grace (320ms) + 300ms fade clears it.
+    await vi.advanceTimersByTimeAsync(900);
     expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(false);
     wrapper.unmount();
   });
@@ -381,8 +381,8 @@ describe("resize veil (review P0/P1)", () => {
     // The show doResize finds an unchanged grid — no instant release.
     await vi.advanceTimersByTimeAsync(0);
     expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
-    // The fallback (grace + 120ms) fades it out.
-    await vi.advanceTimersByTimeAsync(600);
+    // The fallback (grace + 160ms) plus the 300ms fade clears it.
+    await vi.advanceTimersByTimeAsync(1000);
     expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(false);
     wrapper.unmount();
   });
@@ -390,9 +390,10 @@ describe("resize veil (review P0/P1)", () => {
   it("a stale ok-grace cannot release a newer hold (review P1)", async () => {
     vi.useFakeTimers();
     let releaseA!: (v: undefined) => void;
-    h.resizeSession.mockImplementationOnce(
-      () => new Promise<void>((res) => { releaseA = res; })
-    );
+    let releaseB!: (v: undefined) => void;
+    h.resizeSession
+      .mockImplementationOnce(() => new Promise<void>((res) => { releaseA = res; }))
+      .mockImplementationOnce(() => new Promise<void>((res) => { releaseB = res; }));
     const { wrapper } = await mountTerminal("running");
     await vi.advanceTimersByTimeAsync(0);
     expect(h.resizeSession).toHaveBeenCalledTimes(1); // A (mount sync) in flight
@@ -404,14 +405,16 @@ describe("resize veil (review P0/P1)", () => {
     await vi.advanceTimersByTimeAsync(200);
     releaseA(undefined); // A lands: its ok-grace carries A's send-time gen
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.resizeSession).toHaveBeenCalledTimes(2); // B sent after A
+    expect(h.resizeSession).toHaveBeenCalledTimes(2); // B sent after A, pending
 
-    // A's grace window elapses — it must NOT expose B's veil.
-    await vi.advanceTimersByTimeAsync(170);
+    // A's grace window elapses — it must NOT expose B's veil (B still
+    // pending, so nothing else could release it).
+    await vi.advanceTimersByTimeAsync(500);
     expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
 
     // B's own ok-grace elapses — now the veil clears.
-    await vi.advanceTimersByTimeAsync(600);
+    releaseB(undefined);
+    await vi.advanceTimersByTimeAsync(800);
     expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(false);
     wrapper.unmount();
   });

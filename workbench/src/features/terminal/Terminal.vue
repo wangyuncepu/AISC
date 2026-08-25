@@ -372,10 +372,13 @@ function fitGrid(): void {
  * guarded by a generation token so stale async releases cannot expose a
  * newer hold; 900ms failsafe; reduced motion skips the veil entirely.
  */
-const VEIL_FADE_MS = 160;
-const VEIL_GRACE_BASH_MS = 160;
-const VEIL_GRACE_TUI_MS = 320;
-const VEIL_FAILSAFE_MS = 900;
+// 手测十二轮(对标 Explorer↔产物栏 200ms cross-fade 的柔和度): fade
+// rides var(--duration-slow) (300ms) with the shared ease — keep
+// VEIL_FADE_MS in sync with that token; graces lengthened accordingly.
+const VEIL_FADE_MS = 300;
+const VEIL_GRACE_BASH_MS = 320;
+const VEIL_GRACE_TUI_MS = 480;
+const VEIL_FAILSAFE_MS = 1200;
 const veilOn = ref(false);
 const veilFading = ref(false);
 let veilGen = 0; // generation token: stale async releases no-op
@@ -823,7 +826,7 @@ onMounted(() => {
       // never expose a veil held by a newer show).
       veilHold(veilGrace());
       const gen = veilGen;
-      window.setTimeout(() => veilRelease(gen), veilGraceMs + 120);
+      window.setTimeout(() => veilRelease(gen), veilGraceMs + 160);
       setTimeout(() => {
         doResize("show");
         term?.refresh(0, term.rows - 1);
@@ -1117,7 +1120,9 @@ defineExpose({
 }
 .resize-veil.fading {
   opacity: 0;
-  transition: opacity var(--duration-normal) var(--ease);
+  /* --duration-slow (300ms) — matches VEIL_FADE_MS; the Explorer↔产物
+   * cross-fade feel (手测十二轮). */
+  transition: opacity var(--duration-slow) var(--ease);
 }
 
 /* B-05 手测 2: opaque cover for a TUI below its minimum readable width. */
