@@ -61,6 +61,10 @@ vi.mock("@xterm/xterm", () => ({
     loadAddon(addon: { activate?: (t: unknown) => void }) {
       addon?.activate?.(this);
     }
+    resize(cols: number, rows: number) {
+      this.cols = cols;
+      this.rows = rows;
+    }
     open() {}
     write(_d: unknown, cb?: () => void) {
       cb?.();

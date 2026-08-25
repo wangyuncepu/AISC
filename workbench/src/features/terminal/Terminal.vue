@@ -239,6 +239,61 @@ function onWindowResize() {
   scheduleResize("window");
 }
 
+/**
+ * B-05: zoom-immune grid sizing. FitAddon mixes clientWidth (local layout
+ * units) with character metrics across the app-zoom / counter-zoom boundary;
+ * whenever effectiveScale < 1 (windows below 800×600 — the small-window
+ * state) the mismatch feeds back on itself: fit → screen width → layout →
+ * ResizeObserver → fit …, one column lost per round — the visible
+ * 14px-per-150ms staircase squeeze (探针 02:18 轮实锤).
+ *
+ * Instead, BOTH numbers come from getBoundingClientRect on elements inside
+ * the SAME zoomed subtree (a hidden probe span shares the terminal's font
+ * settings), so every zoom factor cancels and the grid is exact. The addon
+ * path stays as a fallback for jsdom / pre-layout zero-size boxes.
+ */
+function measureCell(): { w: number; h: number } | null {
+  const host = container.value;
+  if (!host) return null;
+  const s = settingsStore.doc?.terminal;
+  let probe = host.querySelector<HTMLElement>(".cell-probe");
+  if (!probe) {
+    probe = document.createElement("div");
+    probe.className = "cell-probe";
+    probe.setAttribute("aria-hidden", "true");
+    host.appendChild(probe);
+  }
+  probe.textContent = "0000000000";
+  const st = probe.style;
+  st.position = "absolute";
+  st.visibility = "hidden";
+  st.whiteSpace = "pre";
+  st.fontFamily = s?.font_family || "monospace";
+  st.fontSize = `${s?.font_size ?? 14}px`;
+  st.letterSpacing = `${s?.letter_spacing ?? 0}px`;
+  st.lineHeight = String(s?.line_height ?? 1.2);
+  const r = probe.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  return { w: r.width / 10, h: r.height };
+}
+
+function fitGrid(): void {
+  if (!term) return;
+  const host = container.value;
+  const cell = host ? measureCell() : null;
+  const rect = host?.getBoundingClientRect();
+  if (!cell || !rect || rect.width <= 0 || rect.height <= 0) {
+    // jsdom / not laid out yet: fall back to the addon (tests drive it).
+    fit?.fit();
+    termCols.value = term.cols;
+    return;
+  }
+  const cols = Math.max(2, Math.floor((rect.width + 0.5) / cell.w));
+  const rows = Math.max(1, Math.floor((rect.height + 0.5) / cell.h));
+  term.resize(cols, rows);
+  termCols.value = cols;
+}
+
 function doResize(reason = "tick") {
   if (!visible.value || !term || !fit || !sessionLive.value) {
     // B-05 TEMP probe: a real event that got blocked (not the 2s tick).
@@ -249,14 +304,11 @@ function doResize(reason = "tick") {
   }
   try {
     const before = `${term.cols}x${term.rows}`;
-    const boxW = container.value?.clientWidth ?? -1;
-    fit.fit();
-    termCols.value = term.cols; // narrow-TUI guard tracks the fitted grid
+    fitGrid();
     if (before !== `${term.cols}x${term.rows}`) {
-      const p = container.value?.parentElement;
-      const g = p?.parentElement;
+      const rect = container.value?.getBoundingClientRect();
       store.logTerminalProbe(
-        `fit:${reason}:${before}->${term.cols}x${term.rows}:box=${boxW}:p=${p?.clientWidth ?? -1}:g=${g?.clientWidth ?? -1}:win=${window.innerWidth}`,
+        `fit:${reason}:${before}->${term.cols}x${term.rows}:rect=${Math.round(rect?.width ?? -1)}x${Math.round(rect?.height ?? -1)}:win=${window.innerWidth}`,
       );
     }
     const sid = sessionId.value;
@@ -547,7 +599,7 @@ onMounted(() => {
   term.attachCustomKeyEventHandler(onTermCustomKey);
   mountWebgl();
   mountSearch();
-  fit.fit();
+  fitGrid();
   termCols.value = term?.cols ?? 80;
 
   resizeObserver = new ResizeObserver(() => scheduleResize("observer"));
