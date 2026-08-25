@@ -293,6 +293,28 @@ function actualCellWidth(): number | null {
   return w / term.cols;
 }
 
+/** B-05 手测四轮: TUI floor — below the readable minimum BOTH grids (xterm
+ *  + PTY) hold at the floor: the TUI never sees an absurd width (renderers
+ *  wedge) and never renders into a mismatched xterm (garbled buffer).
+ *  Widening then produces a DIFFERENT size, so the send fires, WINCH
+ *  arrives and the TUI repaints cleanly. bash wraps fine and is exempt. */
+function clampToFloor(cols: number): number {
+  return leafSessionType.value !== null &&
+    leafSessionType.value !== "bash" &&
+    cols < NARROW_TUI_MIN_COLS
+    ? NARROW_TUI_MIN_COLS
+    : cols;
+}
+
+function applyGrid(cols: number, rows: number): void {
+  if (!term) return;
+  termCols.value = cols; // narrow-overlay truth: the FITTED width
+  const grid = clampToFloor(cols);
+  if (grid !== term.cols || rows !== term.rows) {
+    term.resize(grid, rows);
+  }
+}
+
 function fitGrid(): void {
   if (!term) return;
   const host = container.value;
@@ -300,53 +322,29 @@ function fitGrid(): void {
   if (!rect || rect.width <= 0 || rect.height <= 0) {
     // jsdom / not laid out yet: fall back to the addon (tests drive it).
     fit?.fit();
-    if (term) termCols.value = term.cols;
+    if (term) applyGrid(term.cols, term.rows);
     return;
   }
-  // Bootstrap cell estimate from a settings-font probe (same zoom subtree).
+  // Cell width: xterm's own rendered screen first (self-calibrating), the
+  // settings-font probe as the first-screen bootstrap. Both live in the
+  // same zoom subtree, so every zoom factor cancels.
   const probe = measureCell();
-  let cellW = probe?.w ?? 0;
-  let cellH = probe?.h ?? 0;
-  // Self-calibrate against xterm's own rendered screen whenever available.
-  const real = actualCellWidth();
-  if (real && real > 0) cellW = real;
+  const cellW = actualCellWidth() ?? probe?.w ?? 0;
+  const cellH = probe?.h ?? 0;
   if (cellW <= 0 || cellH <= 0) {
     fit?.fit();
-    if (term) termCols.value = term.cols;
+    if (term) applyGrid(term.cols, term.rows);
     return;
   }
   const cols = Math.max(2, Math.floor(rect.width / cellW));
   const rows = Math.max(1, Math.floor(rect.height / cellH));
-  termCols.value = cols; // narrow-overlay truth: the FITTED width
-  // B-05 手测四轮: TUI floor. Below the readable minimum the overlay
-  // covers the pane, and BOTH grids (xterm + PTY) hold at the floor — the
-  // TUI never sees an absurd width (renderers wedge) and never renders into
-  // a mismatched xterm (garbled buffer). Widening then produces a DIFFERENT
-  // size, so the send fires, WINCH arrives and the TUI repaints cleanly.
-  const grid =
-    leafSessionType.value !== null &&
-    leafSessionType.value !== "bash" &&
-    cols < NARROW_TUI_MIN_COLS
-      ? NARROW_TUI_MIN_COLS
-      : cols;
-  if (grid !== term.cols || rows !== term.rows) {
-    term.resize(grid, rows);
-    // One correction pass: the resize may have re-snapped the cell (rare);
-    // re-derive once so the settled grid never overflows the container.
-    const real2 = actualCellWidth();
-    if (real2 && real2 > 0 && Math.abs(real2 - cellW) > 0.01) {
-      const cols2 = Math.max(2, Math.floor(rect.width / real2));
-      const grid2 =
-        leafSessionType.value !== null &&
-        leafSessionType.value !== "bash" &&
-        cols2 < NARROW_TUI_MIN_COLS
-          ? NARROW_TUI_MIN_COLS
-          : cols2;
-      if (grid2 !== term.cols) {
-        term.resize(grid2, rows);
-        termCols.value = cols2;
-      }
-    }
+  applyGrid(cols, rows);
+  // One correction pass: the resize may have re-snapped the rendered cell
+  // (rare); re-derive once so the settled grid never overflows the box.
+  const real2 = actualCellWidth();
+  if (real2 && Math.abs(real2 - cellW) > 0.01) {
+    const cols2 = Math.max(2, Math.floor(rect.width / real2));
+    if (cols2 !== cols) applyGrid(cols2, rows);
   }
 }
 
