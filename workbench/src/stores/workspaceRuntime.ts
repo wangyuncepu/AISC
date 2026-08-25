@@ -865,14 +865,16 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   /** Build tabs from TabRecords and open fresh sessions (new id, never
    * reattaching a PTY - 03 §六). Fresh start passes the fixed 4 records and
-   * opens only the requested agents; resume (S2.4.b) passes the history
-   * records (duplicates preserved, A-INFRA-1) and opens all. */
+   * opens only the requested agents; Stage 5 lazy restore passes the history
+   * records with `lazy: true` — only the ACTIVE tab opens sessions, the rest
+   * become dormant placeholders that wake on activation (01 §4.2). */
   async function initTabs(
     records: TabRecord[],
     opts: {
       activeSavedId?: string | null;
       activeAgent?: LaunchAgent | null;
       openAgents?: LaunchAgent[];
+      lazy?: boolean;
     } = {}
   ) {
     lastRuntimeRef.value = {
@@ -888,8 +890,21 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     // through the same provider gate as + menu tabs - unconfigured claude/
     // codex restore as guide without a session (A-G08-3). `openAgents`
     // filters the pane types to open (fresh start opens only the requested).
+    activeTabId.value = resolveActiveTabId(created, bySavedId, {
+      activeSavedId: opts.activeSavedId,
+      activeAgent: opts.activeAgent,
+    });
     const gates: Promise<void>[] = [];
     for (const tab of created) {
+      if (opts.lazy && tab.tabId !== activeTabId.value) {
+        // Stage 5 (01 §4.2): dormant placeholder — no session until the tab
+        // is activated; closing it only touches history (never terminate).
+        for (const pane of Object.values(tab.panes)) {
+          pane.sessionState = "dormant";
+        }
+        syncProjection(tab);
+        continue;
+      }
       for (const leaf of listLeaves(tab.tree)) {
         if (opts.openAgents && !opts.openAgents.includes(leaf.sessionType)) continue;
         // bash/cc-switch open synchronously ("starting"); claude/codex await a
@@ -904,10 +919,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       }
       syncProjection(tab);
     }
-    activeTabId.value = resolveActiveTabId(created, bySavedId, {
-      activeSavedId: opts.activeSavedId,
-      activeAgent: opts.activeAgent,
-    });
     if (gates.length > 0) {
       await Promise.race([
         Promise.all(gates),
@@ -917,6 +928,19 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     status.value = "ready";
     scheduleSave();
     deps.onReady?.(); // 3c: the launcher materializes into a workspace here
+  }
+
+  /** Stage 5 (01 §4.2): activating a dormant tab wakes its placeholder
+   * panes — fresh sessions through the same provider gates as a + menu tab.
+   * Re-activation is a no-op (starting/running panes bail inside the gate). */
+  function wakeDormantTab(tab: Tab): void {
+    for (const leaf of listLeaves(tab.tree)) {
+      const p = tab.panes[leaf.paneId];
+      if (!p || p.sessionState !== "dormant") continue;
+      p.sessionState = "idle";
+      void maybeOpenPaneCreated(tab, leaf.paneId, leaf.sessionType);
+    }
+    syncProjection(tab);
   }
 
   function findTab(tabId: string): Tab | undefined {
@@ -1174,6 +1198,12 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     const tab = findTab(tabId);
     if (!tab) return;
     activeTabId.value = tabId;
+    // Stage 5: first activation of a dormant placeholder opens its sessions.
+    if (Object.values(tab.panes).some((p) => p.sessionState === "dormant")) {
+      wakeDormantTab(tab);
+      scheduleSave();
+      return;
+    }
     if (activePane(tab).sessionState === "idle") openTab(tabId);
     scheduleSave();
   }
@@ -1378,6 +1408,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       activeSavedId?: string | null;
       activeAgent?: LaunchAgent | null;
       openAgents?: LaunchAgent[];
+      lazy?: boolean;
     } = {}
   ) {
     error.value = null;
@@ -1421,8 +1452,24 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   async function startFromSummary() {
     if (!preflight.value) return;
-    // G-08 (A-G08-1): a fresh start opens exactly one Bash tab; more tabs are
-    // created dynamically via the + menu. Restore layout is unchanged.
+    // Stage 5 (01 §4.2): the saved layout restores as dormant placeholders —
+    // only the active tab opens a session now; the rest wake on activation.
+    // No layout (first open / cleared) falls back to the G-08 single Bash
+    // tab; more tabs come from the + menu.
+    const rec = (deps.getHistory()?.workspaces ?? []).find((w) =>
+      sameWorkspace(w.path, workspace.value)
+    );
+    const histTabs = rec?.layout?.tabs ?? [];
+    if (histTabs.length > 0) {
+      const records = [...histTabs]
+        .sort((a, b) => a.position - b.position)
+        .slice(0, MAX_TABS);
+      await launchRuntime(records, {
+        activeSavedId: rec?.layout?.active_tab_id ?? null,
+        lazy: true,
+      });
+      return;
+    }
     const records: TabRecord[] = [
       { tab_id: uuid(), agent: "bash", title: AGENT_TITLE["bash"], position: 0 },
     ];
