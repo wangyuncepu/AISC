@@ -34,6 +34,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Protocol, runtime_checkable
 
+from aisc.adapters.docker_ import _poll_resize_step
 from aisc.domain.gateway import (
     BuildResult,
     ContainerInspectResult,
@@ -620,16 +621,17 @@ class SdkGateway:
             """Poll the resize file; forward changes to exec_resize."""
             if not resize_file:
                 return
+            # Local copy + module-level step helper: immune to the closure
+            # trap that previously dropped every post-initial resize (B-05).
+            last = last_size
             while not stop.is_set():
-                try:
-                    content = open(resize_file).read().strip().split()
-                    if len(content) == 2:
-                        cur = (int(content[0]), int(content[1]))
-                        if cur != last_size:
-                            last_size = cur  # type: ignore[misc]
-                            client.api.exec_resize(exec_id, height=cur[1], width=cur[0])
-                except Exception:  # noqa: BLE001
-                    pass
+                last = _poll_resize_step(
+                    resize_file,
+                    last,
+                    lambda size: client.api.exec_resize(
+                        exec_id, height=size[1], width=size[0]
+                    ),
+                )
                 stop.wait(0.1)
 
         t_drain = threading.Thread(target=drain, daemon=True)
