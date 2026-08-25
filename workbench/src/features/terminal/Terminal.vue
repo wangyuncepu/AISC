@@ -363,24 +363,34 @@ function fitGrid(): void {
 }
 
 /**
- * B-05 手测八轮(视觉打磨): mask the resize repaint with a short veil.
- * The grid change paints two visually jarring passes — the xterm reflow
- * and (for TUI agents) the PTY's async clear+redraw ~100-250ms later. A
- * background-colored veil appears on the SAME frame as the reflow, holds
- * briefly (longer for TUIs, to cover the PTY repaint too), then fades out
- * — the eye sees old content → brief veil → new content fading in instead
- * of a flicker. Reduced motion: no veil (instant, as before).
+ * B-05 手测八/九轮(视觉打磨): mask resize repaints with a veil.
+ * Two jarring passes surround a grid change: the xterm reflow, and the
+ * PTY's async clear+redraw ~100-250ms later (sidecar poll + TUI redraw).
+ * A background-colored veil covers BOTH: it is pinned BEFORE the first
+ * paint (the show watcher runs pre-paint — the stale hidden-pane grid
+ * never reaches the eye), and releases only after the backend CONFIRMS
+ * the resize plus a grace for the PTY repaint (bash 160ms, TUI 320ms),
+ * with a 900ms failsafe so it can never stick. Reduced motion: no veil.
  */
 const VEIL_FADE_MS = 160;
-const TUI_REPAINT_GRACE_MS = 240;
+const VEIL_GRACE_BASH_MS = 160;
+const VEIL_GRACE_TUI_MS = 320;
+const VEIL_FAILSAFE_MS = 900;
 let resizeVeil: HTMLDivElement | null = null;
 let veilTimer: number | null = null;
+let veilFailsafe: number | null = null;
+let veilGraceMs = VEIL_GRACE_BASH_MS;
 
-function veilResize(isTui: boolean): void {
+function veilGrace(): number {
+  return leafSessionType.value !== null && leafSessionType.value !== "bash"
+    ? VEIL_GRACE_TUI_MS
+    : VEIL_GRACE_BASH_MS;
+}
+
+function ensureVeil(): void {
   if (prefersReducedMotion()) return;
   const host = container.value;
   if (!host) return;
-  // Re-arm an existing veil (back-to-back settles) instead of stacking.
   if (veilTimer !== null) {
     window.clearTimeout(veilTimer);
     veilTimer = null;
@@ -388,25 +398,45 @@ function veilResize(isTui: boolean): void {
   if (resizeVeil) {
     resizeVeil.style.transition = "none";
     resizeVeil.style.opacity = "1";
-  } else {
-    const veil = document.createElement("div");
-    veil.className = "resize-veil";
-    host.appendChild(veil);
-    resizeVeil = veil;
+    return;
   }
+  const veil = document.createElement("div");
+  veil.className = "resize-veil";
+  host.appendChild(veil);
+  resizeVeil = veil;
+}
+
+/** Pin the veil; it fades out VEIL_GRACE after the PTY confirms (see
+ *  sendResize → releaseVeil), or at the failsafe cap at the latest. */
+function veilHold(graceMs?: number): void {
+  if (prefersReducedMotion()) return;
+  if (graceMs !== undefined) veilGraceMs = graceMs;
+  ensureVeil();
+  if (veilFailsafe !== null) window.clearTimeout(veilFailsafe);
+  veilFailsafe = window.setTimeout(releaseVeil, VEIL_FAILSAFE_MS);
+}
+
+function releaseVeil(): void {
   const veil = resizeVeil;
-  // Two RAFs: let the resized grid paint a real frame underneath first.
+  if (!veil) return;
+  if (veilFailsafe !== null) {
+    window.clearTimeout(veilFailsafe);
+    veilFailsafe = null;
+  }
+  if (veilTimer !== null) {
+    window.clearTimeout(veilTimer);
+    veilTimer = null;
+  }
+  // Two RAFs: let the settled grid paint a real frame underneath first.
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
+      veil.style.transition = `opacity ${VEIL_FADE_MS}ms ease`;
+      veil.style.opacity = "0";
       veilTimer = window.setTimeout(() => {
-        veil.style.transition = `opacity ${VEIL_FADE_MS}ms ease`;
-        veil.style.opacity = "0";
-        veilTimer = window.setTimeout(() => {
-          veil.remove();
-          if (resizeVeil === veil) resizeVeil = null;
-          veilTimer = null;
-        }, VEIL_FADE_MS + 60);
-      }, isTui ? TUI_REPAINT_GRACE_MS : 30);
+        veil.remove();
+        if (resizeVeil === veil) resizeVeil = null;
+        veilTimer = null;
+      }, VEIL_FADE_MS + 60);
     }),
   );
 }
@@ -434,6 +464,9 @@ function sendResize(sid: string, size: TermSize): void {
       lastConfirmedSize = size;
       resizeSyncFailed = false;
       store.logTerminalProbe(`ok:${size.cols}x${size.rows}`);
+      // Veil release: the PTY has the size; give its redraw the grace,
+      // then fade. (No veil → releaseVeil is a no-op.)
+      window.setTimeout(releaseVeil, veilGraceMs);
     })
     .catch((err: unknown) => {
       // B-05 (fix F2): a swallowed failure used to leave the PTY stuck at
@@ -470,7 +503,7 @@ function doResize(reason = "tick") {
     const before = `${term.cols}x${term.rows}`;
     fitGrid();
     if (before !== `${term.cols}x${term.rows}`) {
-      veilResize(leafSessionType.value !== null && leafSessionType.value !== "bash");
+      veilHold(veilGrace());
       // Walk the whole ancestor chain: the first element that shrinks while
       // its parent does not is the content-coupled culprit.
       const chain: string[] = [];
@@ -483,6 +516,10 @@ function doResize(reason = "tick") {
       store.logTerminalProbe(
         `fit:${reason}:${before}->${term.cols}x${term.rows}:win=${window.innerWidth}:${chain.join("|")}`,
       );
+    } else if (reason === "show") {
+      // Grid already correct — nothing to mask; plain tab switches must
+      // not gain a veil flash.
+      releaseVeil();
     }
     const sid = sessionId.value;
     // B-05 (fix F1): only send when the backend session is Running — a
@@ -776,6 +813,12 @@ onMounted(() => {
   // viewport repaint after the re-fit.
   watch(visible, (v) => {
     if (v) {
+      // B-05 手测九轮: pin the veil BEFORE the first paint. Hidden panes
+      // keep a stale grid (they never fit), and that stale frame IS the
+      // visible garble on tab switch; the show doResize runs a tick later.
+      // It releases the veil — instantly when the grid is already correct,
+      // after backend-confirm + grace when a resize must land.
+      if (sessionLive.value) veilHold(veilGrace());
       setTimeout(() => {
         doResize("show");
         term?.refresh(0, term.rows - 1);
@@ -882,6 +925,7 @@ onBeforeUnmount(() => {
   if (resizeTimer !== null) window.clearTimeout(resizeTimer);
   if (healTimer !== null) window.clearInterval(healTimer);
   if (veilTimer !== null) window.clearTimeout(veilTimer);
+  if (veilFailsafe !== null) window.clearTimeout(veilFailsafe);
   resizeVeil?.remove();
   resizeVeil = null;
   window.removeEventListener("resize", onWindowResize);
