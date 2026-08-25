@@ -523,6 +523,104 @@ class RuntimeServicesDataPlaneTests(unittest.TestCase):
         self.assertEqual(cm.exception.exit_code, RuntimeExitCode.RUNTIME_NOT_RUNNING)
 
 
+class RunFakeExecutor:
+    """Minimal executor for `aisc run` paths: run/inspect only."""
+
+    def __init__(self, bind_conflicts=0, auto_remove=True):
+        self.bind_conflicts = bind_conflicts
+        self.auto_remove = auto_remove
+        self.run_calls: list[list[str]] = []
+        self.exists = True
+
+    def preflight(self):
+        return DockerPreflightResult(docker_path="/usr/bin/docker",
+                                     available=True, reason="ok")
+
+    def inspect_image(self, name):
+        return ImageInspectResult(status=ImageInspectStatus.EXISTS, image=name,
+                                  image_id="sha256:fake")
+
+    def run_captured(self, argv, *, timeout=None):
+        cmd = argv[0] if argv else ""
+        if cmd == "run":
+            self.run_calls.append(list(argv))
+            if self.bind_conflicts > 0:
+                self.bind_conflicts -= 1
+                return ProcessResult(stdout="", exit_code=1,
+                                     stderr="Bind for 127.0.0.1:x failed: "
+                                            "port is already allocated")
+            self.exists = not self.auto_remove  # --rm: gone after exit
+            return ProcessResult(stdout="cid-run", stderr="", exit_code=0)
+        if cmd == "inspect":
+            if not self.exists:
+                return ProcessResult(stdout="", exit_code=1,
+                                     stderr="Error: No such object: x")
+            return ProcessResult(stdout="true\n", stderr="", exit_code=0)
+        return ProcessResult(stdout="", stderr="", exit_code=0)
+
+    def run_streaming(self, argv, *, timeout=None):
+        return ProcessResult(stdout="", stderr="", exit_code=0)
+
+    @staticmethod
+    def _publish_port(argv):
+        for a in argv:
+            if a.startswith("127.0.0.1:"):
+                return int(a.split(":")[1])
+        return 0
+
+
+class RunPathGatewayTests(unittest.TestCase):
+    def test_plan_run_publishes_loopback_gateway(self):
+        from aisc.cli.commands.run import plan_run
+
+        ws = _make_workspace()
+        plan = plan_run(image="super-claude:latest", workspace=str(ws),
+                        name="t", network="direct")
+        self.assertTrue(WEB_GATEWAY_HOST_PORT_MIN <= plan.web_gateway_host_port
+                        <= WEB_GATEWAY_HOST_PORT_MAX)
+        publishes = [a for a in plan.docker_argv if a.startswith("127.0.0.1:")]
+        self.assertEqual(len(publishes), 1)
+        self.assertTrue(publishes[0].endswith(f":{WEB_GATEWAY_CONTAINER_PORT}/tcp"))
+        # dry-run shows the same publish plan without calling Docker
+        self.assertIn("--publish", plan.docker_argv)
+
+    def test_run_metadata_and_bind_conflict_retry(self):
+        from aisc.cli.commands.run import run_container, plan_run
+
+        ws = _make_workspace()
+        plan = plan_run(image="super-claude:latest", workspace=str(ws),
+                        name="t", network="direct")
+        ex = RunFakeExecutor(bind_conflicts=1)
+        result = run_container(plan, capture=True, executor=ex)
+        self.assertTrue(result.executed)
+        self.assertEqual(len(ex.run_calls), 2, "one bind-conflict retry")
+        first_port = ex._publish_port(ex.run_calls[0])
+        second_port = ex._publish_port(ex.run_calls[1])
+        self.assertNotEqual(first_port, second_port)
+        # exactly one publish spec per attempt argv (never stacks)
+        for call in ex.run_calls:
+            self.assertEqual(len([a for a in call if a.startswith("127.0.0.1:")]), 1)
+        self.assertEqual(result.web_gateway["host_port"], second_port)
+        self.assertEqual(result.web_gateway["container_port"], WEB_GATEWAY_CONTAINER_PORT)
+        data = result.to_dict()
+        self.assertEqual(data["web_gateway"]["host_port"], second_port)
+
+    def test_rm_run_leaves_no_registry_entry(self):
+        from aisc.adapters.container_registry import list_containers
+        from aisc.cli.commands.run import plan_run, run_container
+
+        ws = _make_workspace()
+        reg = ws / ".aisc"
+        reg.mkdir()
+        plan = plan_run(image="super-claude:latest", workspace=str(ws),
+                        name="t", network="direct")
+        ex = RunFakeExecutor(auto_remove=True)
+        result = run_container(plan, capture=True, executor=ex, aisc_root=reg)
+        self.assertEqual(result.container_exit_code, 0)
+        # --rm: the container is gone, so the GC pass prunes the entry.
+        self.assertEqual(list_containers(reg), {})
+
+
 class AllocatorExhaustionTests(unittest.TestCase):
     def test_exhaustion_raises_stable_error(self):
         # Block the whole range by binding every port in it is impractical;

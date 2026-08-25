@@ -1031,6 +1031,14 @@ def _cmd_run(
 
     result = run_container(plan, emitter=emitter, capture=capture,
                            aisc_root=aisc_root)
+
+    # svc-5: text mode shows the one-line gateway contract before the
+    # container takes over the terminal (JSON/events carry web_gateway).
+    if (effective_format == "text" and emitter is None
+            and not plan.dry_run and plan.web_gateway_host_port):
+        print(f"🌐 Web 服务网关: http://p<端口>.localhost:{plan.web_gateway_host_port}/ "
+              f"（容器内注册服务: aisc-web-expose <端口>）")
+
     return result.to_dict(), 0, []
 
 

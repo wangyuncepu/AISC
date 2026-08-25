@@ -106,6 +106,24 @@ def plan_run(
     for sub in ("claude", "codex", "cc-switch", "runtime"):
         (ws_state_dir / sub).mkdir(parents=True, exist_ok=True)
 
+    # svc-5: one gateway host port per one-shot run (same capability as
+    # managed runtimes). Ports reserved by other registered containers are
+    # skipped best-effort; dry-run shows the publish plan without Docker.
+    from aisc.application.web_gateway import (
+        allocate_gateway_host_port,
+        registry_host_ports,
+    )
+
+    exclude: set = set()
+    if aisc_root is not None:
+        try:
+            from aisc.adapters.container_registry import list_containers
+
+            exclude = registry_host_ports(list_containers(Path(aisc_root)))
+        except Exception:
+            exclude = set()
+    web_gateway_port = allocate_gateway_host_port(exclude=exclude)
+
     return RunPlan(
         image=image,
         workspace=str(ws_path),
@@ -118,6 +136,7 @@ def plan_run(
         label=label,
         keep_alive=keep_alive,
         agent_state_root=str(ws_state_dir),
+        web_gateway_host_port=web_gateway_port,
     )
 
 
@@ -134,9 +153,12 @@ class RunResult:
     container_exit_code: Optional[int] = None
     dry_run: bool = False
     executed: bool = False
+    # svc-5: service-access metadata — the gateway publish that rode this
+    # run's docker argv. Empty when no port was allocated.
+    web_gateway: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out = {
             "image": self.image,
             "container_id": self.container_id,
             "dry_run": self.dry_run,
@@ -144,6 +166,35 @@ class RunResult:
             "docker_argv": list(self.docker_argv),
             "container_exit_code": self.container_exit_code,
         }
+        if self.web_gateway:
+            out["web_gateway"] = dict(self.web_gateway)
+        return out
+
+
+def _run_captured_with_publish_retry(executor, plan: RunPlan, attempts: int = 3):
+    """``docker run`` (captured) with bounded gateway bind-conflict retry.
+
+    The argv is regenerated from the (replaced) plan each attempt so the
+    publish spec never stacks. Only the captured paths can detect the
+    conflict — the interactive streaming path inherits stderr and surfaces
+    Docker's own message on the terminal (unchanged behavior).
+    """
+    import dataclasses
+
+    from aisc.application.web_gateway import allocate_gateway_host_port, is_bind_conflict
+
+    proc = executor.run_captured(list(plan.docker_argv))
+    tried = 1
+    while proc.exit_code != 0 and is_bind_conflict(proc.stderr or "") \
+            and tried < attempts:
+        plan = dataclasses.replace(
+            plan,
+            web_gateway_host_port=allocate_gateway_host_port(
+                start_hint=plan.web_gateway_host_port + 1),
+        )
+        proc = executor.run_captured(list(plan.docker_argv))
+        tried += 1
+    return proc, plan
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +234,13 @@ def run_container(
         dry_run=plan.dry_run,
         executed=False,
     )
+    if plan.web_gateway_host_port:
+        from aisc.domain.web_services import WEB_GATEWAY_CONTAINER_PORT
+
+        result.web_gateway = {
+            "container_port": WEB_GATEWAY_CONTAINER_PORT,
+            "host_port": plan.web_gateway_host_port,
+        }
 
     # --- emit start event ---
     if emitter is not None:
@@ -302,7 +360,11 @@ def run_container(
     if capture:
         # --- machine mode (json / events): captured output, forwarded to stderr ---
         import sys as _sys
-        proc = exec_.run_captured(argv)
+        proc, plan = _run_captured_with_publish_retry(exec_, plan)
+        result.docker_argv = list(plan.docker_argv)
+        if plan.web_gateway_host_port:
+            result.web_gateway = {**result.web_gateway,
+                                  "host_port": plan.web_gateway_host_port}
         result.container_exit_code = proc.exit_code
         result.executed = True
 
@@ -323,7 +385,11 @@ def run_container(
         # For keep_alive mode, container runs in background (-d), then we attach
         if plan.keep_alive:
             # Step 1: Start container in detached mode
-            proc = exec_.run_captured(argv)
+            proc, plan = _run_captured_with_publish_retry(exec_, plan)
+            result.docker_argv = list(plan.docker_argv)
+            if plan.web_gateway_host_port:
+                result.web_gateway = {**result.web_gateway,
+                                      "host_port": plan.web_gateway_host_port}
             if proc.exit_code != 0:
                 raise CliError(
                     message=f"Failed to start container: {proc.stderr}",
@@ -394,7 +460,11 @@ def run_container(
     else:
         # JSON / events mode (no capture flag, not interactive, not non_interactive): captured
         import sys as _sys
-        proc = exec_.run_captured(argv)
+        proc, plan = _run_captured_with_publish_retry(exec_, plan)
+        result.docker_argv = list(plan.docker_argv)
+        if plan.web_gateway_host_port:
+            result.web_gateway = {**result.web_gateway,
+                                  "host_port": plan.web_gateway_host_port}
         result.container_exit_code = proc.exit_code
         result.executed = True
 
@@ -416,5 +486,15 @@ def run_container(
         emitter.emit("run.container.complete", data={
             "exit_code": result.container_exit_code,
         })
+
+    # svc-5: a `--rm` container is gone the moment it exits — prune its
+    # registry entry now so nothing lingers (best-effort, never fatal).
+    if not plan.keep_alive and aisc_root is not None:
+        try:
+            from aisc.adapters.container_registry import gc as registry_gc
+
+            registry_gc(Path(aisc_root), exec_)
+        except Exception:
+            pass
 
     return result

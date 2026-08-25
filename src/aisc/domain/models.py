@@ -366,6 +366,11 @@ class RunPlan:
     # run is project-scoped) the agent config dirs mount from here instead
     # of being copied into the workspace.
     agent_state_root: str = ""
+    # svc-5 (web gateway): loopback host port publishing the container-side
+    # gateway (45871/tcp); 0 would mean "no gateway" but plan_run always
+    # allocates one — one-shot `aisc run` containers get the same capability
+    # as managed runtimes.
+    web_gateway_host_port: int = 0
 
     @property
     def docker_argv(self) -> list:
@@ -419,6 +424,14 @@ class RunPlan:
                 argv.extend([
                     "-v", f"{self.proxy_config}:/etc/mihomo/config.yaml:ro",
                 ])
+        if self.web_gateway_host_port:
+            # svc-5: loopback publish of the in-container web gateway.
+            from aisc.domain.web_services import WEB_GATEWAY_CONTAINER_PORT
+
+            argv.extend([
+                "--publish",
+                f"127.0.0.1:{self.web_gateway_host_port}:{WEB_GATEWAY_CONTAINER_PORT}/tcp",
+            ])
         argv.append(self.image)
         return argv
 
