@@ -14,7 +14,8 @@
 | svc-3 Agent 合同 | `1303151` | global-claude.md 服务启动 checklist（同一文件生成 CLAUDE.md/AGENTS.md）；静态测试禁止"容器 localhost 当用户 URL"示例 |
 | svc-4 Workbench | `52f833c` | 能力协商扩展（classify 矩阵 +10 行矩阵项）；RuntimeSidebar「Web 服务」区（语义 key、reason i18n、复制/受限打开）；`runtime_services` + `open_runtime_service_url`（后端重生成 URL + 字节级校验 + 字符集门 + 无任意 opener 插件）；store 缓存/降级/清理 |
 | svc-5 run 路径 | `08aeb55` | plan_run 分配端口（dry-run 也展示）；RunPlan publish；captured 路径冲突重试（argv 由 replaced plan 重建，不叠 publish）；RunResult `web_gateway` 元数据；text 模式一行提示；`--rm` 成功后 GC 清注册 |
-| svc-6 验证 | 本提交 | 集成测试 + 台账 |
+| svc-6 验证 | `77cdb9e` | 集成测试 + 台账 |
+| 修复轮 | `caa26d5` | Dockerfile py_compile 移层（首次镜像构建 `python3: not found`）；Python 3.14 argparse 嵌套子命令 required 语义修复（父层改可选+dispatch 校验）；集成测试支持 `AISC_CLI_EXECUTABLE` |
 
 ## 2. 自动化证据（本机，2026-08-25）
 
@@ -37,8 +38,13 @@ Bundle/NSIS 按 path filter。container/ 改动后已手动跑过 `tools/vendor-
 
 `tests/integration/docker/test_web_services.py`：真实 Docker 端到端（start→publish→
 expose→容器内 loopback 服务经网关 200→未注册 404→目标未监听 502→坏 Host 400→
-unexpose→stop 后 `runtime_not_running`→restart 映射不漂移）。本机无 Docker 自动
-skip（已验证 skip 路径）；CI/实机在镜像含 svc-1 gateway 后执行。
+unexpose→stop 后 `runtime_not_running`→restart 映射不漂移）。
+
+**2026-08-25 本机实跑记录**：Docker Desktop 29.7.2 已装机；镜像已用新 sidecar
+rebuild（gateway/helper 镜内冒烟通过）；`AISC_CLI_EXECUTABLE=dist/aisc-*.exe
+python -m pytest tests/integration/docker/test_web_services.py` **PASSED**
+（44.7s，全链路真实容器/真实 publish/真实网关转发）。其余 docker 集成用例本机
+因 venv 无 `aisc` 入口跳过（Windows 既有限制，CI Linux venv 覆盖）。
 
 ## 4. 待用户手测清单（Windows Docker Desktop）
 
