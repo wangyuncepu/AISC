@@ -1,0 +1,9 @@
+{
+  "schema_version": "aisc.web-service/v1",
+  "port": 3000,
+  "protocol": "http",
+  "name": "docs preview",
+  "state": "registered",
+  "registered_at": "2026-08-25T00:00:00Z",
+  "pid": null
+}

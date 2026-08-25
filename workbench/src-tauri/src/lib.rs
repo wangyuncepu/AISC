@@ -25,6 +25,7 @@ pub mod storage;
 pub mod trace;
 pub mod tray;
 pub mod watcher;
+pub mod web_services;
 pub mod window;
 pub mod workspace;
 

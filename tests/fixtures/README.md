@@ -22,6 +22,21 @@ Consumed by all three layers against the same files:
 | `events-build.jsonl` | `build --events` JSONL, seq 1..5, terminal `build.complete` |
 | `error-codes.json` | Stable error-code manifest (code → exit/retryable/action) |
 
+## `web-services/` — container web-service access fixtures (svc-0)
+
+Frozen contract: `docs/plans/container-service-access/decisions.md`. Consumed
+by all three layers against the same files (the svc-0 stage gate — all three
+must decode identically):
+
+- Python: `tests/test_web_services.py`
+- Rust: `workbench/src-tauri/tests/web_services.rs`
+- TypeScript: `workbench/src/lib/__tests__/webServices.test.ts`
+
+| File | Purpose |
+|---|---|
+| `runtime-services.sample.json` | Golden `aisc.runtime-services/v1` payload |
+| `web-service-record.sample.json` | Golden `aisc.web-service/v1` manifest record |
+
 ## `redaction/` — denylist shapes (S0.5, B-A08)
 
 `denylist.txt` holds realistic-but-not-real secret shapes (Anthropic/OpenAI

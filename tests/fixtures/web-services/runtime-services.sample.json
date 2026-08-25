@@ -1,0 +1,27 @@
+{
+  "schema_version": "aisc.runtime-services/v1",
+  "runtime_id": "0e7b7e3b-0000-4000-8000-000000000001",
+  "gateway": {
+    "state": "ready",
+    "container_port": 45871,
+    "host_port": 47831,
+    "host": "127.0.0.1"
+  },
+  "services": [
+    {
+      "port": 3000,
+      "protocol": "http",
+      "name": "docs preview",
+      "state": "registered",
+      "url": "http://p3000.localhost:47831/"
+    },
+    {
+      "port": 5173,
+      "protocol": "http",
+      "name": "",
+      "state": "registered",
+      "url": "http://p5173.localhost:47831/"
+    }
+  ],
+  "observed_at": "2026-08-25T00:00:00Z"
+}
