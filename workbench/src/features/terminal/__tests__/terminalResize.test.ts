@@ -12,7 +12,7 @@ import { mount } from "@vue/test-utils";
 import { i18n } from "../../../i18n";
 import { useWorkspacesStore } from "../../../stores/workspaces";
 import { useRuntimeStore } from "../../../stores/runtime";
-import type { Tab } from "../../../types";
+import type { LaunchAgent, Tab } from "../../../types";
 import Terminal from "../Terminal.vue";
 
 const h = vi.hoisted(() => ({
@@ -121,30 +121,30 @@ class ResizeObserverStub {
   disconnect() {}
 }
 
-function bareTab(id: string): Tab {
+function bareTab(id: string, agent: LaunchAgent = "bash"): Tab {
   const paneId = id;
   return {
     tabId: id,
-    agent: "bash",
-    title: "Bash",
+    agent,
+    title: agent,
     sessionId: null,
     sessionState: "idle",
     exit: null,
     savedTabId: null,
-    tree: { kind: "pane", paneId, sessionType: "bash" },
+    tree: { kind: "pane", paneId, sessionType: agent },
     activePaneId: paneId,
     panes: { [paneId]: { sessionId: null, sessionState: "idle", exit: null } },
   };
 }
 
-async function birthWorkspace(): Promise<ReturnType<typeof useRuntimeStore>> {
+async function birthWorkspace(agent: LaunchAgent = "bash"): Promise<ReturnType<typeof useRuntimeStore>> {
   const ws = useWorkspacesStore();
   ws.launcher.workspace.value = "C:/ws";
   ws.launcher.runtimeId.value = "rid-1";
   await ws.launcher.initTabs([]);
-  // initTabs([]) births the workspace with NO tabs; install one bash tab the
+  // initTabs([]) births the workspace with NO tabs; install one tab the
   // way the workspaces tests do (birth is real, tab seeding is direct).
-  ws.runtimes[0].tabs.value = [bareTab("t1")];
+  ws.runtimes[0].tabs.value = [bareTab("t1", agent)];
   const runtime = useRuntimeStore();
   runtime.activeTabId = "t1";
   return runtime;
@@ -152,8 +152,8 @@ async function birthWorkspace(): Promise<ReturnType<typeof useRuntimeStore>> {
 
 /** Mount Terminal on the active tab's active pane, with the pane in the
  *  given session state (the store owns sessionId from open time). */
-async function mountTerminal(state: "starting" | "running") {
-  const runtime = await birthWorkspace();
+async function mountTerminal(state: "starting" | "running", agent: LaunchAgent = "bash") {
+  const runtime = await birthWorkspace(agent);
   const tab = runtime.tabs[0];
   const paneId = tab.activePaneId;
   tab.panes[paneId].sessionState = state;
@@ -251,6 +251,32 @@ describe("Terminal PTY size convergence (B-05)", () => {
     // Trailing catch-up fires 150ms later but the size is already confirmed.
     await vi.advanceTimersByTimeAsync(200);
     expect(h.resizeSession).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
+  it("narrow-TUI guard: a claude TUI below 60 cols is covered by a widen hint", async () => {
+    vi.useFakeTimers();
+    h.fitSize.cols = 40;
+    const { wrapper } = await mountTerminal("running", "claude");
+    await vi.advanceTimersByTimeAsync(0);
+    const overlay = wrapper.find('[data-testid="narrow-tui-overlay"]');
+    expect(overlay.exists()).toBe(true);
+    expect(overlay.text()).toContain("claude");
+
+    // Widen: the overlay lifts on the next fitted resize.
+    h.fitSize.cols = 118;
+    window.dispatchEvent(new Event("resize"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wrapper.find('[data-testid="narrow-tui-overlay"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("narrow-TUI guard: bash wraps fine and never shows the hint", async () => {
+    vi.useFakeTimers();
+    h.fitSize.cols = 40;
+    const { wrapper } = await mountTerminal("running", "bash");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wrapper.find('[data-testid="narrow-tui-overlay"]').exists()).toBe(false);
     wrapper.unmount();
   });
 });

@@ -42,7 +42,18 @@
 - 观察期(替代定点复现):用户日常使用(含 agent TUI、拖拽窗口、快速切 tab),三症不再出现;`aisc.log` 若出现 `terminal_resize error` 打点即证据留存。
 - 回滚:本专项单分支,按提交粒度回滚。
 
-## 6. 遗留观察项
+## 6. 手测二轮(2026-08-25,F1–F5 之后)与探针证据
+
+用户反馈:①拉伸窗口列数仍不实时跟随;②TUI 列数不足时结构混乱,扩大后不重绘(并提议:列数不足时显示提示而非立即渲染 TUI——已实现,`NARROW_TUI_MIN_COLS=60`,bash 豁免);③全屏→窗口恢复时终端逐段向左压缩逼近目标。
+
+**容器侧定罪探针(本机 Docker 29.7.2,python:3.12-slim 临时容器)**:
+
+- Phase A(单前台进程):2 次 exec_resize → 2 次 SIGWINCH ✓
+- Phase B(精确复刻 wrapper:setpgid 子进程 + tcsetpgrp + waitpid):**agent 子进程收到 SIGWINCH,子进程 `stty size` 读到新尺寸(40×200)** ✓
+
+结论:exec_resize → winsize → SIGWINCH → agent 这段链路在容器内**无断点**,"扩大后不重绘"的断点只能在宿主侧(前端未发 / resize 文件未写 / sidecar 轮询未跑)或 TUI 自身。待用户实机 `stty size` 探针(见验收)定罪。③的逐段压缩与 150ms 采样节流的中间态重排一致(方向不对称:bash 在拉伸方向不重绘历史,压缩方向 xterm reflow 全量可见)。
+
+## 7. 遗留观察项
 
 - 若观察期后①仍偶发:升级探针(屏显同时展示 xterm cols 与 `stty size`,由 `logUiEvent` 携带双侧值)再定位。
 - ②的"逐段挤压"若在 F4 后仍明显:评估 xterm reflow(scrollback 5000)分块渲染的独立优化,不属本专项。

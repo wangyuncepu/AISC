@@ -62,10 +62,13 @@ const sessionLive = computed(() => {
   const st = pane.value?.sessionState;
   return st === "starting" || st === "running" || st === "closing";
 });
-/** G-17: cc-switch panes are a config TUI - no split offered (user feedback). */
-const isCcSwitch = computed(
-  () => (tab.value ? findLeaf(tab.value.tree, props.paneId)?.sessionType === "cc-switch" : false)
+/** G-17: the session type of this pane's leaf (bash / claude / codex /
+ *  cc-switch) — drives TUI-specific behaviors. */
+const leafSessionType = computed(
+  () => (tab.value ? findLeaf(tab.value.tree, props.paneId)?.sessionType ?? null : null)
 );
+/** G-17: cc-switch panes are a config TUI - no split offered (user feedback). */
+const isCcSwitch = computed(() => leafSessionType.value === "cc-switch");
 
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
@@ -79,6 +82,21 @@ let resizeObserver: ResizeObserver | null = null;
 let lastConfirmedSize: TermSize | null = null;
 let resizeSyncFailed = false;
 let healTimer: number | null = null;
+
+// B-05 手测 2 (narrow-TUI guard): full-screen TUIs (claude/codex/cc-switch)
+// render structural garbage below a minimum width; instead of showing the
+// wreckage, cover the pane with a "widen the window" hint. The session keeps
+// running underneath — widening lifts the overlay and the final WINCH-driven
+// redraw lands cleanly. bash wraps fine and is exempt.
+const NARROW_TUI_MIN_COLS = 60;
+const termCols = ref(80);
+const narrowTui = computed(
+  () =>
+    leafSessionType.value !== null &&
+    leafSessionType.value !== "bash" &&
+    visible.value &&
+    termCols.value < NARROW_TUI_MIN_COLS,
+);
 
 // G-03 search overlay state.
 const searchOpen = ref(false);
@@ -217,6 +235,7 @@ function doResize() {
   if (!visible.value || !term || !fit || !sessionLive.value) return;
   try {
     fit.fit();
+    termCols.value = term.cols; // narrow-TUI guard tracks the fitted grid
     const sid = sessionId.value;
     // B-05 (fix F1): only send when the backend session is Running — a
     // Starting/Closing entry makes resize_session fail, which would just
@@ -493,6 +512,7 @@ onMounted(() => {
   mountWebgl();
   mountSearch();
   fit.fit();
+  termCols.value = term?.cols ?? 80;
 
   resizeObserver = new ResizeObserver(scheduleResize);
   if (container.value) resizeObserver.observe(container.value);
@@ -656,6 +676,21 @@ defineExpose({
     <div v-if="streamTruncated" class="truncation-banner" role="status">
       {{ t("terminal.outputTruncated", { bytes: formatBytes(streamTruncatedBytes) }) }}
     </div>
+    <!-- B-05 手测 2: a full-screen TUI below the minimum width renders
+         structural garbage — cover it with a widen-the-window hint instead.
+         The session keeps running underneath; widening lifts the overlay
+         and the final WINCH redraw lands at the readable size. -->
+    <div
+      v-if="narrowTui"
+      class="narrow-overlay"
+      data-testid="narrow-tui-overlay"
+      role="status"
+    >
+      <p class="narrow-title">{{ t("terminal.narrowTui.title") }}</p>
+      <p class="narrow-detail">
+        {{ t("terminal.narrowTui.detail", { cols: termCols, min: NARROW_TUI_MIN_COLS, agent: leafSessionType }) }}
+      </p>
+    </div>
     <!-- G-03 search overlay -->
     <div v-if="searchOpen" class="search-overlay" @click.stop>
       <input
@@ -760,6 +795,33 @@ defineExpose({
   border: var(--border-w) solid var(--border);
   border-radius: var(--radius-full);
   pointer-events: none;
+}
+
+/* B-05 手测 2: opaque cover for a TUI below its minimum readable width. */
+.narrow-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  text-align: center;
+  background: var(--bg);
+}
+.narrow-title {
+  margin: 0;
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.narrow-detail {
+  margin: 0;
+  max-width: 40ch;
+  font-size: var(--font-sm);
+  color: var(--text-muted);
 }
 
 /* --- search overlay (top-right, above the terminal) --- */
