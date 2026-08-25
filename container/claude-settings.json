@@ -1,4 +1,6 @@
 {
+  "skipDangerousModePermissionPrompt": true,
+  "skipAutoPermissionPrompt": true,
   "enabledPlugins": {
     "caveman@caveman": true,
     "claude-hud@claude-hud": true,

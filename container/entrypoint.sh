@@ -187,6 +187,22 @@ export CODEX_CONFIG_DIR
 export CODEX_HOME="$CODEX_CONFIG_DIR"
 export CC_SWITCH_CONFIG_DIR
 
+# Claude 用户态 .claude.json 持久化（2026-08-25，auto-mode 排障）：
+# Claude Code 把 onboarding/特性开关缓存等用户态写在 $HOME/.claude.json；
+# 项目态只挂载 CLAUDE_CONFIG_DIR（/root/.claude），HOME 不落盘 —— 容器重建
+# 后用户态丢失（升级流程还会把它挪进 backups/ 不恢复），每次首会话回退
+# manual、auto-mode 不出现。缺文件时先从配置目录备份自愈，再把 HOME 文件
+# 链到配置目录内，写穿即持久。
+CLAUDE_HOME_JSON="/root/.claude.json"
+CFG_JSON="$CLAUDE_CONFIG_DIR/.claude.json"
+if [ ! -e "$CLAUDE_HOME_JSON" ]; then
+    if [ ! -e "$CFG_JSON" ] && ls "$CLAUDE_CONFIG_DIR"/backups/.claude.json.backup.* >/dev/null 2>&1; then
+        cp "$(ls "$CLAUDE_CONFIG_DIR"/backups/.claude.json.backup.* | tail -1)" "$CFG_JSON"
+        echo "ℹ️  已从备份恢复 Claude 用户态 (.claude.json)"
+    fi
+    [ -e "$CFG_JSON" ] && ln -s "$CFG_JSON" "$CLAUDE_HOME_JSON"
+fi
+
 # cc-switch 与 CLI 配置目录确保可写。
 ensure_writable "$CC_SWITCH_CONFIG_DIR"
 
