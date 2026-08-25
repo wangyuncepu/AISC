@@ -253,7 +253,11 @@ function doResize(reason = "tick") {
     fit.fit();
     termCols.value = term.cols; // narrow-TUI guard tracks the fitted grid
     if (before !== `${term.cols}x${term.rows}`) {
-      store.logTerminalProbe(`fit:${reason}:${before}->${term.cols}x${term.rows}:box=${boxW}`);
+      const p = container.value?.parentElement;
+      const g = p?.parentElement;
+      store.logTerminalProbe(
+        `fit:${reason}:${before}->${term.cols}x${term.rows}:box=${boxW}:p=${p?.clientWidth ?? -1}:g=${g?.clientWidth ?? -1}:win=${window.innerWidth}`,
+      );
     }
     const sid = sessionId.value;
     // B-05 (fix F1): only send when the backend session is Running — a
