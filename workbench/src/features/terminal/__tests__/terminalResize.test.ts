@@ -285,6 +285,32 @@ describe("Terminal PTY size convergence (B-05)", () => {
     wrapper.unmount();
   });
 
+  it("concurrent resizes serialize: the queued LATEST size lands after the in-flight one", async () => {
+    // 手测九轮回归: show-sync and a settle raced, both resize_session
+    // invokes landed and the FILE ended at the OLDER size while the
+    // frontend recorded the newer one — a permanent, unhealed mismatch.
+    vi.useFakeTimers();
+    let release1!: (v: undefined) => void;
+    h.resizeSession.mockImplementationOnce(
+      () => new Promise<void>((res) => { release1 = res; })
+    );
+    const { wrapper } = await mountTerminal("running");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.resizeSession).toHaveBeenCalledTimes(1); // initial sync in flight
+
+    // A second size change while the first is still in flight: queued only.
+    h.fitSize.cols = 100;
+    window.dispatchEvent(new Event("resize"));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.resizeSession).toHaveBeenCalledTimes(1);
+
+    release1(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.resizeSession).toHaveBeenCalledTimes(2);
+    expect(h.resizeSession).toHaveBeenLastCalledWith("sid-1", 100, 30);
+    wrapper.unmount();
+  });
+
   it("narrow-TUI guard: bash wraps fine and never shows the hint", async () => {
     vi.useFakeTimers();
     h.fitSize.cols = 40;

@@ -31,7 +31,7 @@ import { computeDisplayFrom } from "../../domain/streamBuffer";
 import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import { resizeSession, writeSession } from "../../lib/ipc";
-import { shouldSendSize, type TermSize } from "./resizeSync";
+import { sameTermSize, shouldSendSize, type TermSize } from "./resizeSync";
 import { WORKSPACE_PATH_MIME } from "../../lib/workspaceDnd";
 import { containerPathFor, quoteForTerminal } from "./dropPath";
 import { resolveRenderer, terminalTheme } from "./renderer";
@@ -291,7 +291,10 @@ function actualCell(): { w: number; h: number } | null {
   if (!screen || !term || term.cols <= 0 || term.rows <= 0) return null;
   const r = screen.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) return null;
-  return { w: r.width / term.cols, h: r.height / term.rows };
+  const cell = { w: r.width / term.cols, h: r.height / term.rows };
+  // Garbage guard: mid-transition screens can report absurd metrics.
+  if (cell.w < 3 || cell.w > 80 || cell.h < 6 || cell.h > 100) return null;
+  return cell;
 }
 
 /** B-05 手测四轮: TUI floor — below the readable minimum BOTH grids (xterm
@@ -309,6 +312,11 @@ function clampToFloor(cols: number): number {
 
 function applyGrid(cols: number, rows: number): void {
   if (!term) return;
+  // Sanitize: show-transition frames have produced garbage measurements
+  // (3468x435, 6x3 — probe 03:08/02:54 轮) — clamp to sane terminal bounds
+  // before the grid, the overlay or the PTY ever sees them.
+  cols = Math.min(Math.max(cols, 2), 512);
+  rows = Math.min(Math.max(rows, 1), 256);
   termCols.value = cols; // narrow-overlay truth: the FITTED width
   const grid = clampToFloor(cols);
   if (grid !== term.cols || rows !== term.rows) {
@@ -403,6 +411,53 @@ function veilResize(isTui: boolean): void {
   );
 }
 
+/**
+ * B-05 手测九轮: serialize PTY resizes. Two resize_session invokes in
+ * flight (e.g. the show-triggered sync racing a settle) can apply out of
+ * order — the resize FILE then ends at the OLDER size while the frontend
+ * records the newer one as confirmed, the mismatch is permanent (the heal
+ * tick sees "converged" and never resends). One in flight; newer sizes
+ * queue; only the LATEST queued size is sent when the current lands.
+ */
+let resizeInFlight = false;
+let resizeQueued: TermSize | null = null;
+
+function sendResize(sid: string, size: TermSize): void {
+  if (resizeInFlight) {
+    resizeQueued = size;
+    return;
+  }
+  resizeInFlight = true;
+  store.logTerminalProbe(`send:${size.cols}x${size.rows}`);
+  resizeSession(sid, size.cols, size.rows)
+    .then(() => {
+      lastConfirmedSize = size;
+      resizeSyncFailed = false;
+      store.logTerminalProbe(`ok:${size.cols}x${size.rows}`);
+    })
+    .catch((err: unknown) => {
+      // B-05 (fix F2): a swallowed failure used to leave the PTY stuck at
+      // the 80×24 spawn default forever. Record it on the shared timeline
+      // (store choke point per the P4.5 layer contract) and let the heal
+      // tick retry.
+      resizeSyncFailed = true;
+      const code =
+        err && typeof err === "object" && "code" in err
+          ? String((err as { code?: unknown }).code)
+          : undefined;
+      store.logTerminalResizeError(code);
+      store.logTerminalProbe(`fail:${code ?? "unknown"}`);
+    })
+    .finally(() => {
+      resizeInFlight = false;
+      const next = resizeQueued;
+      resizeQueued = null;
+      if (next && sessionId.value && pane.value?.sessionState === "running") {
+        sendResize(sessionId.value, next);
+      }
+    });
+}
+
 function doResize(reason = "tick") {
   if (!visible.value || !term || !fit || !sessionLive.value) {
     // B-05 TEMP probe: a real event that got blocked (not the 2s tick).
@@ -435,29 +490,16 @@ function doResize(reason = "tick") {
     // noise the sync state. Fitting the xterm side above is still correct.
     if (!sid || pane.value?.sessionState !== "running") return;
     const size: TermSize = { cols: term.cols, rows: term.rows };
-    // F5: idempotent skip — nothing to do when the PTY already confirmed
-    // this exact grid and the last send succeeded.
-    if (!shouldSendSize(lastConfirmedSize, size, resizeSyncFailed)) return;
-    store.logTerminalProbe(`send:${reason}:${size.cols}x${size.rows}`);
-    resizeSession(sid, size.cols, size.rows)
-      .then(() => {
-        lastConfirmedSize = size;
-        resizeSyncFailed = false;
-        store.logTerminalProbe(`ok:${size.cols}x${size.rows}`);
-      })
-      .catch((err: unknown) => {
-        // B-05 (fix F2): a swallowed failure used to leave the PTY stuck at
-        // the 80×24 spawn default forever. Record it on the shared timeline
-        // (store choke point per the P4.5 layer contract) and let the heal
-        // tick retry.
-        resizeSyncFailed = true;
-        const code =
-          err && typeof err === "object" && "code" in err
-            ? String((err as { code?: unknown }).code)
-            : undefined;
-        store.logTerminalResizeError(code);
-        store.logTerminalProbe(`fail:${code ?? "unknown"}`);
-      });
+    // F5 + queue-aware skip: nothing to do when the PTY already confirmed
+    // this grid, a queued send already carries it, and the last send
+    // succeeded.
+    if (
+      !shouldSendSize(lastConfirmedSize, size, resizeSyncFailed) ||
+      sameTermSize(resizeQueued, size)
+    ) {
+      return;
+    }
+    sendResize(sid, size);
   } catch (e) {
     /* container not laid out yet */
     store.logTerminalProbe(`throw:${reason}:${String(e)}`);
