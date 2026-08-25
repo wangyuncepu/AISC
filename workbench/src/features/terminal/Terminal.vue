@@ -455,12 +455,10 @@ function sendResize(sid: string, size: TermSize): void {
   // of an OLDER resize must never release a veil pinned by a newer hold —
   // capturing at ok-time would pick up the newer hold's token and fire.
   const veilGenAtSend = veilGen;
-  store.logTerminalProbe(`send:${size.cols}x${size.rows}`);
   resizeSession(sid, size.cols, size.rows)
     .then(() => {
       lastConfirmedSize = size;
       resizeSyncFailed = false;
-      store.logTerminalProbe(`ok:${size.cols}x${size.rows}`);
       // Veil release: the PTY has the size; give its redraw the grace,
       // then fade.
       window.setTimeout(() => veilRelease(veilGenAtSend), veilGraceMs);
@@ -476,7 +474,6 @@ function sendResize(sid: string, size: TermSize): void {
           ? String((err as { code?: unknown }).code)
           : undefined;
       store.logTerminalResizeError(code);
-      store.logTerminalProbe(`fail:${code ?? "unknown"}`);
     })
     .finally(() => {
       resizeInFlight = false;
@@ -489,13 +486,7 @@ function sendResize(sid: string, size: TermSize): void {
 }
 
 function doResize(reason = "tick") {
-  if (!visible.value || !term || !fit || !sessionLive.value) {
-    // B-05 TEMP probe: a real event that got blocked (not the 2s tick).
-    if (reason !== "tick") {
-      store.logTerminalProbe(`blocked:${reason}:vis=${visible.value}:live=${sessionLive.value}`);
-    }
-    return;
-  }
+  if (!visible.value || !term || !fit || !sessionLive.value) return;
   try {
     const before = `${term.cols}x${term.rows}`;
     // Review P1: pin the veil BEFORE fitGrid — term.resize() reflows
@@ -506,20 +497,7 @@ function doResize(reason = "tick") {
     // generation and strand the watcher's fallback release.
     if (reason !== "tick" && reason !== "show") veilHold(veilGrace());
     fitGrid();
-    if (before !== `${term.cols}x${term.rows}`) {
-      // Walk the whole ancestor chain: the first element that shrinks while
-      // its parent does not is the content-coupled culprit.
-      const chain: string[] = [];
-      let el: HTMLElement | null = container.value;
-      for (let i = 0; el && i < 7; i += 1) {
-        const cls = (el.className && String(el.className).split(" ")[0]) || el.tagName.toLowerCase();
-        chain.push(`${cls}:${Math.round(el.getBoundingClientRect().width)}`);
-        el = el.parentElement;
-      }
-      store.logTerminalProbe(
-        `fit:${reason}:${before}->${term.cols}x${term.rows}:win=${window.innerWidth}:${chain.join("|")}`,
-      );
-    } else if (reason !== "tick" && reason !== "show") {
+    if (before === `${term.cols}x${term.rows}` && reason !== "tick" && reason !== "show") {
       // Grid already correct — nothing to mask; release instantly (the
       // same-tick pin never painted, so there is no fade flash). SHOW is
       // exempt: every tab switch keeps the veil (手测十一轮) and lets the
@@ -542,9 +520,8 @@ function doResize(reason = "tick") {
       return;
     }
     sendResize(sid, size);
-  } catch (e) {
+  } catch {
     /* container not laid out yet */
-    store.logTerminalProbe(`throw:${reason}:${String(e)}`);
   }
 }
 
