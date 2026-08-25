@@ -49,6 +49,12 @@ class RuntimeErrorCode:
     STATE_LOCK_TIMEOUT = "AISC_ERR_STATE_LOCK_TIMEOUT"
     RUNTIME_UNHEALTHY = "AISC_ERR_RUNTIME_UNHEALTHY"
     CONTAINER_NOT_FOUND = "AISC_ERR_CONTAINER_NOT_FOUND"
+    # Workspace lease / reconcile (runtime-lifecycle-ux Stage 1,
+    # 02-domain-contract.md §3 error codes)
+    ACTIVE_WORKSPACE_LEASE = "AISC_ERR_ACTIVE_WORKSPACE_LEASE"
+    RUNTIME_OWNER_UNKNOWN = "AISC_ERR_RUNTIME_OWNER_UNKNOWN"
+    RUNTIME_RECONCILE_FAILED = "AISC_ERR_RUNTIME_RECONCILE_FAILED"
+    RUNTIME_LEASE_CONFLICT = "AISC_ERR_RUNTIME_LEASE_CONFLICT"
 
 
 class RuntimeExitCode:
@@ -76,6 +82,9 @@ class RuntimeExitCode:
     RUNTIME_NOT_RUNNING = 20        # AISC_EXIT_RUNTIME_NOT_RUNNING
     # Provider status exit code (S0.4)
     PROVIDER_STATUS_FAILED = 21     # AISC_EXIT_PROVIDER_STATUS_FAILED
+    # Workspace lease / reconcile (runtime-lifecycle-ux Stage 1)
+    ACTIVE_WORKSPACE_LEASE = 22    # AISC_EXIT_ACTIVE_WORKSPACE_LEASE
+    RUNTIME_RECONCILE_FAILED = 23  # AISC_EXIT_RUNTIME_RECONCILE_FAILED
 
 
 # ---------------------------------------------------------------------------
