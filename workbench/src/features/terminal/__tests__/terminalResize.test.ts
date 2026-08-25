@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { nextTick } from "vue";
 import { mount } from "@vue/test-utils";
 import { i18n } from "../../../i18n";
 import { useWorkspacesStore } from "../../../stores/workspaces";
@@ -317,6 +318,78 @@ describe("Terminal PTY size convergence (B-05)", () => {
     const { wrapper } = await mountTerminal("running", "bash");
     await vi.advanceTimersByTimeAsync(0);
     expect(wrapper.find('[data-testid="narrow-tui-overlay"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+/** Review P0/P1 (terminal-render-review.md 方案 D): the veil must be a
+ *  DECLARATIVE node (scoped CSS applies), pinned before term.resize(), and
+ *  stale async releases must not expose a newer hold. */
+describe("resize veil (review P0/P1)", () => {
+  it("appears on a grid change and clears after confirm+grace", async () => {
+    vi.useFakeTimers();
+    const { wrapper } = await mountTerminal("running");
+    await vi.advanceTimersByTimeAsync(0);
+
+    h.fitSize.cols = 100;
+    window.dispatchEvent(new Event("resize"));
+    await vi.advanceTimersByTimeAsync(200); // settle fit + send + ok
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
+
+    // ok landed; grace (160ms) + fade/instant release clears it.
+    await vi.advanceTimersByTimeAsync(600);
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("pins on tab show BEFORE the show doResize runs (stale-grid frame covered)", async () => {
+    vi.useFakeTimers();
+    const { runtime, wrapper } = await mountTerminal("running");
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Hide the tab, then re-show with a DIFFERENT fitted size waiting: the
+    // watcher pins pre-paint; doResize("show") sits in a setTimeout(0)
+    // that fake timers have NOT advanced yet.
+    h.fitSize.cols = 100;
+    runtime.activeTabId = "other";
+    await vi.advanceTimersByTimeAsync(10);
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(false);
+
+    runtime.activeTabId = "t1";
+    await nextTick();
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
+    // The show fit (grid changes 118→100) keeps it held until ok+grace.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("a stale ok-grace cannot release a newer hold (review P1)", async () => {
+    vi.useFakeTimers();
+    let releaseA!: (v: undefined) => void;
+    h.resizeSession.mockImplementationOnce(
+      () => new Promise<void>((res) => { releaseA = res; })
+    );
+    const { wrapper } = await mountTerminal("running");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.resizeSession).toHaveBeenCalledTimes(1); // A (mount sync) in flight
+
+    // New size while A is in flight: the settle PINS a newer veil (gen2)
+    // and queues send B behind A.
+    h.fitSize.cols = 100;
+    window.dispatchEvent(new Event("resize"));
+    await vi.advanceTimersByTimeAsync(200);
+    releaseA(undefined); // A lands: its ok-grace carries A's send-time gen
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.resizeSession).toHaveBeenCalledTimes(2); // B sent after A
+
+    // A's grace window elapses — it must NOT expose B's veil.
+    await vi.advanceTimersByTimeAsync(170);
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
+
+    // B's own ok-grace elapses — now the veil clears.
+    await vi.advanceTimersByTimeAsync(600);
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(false);
     wrapper.unmount();
   });
 });

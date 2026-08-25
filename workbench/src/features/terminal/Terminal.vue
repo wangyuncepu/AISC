@@ -363,21 +363,23 @@ function fitGrid(): void {
 }
 
 /**
- * B-05 手测八/九轮(视觉打磨): mask resize repaints with a veil.
- * Two jarring passes surround a grid change: the xterm reflow, and the
- * PTY's async clear+redraw ~100-250ms later (sidecar poll + TUI redraw).
- * A background-colored veil covers BOTH: it is pinned BEFORE the first
- * paint (the show watcher runs pre-paint — the stale hidden-pane grid
- * never reaches the eye), and releases only after the backend CONFIRMS
- * the resize plus a grace for the PTY repaint (bash 160ms, TUI 320ms),
- * with a 900ms failsafe so it can never stick. Reduced motion: no veil.
+ * B-05 手测十轮(审查 terminal-render-review.md P0/P1): mask resize
+ * repaints with a DECLARATIVE veil (template node → carries the scoped
+ * data-v attribute; the previous imperative createElement node matched no
+ * scoped rule and was invisible). Pin BEFORE any term.resize() so the
+ * reflow frame never paints uncovered; release only after the backend
+ * confirms the resize plus a PTY-redraw grace (bash 160ms / TUI 320ms),
+ * guarded by a generation token so stale async releases cannot expose a
+ * newer hold; 900ms failsafe; reduced motion skips the veil entirely.
  */
 const VEIL_FADE_MS = 160;
 const VEIL_GRACE_BASH_MS = 160;
 const VEIL_GRACE_TUI_MS = 320;
 const VEIL_FAILSAFE_MS = 900;
-let resizeVeil: HTMLDivElement | null = null;
-let veilTimer: number | null = null;
+const veilOn = ref(false);
+const veilFading = ref(false);
+let veilGen = 0; // generation token: stale async releases no-op
+let veilPainted = false; // has the veil actually painted (≥1 frame on)
 let veilFailsafe: number | null = null;
 let veilGraceMs = VEIL_GRACE_BASH_MS;
 
@@ -387,58 +389,46 @@ function veilGrace(): number {
     : VEIL_GRACE_BASH_MS;
 }
 
-function ensureVeil(): void {
-  if (prefersReducedMotion()) return;
-  const host = container.value;
-  if (!host) return;
-  if (veilTimer !== null) {
-    window.clearTimeout(veilTimer);
-    veilTimer = null;
-  }
-  if (resizeVeil) {
-    resizeVeil.style.transition = "none";
-    resizeVeil.style.opacity = "1";
-    return;
-  }
-  const veil = document.createElement("div");
-  veil.className = "resize-veil";
-  host.appendChild(veil);
-  resizeVeil = veil;
-}
-
-/** Pin the veil; it fades out VEIL_GRACE after the PTY confirms (see
- *  sendResize → releaseVeil), or at the failsafe cap at the latest. */
+/** Pin the veil (opaque, instant). Safe to call repeatedly. */
 function veilHold(graceMs?: number): void {
   if (prefersReducedMotion()) return;
   if (graceMs !== undefined) veilGraceMs = graceMs;
-  ensureVeil();
+  veilGen += 1;
+  veilFading.value = false;
+  veilOn.value = true;
+  veilPainted = false;
+  const gen = veilGen;
+  // Painted after two frames — releases before that are instant (the veil
+  // never met the eye, so fading it out would itself be a flash).
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      if (gen === veilGen) veilPainted = true;
+    }),
+  );
   if (veilFailsafe !== null) window.clearTimeout(veilFailsafe);
-  veilFailsafe = window.setTimeout(releaseVeil, VEIL_FAILSAFE_MS);
+  veilFailsafe = window.setTimeout(() => veilRelease(gen), VEIL_FAILSAFE_MS);
 }
 
-function releaseVeil(): void {
-  const veil = resizeVeil;
-  if (!veil) return;
+/** Release the veil: fade out if it has painted, flip off instantly if it
+ *  never did. `fromGen` discards releases belonging to an older hold. */
+function veilRelease(fromGen?: number): void {
+  const gen = fromGen ?? veilGen;
+  if (gen !== veilGen) return; // stale — a newer hold owns the veil
   if (veilFailsafe !== null) {
     window.clearTimeout(veilFailsafe);
     veilFailsafe = null;
   }
-  if (veilTimer !== null) {
-    window.clearTimeout(veilTimer);
-    veilTimer = null;
+  if (!veilOn.value) return;
+  if (!veilPainted) {
+    veilOn.value = false; // never painted → instant off, no fade flash
+    return;
   }
-  // Two RAFs: let the settled grid paint a real frame underneath first.
-  requestAnimationFrame(() =>
-    requestAnimationFrame(() => {
-      veil.style.transition = `opacity ${VEIL_FADE_MS}ms ease`;
-      veil.style.opacity = "0";
-      veilTimer = window.setTimeout(() => {
-        veil.remove();
-        if (resizeVeil === veil) resizeVeil = null;
-        veilTimer = null;
-      }, VEIL_FADE_MS + 60);
-    }),
-  );
+  veilFading.value = true; // CSS transition to 0 (see .resize-veil.fading)
+  window.setTimeout(() => {
+    if (gen !== veilGen) return; // re-held mid-fade (hold() reset state)
+    veilOn.value = false;
+    veilFading.value = false;
+  }, VEIL_FADE_MS + 60);
 }
 
 /**
@@ -458,6 +448,10 @@ function sendResize(sid: string, size: TermSize): void {
     return;
   }
   resizeInFlight = true;
+  // Review P1 (方案 C): capture the veil generation AT SEND TIME. The ok
+  // of an OLDER resize must never release a veil pinned by a newer hold —
+  // capturing at ok-time would pick up the newer hold's token and fire.
+  const veilGenAtSend = veilGen;
   store.logTerminalProbe(`send:${size.cols}x${size.rows}`);
   resizeSession(sid, size.cols, size.rows)
     .then(() => {
@@ -465,8 +459,8 @@ function sendResize(sid: string, size: TermSize): void {
       resizeSyncFailed = false;
       store.logTerminalProbe(`ok:${size.cols}x${size.rows}`);
       // Veil release: the PTY has the size; give its redraw the grace,
-      // then fade. (No veil → releaseVeil is a no-op.)
-      window.setTimeout(releaseVeil, veilGraceMs);
+      // then fade.
+      window.setTimeout(() => veilRelease(veilGenAtSend), veilGraceMs);
     })
     .catch((err: unknown) => {
       // B-05 (fix F2): a swallowed failure used to leave the PTY stuck at
@@ -501,9 +495,13 @@ function doResize(reason = "tick") {
   }
   try {
     const before = `${term.cols}x${term.rows}`;
+    // Review P1: pin the veil BEFORE fitGrid — term.resize() reflows
+    // synchronously inside it, and the intermediate frame must never paint
+    // uncovered. (The 2s heal tick skips the pin: an unchanged fit is a
+    // pure no-op and must not flash.)
+    if (reason !== "tick") veilHold(veilGrace());
     fitGrid();
     if (before !== `${term.cols}x${term.rows}`) {
-      veilHold(veilGrace());
       // Walk the whole ancestor chain: the first element that shrinks while
       // its parent does not is the content-coupled culprit.
       const chain: string[] = [];
@@ -516,10 +514,10 @@ function doResize(reason = "tick") {
       store.logTerminalProbe(
         `fit:${reason}:${before}->${term.cols}x${term.rows}:win=${window.innerWidth}:${chain.join("|")}`,
       );
-    } else if (reason === "show") {
-      // Grid already correct — nothing to mask; plain tab switches must
-      // not gain a veil flash.
-      releaseVeil();
+    } else if (reason !== "tick") {
+      // Grid already correct — nothing to mask; release instantly (the
+      // same-tick pin never painted, so there is no fade flash).
+      veilRelease();
     }
     const sid = sessionId.value;
     // B-05 (fix F1): only send when the backend session is Running — a
@@ -924,10 +922,10 @@ onBeforeUnmount(() => {
   if (resizeObserver) resizeObserver.disconnect();
   if (resizeTimer !== null) window.clearTimeout(resizeTimer);
   if (healTimer !== null) window.clearInterval(healTimer);
-  if (veilTimer !== null) window.clearTimeout(veilTimer);
   if (veilFailsafe !== null) window.clearTimeout(veilFailsafe);
-  resizeVeil?.remove();
-  resizeVeil = null;
+  veilGen += 1; // invalidate any in-flight veil callbacks (review P1)
+  veilOn.value = false;
+  veilFading.value = false;
   window.removeEventListener("resize", onWindowResize);
   term?.dispose(); // disposes fit/webgl/search addons + custom key handler (03 §七)
   term = null;
@@ -962,6 +960,17 @@ defineExpose({
     <div v-if="streamTruncated" class="truncation-banner" role="status">
       {{ t("terminal.outputTruncated", { bytes: formatBytes(streamTruncatedBytes) }) }}
     </div>
+    <!-- B-05 手测十轮: DECLARATIVE resize veil (review P0 — an imperative
+         createElement node carries no data-v scope attribute and matches no
+         scoped rule). v-if keeps the node in the DOM exactly while the veil
+         is on; .fading drives the fade-out transition. -->
+    <div
+      v-if="veilOn"
+      class="resize-veil"
+      :class="{ fading: veilFading }"
+      aria-hidden="true"
+      data-testid="resize-veil"
+    ></div>
     <!-- B-05 手测 2: a full-screen TUI below the minimum width renders
          structural garbage — cover it with a widen-the-window hint instead.
          The session keeps running underneath; widening lifts the overlay
@@ -1087,14 +1096,21 @@ defineExpose({
   pointer-events: none;
 }
 
-/* B-05 手测八轮: repaint veil — covers the resize reflow / TUI redraw
- * frames, then fades out (JS-driven; see veilResize). */
+/* B-05 手测十轮: repaint veil (declarative node — carries the scoped
+ * attribute, unlike the old imperative createElement one). Base state is
+ * opaque with NO transition (re-pinning must be instant); .fading carries
+ * the transition so only the fade-out animates. */
 .resize-veil {
   position: absolute;
   inset: 0;
   z-index: 1;
   background: var(--bg);
   pointer-events: none;
+  opacity: 1;
+}
+.resize-veil.fading {
+  opacity: 0;
+  transition: opacity var(--duration-normal) var(--ease);
 }
 
 /* B-05 手测 2: opaque cover for a TUI below its minimum readable width. */
