@@ -31,6 +31,7 @@ import { computeDisplayFrom } from "../../domain/streamBuffer";
 import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
 import { resizeSession, writeSession } from "../../lib/ipc";
+import { shouldSendSize, type TermSize } from "./resizeSync";
 import { WORKSPACE_PATH_MIME } from "../../lib/workspaceDnd";
 import { containerPathFor, quoteForTerminal } from "./dropPath";
 import { resolveRenderer, terminalTheme } from "./renderer";
@@ -72,6 +73,12 @@ let webgl: WebglAddon | null = null;
 let searchAddon: SearchAddon | null = null;
 let resizeTimer: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
+// B-05: size-convergence state. `lastConfirmedSize` is the size the PTY
+// actually accepted (not merely what fit proposed); `resizeSyncFailed`
+// forces the heal tick to retry after a rejected resize_session.
+let lastConfirmedSize: TermSize | null = null;
+let resizeSyncFailed = false;
+let healTimer: number | null = null;
 
 // G-03 search overlay state.
 const searchOpen = ref(false);
@@ -193,8 +200,13 @@ function rebuildTerminal() {
   setTimeout(doResize, 0);
 }
 
+/** B-06 (fix F4): leading + trailing debounce. The first event fires
+ *  immediately (the drag is followed live); the trailing timer catches the
+ *  resting position and re-arms the leading edge — at most one send per
+ *  150ms under continuous dragging, instead of nothing until it ends. */
 function scheduleResize() {
   if (!visible.value || resizeTimer !== null) return;
+  doResize();
   resizeTimer = window.setTimeout(() => {
     resizeTimer = null;
     doResize();
@@ -206,7 +218,31 @@ function doResize() {
   try {
     fit.fit();
     const sid = sessionId.value;
-    if (sid) resizeSession(sid, term.cols, term.rows).catch(() => {});
+    // B-05 (fix F1): only send when the backend session is Running — a
+    // Starting/Closing entry makes resize_session fail, which would just
+    // noise the sync state. Fitting the xterm side above is still correct.
+    if (!sid || pane.value?.sessionState !== "running") return;
+    const size: TermSize = { cols: term.cols, rows: term.rows };
+    // F5: idempotent skip — nothing to do when the PTY already confirmed
+    // this exact grid and the last send succeeded.
+    if (!shouldSendSize(lastConfirmedSize, size, resizeSyncFailed)) return;
+    resizeSession(sid, size.cols, size.rows)
+      .then(() => {
+        lastConfirmedSize = size;
+        resizeSyncFailed = false;
+      })
+      .catch((err: unknown) => {
+        // B-05 (fix F2): a swallowed failure used to leave the PTY stuck at
+        // the 80×24 spawn default forever. Record it on the shared timeline
+        // (store choke point per the P4.5 layer contract) and let the heal
+        // tick retry.
+        resizeSyncFailed = true;
+        const code =
+          err && typeof err === "object" && "code" in err
+            ? String((err as { code?: unknown }).code)
+            : undefined;
+        store.logTerminalResizeError(code);
+      });
   } catch {
     /* container not laid out yet */
   }
@@ -462,6 +498,19 @@ onMounted(() => {
   if (container.value) resizeObserver.observe(container.value);
   window.addEventListener("resize", scheduleResize);
 
+  // B-05 (fix F1, remount case): a Terminal that mounts onto an
+  // ALREADY-running pane (pane restructure remount) gets no state
+  // transition, so sync immediately.
+  if (pane.value?.sessionState === "running") doResize();
+
+  // B-05 (fix F3): self-heal tick. The size mismatch shows up randomly (no
+  // reproducible trigger), so convergence cannot rely on user-driven resize
+  // events. While live + visible, re-check every 2s; already converged is a
+  // zero-IPC no-op, drift or a failed send triggers one resend.
+  healTimer = window.setInterval(() => {
+    if (sessionLive.value && visible.value) doResize();
+  }, 2000);
+
   // Re-fit when this tab becomes the active (visible) view. v-show toggles
   // display:none; xterm does not repaint automatically on re-display, which
   // leaves a blank screen while the buffer/session stay intact. Force a full
@@ -507,6 +556,12 @@ onMounted(() => {
     () => pane.value?.sessionState,
     (st, prev) => {
       if (!prev || st === prev) return;
+      // B-05 (fix F1): the moment the backend accepts the session, sync the
+      // fitted grid to the PTY immediately (bypassing the debounce). Until
+      // the first resize lands the PTY runs at the 80×24 spawn default while
+      // xterm shows the fitted width — every readline/TUI redraw then lands
+      // on the wrong columns (long-input overwrite).
+      if (st === "running") doResize();
       if (st === "exited" || st === "disconnected") {
         const exit = pane.value?.exit;
         term?.write(
@@ -566,6 +621,7 @@ watch(
 onBeforeUnmount(() => {
   if (resizeObserver) resizeObserver.disconnect();
   if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+  if (healTimer !== null) window.clearInterval(healTimer);
   window.removeEventListener("resize", scheduleResize);
   term?.dispose(); // disposes fit/webgl/search addons + custom key handler (03 §七)
   term = null;
