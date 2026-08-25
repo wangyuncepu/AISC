@@ -25,6 +25,7 @@ Backends
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import sys
@@ -272,6 +273,9 @@ class SdkGateway:
                     state=(c.status or ""),
                     status=(c.attrs.get("State", {}).get("Status", "") or (c.status or "")),
                     labels=(c.attrs.get("Config", {}).get("Labels", {}) or {}),
+                    # Full sha256 image ID ships with the list attrs — no
+                    # extra API round-trip (A0: structured image ID).
+                    image_id=(c.attrs.get("Image") or ""),
                 )
                 for c in rows
             ]
@@ -305,6 +309,9 @@ class SdkGateway:
                 image=attrs.get("Config", {}).get("Image", "") or "",
                 labels=config.get("Labels", {}) or {},
                 config=config,
+                # `.Image` in inspect attrs = content-addressed ID, distinct
+                # from the Config.Image REF above (A0: structured image ID).
+                image_id=(attrs.get("Image") or ""),
             )
         except docker.errors.NotFound:
             return ContainerInspectResult(
@@ -754,19 +761,61 @@ class CliGateway:
     def list_containers(self, all: bool = False) -> ContainerListResult:
         start = time.monotonic()
         r: ProcessResult = self._exec().list_containers(all=all)
-        return ContainerListResult(
+        result = ContainerListResult(
             operation=self._op(r, duration_ms=_elapsed(start)),
             stdout=r.stdout,
             stderr=r.stderr,
         )
+        if r.exit_code != 0:
+            return result
+        # RealDockerExecutor lists with
+        # `--format "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}"` — machine
+        # format, stable fields. `docker ps` cannot carry labels or the
+        # content-addressed image ID: rows leave labels={} / image_id="" and
+        # callers inspect the interesting candidates individually (A0).
+        for line in (r.stdout or "").splitlines():
+            parts = line.split("\t")
+            if len(parts) < 4:
+                continue
+            result.containers.append(
+                ContainerSummary(
+                    id=parts[0].strip(),
+                    name=parts[1].strip(),
+                    image=parts[2].strip(),
+                    status=parts[3].strip(),
+                )
+            )
+        return result
 
     def inspect_container(self, container: str) -> ContainerInspectResult:
         start = time.monotonic()
         r: ProcessResult = self._exec().inspect_container(container)
+        if r.exit_code != 0:
+            return ContainerInspectResult(
+                operation=self._op(r, duration_ms=_elapsed(start)),
+                stdout=r.stdout,
+                stderr=r.stderr,
+            )
+        # `docker inspect` emits stable machine JSON (never human text).
+        try:
+            attrs = json.loads(r.stdout or "[]")
+            attrs = attrs[0] if isinstance(attrs, list) and attrs else {}
+        except ValueError:
+            attrs = {}
+        if not isinstance(attrs, dict):
+            attrs = {}
+        config = attrs.get("Config", {}) or {}
         return ContainerInspectResult(
             operation=self._op(r, duration_ms=_elapsed(start)),
             stdout=r.stdout,
             stderr=r.stderr,
+            container_id=attrs.get("Id", "") or "",
+            name=(attrs.get("Name", "") or "").lstrip("/"),
+            state=(attrs.get("State", {}) or {}).get("Status", "") or "",
+            image=config.get("Image", "") or "",
+            labels=config.get("Labels", {}) or {},
+            config=config,
+            image_id=attrs.get("Image", "") or "",
         )
 
     def start_container(self, container: str) -> LifecycleResult:
