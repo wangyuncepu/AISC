@@ -1215,6 +1215,13 @@ def start_runtime(
                 "workspace_key": ws_key,
                 "image_id": image_id_at_start,
                 "web_gateway_host_port": gw_host_port,
+                # runtime-lifecycle-ux Stage 1 (02 §1): session-ephemeral by
+                # default; dependency_policy derives from scope (D-RUNTIME-09).
+                "lifecycle": "ephemeral",
+                "retention": "remove_on_close",
+                "dependency_policy": (
+                    "persistent_toolchain" if scope == "project" else "ephemeral_toolchain"
+                ),
             })
         except CliError:
             # register raises CliError(STATE_LOCK_TIMEOUT) if the registry lock
