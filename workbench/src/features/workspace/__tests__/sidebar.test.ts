@@ -45,6 +45,8 @@ vi.mock("../../../lib/ipc", () => ({
   listRuntimes: vi.fn().mockResolvedValue({ runtimes: [] }),
   runtimeInspect: vi.fn(),
   stopRuntime: vi.fn(),
+  runtimeServices: vi.fn(),
+  openRuntimeServiceUrl: vi.fn().mockResolvedValue("http://p3000.localhost:47831/"),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: vi.fn().mockResolvedValue(true),
@@ -220,3 +222,4 @@ describe("A-G12 auth labels and actions", () => {
     wrapper.unmount();
   });
 });
+

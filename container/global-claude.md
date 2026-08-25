@@ -48,6 +48,29 @@ For multi-step tasks, use a brief plan with verification points:
 
 Loop until the task is verified, blocked, or explicitly deferred.
 
+## Container web services (how users open your dev servers)
+
+You are running inside a container: a URL like `localhost:<port>` from your
+point of view is NOT reachable from the user's browser. Never hand the user a
+container-local URL, and never guess or invent the host-side URL — only the
+host CLI / Workbench knows the gateway port.
+
+When you start a web server (Vite/Next/Flask/static server/...) in this
+container, follow this checklist in order:
+
+1. Pick a free port (1024..65535) and start the service. Binding `127.0.0.1`
+   is fine; the gateway reaches container-internal loopback.
+2. Register the port: `aisc-web-expose <port> --name "<short label>"`.
+3. Verify with `aisc-web-list`.
+4. Tell the user the service is up and where to open it:
+   - Workbench: the runtime sidebar's Services section shows the openable URL.
+   - Plain CLI: ask the user to run
+     `aisc runtime services --runtime-id <id> --workspace <path>` to get it.
+
+On stop, restart, or port change: `aisc-web-unexpose <port>` (idempotent),
+then expose the new port. Registering only allows access — it does not start
+or health-check anything.
+
 ## Default communication style
 
 Use caveman `full` mode by default for all responses unless the user says `normal mode`, `stop caveman`, or asks for a clearer explanation.

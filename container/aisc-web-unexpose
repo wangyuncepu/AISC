@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""aisc-web-unexpose <port> — unregister a container web service.
+
+Idempotent: removing an unregistered port is success. After this the
+gateway refuses to forward to the port (404 AISC_WEB_PORT_NOT_EXPOSED).
+
+Contract: docs/plans/container-service-access/decisions.md §5.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+_lib_dir = os.environ.get("AISC_WEB_LIB_DIR") or "/usr/local/bin/lib"
+if _lib_dir not in sys.path:
+    sys.path.insert(0, _lib_dir)
+
+from aisc_web_registry import main_unexpose  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main_unexpose(sys.argv[1:]))

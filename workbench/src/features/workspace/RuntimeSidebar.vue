@@ -197,7 +197,9 @@ function copyDone(key: string): boolean {
           {{ store.userRefreshInFlight ? t("sidebar.refreshing") : t("sidebar.refresh") }}
         </button>
         <!-- IDEA-3 (3c): stopping now closes THIS workspace only (真并行:
-             other workspaces' runtimes keep running). -->
+             other workspaces' runtimes keep running). Never disabled by
+             inspectInFlight: the 5s poll holds that flag for 1-3s per cycle
+             and a gated stop reads as a dead button (2026-08-25 report). -->
         <button class="danger" @click="workspaces.closeWorkspace(store.id)">{{ t("sidebar.stopRuntime") }}</button>
       </div>
     </section>

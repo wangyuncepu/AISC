@@ -34,6 +34,8 @@ const REMOVE_TIMEOUT: Duration = Duration::from_secs(60);
 const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
 const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
+/// svc-4: `aisc runtime services` budget (one docker inspect + one exec).
+const SERVICES_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Cancellation tokens for in-flight `start_runtime` operations, keyed by
 /// runtime_id (02 §三: every async operation has a cancellation token).
@@ -293,6 +295,130 @@ fn provider_current_argv(runtime_id: &str, agent: &str, workspace: &str) -> Vec<
         "--format".into(),
         "json".into(),
     ]
+}
+
+// --- svc-4: runtime web services (aisc.runtime-services/v1) -------------------
+
+fn runtime_services_argv(runtime_id: &str, workspace: &str) -> Vec<String> {
+    vec![
+        "runtime".into(),
+        "services".into(),
+        "--runtime-id".into(),
+        runtime_id.into(),
+        "--workspace".into(),
+        workspace.into(),
+        "--format".into(),
+        "json".into(),
+    ]
+}
+
+/// Canonical-URL equality check (defense in depth): the URL we are about to
+/// hand to the OS opener must byte-equal the one regenerated from the live
+/// services payload. Pure unit-testable.
+fn url_matches_canonical(url: &str, container_port: u16, host_port: u16) -> bool {
+    url == crate::web_services::build_service_url(container_port, host_port)
+}
+
+/// Open a registered runtime service URL in the user's default browser.
+///
+/// The frontend never supplies a URL string — only ids. The URL is
+/// regenerated here from a fresh `aisc runtime services` call, must belong
+/// to a currently-registered service on a ready gateway, and must
+/// byte-equal the canonical builder output (`http://p<port>.localhost:<host>/`)
+/// before anything reaches the OS. No arbitrary-URL opener exists.
+#[tauri::command]
+pub async fn open_runtime_service_url(
+    app: AppHandle,
+    workspace: String,
+    runtime_id: String,
+    port: u16,
+) -> Result<String, WorkbenchError> {
+    if uuid_ok(&runtime_id).is_none() {
+        return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_RUNTIME_ID"));
+    }
+    if !(1024..=65535).contains(&port) {
+        return Err(WorkbenchError::map_aisc("AISC_ERR_USAGE"));
+    }
+    let pin = resolve_cli(&app).await?;
+    let argv = runtime_services_argv(&runtime_id, &workspace);
+    let env = run_control(&pin, argv, SERVICES_TIMEOUT, CancellationToken::new()).await?;
+    if let Some(e) = envelope_error(&env) {
+        return Err(e);
+    }
+    let raw = env.data.unwrap_or(Value::Null);
+    let payload = crate::web_services::decode_runtime_services(
+        serde_json::to_vec(&raw).unwrap_or_default().as_slice(),
+    )
+    .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("services parse: {e}")))?;
+
+    if payload.gateway.state != "ready" || payload.gateway.host_port == 0 {
+        return Err(WorkbenchError::map_aisc("AISC_ERR_RUNTIME_NOT_RUNNING").with_detail(format!(
+            "web gateway not ready: {}",
+            payload.gateway.reason
+        )));
+    }
+    let Some(service) = payload.services.iter().find(|s| s.port == port) else {
+        return Err(WorkbenchError::map_aisc("AISC_ERR_RUNTIME_NOT_FOUND")
+            .with_detail(format!("service port {port} is not registered")));
+    };
+    if !url_matches_canonical(&service.url, port, payload.gateway.host_port) {
+        return Err(WorkbenchError::cli_protocol().with_detail(
+            "service URL does not match the canonical builder".to_string(),
+        ));
+    }
+    open_url_in_browser(&service.url)?;
+    Ok(service.url.clone())
+}
+
+/// Hand one strictly-validated http URL to the OS default browser without
+/// the opener plugin (arbitrary-URL open must not exist as an IPC surface).
+fn open_url_in_browser(url: &str) -> Result<(), WorkbenchError> {
+    // The URL charset here is `[a-z0-9.:/]` by construction (canonical
+    // builder); still, belt-and-braces before it reaches a process arg.
+    if !url.starts_with("http://p") || !url.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '/')) {
+        return Err(WorkbenchError::cli_protocol().with_detail("refusing non-canonical URL"));
+    }
+    #[cfg(windows)]
+    let result = {
+        // explorer.exe hands http URLs to the default browser; no shell=True,
+        // the URL is a single argv element and cannot be re-parsed as a command.
+        std::process::Command::new("explorer.exe")
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| ())
+    };
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(url).spawn().map(|_| ());
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open").arg(url).spawn().map(|_| ());
+    result.map_err(|e| {
+        WorkbenchError::cli_protocol().with_detail(format!("failed to open browser: {e}"))
+    })
+}
+
+/// Query gateway info + registered services (svc-4; Workbench Services panel).
+#[tauri::command]
+pub async fn runtime_services(
+    app: AppHandle,
+    workspace: String,
+    runtime_id: String,
+) -> Result<crate::web_services::RuntimeServicesResult, WorkbenchError> {
+    if uuid_ok(&runtime_id).is_none() {
+        return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_RUNTIME_ID"));
+    }
+    let pin = resolve_cli(&app).await?;
+    let argv = runtime_services_argv(&runtime_id, &workspace);
+    let env = run_control(&pin, argv, SERVICES_TIMEOUT, CancellationToken::new()).await?;
+    if let Some(e) = envelope_error(&env) {
+        return Err(e);
+    }
+    let raw = env.data.unwrap_or(Value::Null);
+    let bytes = serde_json::to_vec(&raw).unwrap_or_default();
+    crate::web_services::decode_runtime_services(&bytes)
+        .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("services parse: {e}")))
 }
 
 // --- Stage 8e: cc-switch provider data plane (aisc.cc-switch-provider/v1) ---
@@ -1478,6 +1604,48 @@ mod tests {
         assert!(argv.contains(&"/ws".into()));
         assert!(argv.contains(&"--format".into()));
         assert!(argv.contains(&"json".into()));
+    }
+
+    // --- svc-4: runtime services argv + canonical URL guard ---
+
+    #[test]
+    fn runtime_services_argv_shape() {
+        let argv = runtime_services_argv("rid", "/ws");
+        assert_eq!(argv[0], "runtime");
+        assert_eq!(argv[1], "services");
+        assert!(argv.contains(&"--runtime-id".into()));
+        assert!(argv.contains(&"rid".into()));
+        assert!(argv.contains(&"--workspace".into()));
+        assert!(argv.contains(&"/ws".into()));
+        assert!(argv.contains(&"--format".into()));
+        assert!(argv.contains(&"json".into()));
+    }
+
+    #[test]
+    fn canonical_url_guard_accepts_builder_output_only() {
+        assert!(url_matches_canonical("http://p3000.localhost:47831/", 3000, 47831));
+        assert!(!url_matches_canonical("http://p3000.localhost:47831/", 3001, 47831));
+        assert!(!url_matches_canonical("http://p3000.localhost:49999/", 3000, 47831));
+        assert!(!url_matches_canonical("http://evil.example.com/", 3000, 47831));
+        assert!(!url_matches_canonical("http://p3000.localhost:47831/x", 3000, 47831));
+    }
+
+    #[test]
+    fn browser_open_refuses_non_canonical_urls() {
+        // The charset/shape gate must reject anything not produced by the
+        // canonical builder before it can reach a process argument.
+        for bad in [
+            "https://p3000.localhost:47831/",
+            "http://evil.example.com/pickup",
+            "http://p3000.localhost:47831/;rm -rf /",
+            "http://p3000.localhost:47831/?q=1",
+            "file:///etc/passwd",
+        ] {
+            assert!(
+                open_url_in_browser(bad).is_err(),
+                "must refuse {bad}"
+            );
+        }
     }
 
     #[test]

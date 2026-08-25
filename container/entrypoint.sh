@@ -187,6 +187,22 @@ export CODEX_CONFIG_DIR
 export CODEX_HOME="$CODEX_CONFIG_DIR"
 export CC_SWITCH_CONFIG_DIR
 
+# Claude 用户态 .claude.json 持久化（2026-08-25，auto-mode 排障）：
+# Claude Code 把 onboarding/特性开关缓存等用户态写在 $HOME/.claude.json；
+# 项目态只挂载 CLAUDE_CONFIG_DIR（/root/.claude），HOME 不落盘 —— 容器重建
+# 后用户态丢失（升级流程还会把它挪进 backups/ 不恢复），每次首会话回退
+# manual、auto-mode 不出现。缺文件时先从配置目录备份自愈，再把 HOME 文件
+# 链到配置目录内，写穿即持久。
+CLAUDE_HOME_JSON="/root/.claude.json"
+CFG_JSON="$CLAUDE_CONFIG_DIR/.claude.json"
+if [ ! -e "$CLAUDE_HOME_JSON" ]; then
+    if [ ! -e "$CFG_JSON" ] && ls "$CLAUDE_CONFIG_DIR"/backups/.claude.json.backup.* >/dev/null 2>&1; then
+        cp "$(ls "$CLAUDE_CONFIG_DIR"/backups/.claude.json.backup.* | tail -1)" "$CFG_JSON"
+        echo "ℹ️  已从备份恢复 Claude 用户态 (.claude.json)"
+    fi
+    [ -e "$CFG_JSON" ] && ln -s "$CFG_JSON" "$CLAUDE_HOME_JSON"
+fi
+
 # cc-switch 与 CLI 配置目录确保可写。
 ensure_writable "$CC_SWITCH_CONFIG_DIR"
 
@@ -542,6 +558,29 @@ case "${AI_BRIEF_ON_START,,}" in
         # off / 空 / 任何其他值 — 默认不运行，静默零阻塞
         ;;
 esac
+
+# ==========================================
+# 3.7 容器内 Web 服务网关（svc-1，docs/plans/container-service-access.md）
+#   aisc-web-gateway 监听 0.0.0.0:45871，按 Host: p<port>.localhost 把请求
+#   双向字节转发到容器内 127.0.0.1:<port>；只转发已注册端口
+#   （/run/aisc/web-services/*.json，由 aisc-web-expose 注册）。
+#   宿主经 Docker loopback publish（runtime start / aisc run 注入）访问。
+#   idle 与交互模式一律启动；失败只告警不阻断 —— runtime ready 以
+#   runtime-context.json 为准，gateway 崩溃不许让 runtime 假报或漏报 ready。
+#   无 python3 的极端镜像跳过（与 cc-switch 守护同门槛）。
+# ==========================================
+if command -v aisc-web-gateway >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    mkdir -p /run/aisc/web-services
+    chmod 700 /run/aisc/web-services 2>/dev/null || true
+    bash -c "exec aisc-web-gateway >/tmp/aisc-web-gateway.log 2>&1" &
+    AISC_WEB_GW_PID=$!
+    sleep 0.3
+    if kill -0 "$AISC_WEB_GW_PID" 2>/dev/null; then
+        echo "✅ AISC Web 网关已启动 (容器端口 45871；Agent 注册服务用: aisc-web-expose <端口>)"
+    else
+        echo "⚠️  AISC Web 网关启动失败；日志: /tmp/aisc-web-gateway.log" >&2
+    fi
+fi
 
 # ==========================================
 # 4. 智能引导：CLI 选择

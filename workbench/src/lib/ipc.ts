@@ -21,6 +21,7 @@ import type {
   ProviderStatus,
   PtyEvent,
   RuntimeListResult,
+  RuntimeServicesResult,
   RuntimeSnapshot,
   RuntimeStartResult,
   SaveOutcome,
@@ -128,6 +129,18 @@ export const removeRuntime = (workspace: string, runtimeId: string, force = fals
 
 export const getProviderStatus = (workspace: string, runtimeId: string, agent: string) =>
   invoke<ProviderStatus>("get_provider_status", { workspace, runtimeId, agent });
+
+// --- svc-4: runtime web services (aisc.runtime-services/v1) ---
+// The frontend only ever passes ids; canonical URLs (and the OS open) are
+// regenerated/validated backend-side — no arbitrary-URL opener exists.
+
+export const runtimeServices = (workspace: string, runtimeId: string) =>
+  invoke<RuntimeServicesResult>("runtime_services", { workspace, runtimeId });
+
+/** Backend re-resolves, validates and opens the service URL; resolves with
+ * the URL that was opened (for toasts), rejects with a WorkbenchError. */
+export const openRuntimeServiceUrl = (workspace: string, runtimeId: string, port: number) =>
+  invoke<string>("open_runtime_service_url", { workspace, runtimeId, port });
 
 // --- Stage 8e: cc-switch provider data plane (aisc.cc-switch-provider/v1) ---
 // The request document (with any API key) rides the CLI child's stdin via the

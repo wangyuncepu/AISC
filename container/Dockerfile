@@ -269,6 +269,20 @@ RUN chmod +x /usr/local/bin/aisc-provider-inspect
 COPY container/aisc-cc-provider /usr/local/bin/aisc-cc-provider
 RUN chmod +x /usr/local/bin/aisc-cc-provider
 
+# AISC web 服务访问（svc-1，docs/plans/container-service-access.md）：
+#   aisc-web-gateway  容器内 0.0.0.0:45871，按 Host: p<port>.localhost 把字节流
+#                     双向转发到容器内 127.0.0.1:<port>（HTTP/WebSocket，不改写）；
+#   aisc-web-expose / aisc-web-unexpose / aisc-web-list
+#                     注册三件套，写 /run/aisc/web-services/<port>.json（0600 原子写）。
+#   共享注册逻辑在 container/lib/aisc_web_registry.py（随上面 lib/ COPY 一并装入）。
+#   （py_compile 可执行性冒烟在下方 Python 运行时段——此处 python3 尚未安装。）
+COPY container/aisc-web-gateway /usr/local/bin/aisc-web-gateway
+COPY container/aisc-web-expose /usr/local/bin/aisc-web-expose
+COPY container/aisc-web-unexpose /usr/local/bin/aisc-web-unexpose
+COPY container/aisc-web-list /usr/local/bin/aisc-web-list
+RUN chmod +x /usr/local/bin/aisc-web-gateway /usr/local/bin/aisc-web-expose \
+        /usr/local/bin/aisc-web-unexpose /usr/local/bin/aisc-web-list
+
 # 防御：若构建上下文来自 Windows（CRLF），脚本 shebang 会变成 "#!/bin/bash\r"，
 # 导致 "cannot execute: required file not found"。统一剥离 CR，确保镜像内脚本可执行。
 # 注意：只处理文本脚本，绝不能 sed claude-real/codex-real —— 那些是原生 ELF 二进制，
@@ -280,6 +294,11 @@ RUN sed -i 's/\r$//' \
         /usr/local/bin/aisc-session-wrapper \
         /usr/local/bin/aisc-provider-inspect \
         /usr/local/bin/aisc-cc-provider \
+        /usr/local/bin/aisc-web-gateway \
+        /usr/local/bin/aisc-web-expose \
+        /usr/local/bin/aisc-web-unexpose \
+        /usr/local/bin/aisc-web-list \
+        /usr/local/bin/lib/aisc_web_registry.py \
         /usr/local/bin/mihomo-build-config.js \
         /usr/local/bin/lib/env-inject.sh \
         /usr/local/bin/lib/writable.sh \
@@ -293,6 +312,12 @@ RUN sed -i 's/\r$//' \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-pip python3-venv python-is-python3 \
     && rm -rf /var/lib/apt/lists/*
+
+# svc-1 可执行性冒烟：web gateway/注册三件套/共享注册库在此 py_compile
+#   （语法层校验；运行时行为由宿主测试与 Docker 集成测试覆盖）。
+RUN python3 -m py_compile /usr/local/bin/lib/aisc_web_registry.py \
+        /usr/local/bin/aisc-web-gateway /usr/local/bin/aisc-web-expose \
+        /usr/local/bin/aisc-web-unexpose /usr/local/bin/aisc-web-list
 
 # 设置工作目录；宿主工作区挂载到 /root/app。
 WORKDIR /root/app

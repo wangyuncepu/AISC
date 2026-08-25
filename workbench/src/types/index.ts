@@ -76,6 +76,7 @@ export interface Capabilities {
   session: string | null;
   providerStatus: string | null;
   buildEvents: string | null;
+  runtimeServices?: string | null;
 }
 
 export interface CapabilityReport {
@@ -84,6 +85,8 @@ export interface CapabilityReport {
   session: boolean;
   provider_status: boolean;
   build_events: boolean;
+  /** svc-4 (web gateway): optional — gates the Services panel. */
+  runtime_services: boolean;
   missing_required: string[];
   missing_optional: string[];
   version_info: VersionInfo | null;
@@ -278,11 +281,53 @@ export interface RuntimeSnapshot {
   registry_state: string;
   observed_at: string;
   stale: boolean;
+  /** svc-0: absent on old CLI payloads → treat as unavailable (legacy). */
+  web_access?: WebGatewayInfo | null;
 }
 
 /** `aisc runtime list` envelope data (05 §5.3). */
 export interface RuntimeListResult {
   runtimes: RuntimeSnapshot[];
+  observed_at: string;
+}
+
+// --- svc-0 (container web-service access): aisc.runtime-services/v1 ---------
+// Frozen contract: docs/plans/container-service-access/decisions.md. Missing
+// `web_access` (old CLI / legacy runtime) degrades to "unavailable" — never
+// a failed parse.
+
+/** Gateway reachability snapshot; shared by `RuntimeSnapshot.web_access` and
+ * `RuntimeServicesResult.gateway`. `reason` is set only when unavailable. */
+export interface WebGatewayInfo {
+  state: "ready" | "unavailable";
+  container_port: number;
+  host_port: number;
+  host: string;
+  reason?: string; // WebUnavailableReason, "" when ready
+}
+
+export type WebUnavailableReason =
+  | "legacy_runtime"
+  | "runtime_not_running"
+  | "gateway_unreachable"
+  | "docker_unavailable"
+  | "no_mapping";
+
+/** One service row in a `runtime services` payload (URL attached). */
+export interface WebServiceInfo {
+  port: number;
+  protocol: string;
+  name: string;
+  state: string; // v1: only "registered"
+  url: string;
+}
+
+/** `aisc runtime services` payload (schema aisc.runtime-services/v1). */
+export interface RuntimeServicesResult {
+  schema_version: string;
+  runtime_id: string;
+  gateway: WebGatewayInfo;
+  services: WebServiceInfo[];
   observed_at: string;
 }
 

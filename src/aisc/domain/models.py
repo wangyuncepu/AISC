@@ -91,6 +91,7 @@ WORKBENCH_CAPABILITIES = {
     "session": "aisc.session/v1",               # S0.3
     "providerStatus": "aisc.provider-status/v1",  # S0.4
     "buildEvents": "aisc.build-events/v1",      # S0.5
+    "runtimeServices": "aisc.runtime-services/v1",  # svc-2 (web gateway)
 }
 
 
@@ -365,6 +366,11 @@ class RunPlan:
     # run is project-scoped) the agent config dirs mount from here instead
     # of being copied into the workspace.
     agent_state_root: str = ""
+    # svc-5 (web gateway): loopback host port publishing the container-side
+    # gateway (45871/tcp); 0 would mean "no gateway" but plan_run always
+    # allocates one — one-shot `aisc run` containers get the same capability
+    # as managed runtimes.
+    web_gateway_host_port: int = 0
 
     @property
     def docker_argv(self) -> list:
@@ -418,6 +424,14 @@ class RunPlan:
                 argv.extend([
                     "-v", f"{self.proxy_config}:/etc/mihomo/config.yaml:ro",
                 ])
+        if self.web_gateway_host_port:
+            # svc-5: loopback publish of the in-container web gateway.
+            from aisc.domain.web_services import WEB_GATEWAY_CONTAINER_PORT
+
+            argv.extend([
+                "--publish",
+                f"127.0.0.1:{self.web_gateway_host_port}:{WEB_GATEWAY_CONTAINER_PORT}/tcp",
+            ])
         argv.append(self.image)
         return argv
 
@@ -456,6 +470,11 @@ class RuntimeSnapshot:
     # Staleness indicator
     stale: bool = False            # True if observation is potentially outdated
 
+    # svc-2 (web gateway): loopback gateway reachability per
+    # aisc.runtime-services/v1; None = not observed (list path / old CLI) —
+    # consumers treat absent as unavailable, never as a parse failure.
+    web_access: Optional[Dict[str, Any]] = None
+
     # Last operation error (None if last operation succeeded)
     last_operation_error: Optional[Dict[str, Any]] = None
 
@@ -486,6 +505,8 @@ class RuntimeSnapshot:
             result["created_at"] = self.created_at
         if self.started_at:
             result["started_at"] = self.started_at
+        if self.web_access is not None:
+            result["web_access"] = self.web_access
         if self.last_operation_error:
             result["last_operation_error"] = self.last_operation_error
 

@@ -25,6 +25,7 @@ pub mod storage;
 pub mod trace;
 pub mod tray;
 pub mod watcher;
+pub mod web_services;
 pub mod window;
 pub mod workspace;
 
@@ -49,8 +50,9 @@ use runtime::{
     get_provider_status, list_runtimes,
     network_subscription_clear, network_subscription_import, network_subscription_import_file,
     network_subscription_refresh, network_subscription_show, usage_overview,
-    remove_runtime, runtime_inspect, runtime_preflight, runtime_restart, start_docker,
-    start_runtime, stop_runtime, BuildOps, OpMutexes, StartOps,
+    open_runtime_service_url, remove_runtime, runtime_inspect, runtime_preflight,
+    runtime_restart, runtime_services, start_docker, start_runtime, stop_runtime,
+    BuildOps, OpMutexes, StartOps,
 };
 use session::{
     ack_session_exit, close_session, open_session, resize_session, shutdown_workbench,
@@ -102,6 +104,8 @@ pub fn run(cli_arg: Option<String>) {
             list_runtimes,
             remove_runtime,
             get_provider_status,
+            runtime_services,
+            open_runtime_service_url,
             cc_switch_providers,
             cc_switch_add,
             cc_switch_edit,

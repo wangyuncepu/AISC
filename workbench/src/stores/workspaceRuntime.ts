@@ -20,6 +20,7 @@ import type {
   PtyEvent,
   ProviderStatus,
   RuntimeRef,
+  RuntimeServicesResult,
   RuntimeSnapshot,
   RuntimeState,
   SplitAxis,
@@ -165,6 +166,13 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   const providerError = ref<WorkbenchError | null>(null);
   const providerInFlight = ref<"claude" | "codex" | null>(null);
 
+  // svc-4: runtime web services (aisc.runtime-services/v1). Refreshed with
+  // the runtime snapshot while running; cleared on stop/reset. The gateway
+  // payload carries the canonical URLs — the store never builds them.
+  const webServices = ref<RuntimeServicesResult | null>(null);
+  const webServicesError = ref<WorkbenchError | null>(null);
+  const webServicesInFlight = ref(false);
+
   // S2.4.a: workbench history (02 §九) is SHELL-owned (IDEA-3 3a): the shared
   // doc + revision + recents live in the facade; the instance keeps only its
   // own runtime ref and reads the shared doc through `deps.getHistory()`.
@@ -296,6 +304,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     lastAppliedSeq.value = 0;
     revision.value = 0;
     clearProviderStatuses();
+    clearWebServices();
   }
 
   function backToPicker() {
@@ -664,6 +673,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       inspectInFlight.value = false;
       if (userInitiated) userRefreshInFlight.value = false;
     }
+    // svc-4: keep the Services panel in step with the snapshot (best-effort,
+    // never blocks the inspect path). Stopped/cleared runtimes clear below.
+    void refreshWebServices();
   }
 
   // --- S2.3.b: provider status (per-agent, claude/codex only; 04 §四.2/§五) ---
@@ -690,6 +702,46 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     providerStatuses.value = { claude: null, codex: null };
     providerError.value = null;
     providerInFlight.value = null;
+  }
+
+  // --- svc-4: runtime web services (aisc.runtime-services/v1) ---
+
+  /** Fetch gateway + service list. A stopped/removed runtime is a valid
+   * (non-error) observation: the payload reports the unavailable gateway
+   * and an empty list, which is exactly what the panel should show. */
+  async function refreshWebServices() {
+    if (!runtimeId.value || !workspace.value.trim()) return;
+    if (webServicesInFlight.value) return;
+    webServicesInFlight.value = true;
+    try {
+      const result = await ipc.runtimeServices(workspace.value.trim(), runtimeId.value);
+      webServices.value = result;
+      webServicesError.value = null;
+    } catch (e) {
+      // Old CLI (no runtime services capability) or transport failure — keep
+      // the last good payload; the panel gates on the capability anyway.
+      webServicesError.value = e as WorkbenchError;
+    } finally {
+      webServicesInFlight.value = false;
+    }
+  }
+
+  /** Open one registered service's canonical URL. Ids only — the backend
+   * re-resolves, validates and hands the URL to the OS opener. */
+  async function openWebService(port: number): Promise<void> {
+    if (!runtimeId.value || !workspace.value.trim()) return;
+    try {
+      await ipc.openRuntimeServiceUrl(workspace.value.trim(), runtimeId.value, port);
+      await refreshWebServices();
+    } catch (e) {
+      webServicesError.value = e as WorkbenchError;
+    }
+  }
+
+  function clearWebServices() {
+    webServices.value = null;
+    webServicesError.value = null;
+    webServicesInFlight.value = false;
   }
 
   // --- S2.4.a: history persistence (02 §九) ---
@@ -1497,6 +1549,8 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     lastAppliedSeq.value = 0;
     revision.value = 0;
     clearProviderStatuses();
+    // svc-4: stop/remove immediately clears any openable service state.
+    clearWebServices();
     preflight.value = null;
     status.value = "picker";
     void ipc.logUiEvent?.("stop", "ok");
@@ -1543,6 +1597,12 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     providerStatuses,
     providerError,
     providerInFlight,
+    webServices,
+    webServicesError,
+    webServicesInFlight,
+    refreshWebServices,
+    openWebService,
+    clearWebServices,
     restorableLayout,
     buildPatch,
     pickWorkspace,

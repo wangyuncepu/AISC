@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""AISC web gateway (container-side, svc-1).
+
+Listens on 0.0.0.0:<45871> and routes by request Host header:
+``p<container-port>.localhost[:<gateway-port>]`` → the registered container
+service at ``127.0.0.1:<container-port>``. The original request bytes are
+replayed verbatim and both directions are then relayed as opaque byte
+streams, so plain HTTP, WebSocket upgrades, HMR and friends pass through
+unchanged. No HTML rewriting, no path rewriting, no cookies, no forwarding
+to anything outside the container loopback.
+
+Only ports registered via ``aisc-web-expose`` (manifests under
+``/run/aisc/web-services/``) are routable; everything else fails closed
+with a stable identifier page:
+
+    AISC_WEB_BAD_HOST            400  Host is not p<port>.localhost
+    AISC_WEB_PORT_INVALID        400  port outside 1024..65535
+    AISC_WEB_PORT_NOT_EXPOSED    404  port not registered
+    AISC_WEB_TARGET_UNAVAILABLE  502  container target not listening
+    AISC_WEB_REGISTRY_UNAVAILABLE 503 manifest unreadable
+
+Contract: docs/plans/container-service-access/decisions.md. The gateway
+never touches the Docker socket and never logs paths, queries, headers or
+bodies — events carry client addr, target port and outcome only.
+
+Environment overrides exist for host-side tests only:
+
+- ``AISC_WEB_GATEWAY_PORT``   (default 45871)
+- ``AISC_WEB_GATEWAY_BIND``   (default 0.0.0.0 — Docker publish target)
+- ``AISC_WEB_SERVICES_DIR``   (registry default /run/aisc/web-services)
+- ``AISC_WEB_LIB_DIR``        (default /usr/local/bin/lib)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import re
+import sys
+
+DEFAULT_PORT = 45871
+DEFAULT_BIND = "0.0.0.0"
+TARGET_HOST = "127.0.0.1"
+
+PORT_MIN = 1024
+PORT_MAX = 65535
+
+HEADER_READ_TIMEOUT = 30.0   # seconds to receive complete request headers
+CONNECT_TIMEOUT = 5.0        # seconds to reach the container target
+MAX_HEADER_BYTES = 65536     # request head cap before BAD_HOST
+
+_LOG_PREFIX = "aisc-web-gateway"
+
+# Same grammar frozen in src/aisc/domain/web_services.py (svc-0).
+_HOST_RE = re.compile(r"^p([0-9]{1,5})\.localhost\.?(?::([0-9]{1,5}))?$", re.IGNORECASE)
+
+_lib_dir = os.environ.get("AISC_WEB_LIB_DIR") or "/usr/local/bin/lib"
+if _lib_dir not in sys.path:
+    sys.path.insert(0, _lib_dir)
+
+from aisc_web_registry import RegistryError, read_records  # noqa: E402
+
+
+def _log(message: str) -> None:
+    print(f"{_LOG_PREFIX}: {message}", file=sys.stderr, flush=True)
+
+
+def _error_page(status_text: str, code: str, detail: str) -> bytes:
+    body = f"{code}: {detail}\n".encode("utf-8")
+    head = (
+        f"HTTP/1.1 {status_text}\r\n"
+        f"Content-Type: text/plain; charset=utf-8\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        f"Connection: close\r\n\r\n"
+    ).encode("ascii")
+    return head + body
+
+
+async def _write_and_close(writer: asyncio.StreamWriter, payload: bytes) -> None:
+    try:
+        writer.write(payload)
+        await writer.drain()
+    except (ConnectionError, OSError):
+        pass
+    finally:
+        try:
+            writer.close()
+        except OSError:
+            pass
+
+
+# Stable error pages (decisions.md §4).
+_ERR_BAD_HOST = _error_page("400 Bad Request", "AISC_WEB_BAD_HOST",
+                            "Host must be p<port>.localhost")
+_ERR_PORT_INVALID = _error_page("400 Bad Request", "AISC_WEB_PORT_INVALID",
+                                "port must be 1024..65535")
+_ERR_NOT_EXPOSED = _error_page("404 Not Found", "AISC_WEB_PORT_NOT_EXPOSED",
+                               "port is not registered (run: aisc-web-expose <port>)")
+_ERR_TARGET_DOWN = _error_page("502 Bad Gateway", "AISC_WEB_TARGET_UNAVAILABLE",
+                               "service is not listening inside the container")
+_ERR_REGISTRY = _error_page("503 Service Unavailable", "AISC_WEB_REGISTRY_UNAVAILABLE",
+                            "service registry is unreadable")
+
+
+def _host_from_head(head: bytes):
+    """Return the (single) Host header value, or None when absent/duplicated."""
+    lines = head.split(b"\r\n")
+    if not lines:
+        return None
+    # Request line first; headers after. Reject duplicate Host headers.
+    hosts = []
+    for line in lines[1:]:
+        if b":" not in line:
+            continue
+        name, _, value = line.partition(b":")
+        if name.strip().lower() == b"host":
+            hosts.append(value.strip().decode("iso-8859-1", "replace"))
+    if len(hosts) != 1:
+        return None
+    return hosts[0]
+
+
+async def _relay_pair(client: asyncio.StreamReader, client_w: asyncio.StreamWriter,
+                      target: asyncio.StreamReader, target_w: asyncio.StreamWriter) -> None:
+    """Bidirectional byte pump with half-close propagation."""
+    async def pump(src: asyncio.StreamReader, dst: asyncio.StreamWriter) -> None:
+        try:
+            while True:
+                chunk = await src.read(65536)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                await dst.drain()
+        except (ConnectionError, OSError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            try:
+                if dst.can_write_eof():
+                    dst.write_eof()
+            except (OSError, RuntimeError):
+                pass
+
+    await asyncio.gather(
+        pump(client, target_w),
+        pump(target, client_w),
+        return_exceptions=True,
+    )
+    for w in (client_w, target_w):
+        try:
+            w.close()
+        except OSError:
+            pass
+
+
+async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    peer = writer.get_extra_info("peername")
+    try:
+        # --- 1. read the request head (verbatim bytes are kept for replay) ---
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = await asyncio.wait_for(reader.read(4096), HEADER_READ_TIMEOUT)
+            if not chunk:
+                return  # client left before sending headers
+            buf += chunk
+            if len(buf) > MAX_HEADER_BYTES:
+                await _write_and_close(writer, _ERR_BAD_HOST)
+                return
+        head, _, _rest = buf.partition(b"\r\n\r\n")
+
+        # --- 2. route by Host ---
+        host = _host_from_head(head)
+        match = _HOST_RE.match(host) if host else None
+        if match is None:
+            _log(f"reject peer={peer} code=AISC_WEB_BAD_HOST")
+            await _write_and_close(writer, _ERR_BAD_HOST)
+            return
+        port = int(match.group(1))
+        if not PORT_MIN <= port <= PORT_MAX:
+            _log(f"reject peer={peer} port={port} code=AISC_WEB_PORT_INVALID")
+            await _write_and_close(writer, _ERR_PORT_INVALID)
+            return
+
+        try:
+            records = read_records()
+        except RegistryError as exc:
+            _log(f"reject peer={peer} port={port} code=AISC_WEB_REGISTRY_UNAVAILABLE ({exc})")
+            await _write_and_close(writer, _ERR_REGISTRY)
+            return
+        if port not in records:
+            _log(f"reject peer={peer} port={port} code=AISC_WEB_PORT_NOT_EXPOSED")
+            await _write_and_close(writer, _ERR_NOT_EXPOSED)
+            return
+
+        # --- 3. reach the container target, replay, relay ---
+        try:
+            target_reader, target_writer = await asyncio.wait_for(
+                asyncio.open_connection(TARGET_HOST, port), CONNECT_TIMEOUT
+            )
+        except (OSError, asyncio.TimeoutError) as exc:
+            _log(f"reject peer={peer} port={port} code=AISC_WEB_TARGET_UNAVAILABLE ({type(exc).__name__})")
+            await _write_and_close(writer, _ERR_TARGET_DOWN)
+            return
+
+        target_writer.write(buf)  # original head + any body bytes already read
+        await target_writer.drain()
+        await _relay_pair(reader, writer, target_reader, target_writer)
+    except (ConnectionError, OSError):
+        pass
+    finally:
+        try:
+            writer.close()
+        except OSError:
+            pass
+
+
+async def main() -> int:
+    port = int(os.environ.get("AISC_WEB_GATEWAY_PORT") or DEFAULT_PORT)
+    bind = os.environ.get("AISC_WEB_GATEWAY_BIND") or DEFAULT_BIND
+    try:
+        server = await asyncio.start_server(handle_client, bind, port)
+    except OSError as exc:
+        _log(f"fatal: cannot listen on {bind}:{port} ({exc})")
+        return 1
+    addrs = ", ".join(str(s.getsockname()) for s in server.sockets or [])
+    _log(f"listening on {addrs} (services dir: {os.environ.get('AISC_WEB_SERVICES_DIR') or '/run/aisc/web-services'})")
+    async with server:
+        await server.serve_forever()
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(asyncio.run(main()))
+    except KeyboardInterrupt:
+        sys.exit(0)
