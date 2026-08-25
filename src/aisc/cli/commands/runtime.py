@@ -234,6 +234,61 @@ def cmd_runtime_remove(
     return snapshot.to_dict()
 
 
+# ---------------------------------------------------------------------------
+# svc-2: `aisc runtime services` (aisc.runtime-services/v1)
+# ---------------------------------------------------------------------------
+
+def cmd_runtime_services(
+    runtime_id: str,
+    workspace: Optional[str] = None,
+    executor: Optional[DockerExecutor] = None,
+) -> Dict[str, Any]:
+    """Execute ``aisc runtime services`` — gateway info + registered services."""
+    from aisc.application.web_gateway import runtime_services
+
+    exec_ = executor or RealDockerExecutor()
+    _ws, reg_root = _resolve_workspace_and_registry(workspace)
+    return runtime_services(
+        runtime_id=runtime_id, executor=exec_, registry_root=reg_root
+    ).to_dict()
+
+
+def cmd_runtime_services_expose(
+    runtime_id: str,
+    port: str,
+    name: str = "",
+    workspace: Optional[str] = None,
+    executor: Optional[DockerExecutor] = None,
+) -> Dict[str, Any]:
+    """Execute ``aisc runtime services expose`` (ops/test entry; agents use
+    the in-container helper — both write the same manifest)."""
+    from aisc.application.web_gateway import expose_runtime_service
+
+    exec_ = executor or RealDockerExecutor()
+    _ws, reg_root = _resolve_workspace_and_registry(workspace)
+    return expose_runtime_service(
+        runtime_id=runtime_id, port_text=port, name=name,
+        executor=exec_, registry_root=reg_root,
+    ).to_dict()
+
+
+def cmd_runtime_services_unexpose(
+    runtime_id: str,
+    port: str,
+    workspace: Optional[str] = None,
+    executor: Optional[DockerExecutor] = None,
+) -> Dict[str, Any]:
+    """Execute ``aisc runtime services unexpose``."""
+    from aisc.application.web_gateway import unexpose_runtime_service
+
+    exec_ = executor or RealDockerExecutor()
+    _ws, reg_root = _resolve_workspace_and_registry(workspace)
+    return unexpose_runtime_service(
+        runtime_id=runtime_id, port_text=port,
+        executor=exec_, registry_root=reg_root,
+    ).to_dict()
+
+
 def print_runtime_text(subcommand: str, data: Any, errors: list) -> None:
     """Minimal human-readable output for ``aisc runtime`` text mode."""
     if errors:
@@ -266,3 +321,14 @@ def print_runtime_text(subcommand: str, data: Any, errors: list) -> None:
         print(f"runtime {data.get('runtime_id', '')}")
         print(f"  container: {data.get('container_name', '')}")
         print(f"  state: {data.get('state', '')}  registry: {data.get('registry_state', '')}")
+    elif subcommand == "services":
+        gateway = data.get("gateway", {})
+        print(f"gateway: {gateway.get('state', '')}  "
+              f"host: {gateway.get('host', '')}:{gateway.get('host_port', '')}")
+        if gateway.get("reason"):
+            print(f"  reason: {gateway.get('reason')}")
+        services = data.get("services", [])
+        if not services:
+            print("(no services registered; in-container: aisc-web-expose <port>)")
+        for s in services:
+            print(f"  {s.get('port')}  {s.get('name') or '-'}  {s.get('url')}")

@@ -517,6 +517,44 @@ def _build_parser() -> _AiscArgumentParser:
     rtrm.add_argument("--force", action="store_true", default=False,
                       help="Remove even if the runtime is running")
 
+    # --- runtime services (svc-2, aisc.runtime-services/v1) ---
+    rtsv = rtsub.add_parser("services", help="Web service gateway info + registered services",
+                            allow_abbrev=False)
+    _add_global_args(rtsv, is_subparser=True)
+    rtsv.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    rtsv.add_argument("--workspace", type=str, default=None,
+                      help="Workspace path (default: current directory)")
+    rtsvsub = rtsv.add_subparsers(dest="runtime_services_command",
+                                  title="runtime services commands",
+                                  parser_class=_AiscArgumentParser)
+
+    rtsvl = rtsvsub.add_parser("list", help="List registered services (default)",
+                               allow_abbrev=False)
+    _add_global_args(rtsvl, is_subparser=True)
+    rtsvl.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    rtsvl.add_argument("--workspace", type=str, default=None,
+                      help="Workspace path (default: current directory)")
+
+    rtsve = rtsvsub.add_parser("expose", help="Register a service port (ops/test entry)",
+                               allow_abbrev=False)
+    _add_global_args(rtsve, is_subparser=True)
+    rtsve.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    rtsve.add_argument("--port", type=str, required=True,
+                       help="Container service port (1024..65535)")
+    rtsve.add_argument("--name", type=str, default="",
+                       help="Display label (safe short text)")
+    rtsve.add_argument("--workspace", type=str, default=None,
+                       help="Workspace path (default: current directory)")
+
+    rtsvu = rtsvsub.add_parser("unexpose", help="Unregister a service port",
+                               allow_abbrev=False)
+    _add_global_args(rtsvu, is_subparser=True)
+    rtsvu.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
+    rtsvu.add_argument("--port", type=str, required=True,
+                       help="Container service port (1024..65535)")
+    rtsvu.add_argument("--workspace", type=str, default=None,
+                       help="Workspace path (default: current directory)")
+
     # --- session ---
     ssp = sub.add_parser("session", help="Session data plane (Workbench Phase 0)", allow_abbrev=False)
     _add_global_args(ssp, is_subparser=True)
@@ -1395,6 +1433,9 @@ def _cmd_runtime(
         cmd_runtime_stop,
         cmd_runtime_restart,
         cmd_runtime_remove,
+        cmd_runtime_services,
+        cmd_runtime_services_expose,
+        cmd_runtime_services_unexpose,
     )
 
     sub = args.runtime_command
@@ -1454,6 +1495,27 @@ def _cmd_runtime(
             workspace=args.workspace,
             force=args.force,
         )
+        return data, 0, []
+    elif sub == "services":
+        sub2 = getattr(args, "runtime_services_command", None)
+        if sub2 == "expose":
+            data = cmd_runtime_services_expose(
+                runtime_id=args.runtime_id,
+                port=args.port,
+                name=args.name,
+                workspace=args.workspace,
+            )
+        elif sub2 == "unexpose":
+            data = cmd_runtime_services_unexpose(
+                runtime_id=args.runtime_id,
+                port=args.port,
+                workspace=args.workspace,
+            )
+        else:  # none or "list"
+            data = cmd_runtime_services(
+                runtime_id=args.runtime_id,
+                workspace=args.workspace,
+            )
         return data, 0, []
     else:
         # Unknown runtime subcommand

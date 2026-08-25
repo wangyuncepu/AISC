@@ -91,6 +91,7 @@ WORKBENCH_CAPABILITIES = {
     "session": "aisc.session/v1",               # S0.3
     "providerStatus": "aisc.provider-status/v1",  # S0.4
     "buildEvents": "aisc.build-events/v1",      # S0.5
+    "runtimeServices": "aisc.runtime-services/v1",  # svc-2 (web gateway)
 }
 
 
@@ -456,6 +457,11 @@ class RuntimeSnapshot:
     # Staleness indicator
     stale: bool = False            # True if observation is potentially outdated
 
+    # svc-2 (web gateway): loopback gateway reachability per
+    # aisc.runtime-services/v1; None = not observed (list path / old CLI) —
+    # consumers treat absent as unavailable, never as a parse failure.
+    web_access: Optional[Dict[str, Any]] = None
+
     # Last operation error (None if last operation succeeded)
     last_operation_error: Optional[Dict[str, Any]] = None
 
@@ -486,6 +492,8 @@ class RuntimeSnapshot:
             result["created_at"] = self.created_at
         if self.started_at:
             result["started_at"] = self.started_at
+        if self.web_access is not None:
+            result["web_access"] = self.web_access
         if self.last_operation_error:
             result["last_operation_error"] = self.last_operation_error
 

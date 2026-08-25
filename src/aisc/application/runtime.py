@@ -1026,13 +1026,25 @@ def start_runtime(
                     break
             # 挂账 heal: legacy records carry no image_id — record the
             # current image's ID in place so future rebuilds under the same
-            # tag are detected. set_default=False: a metadata fix must not
-            # steal the registry default from another container.
-            if reuse_name and not str(reuse_meta.get("image_id") or "").strip() \
+            # tag are detected. svc-2 adds the same in-place heal for the
+            # gateway host port (Docker-observed, only when a mapping really
+            # exists). set_default=False: a metadata fix must not steal the
+            # registry default from another container.
+            healed = dict(reuse_meta)
+            changed = False
+            if reuse_name and not str(healed.get("image_id") or "").strip() \
                     and image_id_at_start:
-                register(reg_root, reuse_name,
-                         {**reuse_meta, "image_id": image_id_at_start},
-                         set_default=False)
+                healed["image_id"] = image_id_at_start
+                changed = True
+            if reuse_name and not int(healed.get("web_gateway_host_port") or 0):
+                from aisc.application.web_gateway import read_gateway_mapping
+
+                mapping = read_gateway_mapping(executor, reuse_name)
+                if mapping and mapping.get("active"):
+                    healed["web_gateway_host_port"] = mapping["host_port"]
+                    changed = True
+            if reuse_name and changed:
+                register(reg_root, reuse_name, healed, set_default=False)
             from aisc.applog import append_event
 
             append_event("container_reused", source="cli",
@@ -1097,6 +1109,19 @@ def start_runtime(
             "-e", "TERM=xterm-256color",
             "-v", f"{canonical_workspace}:/root/app",
         ]
+        # svc-2 (web gateway): allocate a loopback host port and publish the
+        # container-side gateway. Bind conflicts retry with the next free
+        # port; the host port is runtime metadata only — never part of the
+        # config fingerprint (decisions.md §7).
+        from aisc.application.web_gateway import (
+            allocate_gateway_host_port,
+            docker_publish_argv,
+            is_bind_conflict,
+            registry_host_ports,
+        )
+
+        gw_exclude = registry_host_ports(list_containers_readonly(reg_root))
+        gw_host_port = allocate_gateway_host_port(exclude=gw_exclude)
         # Stage 7 (DATA-01): project-scope agent config mounts from the
         # data root; dirs are created host-side so bind mounts are real.
         # Fail closed: resolver errors propagate — never copy agent state
@@ -1121,10 +1146,21 @@ def start_runtime(
                 argv.extend(["-v", f"{resolved_proxy}:/etc/mihomo/config.yaml:ro"])
         argv.append(image)
 
-        proc = executor.run_captured(argv, timeout=60.0)
-        if proc.exit_code != 0 or not (proc.stdout or "").strip():
+        base_argv = argv[:-1]  # everything except the image; publish goes last
+        proc = None
+        for _attempt in range(5):
+            argv = base_argv + docker_publish_argv(gw_host_port) + [image]
+            proc = executor.run_captured(argv, timeout=60.0)
+            if proc.exit_code == 0 and (proc.stdout or "").strip():
+                break
+            stderr = (proc.stderr or "").strip()
+            if is_bind_conflict(stderr) and _attempt < 4:
+                gw_exclude.add(gw_host_port)
+                gw_host_port = allocate_gateway_host_port(
+                    exclude=gw_exclude, start_hint=gw_host_port + 1)
+                continue
             raise CliError(
-                message=f"Failed to create runtime container: {(proc.stderr or '').strip()}",
+                message=f"Failed to create runtime container: {stderr}",
                 exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
                 error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
                 data={"container_name": container_name, "config_fingerprint": fingerprint},
@@ -1135,6 +1171,10 @@ def start_runtime(
 
         append_event("container_created", source="cli",
                      container=container_name, runtime_id=runtime_id, image=image)
+        append_event("web_gateway_allocated", source="cli",
+                     container=container_name, runtime_id=runtime_id,
+                     container_port=45871, host_port=gw_host_port,
+                     protocol="http")
 
         # --- ready check ---
         ctx = _wait_ready(executor, container_name, runtime_id, ready_timeout)
@@ -1155,6 +1195,10 @@ def start_runtime(
             )
         append_event("container_ready", source="cli",
                      container=container_name, runtime_id=runtime_id)
+        append_event("web_gateway_ready", source="cli",
+                     container=container_name, runtime_id=runtime_id,
+                     container_port=45871, host_port=gw_host_port,
+                     protocol="http")
 
         # --- commit registry entry (registry lock acquired inside register) ---
         try:
@@ -1170,6 +1214,7 @@ def start_runtime(
                 "container_id": container_id,
                 "workspace_key": ws_key,
                 "image_id": image_id_at_start,
+                "web_gateway_host_port": gw_host_port,
             })
         except CliError:
             # register raises CliError(STATE_LOCK_TIMEOUT) if the registry lock
@@ -1310,6 +1355,17 @@ def list_runtimes(
     return snapshots
 
 
+def _web_access_for(executor: Any, container_name: str, docker_state: Optional[str],
+                    meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """svc-2: snapshot_web_access wrapped for RuntimeSnapshot.web_access."""
+    from aisc.application.web_gateway import snapshot_web_access
+
+    return snapshot_web_access(
+        executor, container_name, docker_state,
+        registry_has_gateway=bool((meta or {}).get("web_gateway_host_port")),
+    ).to_dict()
+
+
 def inspect_runtime(
     runtime_id: str,
     executor: Any,
@@ -1319,9 +1375,11 @@ def inspect_runtime(
 
     Distinguishes ``not_found`` (Docker & registry both absent), ``stopped``
     (container exists, not running) and ``unknown`` (Docker daemon/permission
-    unavailable).
+    unavailable). svc-2: also carries ``web_access`` (gateway reachability;
+    absent on the list path).
     """
     from aisc.adapters.container_registry import find_by_runtime_id
+    from aisc.domain.web_services import web_access_unavailable
 
     if not validate_uuid_v4(runtime_id):
         raise CliError(
@@ -1340,6 +1398,7 @@ def inspect_runtime(
             registry_state="unknown",
             observed_at=observed_at,
             stale=True,
+            web_access=web_access_unavailable("docker_unavailable").to_dict(),
         )
 
     found = find_by_runtime_id(registry_root, runtime_id)
@@ -1352,20 +1411,26 @@ def inspect_runtime(
             state="not_found",
             registry_state="not_found",
             observed_at=observed_at,
+            web_access=web_access_unavailable("runtime_not_running").to_dict(),
         )
 
     if reg_name is not None and reg_meta is not None:
         docker_state = dc["state"] if dc else "not_found"
-        return _snapshot_from_registry(reg_name, reg_meta, docker_state, observed_at)
+        snapshot = _snapshot_from_registry(reg_name, reg_meta, docker_state, observed_at)
+        snapshot.web_access = _web_access_for(executor, reg_name, docker_state, reg_meta)
+        return snapshot
 
     # Docker-only (registry missing).
+    docker_state = dc["state"] if dc else "not_found"
+    container_name = dc["container_name"] if dc else ""
     return RuntimeSnapshot(
         runtime_id=runtime_id,
-        state=dc["state"] if dc else "not_found",
-        container_name=dc["container_name"] if dc else "",
+        state=docker_state,
+        container_name=container_name,
         container_id=dc["container_id"] if dc else "",
         registry_state="missing",
         observed_at=observed_at,
+        web_access=_web_access_for(executor, container_name, docker_state, None),
     )
 
 

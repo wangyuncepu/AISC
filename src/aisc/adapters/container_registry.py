@@ -282,6 +282,10 @@ def register(root: Path, name: str, meta: Dict[str, Any],
         "container_id": meta.get("container_id", ""),
         "workspace_key": meta.get("workspace_key", ""),
         "image_id": meta.get("image_id", ""),
+        # svc-2 (web gateway): loopback host port of this runtime's gateway
+        # publish; 0/absent on legacy records (web access reports
+        # legacy_runtime). Runtime metadata only — never in the fingerprint.
+        "web_gateway_host_port": meta.get("web_gateway_host_port", 0),
     }
     with _registry_lock(root):
         data = _read_registry(root)
