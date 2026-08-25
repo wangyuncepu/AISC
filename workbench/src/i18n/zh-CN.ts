@@ -369,10 +369,10 @@ export const zhCN = {
   "settings.window.geometryMaximized": "（最大化）",
 
   // --- runtime store dialogs / errors (runtime.ts) ---
-  "runtime.stopConfirm": "停止 Runtime {id}？容器将停止但保留。",
+  "runtime.stopConfirm": "停止 Runtime {id}？残留容器将在下次打开该工作区时自动回收。",
   "runtime.forceRemoveConfirm": "强制移除选中的 Runtime {id}？容器与数据将一并删除。",
   "runtime.removeConfirm": "移除 Runtime {id}？容器与数据将一并删除。",
-  "runtime.exitConfirm": "有 {count} 个活动会话，退出将结束它们（Runtime 保留运行）。继续？",
+  "runtime.exitConfirm": "有 {count} 个活动会话，退出将结束它们，并删除各工作区的临时运行环境（工作区文件不受影响）。继续？",
   "runtime.stopWithSessions": "将结束 {count} 个活动会话，并删除此工作区的临时运行环境。继续？",
   "runtime.stopPlain": "将删除此工作区的临时运行环境（工作区文件不受影响）。继续？",
   "runtime.notStopped": "Runtime 仍处于 {state}（stop 后 inspect 确认失败）",

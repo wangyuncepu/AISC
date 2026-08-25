@@ -369,10 +369,10 @@ export const enUS: Record<string, string> = {
   "settings.window.geometryMaximized": " (maximized)",
 
   // --- runtime store dialogs / errors (runtime.ts) ---
-  "runtime.stopConfirm": "Stop Runtime {id}? The container stops but is kept.",
+  "runtime.stopConfirm": "Stop Runtime {id}? The leftover container is auto-recycled next time this workspace opens.",
   "runtime.forceRemoveConfirm": "Force-remove Runtime {id}? The container and its data will be deleted.",
   "runtime.removeConfirm": "Remove Runtime {id}? The container and its data will be deleted.",
-  "runtime.exitConfirm": "{count} active sessions - exiting will end them (the Runtime keeps running). Continue?",
+  "runtime.exitConfirm": "{count} active sessions - exiting will end them and delete each workspace's temporary runtime (workspace files are unaffected). Continue?",
   "runtime.stopWithSessions": "This will end {count} active sessions and delete this workspace's temporary runtime. Continue?",
   "runtime.stopPlain": "This will delete this workspace's temporary runtime (workspace files are unaffected). Continue?",
   "runtime.notStopped": "Runtime is still {state} (post-stop inspect verification failed)",
