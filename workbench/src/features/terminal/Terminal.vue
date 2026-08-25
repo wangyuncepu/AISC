@@ -874,6 +874,10 @@ defineExpose({
   height: 100%;
   width: 100%;
   position: relative;
+  /* B-05 手测五轮: while the TUI floor holds the grid at 60 cols inside a
+   * narrower pane, the xterm screen is wider than this box — clip it, or it
+   * leaks out past the narrow overlay into the neighbouring chrome. */
+  overflow: hidden;
 }
 /* Stage 11 (11d): lightweight drop-target affordance while a workspace file
  * hovers over this pane (03 §6). */
