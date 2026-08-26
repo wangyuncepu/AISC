@@ -1540,8 +1540,8 @@ Function ExtractDefaultImageId
     StrCpy $R2 ""    ; current line
     ${Do}
       StrCpy $R3 $R0 1
-      ${If} $R3 == "\r"
-      ${OrIf} $R3 == "\n"
+      ${If} $R3 == "$\r"
+      ${OrIf} $R3 == "$\n"
       ${OrIf} $R3 == ""
         ${Break}
       ${EndIf}
@@ -1549,9 +1549,9 @@ Function ExtractDefaultImageId
       StrCpy $R0 $R0 "" 1
     ${Loop}
     StrCpy $R3 $R0 1
-    ${IfThen} $R3 == "\r" ${|} StrCpy $R0 $R0 "" 1 ${|}
+    ${IfThen} $R3 == "$\r" ${|} StrCpy $R0 $R0 "" 1 ${|}
     StrCpy $R3 $R0 1
-    ${IfThen} $R3 == "\n" ${|} StrCpy $R0 $R0 "" 1 ${|}
+    ${IfThen} $R3 == "$\n" ${|} StrCpy $R0 $R0 "" 1 ${|}
     ; prefix: "image owned " (12) or "image legacy_owned " (19)
     StrCpy $R4 0
     StrCpy $R5 $R2 12
@@ -1604,8 +1604,14 @@ Function UpgradeDockerLifecycle
     Return
   ${EndIf}
   ; 2) No-cache rebuild with the old-ID handoff (minutes; 30min budget).
+  ; 2026-08-26 R2 smoke: an EMPTY $OldImageId must be omitted entirely — a
+  ; bare --old-image-id is an argparse usage error that aborts the rebuild.
   DetailPrint "$(UPGRADE_REBUILD_START)"
-  nsExec::ExecToLog /TIMEOUT=1800000 '"$AiscCliExe" maintenance docker-rebuild --root "$INSTDIR\aisc-bundle" --tag super-claude:latest --old-image-id $OldImageId'
+  ${If} $OldImageId == ""
+    nsExec::ExecToLog /TIMEOUT=1800000 '"$AiscCliExe" maintenance docker-rebuild --root "$INSTDIR\aisc-bundle" --tag super-claude:latest'
+  ${Else}
+    nsExec::ExecToLog /TIMEOUT=1800000 '"$AiscCliExe" maintenance docker-rebuild --root "$INSTDIR\aisc-bundle" --tag super-claude:latest --old-image-id $OldImageId'
+  ${EndIf}
   Pop $0
   Pop $1
   ${If} $0 != 0

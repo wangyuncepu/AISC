@@ -98,6 +98,27 @@ class NsisStaticTests(unittest.TestCase):
         self.assertIn('FindFirst $0 $1 "$INSTDIR\\aisc*.exe"', self.text)
         self.assertNotIn("aisc-x86_64-pc-windows-msvc", self.text)
 
+    def test_scan_parser_compares_real_control_chars(self):
+        """2026-08-26 R2 smoke: "\\r"/"\\n" are literal backslash+letter in
+        NSIS and never match a real line break — the whole scan collapsed
+        into one unparsed line and the old-image id came back empty. The
+        real chars are $-prefixed ($\r / $\n)."""
+        body = self.text[self.text.index("Function ExtractDefaultImageId"):]
+        body = body[: body.index("FunctionEnd")]
+        self.assertIn('== "$\\r"', body)
+        self.assertIn('== "$\\n"', body)
+        self.assertNotIn('== "\\r"', body)
+        self.assertNotIn('== "\\n"', body)
+
+    def test_rebuild_omits_old_image_id_when_capture_failed(self):
+        """A bare --old-image-id is an argparse usage error — the rebuild
+        must have a no-old-id variant (the branch without the flag)."""
+        self.assertIn(
+            'maintenance docker-rebuild --root "$INSTDIR\\aisc-bundle" '
+            "--tag super-claude:latest'",
+            self.text,
+        )
+
     def test_no_docker_format_flag_in_nsis(self):
         """KI-5 lesson: literal docker CLI calls in this template can never
         use --format (double braces are handlebars). All docker argv now
