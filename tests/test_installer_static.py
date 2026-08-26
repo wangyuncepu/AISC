@@ -127,6 +127,27 @@ class NsisStaticTests(unittest.TestCase):
         self.assertNotIn("${NSD_Check} $ToolchainCheckbox", self.text)
         self.assertNotIn("${NSD_Check} $DeleteAppDataCheckbox", self.text)
 
+    def test_path_handles_are_pointer_sized(self):
+        """2026-08-26 R4 smoke (critical): `i` System::Call slots truncate
+        the 64-bit HKEY on x64 NSIS - RegQueryValueExW then always failed
+        and every PATH rewrite wrote the empty fallback, wiping the user's
+        entire PATH as an empty REG_SZ. Handles must ride pointer-sized
+        (p) slots."""
+        body = self.text[self.text.index("Function ${UN}PathRead"):]
+        body = body[: body.index("FunctionEnd")]
+        self.assertIn("*p .r1", body)
+        self.assertIn("p 0x80000001", body)
+        self.assertIn("(p r1,", body)
+        self.assertNotIn("(i r1", body)
+        self.assertNotIn("*i .r1", body)
+
+    def test_path_never_written_after_failed_read(self):
+        """Defense in depth: both PATH mutation paths (add + remove) bail
+        when the registry read failed - an empty $PathRaw must never reach
+        PathWrite."""
+        self.assertIn("Var PathOk", self.text)
+        self.assertGreaterEqual(self.text.count("${If} $PathOk <> 1"), 2)
+
     def test_no_docker_format_flag_in_nsis(self):
         """KI-5 lesson: literal docker CLI calls in this template can never
         use --format (double braces are handlebars). All docker argv now
