@@ -485,7 +485,13 @@ aisc profile show unsafe
 - Linux/macOS 便携脚本：重新执行 `bash packaging/install.sh <new-archive>`。
 - 源码 editable：在仓库执行 `git pull`；依赖发生变化时执行 `uv tool upgrade aisc` 或重新安装。
 
-程序升级不会自动删除 Docker 镜像、容器、用户配置和工作区状态。若容器镜像内容有变化，升级宿主 CLI 后还需重新运行 `aisc build`；需要排除缓存时使用 `aisc build --no-cache`。
+安装器/便携脚本升级时会自动执行 Docker 资源生命周期（docker-resource-lifecycle）：先停止并删除 AISC 管理的容器，替换文件后对默认镜像执行 **无缓存重建**（`super-claude:latest`，可能需要几分钟），并在成功后清理被替换的旧镜像。升级失败或 Docker 不可用时应用文件照常更新，镜像重建记为待办——下次启动 Workbench 会提示，或手动执行：
+
+```bash
+aisc maintenance docker-rebuild --root <bundle-root> --tag super-claude:latest
+```
+
+用户配置、工作区状态与各工作区的持久工具链（Agent 安装的 npm/pip/cargo 用户级工具）在升级中全部保留。源码 editable 升级不经过安装器：若容器镜像内容有变化，升级宿主 CLI 后还需重新运行 `aisc build`；需要排除缓存时使用 `aisc build --no-cache`。
 
 ## 卸载
 
@@ -497,14 +503,18 @@ aisc profile show unsafe
 | Linux/macOS `packaging/install.sh` | `bash packaging/uninstall.sh` |
 | uv tool | `uv tool uninstall aisc` |
 
-卸载器不会删除工作区、用户配置或 Docker 资源。确认不再需要后可手工处理：
+默认卸载会同时清理 **AISC 自己的 Docker 资源**（容器 + 工作站镜像），通过统一的归属分类服务执行——只删除可证明属于 AISC 的资源，无法确认归属的仅报告不删除，绝不触碰非 AISC 容器/镜像、Docker 卷和网络。需要保留 Docker 资源时：NSIS 卸载不勾选清理项（或卸载命令行加 `/KEEPDOCKER`）；便携/POSIX 脚本加 `-KeepDockerResources` / `--keep-docker-resources`。
+
+卸载器不会删除工作区、用户配置（数据根）、各工作区持久工具链。需要彻底清理时（谨慎，含登录态/凭据）：
 
 ```bash
-docker ps -a
-docker images super-claude
+# 单独清理 Docker 资源（与卸载器同一服务）
+aisc maintenance docker-cleanup --context uninstall --format json
+# 查看归属分类（只读）
+aisc maintenance docker-scan --context uninstall --format text
 ```
 
-谨慎删除 `<workspace>/.cc-switch/`、`.claude/`、`.codex/`、`.aisc/` 以及各平台用户配置；其中可能包含登录状态、Provider 凭据和自定义 Skills。
+谨慎删除 `<workspace>/.cc-switch/`、`.claude/`、`.codex/`、`.aisc/` 以及各平台用户配置；其中可能包含登录状态、Provider 凭据和自定义 Skills。Docker 不可用时卸载照常完成（文件照删），Docker 资源保留并可在之后用上面的命令清理。
 
 ## 故障排查
 

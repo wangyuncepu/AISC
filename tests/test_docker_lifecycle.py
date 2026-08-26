@@ -254,26 +254,40 @@ class ScanTests(unittest.TestCase):
 
 
 class RebuildTests(unittest.TestCase):
+    """Rebuild takes a BUNDLE root (container/Dockerfile + config/
+    versions.env) and pins cc-switch from the resolver cache; tests inject
+    cc_switch=None for the offline ARG-fallback path (no network)."""
+
+    def _bundle(self, root: str) -> None:
+        from pathlib import Path
+        Path(root, "container").mkdir(parents=True, exist_ok=True)
+        Path(root, "config").mkdir(parents=True, exist_ok=True)
+        Path(root, "container", "Dockerfile").write_text(
+            "FROM node:20-slim\n", encoding="utf-8")
+        Path(root, "config", "versions.env").write_text(
+            "NODE_IMAGE=node:20-slim\n", encoding="utf-8")
+
     def test_rebuild_success_handoff(self):
         import tempfile
-        from pathlib import Path
         with tempfile.TemporaryDirectory() as root:
-            Path(root, "Dockerfile").write_text("FROM node:20-slim\n", encoding="utf-8")
+            self._bundle(root)
             ex = LifecycleFakeExecutor(
                 images=[image_row("super-claude", "latest", "sha256:old")],
             )
-            result = docker_rebuild(ex, root=root, old_image_id="sha256:old")
+            result = docker_rebuild(ex, root=root, old_image_id="sha256:old",
+                                    cc_switch=None)
         self.assertFalse(result["failed"])
         self.assertEqual(result["new_image_id"], "sha256:newimg")
         self.assertTrue(result["image_changed"])
         self.assertEqual(result["old_image_action"], "removed")
         self.assertEqual(result["reconcile_hint"], "image_changed")
+        # ARG fallback path recorded its warning
+        self.assertTrue(any("cc-switch" in w for w in result["warnings"]))
 
     def test_rebuild_failure_keeps_old_image(self):
         import tempfile
-        from pathlib import Path
         with tempfile.TemporaryDirectory() as root:
-            Path(root, "Dockerfile").write_text("FROM node:20-slim\n", encoding="utf-8")
+            self._bundle(root)
             ex = LifecycleFakeExecutor(
                 images=[image_row("super-claude", "latest", "sha256:old")],
             )
@@ -285,20 +299,39 @@ class RebuildTests(unittest.TestCase):
                 return original(argv, timeout=timeout)
 
             ex.run_captured = failing_build
-            result = docker_rebuild(ex, root=root, old_image_id="sha256:old")
+            result = docker_rebuild(ex, root=root, old_image_id="sha256:old",
+                                    cc_switch=None)
         self.assertTrue(result["failed"])
         self.assertEqual(result["old_image_action"], "kept_referenced")
         # old image never removed on failure
         self.assertEqual([i["id"] for i in ex.images], ["sha256:old"])
 
-    def test_rebuild_missing_dockerfile_is_usage_error(self):
+    def test_rebuild_missing_bundle_is_usage_error(self):
         import tempfile
         from pathlib import Path
         with tempfile.TemporaryDirectory() as root:
             ex = LifecycleFakeExecutor()
             with self.assertRaises(CliError):
-                docker_rebuild(ex, root=str(Path(root)), old_image_id="")
+                docker_rebuild(ex, root=str(Path(root)), old_image_id="",
+                               cc_switch=None)
             self.assertEqual(ex.calls, [])
+
+    def test_scan_text_renderer_shape(self):
+        from aisc.application.docker_lifecycle import render_scan_text
+        payload = {
+            "docker": {"available": True, "reason": "ok"},
+            "containers": {"owned": [{"id": "cid1", "name": "aisc-wb-1"}],
+                            "legacy_owned": [], "unverified": []},
+            "images": {"owned": [], "legacy_owned": [
+                {"id": "sha256:aa", "name": "super-claude:latest"}],
+                "unverified": []},
+            "dangling_owned": [],
+        }
+        text = render_scan_text(payload)
+        lines = text.splitlines()
+        self.assertEqual(lines[0], "docker available")
+        self.assertIn("container owned cid1 aisc-wb-1", lines)
+        self.assertIn("image legacy_owned sha256:aa super-claude:latest", lines)
 
 
 class CliContractTests(unittest.TestCase):

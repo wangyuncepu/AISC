@@ -259,6 +259,34 @@ def docker_scan(
     return payload
 
 
+def render_scan_text(payload: Dict[str, Any]) -> str:
+    """Space-separated one-line-per-resource text for installers and shell
+    scripts (NSIS/Inno/POSIX sh cannot parse JSON cheaply; this format is
+    stable: ``<kind> <ownership> <id> <name>``).
+
+    Example lines::
+
+        docker available
+        container owned cid123 aisc-wb-1
+        image owned sha256:abc super-claude:latest
+    """
+    lines = [
+        "docker available" if payload.get("docker", {}).get("available")
+        else "docker unavailable"
+    ]
+    for kind in ("containers", "images"):
+        buckets = payload.get(kind, {})
+        for ownership in ("owned", "legacy_owned", "unverified"):
+            for entry in buckets.get(ownership, []):
+                lines.append(
+                    f"{kind.rstrip('s')} {ownership} {entry.get('id', '')} "
+                    f"{entry.get('name', '')}"
+                )
+    for entry in payload.get("dangling_owned", []):
+        lines.append(f"image dangling-owned {entry.get('id', '')} {entry.get('id', '')}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Cleanup (02 §3 order; per-resource failure never aborts the rest)
 # ---------------------------------------------------------------------------
@@ -275,6 +303,10 @@ def docker_cleanup(
     old_image_ids: Iterable[str] = (),
     data_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    """Upgrade context cleans CONTAINERS ONLY (01 §3 upgrade ordering):
+    the tagged image must survive until docker-rebuild succeeds, or a
+    failed rebuild would leave the user with no workstation image at all;
+    the old image is then removed by ID via rebuild's old-ID handoff."""
     result: Dict[str, Any] = {
         "schema_version": CLEANUP_SCHEMA,
         "action": "cleanup",
@@ -321,9 +353,14 @@ def docker_cleanup(
                 result["containers"]["failed"].append(name)
 
         # 4-6. re-scan image references, then untag/delete by evidence.
-        scan2 = docker_scan(executor, context=context, old_image_ids=old_image_ids,
-                            data_root=data_root)
+        # Upgrade: images ride the rebuild handoff — skip entirely.
         removed_ids = set()
+        if context == "upgrade":
+            scan2 = {"images": {"owned": [], "legacy_owned": [], "unverified": []},
+                     "dangling_owned": []}
+        else:
+            scan2 = docker_scan(executor, context=context, old_image_ids=old_image_ids,
+                                data_root=data_root)
         for entry in scan2["images"]["owned"] + scan2["images"]["legacy_owned"]:
             ref = entry["image"]
             if entry["id"] in removed_ids:
@@ -358,6 +395,36 @@ def docker_cleanup(
 # Rebuild (02 §4)
 # ---------------------------------------------------------------------------
 
+def _cc_switch_for_rebuild() -> Any:
+    """Deterministic-offline cc-switch pin for installer rebuilds.
+
+    Priority: explicit cached version (any age — a pinned digest is stable
+    content, and installers must not depend on reaching the GitHub API) →
+    live ``latest`` → None (Dockerfile ARG fallback, documented
+    non-reproducible; the result carries a warning).
+    """
+    import json as _json
+    from aisc.application.cc_switch_resolver import CcSwitchResolver
+    from aisc.application.data_root import shared_root
+
+    resolver = CcSwitchResolver()
+    cache = shared_root() / "cache" / "cc-switch" / "last-resolved.json"
+    version = ""
+    try:
+        version = str(_json.loads(cache.read_text(encoding="utf-8")).get("version") or "")
+    except (OSError, ValueError):
+        version = ""
+    for candidate in ([version] if version else []) + ["latest"]:
+        try:
+            return resolver.resolve(version=candidate)
+        except Exception:
+            continue
+    return None
+
+
+_CC_UNSET = object()
+
+
 def docker_rebuild(
     executor: Any,
     *,
@@ -366,8 +433,16 @@ def docker_rebuild(
     old_image_id: str = "",
     no_cache: bool = True,
     pull: bool = False,
+    cc_switch: Any = _CC_UNSET,
 ) -> Dict[str, Any]:
     """No-cache rebuild of the workstation image with old-ID handoff.
+
+    ``root`` is the BUNDLE ROOT (aisc-root shaped: ``container/Dockerfile``
+    + ``config/versions.env`` — validated like ``aisc build``), matching
+    the installed ``$INSTDIR/aisc-bundle``. cc-switch is pinned from the
+    resolver cache when available (offline-deterministic; installers must
+    not require the GitHub API), falling back to the Dockerfile ARG path
+    with a warning.
 
     Returns the 02 §4 result: old/new image ids, image_changed,
     old_image_action (removed | untagged | kept_referenced | not_found),
@@ -376,21 +451,28 @@ def docker_rebuild(
     """
     from aisc.adapters.maintenance_lock import docker_maintenance_lock_at_root
     from aisc.application.data_root import shared_root
-    from aisc.domain.models import BuildPlan
+    from aisc.cli.commands.build import plan_build
 
-    build_root = Path(root)
-    dockerfile = build_root / "Dockerfile"
-    if not dockerfile.is_file():
+    if cc_switch is _CC_UNSET:
+        cc_switch = _cc_switch_for_rebuild()
+    warnings: List[str] = []
+    if cc_switch is None:
+        warnings.append(
+            "cc-switch not pinned (no resolver cache, live resolve failed); "
+            "built via Dockerfile ARG fallback"
+        )
+    try:
+        plan = plan_build(
+            Path(root), tag=tag, no_cache=no_cache, pull=pull,
+            dry_run=False, cc_switch=cc_switch,
+        )
+    except CliError as exc:
         raise CliError(
-            message=f"bundle root has no Dockerfile: {build_root}",
+            message=f"bundle validation failed: {exc.message}",
             exit_code=RuntimeExitCode.USAGE_ERROR,
             error_code=RuntimeErrorCode.WORKSPACE_INVALID,
-        )
+        ) from exc
 
-    plan = BuildPlan(
-        tag=tag, root=str(build_root), dockerfile=str(dockerfile),
-        no_cache=no_cache, pull=pull,
-    )
     with docker_maintenance_lock_at_root(shared_root()):
         build = executor.run_captured(plan.docker_argv, timeout=1800.0)
         new_id = _image_id_by_ref(executor, tag)
@@ -404,6 +486,7 @@ def docker_rebuild(
                 "old_image_action": "not_found" if not old_image_id else "kept_referenced",
                 "reconcile_hint": "unchanged",
                 "failed": True,
+                "warnings": warnings,
                 "build_log_tail": _log_tail(build.stdout or ""),
             }
         changed = bool(old_image_id) and old_image_id != new_id
@@ -425,6 +508,7 @@ def docker_rebuild(
             "old_image_action": action,
             "reconcile_hint": "image_changed" if changed else "unchanged",
             "failed": False,
+            "warnings": warnings,
             "build_log_tail": _log_tail(build.stdout or ""),
         }
 
