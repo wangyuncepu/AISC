@@ -119,6 +119,14 @@ class NsisStaticTests(unittest.TestCase):
             self.text,
         )
 
+    def test_uninstall_docker_checkbox_defaults_on(self):
+        """README 卸载契约: Docker 资源默认清理(预勾选, 取消勾选或
+        /KEEPDOCKER 才保留); toolchain 与 app-data 默认保留。2026-08-26
+        R3 smoke: 无 BM_SETCHECK 时全部默认未勾选, 与文档相反。"""
+        self.assertIn("${NSD_Check} $DeleteDockerCheckbox", self.text)
+        self.assertNotIn("${NSD_Check} $ToolchainCheckbox", self.text)
+        self.assertNotIn("${NSD_Check} $DeleteAppDataCheckbox", self.text)
+
     def test_no_docker_format_flag_in_nsis(self):
         """KI-5 lesson: literal docker CLI calls in this template can never
         use --format (double braces are handlebars). All docker argv now

@@ -573,6 +573,11 @@ Function un.ConfirmShow ; Add add a `Delete app data` check box
   System::Call 'user32::CreateWindowEx(i r3, w "${__NSD_CheckBox_CLASS}", w "$(TOOLCHAIN_CLEANUP_CHECKBOX)", i ${__NSD_CheckBox_STYLE}, i r4, i r5, i r6, i r7, p r1, i0, i0, i0) i .s'
   Pop $ToolchainCheckbox
   SendMessage $ToolchainCheckbox ${WM_SETFONT} $8 1
+  ; docker-resource C1: README uninstall contract — Docker resources are
+  ; cleaned BY DEFAULT (opt-out: uncheck or /KEEPDOCKER); toolchain and
+  ; app-data remain opt-in. 2026-08-26 R3 smoke finding: with no BM_SETCHECK
+  ; every checkbox shipped unchecked, contradicting the documented default.
+  ${NSD_Check} $DeleteDockerCheckbox
 FunctionEnd
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ConfirmLeave
 Function un.ConfirmLeave
