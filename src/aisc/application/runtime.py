@@ -986,286 +986,296 @@ def start_runtime(
     _require_docker(executor)
     _require_image(image, executor)
 
-    # 容器随镜像同步更新 (KI-4 挂账): the image ID recorded at create time;
-    # "" when unobservable (transient probe failure) — the conflict check
-    # then simply skips the comparison for this start.
-    image_id_at_start = _resolve_image_id(image, executor) or ""
+    # docker-resource 02 §4.1 (C1b): the default-tag → image-ID
+    # resolution and the container create are a critical section vs.
+    # installer no-cache rebuilds (a retag between resolve and create
+    # would pin a brand-new runtime to a stale image). Lock ORDER is
+    # frozen: maintenance -> workspace -> registry (never reversed;
+    # reconcile follows the same order).
+    from aisc.adapters.maintenance_lock import docker_maintenance_lock_at_root
+    from aisc.application.data_root import shared_root
 
-    # --- workspace lock covers conflict check -> create -> ready -> commit ---
-    # Timeout must exceed ready_timeout so a concurrent project start on the same
-    # workspace waits for the winner (then sees its registry entry -> conflict)
-    # rather than spuriously failing with STATE_LOCK_TIMEOUT.
-    with workspace_lock(reg_root, ws_key, timeout=ready_timeout + 30.0):
-        # Re-validate inside the lock; do not trust client preflight.
-        # conflict_check (PreflightCheck) is advisory only and unused here;
-        # start decides from matching_runtime_id / conflicts / matching_state.
-        _conflict_check, matching_runtime_id, conflicts, matching_state = (
-            _check_runtime_conflict(
-                runtime_id=runtime_id,
-                workspace=canonical_workspace,
-                image=image,
-                network=network,
-                scope=scope,
-                registry_root=reg_root,
-                docker_available=True,
-                executor=executor,
-                proxy_config=resolved_proxy,
+    with docker_maintenance_lock_at_root(shared_root()):
+        # 容器随镜像同步更新 (KI-4 挂账): the image ID recorded at create time;
+        # "" when unobservable (transient probe failure) — the conflict check
+        # then simply skips the comparison for this start.
+        image_id_at_start = _resolve_image_id(image, executor) or ""
+
+        # --- workspace lock covers conflict check -> create -> ready -> commit ---
+        # Timeout must exceed ready_timeout so a concurrent project start on the same
+        # workspace waits for the winner (then sees its registry entry -> conflict)
+        # rather than spuriously failing with STATE_LOCK_TIMEOUT.
+        with workspace_lock(reg_root, ws_key, timeout=ready_timeout + 30.0):
+            # Re-validate inside the lock; do not trust client preflight.
+            # conflict_check (PreflightCheck) is advisory only and unused here;
+            # start decides from matching_runtime_id / conflicts / matching_state.
+            _conflict_check, matching_runtime_id, conflicts, matching_state = (
+                _check_runtime_conflict(
+                    runtime_id=runtime_id,
+                    workspace=canonical_workspace,
+                    image=image,
+                    network=network,
+                    scope=scope,
+                    registry_root=reg_root,
+                    docker_available=True,
+                    executor=executor,
+                    proxy_config=resolved_proxy,
+                )
             )
-        )
 
-        # Idempotent reuse: same runtime_id + same fingerprint already registered.
-        if matching_runtime_id == runtime_id:
-            reg_entries = list_containers_readonly(reg_root)
-            reuse_name = ""
-            reuse_meta: Dict[str, Any] = {}
-            for nm, meta in reg_entries.items():
-                if isinstance(meta, dict) and meta.get("runtime_id") == runtime_id \
-                        and meta.get("config_fingerprint") == fingerprint:
-                    reuse_name = nm
-                    reuse_meta = meta
-                    break
-            # 挂账 heal: legacy records carry no image_id — record the
-            # current image's ID in place so future rebuilds under the same
-            # tag are detected. svc-2 adds the same in-place heal for the
-            # gateway host port (Docker-observed, only when a mapping really
-            # exists). set_default=False: a metadata fix must not steal the
-            # registry default from another container.
-            healed = dict(reuse_meta)
-            changed = False
-            if reuse_name and not str(healed.get("image_id") or "").strip() \
-                    and image_id_at_start:
-                healed["image_id"] = image_id_at_start
-                changed = True
-            if reuse_name and not int(healed.get("web_gateway_host_port") or 0):
-                from aisc.application.web_gateway import read_gateway_mapping
-
-                mapping = read_gateway_mapping(executor, reuse_name)
-                if mapping and mapping.get("active"):
-                    healed["web_gateway_host_port"] = mapping["host_port"]
+            # Idempotent reuse: same runtime_id + same fingerprint already registered.
+            if matching_runtime_id == runtime_id:
+                reg_entries = list_containers_readonly(reg_root)
+                reuse_name = ""
+                reuse_meta: Dict[str, Any] = {}
+                for nm, meta in reg_entries.items():
+                    if isinstance(meta, dict) and meta.get("runtime_id") == runtime_id \
+                            and meta.get("config_fingerprint") == fingerprint:
+                        reuse_name = nm
+                        reuse_meta = meta
+                        break
+                # 挂账 heal: legacy records carry no image_id — record the
+                # current image's ID in place so future rebuilds under the same
+                # tag are detected. svc-2 adds the same in-place heal for the
+                # gateway host port (Docker-observed, only when a mapping really
+                # exists). set_default=False: a metadata fix must not steal the
+                # registry default from another container.
+                healed = dict(reuse_meta)
+                changed = False
+                if reuse_name and not str(healed.get("image_id") or "").strip() \
+                        and image_id_at_start:
+                    healed["image_id"] = image_id_at_start
                     changed = True
-            if reuse_name and changed:
-                register(reg_root, reuse_name, healed, set_default=False)
+                if reuse_name and not int(healed.get("web_gateway_host_port") or 0):
+                    from aisc.application.web_gateway import read_gateway_mapping
+
+                    mapping = read_gateway_mapping(executor, reuse_name)
+                    if mapping and mapping.get("active"):
+                        healed["web_gateway_host_port"] = mapping["host_port"]
+                        changed = True
+                if reuse_name and changed:
+                    register(reg_root, reuse_name, healed, set_default=False)
+                from aisc.applog import append_event
+
+                append_event("container_reused", source="cli",
+                             container=reuse_name, runtime_id=runtime_id,
+                             state=matching_state or "unknown")
+                state = matching_state or "unknown"
+                ready = state == "running"
+                # A stopped matching runtime cannot satisfy `start`'s running
+                # contract; restart it so the caller gets a ready runtime rather
+                # than a reused-but-stopped limbo. `reused` stays True (the
+                # container itself is reused, not freshly created).
+                if state == "stopped":
+                    start_proc = executor.run_captured(["start", reuse_name], timeout=30.0)
+                    if start_proc.exit_code != 0:
+                        raise CliError(
+                            message=f"Failed to restart reused runtime: {(start_proc.stderr or '').strip()}",
+                            exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+                            error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+                            data={"container_name": reuse_name, "reused": True},
+                        )
+                    ctx = _wait_ready(executor, reuse_name, runtime_id, ready_timeout)
+                    if ctx is None:
+                        raise CliError(
+                            message=f"Reused runtime did not become ready within {ready_timeout}s",
+                            exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+                            error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+                            data={"container_name": reuse_name, "reused": True},
+                        )
+                    state = "running"
+                    ready = True
+                return _build_start_payload(
+                    runtime_id, canonical_workspace, image, network, scope,
+                    reuse_name, reuse_meta.get("container_id", ""),
+                    state, ready, reused=True, fingerprint=fingerprint,
+                )
+
+            # Any conflict blocks creation.
+            if conflicts:
+                detail = "; ".join(
+                    f"{c.get('container_name', c.get('runtime_id', '?'))}: {c.get('reason', '')}"
+                    for c in conflicts
+                )
+                raise CliError(
+                    message=f"Runtime conflict prevents start: {detail}",
+                    exit_code=RuntimeExitCode.RUNTIME_CONFLICT,
+                    error_code=RuntimeErrorCode.RUNTIME_CONFLICT,
+                    data={"conflicts": conflicts, "config_fingerprint": fingerprint},
+                )
+
+            # --- create detached idle container ---
+            from aisc.domain.docker_ownership import label_args, runtime_labels
+
+            argv = [
+                "run", "-d",
+                "--name", container_name,
+                *label_args(runtime_labels(runtime_id, owner, ws_key)),
+                "-e", f"CLI_SCOPE={scope}",
+                "-e", "AISC_RUNTIME_MODE=idle",
+                "-e", f"AISC_RUNTIME_ID={runtime_id}",
+                "-e", "TERM=xterm-256color",
+                # runtime-lifecycle-ux 3a: the entrypoint stamps the toolchain
+                # environment baseline with the content-addressed image id.
+                "-e", f"AISC_IMAGE_ID={image_id_at_start}",
+                "-v", f"{canonical_workspace}:/root/app",
+            ]
+            # svc-2 (web gateway): allocate a loopback host port and publish the
+            # container-side gateway. Bind conflicts retry with the next free
+            # port; the host port is runtime metadata only — never part of the
+            # config fingerprint (decisions.md §7).
+            from aisc.application.web_gateway import (
+                allocate_gateway_host_port,
+                docker_publish_argv,
+                is_bind_conflict,
+                registry_host_ports,
+            )
+
+            gw_exclude = registry_host_ports(list_containers_readonly(reg_root))
+            gw_host_port = allocate_gateway_host_port(exclude=gw_exclude)
+            # Stage 7 (DATA-01): project-scope agent config mounts from the
+            # data root; dirs are created host-side so bind mounts are real.
+            # Fail closed: resolver errors propagate — never copy agent state
+            # into the workspace again.
+            toolchain_storage = ""
+            if scope not in ("temporary", "temp", "global"):
+                from aisc.application.data_root import DataRootResolver
+                from aisc.application.toolchain import (
+                    prepare_toolchain,
+                    toolchain_mount_argv,
+                )
+
+                ws_state_dir = DataRootResolver().resolve(
+                    Path(canonical_workspace)
+                ).workspace_dir
+                for sub in ("claude", "codex", "cc-switch", "runtime"):
+                    (ws_state_dir / sub).mkdir(parents=True, exist_ok=True)
+                argv.extend([
+                    "-v", f"{ws_state_dir / 'claude'}:/root/.claude",
+                    "-v", f"{ws_state_dir / 'codex'}:/root/.codex",
+                    "-v", f"{ws_state_dir / 'cc-switch'}:/root/.cc-switch",
+                    "-v", f"{ws_state_dir / 'runtime'}:/root/.local/state/cc-switch",
+                ])
+                # runtime-lifecycle-ux 3a: project scope mounts the persistent
+                # toolchain (host_bind per the Windows spike decision). Failures
+                # to prepare propagate — a broken toolchain dir must not be
+                # silently swallowed into a runtime without it.
+                prepare_toolchain(ws_state_dir, image_id=image_id_at_start)
+                argv.extend(toolchain_mount_argv(ws_state_dir))
+                toolchain_storage = "host_bind"
+            if network == "proxy":
+                argv.extend(["--cap-add=NET_ADMIN", "--device", "/dev/net/tun"])
+                if resolved_proxy:
+                    argv.extend(["-v", f"{resolved_proxy}:/etc/mihomo/config.yaml:ro"])
+            argv.append(image)
+
+            base_argv = argv[:-1]  # everything except the image; publish goes last
+            proc = None
+            for _attempt in range(5):
+                argv = base_argv + docker_publish_argv(gw_host_port) + [image]
+                proc = executor.run_captured(argv, timeout=60.0)
+                if proc.exit_code == 0 and (proc.stdout or "").strip():
+                    break
+                stderr = (proc.stderr or "").strip()
+                if is_bind_conflict(stderr) and _attempt < 4:
+                    gw_exclude.add(gw_host_port)
+                    gw_host_port = allocate_gateway_host_port(
+                        exclude=gw_exclude, start_hint=gw_host_port + 1)
+                    continue
+                raise CliError(
+                    message=f"Failed to create runtime container: {stderr}",
+                    exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+                    error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+                    data={"container_name": container_name, "config_fingerprint": fingerprint},
+                )
+            container_id = proc.stdout.strip()
+
             from aisc.applog import append_event
 
-            append_event("container_reused", source="cli",
-                         container=reuse_name, runtime_id=runtime_id,
-                         state=matching_state or "unknown")
-            state = matching_state or "unknown"
-            ready = state == "running"
-            # A stopped matching runtime cannot satisfy `start`'s running
-            # contract; restart it so the caller gets a ready runtime rather
-            # than a reused-but-stopped limbo. `reused` stays True (the
-            # container itself is reused, not freshly created).
-            if state == "stopped":
-                start_proc = executor.run_captured(["start", reuse_name], timeout=30.0)
-                if start_proc.exit_code != 0:
-                    raise CliError(
-                        message=f"Failed to restart reused runtime: {(start_proc.stderr or '').strip()}",
-                        exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
-                        error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
-                        data={"container_name": reuse_name, "reused": True},
-                    )
-                ctx = _wait_ready(executor, reuse_name, runtime_id, ready_timeout)
-                if ctx is None:
-                    raise CliError(
-                        message=f"Reused runtime did not become ready within {ready_timeout}s",
-                        exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
-                        error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
-                        data={"container_name": reuse_name, "reused": True},
-                    )
-                state = "running"
-                ready = True
+            append_event("container_created", source="cli",
+                         container=container_name, runtime_id=runtime_id, image=image)
+            append_event("web_gateway_allocated", source="cli",
+                         container=container_name, runtime_id=runtime_id,
+                         container_port=45871, host_port=gw_host_port,
+                         protocol="http")
+
+            # --- ready check ---
+            ctx = _wait_ready(executor, container_name, runtime_id, ready_timeout)
+            if ctx is None:
+                # Best-effort cleanup; report partial identity.
+                _safe_remove(executor, container_name)
+                append_event("container_ready_timeout", level="error", source="cli",
+                             container=container_name, runtime_id=runtime_id)
+                raise CliError(
+                    message=f"Runtime container did not become ready within {ready_timeout}s",
+                    exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+                    error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+                    data={
+                        "container_name": container_name,
+                        "container_id": container_id,
+                        "config_fingerprint": fingerprint,
+                    },
+                )
+            append_event("container_ready", source="cli",
+                         container=container_name, runtime_id=runtime_id)
+            append_event("web_gateway_ready", source="cli",
+                         container=container_name, runtime_id=runtime_id,
+                         container_port=45871, host_port=gw_host_port,
+                         protocol="http")
+
+            # --- commit registry entry (registry lock acquired inside register) ---
+            try:
+                register(reg_root, container_name, {
+                    "image": image,
+                    "workspace": canonical_workspace,
+                    "network": network,
+                    "label": "",
+                    "runtime_id": runtime_id,
+                    "owner": owner,
+                    "scope": scope,
+                    "config_fingerprint": fingerprint,
+                    "container_id": container_id,
+                    "workspace_key": ws_key,
+                    "image_id": image_id_at_start,
+                    "web_gateway_host_port": gw_host_port,
+                    # runtime-lifecycle-ux Stage 1 (02 §1): session-ephemeral by
+                    # default; dependency_policy derives from scope (D-RUNTIME-09).
+                    "lifecycle": "ephemeral",
+                    "retention": "remove_on_close",
+                    "dependency_policy": (
+                        "persistent_toolchain" if scope == "project" else "ephemeral_toolchain"
+                    ),
+                    "toolchain_storage": toolchain_storage,
+                })
+            except CliError:
+                # register raises CliError(STATE_LOCK_TIMEOUT) if the registry lock
+                # times out. Cleanup the just-created container but preserve the
+                # original error code (do not remap to RUNTIME_OPERATION_FAILED).
+                _safe_remove(executor, container_name)
+                raise
+            except (ValueError, OSError) as exc:
+                # Registry commit failed: remove the new container, report partial.
+                cleanup_ok = _safe_remove(executor, container_name)
+                raise CliError(
+                    message=(
+                        f"Failed to commit registry: {exc}. "
+                        f"Container cleanup {'succeeded' if cleanup_ok else 'FAILED - orphaned'}."
+                    ),
+                    exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
+                    error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
+                    data={
+                        "container_name": container_name,
+                        "container_id": container_id,
+                        "config_fingerprint": fingerprint,
+                        "cleanup_ok": cleanup_ok,
+                    },
+                ) from exc
+
             return _build_start_payload(
                 runtime_id, canonical_workspace, image, network, scope,
-                reuse_name, reuse_meta.get("container_id", ""),
-                state, ready, reused=True, fingerprint=fingerprint,
+                container_name, container_id,
+                state="running", ready=True, reused=False, fingerprint=fingerprint,
             )
-
-        # Any conflict blocks creation.
-        if conflicts:
-            detail = "; ".join(
-                f"{c.get('container_name', c.get('runtime_id', '?'))}: {c.get('reason', '')}"
-                for c in conflicts
-            )
-            raise CliError(
-                message=f"Runtime conflict prevents start: {detail}",
-                exit_code=RuntimeExitCode.RUNTIME_CONFLICT,
-                error_code=RuntimeErrorCode.RUNTIME_CONFLICT,
-                data={"conflicts": conflicts, "config_fingerprint": fingerprint},
-            )
-
-        # --- create detached idle container ---
-        from aisc.domain.docker_ownership import label_args, runtime_labels
-
-        argv = [
-            "run", "-d",
-            "--name", container_name,
-            *label_args(runtime_labels(runtime_id, owner, ws_key)),
-            "-e", f"CLI_SCOPE={scope}",
-            "-e", "AISC_RUNTIME_MODE=idle",
-            "-e", f"AISC_RUNTIME_ID={runtime_id}",
-            "-e", "TERM=xterm-256color",
-            # runtime-lifecycle-ux 3a: the entrypoint stamps the toolchain
-            # environment baseline with the content-addressed image id.
-            "-e", f"AISC_IMAGE_ID={image_id_at_start}",
-            "-v", f"{canonical_workspace}:/root/app",
-        ]
-        # svc-2 (web gateway): allocate a loopback host port and publish the
-        # container-side gateway. Bind conflicts retry with the next free
-        # port; the host port is runtime metadata only — never part of the
-        # config fingerprint (decisions.md §7).
-        from aisc.application.web_gateway import (
-            allocate_gateway_host_port,
-            docker_publish_argv,
-            is_bind_conflict,
-            registry_host_ports,
-        )
-
-        gw_exclude = registry_host_ports(list_containers_readonly(reg_root))
-        gw_host_port = allocate_gateway_host_port(exclude=gw_exclude)
-        # Stage 7 (DATA-01): project-scope agent config mounts from the
-        # data root; dirs are created host-side so bind mounts are real.
-        # Fail closed: resolver errors propagate — never copy agent state
-        # into the workspace again.
-        toolchain_storage = ""
-        if scope not in ("temporary", "temp", "global"):
-            from aisc.application.data_root import DataRootResolver
-            from aisc.application.toolchain import (
-                prepare_toolchain,
-                toolchain_mount_argv,
-            )
-
-            ws_state_dir = DataRootResolver().resolve(
-                Path(canonical_workspace)
-            ).workspace_dir
-            for sub in ("claude", "codex", "cc-switch", "runtime"):
-                (ws_state_dir / sub).mkdir(parents=True, exist_ok=True)
-            argv.extend([
-                "-v", f"{ws_state_dir / 'claude'}:/root/.claude",
-                "-v", f"{ws_state_dir / 'codex'}:/root/.codex",
-                "-v", f"{ws_state_dir / 'cc-switch'}:/root/.cc-switch",
-                "-v", f"{ws_state_dir / 'runtime'}:/root/.local/state/cc-switch",
-            ])
-            # runtime-lifecycle-ux 3a: project scope mounts the persistent
-            # toolchain (host_bind per the Windows spike decision). Failures
-            # to prepare propagate — a broken toolchain dir must not be
-            # silently swallowed into a runtime without it.
-            prepare_toolchain(ws_state_dir, image_id=image_id_at_start)
-            argv.extend(toolchain_mount_argv(ws_state_dir))
-            toolchain_storage = "host_bind"
-        if network == "proxy":
-            argv.extend(["--cap-add=NET_ADMIN", "--device", "/dev/net/tun"])
-            if resolved_proxy:
-                argv.extend(["-v", f"{resolved_proxy}:/etc/mihomo/config.yaml:ro"])
-        argv.append(image)
-
-        base_argv = argv[:-1]  # everything except the image; publish goes last
-        proc = None
-        for _attempt in range(5):
-            argv = base_argv + docker_publish_argv(gw_host_port) + [image]
-            proc = executor.run_captured(argv, timeout=60.0)
-            if proc.exit_code == 0 and (proc.stdout or "").strip():
-                break
-            stderr = (proc.stderr or "").strip()
-            if is_bind_conflict(stderr) and _attempt < 4:
-                gw_exclude.add(gw_host_port)
-                gw_host_port = allocate_gateway_host_port(
-                    exclude=gw_exclude, start_hint=gw_host_port + 1)
-                continue
-            raise CliError(
-                message=f"Failed to create runtime container: {stderr}",
-                exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
-                error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
-                data={"container_name": container_name, "config_fingerprint": fingerprint},
-            )
-        container_id = proc.stdout.strip()
-
-        from aisc.applog import append_event
-
-        append_event("container_created", source="cli",
-                     container=container_name, runtime_id=runtime_id, image=image)
-        append_event("web_gateway_allocated", source="cli",
-                     container=container_name, runtime_id=runtime_id,
-                     container_port=45871, host_port=gw_host_port,
-                     protocol="http")
-
-        # --- ready check ---
-        ctx = _wait_ready(executor, container_name, runtime_id, ready_timeout)
-        if ctx is None:
-            # Best-effort cleanup; report partial identity.
-            _safe_remove(executor, container_name)
-            append_event("container_ready_timeout", level="error", source="cli",
-                         container=container_name, runtime_id=runtime_id)
-            raise CliError(
-                message=f"Runtime container did not become ready within {ready_timeout}s",
-                exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
-                error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
-                data={
-                    "container_name": container_name,
-                    "container_id": container_id,
-                    "config_fingerprint": fingerprint,
-                },
-            )
-        append_event("container_ready", source="cli",
-                     container=container_name, runtime_id=runtime_id)
-        append_event("web_gateway_ready", source="cli",
-                     container=container_name, runtime_id=runtime_id,
-                     container_port=45871, host_port=gw_host_port,
-                     protocol="http")
-
-        # --- commit registry entry (registry lock acquired inside register) ---
-        try:
-            register(reg_root, container_name, {
-                "image": image,
-                "workspace": canonical_workspace,
-                "network": network,
-                "label": "",
-                "runtime_id": runtime_id,
-                "owner": owner,
-                "scope": scope,
-                "config_fingerprint": fingerprint,
-                "container_id": container_id,
-                "workspace_key": ws_key,
-                "image_id": image_id_at_start,
-                "web_gateway_host_port": gw_host_port,
-                # runtime-lifecycle-ux Stage 1 (02 §1): session-ephemeral by
-                # default; dependency_policy derives from scope (D-RUNTIME-09).
-                "lifecycle": "ephemeral",
-                "retention": "remove_on_close",
-                "dependency_policy": (
-                    "persistent_toolchain" if scope == "project" else "ephemeral_toolchain"
-                ),
-                "toolchain_storage": toolchain_storage,
-            })
-        except CliError:
-            # register raises CliError(STATE_LOCK_TIMEOUT) if the registry lock
-            # times out. Cleanup the just-created container but preserve the
-            # original error code (do not remap to RUNTIME_OPERATION_FAILED).
-            _safe_remove(executor, container_name)
-            raise
-        except (ValueError, OSError) as exc:
-            # Registry commit failed: remove the new container, report partial.
-            cleanup_ok = _safe_remove(executor, container_name)
-            raise CliError(
-                message=(
-                    f"Failed to commit registry: {exc}. "
-                    f"Container cleanup {'succeeded' if cleanup_ok else 'FAILED - orphaned'}."
-                ),
-                exit_code=RuntimeExitCode.RUNTIME_OPERATION_FAILED,
-                error_code=RuntimeErrorCode.RUNTIME_OPERATION_FAILED,
-                data={
-                    "container_name": container_name,
-                    "container_id": container_id,
-                    "config_fingerprint": fingerprint,
-                    "cleanup_ok": cleanup_ok,
-                },
-            ) from exc
-
-        return _build_start_payload(
-            runtime_id, canonical_workspace, image, network, scope,
-            container_name, container_id,
-            state="running", ready=True, reused=False, fingerprint=fingerprint,
-        )
 
 
 def _safe_remove(executor: Any, container_name: str) -> bool:

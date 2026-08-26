@@ -76,3 +76,59 @@ class MaintenanceLockTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StartCriticalSectionTests(unittest.TestCase):
+    """C1b (02 §4.1): start_runtime's tag-resolution/create critical section
+    holds the maintenance lock — a rebuild in flight blocks a racing start
+    (and vice versa); order maintenance -> workspace is never reversed."""
+
+    def test_start_blocks_while_rebuild_holds_the_lock(self):
+        import os
+        import tempfile
+        import threading
+        import time as _time
+        from tests.test_runtime_lifecycle import RuntimeFakeExecutor
+        from aisc.adapters.maintenance_lock import (
+            docker_maintenance_lock_at_root,
+        )
+        from aisc.application.runtime import start_runtime
+
+        with tempfile.TemporaryDirectory() as ws_tmp,                 tempfile.TemporaryDirectory() as root_tmp:
+            os.environ["AISC_DATA_ROOT"] = root_tmp
+            try:
+                ws = str(Path(ws_tmp) / "proj")
+                Path(ws).mkdir(parents=True)
+                ex = RuntimeFakeExecutor()
+                done = threading.Event()
+                result = {}
+
+                def run_start():
+                    try:
+                        start_runtime(
+                            "33333333-3333-4333-8333-333333333333", ws,
+                            "super-claude:latest", "direct", "project",
+                            "workbench", executor=ex, ready_timeout=2.0,
+                        )
+                        result["ok"] = True
+                    except Exception as exc:  # noqa: BLE001
+                        result["error"] = exc
+                    finally:
+                        done.set()
+
+                with docker_maintenance_lock_at_root(Path(root_tmp)):
+                    t = threading.Thread(target=run_start)
+                    t.start()
+                    # While the (simulated) rebuild holds the lock, the start
+                    # must NOT proceed — no container created yet.
+                    _time.sleep(0.6)
+                    self.assertFalse(done.is_set())
+                    self.assertEqual(ex.containers, {})
+
+                # Lock released -> the start completes.
+                self.assertTrue(done.wait(timeout=10))
+                t.join()
+                self.assertIn("ok", result), result
+                self.assertEqual(len(ex.containers), 1)
+            finally:
+                os.environ.pop("AISC_DATA_ROOT", None)

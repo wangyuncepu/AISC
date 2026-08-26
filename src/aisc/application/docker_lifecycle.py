@@ -259,6 +259,34 @@ def docker_scan(
     return payload
 
 
+def render_scan_text(payload: Dict[str, Any]) -> str:
+    """Space-separated one-line-per-resource text for installers and shell
+    scripts (NSIS/Inno/POSIX sh cannot parse JSON cheaply; this format is
+    stable: ``<kind> <ownership> <id> <name>``).
+
+    Example lines::
+
+        docker available
+        container owned cid123 aisc-wb-1
+        image owned sha256:abc super-claude:latest
+    """
+    lines = [
+        "docker available" if payload.get("docker", {}).get("available")
+        else "docker unavailable"
+    ]
+    for kind in ("containers", "images"):
+        buckets = payload.get(kind, {})
+        for ownership in ("owned", "legacy_owned", "unverified"):
+            for entry in buckets.get(ownership, []):
+                lines.append(
+                    f"{kind.rstrip('s')} {ownership} {entry.get('id', '')} "
+                    f"{entry.get('name', '')}"
+                )
+    for entry in payload.get("dangling_owned", []):
+        lines.append(f"image dangling-owned {entry.get('id', '')} {entry.get('id', '')}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Cleanup (02 §3 order; per-resource failure never aborts the rest)
 # ---------------------------------------------------------------------------
@@ -275,6 +303,10 @@ def docker_cleanup(
     old_image_ids: Iterable[str] = (),
     data_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    """Upgrade context cleans CONTAINERS ONLY (01 §3 upgrade ordering):
+    the tagged image must survive until docker-rebuild succeeds, or a
+    failed rebuild would leave the user with no workstation image at all;
+    the old image is then removed by ID via rebuild's old-ID handoff."""
     result: Dict[str, Any] = {
         "schema_version": CLEANUP_SCHEMA,
         "action": "cleanup",
@@ -321,9 +353,14 @@ def docker_cleanup(
                 result["containers"]["failed"].append(name)
 
         # 4-6. re-scan image references, then untag/delete by evidence.
-        scan2 = docker_scan(executor, context=context, old_image_ids=old_image_ids,
-                            data_root=data_root)
+        # Upgrade: images ride the rebuild handoff — skip entirely.
         removed_ids = set()
+        if context == "upgrade":
+            scan2 = {"images": {"owned": [], "legacy_owned": [], "unverified": []},
+                     "dangling_owned": []}
+        else:
+            scan2 = docker_scan(executor, context=context, old_image_ids=old_image_ids,
+                                data_root=data_root)
         for entry in scan2["images"]["owned"] + scan2["images"]["legacy_owned"]:
             ref = entry["image"]
             if entry["id"] in removed_ids:

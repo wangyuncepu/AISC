@@ -1529,6 +1529,10 @@ def _cmd_maintenance(
     if sub == "docker-scan":
         data = docker_scan(executor, context=args.context,
                            old_image_ids=args.old_image_id)
+        if effective_format != "json":
+            from aisc.application.docker_lifecycle import render_scan_text
+            print(render_scan_text(data))
+            return None, 0, []
         return data, 0, []
     if sub == "docker-cleanup":
         try:
@@ -2319,6 +2323,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         elif args.command == "runtime":
             from aisc.cli.commands.runtime import print_runtime_text
             print_runtime_text(getattr(args, "runtime_command", ""), data, errors)
+        # maintenance text output is printed in dispatch (scan lines are
+        # consumed by installers; cleanup/rebuild print nothing extra).
         elif args.command == "session":
             from aisc.cli.commands.session import print_session_text
             print_session_text(getattr(args, "session_command", ""), data, errors)
