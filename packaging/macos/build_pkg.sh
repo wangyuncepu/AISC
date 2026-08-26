@@ -105,12 +105,26 @@ cat > "$LIB_DIR/uninstall.sh" << 'UNINSTALL_EOF'
 #!/usr/bin/env bash
 # AISC macOS uninstaller — removes files installed by the .pkg.
 # Must be run with sudo:  sudo /usr/local/lib/aisc/uninstall.sh
+#                        sudo /usr/local/lib/aisc/uninstall.sh --keep-docker-resources
+#
+# Docker cleanup (docker-resource-lifecycle E): default removes AISC
+# containers + the workstation image via the bundled CLI's centralized
+# lifecycle service, BEFORE the CLI itself is deleted; pass
+# --keep-docker-resources to keep them. Best-effort — an unreachable
+# engine or partial failures never block the file uninstall.
 #
 # Does NOT remove:
 #   - $HOME/.aisc  (user config)
-#   - Docker images / containers
 #   - Workspace directories
 set -euo pipefail
+
+KEEP_DOCKER=false
+for arg in "$@"; do
+    case "$arg" in
+        --keep-docker-resources) KEEP_DOCKER=true ;;
+        *) echo "ERROR: unknown option: $arg" >&2; exit 2 ;;
+    esac
+done
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "ERROR: This script must be run with sudo." >&2
@@ -139,14 +153,40 @@ elif [ -f "$AISC_SYMLINK" ] || [ -e "$AISC_SYMLINK" ]; then
     echo "WARNING: $AISC_SYMLINK exists but is not a symlink created by AISC — NOT removing." >&2
 fi
 
-# 2. Remove /usr/local/lib/aisc and all contents
+# 2. Docker companion cleanup — BEFORE the CLI dir is removed (the
+# sidecar performing the cleanup lives there). Sudo context: the
+# cleanup targets Docker + the invoking user's data root, so drop back
+# to SUDO_UID for the CLI invocation.
+if [ "$KEEP_DOCKER" = false ] && [ -x "$AISC_LIB/aisc" ]; then
+    echo "Cleaning AISC Docker resources (containers + image)..."
+    RUN_AS="${SUDO_UID:-$(id -u)}"
+    set +e
+    if [ "$RUN_AS" = "0" ]; then
+        "$AISC_LIB/aisc" maintenance docker-cleanup --context uninstall --format json
+    else
+        sudo -u "#$RUN_AS" "$AISC_LIB/aisc" maintenance docker-cleanup             --context uninstall --format json
+    fi
+    rc=$?
+    set -e
+    if [ "$rc" -eq 3 ]; then
+        echo "WARNING: Docker unreachable - AISC containers/image kept." >&2
+    elif [ "$rc" -ne 0 ]; then
+        echo "WARNING: partial cleanup failures (exit $rc)." >&2
+    else
+        echo "AISC Docker resources cleaned."
+    fi
+elif [ "$KEEP_DOCKER" = true ]; then
+    echo "Keeping Docker resources (--keep-docker-resources)."
+fi
+
+# 3. Remove /usr/local/lib/aisc and all contents
 if [ -d "$AISC_LIB" ]; then
     rm -rf "$AISC_LIB"
     echo "Removed: $AISC_LIB"
     removed=true
 fi
 
-# 3. Forget the pkg receipt (best-effort)
+# 4. Forget the pkg receipt (best-effort)
 if command -v pkgutil >/dev/null 2>&1; then
     pkgutil --forget "$IDENTIFIER" 2>/dev/null && \
         echo "Forgot package receipt: $IDENTIFIER" || \
@@ -158,8 +198,8 @@ if [ "$removed" = true ]; then
     echo "AISC has been uninstalled."
     echo ""
     echo "The following were NOT removed:"
-    echo "  - \$HOME/.aisc"
-    echo "  - Docker images/containers"
+    echo "  - \$HOME/.aisc (user config / data root)"
+    echo "  - Workspace directories and persistent toolchains"
 else
     echo "AISC installation not found — nothing to uninstall."
 fi

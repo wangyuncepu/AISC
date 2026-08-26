@@ -54,6 +54,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; Onefile executable
 Source: "{#MyExeSource}"; DestDir: "{app}"; DestName: "aisc.exe"; Flags: ignoreversion
 
+; Staged copy for the pre-install upgrade lifecycle (docker-resource C2):
+; dontcopy keeps it in the archive only — ExtractTemporaryFile pulls it at
+; ssInstall, before the old installation is replaced.
+Source: "{#MyExeSource}"; DestDir: "{tmp}"; DestName: "aisc-new.exe"; Flags: ignoreversion dontcopy skipifsourcedoesntexist
+
 ; Entire aisc-bundle directory (recursive)
 Source: "{#MyBundleSource}\*"; DestDir: "{app}\aisc-bundle"; Flags: ignoreversion recursesubdirs createallsubdirs
 
@@ -221,6 +226,126 @@ begin
 end;
 
 // ================================================================
+// Docker resource lifecycle (docker-resource-lifecycle C2)
+// ================================================================
+
+// Extracted from THIS installer at ssInstall — the OLD aisc.exe on disk
+// may predate the maintenance commands, so the NEW helper always runs
+// (02 §C2.1: never assume the old CLI supports cleanup).
+var
+  OldImageId: string;
+  OldImageWasPresent: Boolean;
+
+function RunAisc(const ExePath: string; const Args: string): Integer;
+var
+  ResultCode: Integer;
+begin
+  Result := -1;
+  if not FileExists(ExePath) then Exit;
+  if Exec(ExePath, Args, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Result := ResultCode;
+end;
+
+// Parse the text-mode scan: 'image owned <id> super-claude:latest'.
+function ParseOldImageId(const ScanText: string): string;
+var
+  Lines: TStringList;
+  I, P1, P2: Integer;
+  Line, Rest: string;
+begin
+  Result := '';
+  Lines := TStringList.Create;
+  try
+    Lines.Text := ScanText;
+    for I := 0 to Lines.Count - 1 do
+    begin
+      Line := Trim(Lines[I]);
+      if Pos('image owned ', Line) = 1 then Rest := Copy(Line, 13, MaxInt)
+      else if Pos('image legacy_owned ', Line) = 1 then Rest := Copy(Line, 20, MaxInt)
+      else Continue;
+      // Rest = '<id> super-claude:latest'
+      P1 := Pos(' ', Rest);
+      if P1 = 0 then Continue;
+      P2 := Pos('super-claude:latest', Rest);
+      if (P2 > P1) and (Copy(Rest, P2 - 1, 1) = ' ') then
+      begin
+        Result := Copy(Rest, 1, P1 - 1);
+        Exit;
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure UpgradeDockerLifecycle();
+var
+  Helper, ScanText, ScanCmd: string;
+  ResultCode: Integer;
+begin
+  OldImageId := '';
+  Helper := ExpandConstant('{tmp}\aisc-new.exe');
+  // Capture the old default-image id (text mode; JSON parsing in Inno
+  // script is not worth it — Exec cannot capture stdout, so the scan
+  // redirects through cmd). Failure just leaves the id empty.
+  ScanCmd := '/c ""' + Helper + '" maintenance docker-scan --context upgrade --format text > "' +
+             ExpandConstant('{tmp}') + '\aisc-scan.txt"';
+  if Exec(ExpandConstant('{cmd}'), ScanCmd, '', SW_HIDE, ewWaitUntilTerminated,
+          ResultCode) and (ResultCode = 0) then
+  begin
+    if LoadStringFromFile(ExpandConstant('{tmp}\aisc-scan.txt'), ScanText) then
+      OldImageId := ParseOldImageId(ScanText);
+  end;
+  // Containers-only cleanup (the tagged image survives until rebuild).
+  RunAisc(Helper, 'maintenance docker-cleanup --context upgrade --format json');
+end;
+
+procedure RebuildWorkstationImage();
+var
+  Exe, Args: string;
+  ResultCode: Integer;
+begin
+  Exe := ExpandConstant('{app}\aisc.exe');
+  if not FileExists(Exe) then Exit;
+  Args := 'maintenance docker-rebuild --root "' + ExpandConstant('{app}\aisc-bundle') +
+          '" --tag super-claude:latest';
+  if OldImageId <> '' then
+    Args := Args + ' --old-image-id ' + OldImageId;
+  Log('Rebuilding workstation image (no cache; minutes)...');
+  if not Exec(Exe, Args, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or
+     (ResultCode <> 0) then
+  begin
+    Log('WARNING: image rebuild pending (exit ' + IntToStr(ResultCode) + ').');
+    Log('Manual: aisc maintenance docker-rebuild --root <install-dir>\aisc-bundle');
+  end;
+end;
+
+procedure UninstallDockerCleanup();
+var
+  Exe: string;
+  ResultCode: Integer;
+begin
+  // 02 §C2.2: runs BEFORE {app} is deleted (the sidecar must exist).
+  // Best-effort: a missing helper or unreachable engine never blocks
+  // the file uninstall.
+  Exe := ExpandConstant('{app}\aisc.exe');
+  if not FileExists(Exe) then
+  begin
+    Log('aisc.exe not found - skipping Docker cleanup');
+    Exit;
+  end;
+  if not Exec(Exe, 'maintenance docker-cleanup --context uninstall --format json',
+              '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Log('WARNING: Docker cleanup exec failed')
+  else if ResultCode = 3 then
+    Log('Docker unreachable - AISC containers/image kept')
+  else if ResultCode <> 0 then
+    Log('WARNING: partial Docker cleanup failures (exit ' + IntToStr(ResultCode) + ')')
+  else
+    Log('AISC Docker resources cleaned');
+end;
+
+// ================================================================
 // Install / uninstall event handlers
 // ================================================================
 
@@ -228,6 +353,12 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
+    // Stage the NEW helper from this installer, then run the upgrade
+    // lifecycle BEFORE the old installation is replaced (02 §C2.1).
+    OldImageWasPresent := FileExists(ExpandConstant('{app}\aisc.exe'));
+    ExtractTemporaryFile('aisc-new.exe');
+    UpgradeDockerLifecycle();
+
     if FileExists(ExpandConstant('{app}\aisc.exe')) then
       DeleteFile(ExpandConstant('{app}\aisc.exe'));
     if DirExists(ExpandConstant('{app}\aisc-bundle')) then
@@ -237,11 +368,20 @@ begin
   if CurStep = ssPostInstall then
   begin
     AddToPath(ExpandConstant('{app}'));
+    // Rebuild only when an older install existed (fresh installs never
+    // build - 01 §2.2.7).
+    if OldImageWasPresent then
+      RebuildWorkstationImage();
   end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
+  if CurUninstallStep = usUninstall then
+  begin
+    // Before {app} deletion (usPostUninstall would be too late).
+    UninstallDockerCleanup();
+  end;
   if CurUninstallStep = usPostUninstall then
   begin
     RemoveFromPath(ExpandConstant('{app}'));

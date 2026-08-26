@@ -104,6 +104,35 @@ class NsisStaticTests(unittest.TestCase):
             )
 
 
+class InnoStaticTests(unittest.TestCase):
+    """C2: the secondary Inno installer rides the same service."""
+
+    def setUp(self):
+        if not INNO.exists():
+            self.skipTest("installer.iss not present")
+        self.text = INNO.read_text(encoding="utf-8")
+
+    def test_routes_through_the_maintenance_service(self):
+        self.assertIn("maintenance docker-scan", self.text)
+        self.assertIn("maintenance docker-cleanup", self.text)
+        self.assertIn("maintenance docker-rebuild", self.text)
+
+    def test_staged_helper_not_the_old_exe(self):
+        """02 §C2.1: the NEW helper is extracted from THIS installer —
+        the old aisc.exe may predate the maintenance commands."""
+        self.assertIn("ExtractTemporaryFile('aisc-new.exe')", self.text)
+        self.assertIn("dontcopy", self.text)
+
+    def test_uninstall_cleanup_before_file_removal(self):
+        """usUninstall fires before file deletion (usPostUninstall is too
+        late) — the CALL inside the handler must sit between them."""
+        handler = self.text.index("CurUninstallStepChanged")
+        us = self.text.index("= usUninstall then", handler)
+        cleanup = self.text.index("UninstallDockerCleanup", handler)
+        post = self.text.index("= usPostUninstall then", handler)
+        self.assertTrue(us < cleanup < post)
+
+
 class PortableScriptStaticTests(unittest.TestCase):
     """D: portable install/uninstall scripts never reimplement filters."""
 
