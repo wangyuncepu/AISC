@@ -815,6 +815,7 @@ Var PathRaw
 Var PathNorm
 Var PathHit
 Var PathVer
+Var PathOk
 
 ; $0 in/out: normalize a directory entry - trim spaces, strip one matching
 ; quote pair, remove trailing backslashes, lowercase (Windows compare).
@@ -878,6 +879,11 @@ FunctionEnd
 
 ; Read HKCU\Environment\Path into $PathRaw and its value type into $PathType
 ; (2 = REG_EXPAND_SZ, else REG_SZ); missing value -> $PathRaw = "", type SZ.
+; 2026-08-26 R4 smoke: registry HANDLE parameters must ride pointer-sized
+; (p) System::Call slots. `i` truncates the 64-bit HKEY on x64 NSIS, the
+; RegQueryValueExW call then always failed, and every caller rewrote the
+; resulting empty string - wiping the user's entire PATH (as empty REG_SZ).
+; $PathOk=1 only when the query succeeded; callers MUST NOT write on 0.
 Function ${UN}PathRead
   Push $1
   Push $2
@@ -885,14 +891,17 @@ Function ${UN}PathRead
   Push $4
   Push $5
   StrCpy $PathType 1
-  System::Call 'advapi32::RegOpenKeyExW(i 0x80000001, w "Environment", i 0, i 0x20019, *i .r1) i .r2'
+  StrCpy $PathOk 0
+  StrCpy $PathRaw ""
+  System::Call 'advapi32::RegOpenKeyExW(p 0x80000001, w "Environment", i 0, i 0x20019, *p .r1) i .r2'
   ${If} $2 = 0
-    System::Call 'advapi32::RegQueryValueExW(i r1, w "Path", i 0, *i .r3, i 0, i 0) i .r5'
+    System::Call 'advapi32::RegQueryValueExW(p r1, w "Path", i 0, *i .r3, p 0, p 0) i .r5'
     ${If} $5 = 0
       StrCpy $PathType $3
+      StrCpy $PathOk 1
       ReadRegStr $PathRaw HKCU "Environment" "Path"
     ${EndIf}
-    System::Call 'advapi32::RegCloseKey(i r1)'
+    System::Call 'advapi32::RegCloseKey(p r1)'
   ${EndIf}
   ${If} $PathRaw == ""
     StrCpy $PathType 1
@@ -918,6 +927,11 @@ FunctionEnd
 ; normalized directory). Rewrites the value and broadcasts.
 Function ${UN}RemovePathEntryExact
   Call ${UN}PathRead
+  ; Never rewrite after a failed read: an empty $PathRaw here would WIPE
+  ; the whole user PATH (2026-08-26 R4 smoke - see PathRead).
+  ${If} $PathOk <> 1
+    Return
+  ${EndIf}
   StrCpy $2 $PathRaw
   StrCpy $3 ""
   ${Do}
@@ -972,6 +986,12 @@ Function ${UN}AddInstDirToPath
   ${EndIf}
 
   Call ${UN}PathRead
+  ; Failed read: leave the PATH strictly untouched (see PathRead) - writing
+  ; would replace the whole value with just $INSTDIR.
+  ${If} $PathOk <> 1
+    DetailPrint "PATH read failed; $INSTDIR not added (value left untouched)"
+    Return
+  ${EndIf}
   StrCpy $0 $INSTDIR
   Call ${UN}PathNormalizeDir
   StrCpy $PathNorm $0
