@@ -47,6 +47,11 @@ const mockIpc = vi.hoisted(() => ({
   ackSessionExit: vi.fn().mockResolvedValue("acknowledged"),
   stopRuntime: vi.fn().mockResolvedValue({ state: "stopped" }),
   runtimeInspect: vi.fn().mockResolvedValue({ state: "stopped" }),
+  // runtime-lifecycle-ux Stage 3: the background close teardown
+  // (stop -> verify -> remove -> lease release) needs these on the mock,
+  // otherwise the path silently degrades and logs on every close test.
+  removeRuntime: vi.fn().mockResolvedValue({ state: "not_found" }),
+  leaseRelease: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("../../../lib/ipc", () => mockIpc);

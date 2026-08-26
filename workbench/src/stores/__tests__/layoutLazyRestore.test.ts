@@ -74,7 +74,7 @@ function layoutRecord(tabs: TabRecord[], activeTabId: string | null) {
     revision: 1,
     workspaces: [
       {
-        path: "C:\\ws",
+        path: "/ws",
         last_used: "2026-08-25T00:00:00Z",
         runtime: null,
         last_agent: "bash",
@@ -87,14 +87,14 @@ function layoutRecord(tabs: TabRecord[], activeTabId: string | null) {
 function lastRec() {
   const calls = mockIpc.saveHistory.mock.calls as [number, HistoryPatch][];
   const patch = calls[calls.length - 1]?.[1];
-  return patch?.workspaces?.find((w) => w.path?.includes("ws") || w.path?.includes("C:\ws"));
+  return patch?.workspaces?.find((w) => w.path?.includes("ws"));
 }
 
 function bashRecord(id: string, pos: number): TabRecord {
   return { tab_id: id, agent: "bash", title: "Bash", position: pos };
 }
 
-async function launch(wsPath = "C:/ws"): Promise<void> {
+async function launch(wsPath = "/ws"): Promise<void> {
   const ws = useWorkspacesStore();
   await ws.loadHistory(); // normally runs with negotiate; tests skip negotiate
   ws.launcher.workspace.value = wsPath;
@@ -154,7 +154,7 @@ describe("lazy layout restore (Stage 5)", () => {
     const dormant = rt.tabs.find((t) => t.tabId !== rt.activeTabId)!;
     expect(dormant.sessionState).toBe("dormant");
 
-    const inst = ws.runtimes.find((r) => r.workspace.value === "C:/ws")!;
+    const inst = ws.runtimes.find((r) => r.workspace.value === "/ws")!;
     inst.activateTab(dormant.tabId);
     await Promise.resolve();
     expect(mockIpc.openSession).toHaveBeenCalledTimes(2); // active + woken
@@ -176,7 +176,7 @@ describe("lazy layout restore (Stage 5)", () => {
     const ws = useWorkspacesStore();
     const rt = useRuntimeStore();
     const dormant = rt.tabs.find((t) => t.tabId !== rt.activeTabId)!;
-    const inst = ws.runtimes.find((r) => r.workspace.value === "C:/ws")!;
+    const inst = ws.runtimes.find((r) => r.workspace.value === "/ws")!;
     mockIpc.closeSession.mockClear();
     inst.removeTab(dormant.tabId);
     expect(mockIpc.closeSession).not.toHaveBeenCalled(); // history-only change
