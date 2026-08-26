@@ -87,7 +87,9 @@ class NsisStaticTests(unittest.TestCase):
         self.assertGreater(rebuild, post_hook)
 
     def test_sidecar_referenced_by_pattern_not_hardcoded_name(self):
-        self.assertIn('FindFirst $0 $1 "$INSTDIR\\aisc-*.exe"', self.text)
+        # aisc*.exe matches the observed plain aisc.exe install name AND
+        # any arch-suffixed variant (2026-08-26 smoke finding).
+        self.assertIn('FindFirst $0 $1 "$INSTDIR\\aisc*.exe"', self.text)
         self.assertNotIn("aisc-x86_64-pc-windows-msvc", self.text)
 
     def test_no_docker_format_flag_in_nsis(self):

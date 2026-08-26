@@ -1492,7 +1492,7 @@ SectionEnd
 Function FindAiscCli
   StrCpy $AiscCliExe ""
   ClearErrors
-  FindFirst $0 $1 "$INSTDIR\aisc-*.exe"
+  FindFirst $0 $1 "$INSTDIR\aisc*.exe"
   ${DoUntil} ${Errors}
     ${If} $1 != ""
     ${AndIf} $AiscCliExe == ""
@@ -1819,7 +1819,7 @@ SectionEnd
 Function un.FindAiscCli
   StrCpy $AiscCliExe ""
   ClearErrors
-  FindFirst $0 $1 "$INSTDIR\aisc-*.exe"
+  FindFirst $0 $1 "$INSTDIR\aisc*.exe"
   ${DoUntil} ${Errors}
     ${If} $1 != ""
     ${AndIf} $AiscCliExe == ""
