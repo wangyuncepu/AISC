@@ -124,11 +124,13 @@ class PortableScriptStaticTests(unittest.TestCase):
         self.assertNotIn("docker rmi -f", text)
 
     def test_keep_docker_flag_exists(self):
+        """PowerShell switch is unhyphenated, POSIX uses hyphens — either
+        spelling satisfies the keep option contract (01 §6)."""
         for path in (UNINSTALL_PS1, UNINSTALL_SH):
             if not path.exists():
                 continue
-            text = path.read_text(encoding="utf-8").lower()
-            self.assertIn("-keepdockerresources", text,
+            text = path.read_text(encoding="utf-8").lower().replace("-", "")
+            self.assertIn("keepdockerresources", text,
                           f"{path.name} must honor the keep option")
 
 
