@@ -1,3 +1,5 @@
+> 2026-08-26 真实 Docker 手测：maintenance 三命令（scan 分类两态、cleanup 保非 AISC 资源、rebuild 交接）随联合轮 PASS（见 ../runtime-lifecycle-ux/manual-test-joint.md E 组）；安装器接入（C/D/E）待后续阶段。
+
 # 验收标准
 
 ## 1. 核心单元测试
