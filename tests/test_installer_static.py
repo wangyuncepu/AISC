@@ -86,6 +86,12 @@ class NsisStaticTests(unittest.TestCase):
         post_hook = self.text.index("NSIS_HOOK_POSTINSTALL")
         self.assertGreater(rebuild, post_hook)
 
+    def test_manual_reinstall_counts_as_upgrade(self):
+        """2026-08-26 smoke finding: the maintenance page's reinstall path
+        never sets /UPDATE — the lifecycle must also fire when a previous
+        install existed (fresh installs still skip)."""
+        self.assertIn("$HadPreviousInstall", self.text)
+
     def test_sidecar_referenced_by_pattern_not_hardcoded_name(self):
         # aisc*.exe matches the observed plain aisc.exe install name AND
         # any arch-suffixed variant (2026-08-26 smoke finding).

@@ -523,6 +523,7 @@ Var ToolchainCheckbox       ; third uninstall option: persistent toolchains
 Var ToolchainCheckboxState
 Var OldImageId              ; captured pre-overwrite; rebuild handoff
 Var RebuildPending          ; upgrade rebuild failed/unavailable -> note
+Var HadPreviousInstall      ; manual reinstall-over counts as an upgrade too
 !define /ifndef WS_EX_LAYOUTRTL         0x00400000
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW un.ConfirmShow
 Function un.ConfirmShow ; Add add a `Delete app data` check box
@@ -1505,10 +1506,12 @@ FunctionEnd
 
 Function CaptureOldImageId
   StrCpy $OldImageId ""
+  StrCpy $HadPreviousInstall 0
   Call FindAiscCli
   ${If} $AiscCliExe == ""
     Return
   ${EndIf}
+  StrCpy $HadPreviousInstall 1
   ; Text-mode scan: stable "kind ownership id name" lines (JSON is not
   ; parseable in NSIS). Any failure leaves the id empty.
   nsExec::ExecToStack /TIMEOUT=60000 '"$AiscCliExe" maintenance docker-scan --context upgrade --format text'
@@ -1578,7 +1581,11 @@ FunctionEnd
 
 Function UpgradeDockerLifecycle
   StrCpy $RebuildPending 0
+  ; Upgrade = /UPDATE (Tauri self-update) OR a manual reinstall over an
+  ; existing install (2026-08-26 smoke finding: the maintenance page's
+  ; reinstall path never sets UpdateMode). Fresh installs skip entirely.
   ${If} $UpdateMode <> 1
+  ${AndIf} $HadPreviousInstall <> 1
     Return
   ${EndIf}
   Call FindAiscCli
