@@ -1,16 +1,24 @@
 # AISC portable uninstall — removes the installed aisc.exe and bundle
 #
 # Usage:
-#   .\uninstall.ps1
+#   .\uninstall.ps1                     # also cleans AISC Docker resources
+#   .\uninstall.ps1 -KeepDockerResources  # keep containers + image
 #
 # Removes:
+#   - AISC Docker containers and the workstation image (via the bundled
+#     CLI's centralized lifecycle service; default, needs Docker running)
 #   - The install directory (%LOCALAPPDATA%\AISC)
 #   - The install directory from the user PATH
 #
 # Does NOT remove:
-#   - User configuration (e.g. %USERPROFILE%\.aisc)
-#   - Docker images or containers
+#   - User configuration (e.g. %USERPROFILE%\.aisc, data root)
 #   - Workspace directories
+#   - Persistent project toolchains (host_bind dirs under the data root)
+
+[CmdletBinding()]
+param(
+    [switch]$KeepDockerResources
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -93,6 +101,34 @@ public static extern IntPtr SendMessageTimeout(
 }
 
 # ---------------------------------------------------------------------------
+# 1.5 Docker companion cleanup (docker-resource-lifecycle D)
+#
+# Default ON per 01 §4/§6 (pass -KeepDockerResources to keep). Runs the
+# bundled CLI's centralized lifecycle service BEFORE the install dir is
+# removed — the exe performing the cleanup must still exist. Best-effort:
+# an unreachable engine or partial failures never block the uninstall.
+# ---------------------------------------------------------------------------
+
+if (-not $KeepDockerResources) {
+    $aiscExe = Join-Path $InstallDir $ExeName
+    if (Test-Path $aiscExe) {
+        Write-Info "Cleaning AISC Docker resources (containers + image)..."
+        & $aiscExe maintenance docker-cleanup --context uninstall --format json
+        if ($LASTEXITCODE -eq 3) {
+            Write-Warn "Docker unreachable — AISC containers/image kept."
+        } elseif ($LASTEXITCODE -ne 0) {
+            Write-Warn "Partial cleanup failures (exit $LASTEXITCODE) — see output above."
+        } else {
+            Write-Info "AISC Docker resources cleaned."
+        }
+    } else {
+        Write-Info "aisc.exe not found — skipping Docker cleanup."
+    }
+} else {
+    Write-Info "Keeping Docker resources (-KeepDockerResources)."
+}
+
+# ---------------------------------------------------------------------------
 # 2. Remove install directory
 # ---------------------------------------------------------------------------
 
@@ -117,9 +153,8 @@ if ($removedAny) {
     Write-Info "AISC has been uninstalled."
     Write-Info ""
     Write-Info "The following were NOT removed (preserve these manually if desired):"
-    Write-Info "  - User configuration: %USERPROFILE%\.aisc"
-    Write-Info "  - Docker images and containers (use 'docker' commands)"
-    Write-Info "  - Workspace directories"
+    Write-Info "  - User configuration: %USERPROFILE%\.aisc and the data root"
+    Write-Info "  - Workspace directories and persistent toolchains"
     Write-Info ""
     Write-Info "Restart your terminal for PATH changes to take effect."
 } else {

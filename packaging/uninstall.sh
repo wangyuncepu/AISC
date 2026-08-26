@@ -2,16 +2,18 @@
 # AISC portable uninstall — removes the installed aisc binary and bundle
 #
 # Usage:
-#   ./uninstall.sh
+#   ./uninstall.sh                        # also cleans AISC Docker resources
+#   ./uninstall.sh --keep-docker-resources # keep containers + image
 #
 # Removes:
+#   - AISC Docker containers and the workstation image (via the bundled
+#     CLI's centralized lifecycle service; default, needs Docker running)
 #   - The install directory (aisc + aisc-bundle/ from install.sh)
 #   - The symlink from $XDG_BIN_HOME
 #
 # Does NOT remove:
 #   - User configuration (e.g. ~/.aisc, container volumes)
-#   - Docker images or containers
-#   - Workspace directories
+#   - Workspace directories or persistent toolchains
 
 set -euo pipefail
 
@@ -50,6 +52,14 @@ INSTALL_DIR="$(get_install_dir)"
 BIN_DIR="$(get_bin_dir)"
 BIN_LINK="${BIN_DIR}/${EXE_NAME}"
 
+KEEP_DOCKER=false
+for arg in "$@"; do
+    case "$arg" in
+        --keep-docker-resources) KEEP_DOCKER=true ;;
+        *) die "Unknown option: $arg (expected --keep-docker-resources)" ;;
+    esac
+done
+
 # ---------------------------------------------------------------------------
 # Uninstall
 # ---------------------------------------------------------------------------
@@ -79,6 +89,26 @@ else
     info "Symlink not found: ${BIN_LINK}"
 fi
 
+# 1.5 Docker companion cleanup (docker-resource-lifecycle D): default ON,
+# --keep-docker-resources opts out. Runs the bundled CLI BEFORE the
+# install dir is removed; best-effort, never blocks the uninstall.
+if [ "$KEEP_DOCKER" = false ] && [ -x "${INSTALL_DIR}/${EXE_NAME}" ]; then
+    info "Cleaning AISC Docker resources (containers + image)..."
+    set +e
+    "${INSTALL_DIR}/${EXE_NAME}" maintenance docker-cleanup         --context uninstall --format json
+    rc=$?
+    set -e
+    if [ "$rc" -eq 3 ]; then
+        warn "Docker unreachable - AISC containers/image kept."
+    elif [ "$rc" -ne 0 ]; then
+        warn "Partial cleanup failures (exit $rc) - see output above."
+    else
+        info "AISC Docker resources cleaned."
+    fi
+elif [ "$KEEP_DOCKER" = true ]; then
+    info "Keeping Docker resources (--keep-docker-resources)."
+fi
+
 # 2. Remove install directory
 if [ -d "$INSTALL_DIR" ]; then
     info "Removing install directory: ${INSTALL_DIR}"
@@ -106,9 +136,8 @@ if [ "$removed_any" = true ]; then
     info "AISC has been uninstalled."
     info ""
     info "The following were NOT removed (preserve these manually if desired):"
-    info "  - User configuration: ~/.aisc"
-    info "  - Docker images and containers (use 'docker' commands)"
-    info "  - Workspace directories"
+    info "  - User configuration: ~/.aisc and the data root"
+    info "  - Workspace directories and persistent toolchains"
     info ""
     info "If you also used the Scheme A (uv) installation, run:"
     info "  uv tool uninstall aisc"

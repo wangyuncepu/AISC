@@ -202,6 +202,30 @@ function Install-AISC {
         if (-not (Test-Path $stagedExe)) { throw "Staged executable not found" }
         Verify-Bundle (Join-Path $stagingDir $BundleDir)
 
+        # docker-resource-lifecycle D: upgrade lifecycle. The STAGED (new)
+        # sidecar runs BEFORE the old installation is replaced — the old
+        # aisc.exe may predate the maintenance commands. Capture the old
+        # default-image id, then stop AISC containers (upgrade context
+        # keeps the tagged image until the rebuild succeeds).
+        $script:WasUpgrade = Test-Path (Join-Path $InstallDir $ExeName)
+        $script:OldImageId = ""
+        if ($script:WasUpgrade) {
+            Write-Info "Previous installation detected — running upgrade lifecycle..."
+            $scanText = & $stagedExe maintenance docker-scan --context upgrade --format text
+            if ($LASTEXITCODE -eq 0) {
+                foreach ($line in $scanText) {
+                    if ($line -match '^image (?:owned|legacy_owned) (\S+) super-claude:latest$') {
+                        $script:OldImageId = $Matches[1]
+                        break
+                    }
+                }
+            }
+            & $stagedExe maintenance docker-cleanup --context upgrade --format json
+            if ($LASTEXITCODE -eq 3) {
+                Write-Warn "Docker unreachable — AISC containers left as-is."
+            }
+        }
+
         # Remove previous installation
         if (Test-Path $InstallDir) {
             Write-Info "Removing previous installation at $InstallDir ..."
@@ -212,6 +236,24 @@ function Install-AISC {
         Move-Item $stagingDir $InstallDir -Force
         $stagingDir = $null  # prevent cleanup in finally
         Write-Info "Installed to: $InstallDir"
+
+        # docker-resource-lifecycle D: no-cache rebuild with the old-ID
+        # handoff (fresh installs never build). Best-effort: a failure
+        # leaves the image pending, printed with the manual command.
+        if ($script:WasUpgrade) {
+            Write-Info "Rebuilding workstation image (no cache; this can take minutes)..."
+            $finalExe = Join-Path $InstallDir $ExeName
+            & $finalExe maintenance docker-rebuild `
+                --root (Join-Path $InstallDir $BundleDir) `
+                --tag super-claude:latest --old-image-id $script:OldImageId `
+                --format json | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "Image rebuild did not complete (exit $LASTEXITCODE)."
+                Write-Warn "Manual: aisc maintenance docker-rebuild --root <install-dir>\aisc-bundle --tag super-claude:latest"
+            } else {
+                Write-Info "Workstation image rebuilt."
+            }
+        }
 
     } finally {
         if ($stagingDir -and (Test-Path $stagingDir)) {

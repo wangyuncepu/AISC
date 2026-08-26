@@ -516,6 +516,13 @@ Var DeleteDockerCheckbox
 Var DeleteDockerCheckboxState
 Var DockerExe
 Var DockerCleanupSkipped
+; docker-resource-lifecycle C1: installer-side lifecycle plumbing.
+Var KeepDockerMode          ; /KEEPDOCKER skips Docker cleanup even if checked
+Var AiscCliExe              ; bundled sidecar (found by pattern, never hardcoded)
+Var ToolchainCheckbox       ; third uninstall option: persistent toolchains
+Var ToolchainCheckboxState
+Var OldImageId              ; captured pre-overwrite; rebuild handoff
+Var RebuildPending          ; upgrade rebuild failed/unavailable -> note
 !define /ifndef WS_EX_LAYOUTRTL         0x00400000
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW un.ConfirmShow
 Function un.ConfirmShow ; Add add a `Delete app data` check box
@@ -557,11 +564,20 @@ Function un.ConfirmShow ; Add add a `Delete app data` check box
   System::Call 'user32::CreateWindowEx(i r3, w "${__NSD_CheckBox_CLASS}", w "$(DOCKER_CLEANUP_CHECKBOX)", i ${__NSD_CheckBox_STYLE}, i r4, i r5, i r6, i r7, p r1, i0, i0, i0) i .s'
   Pop $DeleteDockerCheckbox
   SendMessage $DeleteDockerCheckbox ${WM_SETFONT} $8 1
+  ; docker-resource C1: third checkbox — persistent project toolchains
+  ; (02 §3.1: independent of the container/image cleanup AND of app data;
+  ; default unchecked).
+  IntOp $5 150 * $2
+  IntOp $5 $5 / 96
+  System::Call 'user32::CreateWindowEx(i r3, w "${__NSD_CheckBox_CLASS}", w "$(TOOLCHAIN_CLEANUP_CHECKBOX)", i ${__NSD_CheckBox_STYLE}, i r4, i r5, i r6, i r7, p r1, i0, i0, i0) i .s'
+  Pop $ToolchainCheckbox
+  SendMessage $ToolchainCheckbox ${WM_SETFONT} $8 1
 FunctionEnd
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ConfirmLeave
 Function un.ConfirmLeave
   SendMessage $DeleteAppDataCheckbox ${BM_GETCHECK} 0 0 $DeleteAppDataCheckboxState
   SendMessage $DeleteDockerCheckbox ${BM_GETCHECK} 0 0 $DeleteDockerCheckboxState
+  SendMessage $ToolchainCheckbox ${BM_GETCHECK} 0 0 $ToolchainCheckboxState
 FunctionEnd
 !define MUI_PAGE_CUSTOMFUNCTION_PRE un.SkipIfPassive
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -591,14 +607,22 @@ LangString DOCKER_MISSING_LAUNCH ${LANG_SIMPCHINESE} "AISC Workbench 需要 Dock
 ; docker CLI calls never use --format.
 LangString DOCKER_CLEANUP_CHECKBOX ${LANG_ENGLISH} "Also delete AISC Docker containers and image (about 2 GB+, needs Docker running)"
 LangString DOCKER_CLEANUP_CHECKBOX ${LANG_SIMPCHINESE} "同时删除 AISC 的 Docker 容器与镜像（约 2GB+，需 Docker 正在运行）"
+LangString TOOLCHAIN_CLEANUP_CHECKBOX ${LANG_ENGLISH} "Also delete persistent project toolchains (user-level npm/pip/cargo tools installed by agents)"
+LangString TOOLCHAIN_CLEANUP_CHECKBOX ${LANG_SIMPCHINESE} "同时删除各工作区的持久工具链（Agent 安装的 npm/pip/cargo 用户级工具）"
 LangString DOCKER_CLEAN_START ${LANG_ENGLISH} "Cleaning AISC Docker resources..."
 LangString DOCKER_CLEAN_START ${LANG_SIMPCHINESE} "正在清理 AISC 的 Docker 资源…"
 LangString DOCKER_CLEAN_UNREACHABLE ${LANG_ENGLISH} "Docker engine not reachable"
 LangString DOCKER_CLEAN_UNREACHABLE ${LANG_SIMPCHINESE} "Docker 引擎不可达"
 LangString DOCKER_CLEAN_DONE ${LANG_ENGLISH} "AISC Docker resources cleaned."
 LangString DOCKER_CLEAN_DONE ${LANG_SIMPCHINESE} "AISC Docker 资源已清理。"
-LangString DOCKER_CLEANUP_SKIPPED ${LANG_ENGLISH} "Docker was not reachable, so the AISC containers and image were kept. To clean them up manually: run 'docker ps -a --filter name=aisc-wb-' and 'docker rm -f <id>' for each container, then 'docker rmi -f super-claude:latest' (optionally 'docker image prune' for build leftovers)."
-LangString DOCKER_CLEANUP_SKIPPED ${LANG_SIMPCHINESE} "Docker 引擎不可达，AISC 容器与镜像已保留。可手动清理：执行 docker ps -a --filter name=aisc-wb- 查看容器，逐个执行 docker rm -f <容器ID>，再执行 docker rmi -f super-claude:latest（构建残留可再执行 docker image prune）。"
+LangString DOCKER_CLEANUP_SKIPPED ${LANG_ENGLISH} "Docker was not reachable, so the AISC containers and image were kept. To clean them up later: reinstall AISC and uninstall with the cleanup box checked, or run 'docker ps -a --filter label=io.aisc.managed=true' and 'docker rm -f <id>' for each container, then 'docker rmi -f super-claude:latest'."
+LangString DOCKER_CLEANUP_SKIPPED ${LANG_SIMPCHINESE} "Docker 引擎不可达，AISC 容器与镜像已保留。稍后清理：重新安装 AISC 并勾选清理后卸载，或执行 docker ps -a --filter label=io.aisc.managed=true 查看容器，逐个执行 docker rm -f <容器ID>，再执行 docker rmi -f super-claude:latest。"
+LangString UPGRADE_CLEAN_START ${LANG_ENGLISH} "Stopping AISC containers before update..."
+LangString UPGRADE_CLEAN_START ${LANG_SIMPCHINESE} "更新前停止 AISC 容器…"
+LangString UPGRADE_REBUILD_START ${LANG_ENGLISH} "Rebuilding the workstation image without cache (this can take several minutes)..."
+LangString UPGRADE_REBUILD_START ${LANG_SIMPCHINESE} "正在无缓存重建工作站镜像（可能需要几分钟）…"
+LangString REBUILD_PENDING ${LANG_ENGLISH} "The workstation image was not rebuilt (Docker unavailable or build failed). The Workbench will offer to build it on next start, or run the installer's bundled CLI: aisc maintenance docker-rebuild --root <install-dir>\aisc-bundle --tag super-claude:latest"
+LangString REBUILD_PENDING ${LANG_SIMPCHINESE} "工作站镜像未重建（Docker 不可用或构建失败）。Workbench 下次启动时会提示构建，或手动执行安装目录内 CLI：aisc maintenance docker-rebuild --root <安装目录>\aisc-bundle --tag super-claude:latest"
 
 Function .onInit
   ${GetOptions} $CMDLINE "/P" $PassiveMode
@@ -1318,6 +1342,13 @@ Section Install
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
+  ; docker-resource C1: capture the current default-image ID BEFORE any
+  ; File overwrites the previous sidecar — the post-install rebuild hands
+  ; it off (01 §3 upgrade ordering). No-op on a fresh install (no
+  ; aisc-*.exe on disk yet) and when the old CLI predates the
+  ; maintenance commands (scan fails -> empty id -> rebuild skips handoff).
+  Call CaptureOldImageId
+
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
 
@@ -1422,6 +1453,12 @@ Section Install
     !insertmacro NSIS_HOOK_POSTINSTALL
   !endif
 
+  ; docker-resource C1: upgrade lifecycle — stop AISC containers (the
+  ; tagged image survives until the rebuild succeeds), then no-cache
+  ; rebuild with the captured old-ID handoff. Fresh installs never build
+  ; (01 §2.2.7); best-effort — failures only set the pending note.
+  Call UpgradeDockerLifecycle
+
   ; Auto close this page for passive mode
   ${If} $PassiveMode = 1
     SetAutoClose true
@@ -1450,7 +1487,134 @@ Section Docker
 docker_done:
 SectionEnd
 
+; docker-resource C1: locate the bundled sidecar by pattern (the rendered
+; externalBin name carries an arch suffix — never hardcode it).
+Function FindAiscCli
+  StrCpy $AiscCliExe ""
+  ClearErrors
+  FindFirst $0 $1 "$INSTDIR\aisc-*.exe"
+  ${DoUntil} ${Errors}
+    ${If} $1 != ""
+    ${AndIf} $AiscCliExe == ""
+      StrCpy $AiscCliExe "$INSTDIR\$1"
+    ${EndIf}
+    FindNext $0 $1
+  ${Loop}
+  FindClose $0
+FunctionEnd
+
+Function CaptureOldImageId
+  StrCpy $OldImageId ""
+  Call FindAiscCli
+  ${If} $AiscCliExe == ""
+    Return
+  ${EndIf}
+  ; Text-mode scan: stable "kind ownership id name" lines (JSON is not
+  ; parseable in NSIS). Any failure leaves the id empty.
+  nsExec::ExecToStack /TIMEOUT=60000 '"$AiscCliExe" maintenance docker-scan --context upgrade --format text'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    Return
+  ${EndIf}
+  Push $1
+  Call ExtractDefaultImageId
+  Pop $OldImageId
+  ${If} $OldImageId != ""
+    DetailPrint "old image: $OldImageId"
+  ${EndIf}
+FunctionEnd
+
+; Stack: scan text -> default-image id ("" when absent). Line shape:
+; "image owned <id> super-claude:latest" / "image legacy_owned <id> ...".
+Function ExtractDefaultImageId
+  Pop $R0            ; remaining text
+  StrCpy $R1 ""      ; result
+  ${Do}
+    ${If} $R0 == ""
+      ${Break}
+    ${EndIf}
+    StrCpy $R2 ""    ; current line
+    ${Do}
+      StrCpy $R3 $R0 1
+      ${If} $R3 == "\r"
+      ${OrIf} $R3 == "\n"
+      ${OrIf} $R3 == ""
+        ${Break}
+      ${EndIf}
+      StrCpy $R2 "$R2$R3"
+      StrCpy $R0 $R0 "" 1
+    ${Loop}
+    StrCpy $R3 $R0 1
+    ${IfThen} $R3 == "\r" ${|} StrCpy $R0 $R0 "" 1 ${|}
+    StrCpy $R3 $R0 1
+    ${IfThen} $R3 == "\n" ${|} StrCpy $R0 $R0 "" 1 ${|}
+    ; prefix: "image owned " (12) or "image legacy_owned " (19)
+    StrCpy $R4 0
+    StrCpy $R5 $R2 12
+    ${If} $R5 == "image owned "
+      StrCpy $R4 12
+    ${Else}
+      StrCpy $R5 $R2 19
+      ${If} $R5 == "image legacy_owned "
+        StrCpy $R4 19
+      ${EndIf}
+    ${EndIf}
+    ${If} $R4 <> 0
+      StrLen $R6 $R2
+      IntOp $R7 $R6 - 20          ; start of the 20-char suffix
+      ${If} $R7 > $R4
+        StrCpy $R5 $R2 "" $R7     ; last 20 chars
+        ${If} $R5 == " super-claude:latest"
+          IntOp $R6 $R7 - $R4     ; id length
+          StrCpy $R1 $R2 $R6 $R4
+          ${Break}
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${Loop}
+  Push $R1
+FunctionEnd
+
+Function UpgradeDockerLifecycle
+  StrCpy $RebuildPending 0
+  ${If} $UpdateMode <> 1
+    Return
+  ${EndIf}
+  Call FindAiscCli
+  ${If} $AiscCliExe == ""
+    StrCpy $RebuildPending 1
+    Return
+  ${EndIf}
+  ; 1) Upgrade-context cleanup = containers ONLY (02 §3 upgrade ordering:
+  ; the tagged image must survive a failed rebuild).
+  DetailPrint "$(UPGRADE_CLEAN_START)"
+  nsExec::ExecToLog /TIMEOUT=180000 '"$AiscCliExe" maintenance docker-cleanup --context upgrade --format json'
+  Pop $0
+  Pop $1
+  ${If} $0 == 3
+    StrCpy $RebuildPending 1
+    Return
+  ${EndIf}
+  ; 2) No-cache rebuild with the old-ID handoff (minutes; 30min budget).
+  DetailPrint "$(UPGRADE_REBUILD_START)"
+  nsExec::ExecToLog /TIMEOUT=1800000 '"$AiscCliExe" maintenance docker-rebuild --root "$INSTDIR\aisc-bundle" --tag super-claude:latest --old-image-id $OldImageId'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    StrCpy $RebuildPending 1
+  ${EndIf}
+FunctionEnd
+
 Function .onInstSuccess
+  ; docker-resource C1: upgrade rebuild did not complete (Docker down or
+  ; build failed) — interactive finish note with the manual command.
+  ${If} $RebuildPending = 1
+  ${AndIfNot} ${Silent}
+  ${AndIf} $PassiveMode <> 1
+    MessageBox MB_ICONINFORMATION "$(REBUILD_PENDING)"
+  ${EndIf}
+
   ; Check for `/R` flag only in silent and passive installers because
   ; GUI installer has a toggle for the user to (re)start the app
   ${If} $PassiveMode = 1
@@ -1487,6 +1651,14 @@ Function un.onInit
   ${IfNot} ${Errors}
     StrCpy $UpdateMode 1
   ${EndIf}
+
+  ; docker-resource C1: explicit Docker-resource keep for scripted
+  ; uninstalls (same force level as unchecking the box).
+  StrCpy $KeepDockerMode 0
+  ${GetOptions} $CMDLINE "/KEEPDOCKER" $0
+  ${IfNot} ${Errors}
+    StrCpy $KeepDockerMode 1
+  ${EndIf}
 FunctionEnd
 
 Section Uninstall
@@ -1495,6 +1667,24 @@ Section Uninstall
   !endif
 
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+
+  ; docker-resource C1: the lifecycle cleanup runs BEFORE any file deletion
+  ; — the bundled sidecar performs it and must still exist (02 §3/C1).
+  ; /KEEPDOCKER and /UPDATE skip; best-effort, never blocks the uninstall.
+  StrCpy $DockerCleanupSkipped 0
+  ${If} $DeleteDockerCheckboxState = 1
+  ${AndIf} $UpdateMode <> 1
+  ${AndIf} $KeepDockerMode <> 1
+    Call un.CleanDockerResources
+  ${EndIf}
+
+  ; Third option (independent of Docker cleanup AND of app data): delete
+  ; the persistent per-workspace toolchains (host_bind backend = plain
+  ; dirs under the data root). Default unchecked (02 §3.1).
+  ${If} $ToolchainCheckboxState = 1
+  ${AndIf} $UpdateMode <> 1
+    Call un.DeleteToolchains
+  ${EndIf}
 
   ; Delete the app directory and its content from disk
   ; Copy main executable
@@ -1612,15 +1802,6 @@ Section Uninstall
     ${EndIf}
   ${EndIf}
 
-  ; KI-4: optional Docker companion cleanup (default unchecked; never on
-  ; /UPDATE). Best-effort: an unreachable engine skips and the finish note
-  ; shows the manual commands instead — the uninstall itself never fails.
-  StrCpy $DockerCleanupSkipped 0
-  ${If} $DeleteDockerCheckboxState = 1
-  ${AndIf} $UpdateMode <> 1
-    Call un.CleanDockerResources
-  ${EndIf}
-
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
     !insertmacro NSIS_HOOK_POSTUNINSTALL
   !endif
@@ -1632,127 +1813,70 @@ Section Uninstall
   ${EndIf}
 SectionEnd
 
-; KI-4 (2026-08-18): stop+remove the AISC runtime containers (aisc-wb-*) and
-; the runtime image (super-claude:latest). Best-effort by design: when
-; docker.exe is missing or the engine is down it only sets the skipped flag
-; ($DockerCleanupSkipped) and returns — the uninstall never fails here, and
-; un.onUnInstSuccess surfaces the manual commands. No --format anywhere:
-; double braces are handlebars in this template.
-; KI-4 manual-test finding (2026-08-18): a Docker Desktop installed to a
-; NON-DEFAULT path was invisible to the two hardcoded locations. Discovery
-; chain: 1) `where docker` (the Desktop installer puts resources\bin on PATH,
-; which covers every custom location it knows about); 2) the two default
-; install roots; 3) the Docker Desktop uninstall-registry InstallLocation
-; (mirrors CheckDocker). Writes the absolute path to $DockerExe, "" if none.
-Function un.FindDockerCli
-  StrCpy $DockerExe ""
-  nsExec::ExecToStack 'where docker'
-  Pop $0
-  Pop $1
-  ${If} $0 = 0
-    ; first line of `where` output = an absolute docker.exe path
-    ${Do}
-      StrCpy $2 $1 1
-      ${If} $2 == "\r"
-      ${OrIf} $2 == "\n"
-      ${OrIf} $2 == ""
-        ${Break}
-      ${EndIf}
-      StrCpy $DockerExe "$DockerExe$2"
-      StrCpy $1 $1 "" 1
-    ${Loop}
-  ${EndIf}
-  ${If} $DockerExe != ""
-  ${AndIf} ${FileExists} $DockerExe
+; docker-resource C1: locate the bundled sidecar WITHOUT hardcoding the
+; rendered externalBin name (the arch suffix varies) — pattern search only.
+; Writes the absolute path to $AiscCliExe, "" if none.
+Function un.FindAiscCli
+  StrCpy $AiscCliExe ""
+  ClearErrors
+  FindFirst $0 $1 "$INSTDIR\aisc-*.exe"
+  ${DoUntil} ${Errors}
+    ${If} $1 != ""
+    ${AndIf} $AiscCliExe == ""
+      StrCpy $AiscCliExe "$INSTDIR\$1"
+    ${EndIf}
+    FindNext $0 $1
+  ${Loop}
+  FindClose $0
+FunctionEnd
+
+; docker-resource C1 (02 §3): the centralized lifecycle service does the
+; classification + removal (three-tier ownership, containers before images,
+; ID dedup) — this installer never reimplements the filter rules, and the
+; duplicated KI-4 docker-CLI discovery/ps/rm/rmi chain is deleted. Exit
+; codes (frozen): 0 ok · 3 Docker unavailable · 1 partial (logged by the
+; CLI). Best-effort: the uninstall never fails here.
+Function un.CleanDockerResources
+  Call un.FindAiscCli
+  ${If} $AiscCliExe == ""
+    DetailPrint "$(DOCKER_CLEAN_UNREACHABLE): aisc CLI not found"
+    StrCpy $DockerCleanupSkipped 1
     Return
   ${EndIf}
-  StrCpy $DockerExe ""
-  ${If} ${FileExists} "$PROGRAMFILES64\Docker\Docker\resources\bin\docker.exe"
-    StrCpy $DockerExe "$PROGRAMFILES64\Docker\Docker\resources\bin\docker.exe"
-  ${ElseIf} ${FileExists} "$LOCALAPPDATA\Programs\DockerDesktop\resources\bin\docker.exe"
-    ; per-user "Install for me" layout (KI-6: engine probe missed it too)
-    StrCpy $DockerExe "$LOCALAPPDATA\Programs\DockerDesktop\resources\bin\docker.exe"
-  ${ElseIf} ${FileExists} "$LOCALAPPDATA\Docker\resources\bin\docker.exe"
-    StrCpy $DockerExe "$LOCALAPPDATA\Docker\resources\bin\docker.exe"
+
+  DetailPrint "$(DOCKER_CLEAN_START)"
+  nsExec::ExecToLog '"$AiscCliExe" maintenance docker-cleanup --context uninstall --format json'
+  Pop $0
+  Pop $1
+  ${If} $0 == 3
+    DetailPrint "$(DOCKER_CLEAN_UNREACHABLE)"
+    StrCpy $DockerCleanupSkipped 1
   ${Else}
-    ; registry fallback: Docker Desktop's InstallLocation is the dir holding
-    ; Docker Desktop.exe; docker.exe sits under resources\bin below it.
-    SetRegView 64
-    ReadRegStr $5 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
-    ${If} $5 == ""
-      ReadRegStr $5 HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
-    ${EndIf}
-    SetRegView 32
-    ${If} $5 == ""
-      ReadRegStr $5 HKLM "SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop" "InstallLocation"
-    ${EndIf}
-    ${If} $5 != ""
-    ${AndIf} ${FileExists} "$5\resources\bin\docker.exe"
-      StrCpy $DockerExe "$5\resources\bin\docker.exe"
-    ${EndIf}
+    ; 0 = clean, 1 = partial failures (already logged by the CLI) — the
+    ; shared note only fires for the fully-unreachable case.
+    DetailPrint "$(DOCKER_CLEAN_DONE)"
   ${EndIf}
 FunctionEnd
 
-Function un.CleanDockerResources
-  Call un.FindDockerCli
-  ${If} $DockerExe == ""
-    DetailPrint "$(DOCKER_CLEAN_UNREACHABLE): docker.exe not found"
-    StrCpy $DockerCleanupSkipped 1
+; docker-resource C1: third uninstall option — persistent project
+; toolchains (host_bind backend = plain directories under the data root).
+; Independent of the container/image cleanup; workspace files, agent
+; configs and everything else under the data root are untouched.
+Function un.DeleteToolchains
+  ${If} "$LOCALAPPDATA" == ""
     Return
   ${EndIf}
-
-  ; Engine probe: `docker version` exits non-zero quickly when the daemon
-  ; is down (no timeout needed for the down case; a starting engine is not
-  ; awaited — the skip path is the designed fallback).
-  DetailPrint "$(DOCKER_CLEAN_START)"
-  nsExec::ExecToStack '"$DockerExe" version'
-  Pop $0
-  Pop $1
-  ${If} $0 != 0
-    DetailPrint "$(DOCKER_CLEAN_UNREACHABLE)"
-    StrCpy $DockerCleanupSkipped 1
-    Return
-  ${EndIf}
-
-  ; Remove every aisc-wb-* container (rm -f stops running ones first).
-  nsExec::ExecToStack '"$DockerExe" ps -aq --filter "name=aisc-wb-"'
-  Pop $0
-  Pop $1
-  StrCpy $2 $1
-  ${Do}
-    ${If} $2 == ""
-      ${Break}
+  ClearErrors
+  FindFirst $0 $1 "$LOCALAPPDATA\AISC\data\workspaces\*"
+  ${DoUntil} ${Errors}
+    ${If} $1 != ""
+    ${AndIf} ${FileExists} "$LOCALAPPDATA\AISC\data\workspaces\$1\toolchain\*"
+      DetailPrint "toolchain: $1"
+      RmDir /r "$LOCALAPPDATA\AISC\data\workspaces\$1\toolchain"
     ${EndIf}
-    StrCpy $3 ""
-    ${Do}
-      StrCpy $4 $2 1
-      ${If} $4 == "\r"
-      ${OrIf} $4 == "\n"
-      ${OrIf} $4 == ""
-        ${Break}
-      ${EndIf}
-      StrCpy $3 "$3$4"
-      StrCpy $2 $2 "" 1
-    ${Loop}
-    StrCpy $4 $2 1
-    ${IfThen} $4 == "\r" ${|} StrCpy $2 $2 "" 1 ${|}
-    StrCpy $4 $2 1
-    ${IfThen} $4 == "\n" ${|} StrCpy $2 $2 "" 1 ${|}
-    ${If} $3 != ""
-      DetailPrint "docker rm -f $3"
-      nsExec::ExecToLog '"$DockerExe" rm -f $3'
-      Pop $0
-      Pop $1
-    ${EndIf}
+    FindNext $0 $1
   ${Loop}
-
-  ; Remove the tagged runtime image; dangling build layers are left for a
-  ; manual `docker image prune` (mentioned in the skip note only).
-  DetailPrint "docker rmi -f super-claude:latest"
-  nsExec::ExecToLog '"$DockerExe" rmi -f super-claude:latest'
-  Pop $0
-  Pop $1
-  DetailPrint "$(DOCKER_CLEAN_DONE)"
+  FindClose $0
 FunctionEnd
 
 ; KI-4: finish note when Docker cleanup was requested but the engine was not
