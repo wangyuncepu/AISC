@@ -1095,18 +1095,19 @@ def start_runtime(
             )
 
         # --- create detached idle container ---
+        from aisc.domain.docker_ownership import label_args, runtime_labels
+
         argv = [
             "run", "-d",
             "--name", container_name,
-            "--label", "io.aisc.managed=true",
-            "--label", "io.aisc.kind=runtime",
-            "--label", f"io.aisc.runtime-id={runtime_id}",
-            "--label", f"io.aisc.owner={owner}",
-            "--label", f"io.aisc.workspace-key={ws_key}",
+            *label_args(runtime_labels(runtime_id, owner, ws_key)),
             "-e", f"CLI_SCOPE={scope}",
             "-e", "AISC_RUNTIME_MODE=idle",
             "-e", f"AISC_RUNTIME_ID={runtime_id}",
             "-e", "TERM=xterm-256color",
+            # runtime-lifecycle-ux 3a: the entrypoint stamps the toolchain
+            # environment baseline with the content-addressed image id.
+            "-e", f"AISC_IMAGE_ID={image_id_at_start}",
             "-v", f"{canonical_workspace}:/root/app",
         ]
         # svc-2 (web gateway): allocate a loopback host port and publish the
@@ -1126,8 +1127,13 @@ def start_runtime(
         # data root; dirs are created host-side so bind mounts are real.
         # Fail closed: resolver errors propagate — never copy agent state
         # into the workspace again.
+        toolchain_storage = ""
         if scope not in ("temporary", "temp", "global"):
             from aisc.application.data_root import DataRootResolver
+            from aisc.application.toolchain import (
+                prepare_toolchain,
+                toolchain_mount_argv,
+            )
 
             ws_state_dir = DataRootResolver().resolve(
                 Path(canonical_workspace)
@@ -1140,6 +1146,13 @@ def start_runtime(
                 "-v", f"{ws_state_dir / 'cc-switch'}:/root/.cc-switch",
                 "-v", f"{ws_state_dir / 'runtime'}:/root/.local/state/cc-switch",
             ])
+            # runtime-lifecycle-ux 3a: project scope mounts the persistent
+            # toolchain (host_bind per the Windows spike decision). Failures
+            # to prepare propagate — a broken toolchain dir must not be
+            # silently swallowed into a runtime without it.
+            prepare_toolchain(ws_state_dir, image_id=image_id_at_start)
+            argv.extend(toolchain_mount_argv(ws_state_dir))
+            toolchain_storage = "host_bind"
         if network == "proxy":
             argv.extend(["--cap-add=NET_ADMIN", "--device", "/dev/net/tun"])
             if resolved_proxy:
@@ -1215,6 +1228,14 @@ def start_runtime(
                 "workspace_key": ws_key,
                 "image_id": image_id_at_start,
                 "web_gateway_host_port": gw_host_port,
+                # runtime-lifecycle-ux Stage 1 (02 §1): session-ephemeral by
+                # default; dependency_policy derives from scope (D-RUNTIME-09).
+                "lifecycle": "ephemeral",
+                "retention": "remove_on_close",
+                "dependency_policy": (
+                    "persistent_toolchain" if scope == "project" else "ephemeral_toolchain"
+                ),
+                "toolchain_storage": toolchain_storage,
             })
         except CliError:
             # register raises CliError(STATE_LOCK_TIMEOUT) if the registry lock
@@ -1267,9 +1288,11 @@ def _snapshot_from_registry(
 
     ``registry_state`` is "registered" when the meta came from the registry,
     or "missing" when the container was discovered via Docker labels only.
+    runtime-lifecycle-ux 3a: project runtimes also carry the dependency
+    policy + host-side toolchain health (advisory; stat-only, never gates).
     """
     state = docker_state or "not_found"
-    return RuntimeSnapshot(
+    snapshot = RuntimeSnapshot(
         runtime_id=meta.get("runtime_id", ""),
         state=state,
         workspace=meta.get("workspace", ""),
@@ -1283,6 +1306,20 @@ def _snapshot_from_registry(
         registry_state=registry_state,
         observed_at=observed_at,
     )
+    policy = str(meta.get("dependency_policy") or "")
+    if not policy:
+        policy = "persistent_toolchain" if snapshot.scope == "project" else "ephemeral_toolchain"
+    snapshot.dependency_policy = policy
+    if meta.get("toolchain_storage") == "host_bind" and snapshot.workspace:
+        try:
+            from aisc.application.data_root import DataRootResolver
+            from aisc.application.toolchain import toolchain_health
+
+            ws_dir = DataRootResolver().resolve(Path(snapshot.workspace)).workspace_dir
+            snapshot.toolchain = toolchain_health(ws_dir)
+        except Exception:
+            pass  # advisory only — an unresolvable data root is not a failure
+    return snapshot
 
 
 def list_runtimes(

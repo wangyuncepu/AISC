@@ -430,6 +430,38 @@ def _build_parser() -> _AiscArgumentParser:
     psp = sub.add_parser("ps", help="List all registered containers", allow_abbrev=False)
     _add_global_args(psp, is_subparser=True)
 
+    # --- maintenance (docker-resource-lifecycle B) ---
+    mtp = sub.add_parser("maintenance", help="Installer-facing Docker lifecycle ops",
+                         allow_abbrev=False)
+    _add_global_args(mtp, is_subparser=True)
+    mtsub = mtp.add_subparsers(dest="maintenance_command", title="maintenance commands",
+                               parser_class=_AiscArgumentParser)
+
+    mts = mtsub.add_parser("docker-scan", help="Read-only ownership classification",
+                           allow_abbrev=False)
+    _add_global_args(mts, is_subparser=True)
+    mts.add_argument("--context", choices=["first_install", "upgrade", "uninstall"],
+                     default="upgrade",
+                     help="Install context drives legacy-image evidence rules")
+    mts.add_argument("--old-image-id", action="append", default=[],
+                     help="Upgrade-captured old image ID (temporary evidence; repeatable)")
+
+    mtc = mtsub.add_parser("docker-cleanup", help="Remove owned/legacy containers+images",
+                           allow_abbrev=False)
+    _add_global_args(mtc, is_subparser=True)
+    mtc.add_argument("--context", choices=["first_install", "upgrade", "uninstall"],
+                     default="uninstall")
+    mtc.add_argument("--old-image-id", action="append", default=[])
+
+    mtr = mtsub.add_parser("docker-rebuild", help="No-cache rebuild with old-ID handoff",
+                           allow_abbrev=False)
+    _add_global_args(mtr, is_subparser=True)
+    mtr.add_argument("--root", required=True, help="Bundle root (contains Dockerfile)")
+    mtr.add_argument("--tag", default="super-claude:latest")
+    mtr.add_argument("--old-image-id", default="")
+    mtr.add_argument("--no-cache", action="store_true", default=True)
+    mtr.add_argument("--pull", action="store_true", default=False)
+
     # --- runtime ---
     rtp = sub.add_parser("runtime", help="Runtime control plane (Workbench Phase 0)", allow_abbrev=False)
     _add_global_args(rtp, is_subparser=True)
@@ -560,6 +592,48 @@ def _build_parser() -> _AiscArgumentParser:
                        help="Container service port (1024..65535)")
     rtsvu.add_argument("--workspace", type=str, default=None,
                        help="Workspace path (default: current directory)")
+
+    # --- runtime reconcile (runtime-lifecycle-ux Stage 1, 02 §3) ---
+    rtrc = rtsub.add_parser("reconcile",
+                            help="Classify + auto-recycle stale runtimes for a workspace",
+                            allow_abbrev=False)
+    _add_global_args(rtrc, is_subparser=True)
+    rtrc.add_argument("--workspace", type=str, default=None,
+                      help="Workspace path (default: current directory)")
+    rtrc.add_argument("--instance-id", type=str, required=True,
+                      help="This Workbench instance's UUID v4")
+    rtrc.add_argument("--workspace-key", type=str, default=None,
+                      help="Optional cross-check: expected sha256 workspace key")
+
+    # --- runtime lease (runtime-lifecycle-ux Stage 1, 02 §2) ---
+    # Same py3.14 pattern as `services`: shared options on the group are
+    # optional, children re-require them; the bare form is usage-rejected
+    # in dispatch.
+    rtlg = rtsub.add_parser("lease", help="Workspace lease claim/heartbeat/release/inspect",
+                            allow_abbrev=False)
+    _add_global_args(rtlg, is_subparser=True)
+    rtlg.add_argument("--workspace", type=str, default=None,
+                      help="Workspace path (default: current directory)")
+    rtlg.add_argument("--instance-id", type=str, default=None,
+                      help="This Workbench instance's UUID v4")
+    rtlgsub = rtlg.add_subparsers(dest="runtime_lease_command",
+                                  title="runtime lease commands",
+                                  parser_class=_AiscArgumentParser)
+    for _name, _help in (
+        ("claim", "Claim the workspace lease"),
+        ("heartbeat", "Refresh the lease last-seen timestamp"),
+        ("release", "Release the workspace lease"),
+        ("inspect", "Show the current lease"),
+    ):
+        _p = rtlgsub.add_parser(_name, help=_help, allow_abbrev=False)
+        _add_global_args(_p, is_subparser=True)
+        _req = _name in ("claim", "heartbeat", "release")
+        _p.add_argument("--workspace", type=str, default=None,
+                        help="Workspace path (default: current directory)")
+        _p.add_argument("--instance-id", type=str, required=_req,
+                        help="This Workbench instance's UUID v4")
+        _p.add_argument("--lease-id", type=str, default=None,
+                        help="Lease ID (heartbeat/release match guard)")
 
     # --- session ---
     ssp = sub.add_parser("session", help="Session data plane (Workbench Phase 0)", allow_abbrev=False)
@@ -708,7 +782,7 @@ def _detect_command(argv: List[str]) -> Optional[str]:
     known = {"version", "doctor", "build", "run", "config", "profile",
              "status", "stop", "restart", "shell", "switch", "provider",
              "cc-switch", "network", "usage", "logs", "ps", "runtime", "session",
-             "artifact", "data-root"}
+             "artifact", "data-root", "maintenance"}
     for arg in argv:
         if arg in known:
             return arg
@@ -1434,6 +1508,44 @@ def _cmd_ps(
     return data, 0, []
 
 
+def _cmd_maintenance(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Any, int, List[Dict[str, Any]]]:
+    """Execute ``aisc maintenance`` subcommands (docker-resource-lifecycle B).
+
+    Exit codes (02 §3): 0 all-ok/absent · 3 docker unavailable · 1 partial
+    resource failures · 2 usage. stdout carries ONLY the JSON envelope;
+    Docker noise rides stderr via run_captured.
+    """
+    from aisc.adapters.docker_ import RealDockerExecutor
+    from aisc.application.docker_lifecycle import (
+        docker_cleanup, docker_rebuild, docker_scan,
+    )
+    from aisc.domain.models import CliError
+
+    sub = args.maintenance_command
+    executor = RealDockerExecutor()
+    if sub == "docker-scan":
+        data = docker_scan(executor, context=args.context,
+                           old_image_ids=args.old_image_id)
+        return data, 0, []
+    if sub == "docker-cleanup":
+        try:
+            data = docker_cleanup(executor, context=args.context,
+                                  old_image_ids=args.old_image_id)
+        except CliError as exc:
+            raise
+        failed = bool(data["containers"]["failed"] or data["images"]["failed"])
+        return data, (1 if failed else 0), []
+    if sub == "docker-rebuild":
+        data = docker_rebuild(executor, root=args.root, tag=args.tag,
+                              old_image_id=args.old_image_id,
+                              no_cache=args.no_cache, pull=args.pull)
+        return data, (1 if data.get("failed") else 0), []
+    return None, 2, [build_error("AISC_ERR_USAGE", f"Unknown maintenance subcommand: {sub}")]
+
+
 def _cmd_runtime(
     args: argparse.Namespace,
     effective_format: str,
@@ -1450,6 +1562,8 @@ def _cmd_runtime(
         cmd_runtime_services,
         cmd_runtime_services_expose,
         cmd_runtime_services_unexpose,
+        cmd_runtime_reconcile,
+        cmd_runtime_lease,
     )
 
     sub = args.runtime_command
@@ -1535,6 +1649,27 @@ def _cmd_runtime(
                 runtime_id=args.runtime_id,
                 workspace=args.workspace,
             )
+        return data, 0, []
+    elif sub == "reconcile":
+        data = cmd_runtime_reconcile(
+            workspace=args.workspace,
+            instance_id=args.instance_id,
+            workspace_key=args.workspace_key,
+        )
+        return data, 0, []
+    elif sub == "lease":
+        action = getattr(args, "runtime_lease_command", None) or "inspect"
+        if action != "inspect" and not getattr(args, "instance_id", None):
+            return None, 2, [build_error(
+                "AISC_ERR_USAGE",
+                f"runtime lease {action} requires --instance-id",
+            )]
+        data = cmd_runtime_lease(
+            action=action,
+            workspace=args.workspace,
+            instance_id=getattr(args, "instance_id", "") or "",
+            lease_id=getattr(args, "lease_id", None),
+        )
         return data, 0, []
     else:
         # Unknown runtime subcommand
@@ -1812,7 +1947,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             # command that supports --format json must emit a JSON usage error,
             # not fall back to argparse text — matches the session propagation).
             for _sub in ("preflight", "start", "list", "inspect", "stop",
-                         "restart", "remove"):
+                         "restart", "remove", "reconcile", "lease"):
                 if _sub in args_list:
                     try:
                         _sp = [a for a in runtime_parser._subparsers._group_actions
@@ -2026,6 +2161,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_logs(args, effective_format)
         elif args.command == "ps":
             data, exit_code, errors = _cmd_ps(args, effective_format)
+        elif args.command == "maintenance":
+            data, exit_code, errors = _cmd_maintenance(args, effective_format)
         elif args.command == "runtime":
             data, exit_code, errors = _cmd_runtime(args, effective_format)
         elif args.command == "session":

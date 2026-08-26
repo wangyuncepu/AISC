@@ -26,6 +26,17 @@ const mockIpc = vi.hoisted(() => ({
   ackSessionExit: vi.fn().mockResolvedValue("acknowledged"),
   stopRuntime: vi.fn().mockResolvedValue({ state: "stopped" }),
   runtimeInspect: vi.fn().mockResolvedValue({ state: "stopped" }),
+  // runtime-lifecycle-ux Stage 3: the ephemeral teardown + lease surface.
+  removeRuntime: vi.fn().mockResolvedValue({ state: "not_found" }),
+  leaseClaim: vi.fn().mockResolvedValue({ outcome: "claimed", lease_id: "l-1", workspace_key: "k" }),
+  leaseRelease: vi.fn().mockResolvedValue(true),
+  runtimeReconcile: vi.fn().mockResolvedValue({
+    schema_version: "aisc.runtime-reconcile/v1",
+    workspace_key: "k", classification: "clean", runtime_id: null,
+    can_proceed: true,
+    cleanup: { attempted: false, stopped: false, removed: false, registry_pruned: false },
+    observed_at: "", error_code: null, technical_detail: null,
+  }),
 }));
 
 vi.mock("../../lib/ipc", () => mockIpc);
@@ -152,14 +163,21 @@ describe("closeWorkspace (3c)", () => {
     const calls = mockIpc.saveHistory.mock.calls as [number, HistoryPatch][];
     const last = calls[calls.length - 1]?.[1];
     expect(last?.workspaces.some((w) => w.layout?.tabs?.length === 1)).toBe(true);
-    // Teardown (close + stop + dispose/GC) continues detached.
+    // Teardown (close + ephemeral remove + dispose/GC) continues detached.
     await vi.waitFor(() => {
       expect(Object.keys(a.paneStreams.value)).toHaveLength(0);
       expect(a.streamCursor.value).toEqual({});
     });
+    // runtime-lifecycle-ux Stage 3 (01 §2.2): the background cleanup REMOVES
+    // the container (stop -> verify -> remove) and releases the lease — no
+    // stopped leftover to conflict with the next launch.
+    await vi.waitFor(() => {
+      expect(mockIpc.removeRuntime).toHaveBeenCalledWith("C:/a", "rid-C:/a", true);
+      expect(mockIpc.leaseRelease).toHaveBeenCalledWith("C:/a");
+    });
   });
 
-  it("stays visually closed even when the background stop fails (conflict gate is the safety net)", async () => {
+  it("stays visually closed even when the background cleanup fails (next reconcile recycles)", async () => {
     const ws = useWorkspacesStore();
     await launchWorkspace(ws, "C:/a");
     mockIpc.stopRuntime.mockResolvedValue({ state: "running" });
@@ -168,6 +186,9 @@ describe("closeWorkspace (3c)", () => {
     await ws.closeWorkspace(ws.runtimes[0].id);
     expect(ws.runtimes).toHaveLength(0); // chip already gone
     await vi.waitFor(() => expect(errSpy).toHaveBeenCalled());
+    // The leftover never resurfaces as a user conflict — it is not removed
+    // here, and the NEXT launch's reconcile auto-recycles it.
+    expect(mockIpc.removeRuntime).not.toHaveBeenCalled();
     errSpy.mockRestore();
   });
 });
@@ -209,5 +230,15 @@ describe("aggregated exit gate (3c)", () => {
     expect(ok).toBe(false);
     expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("2"));
     expect(ws.livePaneCount()).toBe(2);
+  });
+
+  it("shutdownTargets lists every materialized workspace with a runtime id (02 §4)", async () => {
+    const ws = useWorkspacesStore();
+    await launchWorkspace(ws, "C:/a");
+    await launchWorkspace(ws, "C:/b");
+    // A workspace whose runtime id vanished (already torn down) drops out.
+    ws.runtimes[1].runtimeId.value = "";
+    const targets = ws.shutdownTargets();
+    expect(targets).toEqual([{ workspace: "C:/a", runtimeId: "rid-C:/a" }]);
   });
 });

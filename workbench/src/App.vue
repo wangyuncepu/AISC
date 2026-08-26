@@ -15,7 +15,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   captureWindowGeometry,
   resolveLocale,
-  shutdownWorkbench,
+  shutdownWorkbenchV2,
   trayAvailable as trayAvailableIpc,
   trayRemove,
 } from "./lib/ipc";
@@ -303,10 +303,16 @@ async function runExitFlow(): Promise<void> {
   void trayRemove().catch(() => undefined);
   void captureWindowGeometry().catch(() => undefined);
   // G-17: flush the debounced history save so a split/pane-close inside the
-  // 300ms window survives 恢复布局 on the next launch (feedback 2026-08-10).
+  // 300ms window survives layout restore on the next launch (feedback 2026-08-10).
   await store.flushSave();
-  void shutdownWorkbench().catch((e) => {
-    console.error("shutdown_workbench failed, destroying window:", e);
+  // runtime-lifecycle-ux Stage 3 (02 §4): structured shutdown — sessions,
+  // then per-runtime stop→remove for every materialized workspace, then
+  // lease release, all inside the Rust coordinator.
+  void shutdownWorkbenchV2({
+    workspaces: store.shutdownTargets(),
+    reason: "window_close",
+  }).catch((e) => {
+    console.error("shutdown_workbench_v2 failed, destroying window:", e);
     void win.destroy().catch(() => undefined);
   });
 }

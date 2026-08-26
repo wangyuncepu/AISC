@@ -100,6 +100,11 @@ class ContainerSummary:
     state: str = ""       # running | exited | created | restarting | paused | dead
     status: str = ""      # human string e.g. "Up 2 hours" / "Exited (0) 1 minute ago"
     labels: Dict[str, str] = field(default_factory=dict)
+    # Content-addressed image ID (sha256:...) — A0 docker-ownership-
+    # foundation. Empty when the backend cannot provide it cheaply
+    # (CLI `docker ps` only knows the image REF); callers needing the ID
+    # inspect the specific container instead of guessing from the ref.
+    image_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -119,6 +124,9 @@ class ContainerInspectResult(GatewayResult):
     image: str = ""
     labels: Dict[str, str] = field(default_factory=dict)
     config: Dict[str, Any] = field(default_factory=dict)
+    # Content-addressed image ID (``.Image`` in docker inspect JSON) —
+    # distinct from ``image`` (the REF the container was created with).
+    image_id: str = ""
 
 
 # ---------------------------------------------------------------------------

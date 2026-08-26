@@ -261,6 +261,12 @@ def register(root: Path, name: str, meta: Dict[str, Any],
             - workspace_key: sha256 of canonical workspace (Workbench runtimes)
             - image_id: Content-addressed image ID at create time
               (容器随镜像同步更新, KI-4 挂账 — empty on legacy records)
+            - lifecycle/retention/dependency_policy (runtime-lifecycle-ux
+              02 §1): "" on legacy records — absent lifecycle is the legacy
+              marker reconcile treats as recyclable-after-verification;
+              never part of the config fingerprint.
+            - workbench_instance_id: creating Workbench instance (Stage 2+
+              callers); "" for CLI-created runtimes.
         set_default: also mark the container as the default target. The
             image_id heal path (start_runtime reusing a legacy record)
             re-registers with False so an in-place metadata fix never
@@ -286,6 +292,17 @@ def register(root: Path, name: str, meta: Dict[str, Any],
         # publish; 0/absent on legacy records (web access reports
         # legacy_runtime). Runtime metadata only — never in the fingerprint.
         "web_gateway_host_port": meta.get("web_gateway_host_port", 0),
+        # runtime-lifecycle-ux Stage 1 (02 §1): lifecycle metadata. Epoch
+        # float to match created_at (contract shows RFC3339; the registry's
+        # existing timestamp convention wins for on-disk consistency).
+        "lifecycle": meta.get("lifecycle", ""),
+        "retention": meta.get("retention", ""),
+        "dependency_policy": meta.get("dependency_policy", ""),
+        "workbench_instance_id": meta.get("workbench_instance_id", ""),
+        # runtime-lifecycle-ux 3a: which storage backend this runtime's
+        # persistent toolchain uses ("" on legacy/non-project records).
+        "toolchain_storage": meta.get("toolchain_storage", ""),
+        "last_state_change_at": meta.get("last_state_change_at") or time.time(),
     }
     with _registry_lock(root):
         data = _read_registry(root)

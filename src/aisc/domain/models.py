@@ -49,6 +49,12 @@ class RuntimeErrorCode:
     STATE_LOCK_TIMEOUT = "AISC_ERR_STATE_LOCK_TIMEOUT"
     RUNTIME_UNHEALTHY = "AISC_ERR_RUNTIME_UNHEALTHY"
     CONTAINER_NOT_FOUND = "AISC_ERR_CONTAINER_NOT_FOUND"
+    # Workspace lease / reconcile (runtime-lifecycle-ux Stage 1,
+    # 02-domain-contract.md §3 error codes)
+    ACTIVE_WORKSPACE_LEASE = "AISC_ERR_ACTIVE_WORKSPACE_LEASE"
+    RUNTIME_OWNER_UNKNOWN = "AISC_ERR_RUNTIME_OWNER_UNKNOWN"
+    RUNTIME_RECONCILE_FAILED = "AISC_ERR_RUNTIME_RECONCILE_FAILED"
+    RUNTIME_LEASE_CONFLICT = "AISC_ERR_RUNTIME_LEASE_CONFLICT"
 
 
 class RuntimeExitCode:
@@ -76,6 +82,9 @@ class RuntimeExitCode:
     RUNTIME_NOT_RUNNING = 20        # AISC_EXIT_RUNTIME_NOT_RUNNING
     # Provider status exit code (S0.4)
     PROVIDER_STATUS_FAILED = 21     # AISC_EXIT_PROVIDER_STATUS_FAILED
+    # Workspace lease / reconcile (runtime-lifecycle-ux Stage 1)
+    ACTIVE_WORKSPACE_LEASE = 22    # AISC_EXIT_ACTIVE_WORKSPACE_LEASE
+    RUNTIME_RECONCILE_FAILED = 23  # AISC_EXIT_RUNTIME_RECONCILE_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -327,10 +336,16 @@ class BuildPlan:
             argv.append("--no-cache")
         if self.pull:
             argv.append("--pull")
+        from aisc.domain.docker_ownership import image_labels, label_args
+
         argv.extend([
             "--build-arg", f"USE_CN_MIRROR={self.build_arg_use_cn_mirror}",
             "--build-arg", f"NODE_IMAGE={self.build_arg_node_image}",
         ])
+        # docker-resource-lifecycle A2: provenance labels injected by the
+        # unified build argv (org.aisc.*; 02 §1.2 — never only host logs).
+        import aisc as _aisc
+        argv.extend(label_args(image_labels(getattr(_aisc, "__version__", "") or "dev")))
         if self.cc_switch_version:
             argv.extend([
                 "--build-arg", f"CC_SWITCH_RESOLVED_VERSION={self.cc_switch_version}",
@@ -371,6 +386,10 @@ class RunPlan:
     # allocates one — one-shot `aisc run` containers get the same capability
     # as managed runtimes.
     web_gateway_host_port: int = 0
+    # runtime-lifecycle-ux 3a: host-side persistent toolchain dir (project
+    # scope one-shots get the same capability as managed runtimes); empty =
+    # no toolchain mount (temporary mode -> container-side /tmp layout).
+    toolchain_root: str = ""
 
     @property
     def docker_argv(self) -> list:
@@ -397,9 +416,14 @@ class RunPlan:
             argv.append("-d")
         elif self.interactive and not self.non_interactive:
             argv.append("-it")
+        from aisc.domain.docker_ownership import label_args, one_shot_labels
+
         argv.extend([
             "-e", "TERM=xterm-256color",
             "--name", self.name,
+            # runtime-lifecycle A2 / docker-ownership A0: labels prove
+            # ownership for the maintenance classifier (kind=one-shot).
+            *label_args(one_shot_labels()),
             "-v", f"{self.workspace}:/root/app",
         ])
         if self.agent_state_root:
@@ -410,6 +434,10 @@ class RunPlan:
                 "-v", f"{base}/cc-switch:/root/.cc-switch",
                 "-v", f"{base}/runtime:/root/.local/state/cc-switch",
             ])
+            if self.toolchain_root:
+                from aisc.domain.toolchain import TOOLCHAIN_MOUNT_TARGET
+
+                argv.extend(["-v", f"{self.toolchain_root}:{TOOLCHAIN_MOUNT_TARGET}"])
         if self.non_interactive:
             argv.extend([
                 "-e", "AISC_NON_INTERACTIVE=1",
@@ -475,6 +503,12 @@ class RuntimeSnapshot:
     # consumers treat absent as unavailable, never as a parse failure.
     web_access: Optional[Dict[str, Any]] = None
 
+    # runtime-lifecycle-ux 3a: scope-derived dependency policy
+    # (persistent_toolchain | ephemeral_toolchain; "" on legacy records) and
+    # the host-side toolchain health summary. Both advisory — never gates.
+    dependency_policy: str = ""
+    toolchain: Optional[Dict[str, Any]] = None
+
     # Last operation error (None if last operation succeeded)
     last_operation_error: Optional[Dict[str, Any]] = None
 
@@ -507,6 +541,10 @@ class RuntimeSnapshot:
             result["started_at"] = self.started_at
         if self.web_access is not None:
             result["web_access"] = self.web_access
+        if self.dependency_policy:
+            result["dependency_policy"] = self.dependency_policy
+        if self.toolchain is not None:
+            result["toolchain"] = self.toolchain
         if self.last_operation_error:
             result["last_operation_error"] = self.last_operation_error
 

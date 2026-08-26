@@ -36,6 +36,11 @@ const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
 const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 /// svc-4: `aisc runtime services` budget (one docker inspect + one exec).
 const SERVICES_TIMEOUT: Duration = Duration::from_secs(45);
+/// Reconcile may stop+remove containers under the maintenance lock —
+/// generous budget (stop grace alone is 10s per container).
+const RECONCILE_TIMEOUT: Duration = Duration::from_secs(90);
+/// Lease claim/heartbeat/release: tiny metadata ops.
+pub(crate) const LEASE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Cancellation tokens for in-flight `start_runtime` operations, keyed by
 /// runtime_id (02 §三: every async operation has a cancellation token).
@@ -174,6 +179,12 @@ pub struct RuntimeSnapshot {
     pub observed_at: String,
     #[serde(default)]
     pub stale: bool,
+    /// runtime-lifecycle-ux 3a: advisory dependency policy + host-side
+    /// toolchain health (absent on old CLIs — consumers render nothing).
+    #[serde(default)]
+    pub dependency_policy: String,
+    #[serde(default)]
+    pub toolchain: Option<Value>,
 }
 
 /// `aisc runtime list` envelope `data` (§5.3): `{runtimes, observed_at}`.
@@ -182,6 +193,46 @@ pub struct RuntimeListResult {
     pub runtimes: Vec<RuntimeSnapshot>,
     #[serde(default)]
     pub observed_at: String,
+}
+
+/// `aisc runtime reconcile` envelope `data` (runtime-lifecycle-ux 02 §3).
+/// Field names mirror the Python payload verbatim (snake_case); a blocked
+/// classification is a VALID answer — `can_proceed=false` is not an error.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReconcileCleanup {
+    pub attempted: bool,
+    pub stopped: bool,
+    pub removed: bool,
+    pub registry_pruned: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReconcilePayload {
+    pub schema_version: String,
+    pub workspace_key: String,
+    pub classification: String,
+    pub runtime_id: Option<String>,
+    pub can_proceed: bool,
+    pub cleanup: ReconcileCleanup,
+    pub observed_at: String,
+    #[serde(default)]
+    pub error_code: Option<String>,
+    #[serde(default)]
+    pub technical_detail: Option<String>,
+}
+
+/// Known classifications (02 §3) — decode fails closed on foreign values so
+/// a schema drift surfaces as a protocol error instead of a wrong UI page.
+impl ReconcilePayload {
+    pub const CLASSIFICATIONS: &'static [&'static str] = &[
+        "clean",
+        "active_same_instance",
+        "stale_ephemeral",
+        "active_other_instance",
+        "unknown_owner",
+        "stale_registry",
+        "docker_unavailable",
+    ];
 }
 
 /// `aisc provider current` snapshot (05 §七). Secret-free: routing/auth metadata
@@ -202,7 +253,7 @@ pub struct ProviderStatus {
     pub observed_at: String,
 }
 
-fn envelope_error(env: &crate::cli::Envelope) -> Option<WorkbenchError> {
+pub(crate) fn envelope_error(env: &crate::cli::Envelope) -> Option<WorkbenchError> {
     env.errors.first().map(|err| WorkbenchError::map_aisc(&err.code).with_detail(err.message.clone()))
 }
 
@@ -263,6 +314,42 @@ fn runtime_remove_argv(runtime_id: &str, workspace: &str, force: bool) -> Vec<St
     if force {
         argv.push("--force".into());
     }
+    argv
+}
+
+/// runtime-lifecycle-ux Stage 1/2: one-shot workspace classification pass
+/// (02 §3). `instance_id` comes from the lease supervisor when the caller
+/// does not pin one itself.
+fn runtime_reconcile_argv(workspace: &str, instance_id: &str) -> Vec<String> {
+    vec![
+        "runtime".into(),
+        "reconcile".into(),
+        "--workspace".into(),
+        workspace.into(),
+        "--instance-id".into(),
+        instance_id.into(),
+        "--format".into(),
+        "json".into(),
+    ]
+}
+
+/// Workspace-lease argv (02 §2). The Rust heartbeat task drives
+/// `lease heartbeat` on its interval (D-RUNTIME-12).
+pub(crate) fn lease_argv(action: &str, workspace: &str, instance_id: Option<&str>, lease_id: Option<&str>) -> Vec<String> {
+    let mut argv = vec![
+        "runtime".into(),
+        "lease".into(),
+        action.into(),
+        "--workspace".into(),
+        workspace.into(),
+    ];
+    if let Some(i) = instance_id {
+        argv.extend(["--instance-id".into(), i.into()]);
+    }
+    if let Some(l) = lease_id {
+        argv.extend(["--lease-id".into(), l.into()]);
+    }
+    argv.extend(["--format".into(), "json".into()]);
     argv
 }
 
@@ -965,6 +1052,38 @@ pub async fn remove_runtime(
         .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("remove parse: {e}")))
 }
 
+/// One-shot workspace reconcile (runtime-lifecycle-ux Stage 2 IPC).
+/// `instance_id` defaults to the lease supervisor's per-run id; cross-
+/// process safety is enforced CLI-side (maintenance -> workspace lock).
+#[tauri::command]
+pub async fn runtime_reconcile(
+    app: AppHandle,
+    workspace: String,
+    instance_id: Option<String>,
+) -> Result<ReconcilePayload, WorkbenchError> {
+    let pin = resolve_cli(&app).await?;
+    let iid = match instance_id {
+        Some(i) => i,
+        None => app
+            .state::<crate::lease::LeaseSupervisor>()
+            .instance_id()
+            .to_string(),
+    };
+    let argv = runtime_reconcile_argv(&workspace, &iid);
+    let env = run_control(&pin, argv, RECONCILE_TIMEOUT, CancellationToken::new()).await?;
+    if let Some(e) = envelope_error(&env) {
+        return Err(e);
+    }
+    let data = env.data.unwrap_or(Value::Null);
+    let payload: ReconcilePayload = serde_json::from_value(data)
+        .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("reconcile parse: {e}")))?;
+    if !ReconcilePayload::CLASSIFICATIONS.contains(&payload.classification.as_str()) {
+        return Err(WorkbenchError::cli_protocol()
+            .with_detail(format!("unknown reconcile classification: {}", payload.classification)));
+    }
+    Ok(payload)
+}
+
 /// Query the provider status for one agent (claude | codex) via `aisc provider
 /// current` (05 §七). Secret-free: routing/auth metadata only. bash/cc-switch
 /// are not applicable (rejected client-side).
@@ -1607,6 +1726,75 @@ mod tests {
     }
 
     // --- svc-4: runtime services argv + canonical URL guard ---
+
+    #[test]
+    fn runtime_reconcile_argv_shape() {
+        let argv = runtime_reconcile_argv("C:\\ws", "inst-1");
+        assert_eq!(
+            argv,
+            vec![
+                "runtime".to_string(),
+                "reconcile".to_string(),
+                "--workspace".to_string(),
+                "C:\\ws".to_string(),
+                "--instance-id".to_string(),
+                "inst-1".to_string(),
+                "--format".to_string(),
+                "json".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn lease_argv_shapes() {
+        // claim: workspace + instance, no lease id
+        assert_eq!(
+            lease_argv("claim", "C:\\ws", Some("inst-1"), None),
+            vec![
+                "runtime".to_string(), "lease".to_string(), "claim".to_string(),
+                "--workspace".to_string(), "C:\\ws".to_string(),
+                "--instance-id".to_string(), "inst-1".to_string(),
+                "--format".to_string(), "json".to_string(),
+            ]
+        );
+        // heartbeat: both ids
+        assert_eq!(
+            lease_argv("heartbeat", "C:\\ws", Some("inst-1"), Some("l-9")),
+            vec![
+                "runtime".to_string(), "lease".to_string(), "heartbeat".to_string(),
+                "--workspace".to_string(), "C:\\ws".to_string(),
+                "--instance-id".to_string(), "inst-1".to_string(),
+                "--lease-id".to_string(), "l-9".to_string(),
+                "--format".to_string(), "json".to_string(),
+            ]
+        );
+        // inspect carries no ids: runtime lease inspect --workspace W --format json
+        assert_eq!(
+            lease_argv("inspect", "C:\\ws", None, None).len(),
+            7
+        );
+    }
+
+    #[test]
+    fn reconcile_payload_decodes_and_gates_classification() {
+        let payload: ReconcilePayload = serde_json::from_value(serde_json::json!({
+            "schema_version": "aisc.runtime-reconcile/v1",
+            "workspace_key": "abcd",
+            "classification": "stale_ephemeral",
+            "runtime_id": null,
+            "can_proceed": true,
+            "cleanup": {"attempted": true, "stopped": true,
+                        "removed": true, "registry_pruned": true},
+            "observed_at": "2026-08-25T00:00:00Z",
+            "error_code": null,
+            "technical_detail": null
+        }))
+        .unwrap();
+        assert!(payload.can_proceed);
+        assert!(payload.cleanup.registry_pruned);
+        assert!(ReconcilePayload::CLASSIFICATIONS.contains(&payload.classification.as_str()));
+        assert!(!ReconcilePayload::CLASSIFICATIONS.contains(&"bogus".to_string().as_str()));
+    }
 
     #[test]
     fn runtime_services_argv_shape() {

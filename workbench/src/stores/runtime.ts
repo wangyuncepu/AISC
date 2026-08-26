@@ -114,6 +114,9 @@ export const useRuntimeStore = defineStore("runtime", () => {
     pickAndPinCli,
     setExitError,
     confirmExit: () => ws.confirmExit(),
+    /** runtime-lifecycle-ux Stage 3 (02 §4): structured-shutdown runtime
+     * targets for the App exit flow. */
+    shutdownTargets: () => ws.shutdownTargets(),
     flushSave: () => ws.flushSave(),
     loadHistory: () => ws.loadHistory(),
     // IDEA-3 (3d): Settings is a WORKSPACE-layer sentinel now — forwarded
@@ -185,7 +188,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     dockerStartedAt: fwdRef("dockerStartedAt"),
 
     // instance computed (read-only forward)
-    restorableLayout: computed(() => inst.value.restorableLayout.value),
+    reconcile: fwdRef("reconcile"),
 
     // instance methods (call-time re-lookup -> ACTIVE workspace)
     buildPatch: fwdFn("buildPatch"),
@@ -198,7 +201,6 @@ export const useRuntimeStore = defineStore("runtime", () => {
     recomputePreflightNeeded: fwdFn("recomputePreflightNeeded"),
     startDockerAndRepreflight: fwdFn("startDockerAndRepreflight"),
     startFromSummary: fwdFn("startFromSummary"),
-    resumeLayout: fwdFn("resumeLayout"),
     cancelStart: fwdFn("cancelStart"),
     keepCancelledRuntime: fwdFn("keepCancelledRuntime"),
     stopCancelledRuntime: fwdFn("stopCancelledRuntime"),
@@ -229,8 +231,6 @@ export const useRuntimeStore = defineStore("runtime", () => {
     clearWebServices: fwdFn("clearWebServices"),
     selectRecentWorkspace: fwdFn("selectRecentWorkspace"),
     loadConflicts: fwdFn("loadConflicts"),
-    stopConflictRuntime: fwdFn("stopConflictRuntime"),
-    removeConflictRuntime: fwdFn("removeConflictRuntime"),
     retryFromConflict: fwdFn("retryFromConflict"),
     openCcSwitchUiTab: fwdFn("openCcSwitchUiTab"),
     closeCcSwitchUiTab: fwdFn("closeCcSwitchUiTab"),

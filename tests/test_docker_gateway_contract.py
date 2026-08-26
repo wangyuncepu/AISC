@@ -141,5 +141,106 @@ class CliGatewayTests(unittest.TestCase):
         executor.run_captured.assert_called_once()
 
 
+class StructuredContainerResultsTests(unittest.TestCase):
+    """A0 (docker-ownership-foundation): list/inspect stably carry labels,
+    image ref and the content-addressed image ID — the ownership
+    classification service (A1) builds on exactly these fields."""
+
+    def _sdk_list_client(self):
+        container = mock.Mock()
+        container.id = "aaaaaaaaaaaaaaaa"
+        container.name = "/aisc-wb-test".lstrip("/")
+        container.status = "running"
+        container.image.tags = ["super-claude:latest"]
+        container.attrs = {
+            "State": {"Status": "running"},
+            "Config": {"Labels": {"io.aisc.managed": "true"}, "Image": "super-claude:latest"},
+            "Image": "sha256:bbbb",
+        }
+        client = mock.Mock()
+        client.containers.list.return_value = [container]
+        return client, container
+
+    def test_sdk_list_carries_labels_and_image_id(self):
+        client, container = self._sdk_list_client()
+        g = SdkGateway(client=client)
+        rows = g.list_containers(all=True).containers
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].labels, {"io.aisc.managed": "true"})
+        self.assertEqual(rows[0].image, "super-claude:latest")
+        self.assertEqual(rows[0].image_id, "sha256:bbbb")
+
+    def test_sdk_inspect_carries_labels_and_image_id(self):
+        client, container = self._sdk_list_client()
+        inspect_attrs = {
+            "Id": "aaaaaaaaaaaaaaaa",
+            "Name": "/aisc-wb-test",
+            "State": {"Status": "running"},
+            "Config": {"Image": "super-claude:latest", "Labels": {"io.aisc.kind": "runtime"}},
+            "Image": "sha256:bbbb",
+        }
+        container.attrs = inspect_attrs
+        client.containers.get.return_value = container
+        g = SdkGateway(client=client)
+        r = g.inspect_container("aisc-wb-test")
+        self.assertEqual(r.image, "super-claude:latest")       # ref
+        self.assertEqual(r.image_id, "sha256:bbbb")            # content ID ≠ ref
+        self.assertEqual(r.labels, {"io.aisc.kind": "runtime"})
+        self.assertEqual(r.name, "aisc-wb-test")
+
+    def test_cli_list_parses_tab_format_rows(self):
+        executor = mock.Mock()
+        executor.list_containers.return_value = ProcessResult(
+            exit_code=0,
+            stdout="aaaa\taisc-wb-1\tsuper-claude:latest\tUp 2 hours\nbbbb\tother\talpine:3\tExited (0)",
+        )
+        g = CliGateway(executor=executor)
+        rows = g.list_containers(all=True).containers
+        self.assertEqual([r.id for r in rows], ["aaaa", "bbbb"])
+        self.assertEqual(rows[0].name, "aisc-wb-1")
+        self.assertEqual(rows[0].image, "super-claude:latest")
+        self.assertEqual(rows[0].status, "Up 2 hours")
+        # docker ps cannot provide labels / image ID — documented empties.
+        self.assertEqual(rows[0].labels, {})
+        self.assertEqual(rows[0].image_id, "")
+
+    def test_cli_inspect_parses_machine_json(self):
+        import json as _json
+
+        payload = [{
+            "Id": "aaaa",
+            "Name": "/aisc-wb-2",
+            "State": {"Status": "exited"},
+            "Config": {
+                "Image": "super-claude:latest",
+                "Labels": {"io.aisc.managed": "true", "io.aisc.kind": "runtime"},
+            },
+            "Image": "sha256:cccc",
+        }]
+        executor = mock.Mock()
+        executor.inspect_container.return_value = ProcessResult(
+            exit_code=0, stdout=_json.dumps(payload),
+        )
+        g = CliGateway(executor=executor)
+        r = g.inspect_container("aisc-wb-2")
+        self.assertEqual(r.container_id, "aaaa")
+        self.assertEqual(r.name, "aisc-wb-2")
+        self.assertEqual(r.state, "exited")
+        self.assertEqual(r.image, "super-claude:latest")
+        self.assertEqual(r.labels["io.aisc.kind"], "runtime")
+        self.assertEqual(r.image_id, "sha256:cccc")
+
+    def test_cli_inspect_garbage_stays_fail_closed(self):
+        executor = mock.Mock()
+        executor.inspect_container.return_value = ProcessResult(
+            exit_code=0, stdout="not json at all",
+        )
+        g = CliGateway(executor=executor)
+        r = g.inspect_container("x")
+        self.assertEqual(r.container_id, "")
+        self.assertEqual(r.image_id, "")
+        self.assertEqual(r.operation.exit_code, 0)  # transport ok; fields empty
+
+
 if __name__ == "__main__":
     unittest.main()
