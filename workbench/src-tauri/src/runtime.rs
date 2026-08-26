@@ -179,6 +179,12 @@ pub struct RuntimeSnapshot {
     pub observed_at: String,
     #[serde(default)]
     pub stale: bool,
+    /// runtime-lifecycle-ux 3a: advisory dependency policy + host-side
+    /// toolchain health (absent on old CLIs — consumers render nothing).
+    #[serde(default)]
+    pub dependency_policy: String,
+    #[serde(default)]
+    pub toolchain: Option<Value>,
 }
 
 /// `aisc runtime list` envelope `data` (§5.3): `{runtimes, observed_at}`.
