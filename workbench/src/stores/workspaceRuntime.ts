@@ -9,6 +9,7 @@ import {
 } from "@tauri-apps/plugin-notification";
 import type {
   BuildEvent,
+  BuildProgressData,
   BuildStatus,
   Freshness,
   HistoryPatch,
@@ -205,6 +206,12 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   // frozen duration is shown and never grows.
   const buildStatus = ref<BuildStatus>("idle");
   const buildLog = ref("");
+  // v2.1.7 S4 (Gate-S4): structured progress + the full-log path. buildLog
+  // is a BOUNDED tail ring — the complete raw output lives in the file the
+  // backend names in build.start (A-21748: no unbounded Vue string).
+  const buildProgress = ref<BuildProgressData | null>(null);
+  const buildLogPath = ref<string | null>(null);
+  const BUILD_LOG_RING_CHARS = 64 * 1024;
   const buildTag = ref("");
   const buildError = ref<WorkbenchError | null>(null);
   /** G-17: per-pane PTY output buffer (base64 chunks). The store owns the
@@ -337,18 +344,31 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     const op = ++buildOpId;
     buildTag.value = tag;
     buildLog.value = "";
+    buildProgress.value = null;
+    buildLogPath.value = null;
     buildError.value = null;
     buildStatus.value = "building";
     buildStartedAt.value = Date.now();
     buildFinishedAt.value = null;
     buildDurationMs.value = null;
     status.value = "building";
-    // Channel only streams opaque build.output chunks for display.
+    // Channel streams opaque build.output chunks for the tail log AND the
+    // structured build.progress facts (S4: the emitter is the only parser).
     const ch = new Channel<BuildEvent>();
     ch.onmessage = (ev) => {
       if (ev.type === "build.output") {
         const chunk = ev.data?.chunk;
-        if (typeof chunk === "string") buildLog.value += chunk;
+        if (typeof chunk === "string") {
+          buildLog.value += chunk;
+          if (buildLog.value.length > BUILD_LOG_RING_CHARS) {
+            buildLog.value = buildLog.value.slice(-BUILD_LOG_RING_CHARS);
+          }
+        }
+      } else if (ev.type === "build.start") {
+        const p = ev.data?.log_path;
+        if (typeof p === "string" && p) buildLogPath.value = p;
+      } else if (ev.type === "build.progress") {
+        buildProgress.value = ev.data as unknown as BuildProgressData;
       }
     };
     try {
@@ -368,6 +388,18 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     freezeBuildDuration();
     if (buildStatus.value === "complete" || buildStatus.value === "failed") {
       await maybeNotifyBuildFinished();
+    }
+  }
+
+  /** S4: open the complete build log in the OS file manager (the store keeps
+   *  only the bounded tail; the file is the full story). */
+  async function revealBuildLog(): Promise<void> {
+    const p = buildLogPath.value;
+    if (!p) return;
+    try {
+      await ipc.workspaceRevealDataFile(p);
+    } catch {
+      /* best-effort UI affordance */
     }
   }
 
@@ -422,9 +454,16 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   async function cancelBuild() {
     try {
-      await ipc.cancelBuild(buildTag.value);
-    } catch {
-      /* best-effort */
+      const hit = await ipc.cancelBuild(buildTag.value);
+      if (!hit) {
+        // 2026-08-27 manual test (cancel no-op): make a MISSING op visible —
+        // previously both transport errors and key misses vanished here.
+        void ipc.logUiEvent?.("build", "error", "WB_ERR_BUILD_CANCEL_MISSED");
+        console.warn("[build] cancel missed: no active op for", buildTag.value);
+      }
+    } catch (e) {
+      void ipc.logUiEvent?.("build", "error", "WB_ERR_BUILD_CANCEL_FAILED");
+      console.error("[build] cancel transport failed:", e);
     }
   }
 
@@ -1627,6 +1666,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     cancelInspect,
     buildStatus,
     buildLog,
+  buildProgress,
+  buildLogPath,
+  revealBuildLog,
     buildTag,
     buildError,
     buildStartedAt,

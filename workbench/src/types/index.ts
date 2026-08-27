@@ -742,6 +742,20 @@ export interface BuildEvent {
 
 export type BuildStatus = "idle" | "building" | "complete" | "failed" | "cancelled";
 
+// --- v2.1.7 S4 (Gate-S4 §1): structured build progress ---
+
+/** `build.progress` data payload — the ONLY progress fact source (the UI
+ *  never parses build.output). Null fields mean "not reliably known". */
+export interface BuildProgressData {
+  phase: "prepare" | "pull" | "steps" | "export" | "done" | string;
+  step_current: number | null;
+  step_total: number | null;
+  /** Determinate percent, monotonic, <100 until build.complete. */
+  percent: number | null;
+  progress_kind: "determinate" | "indeterminate";
+  summary: string;
+}
+
 // --- S2.3.a: observability (04 §六.1) ---
 
 /** Runtime observation freshness quality (not a Runtime state). */

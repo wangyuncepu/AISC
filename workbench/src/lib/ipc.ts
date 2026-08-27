@@ -231,8 +231,9 @@ export const cancelRuntimeStart = (runtimeId: string) =>
 export const buildImage = (tag: string, onEvent: Channel<BuildEvent>) =>
   invoke<void>("build_image", { tag, onEvent });
 
-/** IDEA-3 (3b): keyed by the build tag. */
-export const cancelBuild = (tag: string) => invoke<void>("cancel_build", { tag });
+/** IDEA-3 (3b): keyed by the build tag. Returns whether an active op was
+ *  found and cancelled (false = cancel missed — logged by the caller). */
+export const cancelBuild = (tag: string) => invoke<boolean>("cancel_build", { tag });
 
 // --- S4.1.b fix: start the Docker engine (Docker Desktop) ---
 
@@ -265,6 +266,10 @@ export const workspaceHistoryRemove = (path: string, expectedHistoryRevision: nu
 
 export const workspacePathExists = (path: string) =>
   invoke<boolean>("workspace_path_exists", { path });
+
+/** S4: reveal the build log file (data-root paths only) in the OS file manager. */
+export const workspaceRevealDataFile = (path: string) =>
+  invoke<void>("workspace_reveal_data_file", { path });
 
 // --- Stage 5 (ONB-01): onboarding state (schema-versioned, no secrets) ---
 

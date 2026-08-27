@@ -10,8 +10,10 @@ this module never calls ``subprocess.run`` directly.
 from __future__ import annotations
 
 import json
+import re
 import sys as _sys
-from dataclasses import dataclass, field
+import time as _time
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -22,6 +24,7 @@ from aisc.adapters.docker_ import (
     validate_build_resources,
 )
 from aisc.application.version import _parse_versions_env
+from aisc.cli.build_progress_parser import BuildProgressParser, parse_context_bytes
 from aisc.cli.output import JsonlEmitter
 
 
@@ -44,6 +47,82 @@ def _parse_build_env(root: Path) -> _BuildEnv:
     node_image = env.get("NODE_IMAGE", "")
     node_image_cn = env.get("NODE_IMAGE_CN", "")
     return _BuildEnv(use_cn_mirror=use_cn, node_image=node_image, node_image_cn=node_image_cn)
+
+
+def _open_build_log() -> Optional[Path]:
+    """Create a timestamped build log under ``<data-root>/logs`` (Gate-S4 §1:
+    the UI keeps only a bounded tail; the complete raw output lives here and
+    ``build.start`` carries its path). Best-effort — never blocks the build."""
+    try:
+        from aisc.application.data_root import shared_root
+        logs = shared_root() / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        path = logs / f"build-{int(_time.time())}.log"
+        path.write_text("", encoding="utf-8")
+        return path
+    except Exception:
+        return None
+
+
+def _previous_context_total(skip_log: Optional[Path]) -> Optional[float]:
+    """The FINAL `transferring context: X done` bytes from the most recent
+    PREVIOUS build log — the estimated denominator for the prepare-phase
+    progress bar (Gate-S4 §1 amendment). Best-effort; absence = the bar
+    simply stays indeterminate."""
+    try:
+        from aisc.application.data_root import shared_root
+        logs = shared_root() / "logs"
+        candidates = sorted(
+            (p for p in logs.glob("build-*.log") if p != skip_log),
+            key=lambda p: p.name,
+            reverse=True,
+        )
+        for path in candidates[:3]:  # newest few; tolerate partial logs
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            last: Optional[float] = None
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.endswith("done") or stripped.endswith("done)"):
+                    val = parse_context_bytes(stripped)
+                    if val:
+                        last = val
+            if last:
+                return last
+    except Exception:
+        pass
+    return None
+
+
+# Dockerfile instructions that count as build steps (candidate step_total).
+_INSTRUCTION_RE = re.compile(
+    r"^\s*(?:FROM|RUN|CMD|LABEL|MAINTAINER|EXPOSE|ENV|ADD|COPY|ENTRYPOINT"
+    r"|VOLUME|USER|WORKDIR|ARG|ONBUILD|STOPSIGNAL|HEALTHCHECK|SHELL)\b",
+    re.IGNORECASE,
+)
+
+
+def _dockerfile_instruction_count(plan: BuildPlan) -> Optional[int]:
+    """Metadata only (Gate-S4): the Dockerfile's instruction count as a
+    candidate ``step_total``. build.progress itself only trusts what the
+    docker output actually maps; this feeds the plan event for consumers
+    that want an early hint."""
+    try:
+        if not plan.root or not plan.dockerfile:
+            return None
+        text = (Path(plan.root) / plan.dockerfile).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    count = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if _INSTRUCTION_RE.match(stripped):
+            count += 1
+    return count or None
 
 
 def plan_build(
@@ -218,8 +297,14 @@ def run_build(
     )
 
     # --- emit start event ---
+    # v2.1.7 S4 (Gate-S4): build.start carries the full-log path — the raw
+    # docker output lands there while the UI keeps only a bounded tail.
+    build_log_path = _open_build_log() if emitter is not None else None
     if emitter is not None:
-        emitter.emit("build.start", data={"image_tag": plan.tag})
+        emitter.emit("build.start", data={
+            "image_tag": plan.tag,
+            "log_path": str(build_log_path) if build_log_path else None,
+        })
 
     # --- dry-run: zero docker calls ---
     if plan.dry_run:
@@ -258,6 +343,9 @@ def run_build(
             "docker_argv": result.docker_argv,
             "image_exists": image_exists,
             "cc_switch": result.cc_switch,
+            # Gate-S4: Dockerfile instruction count as candidate step_total
+            # metadata; build.progress only trusts what the output maps.
+            "step_total": _dockerfile_instruction_count(plan),
         })
 
     # --- execute docker build ---
@@ -288,9 +376,25 @@ def run_build(
                 data=result.to_dict(),
             )
     elif emitter is not None:
-        # --events: stream docker output as real-time build.output events.
+        # --events: stream docker output as real-time build.output events and
+        # (v2.1.7 S4, Gate-S4) derive structured build.progress updates from
+        # the SAME bytes — the emitter is the only progress fact source; the
+        # UI never parses build.output. Raw chunks also append to the
+        # build.start log file.
+        progress = BuildProgressParser(
+            context_total_bytes=_previous_context_total(build_log_path)
+        )
+
         def _on_chunk(stream: str, chunk: str) -> None:
+            if build_log_path is not None:
+                try:
+                    with open(build_log_path, "a", encoding="utf-8", errors="replace") as _lf:
+                        _lf.write(chunk)
+                except OSError:
+                    pass  # logging must never break the build
             emitter.emit("build.output", data={"stream": stream, "chunk": chunk})
+            for upd in progress.feed(chunk):
+                emitter.emit("build.progress", data=asdict(upd))
 
         try:
             proc = exec_.run_streaming_captured(argv, _on_chunk)

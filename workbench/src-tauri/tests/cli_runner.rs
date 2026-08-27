@@ -45,7 +45,7 @@ fn which_lookup(name: &str) -> Result<PathBuf, ()> {
     Err(())
 }
 
-const VALID_ENVELOPE: &str = r#"{"meta":{"protocol":"aisc.cli/v1","command":"version","exit_code":0,"timestamp":"t","version":"1.0","run_id":"r"},"data":{"cli_version":"1.0","capabilities":{"runtime":"aisc.runtime/v1","session":"aisc.session/v1","providerStatus":"aisc.provider-status/v1","buildEvents":"aisc.build-events/v1"}},"errors":[]}"#;
+const VALID_ENVELOPE: &str = r#"{"meta":{"protocol":"aisc.cli/v1","command":"version","exit_code":0,"timestamp":"t","version":"1.0","run_id":"r"},"data":{"cli_version":"1.0","capabilities":{"runtime":"aisc.runtime/v1","session":"aisc.session/v1","providerStatus":"aisc.provider-status/v1","buildEvents":"aisc.build-events/v2"}},"errors":[]}"#;
 
 fn argv_for(script: &str) -> Vec<String> {
     vec!["-c".into(), script.into()]

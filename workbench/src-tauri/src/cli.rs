@@ -36,7 +36,7 @@ const VERSION_TIMEOUT: Duration = Duration::from_secs(45);
 const EXPECTED_RUNTIME: &str = "aisc.runtime/v1";
 const EXPECTED_SESSION: &str = "aisc.session/v1";
 const EXPECTED_PROVIDER: &str = "aisc.provider-status/v1";
-const EXPECTED_BUILD: &str = "aisc.build-events/v1";
+const EXPECTED_BUILD: &str = "aisc.build-events/v2";
 /// svc-2/4 (web gateway): optional capability — `runtime services`.
 const EXPECTED_RUNTIME_SERVICES: &str = "aisc.runtime-services/v1";
 
@@ -97,7 +97,7 @@ pub fn parse_and_validate(stdout: &[u8], expected_exit_code: Option<i32>) -> Res
 }
 
 // ---------------------------------------------------------------------------
-// Build events (aisc.build-events/v1 JSONL, 05 §4.1)
+// Build events (aisc.build-events/v2 JSONL, 05 §4.1)
 // ---------------------------------------------------------------------------
 
 /// One JSONL line from `aisc build --events`. Forwarded verbatim to the
@@ -735,7 +735,26 @@ fn sigint_or_kill(child: &mut tokio::process::Child) {
     }
     #[cfg(not(unix))]
     {
-        let _ = child.start_kill();
+        // 2026-08-27 manual test (cancel no-op): start_kill terminates ONLY
+        // the CLI — the docker.exe grandchild survives and the build runs to
+        // natural completion ("cancel had no effect"). Kill the whole tree;
+        // fall back to start_kill if taskkill is unavailable.
+        let killed_tree = child.id().map(|pid| {
+            let mut cmd = std::process::Command::new("taskkill");
+            cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::null());
+            cmd.stdin(std::process::Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+            }
+            cmd.status().map(|s| s.success()).unwrap_or(false)
+        });
+        if !killed_tree.unwrap_or(false) {
+            let _ = child.start_kill();
+        }
     }
 }
 
@@ -844,8 +863,18 @@ pub async fn run_build_stream(
             }
             _ => Err(WorkbenchError::cli_protocol().with_detail(format!("unknown terminal: {t}"))),
         },
-        None => Err(WorkbenchError::cli_protocol()
-            .with_detail(format!("no terminal build event | stderr: {stderr_summary}"))),
+        None => {
+            // 2026-08-27 manual test: on Windows the tree-kill leaves no
+            // terminal event (§4.1.4 — no SIGINT equivalent). A kill WE
+            // initiated because the user cancelled is a CANCEL, not a
+            // protocol violation; only an unexpected missing terminal is.
+            if cancel.is_cancelled() {
+                Err(WorkbenchError::cli_cancelled().with_detail(stderr_summary))
+            } else {
+                Err(WorkbenchError::cli_protocol()
+                    .with_detail(format!("no terminal build event | stderr: {stderr_summary}")))
+            }
+        }
     }
 }
 
@@ -1188,7 +1217,7 @@ mod tests {
                      "timestamp": "t", "version": "1.0", "run_id": "r"},
             "data": {"cli_version": "1.0", "capabilities": {
                 "runtime": "aisc.runtime/v1", "session": "aisc.session/v1",
-                "providerStatus": "aisc.provider-status/v1", "buildEvents": "aisc.build-events/v1"}},
+                "providerStatus": "aisc.provider-status/v1", "buildEvents": "aisc.build-events/v2"}},
             "errors": []
         });
         let bytes = serde_json::to_vec(&body).unwrap();

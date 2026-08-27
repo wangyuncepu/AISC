@@ -66,7 +66,7 @@ describe("aisc.cli/v1 fixture set (TS consumer)", () => {
     expect(vi.capabilities.runtime).toBe("aisc.runtime/v1");
     expect(vi.capabilities.session).toBe("aisc.session/v1");
     expect(vi.capabilities.providerStatus).toBe("aisc.provider-status/v1");
-    expect(vi.capabilities.buildEvents).toBe("aisc.build-events/v1");
+    expect(vi.capabilities.buildEvents).toBe("aisc.build-events/v2");
   });
 
   it("error envelopes carry stable codes and matching exit codes", () => {

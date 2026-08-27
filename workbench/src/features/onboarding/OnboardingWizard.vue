@@ -111,6 +111,53 @@ watch(
   }
 );
 
+// --- v2.1.7 S4 (#27, Gate-S4 §2): live install heartbeat ---
+// The backend emits `docker-install-progress` every ≤5s while a winget/
+// bundled install runs (and a separate engine_start phase after). Latest
+// operation wins; a stale event from an older operation never overrides it.
+type InstallBeat = {
+  operationId: string; backend: string; phase: string; state: string;
+  elapsedMs: number; deadlineMs: number;
+};
+const installBeat = ref<InstallBeat | null>(null);
+let installOp: string | null = null;
+let unlistenBeat: (() => void) | null = null;
+const beatElapsedText = computed(() => {
+  const ms = installBeat.value?.elapsedMs ?? 0;
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  return `${m}m${String(s).padStart(2, "0")}s`;
+});
+const beatDeadlineText = computed(
+  () => `${Math.round((installBeat.value?.deadlineMs ?? 0) / 60000)}m`,
+);
+function onBeat(p: InstallBeat): void {
+  if (installOp === null) {
+    // Adopt only a fresh operation (its first running beat).
+    if (p.state === "running" && p.elapsedMs === 0) {
+      installOp = p.operationId;
+      installBeat.value = p;
+    }
+    return;
+  }
+  if (p.operationId !== installOp) return;
+  installBeat.value = p;
+  if (p.state !== "running") installOp = null; // terminal shown; next op may adopt
+}
+onMounted(async () => {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    unlistenBeat = await listen<InstallBeat>("docker-install-progress", (e) =>
+      onBeat(e.payload),
+    );
+  } catch {
+    /* no events = no display; the static hint stays */
+  }
+});
+onBeforeUnmount(() => {
+  unlistenBeat?.();
+});
+
 // Elapsed-seconds ticker while the wake-up runs (same pattern as the summary
 // page's banner).
 const nowMs = ref(Date.now());
@@ -298,6 +345,15 @@ async function finish() {
       </p>
       <p v-else-if="environment.readiness.engine === 'starting'" class="ob-note" role="status">
         {{ t("onboarding.env.startingHint") }}
+      </p>
+      <!-- v2.1.7 S4 (#27): live install/wait heartbeat from the backend
+           (elapsed + phase + deadline; replaces the longest-silent 10 min). -->
+      <p v-if="installBeat" class="ob-note ob-beat" role="status">
+        {{ t("onboarding.env.installBeat", {
+          phase: t(`onboarding.env.installPhase.${installBeat.phase}`),
+          elapsed: beatElapsedText,
+          deadline: beatDeadlineText,
+        }) }}
       </p>
       <!-- Terminal signal for OUR wake-up: green note the moment it readies
            (previously the step just silently unlocked 继续). -->
