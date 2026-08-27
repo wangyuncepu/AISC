@@ -735,7 +735,26 @@ fn sigint_or_kill(child: &mut tokio::process::Child) {
     }
     #[cfg(not(unix))]
     {
-        let _ = child.start_kill();
+        // 2026-08-27 manual test (cancel no-op): start_kill terminates ONLY
+        // the CLI — the docker.exe grandchild survives and the build runs to
+        // natural completion ("cancel had no effect"). Kill the whole tree;
+        // fall back to start_kill if taskkill is unavailable.
+        let killed_tree = child.id().map(|pid| {
+            let mut cmd = std::process::Command::new("taskkill");
+            cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::null());
+            cmd.stdin(std::process::Stdio::null());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+            }
+            cmd.status().map(|s| s.success()).unwrap_or(false)
+        });
+        if !killed_tree.unwrap_or(false) {
+            let _ = child.start_kill();
+        }
     }
 }
 

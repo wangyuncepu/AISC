@@ -1140,10 +1140,12 @@ pub async fn build_image(
 }
 
 #[tauri::command]
-pub async fn cancel_build(app: AppHandle, tag: String) -> Result<(), WorkbenchError> {
+pub async fn cancel_build(app: AppHandle, tag: String) -> Result<bool, WorkbenchError> {
     let build_ops = app.state::<BuildOps>().inner().clone();
-    cancel_op(&build_ops.0, &tag);
-    Ok(())
+    // 2026-08-27 manual test: a cancel that misses the op key must be
+    // VISIBLE — return whether an op was actually found and cancelled so
+    // the frontend can log a cancel_missed instead of silently swallowing.
+    Ok(cancel_op(&build_ops.0, &tag))
 }
 
 /// Start the Docker engine (Docker Desktop on Windows, Docker.app on macOS).

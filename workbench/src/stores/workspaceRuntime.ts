@@ -454,9 +454,16 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   async function cancelBuild() {
     try {
-      await ipc.cancelBuild(buildTag.value);
-    } catch {
-      /* best-effort */
+      const hit = await ipc.cancelBuild(buildTag.value);
+      if (!hit) {
+        // 2026-08-27 manual test (cancel no-op): make a MISSING op visible —
+        // previously both transport errors and key misses vanished here.
+        void ipc.logUiEvent?.("build", "error", "WB_ERR_BUILD_CANCEL_MISSED");
+        console.warn("[build] cancel missed: no active op for", buildTag.value);
+      }
+    } catch (e) {
+      void ipc.logUiEvent?.("build", "error", "WB_ERR_BUILD_CANCEL_FAILED");
+      console.error("[build] cancel transport failed:", e);
     }
   }
 
