@@ -192,6 +192,21 @@ function writeChunks(chunks: string[]): void {
   term.write(decoded.subarray(0, off));
 }
 
+/** v2.1.7 S6: first-screen quick-start card per session type (replaces the
+ *  meaningless "terminal ready" line). Written ONLY when the pane has no
+ *  buffered stream yet (fresh open); a rebuild of a live pane replays the
+ *  real session instead — the card would otherwise duplicate mid-scrollback
+ *  (it is view-only and never enters paneStreams). */
+function writeWelcomeCard(): void {
+  if ((store.paneStreams[props.paneId] ?? []).length > 0) return;
+  const key =
+    leafSessionType.value === "claude" || leafSessionType.value === "codex"
+      ? `terminal.card.${leafSessionType.value}`
+      : "terminal.card.bash";
+  const card = t(key);
+  for (const line of card.split("\n")) term?.writeln(line);
+}
+
 /** G-06 (A-G06-3): rebuild the Terminal view in place for renderer/font-family
  * changes. The session is STORE-owned (output buffered in paneStreams), so the
  * rebuild disposes only the view and replays the buffer - the PTY/session are
@@ -207,7 +222,7 @@ function rebuildTerminal() {
   fit = new FitAddon();
   term.loadAddon(fit);
   term.open(host);
-  term.writeln(t("terminal.welcome"));
+  writeWelcomeCard();
   term.onData(onTermData);
   term.onSelectionChange(onSelectionChange);
   mountWebgl();
@@ -763,7 +778,7 @@ onMounted(() => {
   fit = new FitAddon();
   term.loadAddon(fit);
   term.open(container.value!);
-  term.writeln(t("terminal.welcome"));
+  writeWelcomeCard();
   term.onData(onTermData);
   term.onSelectionChange(onSelectionChange);
   term.attachCustomKeyEventHandler(onTermCustomKey);

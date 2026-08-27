@@ -339,7 +339,12 @@ def cmd_shell(
             exit_code=1, error_code="AISC_ERR_CONTAINER_NOT_FOUND",
         )
 
-    argv = ["exec", "-it", name, "bash"]
+    # v2.1.7 S6 (Gate-S6/D10): interactive session opens inject the tutorial
+    # `help` function via `bash -c` + export -f + exec bash — per-session,
+    # no image/profile/workspace writes, non-interactive shells unaffected.
+    from aisc.cli.tutorial import session_bash_prelude
+
+    argv = ["exec", "-it", name, "bash", "-c", session_bash_prelude()]
     proc = exec_.run_streaming(argv)
 
     # Map transport errors — nonzero exit from docker exec is returned to caller
