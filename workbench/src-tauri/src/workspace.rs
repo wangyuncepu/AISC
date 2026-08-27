@@ -697,6 +697,44 @@ pub fn workspace_path_exists(path: String) -> bool {
     fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
 }
 
+/// Reveal a DATA-ROOT file (the build log the CLI named in build.start) in
+/// the OS file manager. Only paths under the shared data root are accepted —
+/// this is never a general-purpose explorer opener (S4 / A-21748).
+#[tauri::command]
+pub fn workspace_reveal_data_file(path: String) -> Result<(), WorkbenchError> {
+    let root = crate::data_root::validate_data_root()
+        .map_err(|e| WorkbenchError::workspace_io().with_detail(e.message()))?;
+    let target = Path::new(&path);
+    if !target.is_absolute() || !target.starts_with(&root) {
+        return Err(WorkbenchError::workspace_invalid()
+            .with_detail("path is outside the data root"));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", target.display()))
+            .creation_flags(0x08000000 /* CREATE_NO_WINDOW */)
+            .spawn()
+            .map_err(|e| WorkbenchError::workspace_io().with_detail(e.to_string()))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &target.to_string_lossy()])
+            .spawn()
+            .map_err(|e| WorkbenchError::workspace_io().with_detail(e.to_string()))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(target.parent().unwrap_or(target))
+            .spawn()
+            .map_err(|e| WorkbenchError::workspace_io().with_detail(e.to_string()))?;
+    }
+    Ok(())
+}
+
 /// Open a file/dir with the system default app (after containment).
 pub fn open_path(workspace: &Path, relative: &str) -> Result<(), WorkbenchError> {
     let target = resolve_existing(workspace, relative)?;

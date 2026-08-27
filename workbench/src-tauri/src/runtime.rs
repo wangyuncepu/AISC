@@ -1341,6 +1341,118 @@ fn bundled_docker_installer() -> Option<std::path::PathBuf> {
 /// awaiting and a clear failure on error. Console window is hidden. Returns
 /// Ok only when Docker Desktop.exe exists afterward.
 #[cfg(windows)]
+// --- v2.1.7 S4 (#27, Gate-S4 §2): docker install progress events ---
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DockerInstallProgress {
+    operation_id: String,
+    backend: &'static str,
+    phase: &'static str, // "install" | "engine_start"
+    state: &'static str, // "running" | "done" | "failed" | "timeout"
+    elapsed_ms: u128,
+    deadline_ms: u64,
+}
+
+fn emit_install_progress(app: &AppHandle, p: DockerInstallProgress) {
+    use tauri::Emitter;
+    let _ = app.emit("docker-install-progress", p);
+}
+
+/// Heartbeated install wait: a `docker-install-progress` event every 5s; on
+/// the deadline the child is KILLED and reaped BEFORE the timeout is
+/// reported (Gate-S4 §2 — a reported timeout never leaves an install
+/// running on in the background).
+async fn wait_install_with_heartbeat(
+    app: &AppHandle,
+    op: &str,
+    backend: &'static str,
+    mut child: tokio::process::Child,
+) -> std::io::Result<std::process::ExitStatus> {
+    let started = std::time::Instant::now();
+    let deadline = started + DOCKER_INSTALL_TIMEOUT;
+    let mk = |state: &'static str, elapsed_ms: u128| DockerInstallProgress {
+        operation_id: op.to_string(),
+        backend,
+        phase: "install",
+        state,
+        elapsed_ms,
+        deadline_ms: DOCKER_INSTALL_TIMEOUT.as_millis() as u64,
+    };
+    emit_install_progress(app, mk("running", 0));
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill().await;
+                    let _ = child.wait().await; // reap
+                    emit_install_progress(app, mk("timeout", started.elapsed().as_millis()));
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "install deadline reached; child killed and reaped",
+                    ));
+                }
+                emit_install_progress(app, mk("running", started.elapsed().as_millis()));
+            }
+            status = child.wait() => {
+                let s = status?;
+                emit_install_progress(
+                    app,
+                    mk(if s.success() { "done" } else { "failed" }, started.elapsed().as_millis()),
+                );
+                return Ok(s);
+            }
+        }
+    }
+}
+
+/// After a successful install: watch the ENGINE with its OWN deadline (the
+/// 10-minute install deadline never bleeds into engine readiness). Emits
+/// `phase=engine_start` heartbeats until `docker version` answers or 180s
+/// lapse. Detached — the wizard polls env readiness in parallel and stays
+/// the interactive source of truth.
+fn spawn_engine_start_watch(app: AppHandle, op: String, backend: &'static str) {
+    tokio::spawn(async move {
+        const ENGINE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(180);
+        let started = std::time::Instant::now();
+        let mk = |state: &'static str, elapsed_ms: u128| DockerInstallProgress {
+            operation_id: op.clone(),
+            backend,
+            phase: "engine_start",
+            state,
+            elapsed_ms,
+            deadline_ms: ENGINE_DEADLINE.as_millis() as u64,
+        };
+        emit_install_progress(&app, mk("running", 0));
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            if engine_probe_ok() {
+                emit_install_progress(&app, mk("done", started.elapsed().as_millis()));
+                return;
+            }
+            if started.elapsed() >= ENGINE_DEADLINE {
+                emit_install_progress(&app, mk("timeout", started.elapsed().as_millis()));
+                return;
+            }
+            emit_install_progress(&app, mk("running", started.elapsed().as_millis()));
+        }
+    });
+}
+
+fn engine_probe_ok() -> bool {
+    let mut cmd = std::process::Command::new("docker");
+    cmd.arg("version");
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    cmd.stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+    }
+    cmd.status().map(|s| s.success()).unwrap_or(false)
+}
+
 async fn install_docker_desktop_winget(app: &AppHandle) -> Result<(), String> {
     if !winget_available() {
         return Err("winget (App Installer) not available".into());
@@ -1361,22 +1473,26 @@ async fn install_docker_desktop_winget(app: &AppHandle) -> Result<(), String> {
     // GUI process (observed 2026-08-16). `DETACHED_PROCESS` alone can still
     // open a console. tokio's Command exposes creation_flags inherently.
     cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let result = tokio::time::timeout(DOCKER_INSTALL_TIMEOUT, child.wait()).await;
-    match result {
-        Ok(Ok(status)) if status.success() => {
-            // Confirm the exe appeared (install success even if the post-step
-            // launch is not immediate).
-            if docker_desktop_candidates().iter().any(|p| p.exists()) {
-                notify_docker(app, "Docker Desktop", "Docker Desktop 安装完成，正在启动引擎…");
-                Ok(())
-            } else {
-                Err("winget reported success but Docker Desktop.exe was not found".into())
-            }
+    let child = cmd.spawn().map_err(|e| e.to_string())?;
+    let op_id = uuid::Uuid::new_v4().to_string();
+    let status = match wait_install_with_heartbeat(app, &op_id, "winget", child).await {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            return Err("winget install timed out after 10 minutes".into())
         }
-        Ok(Ok(status)) => Err(format!("winget install failed (exit {:?})", status.code())),
-        Ok(Err(e)) => Err(format!("winget install error: {e}")),
-        Err(_) => Err("winget install timed out after 10 minutes".into()),
+        Err(e) => return Err(format!("winget install error: {e}")),
+    };
+    if !status.success() {
+        return Err(format!("winget install failed (exit {:?})", status.code()));
+    }
+    // Confirm the exe appeared (install success even if the post-step
+    // launch is not immediate).
+    if docker_desktop_candidates().iter().any(|p| p.exists()) {
+        notify_docker(app, "Docker Desktop", "Docker Desktop 安装完成，正在启动引擎…");
+        spawn_engine_start_watch(app.clone(), op_id, "winget");
+        Ok(())
+    } else {
+        Err("winget reported success but Docker Desktop.exe was not found".into())
     }
 }
 
@@ -1398,20 +1514,24 @@ async fn install_docker_desktop_bundled(
     cmd.stderr(std::process::Stdio::null());
     cmd.stdin(std::process::Stdio::null());
     cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
-    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
-    let result = tokio::time::timeout(DOCKER_INSTALL_TIMEOUT, child.wait()).await;
-    match result {
-        Ok(Ok(status)) if status.success() => {
-            if docker_desktop_candidates().iter().any(|p| p.exists()) {
-                notify_docker(app, "Docker Desktop", "Docker Desktop 安装完成，正在启动引擎…");
-                Ok(())
-            } else {
-                Err("bundled installer reported success but Docker Desktop.exe was not found".into())
-            }
+    let child = cmd.spawn().map_err(|e| e.to_string())?;
+    let op_id = uuid::Uuid::new_v4().to_string();
+    let status = match wait_install_with_heartbeat(app, &op_id, "bundled", child).await {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            return Err("bundled installer timed out after 10 minutes".into())
         }
-        Ok(Ok(status)) => Err(format!("bundled installer failed (exit {:?})", status.code())),
-        Ok(Err(e)) => Err(format!("bundled installer error: {e}")),
-        Err(_) => Err("bundled installer timed out after 10 minutes".into()),
+        Err(e) => return Err(format!("bundled installer error: {e}")),
+    };
+    if !status.success() {
+        return Err(format!("bundled installer failed (exit {:?})", status.code()));
+    }
+    if docker_desktop_candidates().iter().any(|p| p.exists()) {
+        notify_docker(app, "Docker Desktop", "Docker Desktop 安装完成，正在启动引擎…");
+        spawn_engine_start_watch(app.clone(), op_id, "bundled");
+        Ok(())
+    } else {
+        Err("bundled installer reported success but Docker Desktop.exe was not found".into())
     }
 }
 
