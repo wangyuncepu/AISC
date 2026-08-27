@@ -1,7 +1,13 @@
 import { defineStore } from "pinia";
 import { computed, markRaw, ref, shallowRef } from "vue";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import type { WorkbenchError, WorkbenchHistory, WorkspaceRecord } from "../types";
+import type {
+  ForgetResult,
+  ForgetPreview,
+  WorkbenchError,
+  WorkbenchHistory,
+  WorkspaceRecord,
+} from "../types";
 import * as ipc from "../lib/ipc";
 import { i18n } from "../i18n";
 import { sameWorkspace } from "./tabLayout";
@@ -412,6 +418,47 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     }
   }
 
+  // --- v2.1.7 S2 (⑦⑧): forget transaction + record-only clear ---
+  // The destructive path is ONE backend IPC (never chained removals in the
+  // frontend); the store only supplies the current revision and refreshes
+  // the shared history afterwards. CAS conflicts propagate as rejections so
+  // the caller can offer a retry after loadHistory() picked up the new rev.
+
+  async function forgetPreview(path: string): Promise<ForgetPreview> {
+    return ipc.workspaceForgetPreview(path);
+  }
+
+  async function forgetWorkspace(path: string): Promise<ForgetResult> {
+    try {
+      return await ipc.workspaceForget(path, historyRevision.value);
+    } finally {
+      // Refresh even on failure so a CAS-conflict retry uses the fresh
+      // revision (the caller keeps its dialog open and can retry).
+      await loadHistory();
+    }
+  }
+
+  /** ⑧ "clear the moved/deleted record": drops the history entry only. */
+  async function clearHistoryEntry(path: string): Promise<void> {
+    try {
+      await ipc.workspaceHistoryRemove(path, historyRevision.value);
+    } finally {
+      await loadHistory();
+    }
+  }
+
+  /** ⑧ click guard: does the recent's path still exist on disk? Store-routed
+   *  per the layer contract (F-A01) — components never touch lib/ipc facts. */
+  async function workspacePathExists(path: string): Promise<boolean> {
+    try {
+      return await ipc.workspacePathExists(path);
+    } catch {
+      // Fail-open: preflight surfaces the real error; the guard is a UX
+      // nicety for the friendly moved/deleted flow, not a hard gate.
+      return true;
+    }
+  }
+
   return {
     // constants/state
     runtimes,
@@ -432,6 +479,10 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     history,
     historyRevision,
     recentWorkspaces,
+    forgetPreview,
+    forgetWorkspace,
+    clearHistoryEntry,
+    workspacePathExists,
     // activation
     activate,
     openLauncher,
