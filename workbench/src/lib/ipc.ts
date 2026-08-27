@@ -11,6 +11,8 @@ import type {
   DoctorReport,
   EnvReadiness,
   FetchModelsResult,
+  ForgetResult,
+  ForgetPreview,
   OpTrace,
   HistoryPatch,
   InstallerHandoff,
@@ -249,6 +251,20 @@ export const loadHistory = () => invoke<WorkbenchHistory>("load_history");
 
 export const saveHistory = (expectedRevision: number, patch: HistoryPatch) =>
   invoke<number>("save_history", { expectedRevision, patch });
+
+// --- v2.1.7 S2: workspace forget / record-only clear (⑦⑧) ---
+
+export const workspaceForgetPreview = (path: string) =>
+  invoke<ForgetPreview>("workspace_forget_preview", { path });
+
+export const workspaceForget = (path: string, expectedHistoryRevision: number) =>
+  invoke<ForgetResult>("workspace_forget", { path, expectedHistoryRevision });
+
+export const workspaceHistoryRemove = (path: string, expectedHistoryRevision: number) =>
+  invoke<number>("workspace_history_remove", { path, expectedHistoryRevision });
+
+export const workspacePathExists = (path: string) =>
+  invoke<boolean>("workspace_path_exists", { path });
 
 // --- Stage 5 (ONB-01): onboarding state (schema-versioned, no secrets) ---
 

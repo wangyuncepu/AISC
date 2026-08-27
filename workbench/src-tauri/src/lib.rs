@@ -36,7 +36,8 @@ use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use watcher::{workspace_rescan, workspace_watch_start, workspace_watch_stop, WatcherState};
 use workspace::{
     workspace_copy_entry, workspace_copy_path, workspace_create_dir, workspace_create_file,
-    workspace_list, workspace_open, workspace_preview, workspace_rename, workspace_reveal,
+    workspace_forget, workspace_forget_preview, workspace_history_remove, workspace_list,
+    workspace_open, workspace_path_exists, workspace_preview, workspace_rename, workspace_reveal,
 };
 use doctor::{diagnostic_bundle, logs_tail, run_doctor};
 use logging::log_ui_event;
@@ -144,6 +145,10 @@ pub fn run(cli_arg: Option<String>) {
             workspace_open,
             workspace_preview,
             workspace_reveal,
+            workspace_forget_preview,
+            workspace_forget,
+            workspace_history_remove,
+            workspace_path_exists,
             workspace_copy_path,
             workspace_create_file,
             workspace_create_dir,

@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::error::WorkbenchError;
 
@@ -205,6 +205,496 @@ fn resolve_existing(workspace: &Path, relative: &str) -> Result<PathBuf, Workben
         );
     }
     Ok(target)
+}
+
+// --- v2.1.7 S2: workspace "forget" (history entry + AISC data-root state) ---
+//
+// Plan docs/plans/2.1.7-dev-plans 02 §A: ONE backend command performs the
+// whole destructive transaction — the frontend never chains removals or
+// builds deletion paths itself. Identity is the canonical workspace path →
+// workspace key → data-root resolver; the only deletable target is the
+// resolver-returned `<data-root>/workspaces/<key>/` subtree. The user's
+// on-disk workspace files are NEVER touched. Docker named toolchain volumes
+// are NEVER deleted (D12): they are detected, listed, and left for the user.
+
+/// Lease heartbeat freshness bound: 45s TTL (3 × 15s) + slack. A lease file
+/// whose mtime is younger counts as a LIVE cross-instance owner and blocks
+/// the forget (fail-closed; plan A-21728).
+const FORGET_LEASE_FRESH_MS: u64 = 60_000;
+
+/// Known per-workspace state categories under workspaces/<key>/. The preview
+/// lists NAMES ONLY — never contents; secrets stay on disk until the purge.
+const FORGET_CATEGORIES: &[&str] = &["claude", "codex", "cc-switch", "runtime", "toolchain"];
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgetPreview {
+    pub workspace_path: String,
+    pub workspace_key: String,
+    /// Some(reason) when the workspace cannot be forgotten right now:
+    /// "open-here" (this window holds it) | "lease-active" (another live
+    /// instance). None = clear to proceed after user confirmation.
+    pub blocked_reason: Option<String>,
+    pub data_present: bool,
+    pub categories: Vec<String>,
+    /// Named toolchain volumes that would be KEPT (D12) — listed so the user
+    /// can clean them manually; empty when none exist or the check was
+    /// skipped (see warnings).
+    pub named_volumes: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForgetResult {
+    pub workspace_key: String,
+    pub history_removed: bool,
+    pub data_removed: bool,
+    /// Quarantine dir left behind when the purge failed. The history entry is
+    /// already gone at that point, so the state is recoverable manually.
+    pub quarantine_left: Option<String>,
+    pub named_volumes_kept: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Shared gather: identity, target subtree, liveness, state categories.
+struct ForgetGather {
+    key: String,
+    ws_dir: PathBuf,
+    root: PathBuf,
+    blocked_reason: Option<String>,
+    data_present: bool,
+    categories: Vec<String>,
+    warnings: Vec<String>,
+}
+
+fn forget_gather(
+    active_in_this_instance: &[String],
+    path: &str,
+    dirs_override: Option<(PathBuf, PathBuf)>,
+) -> Result<ForgetGather, WorkbenchError> {
+    let ws_path = Path::new(path);
+    let canonical = crate::data_root::canonical_workspace_path(ws_path);
+    let key = crate::data_root::workspace_hash_v1(ws_path);
+    let (root, ws_dir) = match dirs_override {
+        Some(pair) => pair,
+        None => {
+            let resolved = crate::data_root::resolve_data_root(ws_path)
+                .map_err(|e| WorkbenchError::workspace_io().with_detail(e.message()))?;
+            let ws_dir = resolved.workspace_dir();
+            (resolved.root, ws_dir)
+        }
+    };
+
+    // Liveness, fail-closed (plan §A.6): this instance's heartbeat beats…
+    let mut blocked_reason = None;
+    if active_in_this_instance
+        .iter()
+        .any(|a| a == path || a == &canonical || a == &key)
+    {
+        blocked_reason = Some("open-here".to_string());
+    }
+    let mut warnings = Vec::new();
+    let lease_file = ws_dir.join("runtime-lease.json");
+    if blocked_reason.is_none() && lease_file.exists() {
+        let fresh = fs::metadata(&lease_file)
+            .and_then(|m| m.modified())
+            .map(|mtime| {
+                // A future mtime (clock skew) reads as age 0 = fresh.
+                mtime
+                    .elapsed()
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0)
+            })
+            .map(|age| age < FORGET_LEASE_FRESH_MS)
+            .unwrap_or(true); // unreadable lease file: fail-closed
+        if fresh {
+            blocked_reason = Some("lease-active".to_string());
+        } else {
+            warnings.push("stale-lease-file-removed-with-state".to_string());
+        }
+    }
+
+    let data_present = ws_dir.is_dir();
+    let mut categories = Vec::new();
+    if data_present {
+        if let Ok(rd) = fs::read_dir(&ws_dir) {
+            let mut others = 0u32;
+            for entry in rd.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if FORGET_CATEGORIES.contains(&name.as_str()) {
+                    categories.push(name);
+                } else if name != "runtime-lease.json" {
+                    others += 1;
+                }
+            }
+            if others > 0 {
+                categories.push(format!("other:{others}"));
+            }
+        }
+        categories.sort();
+    }
+
+    Ok(ForgetGather {
+        key,
+        ws_dir,
+        root,
+        blocked_reason,
+        data_present,
+        categories,
+        warnings,
+    })
+}
+
+/// Best-effort list of the workspace's named toolchain volumes (read-only;
+/// D12 keeps them). Failure maps to Err so callers can surface a warning
+/// instead of silently claiming "none".
+fn named_toolchain_volumes(key: &str) -> Result<Vec<String>, String> {
+    let mut cmd = std::process::Command::new("docker");
+    cmd.args([
+        "volume",
+        "ls",
+        "--filter",
+        &format!("label=io.aisc.workspace-key={key}"),
+        "--format",
+        "{{.Name}}",
+    ]);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::null());
+    cmd.stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+    }
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!("docker volume ls exited {:?}", out.status.code()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn forget_now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// The transaction core, isolated from Tauri so tests drive it directly.
+/// Order (plan §A.3-4): containment symlink check → quarantine rename
+/// (same-volume, atomic) → history removal under its cross-process lock
+/// (rollback the rename on ANY history failure) → purge the quarantine.
+fn forget_execute(
+    ws_dir: &Path,
+    root: &Path,
+    history_dir: &Path,
+    path: &str,
+    expected_revision: u64,
+) -> Result<(ForgetResult, bool), WorkbenchError> {
+    let io_err = |e: std::io::Error| WorkbenchError::workspace_io().with_detail(e.to_string());
+
+    if fs::symlink_metadata(ws_dir)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        // Reparse point at the subtree root: fail-closed (plan §A.2).
+        return Err(WorkbenchError::workspace_invalid()
+            .with_detail("workspace state dir is a symlink/reparse point — refusing"));
+    }
+
+    let mut warnings = Vec::new();
+    let mut quarantine_left = None;
+    let mut data_removed = false;
+
+    let quarantine_target = if ws_dir.is_dir() {
+        let q_dir = root.join(".quarantine");
+        fs::create_dir_all(&q_dir).map_err(io_err)?;
+        let name = ws_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "workspace".to_string());
+        let target = q_dir.join(format!("{name}-{}", forget_now_ms()));
+        // 2026-08-27 manual test ("bb"): closing a workspace and forgetting it
+        // immediately can race the bind-mount handle teardown — Windows
+        // returns a sharing violation on the rename for a few hundred ms.
+        // Bounded retry instead of failing the whole transaction.
+        let mut renamed = false;
+        let mut last_err: Option<std::io::Error> = None;
+        for attempt in 0..3 {
+            match fs::rename(ws_dir, &target) {
+                Ok(()) => {
+                    renamed = true;
+                    break;
+                }
+                Err(e) => {
+                    if attempt == 2 {
+                        last_err = Some(e);
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                    }
+                }
+            }
+        }
+        if !renamed {
+            return Err(WorkbenchError::workspace_io().with_detail(format!(
+                "quarantine rename failed: {}",
+                last_err.map(|e| e.to_string()).unwrap_or_default()
+            )));
+        }
+        Some(target)
+    } else {
+        None
+    };
+
+    match crate::history::remove_workspace(history_dir, expected_revision, path) {
+        Ok((_rev, history_removed)) => {
+            if let Some(q) = &quarantine_target {
+                match fs::remove_dir_all(q) {
+                    Ok(()) => data_removed = true,
+                    Err(e) => {
+                        quarantine_left =
+                            Some(q.to_string_lossy().to_string());
+                        warnings.push(format!("quarantine purge failed: {e}"));
+                    }
+                }
+            }
+            Ok((
+                ForgetResult {
+                    workspace_key: String::new(), // filled by the caller
+                    history_removed,
+                    data_removed,
+                    quarantine_left,
+                    named_volumes_kept: Vec::new(),
+                    warnings,
+                },
+                quarantine_target.is_some(),
+            ))
+        }
+        Err(e) => {
+            // Half-failure semantics: roll the quarantine back so the disk
+            // returns to the pre-transaction state (plan §A.4). If even the
+            // rollback fails the state stays safe in .quarantine — surface it.
+            let rollback_note = match &quarantine_target {
+                Some(q) if fs::rename(q, ws_dir).is_err() => format!(
+                    " | quarantine rollback failed, state preserved at {}",
+                    q.display()
+                ),
+                _ => String::new(),
+            };
+            Err(WorkbenchError::workspace_conflict()
+                .with_detail(format!("{e}{rollback_note}")))
+        }
+    }
+}
+
+/// Stop+remove AISC-OWNED containers bound to this workspace key before the
+/// state-dir rename. Ownership labels (io.aisc.managed + owner=workbench +
+/// workspace-key) prove they are ours, and the lease-fresh check earlier
+/// already blocks LIVE other instances — their heartbeats keep
+/// runtime-lease.json fresh. What reaches here is an ORPHANED session: the
+/// app died (e.g. a dev restart) so the lease went stale while the container
+/// kept running, holding bind-mount handles that make the rename fail with
+/// ACCESS_DENIED (2026-08-27 "bb", os error 5). The label value is the BARE
+/// hex key (no sha256-v1: prefix — see the inspect evidence).
+fn forget_stop_owned_containers(key: &str) -> Result<u32, String> {
+    let bare = key.strip_prefix("sha256-v1:").unwrap_or(key);
+    let run = |args: Vec<String>| -> Result<std::process::Output, String> {
+        let mut cmd = std::process::Command::new("docker");
+        cmd.args(&args);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::null());
+        cmd.stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+        }
+        cmd.output().map_err(|e| e.to_string())
+    };
+    let out = run(vec![
+        "ps".into(),
+        "-aq".into(),
+        "--filter".into(),
+        "label=io.aisc.managed=true".into(),
+        "--filter".into(),
+        format!("label=io.aisc.workspace-key={bare}"),
+    ])?;
+    if !out.status.success() {
+        return Err(format!("docker ps exited {:?}", out.status.code()));
+    }
+    let ids: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    let mut stopped = 0u32;
+    for id in &ids {
+        // Best-effort per container; a survivor surfaces via the rename's
+        // own io error detail rather than aborting the whole transaction.
+        let stop_ok = run(vec!["stop".into(), id.clone()])
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        let rm_ok = run(vec!["rm".into(), id.clone()])
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if stop_ok && rm_ok {
+            stopped += 1;
+        }
+    }
+    Ok(stopped)
+}
+
+/// Read-only preview for the confirm dialog: what WOULD be deleted, what is
+/// kept, and whether anything blocks the operation right now.
+#[tauri::command]
+pub async fn workspace_forget_preview(
+    app: AppHandle,
+    path: String,
+) -> Result<ForgetPreview, WorkbenchError> {
+    let active = {
+        let supervisor = app.state::<crate::lease::LeaseSupervisor>();
+        supervisor.active_workspaces()
+    };
+    let g = forget_gather(&active, &path, None)?;
+    let mut warnings = g.warnings;
+    let named_volumes = match named_toolchain_volumes(&g.key) {
+        Ok(v) => v,
+        Err(e) => {
+            warnings.push(format!("named-volume check skipped: {e}"));
+            Vec::new()
+        }
+    };
+    Ok(ForgetPreview {
+        workspace_path: path,
+        workspace_key: g.key,
+        blocked_reason: g.blocked_reason,
+        data_present: g.data_present,
+        categories: g.categories,
+        named_volumes,
+        warnings,
+    })
+}
+
+/// The destructive transaction. ONE command, structured result, idempotent.
+#[tauri::command]
+pub async fn workspace_forget(
+    app: AppHandle,
+    path: String,
+    expected_history_revision: u64,
+) -> Result<ForgetResult, WorkbenchError> {
+    let active = {
+        let supervisor = app.state::<crate::lease::LeaseSupervisor>();
+        supervisor.active_workspaces()
+    };
+    let g = forget_gather(&active, &path, None)?;
+    if let Some(reason) = &g.blocked_reason {
+        return Err(WorkbenchError::workspace_conflict().with_detail(reason.clone()));
+    }
+    // Orphaned-session cleanup (see forget_stop_owned_containers): the live
+    // instances are already excluded by the blocked check above.
+    let mut orphan_note: Option<String> = None;
+    if g.data_present {
+        match forget_stop_owned_containers(&g.key) {
+            Ok(n) if n > 0 => orphan_note = Some(format!("orphaned-containers-stopped:{n}")),
+            Ok(_) => {}
+            Err(e) => orphan_note = Some(format!("orphan-container-check-failed:{e}")),
+        }
+    }
+    let history_dir = crate::session::config_dir(&app)?;
+    // Bounded auto-retry (2026-08-27 manual test "bb"): a concurrent history
+    // save can bump the disk revision between the store's capture and this
+    // transaction. forget_execute already rolled the quarantine back on the
+    // conflict, so re-running once with the fresh disk revision is safe.
+    let mut revision = expected_history_revision;
+    let outcome = {
+        let mut attempts = 0;
+        loop {
+            match forget_execute(&g.ws_dir, &g.root, &history_dir, &path, revision) {
+                Ok(pair) => break Ok(pair),
+                Err(e) if e.code == "WB_ERR_WORKSPACE_CONFLICT" && attempts < 3 => {
+                    attempts += 1;
+                    let fresh = crate::history::load(&history_dir)
+                        .map(|(h, _)| h.revision)
+                        .unwrap_or(revision);
+                    if fresh == revision {
+                        break Err(e); // nothing moved — a real conflict, surface it
+                    }
+                    revision = fresh;
+                }
+                Err(e) => break Err(e),
+            }
+        }
+    };
+    // Failed transactions land in the shared timeline with their real cause
+    // (the dialog only shows the wire shape; 2026-08-27 "bb" chase).
+    if let Err(e) = &outcome {
+        crate::logging::append_event(
+            "error",
+            "app",
+            "workspace_forget",
+            None,
+            serde_json::json!({
+                "workspace_key": g.key,
+                "error_code": e.code,
+                "detail": e.technical_detail,
+            }),
+        );
+    }
+    let (mut result, _had_data) = outcome?;
+    result.workspace_key = g.key.clone();
+    // D12: named toolchain volumes are KEPT — list them for manual cleanup.
+    match named_toolchain_volumes(&g.key) {
+        Ok(v) => result.named_volumes_kept = v,
+        Err(e) => result
+            .warnings
+            .push(format!("named-volume check skipped: {e}")),
+    }
+    if let Some(note) = orphan_note {
+        result.warnings.push(note);
+    }
+    // Logging redline: workspace absolute paths never enter the log — the
+    // key plus booleans are enough to audit the transaction.
+    crate::logging::append_event(
+        "info",
+        "app",
+        "workspace_forget",
+        None,
+        serde_json::json!({
+            "workspace_key": g.key,
+            "history_removed": result.history_removed,
+            "data_removed": result.data_removed,
+            "quarantine_left": result.quarantine_left.is_some(),
+        }),
+    );
+    Ok(result)
+}
+
+/// Record-only removal (⑧ "clear the moved/deleted record"): drops the
+/// history entry, touches NOTHING else.
+#[tauri::command]
+pub async fn workspace_history_remove(
+    app: AppHandle,
+    path: String,
+    expected_history_revision: u64,
+) -> Result<u64, WorkbenchError> {
+    let dir = crate::session::config_dir(&app)?;
+    let (rev, _removed) =
+        crate::history::remove_workspace(&dir, expected_history_revision, &path)
+            .map_err(|e| WorkbenchError::workspace_io().with_detail(e.to_string()))?;
+    Ok(rev)
+}
+
+/// Cheap existence probe for the picker's click-guard (⑧).
+#[tauri::command]
+pub fn workspace_path_exists(path: String) -> bool {
+    fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
 }
 
 /// Open a file/dir with the system default app (after containment).
@@ -1524,5 +2014,138 @@ mod mutation_tests {
             "WB_ERR_WORKSPACE_INVALID"
         );
         assert!(!outside.path().join("victim/x.txt").exists());
+    }
+}
+
+#[cfg(test)]
+mod s2_forget_tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    fn setup(root: &Path, ws_path: &str) -> (PathBuf, PathBuf) {
+        let key = crate::data_root::workspace_hash_v1(Path::new(ws_path));
+        let dir_name = crate::data_root::workspace_dir_name(&key);
+        let ws_dir = root.join("workspaces").join(&dir_name);
+        fs::create_dir_all(ws_dir.join("claude")).unwrap();
+        fs::write(ws_dir.join("runtime-lease.json"), "{}").unwrap();
+        let history_dir = root.join("state");
+        fs::create_dir_all(&history_dir).unwrap();
+        let history_json = serde_json::json!({
+            "schema_version": 2,
+            "revision": 0,
+            "workspaces": [{ "path": ws_path, "last_used_at": "t", "last_agent": "claude" }]
+        });
+        fs::write(
+            history_dir.join("history.json"),
+            serde_json::to_vec_pretty(&history_json).unwrap(),
+        )
+        .unwrap();
+        (ws_dir, history_dir)
+    }
+
+    fn quarantine_is_empty(root: &Path) -> bool {
+        root.join(".quarantine")
+            .read_dir()
+            .map(|mut d| d.next().is_none())
+            .unwrap_or(true)
+    }
+
+    #[test]
+    fn forget_removes_state_and_history() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ws_dir, history_dir) = setup(tmp.path(), "/ws/a");
+        let (result, _) = forget_execute(&ws_dir, tmp.path(), &history_dir, "/ws/a", 0).unwrap();
+        assert!(result.history_removed);
+        assert!(result.data_removed);
+        assert!(!ws_dir.exists(), "the AISC state subtree must be gone");
+        let h = crate::history::load(&history_dir).unwrap().0;
+        assert!(h.workspaces.iter().all(|w| w.path != "/ws/a"));
+        assert_eq!(h.revision, 1);
+        assert!(quarantine_is_empty(tmp.path()));
+    }
+
+    #[test]
+    fn forget_is_idempotent_when_nothing_remains() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ws_dir, history_dir) = setup(tmp.path(), "/ws/b");
+        forget_execute(&ws_dir, tmp.path(), &history_dir, "/ws/b", 0).unwrap();
+        let (result, _) = forget_execute(&ws_dir, tmp.path(), &history_dir, "/ws/b", 1).unwrap();
+        assert!(!result.history_removed);
+        assert!(!result.data_removed);
+    }
+
+    #[test]
+    fn forget_history_conflict_rolls_back_the_rename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ws_dir, history_dir) = setup(tmp.path(), "/ws/c");
+        // Wrong expected revision -> Conflict, and the quarantine rename must
+        // roll back so the disk returns to the pre-transaction state (§A.4).
+        let err = forget_execute(&ws_dir, tmp.path(), &history_dir, "/ws/c", 7).unwrap_err();
+        assert_eq!(err.code, "WB_ERR_WORKSPACE_CONFLICT");
+        assert!(ws_dir.join("claude").exists(), "state subtree must be back");
+        assert!(quarantine_is_empty(tmp.path()));
+        // The history entry survived untouched.
+        let h = crate::history::load(&history_dir).unwrap().0;
+        assert!(h.workspaces.iter().any(|w| w.path == "/ws/c"));
+        assert_eq!(h.revision, 0);
+    }
+
+    #[test]
+    fn gather_blocks_on_fresh_lease_and_passes_when_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ws_dir, _hist) = setup(tmp.path(), "/ws/d");
+        let root = tmp.path().to_path_buf();
+        let fresh = forget_gather(&[], "/ws/d", Some((root.clone(), ws_dir.clone()))).unwrap();
+        assert_eq!(fresh.blocked_reason.as_deref(), Some("lease-active"));
+
+        // Age the lease file past the freshness bound (FileTimes; when the
+        // platform refuses, the stale half of the test degrades to a skip).
+        let lease = ws_dir.join("runtime-lease.json");
+        if let Ok(f) = fs::File::options().write(true).open(&lease) {
+            let old = SystemTime::now()
+                .checked_sub(Duration::from_secs(FORGET_LEASE_FRESH_MS + 60))
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            if f.set_modified(old).is_ok() {
+                let stale = forget_gather(&[], "/ws/d", Some((root, ws_dir))).unwrap();
+                assert!(stale.blocked_reason.is_none());
+                assert!(stale
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("stale-lease")));
+                return;
+            }
+        }
+        eprintln!("skipped stale-lease half: set_modified unavailable");
+    }
+
+    #[test]
+    fn gather_blocks_when_open_in_this_instance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ws_dir, _hist) = setup(tmp.path(), "/ws/e");
+        let g = forget_gather(
+            &["/ws/e".to_string()],
+            "/ws/e",
+            Some((tmp.path().to_path_buf(), ws_dir)),
+        )
+        .unwrap();
+        assert_eq!(g.blocked_reason.as_deref(), Some("open-here"));
+    }
+
+    #[test]
+    fn gather_lists_state_categories_without_contents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ws_dir, _hist) = setup(tmp.path(), "/ws/f");
+        fs::create_dir_all(ws_dir.join("toolchain")).unwrap();
+        fs::write(ws_dir.join("notes.txt"), "x").unwrap();
+        let g = forget_gather(
+            &[],
+            "/ws/f",
+            Some((tmp.path().to_path_buf(), ws_dir)),
+        )
+        .unwrap();
+        // Lease file freshly written -> blocked, but categories still gathered.
+        assert!(g.categories.contains(&"claude".to_string()));
+        assert!(g.categories.contains(&"toolchain".to_string()));
+        assert!(g.categories.iter().any(|c| c.starts_with("other:")));
     }
 }

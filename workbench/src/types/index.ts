@@ -635,6 +635,36 @@ export interface WorkbenchHistory {
   workspaces: WorkspaceRecord[];
 }
 
+// --- v2.1.7 S2: workspace forget transaction (⑦⑧) ---
+
+/** Read-only preview for the forget confirm dialog: what WOULD be deleted,
+ *  what stays, and whether anything blocks the operation right now. */
+export interface ForgetPreview {
+  workspacePath: string;
+  workspaceKey: string;
+  /** "open-here" | "lease-active" | null (null = clear to proceed). */
+  blockedReason: string | null;
+  dataPresent: boolean;
+  /** State-category NAMES under workspaces/<key>/ (claude/codex/cc-switch/
+   *  runtime/toolchain, plus "other:N") — never file contents. */
+  categories: string[];
+  /** Named toolchain volumes that will be KEPT (D12), listed for manual
+   *  cleanup; empty when none exist or the check was skipped. */
+  namedVolumes: string[];
+  warnings: string[];
+}
+
+/** Structured outcome of the single-IPC forget transaction. */
+export interface ForgetResult {
+  workspaceKey: string;
+  historyRemoved: boolean;
+  dataRemoved: boolean;
+  /** Quarantine dir left behind when the purge failed (recoverable). */
+  quarantineLeft: string | null;
+  namedVolumesKept: string[];
+  warnings: string[];
+}
+
 // --- Stage 5 (ONB-01): onboarding state (schema-versioned, no secrets) ---
 
 export type OnboardingStatus =
