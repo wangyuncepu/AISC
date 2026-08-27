@@ -97,6 +97,88 @@ function setNameInputEl(el: Element | ComponentPublicInstance | null) {
 
 const artifactFilter = computed(() => explorer.activeKind);
 
+// --- v2.1.7 S5c: shared top search + artifacts kind filter/collapse ---
+/** One search box above both panels (VSCode-style). Empty = no filtering. */
+const panelSearch = ref("");
+const searchQuery = computed(() => panelSearch.value.trim().toLowerCase());
+const searchPlaceholder = computed(() =>
+  explorer.activeKind === "artifacts"
+    ? t("explorer.searchArtifacts")
+    : t("explorer.searchFiles"),
+);
+/** Flat match list over EVERY loaded directory (not just expanded ones) —
+ *  a query must find a file even inside a collapsed-but-loaded folder. */
+const searchMatches = computed(() => {
+  if (artifactFilter.value !== "explorer" || !searchQuery.value) return [];
+  const q = searchQuery.value;
+  const seen = new Set<string>();
+  const out: Array<{ relative_path: string; name: string; kind: "file" | "dir" }> = [];
+  for (const nodes of Object.values(explorer.tree)) {
+    for (const n of nodes) {
+      if (seen.has(n.relative_path)) continue;
+      if (
+        n.name.toLowerCase().includes(q) ||
+        n.relative_path.toLowerCase().includes(q)
+      ) {
+        seen.add(n.relative_path);
+        out.push({ relative_path: n.relative_path, name: n.name, kind: n.kind });
+      }
+    }
+  }
+  out.sort((a, b) => a.relative_path.localeCompare(b.relative_path));
+  return out;
+});
+/** Artifact kind filter chips (all | deliverables | sourceChanges |
+ *  generated | unattributed) + collapsible groups. */
+type ArtifactGroup = "all" | "deliverables" | "sourceChanges" | "generated" | "unattributed";
+const artifactKindFilter = ref<ArtifactGroup>("all");
+const collapsedGroups = ref(new Set<string>());
+function toggleGroup(key: string): void {
+  const next = new Set(collapsedGroups.value);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  collapsedGroups.value = next;
+}
+function artifactHit(a: { workspace_relative_path: string; label?: string }): boolean {
+  if (!searchQuery.value) return true;
+  return `${a.workspace_relative_path} ${a.label ?? ""}`
+    .toLowerCase()
+    .includes(searchQuery.value);
+}
+function filterArtifacts<
+  T extends { workspace_relative_path: string; label?: string },
+>(list: T[], group: Exclude<ArtifactGroup, "all">): T[] {
+  if (artifactKindFilter.value !== "all" && artifactKindFilter.value !== group) return [];
+  return list.filter(artifactHit);
+}
+function groupVisible(key: string): boolean {
+  return !collapsedGroups.value.has(key);
+}
+/** Filtered group lists (search + kind chips) — plain computed over the
+ *  store getters; the store contract stays untouched. */
+const deliverablesFiltered = computed(() =>
+  filterArtifacts(explorer.artifactDeliverables, "deliverables"),
+);
+const sourceChangesFiltered = computed(() =>
+  filterArtifacts(explorer.artifactSourceChanges, "sourceChanges"),
+);
+const generatedFiltered = computed(() =>
+  filterArtifacts(explorer.artifactGenerated, "generated"),
+);
+const unattributedFiltered = computed(() =>
+  filterArtifacts(
+    explorer.unattributedEntries.map((e) => ({
+      ...e,
+      workspace_relative_path: e.relative_path,
+    })),
+    "unattributed",
+  ),
+);
+function dirOf(p: string): string {
+  const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  return i === -1 ? "" : p.slice(0, i);
+}
+
 async function switchKind(kind: "explorer" | "artifacts" | "services") {
   explorer.activeKind = kind;
   if (kind === "artifacts") {
@@ -809,6 +891,20 @@ function onTreeKeydown(e: KeyboardEvent) {
       {{ t("explorer.stale") }}
     </div>
 
+    <!-- v2.1.7 S5c: shared top search (VSCode-style). Applies to the active
+         panel: files tab = flat match list over every loaded directory;
+         artifacts tab = filters every group. Hidden on the services tab. -->
+    <div v-if="artifactFilter !== 'services'" class="explorer-search">
+      <input
+        v-model="panelSearch"
+        type="search"
+        data-testid="explorer-search"
+        class="explorer-search-input"
+        :placeholder="searchPlaceholder"
+        :aria-label="searchPlaceholder"
+      />
+    </div>
+
     <!-- 10e: cross-fade between the tree and artifacts panels (out-in). -->
     <Transition name="fade" mode="out-in">
     <!-- Explorer tree -->
@@ -822,6 +918,31 @@ function onTreeKeydown(e: KeyboardEvent) {
       @contextmenu.prevent="openMenuAt({ kind: 'root' }, $event.clientX, $event.clientY)"
     >
       <p v-if="!runtime.workspace" class="explorer-empty">{{ t("explorer.empty.workspace") }}</p>
+      <!-- S5c: active query = flat match list over every LOADED directory
+           (collapsed-but-loaded folders included). Click selects; dirs
+           expand; files open on double-click like normal rows. Checked
+           BEFORE the empty-files state — visibleNodes only counts EXPANDED
+           dirs, so a loaded-but-collapsed tree must not read as "empty". -->
+      <template v-else-if="searchQuery">
+        <p v-if="searchMatches.length === 0" class="explorer-empty">
+          {{ t("explorer.searchNoMatch") }}
+        </p>
+        <div
+          v-for="m in searchMatches"
+          :key="m.relative_path"
+          class="explorer-row search-hit"
+          :class="{ selected: selected === m.relative_path }"
+          :data-path="m.relative_path"
+          :title="hostPath(m.relative_path)"
+          @click="selected = m.relative_path; m.kind === 'dir' && explorer.toggleDir(m.relative_path)"
+          @dblclick="m.kind === 'file' && explorer.openFile(m.relative_path)"
+          @contextmenu.prevent.stop="openMenuAt({ kind: m.kind, relativePath: m.relative_path, renamable: nodeOf(m.relative_path) !== null }, $event.clientX, $event.clientY)"
+        >
+          <TypeIcon class="explorer-typeicon" :name="m.name" :dir="m.kind === 'dir'" :expanded="false" />
+          <span class="explorer-name">{{ m.name }}</span>
+          <span class="search-dir">{{ dirOf(m.relative_path) }}</span>
+        </div>
+      </template>
       <p
         v-else-if="explorer.visibleNodes.length === 0 && !explorer.isLoading('') && !explorer.errors[''] && pending === null"
         class="explorer-empty"
@@ -963,57 +1084,113 @@ function onTreeKeydown(e: KeyboardEvent) {
           {{ t("explorer.empty.artifacts") }}
         </p>
 
-        <template v-if="explorer.artifactDeliverables.length">
-          <h4 class="artifacts-group">{{ t("explorer.artifacts.deliverables") }}</h4>
-          <div
-            v-for="a in explorer.artifactDeliverables"
-            :key="a.artifact_id"
-            class="explorer-row artifact-row"
-            :class="{ selected: selected === a.workspace_relative_path }"
-            @click="onArtifactSelect(a.workspace_relative_path)"
-            @dblclick="explorer.openFile(a.workspace_relative_path)"
-            @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: a.workspace_relative_path, renamable: nodeOf(a.workspace_relative_path) !== null }, $event.clientX, $event.clientY)"
+        <!-- S5c: kind filter chips + collapsible groups. Empty-after-filter
+             groups hide entirely; the counts reflect the CURRENT filter. -->
+        <div
+          v-if="explorer.artifacts.length > 0 || explorer.unattributedEntries.length > 0"
+          class="artifact-chips"
+          role="group"
+          :aria-label="t('explorer.filterLabel')"
+        >
+          <button
+            v-for="g in ['all', 'deliverables', 'sourceChanges', 'generated', 'unattributed'] as const"
+            :key="g"
+            class="artifact-chip"
+            :class="{ active: artifactKindFilter === g }"
+            :aria-pressed="artifactKindFilter === g"
+            @click="artifactKindFilter = g"
           >
-            <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
-              {{ artifactLabel(a.workspace_relative_path) }}
-            </span>
-            <span v-if="a.label" class="explorer-label">{{ a.label }}</span>
-          </div>
-        </template>
+            {{ t(`explorer.filter.${g}`) }}
+          </button>
+        </div>
+        <p
+          v-if="searchQuery && !deliverablesFiltered.length && !sourceChangesFiltered.length && !generatedFiltered.length && !unattributedFiltered.length"
+          class="explorer-empty"
+        >
+          {{ t("explorer.searchNoMatch") }}
+        </p>
 
-        <template v-if="explorer.artifactSourceChanges.length">
-          <h4 class="artifacts-group">{{ t("explorer.artifacts.sourceChanges") }}</h4>
-          <div
-            v-for="a in explorer.artifactSourceChanges"
-            :key="a.artifact_id"
-            class="explorer-row artifact-row"
-            :class="{ selected: selected === a.workspace_relative_path }"
-            @click="onArtifactSelect(a.workspace_relative_path)"
-            @dblclick="explorer.openFile(a.workspace_relative_path)"
-            @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: a.workspace_relative_path, renamable: nodeOf(a.workspace_relative_path) !== null }, $event.clientX, $event.clientY)"
+        <section v-if="deliverablesFiltered.length">
+          <button
+            class="artifacts-group-head"
+            :aria-expanded="groupVisible('deliverables')"
+            @click="toggleGroup('deliverables')"
           >
-            <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
-              {{ artifactLabel(a.workspace_relative_path) }}
-            </span>
-          </div>
-        </template>
+            <span class="twisty" aria-hidden="true">{{ groupVisible('deliverables') ? "▾" : "▸" }}</span>
+            {{ t("explorer.artifacts.deliverables") }}
+            <span class="group-count">{{ deliverablesFiltered.length }}</span>
+          </button>
+          <template v-if="groupVisible('deliverables')">
+            <div
+              v-for="a in deliverablesFiltered"
+              :key="a.artifact_id"
+              class="explorer-row artifact-row"
+              :class="{ selected: selected === a.workspace_relative_path }"
+              @click="onArtifactSelect(a.workspace_relative_path)"
+              @dblclick="explorer.openFile(a.workspace_relative_path)"
+              @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: a.workspace_relative_path, renamable: nodeOf(a.workspace_relative_path) !== null }, $event.clientX, $event.clientY)"
+            >
+              <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
+                {{ artifactLabel(a.workspace_relative_path) }}
+              </span>
+              <span v-if="a.label" class="explorer-label">{{ a.label }}</span>
+            </div>
+          </template>
+        </section>
 
-        <template v-if="explorer.artifactGenerated.length">
-          <h4 class="artifacts-group">{{ t("explorer.artifacts.generatedOutputs") }}</h4>
-          <div
-            v-for="a in explorer.artifactGenerated"
-            :key="a.artifact_id"
-            class="explorer-row artifact-row"
-            :class="{ selected: selected === a.workspace_relative_path }"
-            @click="onArtifactSelect(a.workspace_relative_path)"
-            @dblclick="explorer.openFile(a.workspace_relative_path)"
-            @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: a.workspace_relative_path, renamable: nodeOf(a.workspace_relative_path) !== null }, $event.clientX, $event.clientY)"
+        <section v-if="sourceChangesFiltered.length">
+          <button
+            class="artifacts-group-head"
+            :aria-expanded="groupVisible('sourceChanges')"
+            @click="toggleGroup('sourceChanges')"
           >
-            <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
-              {{ artifactLabel(a.workspace_relative_path) }}
-            </span>
-          </div>
-        </template>
+            <span class="twisty" aria-hidden="true">{{ groupVisible('sourceChanges') ? "▾" : "▸" }}</span>
+            {{ t("explorer.artifacts.sourceChanges") }}
+            <span class="group-count">{{ sourceChangesFiltered.length }}</span>
+          </button>
+          <template v-if="groupVisible('sourceChanges')">
+            <div
+              v-for="a in sourceChangesFiltered"
+              :key="a.artifact_id"
+              class="explorer-row artifact-row"
+              :class="{ selected: selected === a.workspace_relative_path }"
+              @click="onArtifactSelect(a.workspace_relative_path)"
+              @dblclick="explorer.openFile(a.workspace_relative_path)"
+              @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: a.workspace_relative_path, renamable: nodeOf(a.workspace_relative_path) !== null }, $event.clientX, $event.clientY)"
+            >
+              <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
+                {{ artifactLabel(a.workspace_relative_path) }}
+              </span>
+            </div>
+          </template>
+        </section>
+
+        <section v-if="generatedFiltered.length">
+          <button
+            class="artifacts-group-head"
+            :aria-expanded="groupVisible('generated')"
+            @click="toggleGroup('generated')"
+          >
+            <span class="twisty" aria-hidden="true">{{ groupVisible('generated') ? "▾" : "▸" }}</span>
+            {{ t("explorer.artifacts.generatedOutputs") }}
+            <span class="group-count">{{ generatedFiltered.length }}</span>
+          </button>
+          <template v-if="groupVisible('generated')">
+            <div
+              v-for="a in generatedFiltered"
+              :key="a.artifact_id"
+              class="explorer-row artifact-row"
+              :class="{ selected: selected === a.workspace_relative_path }"
+              @click="onArtifactSelect(a.workspace_relative_path)"
+              @dblclick="explorer.openFile(a.workspace_relative_path)"
+              @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: a.workspace_relative_path, renamable: nodeOf(a.workspace_relative_path) !== null }, $event.clientX, $event.clientY)"
+            >
+              <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
+                {{ artifactLabel(a.workspace_relative_path) }}
+              </span>
+            </div>
+          </template>
+        </section>
 
         <div v-if="explorer.artifactsNextCursor !== null" class="explorer-more">
           <button
@@ -1025,21 +1202,31 @@ function onTreeKeydown(e: KeyboardEvent) {
           </button>
         </div>
 
-        <h4 v-if="explorer.unattributedEntries.length" class="artifacts-group">
-          {{ t("explorer.artifacts.workspaceChanges") }}
-        </h4>
-        <div
-          v-for="u in explorer.unattributedEntries"
-          :key="u.relative_path"
-          class="explorer-row unattributed"
-          :class="{ selected: selected === u.relative_path }"
-          @click="onArtifactSelect(u.relative_path)"
-          @dblclick="explorer.openFile(u.relative_path)"
-          @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: u.relative_path, renamable: nodeOf(u.relative_path) !== null }, $event.clientX, $event.clientY)"
-        >
-          <span class="explorer-name" :title="hostPath(u.relative_path)">{{ artifactLabel(u.relative_path) }}</span>
-          <span class="change-label">{{ changeLabel(u.change_type) }}</span>
-        </div>
+        <section v-if="unattributedFiltered.length">
+          <button
+            class="artifacts-group-head"
+            :aria-expanded="groupVisible('unattributed')"
+            @click="toggleGroup('unattributed')"
+          >
+            <span class="twisty" aria-hidden="true">{{ groupVisible('unattributed') ? "▾" : "▸" }}</span>
+            {{ t("explorer.artifacts.workspaceChanges") }}
+            <span class="group-count">{{ unattributedFiltered.length }}</span>
+          </button>
+          <template v-if="groupVisible('unattributed')">
+            <div
+              v-for="u in unattributedFiltered"
+              :key="u.relative_path"
+              class="explorer-row unattributed"
+              :class="{ selected: selected === u.relative_path }"
+              @click="onArtifactSelect(u.relative_path)"
+              @dblclick="explorer.openFile(u.relative_path)"
+              @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: u.relative_path, renamable: nodeOf(u.relative_path) !== null }, $event.clientX, $event.clientY)"
+            >
+              <span class="explorer-name" :title="hostPath(u.relative_path)">{{ artifactLabel(u.relative_path) }}</span>
+              <span class="change-label">{{ changeLabel(u.change_type) }}</span>
+            </div>
+          </template>
+        </section>
       </template>
     </div>
 
@@ -1455,5 +1642,43 @@ function onTreeKeydown(e: KeyboardEvent) {
   color: var(--text-muted);
   font-size: var(--font-xs);
   text-transform: uppercase;
+}
+/* --- S5c: shared search box, artifact chips, collapsible group heads --- */
+.explorer-search { padding: var(--space-1) var(--space-2); border-bottom: var(--border-w) solid var(--border); }
+.explorer-search-input {
+  width: 100%; box-sizing: border-box;
+  background: var(--surface-3); color: var(--text);
+  border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
+  min-height: var(--control-h-sm); padding: 0 var(--space-2); font-size: var(--font-sm);
+}
+.explorer-search-input:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus); outline-offset: var(--focus-ring-offset);
+}
+.search-hit .search-dir {
+  margin-left: auto; color: var(--text-faint); font-size: var(--font-xs);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%;
+}
+.artifact-chips {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  padding: var(--space-1) var(--space-2);
+}
+.artifact-chip {
+  background: var(--surface-3); color: var(--text-2);
+  border: var(--border-w) solid var(--border); border-radius: var(--radius-sm);
+  font-size: var(--font-xs); padding: 1px var(--space-2); cursor: pointer;
+}
+.artifact-chip.active { background: var(--accent-soft); color: var(--text); border-color: var(--border-strong); }
+.artifact-chip:hover:not(.active) { background: var(--surface-hover); }
+.artifacts-group-head {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  margin: var(--space-1) var(--space-2) 2px; padding: 0;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: var(--font-xs); text-transform: uppercase;
+  text-align: left;
+}
+.artifacts-group-head:hover { color: var(--text-2); }
+.artifacts-group-head .twisty { width: 12px; }
+.artifacts-group-head .group-count {
+  color: var(--text-faint); text-transform: none;
 }
 </style>
