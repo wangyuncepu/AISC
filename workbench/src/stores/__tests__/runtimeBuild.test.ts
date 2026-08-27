@@ -191,3 +191,56 @@ describe("notification (A-G14-1/3)", () => {
     expect(notif.sendNotification).not.toHaveBeenCalled();
   });
 });
+
+describe("build.progress events (v2.1.7 S4 / Gate-S4)", () => {
+  type FakeChannel = { onmessage: (e: unknown) => void };
+
+  it("structured progress lands in buildProgress; the log tail stays bounded", async () => {
+    const d = deferred<void>();
+    let ch: FakeChannel | null = null;
+    mockIpc.buildImage.mockImplementation((_tag: string, channel: FakeChannel) => {
+      ch = channel;
+      return d.promise;
+    });
+    const s = useRuntimeStore();
+    const p = s.startBuild("img");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ch).not.toBeNull();
+
+    ch!.onmessage({ type: "build.start", data: { log_path: "/x/build-1.log" } });
+    ch!.onmessage({
+      type: "build.progress",
+      data: { phase: "steps", step_current: 2, step_total: 8, percent: 25,
+              progress_kind: "determinate", summary: "RUN apt-get update" },
+    });
+    ch!.onmessage({ type: "build.output", data: { chunk: "x".repeat(80 * 1024) } });
+    ch!.onmessage({ type: "build.output", data: { chunk: "y".repeat(80 * 1024) } });
+
+    expect(s.buildProgress?.percent).toBe(25);
+    expect(s.buildProgress?.summary).toBe("RUN apt-get update");
+    expect(s.buildLogPath).toBe("/x/build-1.log");
+    // A-21748: bounded tail ring — never an unbounded Vue string.
+    expect(s.buildLog.length).toBeLessThanOrEqual(64 * 1024);
+
+    d.resolve();
+    await p;
+    expect(s.buildStatus).toBe("complete");
+  });
+
+  it("unknown event types are ignored without touching build facts", async () => {
+    const d = deferred<void>();
+    let ch: FakeChannel | null = null;
+    mockIpc.buildImage.mockImplementation((_tag: string, channel: FakeChannel) => {
+      ch = channel;
+      return d.promise;
+    });
+    const s = useRuntimeStore();
+    const p = s.startBuild("img");
+    await new Promise((r) => setTimeout(r, 0));
+    ch!.onmessage({ type: "future.unknown", data: { whatever: 1 } });
+    expect(s.buildProgress).toBeNull();
+    d.resolve();
+    await p;
+    expect(s.buildStatus).toBe("complete"); // the build itself is unaffected
+  });
+});

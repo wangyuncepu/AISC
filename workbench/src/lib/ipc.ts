@@ -266,6 +266,10 @@ export const workspaceHistoryRemove = (path: string, expectedHistoryRevision: nu
 export const workspacePathExists = (path: string) =>
   invoke<boolean>("workspace_path_exists", { path });
 
+/** S4: reveal the build log file (data-root paths only) in the OS file manager. */
+export const workspaceRevealDataFile = (path: string) =>
+  invoke<void>("workspace_reveal_data_file", { path });
+
 // --- Stage 5 (ONB-01): onboarding state (schema-versioned, no secrets) ---
 
 export const onboardingLoad = () => invoke<OnboardingState>("onboarding_load");
