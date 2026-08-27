@@ -67,6 +67,7 @@ export const enUS: Record<string, string> = {
   "picker.forgetConfirmBtn": "Forget workspace",
   "picker.forgetBusy": "Removing…",
   "picker.forgetBlocked.open-here": "This workspace is open in the current window — close it first.",
+  "picker.warnStaleLease": "An expired runtime lease file was found; it will be removed together with this workspace's state.",
   "picker.forgetBlocked.lease-active": "This workspace is in use by another Workbench instance — close it there first.",
   "picker.invalidTitle": "Workspace moved or deleted",
   "picker.invalidBody": "The path below no longer exists on disk. You can clear this history entry (removes only the record, never any data):",

@@ -67,6 +67,7 @@ export const zhCN = {
   "picker.forgetConfirmBtn": "彻底忘记",
   "picker.forgetBusy": "正在移除…",
   "picker.forgetBlocked.open-here": "该工作区正在当前窗口中打开——请先关闭它再执行忘记。",
+  "picker.warnStaleLease": "检测到已过期的运行时租约文件，将随该工作区状态一并清除。",
   "picker.forgetBlocked.lease-active": "该工作区正被另一个 Workbench 实例使用——请先在对应窗口关闭它。",
   "picker.invalidTitle": "工作区已移动或删除",
   "picker.invalidBody": "以下路径在磁盘上已不存在。可以清除这条历史记录（只移除记录，不动任何数据）：",

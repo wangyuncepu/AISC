@@ -35,6 +35,13 @@ function catLabel(c: string): string {
   }
   return t(`picker.cat.${c}`);
 }
+
+/** Preview warnings are stable backend codes — humanize the known ones. */
+function warnText(w: string): string {
+  return w === "stale-lease-file-removed-with-state"
+    ? t("picker.warnStaleLease")
+    : w;
+}
 </script>
 
 <template>
@@ -74,7 +81,7 @@ function catLabel(c: string): string {
           <p class="safe">{{ t("picker.forgetSafeLine") }}</p>
         </template>
 
-        <p v-for="w in preview.warnings" :key="w" class="dim">{{ w }}</p>
+        <p v-for="w in preview.warnings" :key="w" class="dim">{{ warnText(w) }}</p>
         <p v-if="error" class="err" role="alert">{{ error }}</p>
       </div>
       <footer class="foot">

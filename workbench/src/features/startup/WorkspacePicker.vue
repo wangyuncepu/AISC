@@ -62,8 +62,9 @@ async function clearInvalidEntry(): Promise<void> {
 
 // --- (⑦b) context menu: forget this workspace ---
 const menuFor = ref<string | null>(null);
-const menuX = ref(0);
-const menuY = ref(0);
+const menuLeft = ref(0);
+const menuRight = ref<number | null>(null);
+const menuTop = ref(0);
 /** Live .app zoom (font_scale): the menu is position:fixed INSIDE the
  * zoomed .app, which re-scales fixed offsets — viewport pixels must be
  * divided by the zoom (Stage 11 two-space model, re-hit 2026-08-27). */
@@ -72,33 +73,57 @@ function appZoom(): number {
   const z = el ? parseFloat(getComputedStyle(el).zoom || "1") : 1;
   return Number.isFinite(z) && z > 0 ? z : 1;
 }
-function openMenu(path: string, vx: number, vy: number): void {
+/** Anchor by viewport px; `fromRight` right-aligns (kebab path) so the
+ * menu's own zoom-scaled WIDTH never shifts the anchor (0.8× manual test:
+ * a fixed -170px left-offset over/undershot at every zoom but 1.5). */
+function openMenuAt(path: string, vx: number, vy: number, fromRight?: number): void {
   const z = appZoom();
   menuFor.value = path;
-  menuX.value = Math.round(vx / z);
-  menuY.value = Math.round(vy / z);
+  menuTop.value = Math.round(vy / z);
+  if (fromRight !== undefined) {
+    menuRight.value = Math.round(fromRight / z);
+    menuLeft.value = 0;
+  } else {
+    menuLeft.value = Math.round(vx / z);
+    menuRight.value = null;
+  }
 }
-/** Kebab path: anchor the menu to the button (below, right-aligned) instead
- * of screen coordinates (2026-08-27 manual test: the 50%/50% fallback read
- * as a random position). */
+function openMenu(path: string, vx: number, vy: number): void {
+  openMenuAt(path, vx, vy);
+}
 function openMenuAtButton(path: string, e: MouseEvent): void {
   const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  openMenu(path, Math.max(8, r.right - 170), r.bottom + 4);
+  openMenuAt(path, 0, r.bottom + 4, window.innerWidth - r.right + 8);
 }
 function closeMenu(): void {
   menuFor.value = null;
 }
+const menuStyle = computed(() =>
+  menuRight.value !== null
+    ? { right: `${menuRight.value}px`, top: `${menuTop.value}px` }
+    : { left: `${menuLeft.value}px`, top: `${menuTop.value}px` },
+);
 
 const forgetPreview = ref<ForgetPreview | null>(null);
 const forgetBusy = ref(false);
 const forgetError = ref<string | null>(null);
+/** Rejected Tauri commands arrive as serialized WorkbenchError OBJECTS —
+ * String(e) rendered "[object Object]" (2026-08-27 manual test). Extract
+ * the human detail + code instead. */
+function errText(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  const w = e as { detail?: string; message?: string; code?: string };
+  const body = w?.detail || w?.message || "";
+  const code = w?.code ? ` (${w.code})` : "";
+  return (body ? `${body}${code}` : code || JSON.stringify(e));
+}
 async function startForget(path: string): Promise<void> {
   closeMenu();
   forgetError.value = null;
   try {
     forgetPreview.value = await wsStore.forgetPreview(path);
   } catch (e) {
-    forgetError.value = String(e);
+    forgetError.value = errText(e);
     forgetPreview.value = null;
   }
 }
@@ -112,7 +137,7 @@ async function confirmForget(): Promise<void> {
   } catch (e) {
     // CAS conflict / transient failure: keep the dialog open with the error
     // — the store has reloaded its revision, so a retry is meaningful.
-    forgetError.value = String(e);
+    forgetError.value = errText(e);
   } finally {
     forgetBusy.value = false;
   }
@@ -175,7 +200,7 @@ async function confirmForget(): Promise<void> {
       v-if="menuFor"
       class="ctx"
       role="menu"
-      :style="menuX ? { left: `${menuX}px`, top: `${menuY}px` } : undefined"
+      :style="menuStyle"
       @keydown.escape="closeMenu"
     >
       <button role="menuitem" class="ctx-item danger" @click="startForget(menuFor)">
