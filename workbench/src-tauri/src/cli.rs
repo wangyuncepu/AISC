@@ -863,8 +863,18 @@ pub async fn run_build_stream(
             }
             _ => Err(WorkbenchError::cli_protocol().with_detail(format!("unknown terminal: {t}"))),
         },
-        None => Err(WorkbenchError::cli_protocol()
-            .with_detail(format!("no terminal build event | stderr: {stderr_summary}"))),
+        None => {
+            // 2026-08-27 manual test: on Windows the tree-kill leaves no
+            // terminal event (§4.1.4 — no SIGINT equivalent). A kill WE
+            // initiated because the user cancelled is a CANCEL, not a
+            // protocol violation; only an unexpected missing terminal is.
+            if cancel.is_cancelled() {
+                Err(WorkbenchError::cli_cancelled().with_detail(stderr_summary))
+            } else {
+                Err(WorkbenchError::cli_protocol()
+                    .with_detail(format!("no terminal build event | stderr: {stderr_summary}")))
+            }
+        }
     }
 }
 
