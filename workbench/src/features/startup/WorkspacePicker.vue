@@ -108,12 +108,12 @@ const forgetPreview = ref<ForgetPreview | null>(null);
 const forgetBusy = ref(false);
 const forgetError = ref<string | null>(null);
 /** Rejected Tauri commands arrive as serialized WorkbenchError OBJECTS —
- * String(e) rendered "[object Object]" (2026-08-27 manual test). Extract
- * the human detail + code instead. */
+ * String(e) rendered "[object Object]" (2026-08-27 manual test). The real
+ * detail rides `technical_detail` (snake_case wire shape). */
 function errText(e: unknown): string {
   if (e instanceof Error) return e.message;
-  const w = e as { detail?: string; message?: string; code?: string };
-  const body = w?.detail || w?.message || "";
+  const w = e as { technical_detail?: string; message?: string; code?: string };
+  const body = w?.technical_detail || w?.message || "";
   const code = w?.code ? ` (${w.code})` : "";
   return (body ? `${body}${code}` : code || JSON.stringify(e));
 }

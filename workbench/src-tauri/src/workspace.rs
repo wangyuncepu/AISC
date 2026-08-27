@@ -420,9 +420,33 @@ fn forget_execute(
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "workspace".to_string());
         let target = q_dir.join(format!("{name}-{}", forget_now_ms()));
-        fs::rename(ws_dir, &target).map_err(|e| {
-            WorkbenchError::workspace_io().with_detail(format!("quarantine rename failed: {e}"))
-        })?;
+        // 2026-08-27 manual test ("bb"): closing a workspace and forgetting it
+        // immediately can race the bind-mount handle teardown — Windows
+        // returns a sharing violation on the rename for a few hundred ms.
+        // Bounded retry instead of failing the whole transaction.
+        let mut renamed = false;
+        let mut last_err: Option<std::io::Error> = None;
+        for attempt in 0..3 {
+            match fs::rename(ws_dir, &target) {
+                Ok(()) => {
+                    renamed = true;
+                    break;
+                }
+                Err(e) => {
+                    if attempt == 2 {
+                        last_err = Some(e);
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                    }
+                }
+            }
+        }
+        if !renamed {
+            return Err(WorkbenchError::workspace_io().with_detail(format!(
+                "quarantine rename failed: {}",
+                last_err.map(|e| e.to_string()).unwrap_or_default()
+            )));
+        }
         Some(target)
     } else {
         None
@@ -540,6 +564,21 @@ pub async fn workspace_forget(
             }
         }
     };
+    // Failed transactions land in the shared timeline with their real cause
+    // (the dialog only shows the wire shape; 2026-08-27 "bb" chase).
+    if let Err(e) = &outcome {
+        crate::logging::append_event(
+            "error",
+            "app",
+            "workspace_forget",
+            None,
+            serde_json::json!({
+                "workspace_key": g.key,
+                "error_code": e.code,
+                "detail": e.technical_detail,
+            }),
+        );
+    }
     let (mut result, _had_data) = outcome?;
     result.workspace_key = g.key.clone();
     // D12: named toolchain volumes are KEPT — list them for manual cleanup.
