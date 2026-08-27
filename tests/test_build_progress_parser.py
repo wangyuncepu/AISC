@@ -41,10 +41,24 @@ class BuildkitPlainTests(unittest.TestCase):
         ups = p.feed("#9 exporting to image\n")
         self.assertEqual(ups[0].phase, "export")
 
-    def test_cached_and_done_lines_do_not_fabricate_steps(self):
+    def test_cached_lines_surface_as_indeterminate_steps_done_stays_silent(self):
+        # 2026-08-27 manual test: a fully-cached build has no [i/t] headers;
+        # CACHED must still show motion (indeterminate, honest percent=None).
         p = BuildProgressParser()
         ups = p.feed("#5 CACHED\n#6 DONE 0.1s\n")
-        self.assertEqual(ups, [], "CACHED/DONE alone are not step mappings")
+        self.assertEqual(len(ups), 1)
+        self.assertEqual(ups[0].phase, "steps")
+        self.assertEqual(ups[0].progress_kind, "indeterminate")
+        self.assertIsNone(ups[0].percent)
+        self.assertIsNone(ups[0].step_current, "no fabricated step number")
+        self.assertEqual(ups[0].summary, "CACHED")
+
+    def test_context_transfer_maps_to_prepare_with_live_summary(self):
+        p = BuildProgressParser()
+        ups = p.feed("transferring context: 247.12MB 5.2s\ndone\n")
+        self.assertEqual(ups[0].phase, "prepare")
+        self.assertIn("247.12MB", ups[0].summary)
+        self.assertEqual(ups[0].progress_kind, "indeterminate")
 
 
 class LegacyBuilderTests(unittest.TestCase):

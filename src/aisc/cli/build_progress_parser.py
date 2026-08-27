@@ -34,6 +34,7 @@ _LEGACY_STEP = re.compile(r"^Step (\d+)(?:/(\d+))? : (.*)$")
 
 _PHASE_PATTERNS = (
     (re.compile(r"^(?:resolve|pulling|sha256:|docker\.io|Downloading|extracting|Pulling)", re.I), "pull"),
+    (re.compile(r"^(?:transferring context|load build definition|load \.dockerignore|load metadata)", re.I), "prepare"),
     (re.compile(r"^exporting (?:to image|layers|manifest)", re.I), "export"),
     (re.compile(r"^(?:naming to|writing image|loaded image|tagged)", re.I), "export"),
     (re.compile(r"^Successfully (?:built|tagged)", re.I), "done"),
@@ -141,6 +142,19 @@ class BuildProgressParser:
             if text.lower() == "done":
                 # completion of a single step — not the build's end
                 return None
+            # 2026-08-27 manual test (full-cache build): a CACHED step carries
+            # no [i/t] header, so a fully-cached build otherwise shows ZERO
+            # motion. Surface it as an indeterminate steps-phase update — no
+            # fabricated step number, percent stays honest (null).
+            if text.lower() == "cached":
+                return ProgressUpdate(
+                    phase="steps",
+                    step_current=None,
+                    step_total=self._step_total,
+                    percent=None,
+                    progress_kind="indeterminate",
+                    summary="CACHED",
+                )
             mapped = next((p for pat, p in _PHASE_PATTERNS if pat.match(text)), None)
             if mapped:
                 return self._update(mapped, text)
