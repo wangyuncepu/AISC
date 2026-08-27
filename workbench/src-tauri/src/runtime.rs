@@ -1292,10 +1292,14 @@ pub(crate) fn docker_desktop_candidates() -> Vec<std::path::PathBuf> {
 /// Check whether winget (App Installer) is available on PATH.
 #[cfg(windows)]
 fn winget_available() -> bool {
+    // v2.1.7 S1 (#29): `where` is a console binary — CREATE_NO_WINDOW stops
+    // the black flash when the wizard probes winget (cli.rs:628 pattern).
+    use std::os::windows::process::CommandExt;
     std::process::Command::new("where")
         .arg("winget")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
+        .creation_flags(0x08000000 /* CREATE_NO_WINDOW */)
         .status()
         .map(|s| s.success())
         .unwrap_or(false)

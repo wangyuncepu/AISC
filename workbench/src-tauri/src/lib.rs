@@ -68,15 +68,6 @@ use window::{capture_window_geometry, restore_window_geometry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(cli_arg: Option<String>) {
-    // lifecycle-logging P1: app start opens the shared JSONL timeline
-    // (best-effort — never blocks startup).
-    logging::append_event(
-        "info",
-        "app",
-        "app_start",
-        None,
-        serde_json::json!({ "app_version": env!("CARGO_PKG_VERSION") }),
-    );
     let cli_arg_state = CliArg(std::sync::Arc::new(std::sync::Mutex::new(cli_arg)));
     tauri::Builder::default()
         .manage(WatcherState::default())
@@ -177,6 +168,18 @@ pub fn run(cli_arg: Option<String>) {
             }
         })
         .setup(|app| {
+            // lifecycle-logging P1: app start opens the shared JSONL timeline
+            // (best-effort — never blocks startup). v2.1.7 S1 (A-21714): the
+            // version is the Tauri package info (tauri.conf.json) logged once
+            // per process — Cargo's package version is a dev-local 0.1.0 and
+            // is NOT the shipped version.
+            logging::append_event(
+                "info",
+                "app",
+                "app_start",
+                None,
+                serde_json::json!({ "app_version": app.package_info().version.to_string() }),
+            );
             // G-10: restore window geometry on startup (before the window
             // is shown, so the user sees the saved position immediately).
             let app_handle = app.handle().clone();

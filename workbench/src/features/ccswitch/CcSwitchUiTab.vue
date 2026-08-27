@@ -300,6 +300,18 @@ onBeforeUnmount(() => {
     </Teleport>
 
     <div class="list" v-if="visibleProviders.length">
+      <!-- v2.1.7 S1 (⑤/A-21715): frozen column header — same grid template
+           as .row so header and cells stay aligned at every width; the
+           pid/url cells carry the same truncation classes as data rows. -->
+      <div class="head-row">
+        <span>{{ t("ccswitch.colStatus") }}</span>
+        <span class="pid">{{ t("ccswitch.colId") }}</span>
+        <span>{{ t("ccswitch.colName") }}</span>
+        <span class="url">{{ t("ccswitch.colEndpoint") }}</span>
+        <span>{{ t("ccswitch.colModel") }}</span>
+        <span>{{ t("ccswitch.colKey") }}</span>
+        <span>{{ t("ccswitch.colActions") }}</span>
+      </div>
       <div
         v-for="p in visibleProviders"
         :key="p.id"
@@ -455,6 +467,18 @@ onBeforeUnmount(() => {
   display: grid; grid-template-columns: 64px 130px 120px 1fr 160px 110px auto;
   gap: var(--space-2); align-items: center; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm);
   font-size: var(--font-sm); color: var(--text-2);
+}
+/* S1 (⑤): header mirrors the .row grid exactly — a single source of truth
+ * for the template would be nicer, but CSS grid duplication here is the
+ * least invasive way to keep both aligned (A-21715). */
+.head-row {
+  display: grid; grid-template-columns: 64px 130px 120px 1fr 160px 110px auto;
+  gap: var(--space-2); align-items: center; padding: var(--space-1) var(--space-2);
+  font-size: var(--font-xs); color: var(--text-faint); font-weight: 600;
+}
+.head-row > span { min-width: 0; }
+.head-row .pid, .head-row .url {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .row.current { background: var(--accent-soft); }
 /* B-03: every text cell truncates inside its grid track — a long provider
