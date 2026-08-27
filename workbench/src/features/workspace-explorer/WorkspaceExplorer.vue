@@ -101,6 +101,38 @@ const artifactFilter = computed(() => explorer.activeKind);
 /** One search box above both panels (VSCode-style). Empty = no filtering. */
 const panelSearch = ref("");
 const searchQuery = computed(() => panelSearch.value.trim().toLowerCase());
+/** S5c r2 (user request): fuzzy matching — a literal substring wins, then a
+ *  subsequence match (query chars in order, gaps allowed: "ndl" → needle).
+ *  Returns 0 = no match, 1 = subsequence, 2 = substring (higher ranks first). */
+function fuzzyRank(query: string, hay: string): 0 | 1 | 2 {
+  if (!query) return 2;
+  if (hay.includes(query)) return 2;
+  let i = 0;
+  for (const ch of hay) {
+    if (ch === query[i]) i += 1;
+    if (i === query.length) return 1;
+  }
+  return 0;
+}
+/** S5c r3: explicit regex with `/pattern/` delimiters (case-insensitive,
+ *  matching the box's default). An INVALID pattern falls back to the literal
+ *  string — a broken regex must never blank the panel. The raw (non-
+ *  lowercased) query feeds the regex so character classes survive. */
+const searchMatcher = computed<((hay: string) => 0 | 1 | 2) | null>(() => {
+  const raw = panelSearch.value.trim();
+  if (!raw) return null;
+  const m = /^\/(.+)\/$/.exec(raw);
+  if (m) {
+    try {
+      const re = new RegExp(m[1], "i");
+      return (hay: string) => (re.test(hay) ? 2 : 0);
+    } catch {
+      return (hay: string) => (hay.includes(raw.toLowerCase()) ? 2 : 0);
+    }
+  }
+  const q = raw.toLowerCase();
+  return (hay: string) => fuzzyRank(q, hay);
+});
 const searchPlaceholder = computed(() =>
   explorer.activeKind === "artifacts"
     ? t("explorer.searchArtifacts")
@@ -109,23 +141,27 @@ const searchPlaceholder = computed(() =>
 /** Flat match list over EVERY loaded directory (not just expanded ones) —
  *  a query must find a file even inside a collapsed-but-loaded folder. */
 const searchMatches = computed(() => {
-  if (artifactFilter.value !== "explorer" || !searchQuery.value) return [];
-  const q = searchQuery.value;
+  const matcher = searchMatcher.value;
+  if (artifactFilter.value !== "explorer" || matcher === null) return [];
   const seen = new Set<string>();
-  const out: Array<{ relative_path: string; name: string; kind: "file" | "dir" }> = [];
+  const out: Array<{ relative_path: string; name: string; kind: "file" | "dir"; rank: number }> = [];
   for (const nodes of Object.values(explorer.tree)) {
     for (const n of nodes) {
       if (seen.has(n.relative_path)) continue;
-      if (
-        n.name.toLowerCase().includes(q) ||
-        n.relative_path.toLowerCase().includes(q)
-      ) {
+      const rank = Math.max(
+        matcher(n.name.toLowerCase()),
+        matcher(n.relative_path.toLowerCase()),
+      );
+      if (rank > 0) {
         seen.add(n.relative_path);
-        out.push({ relative_path: n.relative_path, name: n.name, kind: n.kind });
+        out.push({ relative_path: n.relative_path, name: n.name, kind: n.kind, rank });
       }
     }
   }
-  out.sort((a, b) => a.relative_path.localeCompare(b.relative_path));
+  // Substring/regex matches before subsequence; then alphabetical.
+  out.sort(
+    (a, b) => b.rank - a.rank || a.relative_path.localeCompare(b.relative_path),
+  );
   return out;
 });
 /** Artifact kind filter chips (all | deliverables | sourceChanges |
@@ -140,10 +176,9 @@ function toggleGroup(key: string): void {
   collapsedGroups.value = next;
 }
 function artifactHit(a: { workspace_relative_path: string; label?: string }): boolean {
-  if (!searchQuery.value) return true;
-  return `${a.workspace_relative_path} ${a.label ?? ""}`
-    .toLowerCase()
-    .includes(searchQuery.value);
+  const matcher = searchMatcher.value;
+  if (matcher === null) return true;
+  return matcher(`${a.workspace_relative_path} ${a.label ?? ""}`.toLowerCase()) > 0;
 }
 function filterArtifacts<
   T extends { workspace_relative_path: string; label?: string },

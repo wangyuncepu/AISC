@@ -95,6 +95,47 @@ describe("files tab: flat search over loaded dirs (S5c)", () => {
     expect(hits[0].text()).toContain("sub"); // parent dir shown as context
   });
 
+  it("fuzzy subsequence matches, substring hits ranked first", async () => {
+    const w = await mountExplorer();
+    const explorer = useWorkspaceExplorerStore();
+    explorer.tree = {
+      "": [node("needle.txt", "file"), node("readme.md", "file")],
+    };
+    // "ndl" is a subsequence of needle (not a substring).
+    await w.find('[data-testid="explorer-search"]').setValue("ndl");
+    const hits = w.findAll(".search-hit");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].attributes("data-path")).toBe("needle.txt");
+
+    // Substring beats subsequence: "readme" hits readme.md literally while
+    // "rdm" would subsequence-match BOTH — "readme" must still find only it.
+    await w.find('[data-testid="explorer-search"]').setValue("readme");
+    expect(w.findAll(".search-hit")).toHaveLength(1);
+    expect(w.find(".search-hit").attributes("data-path")).toBe("readme.md");
+  });
+
+  it("regex mode via /pattern/ delimiters; invalid patterns fall back to literal", async () => {
+    const w = await mountExplorer();
+    const explorer = useWorkspaceExplorerStore();
+    explorer.tree = {
+      "": [node("needle.txt", "file"), node("readme.md", "file"), node("notes/x.md", "file")],
+    };
+
+    // Anchored regex: only readme.md starts with "read".
+    await w.find('[data-testid="explorer-search"]').setValue("/^read/");
+    expect(w.findAll(".search-hit")).toHaveLength(1);
+    expect(w.find(".search-hit").attributes("data-path")).toBe("readme.md");
+
+    // Character class + suffix: .md files only.
+    await w.find('[data-testid="explorer-search"]').setValue("/\\.(md|txt)$/");
+    expect(w.findAll(".search-hit").length).toBeGreaterThanOrEqual(3);
+
+    // INVALID pattern: literal fallback — no crash, no matches for garbage.
+    await w.find('[data-testid="explorer-search"]').setValue("/[/");
+    expect(w.find(".search-hit").exists()).toBe(false);
+    expect(w.text()).toContain("无匹配结果");
+  });
+
   it("shows the no-match empty state and restores the tree when cleared", async () => {
     const w = await mountExplorer();
     const explorer = useWorkspaceExplorerStore();
