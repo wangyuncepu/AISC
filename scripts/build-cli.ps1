@@ -21,3 +21,17 @@ New-Item -ItemType Directory -Force -Path dist | Out-Null
 Move-Item -Force dist\aisc.exe "dist\aisc-$TargetTriple.exe"
 Write-Host "== artifact: dist\aisc-$TargetTriple.exe =="
 & "dist\aisc-$TargetTriple.exe" version --format json | Select-Object -First 1
+
+# v2.1.7 S5: sync the fresh sidecar to BOTH places that actually run it.
+# workbench/src-tauri/binaries/ feeds tauri build/dev externalBin, and the
+# dev Workbench's CLI pin resolves workbench/src-tauri/target/debug/aisc.exe.
+# Leaving either stale cost a full debugging round on 2026-08-27 (the app
+# ran a two-day-old sidecar and failed with a capability mismatch).
+$Dst1 = "workbench\src-tauri\binaries\aisc-$TargetTriple.exe"
+$Dst2 = "workbench\src-tauri\target\debug\aisc.exe"
+New-Item -ItemType Directory -Force -Path (Split-Path $Dst1) | Out-Null
+New-Item -ItemType Directory -Force -Path (Split-Path $Dst2) | Out-Null
+Copy-Item -Force "dist\aisc-$TargetTriple.exe" $Dst1
+Copy-Item -Force "dist\aisc-$TargetTriple.exe" $Dst2
+Write-Host "== synced: $Dst1"
+Write-Host "== synced: $Dst2"
