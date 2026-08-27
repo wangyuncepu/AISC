@@ -300,6 +300,18 @@ onBeforeUnmount(() => {
     </Teleport>
 
     <div class="list" v-if="visibleProviders.length">
+      <!-- v2.1.7 S1 (⑤/A-21715): frozen column header — same grid template
+           as .row so header and cells stay aligned at every width; the
+           pid/url cells carry the same truncation classes as data rows. -->
+      <div class="head-row">
+        <span>{{ t("ccswitch.colStatus") }}</span>
+        <span class="pid">{{ t("ccswitch.colId") }}</span>
+        <span>{{ t("ccswitch.colName") }}</span>
+        <span class="url">{{ t("ccswitch.colEndpoint") }}</span>
+        <span>{{ t("ccswitch.colModel") }}</span>
+        <span>{{ t("ccswitch.colKey") }}</span>
+        <span>{{ t("ccswitch.colActions") }}</span>
+      </div>
       <div
         v-for="p in visibleProviders"
         :key="p.id"
@@ -450,11 +462,27 @@ onBeforeUnmount(() => {
 .banner { padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); font-size: var(--font-sm); }
 .banner.warn { background: var(--warn-bg); color: var(--warn-fg); }
 .banner.err { background: var(--error-bg); color: var(--error-fg); }
-.list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+/* S1 (⑤/A-21715): ONE grid template shared by header and rows. The last
+ * track is FIXED, not auto — an auto track sizes to its own content
+ * (buttons in rows vs "操作" text in the header), which desynced the 1fr
+ * column and shifted everything after it (user evidence @zoom 1.5). */
+.list {
+  --ccs-grid: 64px 130px 120px 1fr 160px 110px 150px;
+  display: flex; flex-direction: column; gap: 2px; margin-top: 10px;
+}
 .row {
-  display: grid; grid-template-columns: 64px 130px 120px 1fr 160px 110px auto;
+  display: grid; grid-template-columns: var(--ccs-grid);
   gap: var(--space-2); align-items: center; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm);
   font-size: var(--font-sm); color: var(--text-2);
+}
+.head-row {
+  display: grid; grid-template-columns: var(--ccs-grid);
+  gap: var(--space-2); align-items: center; padding: var(--space-1) var(--space-2);
+  font-size: var(--font-xs); color: var(--text-faint); font-weight: 600;
+}
+.head-row > span { min-width: 0; }
+.head-row .pid, .head-row .url {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .row.current { background: var(--accent-soft); }
 /* B-03: every text cell truncates inside its grid track — a long provider

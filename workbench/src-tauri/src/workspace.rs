@@ -211,9 +211,16 @@ fn resolve_existing(workspace: &Path, relative: &str) -> Result<PathBuf, Workben
 pub fn open_path(workspace: &Path, relative: &str) -> Result<(), WorkbenchError> {
     let target = resolve_existing(workspace, relative)?;
     #[cfg(target_os = "windows")]
-    let status = std::process::Command::new("cmd")
-        .args(["/C", "start", "", &target.to_string_lossy()])
-        .status();
+    let status = {
+        // v2.1.7 S1 (#29): cmd is a console binary — CREATE_NO_WINDOW stops
+        // the black flash when opening files from the explorer (same flag as
+        // cli.rs:628 / env.rs:189).
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &target.to_string_lossy()])
+            .creation_flags(0x08000000 /* CREATE_NO_WINDOW */)
+            .status()
+    };
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("open").arg(&target).status();
     #[cfg(all(unix, not(target_os = "macos")))]
