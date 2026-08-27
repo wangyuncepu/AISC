@@ -36,7 +36,7 @@ const VERSION_TIMEOUT: Duration = Duration::from_secs(45);
 const EXPECTED_RUNTIME: &str = "aisc.runtime/v1";
 const EXPECTED_SESSION: &str = "aisc.session/v1";
 const EXPECTED_PROVIDER: &str = "aisc.provider-status/v1";
-const EXPECTED_BUILD: &str = "aisc.build-events/v1";
+const EXPECTED_BUILD: &str = "aisc.build-events/v2";
 /// svc-2/4 (web gateway): optional capability — `runtime services`.
 const EXPECTED_RUNTIME_SERVICES: &str = "aisc.runtime-services/v1";
 
@@ -97,7 +97,7 @@ pub fn parse_and_validate(stdout: &[u8], expected_exit_code: Option<i32>) -> Res
 }
 
 // ---------------------------------------------------------------------------
-// Build events (aisc.build-events/v1 JSONL, 05 §4.1)
+// Build events (aisc.build-events/v2 JSONL, 05 §4.1)
 // ---------------------------------------------------------------------------
 
 /// One JSONL line from `aisc build --events`. Forwarded verbatim to the
@@ -1188,7 +1188,7 @@ mod tests {
                      "timestamp": "t", "version": "1.0", "run_id": "r"},
             "data": {"cli_version": "1.0", "capabilities": {
                 "runtime": "aisc.runtime/v1", "session": "aisc.session/v1",
-                "providerStatus": "aisc.provider-status/v1", "buildEvents": "aisc.build-events/v1"}},
+                "providerStatus": "aisc.provider-status/v1", "buildEvents": "aisc.build-events/v2"}},
             "errors": []
         });
         let bytes = serde_json::to_vec(&body).unwrap();

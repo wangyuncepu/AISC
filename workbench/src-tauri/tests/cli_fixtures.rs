@@ -33,7 +33,7 @@ fn version_envelope_parses_and_validates() {
     assert_eq!(caps["runtime"], "aisc.runtime/v1");
     assert_eq!(caps["session"], "aisc.session/v1");
     assert_eq!(caps["providerStatus"], "aisc.provider-status/v1");
-    assert_eq!(caps["buildEvents"], "aisc.build-events/v1");
+    assert_eq!(caps["buildEvents"], "aisc.build-events/v2");
 }
 
 #[test]

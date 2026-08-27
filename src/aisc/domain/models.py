@@ -99,7 +99,7 @@ WORKBENCH_CAPABILITIES = {
     "runtime": "aisc.runtime/v1",               # S0.2
     "session": "aisc.session/v1",               # S0.3
     "providerStatus": "aisc.provider-status/v1",  # S0.4
-    "buildEvents": "aisc.build-events/v1",      # S0.5
+    "buildEvents": "aisc.build-events/v2",      # S0.5
     "runtimeServices": "aisc.runtime-services/v1",  # svc-2 (web gateway)
 }
 

@@ -67,7 +67,7 @@ class CliEnvelopeFixturesTests(unittest.TestCase):
                 "runtime": "aisc.runtime/v1",
                 "session": "aisc.session/v1",
                 "providerStatus": "aisc.provider-status/v1",
-                "buildEvents": "aisc.build-events/v1",
+                "buildEvents": "aisc.build-events/v2",
                 "runtimeServices": "aisc.runtime-services/v1",
             },
         )
