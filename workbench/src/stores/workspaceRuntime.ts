@@ -679,8 +679,29 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   /** Apply an observation with its request seq (04 §六.2). A response whose
    * seq is lower than the last applied one is stale (slow poll or superseded
    * control op) and is dropped - it must never overwrite newer state. */
+  /** S5/#28: semantic snapshot equality. `observed_at` changes on every poll
+   *  by construction — everything ELSE must match for "nothing happened". */
+  function snapshotSemanticallyEqual(a: RuntimeSnapshot, b: RuntimeSnapshot): boolean {
+    const { observed_at: _ao, ...ra } = a;
+    const { observed_at: _bo, ...rb } = b;
+    return JSON.stringify(ra) === JSON.stringify(rb);
+  }
+
   function applyRuntimeSnapshot(snap: RuntimeSnapshot, seq: number) {
     if (seq < lastAppliedSeq.value) return; // stale response
+    // v2.1.7 S5/#28: an observation with IDENTICAL content must not re-enter
+    // reactivity. The 5s poll assigned a fresh object identity every tick,
+    // invalidating every consumer that touches the snapshot — on low-GPU
+    // (nested-VM) renderers that read as whole-window flicker. serde structs
+    // serialize deterministically, so the (observed_at-stripped) JSON compare
+    // is a reliable value gate; identity + revision only change when
+    // something actually did.
+    const prev = runtimeSnapshot.value;
+    if (prev !== null && snapshotSemanticallyEqual(prev, snap)) {
+      freshness.value = "fresh";
+      lastAppliedSeq.value = seq;
+      return;
+    }
     runtimeSnapshot.value = snap;
     runtimeState.value = snap.state;
     freshness.value = "fresh";
@@ -766,7 +787,19 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     webServicesInFlight.value = true;
     try {
       const result = await ipc.runtimeServices(workspace.value.trim(), runtimeId.value);
-      webServices.value = result;
+      // S5/#28: same value-gate as applyRuntimeSnapshot (observed_at
+      // stripped) — the services poll also rides the 5s tick and must not
+      // hand consumers a fresh object identity when nothing changed.
+      const stripTs = (r: RuntimeServicesResult) => {
+        const { observed_at: _t, ...rest } = r;
+        return JSON.stringify(rest);
+      };
+      if (
+        webServices.value === null ||
+        stripTs(webServices.value) !== stripTs(result)
+      ) {
+        webServices.value = result;
+      }
       webServicesError.value = null;
     } catch (e) {
       // Old CLI (no runtime services capability) or transport failure — keep

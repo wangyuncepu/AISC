@@ -81,3 +81,29 @@ describe("runtime snapshot freshness (S1.5)", () => {
     expect(store.freshness).toBe("fresh");
   });
 });
+
+describe("poll value-gate (v2.1.7 S5 / #28)", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("a semantically identical snapshot keeps object identity (no re-render)", () => {
+    const store = useRuntimeStore();
+    store.applyRuntimeSnapshot(snap("running", "t1"), 1);
+    const applied = store.runtimeSnapshot;
+    // Identical content, only observed_at moved (the every-poll case).
+    store.applyRuntimeSnapshot(snap("running", "t2"), 2);
+    expect(store.runtimeSnapshot).toBe(applied); // SAME reference — no churn
+    expect(store.freshness).toBe("fresh"); // freshness semantics preserved
+    expect(store.runtimeSnapshot?.observed_at).toBe("t1"); // kept the old object
+  });
+
+  it("a genuinely different snapshot replaces the object", () => {
+    const store = useRuntimeStore();
+    store.applyRuntimeSnapshot(snap("running", "t1"), 1);
+    const applied = store.runtimeSnapshot;
+    store.applyRuntimeSnapshot(snap("stopped", "t2"), 2);
+    expect(store.runtimeSnapshot).not.toBe(applied);
+    expect(store.runtimeState).toBe("stopped");
+  });
+});
