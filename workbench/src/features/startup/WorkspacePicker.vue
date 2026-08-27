@@ -64,10 +64,19 @@ async function clearInvalidEntry(): Promise<void> {
 const menuFor = ref<string | null>(null);
 const menuX = ref(0);
 const menuY = ref(0);
-function openMenu(path: string, x: number, y: number): void {
+/** Live .app zoom (font_scale): the menu is position:fixed INSIDE the
+ * zoomed .app, which re-scales fixed offsets — viewport pixels must be
+ * divided by the zoom (Stage 11 two-space model, re-hit 2026-08-27). */
+function appZoom(): number {
+  const el = document.querySelector(".app");
+  const z = el ? parseFloat(getComputedStyle(el).zoom || "1") : 1;
+  return Number.isFinite(z) && z > 0 ? z : 1;
+}
+function openMenu(path: string, vx: number, vy: number): void {
+  const z = appZoom();
   menuFor.value = path;
-  menuX.value = x;
-  menuY.value = y;
+  menuX.value = Math.round(vx / z);
+  menuY.value = Math.round(vy / z);
 }
 /** Kebab path: anchor the menu to the button (below, right-aligned) instead
  * of screen coordinates (2026-08-27 manual test: the 50%/50% fallback read
@@ -158,24 +167,21 @@ async function confirmForget(): Promise<void> {
       </button>
     </div>
 
-    <!-- right-click / kebab context menu (single destructive action).
-         Teleported to body: .app carries the font-scale CSS zoom, and fixed
-         positioning inside a zoomed container re-scales viewport coordinates
-         (2026-08-27 manual test @1.5× — Stage 11's two-space menu model). -->
-    <Teleport to="body">
-      <div v-if="menuFor" class="ctx-overlay" @mousedown="closeMenu" @contextmenu.prevent="closeMenu" />
-      <div
-        v-if="menuFor"
-        class="ctx"
-        role="menu"
-        :style="menuX ? { left: `${menuX}px`, top: `${menuY}px` } : undefined"
-        @keydown.escape="closeMenu"
-      >
-        <button role="menuitem" class="ctx-item danger" @click="startForget(menuFor)">
-          {{ t("picker.ctxForget") }}
-        </button>
-      </div>
-    </Teleport>
+    <!-- right-click / kebab context menu (single destructive action). Inside
+         .app (inherits the font-scale zoom) with viewport coords divided by
+         the live zoom — the Stage 11 two-space model. -->
+    <div v-if="menuFor" class="ctx-overlay" @mousedown="closeMenu" @contextmenu.prevent="closeMenu" />
+    <div
+      v-if="menuFor"
+      class="ctx"
+      role="menu"
+      :style="menuX ? { left: `${menuX}px`, top: `${menuY}px` } : undefined"
+      @keydown.escape="closeMenu"
+    >
+      <button role="menuitem" class="ctx-item danger" @click="startForget(menuFor)">
+        {{ t("picker.ctxForget") }}
+      </button>
+    </div>
 
     <p v-if="forgetError && !forgetPreview" class="forget-error" role="alert">{{ forgetError }}</p>
 

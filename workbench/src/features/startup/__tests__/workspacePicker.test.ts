@@ -167,7 +167,7 @@ describe("forget flow (⑦)", () => {
     const w = mountPicker();
 
     await w.find(".kebab").trigger("click");
-    (document.querySelector(".ctx-item") as HTMLElement).click();
+    await w.find(".ctx-item").trigger("click");
     await flushPromises();
     expect(mockIpc.workspaceForgetPreview).toHaveBeenCalledWith("C:\\ws\\project-1");
 
@@ -193,7 +193,7 @@ describe("forget flow (⑦)", () => {
     });
     const w = mountPicker();
     await w.find(".kebab").trigger("click");
-    (document.querySelector(".ctx-item") as HTMLElement).click();
+    await w.find(".ctx-item").trigger("click");
     await flushPromises();
     const confirmBtn = w.findAll(".foot button")[1];
     expect((confirmBtn.element as HTMLButtonElement).disabled).toBe(true);
@@ -210,7 +210,7 @@ describe("forget flow (⑦)", () => {
     mockIpc.loadHistory.mockResolvedValue(historyWith(1));
     const w = mountPicker();
     await w.find(".kebab").trigger("click");
-    (document.querySelector(".ctx-item") as HTMLElement).click();
+    await w.find(".ctx-item").trigger("click");
     await flushPromises();
     await w.findAll(".foot button")[1].trigger("click");
     await flushPromises();
