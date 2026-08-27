@@ -335,6 +335,41 @@ pub fn save(dir: &Path, expected_revision: u64, patch: &HistoryPatch) -> Result<
     result
 }
 
+/// v2.1.7 S2 (A-2172x): remove ONE workspace record by exact path under the
+/// cross-process lock — same revision CAS as `save`. This is the "clear the
+/// record" half of the forget transaction; it never touches anything outside
+/// history.json. Removing an absent path writes nothing and reports
+/// `removed=false` (idempotent: forget retries must converge).
+pub fn remove_workspace(
+    dir: &Path,
+    expected_revision: u64,
+    path: &str,
+) -> Result<(u64, bool), HistoryError> {
+    fs::create_dir_all(dir).map_err(|e| HistoryError::Io(e.to_string()))?;
+    let lock_file = acquire_lock(dir)?;
+    let result = (|| {
+        let (mut current, _) = load(dir)?;
+        if current.revision != expected_revision {
+            return Err(HistoryError::Conflict {
+                current_revision: current.revision,
+            });
+        }
+        let before = current.workspaces.len();
+        current.workspaces.retain(|w| w.path != path);
+        if current.workspaces.len() == before {
+            return Ok((current.revision, false));
+        }
+        current.revision += 1;
+        let bytes = serde_json::to_vec_pretty(&current)
+            .map_err(|e| HistoryError::Corrupt(e.to_string()))?;
+        atomic_write(&dir.join(HISTORY_FILE), &bytes)
+            .map_err(|e| HistoryError::Io(e.to_string()))?;
+        Ok((current.revision, true))
+    })();
+    let _ = lock_file.unlock();
+    result
+}
+
 /// Deep-merge `src` into `dst` (unknown-field maps): `src` fills keys `dst`
 /// lacks; `dst` wins on conflict. Used so an old window's patch never drops
 /// unknown fields a newer window wrote (A-INFRA-5).
@@ -819,5 +854,51 @@ mod tests {
         let on_disk: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.path().join(HISTORY_FILE)).unwrap()).unwrap();
         assert_eq!(on_disk.get("schema_version").and_then(|v| v.as_u64()), Some(3));
+    }
+
+    // --- v2.1.7 S2: record-only removal (forget transaction, §A) ---
+
+    fn seed_for_remove(dir: &Path) -> u64 {
+        let patch = HistoryPatch {
+            workspaces: vec![WorkspaceRecord {
+                path: "/ws/x".into(),
+                last_used_at: "t1".into(),
+                last_agent: "claude".into(),
+                ..Default::default()
+            }],
+        };
+        save(dir, 0, &patch).unwrap()
+    }
+
+    #[test]
+    fn remove_workspace_drops_the_entry_and_bumps_revision() {
+        let dir = tempdir().unwrap();
+        seed_for_remove(dir.path());
+        let (rev, removed) = remove_workspace(dir.path(), 1, "/ws/x").unwrap();
+        assert!(removed);
+        assert_eq!(rev, 2);
+        let h = load(dir.path()).unwrap().0;
+        assert!(h.workspaces.is_empty());
+    }
+
+    #[test]
+    fn remove_workspace_is_idempotent_for_absent_path() {
+        let dir = tempdir().unwrap();
+        seed_for_remove(dir.path());
+        // Different path: nothing matches, no write, revision unchanged.
+        let (rev, removed) = remove_workspace(dir.path(), 1, "/ws/other").unwrap();
+        assert!(!removed);
+        assert_eq!(rev, 1);
+        assert_eq!(load(dir.path()).unwrap().0.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn remove_workspace_conflicts_on_stale_revision() {
+        let dir = tempdir().unwrap();
+        seed_for_remove(dir.path());
+        let err = remove_workspace(dir.path(), 99, "/ws/x").unwrap_err();
+        assert!(matches!(err, HistoryError::Conflict { current_revision: 1 }));
+        // Nothing changed on disk.
+        assert_eq!(load(dir.path()).unwrap().0.workspaces.len(), 1);
     }
 }
