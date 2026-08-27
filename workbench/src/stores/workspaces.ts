@@ -429,6 +429,11 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
   }
 
   async function forgetWorkspace(path: string): Promise<ForgetResult> {
+    // Drain any debounced merged-history save FIRST: an in-flight save bumps
+    // the disk revision mid-transaction and CAS-kills the forget (2026-08-27
+    // manual test on workspace "bb"). The backend still auto-retries once on
+    // conflict, but not racing in the first place is the better half.
+    await flushSave();
     try {
       return await ipc.workspaceForget(path, historyRevision.value);
     } finally {

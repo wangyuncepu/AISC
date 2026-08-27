@@ -69,6 +69,13 @@ function openMenu(path: string, x: number, y: number): void {
   menuX.value = x;
   menuY.value = y;
 }
+/** Kebab path: anchor the menu to the button (below, right-aligned) instead
+ * of screen coordinates (2026-08-27 manual test: the 50%/50% fallback read
+ * as a random position). */
+function openMenuAtButton(path: string, e: MouseEvent): void {
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  openMenu(path, Math.max(8, r.right - 170), r.bottom + 4);
+}
 function closeMenu(): void {
   menuFor.value = null;
 }
@@ -137,7 +144,7 @@ async function confirmForget(): Promise<void> {
               :aria-label="t('picker.rowMenu')"
               :aria-haspopup="menuFor === w.path ? 'true' : undefined"
               aria-expanded="false"
-              @click="openMenu(w.path, 0, 0)"
+              @click="openMenuAtButton(w.path, $event)"
               @keydown.escape="closeMenu"
             >⋯</button>
           </div>
@@ -230,7 +237,10 @@ async function confirmForget(): Promise<void> {
 }
 .kebab:hover, .kebab:focus-visible { background: var(--surface-hover); color: var(--text); }
 .kebab:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: calc(-1 * var(--focus-ring-offset)); }
-.expand { margin-top: var(--space-1); align-self: center; font-size: var(--font-sm); }
+.expand {
+  margin-top: var(--space-1); align-self: stretch; width: 100%;
+  text-align: center; font-size: var(--font-sm);
+}
 .workspace {
   flex: 1; min-width: 0; background: var(--surface-3); color: var(--text);
   border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
@@ -240,7 +250,6 @@ async function confirmForget(): Promise<void> {
 .ctx-overlay { position: fixed; inset: 0; z-index: 80; }
 .ctx {
   position: fixed; z-index: 81;
-  left: 50%; top: 50%; /* kebab path (no coords): centered fallback */
   background: var(--surface); color: var(--text);
   border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
   box-shadow: var(--shadow-menu); padding: var(--space-1); min-width: 160px;

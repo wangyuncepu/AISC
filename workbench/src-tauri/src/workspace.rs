@@ -516,7 +516,31 @@ pub async fn workspace_forget(
         return Err(WorkbenchError::workspace_conflict().with_detail(reason.clone()));
     }
     let history_dir = crate::session::config_dir(&app)?;
-    let (mut result, _had_data) = forget_execute(&g.ws_dir, &g.root, &history_dir, &path, expected_history_revision)?;
+    // Bounded auto-retry (2026-08-27 manual test "bb"): a concurrent history
+    // save can bump the disk revision between the store's capture and this
+    // transaction. forget_execute already rolled the quarantine back on the
+    // conflict, so re-running once with the fresh disk revision is safe.
+    let mut revision = expected_history_revision;
+    let outcome = {
+        let mut attempts = 0;
+        loop {
+            match forget_execute(&g.ws_dir, &g.root, &history_dir, &path, revision) {
+                Ok(pair) => break Ok(pair),
+                Err(e) if e.code == "WB_ERR_WORKSPACE_CONFLICT" && attempts < 3 => {
+                    attempts += 1;
+                    let fresh = crate::history::load(&history_dir)
+                        .map(|(h, _)| h.revision)
+                        .unwrap_or(revision);
+                    if fresh == revision {
+                        break Err(e); // nothing moved — a real conflict, surface it
+                    }
+                    revision = fresh;
+                }
+                Err(e) => break Err(e),
+            }
+        }
+    };
+    let (mut result, _had_data) = outcome?;
     result.workspace_key = g.key.clone();
     // D12: named toolchain volumes are KEPT — list them for manual cleanup.
     match named_toolchain_volumes(&g.key) {
