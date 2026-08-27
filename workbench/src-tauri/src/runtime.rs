@@ -1337,14 +1337,11 @@ fn bundled_docker_installer() -> Option<std::path::PathBuf> {
     p.is_file().then_some(p)
 }
 
-/// Install Docker Desktop via winget (Stage 5, A-ONB02/B). **Awaits completion**
-/// (bounded by `DOCKER_INSTALL_TIMEOUT`) so the caller can report a real
-/// result instead of fire-and-forget — the wizard shows "installing" while
-/// awaiting and a clear failure on error. Console window is hidden. Returns
-/// Ok only when Docker Desktop.exe exists afterward.
-#[cfg(windows)]
 // --- v2.1.7 S4 (#27, Gate-S4 §2): docker install progress events ---
-
+// Windows-only: both install backends (winget / bundled installer) exist
+// only there. 2026-08-27 CI lesson: an attribute above a comment block
+// binds to the item AFTER it — keep every cfg directly on its item.
+#[cfg(windows)]
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DockerInstallProgress {
@@ -1356,6 +1353,7 @@ struct DockerInstallProgress {
     deadline_ms: u64,
 }
 
+#[cfg(windows)]
 fn emit_install_progress(app: &AppHandle, p: DockerInstallProgress) {
     use tauri::Emitter;
     let _ = app.emit("docker-install-progress", p);
@@ -1365,6 +1363,7 @@ fn emit_install_progress(app: &AppHandle, p: DockerInstallProgress) {
 /// the deadline the child is KILLED and reaped BEFORE the timeout is
 /// reported (Gate-S4 §2 — a reported timeout never leaves an install
 /// running on in the background).
+#[cfg(windows)]
 async fn wait_install_with_heartbeat(
     app: &AppHandle,
     op: &str,
@@ -1413,6 +1412,7 @@ async fn wait_install_with_heartbeat(
 /// `phase=engine_start` heartbeats until `docker version` answers or 180s
 /// lapse. Detached — the wizard polls env readiness in parallel and stays
 /// the interactive source of truth.
+#[cfg(windows)]
 fn spawn_engine_start_watch(app: AppHandle, op: String, backend: &'static str) {
     tokio::spawn(async move {
         const ENGINE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(180);
@@ -1441,6 +1441,7 @@ fn spawn_engine_start_watch(app: AppHandle, op: String, backend: &'static str) {
     });
 }
 
+#[cfg(windows)]
 fn engine_probe_ok() -> bool {
     let mut cmd = std::process::Command::new("docker");
     cmd.arg("version");
@@ -1455,6 +1456,12 @@ fn engine_probe_ok() -> bool {
     cmd.status().map(|s| s.success()).unwrap_or(false)
 }
 
+/// Install Docker Desktop via winget (Stage 5, A-ONB02/B). **Awaits completion**
+/// (bounded by `DOCKER_INSTALL_TIMEOUT`) so the caller can report a real
+/// result instead of fire-and-forget — the wizard shows "installing" while
+/// awaiting and a clear failure on error. Console window is hidden. Returns
+/// Ok only when Docker Desktop.exe exists afterward.
+#[cfg(windows)]
 async fn install_docker_desktop_winget(app: &AppHandle) -> Result<(), String> {
     if !winget_available() {
         return Err("winget (App Installer) not available".into());
