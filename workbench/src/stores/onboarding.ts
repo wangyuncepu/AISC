@@ -8,7 +8,7 @@
  * keep the backend and UI in sync; corrupt/high-version files fail closed.
  */
 import { defineStore } from "pinia";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import * as ipc from "../lib/ipc";
 import type { OnboardingPatch, OnboardingState } from "../types";
 
@@ -26,6 +26,24 @@ export const useOnboardingStore = defineStore("onboarding", () => {
       state.value?.status === "abandoned",
   );
   const isInProgress = computed(() => state.value?.status === "in_progress");
+
+  // --- v2.1.7 S3 (⑥/D3): the wizard is MANUAL-ONLY ---
+  // Startup always lands on the picker; the overlay appears exclusively via
+  // openWizard() (Settings entry). Finishing/skipping the wizard lowers it
+  // again. The persisted status keeps its meaning for diagnostics and for
+  // the wizard's own resume step.
+  const wizardOpen = ref(false);
+
+  function openWizard(): void {
+    void load();
+    wizardOpen.value = true;
+  }
+  function closeWizard(): void {
+    wizardOpen.value = false;
+  }
+  watch(isFinished, (fin) => {
+    if (fin) wizardOpen.value = false;
+  });
 
   async function load(): Promise<void> {
     try {
@@ -68,6 +86,9 @@ export const useOnboardingStore = defineStore("onboarding", () => {
     status,
     isFinished,
     isInProgress,
+    wizardOpen,
+    openWizard,
+    closeWizard,
     load,
     patch,
     isStepComplete,

@@ -136,7 +136,11 @@ async function onReset() {
 async function reopenOnboarding() {
   const { useOnboardingStore } = await import("../../stores/onboarding");
   const onboarding = useOnboardingStore();
+  // Resume at the environment step (the wizard's own step machine reads
+  // this) and RAISE the manual overlay (v2.1.7 S3: the status patch alone
+  // no longer opens anything).
   await onboarding.patch({ status: "in_progress", currentStep: "environment" });
+  onboarding.openWizard();
   emit("close");
 }
 </script>

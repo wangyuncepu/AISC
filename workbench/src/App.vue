@@ -48,15 +48,14 @@ const onboardingStore = useOnboardingStore();
 const polling = useRuntimePolling();
 const providerPolling = useProviderPolling();
 
-// Stage 5 (ONB-01/07): show the first-run wizard until onboarding finishes.
-// Loaded async at startup; fail-closed (corrupt/high-version) still shows the
-// main app rather than trapping the user in a broken wizard.
-const showOnboarding = computed(
-  () => onboardingStore.loaded && !onboardingStore.isFinished
-);
+// v2.1.7 S3 (⑥/D3): the wizard is MANUAL-ONLY — startup always lands on
+// the picker; the overlay appears exclusively when opened from Settings and
+// lowers again when the wizard finishes/skips (the store watches isFinished).
+const showOnboarding = computed(() => onboardingStore.wizardOpen);
 
-// Stage 5 (ONB-07): once the wizard finishes, negotiate the main app (it was
-// deferred during onboarding so the fresh-install gate never flashes).
+// Stage 5 (ONB-07) belt-and-suspenders: if a manually-opened wizard finishes
+// while negotiate somehow never ran (idle), start it now. Normally boot
+// already negotiated unconditionally (see onMounted, A-21735).
 watch(
   () => onboardingStore.isFinished,
   (finished) => {
@@ -318,10 +317,11 @@ async function runExitFlow(): Promise<void> {
 }
 
 onMounted(() => {
-  // Stage 5 (ONB-07): decide the first-run gate BEFORE negotiating.
+  // v2.1.7 S3: the wizard never gates startup anymore — negotiate ALWAYS
+  // runs; a CLI discovery failure surfaces through the global blocked gate
+  // instead of stranding the user on a wizard (A-21735).
   void (async () => {
     await onboardingStore.load();
-    if (!onboardingStore.isFinished) return; // wizard handles startup
     store.negotiate();
   })();
   // G-09 (02 §3.1): resolve + apply the locale in parallel.
