@@ -493,6 +493,64 @@ fn forget_execute(
     }
 }
 
+/// Stop+remove AISC-OWNED containers bound to this workspace key before the
+/// state-dir rename. Ownership labels (io.aisc.managed + owner=workbench +
+/// workspace-key) prove they are ours, and the lease-fresh check earlier
+/// already blocks LIVE other instances — their heartbeats keep
+/// runtime-lease.json fresh. What reaches here is an ORPHANED session: the
+/// app died (e.g. a dev restart) so the lease went stale while the container
+/// kept running, holding bind-mount handles that make the rename fail with
+/// ACCESS_DENIED (2026-08-27 "bb", os error 5). The label value is the BARE
+/// hex key (no sha256-v1: prefix — see the inspect evidence).
+fn forget_stop_owned_containers(key: &str) -> Result<u32, String> {
+    let bare = key.strip_prefix("sha256-v1:").unwrap_or(key);
+    let run = |args: Vec<String>| -> Result<std::process::Output, String> {
+        let mut cmd = std::process::Command::new("docker");
+        cmd.args(&args);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::null());
+        cmd.stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000 /* CREATE_NO_WINDOW */);
+        }
+        cmd.output().map_err(|e| e.to_string())
+    };
+    let out = run(vec![
+        "ps".into(),
+        "-aq".into(),
+        "--filter".into(),
+        "label=io.aisc.managed=true".into(),
+        "--filter".into(),
+        format!("label=io.aisc.workspace-key={bare}"),
+    ])?;
+    if !out.status.success() {
+        return Err(format!("docker ps exited {:?}", out.status.code()));
+    }
+    let ids: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    let mut stopped = 0u32;
+    for id in &ids {
+        // Best-effort per container; a survivor surfaces via the rename's
+        // own io error detail rather than aborting the whole transaction.
+        let stop_ok = run(vec!["stop".into(), id.clone()])
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        let rm_ok = run(vec!["rm".into(), id.clone()])
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if stop_ok && rm_ok {
+            stopped += 1;
+        }
+    }
+    Ok(stopped)
+}
+
 /// Read-only preview for the confirm dialog: what WOULD be deleted, what is
 /// kept, and whether anything blocks the operation right now.
 #[tauri::command]
@@ -538,6 +596,16 @@ pub async fn workspace_forget(
     let g = forget_gather(&active, &path, None)?;
     if let Some(reason) = &g.blocked_reason {
         return Err(WorkbenchError::workspace_conflict().with_detail(reason.clone()));
+    }
+    // Orphaned-session cleanup (see forget_stop_owned_containers): the live
+    // instances are already excluded by the blocked check above.
+    let mut orphan_note: Option<String> = None;
+    if g.data_present {
+        match forget_stop_owned_containers(&g.key) {
+            Ok(n) if n > 0 => orphan_note = Some(format!("orphaned-containers-stopped:{n}")),
+            Ok(_) => {}
+            Err(e) => orphan_note = Some(format!("orphan-container-check-failed:{e}")),
+        }
     }
     let history_dir = crate::session::config_dir(&app)?;
     // Bounded auto-retry (2026-08-27 manual test "bb"): a concurrent history
@@ -587,6 +655,9 @@ pub async fn workspace_forget(
         Err(e) => result
             .warnings
             .push(format!("named-volume check skipped: {e}")),
+    }
+    if let Some(note) = orphan_note {
+        result.warnings.push(note);
     }
     // Logging redline: workspace absolute paths never enter the log — the
     // key plus booleans are enough to audit the transaction.
