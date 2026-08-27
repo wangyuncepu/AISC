@@ -23,6 +23,7 @@
   - `percent` 仅在 `step_total>0` 且映射稳定时产生；单调不回退；`build.complete` 之前恒 `< 100`。
   - 拉取层为独立 `phase=pull`，`progress_kind=indeterminate`（字节级不做伪百分比）。
   - 解析不出的输出只进 `build.output`，不产生 progress 事件。
+  - **修订（2026-08-27 手测第 2 轮）**：`phase=prepare` 的 `transferring context` 允许用**上一次构建日志的最终上下文字节数**做分母产生估算 `percent`——`step_total` 携带该估算字节数、`summary` 以 `≈` 前缀标注估算、prepare 阶段封顶 95、无估算数据时回退 indeterminate。估算分母永不写入 `step_current/step_total` 的步骤语义（`progress_kind` 仍为 determinate，字段语义按字节计）。
 - `log_path`（仅 `build.start` 携带）：本次构建完整原始输出的落盘文件；UI 只渲染有界尾部窗口，完整日志经此路径打开。
 - 解析源：BuildKit `--progress=plain`（`#12 [3/7] RUN …`、`#12 CACHED`、`#12 DONE`、`exporting to image`）与 legacy 构建器（`Step 3/12 : …`）。**不改 docker_argv**（不强制 `--progress`，避免 legacy builder 拒绝未知 flag）。
 - 兼容：v1 消费端（旧 Workbench）忽略新事件，行为不变。

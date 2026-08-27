@@ -29,6 +29,26 @@ from typing import Optional
 # "#12 exporting to image" (phase text without [i/t]).
 _BUILDKIT_STEP = re.compile(r"^#\d+ \[(\d+)/(\d+)\] (.*)$")
 _BUILDKIT_PHASE = re.compile(r"^#\d+ (.+)$")
+
+# "transferring context: 247.12MB 5.2s" / "... 1.2GB done" — cumulative
+# bytes WITHOUT a total (BuildKit never announces the context size), so the
+# prepare bar can only be determinate against an ESTIMATED denominator.
+_CONTEXT_BYTES = re.compile(
+    r"^transferring context: ([\d.]+)\s*(B|kB|MB|GB|TB)\b", re.I
+)
+_UNIT_MULT = {"b": 1.0, "kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12}
+
+
+def _fmt_mb(n: float) -> str:
+    return f"{n / 1e6:.1f}MB"
+
+
+def parse_context_bytes(line: str) -> Optional[float]:
+    """Cumulative transferred bytes from a `transferring context:` line."""
+    m = _CONTEXT_BYTES.match(line)
+    if not m:
+        return None
+    return float(m.group(1)) * _UNIT_MULT[m.group(2).lower()]
 # Legacy builder: "Step 3/12 : RUN ..." / bare "Step 3 : ..."
 _LEGACY_STEP = re.compile(r"^Step (\d+)(?:/(\d+))? : (.*)$")
 
@@ -57,11 +77,15 @@ class BuildProgressParser:
     """Feed raw chunks; collect :class:`ProgressUpdate` for each recognised
     line. Monotonic by construction: percent only ever rises."""
 
-    def __init__(self) -> None:
+    def __init__(self, context_total_bytes: Optional[float] = None) -> None:
         self._step_current = 0
         self._step_total: Optional[int] = None
         self._last_percent = 0.0
         self._phase = "prepare"
+        # Estimated context denominator from the PREVIOUS build's log
+        # (Gate-S4 §1 amendment): enables a determinate prepare bar that is
+        # explicitly marked ≈ in the summary and capped at 95.
+        self._context_total_bytes = context_total_bytes
 
     # -- helpers -----------------------------------------------------------
 
@@ -101,6 +125,36 @@ class BuildProgressParser:
             summary=summary,
         )
 
+    def _context_update(self, line: str) -> ProgressUpdate:
+        """`transferring context` — cumulative bytes only. With an estimated
+        denominator from the previous build, emit a determinate ≈ percent
+        (capped at 95 — the real total is unknown); otherwise stay
+        indeterminate with the live byte count as the summary."""
+        self._phase = "prepare"
+        cur = parse_context_bytes(line)
+        total = self._context_total_bytes
+        if cur is not None and total and total > 0:
+            raw = min(cur / total, 0.95) * 100.0
+            if raw < self._last_percent:
+                raw = self._last_percent
+            self._last_percent = raw
+            return ProgressUpdate(
+                phase="prepare",
+                step_current=None,
+                step_total=int(total),
+                percent=round(raw, 1),
+                progress_kind="determinate",
+                summary=f"≈ {_fmt_mb(cur)} / ≈ {_fmt_mb(total)}",
+            )
+        return ProgressUpdate(
+            phase="prepare",
+            step_current=None,
+            step_total=None,
+            percent=None,
+            progress_kind="indeterminate",
+            summary=line,
+        )
+
     # -- api ---------------------------------------------------------------
 
     @property
@@ -133,6 +187,8 @@ class BuildProgressParser:
 
         for pattern, phase in _PHASE_PATTERNS:
             if pattern.match(line):
+                if phase == "prepare":
+                    return self._context_update(line)
                 return self._update(phase, line)
 
         # BuildKit bare phase lines ("#12 exporting to image", "#7 DONE").

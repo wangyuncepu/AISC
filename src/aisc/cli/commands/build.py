@@ -24,7 +24,7 @@ from aisc.adapters.docker_ import (
     validate_build_resources,
 )
 from aisc.application.version import _parse_versions_env
-from aisc.cli.build_progress_parser import BuildProgressParser
+from aisc.cli.build_progress_parser import BuildProgressParser, parse_context_bytes
 from aisc.cli.output import JsonlEmitter
 
 
@@ -62,6 +62,38 @@ def _open_build_log() -> Optional[Path]:
         return path
     except Exception:
         return None
+
+
+def _previous_context_total(skip_log: Optional[Path]) -> Optional[float]:
+    """The FINAL `transferring context: X done` bytes from the most recent
+    PREVIOUS build log — the estimated denominator for the prepare-phase
+    progress bar (Gate-S4 §1 amendment). Best-effort; absence = the bar
+    simply stays indeterminate."""
+    try:
+        from aisc.application.data_root import shared_root
+        logs = shared_root() / "logs"
+        candidates = sorted(
+            (p for p in logs.glob("build-*.log") if p != skip_log),
+            key=lambda p: p.name,
+            reverse=True,
+        )
+        for path in candidates[:3]:  # newest few; tolerate partial logs
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            last: Optional[float] = None
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.endswith("done") or stripped.endswith("done)"):
+                    val = parse_context_bytes(stripped)
+                    if val:
+                        last = val
+            if last:
+                return last
+    except Exception:
+        pass
+    return None
 
 
 # Dockerfile instructions that count as build steps (candidate step_total).
@@ -349,7 +381,9 @@ def run_build(
         # the SAME bytes — the emitter is the only progress fact source; the
         # UI never parses build.output. Raw chunks also append to the
         # build.start log file.
-        progress = BuildProgressParser()
+        progress = BuildProgressParser(
+            context_total_bytes=_previous_context_total(build_log_path)
+        )
 
         def _on_chunk(stream: str, chunk: str) -> None:
             if build_log_path is not None:

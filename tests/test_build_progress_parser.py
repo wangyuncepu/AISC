@@ -60,6 +60,17 @@ class BuildkitPlainTests(unittest.TestCase):
         self.assertIn("247.12MB", ups[0].summary)
         self.assertEqual(ups[0].progress_kind, "indeterminate")
 
+    def test_context_transfer_determinate_against_estimated_total(self):
+        p = BuildProgressParser(context_total_bytes=500e6)
+        ups = p.feed("transferring context: 247.5MB 5.2s\n")
+        self.assertEqual(ups[0].progress_kind, "determinate")
+        self.assertEqual(ups[0].percent, 49.5)
+        self.assertIn("≈", ups[0].summary)
+        # Capped at 95 — the real total is unknown (estimate semantics).
+        ups = p.feed("transferring context: 900MB 12.0s\n")
+        self.assertEqual(ups[0].percent, 95.0)
+        self.assertLess(ups[0].percent, 100)
+
 
 class LegacyBuilderTests(unittest.TestCase):
     def test_legacy_step_lines_map(self):
