@@ -366,9 +366,14 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
       void Promise.all(reloadTasks).then(() => this.loadNewCreatedDirs());
     },
 
-    /** Re-apply watcher-derived change_state to every loaded tree node. */
-    applyChangeStates() {
-      for (const list of Object.values(this.tree)) {
+    /** Re-apply watcher-derived change_state to loaded tree nodes. With a
+     *  dir only that directory is rescanned (S5/R3 — the poll loop used to
+     *  walk EVERY loaded directory's nodes on every 1.5s tick); no arg
+     *  rescans everything (workspace switch / reset). */
+    applyChangeStates(dir?: string) {
+      const lists = dir === undefined ? Object.values(this.tree) : [this.tree[dir]];
+      for (const list of lists) {
+        if (!list) continue;
         for (const node of list) {
           const change = this.unattributed[node.relative_path];
           if (change) {
@@ -378,14 +383,17 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
       }
     },
 
-    /** Lazily load a directory's children. No-op if already loaded or loading. */
-    async loadDir(dir: string, force = false, markCreated = false) {
+    /** Lazily load a directory's children. No-op if already loaded or loading.
+     *  `silent` (S5/R2): the 1.5s background poll must NOT flip the loading
+     *  flag — a big dir listing slower than the interval kept the spinner
+     *  permanently on ("疯狂转圈"). User-initiated loads keep the spinner. */
+    async loadDir(dir: string, force = false, markCreated = false, silent = false) {
       if (!this.workspace) return;
       if (this.loading[dir]) return;
       if (!force && this.tree[dir]) return;
       const previous = this.tree[dir] ?? [];
       const previousPaths = new Set(previous.map((n) => n.relative_path));
-      this.loading[dir] = true;
+      if (!silent) this.loading[dir] = true;
       this.errors[dir] = "";
       try {
         const result = await workspaceList(this.workspace, dir, null);
@@ -417,11 +425,11 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
             }
           }
         }
-        this.applyChangeStates();
+        this.applyChangeStates(dir);
       } catch (e) {
         this.errors[dir] = String(e);
       } finally {
-        this.loading[dir] = false;
+        if (!silent) this.loading[dir] = false;
       }
     },
 
@@ -491,7 +499,7 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
       const tasks: Promise<void>[] = [];
       for (const dir of dirs) {
         if (this.tree[dir] && !this.loading[dir]) {
-          tasks.push(this.loadDir(dir, true));
+          tasks.push(this.loadDir(dir, true, false, true /* silent poll (S5/R2) */));
         }
       }
       await Promise.all(tasks);
@@ -518,7 +526,7 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
         }
         if (pending.length === 0) break;
         await Promise.all(
-          pending.map((dir) => this.loadDir(dir, false, true)),
+          pending.map((dir) => this.loadDir(dir, false, true, true /* silent */)),
         );
       }
     },

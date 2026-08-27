@@ -134,6 +134,12 @@ pub struct ArtifactIndex {
     pub revision: u64,
     #[serde(default)]
     pub artifacts: Vec<ArtifactRecord>,
+    /// v2.1.7 S5 (spike-artifact-flood R1): fingerprint of the CLI registry
+    /// dir at import time (file count + total bytes + newest mtime). An
+    /// unchanged fingerprint lets the next import return the existing index
+    /// instead of re-parsing/rebuilding/rewriting the whole thing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry_fingerprint: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +291,7 @@ pub fn load_index(dir: &Path) -> ArtifactIndex {
                     schema_version: INDEX_SCHEMA_VERSION,
                     revision: 0,
                     artifacts: Vec::new(),
+                    registry_fingerprint: None,
                 }
             }
         },
@@ -292,6 +299,7 @@ pub fn load_index(dir: &Path) -> ArtifactIndex {
             schema_version: INDEX_SCHEMA_VERSION,
             revision: 0,
             artifacts: Vec::new(),
+            registry_fingerprint: None,
         },
     }
 }
@@ -336,9 +344,53 @@ pub fn import_registries(app: &AppHandle, workspace: &Path) -> Result<ArtifactIn
     result
 }
 
+/// Test/import entry: same as import_locked but takes the registry dir
+/// directly (the workspace path derives it via resolve_data_root, which the
+/// hermetic tests cannot inject).
+#[cfg(test)]
+fn import_from_registry_dir(
+    dir: &Path,
+    registry_dir: &Path,
+) -> Result<ArtifactIndex, WorkbenchError> {
+    // fingerprint gate against the given registry dir (mirrors import_locked)
+    let fp = fingerprint_dir(registry_dir);
+    let existing = load_index(dir);
+    if let (Some(current), Some(stored)) = (fp.as_deref(), existing.registry_fingerprint.as_deref()) {
+        if current == stored && !existing.artifacts.is_empty() {
+            return Ok(existing);
+        }
+    }
+    let records = read_registry_dir(registry_dir);
+    let mut index = existing;
+    let mut by_id: std::collections::BTreeMap<String, ArtifactRecord> = std::collections::BTreeMap::new();
+    for rec in records {
+        by_id.insert(rec.artifact_id.clone(), rec);
+    }
+    let mut artifacts: Vec<ArtifactRecord> = by_id.into_values().collect();
+    artifacts.sort_by(|a, b| a.workspace_relative_path.cmp(&b.workspace_relative_path));
+    index.artifacts = artifacts;
+    index.revision = index.revision.wrapping_add(1);
+    index.registry_fingerprint = fp;
+    let bytes = serde_json::to_vec(&index)
+        .map_err(|e| WorkbenchError::history_error().with_detail(format!("serialize: {e}")))?;
+    storage::atomic_replace(&dir.join(INDEX_FILE), &bytes)
+        .map_err(|e| WorkbenchError::history_error().with_detail(format!("write: {e}")))?;
+    Ok(index)
+}
+
 fn import_locked(dir: &Path, workspace: &Path) -> Result<ArtifactIndex, WorkbenchError> {
+    // v2.1.7 S5 (R1): fingerprint gate — an unchanged registry dir returns
+    // the existing index untouched. Reopening an unchanged workspace drops
+    // from O(N) parse+merge+serialize+write to one read_dir pass.
+    let fp = registry_fingerprint(workspace);
+    let existing = load_index(dir);
+    if let (Some(current), Some(stored)) = (fp.as_deref(), existing.registry_fingerprint.as_deref()) {
+        if current == stored && !existing.artifacts.is_empty() {
+            return Ok(existing);
+        }
+    }
     let records = read_cli_registries(workspace);
-    let mut index = load_index(dir);
+    let mut index = existing;
     // Deterministic merge: dedupe by artifact_id (latest line wins), sort by path.
     let mut by_id: std::collections::BTreeMap<String, ArtifactRecord> = std::collections::BTreeMap::new();
     for rec in records {
@@ -348,11 +400,48 @@ fn import_locked(dir: &Path, workspace: &Path) -> Result<ArtifactIndex, Workbenc
     artifacts.sort_by(|a, b| a.workspace_relative_path.cmp(&b.workspace_relative_path));
     index.artifacts = artifacts;
     index.revision = index.revision.wrapping_add(1);
+    index.registry_fingerprint = fp;
     let bytes = serde_json::to_vec(&index)
         .map_err(|e| WorkbenchError::history_error().with_detail(format!("serialize: {e}")))?;
     storage::atomic_replace(&dir.join(INDEX_FILE), &bytes)
         .map_err(|e| WorkbenchError::history_error().with_detail(format!("write: {e}")))?;
     Ok(index)
+}
+
+/// Cheap change detection for the CLI registry dir: (jsonl count, total
+/// bytes, newest mtime nanos). Any appended record changes bytes+newest
+/// mtime; a rewritten file changes mtime. Collisions only delay one import.
+fn registry_fingerprint(workspace: &Path) -> Option<String> {
+    let root = resolve_data_root();
+    let mut dir = registry_dir(&root, workspace);
+    let mut parts = fingerprint_dir(&dir);
+    if parts.is_none() {
+        dir = registry_dir(&legacy_data_root(), workspace);
+        parts = fingerprint_dir(&dir);
+    }
+    parts
+}
+
+fn fingerprint_dir(dir: &Path) -> Option<String> {
+    let entries = fs::read_dir(dir).ok()?;
+    let mut count: u64 = 0;
+    let mut total: u64 = 0;
+    let mut newest: u128 = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let meta = entry.metadata().ok()?;
+        count += 1;
+        total += meta.len();
+        if let Ok(m) = meta.modified() {
+            if let Ok(d) = m.duration_since(std::time::UNIX_EPOCH) {
+                newest = newest.max(d.as_nanos());
+            }
+        }
+    }
+    Some(format!("{count}:{total}:{newest}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +585,97 @@ mod tests {
         assert_eq!(rec.label, "");
         // Unknown field from the previous version survives into `extra`.
         assert_eq!(rec.extra.get("old_field").and_then(|v| v.as_str()), Some("kept"));
+    }
+
+    // --- v2.1.7 S5 (spike-artifact-flood R1): fingerprint-gated import ---
+
+    fn record_line(id: &str, path: &str) -> String {
+        format!(
+            r#"{{"schema_version":1,"artifact_id":"{id}","workspace_relative_path":"{path}","action":"created","kind":"deliverable","producer":{{"agent":"claude"}},"state":"present","recorded_at":"2026-08-27T00:00:00Z"}}"#
+        )
+    }
+
+    #[test]
+    fn fingerprint_unchanged_skips_reimport() {
+        let tmp = tempdir().unwrap();
+        let reg = tmp.path().join("registry");
+        std::fs::create_dir_all(&reg).unwrap();
+        std::fs::write(reg.join("a.jsonl"), record_line("id-1", "a.md")).unwrap();
+
+        let idx_dir = tmp.path().join("idx");
+        std::fs::create_dir_all(&idx_dir).unwrap();
+        let first = import_from_registry_dir(&idx_dir, &reg).unwrap();
+        assert_eq!(first.artifacts.len(), 1);
+        assert!(first.registry_fingerprint.is_some());
+        let rev = first.revision;
+
+        // Second import with an UNCHANGED registry: same revision, no rewrite.
+        let second = import_from_registry_dir(&idx_dir, &reg).unwrap();
+        assert_eq!(second.revision, rev, "unchanged fingerprint must skip reimport");
+        assert_eq!(second.artifacts.len(), 1);
+    }
+
+    #[test]
+    fn fingerprint_change_triggers_reimport() {
+        let tmp = tempdir().unwrap();
+        let reg = tmp.path().join("registry");
+        std::fs::create_dir_all(&reg).unwrap();
+        std::fs::write(reg.join("a.jsonl"), record_line("id-1", "a.md")).unwrap();
+
+        let idx_dir = tmp.path().join("idx");
+        std::fs::create_dir_all(&idx_dir).unwrap();
+        let first = import_from_registry_dir(&idx_dir, &reg).unwrap();
+
+        // Append a record: bytes + newest mtime change → full reimport.
+        // (mtime granularity: force a NEW mtime by setting the file time
+        // explicitly when available; otherwise bump content twice.)
+        std::fs::write(reg.join("a.jsonl"), format!(
+            "{}\n{}",
+            record_line("id-1", "a.md"),
+            record_line("id-2", "b.md"),
+        )).unwrap();
+        match std::fs::File::options().write(true).open(reg.join("a.jsonl")) {
+            Ok(f) => {
+                let t = std::time::SystemTime::now() + std::time::Duration::from_secs(1);
+                let _ = f.set_modified(t);
+            }
+            Err(_) => {}
+        }
+
+        let second = import_from_registry_dir(&idx_dir, &reg).unwrap();
+        assert_eq!(second.artifacts.len(), 2, "changed fingerprint must reimport");
+        assert!(second.revision > first.revision);
+    }
+
+    /// S5 benchmark evidence (spike-artifact-flood.md): import cost at
+    /// 200/500/1000 records. Not an assertion — a timing print the report
+    /// cites; keep a generous ceiling so slow CI never flakes it.
+    #[test]
+    fn import_benchmark_ceiling() {
+        for n in [200u32, 500, 1000] {
+            let tmp = tempdir().unwrap();
+            let reg = tmp.path().join("registry");
+            std::fs::create_dir_all(&reg).unwrap();
+            let body: Vec<String> = (0..n)
+                .map(|i| record_line(&format!("id-{i}"), &format!("f{i}.md")))
+                .collect();
+            std::fs::write(reg.join("all.jsonl"), body.join("\n")).unwrap();
+            let idx_dir = tmp.path().join("idx");
+            std::fs::create_dir_all(&idx_dir).unwrap();
+            let t0 = std::time::Instant::now();
+            let idx = import_from_registry_dir(&idx_dir, &reg).unwrap();
+            let full = t0.elapsed();
+            let t1 = std::time::Instant::now();
+            let skipped = import_from_registry_dir(&idx_dir, &reg).unwrap();
+            let gated = t1.elapsed();
+            assert_eq!(idx.artifacts.len(), n as usize);
+            assert_eq!(skipped.revision, idx.revision);
+            // Warm-run ceilings: full import stays under 1s even at 1000;
+            // the fingerprint gate is two orders cheaper.
+            assert!(full.as_millis() < 1000, "full import too slow at {n}: {full:?}");
+            assert!(gated < full, "fingerprint gate must be cheaper at {n}");
+            eprintln!("bench n={n} full={full:?} gated={gated:?}");
+        }
     }
 
     #[test]
