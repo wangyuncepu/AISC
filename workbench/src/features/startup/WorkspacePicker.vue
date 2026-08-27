@@ -158,19 +158,24 @@ async function confirmForget(): Promise<void> {
       </button>
     </div>
 
-    <!-- right-click / kebab context menu (single destructive action) -->
-    <div v-if="menuFor" class="ctx-overlay" @mousedown="closeMenu" @contextmenu.prevent="closeMenu" />
-    <div
-      v-if="menuFor"
-      class="ctx"
-      role="menu"
-      :style="menuX ? { left: `${menuX}px`, top: `${menuY}px` } : undefined"
-      @keydown.escape="closeMenu"
-    >
-      <button role="menuitem" class="ctx-item danger" @click="startForget(menuFor)">
-        {{ t("picker.ctxForget") }}
-      </button>
-    </div>
+    <!-- right-click / kebab context menu (single destructive action).
+         Teleported to body: .app carries the font-scale CSS zoom, and fixed
+         positioning inside a zoomed container re-scales viewport coordinates
+         (2026-08-27 manual test @1.5× — Stage 11's two-space menu model). -->
+    <Teleport to="body">
+      <div v-if="menuFor" class="ctx-overlay" @mousedown="closeMenu" @contextmenu.prevent="closeMenu" />
+      <div
+        v-if="menuFor"
+        class="ctx"
+        role="menu"
+        :style="menuX ? { left: `${menuX}px`, top: `${menuY}px` } : undefined"
+        @keydown.escape="closeMenu"
+      >
+        <button role="menuitem" class="ctx-item danger" @click="startForget(menuFor)">
+          {{ t("picker.ctxForget") }}
+        </button>
+      </div>
+    </Teleport>
 
     <p v-if="forgetError && !forgetPreview" class="forget-error" role="alert">{{ forgetError }}</p>
 
