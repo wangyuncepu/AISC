@@ -97,3 +97,44 @@ describe("onboarding store (ONB-01)", () => {
     expect(s.isSkipped("network")).toBe(true);
   });
 });
+
+describe("onboarding store — manual-only wizard gate (v2.1.7 S3 / ⑥)", () => {
+  it("the overlay is closed by default regardless of persisted status", async () => {
+    for (const status of ["not_started", "in_progress"]) {
+      vi.mocked(onboardingLoad).mockResolvedValue(baseState({ status }) as never);
+      const s = useOnboardingStore();
+      await s.load();
+      expect(s.wizardOpen).toBe(false); // startup lands on the picker, never the wizard
+    }
+  });
+
+  it("openWizard raises the overlay; finishing lowers it automatically", async () => {
+    vi.mocked(onboardingLoad).mockResolvedValue(
+      baseState({ status: "in_progress", current_step: "environment" }) as never,
+    );
+    const s = useOnboardingStore();
+    await s.load();
+    s.openWizard();
+    expect(s.wizardOpen).toBe(true);
+
+    // The wizard completes (patch returns the authoritative completed state).
+    vi.mocked(onboardingUpdate).mockResolvedValue(
+      baseState({ status: "completed", completed_steps: ["environment", "workspace"] }) as never,
+    );
+    await s.patch({ status: "completed" });
+    expect(s.isFinished).toBe(true);
+    expect(s.wizardOpen).toBe(false); // the watch lowered the overlay
+  });
+
+  it("closeWizard lowers a manually raised overlay without touching status", async () => {
+    vi.mocked(onboardingLoad).mockResolvedValue(
+      baseState({ status: "in_progress" }) as never,
+    );
+    const s = useOnboardingStore();
+    await s.load();
+    s.openWizard();
+    s.closeWizard();
+    expect(s.wizardOpen).toBe(false);
+    expect(s.status).toBe("in_progress"); // resume state preserved
+  });
+});
