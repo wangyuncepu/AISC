@@ -495,22 +495,32 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       const payload = await ipc.runtimeReconcile(workspace.value.trim());
       reconcile.value = payload;
       if (!payload.can_proceed) {
-        if (
-          payload.classification === "active_same_instance" &&
-          deps.focusExistingWorkspace?.(workspace.value.trim())
-        ) {
-          // Same process already materialized this workspace: it got focused
-          // — this launcher resets silently (01 §1.3).
-          resetWorkspace();
-          status.value = "picker";
+        if (payload.classification === "docker_unavailable") {
+          // S8a (VM retest feedback #1): "cannot verify — docker is down" is
+          // NOT a workspace conflict. Falling through lets preflight own the
+          // gate: the summary page shows the failing docker check with the
+          // actionable 启动 Docker button + auto wake-up (and, since S8h, the
+          // structured not-installed error). The old route parked on the
+          // generic 「启动已被阻断」 block page with the reason behind 诊断.
+          void ipc.logUiEvent?.("reconcile_docker_unavailable", "error", payload.error_code ?? undefined);
+        } else {
+          if (
+            payload.classification === "active_same_instance" &&
+            deps.focusExistingWorkspace?.(workspace.value.trim())
+          ) {
+            // Same process already materialized this workspace: it got focused
+            // — this launcher resets silently (01 §1.3).
+            resetWorkspace();
+            status.value = "picker";
+            return;
+          }
+          // active_other_instance / unknown_owner: the (Stage 4) block page;
+          // the conflict status renders it until then.
+          status.value = "conflict";
+          void loadConflicts();
+          void ipc.logUiEvent?.("reconcile_block", "error", payload.error_code ?? undefined);
           return;
         }
-        // active_other_instance / unknown_owner: the (Stage 4) block page;
-        // the conflict status renders it until then.
-        status.value = "conflict";
-        void loadConflicts();
-        void ipc.logUiEvent?.("reconcile_block", "error", payload.error_code ?? undefined);
-        return;
       }
     } catch {
       // Reconcile transport failure: fall through to preflight — its docker

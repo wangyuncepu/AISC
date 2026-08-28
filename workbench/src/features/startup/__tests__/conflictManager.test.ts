@@ -137,4 +137,20 @@ describe("Stage 4 block page", () => {
       w.unmount();
     }
   });
+
+  it("the generic blocked page shows the backend reason inline (S8a)", () => {
+    const s = useRuntimeStore();
+    s.status = "conflict";
+    s.reconcile = payload("unknown_owner");
+    s.reconcile.technical_detail = "workspace leased by another Workbench instance";
+    const w = mount(ConflictManager, { global: { plugins: [i18n] } });
+    try {
+      // The reconcile's own reason line is visible without opening 诊断.
+      expect(w.find('[data-testid="blocked-detail"]').text()).toContain(
+        "workspace leased by another Workbench instance",
+      );
+    } finally {
+      w.unmount();
+    }
+  });
 });
