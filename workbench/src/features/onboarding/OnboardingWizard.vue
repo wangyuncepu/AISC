@@ -76,6 +76,24 @@ async function skip() {
 
 // --- environment step (5c) ---
 
+// S8e: the readiness enums are wire values — the check list renders localized
+// state text, never the raw English enum (unknown / not_installed / ...).
+const READINESS_STATE_KEY: Record<string, string> = {
+  unknown: "onboarding.env.state.unknown",
+  not_installed: "onboarding.env.state.notInstalled",
+  installing: "onboarding.env.state.installing",
+  installed: "onboarding.env.state.installed",
+  starting: "onboarding.env.state.starting",
+  ready: "onboarding.env.state.ready",
+  blocked: "onboarding.env.state.blocked",
+  unavailable: "onboarding.env.state.unavailable",
+  missing: "onboarding.env.state.missing",
+  permission_denied: "onboarding.env.state.permissionDenied",
+};
+function readinessStateText(state: string): string {
+  return t(READINESS_STATE_KEY[state] ?? "onboarding.env.state.unknown");
+}
+
 async function startDocker() {
   // Launch (or install, if missing) — awaited so failures surface. Then hand
   // detection to the live auto-poll (5s): first launch of Docker Desktop needs
@@ -312,19 +330,19 @@ async function finish() {
       <ul class="ob-check-list">
         <li>
           <span class="ob-check-dot" :data-state="environment.readiness.cli" />
-          {{ t("onboarding.env.cli") }}: {{ environment.readiness.cli }}
+          {{ t("onboarding.env.cli") }}: {{ readinessStateText(environment.readiness.cli) }}
         </li>
         <li>
           <span class="ob-check-dot" :data-state="environment.readiness.docker" />
-          {{ t("onboarding.env.docker") }}: {{ environment.readiness.docker }}
+          {{ t("onboarding.env.docker") }}: {{ readinessStateText(environment.readiness.docker) }}
         </li>
         <li>
           <span class="ob-check-dot" :data-state="environment.readiness.engine" />
-          {{ t("onboarding.env.engine") }}: {{ environment.readiness.engine }}
+          {{ t("onboarding.env.engine") }}: {{ readinessStateText(environment.readiness.engine) }}
         </li>
         <li>
           <span class="ob-check-dot" :data-state="environment.readiness.webview2" />
-          {{ t("onboarding.env.webview2") }}: {{ environment.readiness.webview2 }}
+          {{ t("onboarding.env.webview2") }}: {{ readinessStateText(environment.readiness.webview2) }}
         </li>
       </ul>
 

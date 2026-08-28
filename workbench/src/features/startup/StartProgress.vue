@@ -8,7 +8,19 @@ const { t } = useI18n();
 const store = useRuntimeStore();
 
 const elapsedSec = computed(() => (store.startElapsedMs / 1000).toFixed(1));
+const elapsedNum = computed(() => store.startElapsedMs / 1000);
 const cancelledSnap = computed(() => store.cancelInspect);
+// S8e: the snapshot state is a wire value — interpolate localized text.
+const STATE_KEY: Record<string, string> = {
+  running: "start.state.running",
+  stopped: "start.state.stopped",
+  not_found: "start.state.notFound",
+  missing: "start.state.missing",
+};
+const cancelledStateText = computed(() => {
+  const s = cancelledSnap.value?.state ?? "";
+  return t(STATE_KEY[s] ?? "start.state.unknown");
+});
 </script>
 
 <template>
@@ -16,10 +28,13 @@ const cancelledSnap = computed(() => store.cancelInspect);
     <template v-if="!cancelledSnap">
       <p class="msg">{{ t("start.msg", { sec: elapsedSec }) }}</p>
       <p class="hint">{{ t("start.hint") }}</p>
-      <button class="danger" @click="store.cancelStart()">Cancel</button>
+      <!-- S8d: after a short grace, set the cold-start expectation honestly
+           (first starts init the container environment; up to ~3 min). -->
+      <p v-if="elapsedNum > 15" class="hint">{{ t("start.slowHint") }}</p>
+      <button class="danger" @click="store.cancelStart()">{{ t("start.cancel") }}</button>
     </template>
     <template v-else>
-      <p class="msg">{{ t("start.cancelled", { state: cancelledSnap.state }) }}</p>
+      <p class="msg">{{ t("start.cancelled", { state: cancelledStateText }) }}</p>
       <p v-if="cancelledSnap.state === 'not_found'" class="hint">{{ t("start.cancelledNotFound") }}</p>
       <p v-else class="hint">{{ t("start.cancelledExists", { name: cancelledSnap.container_name }) }}</p>
       <div class="actions">

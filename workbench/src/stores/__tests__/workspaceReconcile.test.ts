@@ -130,4 +130,21 @@ describe("reconcile-first preflight (Stage 3)", () => {
     expect(mockIpc.runtimePreflight).toHaveBeenCalledTimes(1);
     expect(ws.launcher.reconcile.value).toBeNull();
   });
+
+  it("docker_unavailable is not a conflict — falls through to preflight (S8a)", async () => {
+    // The old route parked docker-down launches on the generic 「启动已被阻断」
+    // block page with the reason hidden behind 诊断; the summary's docker gate
+    // is the actionable place (启动 Docker button + auto wake-up).
+    mockIpc.runtimeReconcile.mockResolvedValue(reconcilePayload({
+      classification: "docker_unavailable", can_proceed: false,
+      error_code: "AISC_ERR_DOCKER_UNAVAILABLE",
+      technical_detail: "docker daemon/CLI unavailable; nothing removed",
+    }));
+    const ws = useWorkspacesStore();
+    ws.launcher.workspace.value = "C:/ws";
+    await ws.launcher.runPreflight();
+    expect(ws.launcher.status.value).toBe("summary");
+    expect(mockIpc.runtimePreflight).toHaveBeenCalledTimes(1);
+    expect(ws.launcher.reconcile.value?.classification).toBe("docker_unavailable");
+  });
 });

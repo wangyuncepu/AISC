@@ -25,6 +25,9 @@ from aisc.adapters.container_registry import (
     register,
 )
 from aisc.application.runtime import (
+    _READY_COLD_TIMEOUT,
+    _READY_DEFAULT_TIMEOUT,
+    _registry_has_history,
     container_name_for,
     inspect_runtime,
     list_runtimes,
@@ -502,6 +505,82 @@ class TestInspectRuntime(unittest.TestCase):
         with self.assertRaises(CliError) as cm:
             inspect_runtime("bad", ex, ws / ".aisc")
         self.assertEqual(cm.exception.exit_code, RuntimeExitCode.INVALID_RUNTIME_ID)
+
+
+class TestColdStartReadyTimeout(unittest.TestCase):
+    """S8d: a workspace's FIRST start (empty registry = cold caches) widens
+    the ready wait to _READY_COLD_TIMEOUT; an explicit ready_timeout always
+    wins, and a registry with history keeps the steady-state budget."""
+
+    def test_registry_has_history_states(self):
+        ws = _make_workspace()
+        self.assertFalse(_registry_has_history(ws / ".aisc"))  # fresh = cold
+        register(ws / ".aisc", "aisc-wb-550e8400", {
+            "runtime_id": RID_A, "owner": "workbench",
+            "config_fingerprint": "sha256:x", "container_id": "cid",
+        })
+        self.assertTrue(_registry_has_history(ws / ".aisc"))  # history = warm
+        # Corrupt registry: warm (the steady-state default never depends on
+        # a broken state file).
+        (ws / ".aisc" / "registry.json").write_text("{broken", encoding="utf-8")
+        self.assertTrue(_registry_has_history(ws / ".aisc"))
+
+    def _captured_wait_timeout(self, ws, ex, ready_timeout):
+        from aisc.application import runtime as runtime_mod
+
+        captured = {}
+        real_wait = runtime_mod._wait_ready
+
+        def spy(executor, name, rid, timeout=_READY_DEFAULT_TIMEOUT):
+            captured["timeout"] = timeout
+            return real_wait(executor, name, rid, timeout=timeout)
+
+        kwargs = {"executor": ex, "registry_root": ws / ".aisc"}
+        if ready_timeout is not None:
+            kwargs["ready_timeout"] = ready_timeout
+        # Patch the gateway allocator (function-local import → patch the
+        # source) so the test never binds a real host port.
+        with patch("aisc.application.web_gateway.allocate_gateway_host_port",
+                   return_value=47001), \
+                patch.object(runtime_mod, "_wait_ready", side_effect=spy):
+            start_runtime(RID_A, str(ws), "super-claude:latest", "direct",
+                          "project", "workbench", **kwargs)
+        return captured["timeout"]
+
+    def test_cold_first_start_gets_extended_budget(self):
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        timeout = self._captured_wait_timeout(ws, ex, ready_timeout=None)
+        self.assertEqual(timeout, _READY_COLD_TIMEOUT)
+
+    def test_warm_registry_keeps_steady_state(self):
+        from aisc.application import runtime as runtime_mod
+
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        captured = {}
+        real_wait = runtime_mod._wait_ready
+
+        def spy(executor, name, rid, timeout=_READY_DEFAULT_TIMEOUT):
+            captured["timeout"] = timeout
+            return real_wait(executor, name, rid, timeout=timeout)
+
+        # Warm = the history probe says True (seeding a real entry would
+        # trip project-scope conflict semantics, so stub the probe).
+        with patch("aisc.application.web_gateway.allocate_gateway_host_port",
+                   return_value=47001), \
+                patch.object(runtime_mod, "_registry_has_history", return_value=True), \
+                patch.object(runtime_mod, "_wait_ready", side_effect=spy):
+            start_runtime(RID_A, str(ws), "super-claude:latest", "direct",
+                          "project", "workbench", executor=ex,
+                          registry_root=ws / ".aisc")
+        self.assertEqual(captured["timeout"], _READY_DEFAULT_TIMEOUT)
+
+    def test_explicit_ready_timeout_always_wins(self):
+        ws = _make_workspace()  # cold workspace
+        ex = RuntimeFakeExecutor()
+        timeout = self._captured_wait_timeout(ws, ex, ready_timeout=2.0)
+        self.assertEqual(timeout, 2.0)
 
 
 class TestStopRestartRemove(unittest.TestCase):

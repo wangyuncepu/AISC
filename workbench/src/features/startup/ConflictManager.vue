@@ -36,6 +36,14 @@ const descKey = computed(() => {
 const unverifiedCount = computed(() =>
   classification.value === "unknown_owner" ? store.conflicts.length : 0
 );
+
+/** S8a (VM retest feedback #1): the generic blocked page shows the backend's
+ * own reason line inline instead of hiding it behind 诊断. A fact the
+ * reconcile already reported is free to display; only UNREPORTED blockers
+ * stay generic. */
+const detailText = computed(
+  () => store.reconcile?.technical_detail ?? store.conflictError?.technical_detail ?? ""
+);
 </script>
 
 <template>
@@ -45,6 +53,7 @@ const unverifiedCount = computed(() =>
     <p v-if="unverifiedCount > 0" class="hint sub" data-testid="unverified-count">
       {{ t("conflict.unverifiedCount", { count: unverifiedCount }) }}
     </p>
+    <p v-if="detailText" class="hint sub detail" data-testid="blocked-detail">{{ detailText }}</p>
 
     <div class="actions">
       <button class="primary" @click="store.retryFromConflict()">{{ t("conflict.recheck") }}</button>
@@ -68,6 +77,7 @@ const unverifiedCount = computed(() =>
 .conflict h2 { color: var(--text-2); margin: 0; }
 .hint { font-size: var(--font-sm); color: var(--text-muted); max-width: 480px; text-align: center; margin: 0; }
 .hint.sub { font-size: var(--font-xs); }
+.detail { max-width: 560px; overflow-wrap: anywhere; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button {
   display: inline-flex; align-items: center; justify-content: center;

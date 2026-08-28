@@ -30,14 +30,10 @@ const proxyNoSub = computed(
   () => store.launch.network === "proxy" && store.showAdvanced && subConfigured.value === false,
 );
 
-const ACTION_KEY: Record<string, string> = {
-  start: "summary.action.start",
-  reuse: "summary.action.reuse",
-  restart: "summary.action.restart",
-  resolve_conflict: "summary.action.conflict",
-};
+// S8e (user ruling 2026-08-29): the action LABEL left the UI (「运行时：新建
+// Runtime」 read as confusing jargon) — the recommended action still gates the
+// Start button here and rides the backend's preflight log (aisc.log).
 const action = computed(() => store.preflight?.recommended_action ?? "start");
-const actionText = computed(() => t(ACTION_KEY[action.value] ?? action.value));
 
 function checkStatus(id: string): string {
   return store.preflight?.checks.find((c) => c.id === id)?.status ?? "pass";
@@ -102,28 +98,31 @@ const dockerElapsedSec = computed(() =>
     <h2>{{ t("summary.title") }}</h2>
     <PreflightGate v-if="store.preflight" :report="store.preflight" />
 
-    <div class="row"><span class="k">Workspace</span><span class="v">{{ store.workspace }}</span></div>
+    <div class="row"><span class="k">{{ t("summary.kWorkspace") }}</span><span class="v">{{ store.workspace }}</span></div>
     <!-- G-08 (A-G08-1): no initial-agent picker; a fresh Start opens one Bash
-         tab, more tabs are created dynamically via the + menu. -->
-    <div class="row"><span class="k">Runtime</span><span class="v">{{ actionText }}</span></div>
+         tab, more tabs are created dynamically via the + menu.
+         S8e (user ruling 2026-08-29): the "运行时：新建 Runtime" action row is
+         GONE from the UI — the recommended action already drives the Start
+         button and is recorded in the backend logs; surfacing the enum here
+         read as confusing jargon. -->
 
     <div v-if="store.showAdvanced" class="advanced">
       <div class="row">
-        <span class="k">Image</span>
+        <span class="k">{{ t("summary.kImage") }}</span>
         <input v-model="store.launch.image" @change="onConfigChanged" />
       </div>
       <div class="row">
-        <span class="k">Network</span>
+        <span class="k">{{ t("summary.kNetwork") }}</span>
         <select v-model="store.launch.network" @change="onConfigChanged">
-          <option value="direct">direct</option>
-          <option value="proxy">proxy</option>
+          <option value="direct">{{ t("summary.network.direct") }}</option>
+          <option value="proxy">{{ t("summary.network.proxy") }}</option>
         </select>
       </div>
       <div class="row">
-        <span class="k">Scope</span>
+        <span class="k">{{ t("summary.kScope") }}</span>
         <select v-model="store.launch.scope" @change="onConfigChanged">
-          <option value="project">project</option>
-          <option value="temporary">temporary</option>
+          <option value="project">{{ t("summary.scope.project") }}</option>
+          <option value="temporary">{{ t("summary.scope.temporary") }}</option>
         </select>
       </div>
       <!-- IDEA-2 (2d): proxy without a subscription = TUN caps with nothing
@@ -163,7 +162,7 @@ const dockerElapsedSec = computed(() =>
       </button>
       <button @click="changeSettings">{{ store.showAdvanced ? t("summary.toggleSettings") : t("summary.changeSettings") }}</button>
       <button v-if="imageNotFound" class="danger" @click="store.startBuild(store.launch.image)">{{ t("summary.buildImage") }}</button>
-      <button @click="store.backToPicker()">Cancel</button>
+      <button @click="store.backToPicker()">{{ t("summary.cancel") }}</button>
     </div>
   </div>
 </template>

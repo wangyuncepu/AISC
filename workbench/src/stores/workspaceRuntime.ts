@@ -214,6 +214,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   const BUILD_LOG_RING_CHARS = 64 * 1024;
   const buildTag = ref("");
   const buildError = ref<WorkbenchError | null>(null);
+  // S8b: backend-emitted build.warning messages (e.g. the offline unpinned
+  // cc-switch fallback) — bounded to the last 5, cleared per build op.
+  const buildWarnings = ref<string[]>([]);
   /** G-17: per-pane PTY output buffer (base64 chunks). The store owns the
    * session channel; Terminals replay + stream from here, so remounts never
    * drop output or re-open the session. */
@@ -347,6 +350,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     buildProgress.value = null;
     buildLogPath.value = null;
     buildError.value = null;
+    buildWarnings.value = [];
     buildStatus.value = "building";
     buildStartedAt.value = Date.now();
     buildFinishedAt.value = null;
@@ -369,6 +373,14 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
         if (typeof p === "string" && p) buildLogPath.value = p;
       } else if (ev.type === "build.progress") {
         buildProgress.value = ev.data as unknown as BuildProgressData;
+      } else if (ev.type === "build.warning") {
+        // S8b: additive event — backend warns about degraded-but-continuing
+        // builds (e.g. offline unpinned cc-switch). Unknown to older CLIs,
+        // so absence is normal.
+        const m = ev.data?.message;
+        if (typeof m === "string" && m) {
+          buildWarnings.value = [...buildWarnings.value.slice(-4), m];
+        }
       }
     };
     try {
@@ -495,22 +507,32 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       const payload = await ipc.runtimeReconcile(workspace.value.trim());
       reconcile.value = payload;
       if (!payload.can_proceed) {
-        if (
-          payload.classification === "active_same_instance" &&
-          deps.focusExistingWorkspace?.(workspace.value.trim())
-        ) {
-          // Same process already materialized this workspace: it got focused
-          // — this launcher resets silently (01 §1.3).
-          resetWorkspace();
-          status.value = "picker";
+        if (payload.classification === "docker_unavailable") {
+          // S8a (VM retest feedback #1): "cannot verify — docker is down" is
+          // NOT a workspace conflict. Falling through lets preflight own the
+          // gate: the summary page shows the failing docker check with the
+          // actionable 启动 Docker button + auto wake-up (and, since S8h, the
+          // structured not-installed error). The old route parked on the
+          // generic 「启动已被阻断」 block page with the reason behind 诊断.
+          void ipc.logUiEvent?.("reconcile_docker_unavailable", "error", payload.error_code ?? undefined);
+        } else {
+          if (
+            payload.classification === "active_same_instance" &&
+            deps.focusExistingWorkspace?.(workspace.value.trim())
+          ) {
+            // Same process already materialized this workspace: it got focused
+            // — this launcher resets silently (01 §1.3).
+            resetWorkspace();
+            status.value = "picker";
+            return;
+          }
+          // active_other_instance / unknown_owner: the (Stage 4) block page;
+          // the conflict status renders it until then.
+          status.value = "conflict";
+          void loadConflicts();
+          void ipc.logUiEvent?.("reconcile_block", "error", payload.error_code ?? undefined);
           return;
         }
-        // active_other_instance / unknown_owner: the (Stage 4) block page;
-        // the conflict status renders it until then.
-        status.value = "conflict";
-        void loadConflicts();
-        void ipc.logUiEvent?.("reconcile_block", "error", payload.error_code ?? undefined);
-        return;
       }
     } catch {
       // Reconcile transport failure: fall through to preflight — its docker
@@ -1704,6 +1726,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   revealBuildLog,
     buildTag,
     buildError,
+    buildWarnings,
     buildStartedAt,
     buildFinishedAt,
     buildDurationMs,

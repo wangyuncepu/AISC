@@ -38,6 +38,16 @@ const ordered = computed<PreflightCheck[]>(() => {
 function statusText(c: PreflightCheck): string {
   return { pass: t("gate.status.pass"), warn: t("gate.status.warn"), fail: t("gate.status.fail") }[c.status] ?? c.status;
 }
+
+/** S8e: gate-kind labels ride i18n (were hardcoded "Hard gate"...). */
+const KIND_KEY: Record<string, string> = {
+  hard: "gate.kind.hard",
+  config: "gate.kind.config",
+  info: "gate.kind.info",
+};
+function kindText(c: PreflightCheck): string {
+  return t(KIND_KEY[classify(c.id)] ?? "gate.kind.info");
+}
 </script>
 
 <template>
@@ -45,7 +55,7 @@ function statusText(c: PreflightCheck): string {
     <div v-for="c in ordered" :key="c.id" class="check" :data-status="c.status">
       <span class="dot" />
       <span class="name">{{ label(c.id) }}</span>
-      <span class="cat">{{ classify(c.id) === "hard" ? "Hard gate" : classify(c.id) === "config" ? "Config gate" : "Info" }}</span>
+      <span class="cat">{{ kindText(c) }}</span>
       <span class="state">{{ statusText(c) }}</span>
       <span v-if="c.error_code" class="code">{{ c.error_code }}</span>
     </div>
