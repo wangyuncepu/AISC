@@ -332,7 +332,8 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
             with patch("aisc.cli.commands.container.discover_container", return_value="test-container"):
                 result = cmd_shell(name_override="test-container", executor=fake_executor)
 
-            # Verify docker exec -it <name> bash was called
+            # Verify docker exec -it <name> bash was called — v2.1.7 S6 rides
+            # the exec ENVIRONMENT (BASH_FUNC_*), not the argv.
             fake_executor.run_streaming.assert_called_once()
             call_args = fake_executor.run_streaming.call_args[0][0]
             self.assertEqual(call_args, ["exec", "-it", "test-container", "bash"])

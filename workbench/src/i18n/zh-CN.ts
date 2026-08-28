@@ -315,6 +315,9 @@ export const zhCN = {
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench 终端就绪。",
+  "terminal.card.bash": "┌─ AISC Workbench 快速上手 ─────────────────\n│ 三入口: bash(命令行) · claude(Claude Code) · codex(Codex)\n│ claude        开始对话 · claude -c 续上次 · claude -p \"…\" 单次提问\n│ codex         开始对话 · codex e \"任务\" 单次执行\n│ 左侧栏: 文件/产物/服务（顶部搜索框） · 右上 ⓘ 运行时状态\n│ Ctrl+, 设置 · + 号新建页 · 关闭工作区自动清理容器\n│ 输入 help 查看完整教学（含上手练习）\n└──────────────────────────────────────────",
+  "terminal.card.claude": "┌─ Claude Code 快速上手 ────────────\n│ claude -p \"…\" 单次提问 · claude -c 继续会话\n│ 会话内: /help 命令 · /clear 清空 · /compact 压缩上下文\n│ Esc 中断 · Shift+Tab 切换权限模式\n│ 完整教学: bash 标签输入 help\n└──────────────────────────────────",
+  "terminal.card.codex": "┌─ Codex 快速上手 ──────────────────\n│ codex e \"任务\" 单次执行 · codex 交互对话\n│ 会话内: /help 命令 · /new 新会话 · Ctrl+C 中断\n│ 完整教学: bash 标签输入 help\n└──────────────────────────────────",
   "terminal.exited": "Session exited",
   "terminal.sessionError": "[Session error: {code} {message}]",
   "terminal.openFailed": "[open_session failed: {code}]",

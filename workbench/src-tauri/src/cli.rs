@@ -796,7 +796,7 @@ pub async fn run_build_stream(
     let reader_handle = tokio::spawn(async move {
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
-        let mut terminal: Option<(String, Option<i32>, Option<String>)> = None;
+        let mut terminal: Option<(String, Option<i32>, Option<String>, Option<String>)> = None;
         loop {
             line.clear();
             match reader.read_line(&mut line).await {
@@ -814,10 +814,27 @@ pub async fn run_build_stream(
                         ev.event_type.as_str(),
                         "build.complete" | "build.failed" | "build.cancelled"
                     );
-                    if is_terminal {
+                    // 2026-08-28 field report: a CLI that dies BEFORE event
+                    // mode (cc-switch resolve, root location) prints a bare
+                    // error ENVELOPE on stdout — parses as an event with an
+                    // empty `type`. Treat it as a terminal build.failed with
+                    // the envelope's real code/message instead of falling
+                    // through to a generic protocol error.
+                    let is_envelope = ev.event_type.is_empty() && !ev.protocol.is_empty();
+                    if is_terminal || is_envelope {
                         let exit_code = ev.data.get("exit_code").and_then(|v| v.as_i64()).map(|c| c as i32);
                         let error_code = ev.data.get("error_code").and_then(|v| v.as_str()).map(str::to_string);
-                        terminal = Some((ev.event_type.clone(), exit_code, error_code));
+                        let ev_type = if is_envelope {
+                            "build.failed".to_string()
+                        } else {
+                            ev.event_type.clone()
+                        };
+                        let msg = ev
+                            .data
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                        terminal = Some((ev_type, exit_code, error_code, msg));
                     }
                     if tx.send(ev).await.is_err() {
                         break; // consumer gone
@@ -848,7 +865,7 @@ pub async fn run_build_stream(
     let _exit = exit.map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("wait failed: {e}")))?;
 
     match terminal {
-        Some((t, _code, err_code)) => match t.as_str() {
+        Some((t, _code, err_code, msg)) => match t.as_str() {
             "build.complete" => Ok(()),
             "build.cancelled" => Err(WorkbenchError::cli_cancelled().with_detail(stderr_summary)),
             "build.failed" => {
@@ -856,6 +873,11 @@ pub async fn run_build_stream(
                     Some(c) => WorkbenchError::map_aisc(c),
                     None => WorkbenchError::cli_protocol(),
                 };
+                // The envelope/event's own message is the real diagnosis
+                // (e.g. "cc-switch release resolution failed: ...").
+                if let Some(m) = msg {
+                    e = e.with_detail(m);
+                }
                 if !stderr_summary.is_empty() {
                     e = e.with_detail(stderr_summary);
                 }

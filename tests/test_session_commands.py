@@ -81,7 +81,9 @@ class TestOpenSession(unittest.TestCase):
         proc = open_session(RT, SID, "claude", exec_, REG)
         expected = [WRAP, "open",
                     "--session-id", SID, "--runtime-id", RT, "--agent", "claude"]
-        assert exec_.interactive_calls[0] == (CONTAINER, expected)
+        # v2.1.7 S6: (container, argv, env) — a non-bash agent carries NO env.
+        assert exec_.interactive_calls[0][:2] == (CONTAINER, expected)
+        assert exec_.interactive_calls[0][2] == {}
         # No shell token anywhere; agent is a single controlled argv token.
         assert "claude --dangerously-skip-permissions" not in exec_.interactive_calls[0][1]
         assert proc.exit_code == 0

@@ -979,6 +979,25 @@ def _cmd_build(
             exit_code=1, error_code="AISC_ERR_GENERAL",
         )
 
+    # v2.1.7 hotfix (2026-08-28 field report): failures BEFORE the event
+    # stream starts (root location, cc-switch resolution — a network-blocked
+    # machine fails here in seconds) used to print a bare error envelope to
+    # stdout. The Workbench stream parser saw no terminal event and showed a
+    # generic "AISC CLI 返回错误" with zero diagnosis. In --events mode a
+    # pre-run CliError now emits a TERMINAL build.failed carrying the real
+    # code + message, then re-raises for the normal exit path.
+    def _emit_prerun_failure(exc: CliError) -> None:
+        if emitter is None:
+            return
+        emitter.emit_terminal("build.failed", exc.exit_code, extra_data={
+            "image_tag": getattr(args, "tag", "super-claude:latest"),
+            "docker_exit_code": None,
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "phase": "prerun",
+        })
+
+
     # Run wizard if in interactive text mode and no explicit flags provided
     tag = getattr(args, "tag", "super-claude:latest")
     no_cache = getattr(args, "no_cache", False)
@@ -1017,16 +1036,22 @@ def _cmd_build(
         cs_arch = "x64"  # validated again inside the Dockerfile (arch assert)
     resolver = CcSwitchResolver()
     try:
-        resolved = resolver.resolve(
-            channel=cs_channel,
-            version=cs_version,
-            arch=cs_arch,
-            libc="musl",
-            manifest_path=Path(cs_manifest) if cs_manifest else None,
-        )
-    except ResolveError as exc:
-        raise CliError(message=f"cc-switch release resolution failed: {exc.message}",
-                       exit_code=1, error_code=exc.code) from exc
+        try:
+            resolved = resolver.resolve(
+                channel=cs_channel,
+                version=cs_version,
+                arch=cs_arch,
+                libc="musl",
+                manifest_path=Path(cs_manifest) if cs_manifest else None,
+            )
+        except ResolveError as exc:
+            raise CliError(
+                message=f"cc-switch release resolution failed: {exc.message}",
+                exit_code=1, error_code=exc.code,
+            ) from exc
+    except CliError as exc:
+        _emit_prerun_failure(exc)
+        raise
 
     # Reproducibility receipt: always written next to the build outputs.
     manifest_path = _write_cc_switch_manifest(root, resolved)

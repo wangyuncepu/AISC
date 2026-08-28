@@ -125,7 +125,18 @@ def open_session(
         "--agent", agent,
     ]
 
-    return executor.open_interactive(container_name, docker_argv)
+    # v2.1.7 S6: bash sessions import the tutorial `help` function from the
+    # exec environment (bash re-imports BASH_FUNC_* vars at startup; the
+    # wrapper passes its os.environ through). Nothing is written to the
+    # image, any profile, or the user's workspace (A-21766), and non-bash
+    # agents are untouched.
+    env = None
+    if agent == "bash":
+        from aisc.cli.tutorial import help_function_env
+
+        env = help_function_env()
+
+    return executor.open_interactive(container_name, docker_argv, env=env)
 
 
 # ---------------------------------------------------------------------------

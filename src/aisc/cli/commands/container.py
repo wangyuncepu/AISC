@@ -339,6 +339,10 @@ def cmd_shell(
             exit_code=1, error_code="AISC_ERR_CONTAINER_NOT_FOUND",
         )
 
+    # v2.1.7 S6 (Gate-S6/D10): interactive shells get the tutorial `help`
+    # via the exec environment (BASH_FUNC_* re-import) — see
+    # aisc.cli.tutorial.help_function_env. The plain `bash` argv is
+    # unchanged; nothing is written to the image or any profile.
     argv = ["exec", "-it", name, "bash"]
     proc = exec_.run_streaming(argv)
 

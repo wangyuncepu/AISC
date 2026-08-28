@@ -29,7 +29,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from aisc.domain.models import (
     BuildPlan,
@@ -99,7 +99,12 @@ class DockerExecutor(Protocol):
         """Execute ``docker <argv>`` with inherited stdin / stdout / stderr.
         Returns a ``ProcessResult`` with exit code captured, stderr empty."""
 
-    def open_interactive(self, container: str, argv: List[str]) -> ProcessResult:
+    def open_interactive(
+        self,
+        container: str,
+        argv: List[str],
+        env: Optional[Dict[str, str]] = None,
+    ) -> ProcessResult:
         """Open an interactive TTY session via the Docker SDK so the exec pty
         can be resized with ``exec_resize`` (G-02: the docker CLI's exec pty is
         frozen at the spawn size). Raw tty stream: stdout forwarded to fd 1,
@@ -457,7 +462,12 @@ class RealDockerExecutor:
     # open_interactive (G-02 resize chain)
     # ------------------------------------------------------------------
 
-    def open_interactive(self, container: str, argv: List[str]) -> ProcessResult:
+    def open_interactive(
+        self,
+        container: str,
+        argv: List[str],
+        env: Optional[Dict[str, str]] = None,
+    ) -> ProcessResult:
         """Interactive TTY session via the Docker SDK (see protocol doc).
 
         The sidecar is spawned with **pipes** (not a ConPTY) by the Rust
@@ -479,7 +489,12 @@ class RealDockerExecutor:
                 exit_code=-1, command_not_found=True,
             )
         try:
-            exec_id = client.api.exec_create(container, list(argv), tty=True, stdin=True)["Id"]
+            exec_kwargs: Dict[str, Any] = {"tty": True, "stdin": True}
+            if env:
+                # v2.1.7 S6: session-scoped environment (the bash tutorial
+                # `help` function enters here) — never the image or a profile.
+                exec_kwargs["environment"] = dict(env)
+            exec_id = client.api.exec_create(container, list(argv), **exec_kwargs)["Id"]
         except docker.errors.NotFound:
             return ProcessResult(
                 stdout="", stderr="container not found",
@@ -980,10 +995,15 @@ class FakeDockerExecutor:
         """Configure ``[(stream, chunk), ...]`` replayed by run_streaming_captured."""
         self._streaming_chunks = list(chunks)
 
-    def open_interactive(self, container: str, argv: List[str]) -> ProcessResult:
-        """Fake interactive session: record (container, argv), return the
+    def open_interactive(
+        self,
+        container: str,
+        argv: List[str],
+        env: Optional[Dict[str, str]] = None,
+    ) -> ProcessResult:
+        """Fake interactive session: record (container, argv, env), return the
         configured streaming exit code."""
-        self.interactive_calls.append((container, list(argv)))
+        self.interactive_calls.append((container, list(argv), dict(env or {})))
         return ProcessResult(
             stdout="", stderr="",
             exit_code=self._streaming_exit_code if self._streaming_exit_code >= 0 else -1,

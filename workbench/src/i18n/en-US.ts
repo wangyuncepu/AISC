@@ -315,6 +315,9 @@ export const enUS: Record<string, string> = {
 
   // --- terminal (Terminal.vue) ---
   "terminal.welcome": "AISC Workbench terminal ready.",
+  "terminal.card.bash": "┌─ AISC Workbench quick start ─────────────\n│ Three entry points: bash (shell) · claude (Claude Code) · codex (Codex)\n│ claude        chat · claude -c resume · claude -p \"…\" one-shot\n│ codex         chat · codex e \"task\" one-shot\n│ Left rail: files/artifacts/services (search on top) · top-right ⓘ runtime\n│ Ctrl+, settings · + new tab · closing a workspace cleans its container\n│ Type help for the full tutorial (with exercises — all free)\n└──────────────────────────────────────────",
+  "terminal.card.claude": "┌─ Claude Code quick start ─────────\n│ claude -p \"…\" one-shot · claude -c resume\n│ In-session: /help · /clear · /compact\n│ Esc interrupt · Shift+Tab permission mode\n│ Full tutorial: type help in a bash tab\n└──────────────────────────────────",
+  "terminal.card.codex": "┌─ Codex quick start ───────────────\n│ codex e \"task\" one-shot · codex chat\n│ In-session: /help · /new · Ctrl+C interrupt\n│ Full tutorial: type help in a bash tab\n└──────────────────────────────────",
   "terminal.exited": "Session exited",
   "terminal.sessionError": "[Session error: {code} {message}]",
   "terminal.openFailed": "[open_session failed: {code}]",
