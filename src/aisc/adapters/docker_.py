@@ -29,7 +29,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 from aisc.domain.models import (
     BuildPlan,
@@ -489,7 +489,12 @@ class RealDockerExecutor:
                 exit_code=-1, command_not_found=True,
             )
         try:
-            exec_id = client.api.exec_create(container, list(argv), tty=True, stdin=True)["Id"]
+            exec_kwargs: Dict[str, Any] = {"tty": True, "stdin": True}
+            if env:
+                # v2.1.7 S6: session-scoped environment (the bash tutorial
+                # `help` function enters here) — never the image or a profile.
+                exec_kwargs["environment"] = dict(env)
+            exec_id = client.api.exec_create(container, list(argv), **exec_kwargs)["Id"]
         except docker.errors.NotFound:
             return ProcessResult(
                 stdout="", stderr="container not found",
