@@ -1143,19 +1143,9 @@ function onTreeKeydown(e: KeyboardEvent) {
           >
             {{ t(`explorer.filter.${g}`) }}
           </button>
-          <!-- S7 legend: always visible as its own row (2026-08-28 manual
-               test — a floating toggle read as awkward). -->
-        </div>
-        <div
-          v-if="explorer.artifacts.length > 0 || explorer.unattributedEntries.length > 0"
-          class="badge-legend"
-        >
-          <ChangeBadge type="created" source="agent" agent="claude" />
-          <ChangeBadge type="modified" source="agent" agent="codex" />
-          <ChangeBadge type="renamed" source="agent" agent="claude" detail="/old/path.md" />
-          <ChangeBadge type="deleted" source="unattributed" />
-          <ChangeBadge type="created" source="unattributed" />
-          <span class="legend-note">{{ t("explorer.legendNote") }}</span>
+          <!-- S7: no legend row — badges are self-describing (icon + text +
+               agent name) and the hover tooltip carries the full source
+               note; a permanent legend row read as clutter (manual test). -->
         </div>
         <p
           v-if="searchQuery && !deliverablesFiltered.length && !sourceChangesFiltered.length && !generatedFiltered.length && !unattributedFiltered.length"
@@ -1733,13 +1723,6 @@ function onTreeKeydown(e: KeyboardEvent) {
   font-size: var(--font-xs); padding: 1px var(--space-2); cursor: pointer;
 }
 .artifact-chip.active { background: var(--accent-soft); color: var(--text); border-color: var(--border-strong); }
-/* S7 legend row (always visible) */
-.badge-legend {
-  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
-  border-bottom: var(--border-w) solid var(--border);
-}
-.legend-note { font-size: var(--font-xs); color: var(--text-faint); }
 .artifact-chip:hover:not(.active) { background: var(--surface-hover); }
 .artifacts-group-head {
   display: flex; align-items: center; gap: 6px; width: 100%;

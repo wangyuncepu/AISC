@@ -119,13 +119,14 @@ describe("change badges (S7)", () => {
     expect(badge.attributes("title")).not.toContain("原路径未知");
   });
 
-  it("the legend row is always visible (no toggle)", async () => {
+  it("no legend row — badges self-describe via tooltip (2026-08-28 manual test)", async () => {
     const w = await mountWithArtifacts([
       art({ workspace_relative_path: "x.md", action: "created" }),
     ]);
-    const legend = w.find(".badge-legend");
-    expect(legend.exists()).toBe(true);
-    expect(legend.text()).toContain("未归因");
-    expect(w.find(".legend-chip").exists()).toBe(false); // no floating toggle
+    expect(w.find(".badge-legend").exists()).toBe(false);
+    expect(w.find(".legend-chip").exists()).toBe(false);
+    // The badge's own tooltip still teaches the source semantics.
+    const badge = w.find(".artifact-row .change-badge, .unattributed .change-badge");
+    expect(badge.attributes("title")).toContain("登记");
   });
 });
