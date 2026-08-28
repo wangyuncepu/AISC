@@ -30,14 +30,10 @@ const proxyNoSub = computed(
   () => store.launch.network === "proxy" && store.showAdvanced && subConfigured.value === false,
 );
 
-const ACTION_KEY: Record<string, string> = {
-  start: "summary.action.start",
-  reuse: "summary.action.reuse",
-  restart: "summary.action.restart",
-  resolve_conflict: "summary.action.conflict",
-};
+// S8e (user ruling 2026-08-29): the action LABEL left the UI (「运行时：新建
+// Runtime」 read as confusing jargon) — the recommended action still gates the
+// Start button here and rides the backend's preflight log (aisc.log).
 const action = computed(() => store.preflight?.recommended_action ?? "start");
-const actionText = computed(() => t(ACTION_KEY[action.value] ?? action.value));
 
 function checkStatus(id: string): string {
   return store.preflight?.checks.find((c) => c.id === id)?.status ?? "pass";
@@ -104,8 +100,11 @@ const dockerElapsedSec = computed(() =>
 
     <div class="row"><span class="k">{{ t("summary.kWorkspace") }}</span><span class="v">{{ store.workspace }}</span></div>
     <!-- G-08 (A-G08-1): no initial-agent picker; a fresh Start opens one Bash
-         tab, more tabs are created dynamically via the + menu. -->
-    <div class="row"><span class="k">{{ t("summary.kRuntime") }}</span><span class="v">{{ actionText }}</span></div>
+         tab, more tabs are created dynamically via the + menu.
+         S8e (user ruling 2026-08-29): the "运行时：新建 Runtime" action row is
+         GONE from the UI — the recommended action already drives the Start
+         button and is recorded in the backend logs; surfacing the enum here
+         read as confusing jargon. -->
 
     <div v-if="store.showAdvanced" class="advanced">
       <div class="row">

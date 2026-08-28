@@ -76,7 +76,6 @@ export const enUS: Record<string, string> = {
   // --- launch summary (LaunchSummary.vue) ---
   "summary.title": "Launch summary",
   "summary.kWorkspace": "Workspace",
-  "summary.kRuntime": "Runtime",
   "summary.kImage": "Image",
   "summary.kNetwork": "Network",
   "summary.kScope": "Scope",
@@ -85,10 +84,6 @@ export const enUS: Record<string, string> = {
   "summary.scope.project": "Project",
   "summary.scope.temporary": "Temporary",
   "summary.cancel": "Cancel",
-  "summary.action.start": "Create runtime",
-  "summary.action.reuse": "Reuse running runtime",
-  "summary.action.restart": "Restart stopped runtime",
-  "summary.action.conflict": "Conflict must be resolved",
   "summary.imageMissing": "Image missing (Config gate). Use 「Build image」 with `aisc build --events` (cancellable).",
   "summary.proxyNoSub": "Proxy mode has no imported subscription: the container starts as config-less TUN (mihomo will not run).",
   "summary.configureSub": "Configure subscription",
@@ -109,6 +104,9 @@ export const enUS: Record<string, string> = {
 
   // --- preflight gate (PreflightGate.vue) ---
   "gate.check.docker": "Docker",
+  "gate.kind.hard": "Environment",
+  "gate.kind.config": "Configuration",
+  "gate.kind.info": "Info",
   "gate.check.workspace": "Workspace",
   "gate.check.image": "Image",
   "gate.check.network": "Network",
