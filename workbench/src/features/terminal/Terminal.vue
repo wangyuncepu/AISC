@@ -717,6 +717,13 @@ function clearScreen() {
  * container misses keys captured by xterm's internal textarea). Returns true
  * to let the key reach the PTY, false to swallow it. */
 function onTermCustomKey(e: KeyboardEvent): boolean {
+  // S8f (2026-08-28 VM retest): xterm calls this handler for BOTH keydown and
+  // keyup. A keyup of "v" still carries ctrl/shift (V is usually released
+  // first), so every combo below fired twice — Ctrl+Shift+V pasted the
+  // clipboard TWICE. Actions here are press-only; let everything else through.
+  if (e.type !== "keydown") {
+    return true;
+  }
   const mod = e.ctrlKey || e.metaKey;
   const key = e.key.toLowerCase();
   // 10e (B-08): Shift+Escape is the keyboard exit from the terminal — bare
