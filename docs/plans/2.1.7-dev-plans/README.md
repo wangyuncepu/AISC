@@ -28,6 +28,7 @@ v2.1.7 是 v2.1.6-dev 封版后的第一个开发周期，主题为**上手体�
 - [`01-goals.md`](01-goals.md) —— 用户原始需求逐条、挂账清单、目标与非目标
 - [`02-implementation-plan.md`](02-implementation-plan.md) —— S1-S7 实现要点与涉及文件域
 - [`03-acceptance.md`](03-acceptance.md) —— 验收清单（A-217xx）与手测矩阵
+- [`04-vm-retest-round2-plan.md`](04-vm-retest-round2-plan.md) —— S8 批：VM 统一复测轮 7 条反馈（阻断页原因/构建宽容性/首启超时/i18n 清扫/粘贴双触发；2026-08-28）
 - [`decisions.md`](decisions.md) —— 已拍板决策记录
 
 ## 4. 非目标（本周期不做）
