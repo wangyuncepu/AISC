@@ -81,7 +81,7 @@ describe("change badges (S7)", () => {
     const w = await mountWithArtifacts([
       art({ workspace_relative_path: "docs/report.md", action: "created" }),
     ]);
-    const badge = w.find(".change-badge");
+    const badge = w.find(".artifact-row .change-badge, .unattributed .change-badge");
     expect(badge.exists()).toBe(true);
     expect(badge.attributes("data-type")).toBe("created");
     expect(badge.attributes("data-source")).toBe("agent");
@@ -97,7 +97,7 @@ describe("change badges (S7)", () => {
         previous_path: "docs/old.md",
       }),
     ]);
-    const badge = w.find(".change-badge");
+    const badge = w.find(".artifact-row .change-badge, .unattributed .change-badge");
     expect(badge.attributes("data-type")).toBe("renamed");
     expect(badge.text()).toContain("移动");
     // The tooltip carries the REAL recorded old path (A-21773: fact, not guess).
@@ -110,7 +110,7 @@ describe("change badges (S7)", () => {
     explorer.unattributed = { "notes/x.md": "modified" };
     await flushPromises();
 
-    const badge = w.find(".change-badge");
+    const badge = w.find(".artifact-row .change-badge, .unattributed .change-badge");
     expect(badge.exists()).toBe(true);
     expect(badge.attributes("data-source")).toBe("unattributed");
     expect(badge.attributes("data-type")).toBe("modified");
@@ -119,13 +119,13 @@ describe("change badges (S7)", () => {
     expect(badge.attributes("title")).not.toContain("原路径未知");
   });
 
-  it("the legend is collapsed by default and opens on click", async () => {
+  it("the legend row is always visible (no toggle)", async () => {
     const w = await mountWithArtifacts([
       art({ workspace_relative_path: "x.md", action: "created" }),
     ]);
-    expect(w.find(".badge-legend").exists()).toBe(false);
-    await w.find(".legend-chip").trigger("click");
-    expect(w.find(".badge-legend").exists()).toBe(true);
-    expect(w.find(".badge-legend").text()).toContain("未归因");
+    const legend = w.find(".badge-legend");
+    expect(legend.exists()).toBe(true);
+    expect(legend.text()).toContain("未归因");
+    expect(w.find(".legend-chip").exists()).toBe(false); // no floating toggle
   });
 });

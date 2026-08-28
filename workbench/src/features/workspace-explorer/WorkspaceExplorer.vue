@@ -720,8 +720,7 @@ function badgeTypeOf(change: string): "created" | "modified" | "deleted" | "rena
   }
   return null;
 }
-/** S7 legend (A-21774): collapsible; explains types × sources once. */
-const legendOpen = ref(false);
+/** S7 legend row: always visible — no toggle (2026-08-28 manual test). */
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -1144,16 +1143,13 @@ function onTreeKeydown(e: KeyboardEvent) {
           >
             {{ t(`explorer.filter.${g}`) }}
           </button>
-          <!-- S7 legend: collapsible, explains types × sources once -->
-          <button
-            class="artifact-chip legend-chip"
-            :aria-expanded="legendOpen"
-            @click="legendOpen = !legendOpen"
-          >
-            {{ t("explorer.legend") }} {{ legendOpen ? "▾" : "▸" }}
-          </button>
+          <!-- S7 legend: always visible as its own row (2026-08-28 manual
+               test — a floating toggle read as awkward). -->
         </div>
-        <div v-if="legendOpen" class="badge-legend">
+        <div
+          v-if="explorer.artifacts.length > 0 || explorer.unattributedEntries.length > 0"
+          class="badge-legend"
+        >
           <ChangeBadge type="created" source="agent" agent="claude" />
           <ChangeBadge type="modified" source="agent" agent="codex" />
           <ChangeBadge type="renamed" source="agent" agent="claude" detail="/old/path.md" />
@@ -1737,8 +1733,7 @@ function onTreeKeydown(e: KeyboardEvent) {
   font-size: var(--font-xs); padding: 1px var(--space-2); cursor: pointer;
 }
 .artifact-chip.active { background: var(--accent-soft); color: var(--text); border-color: var(--border-strong); }
-/* S7 legend */
-.legend-chip { margin-left: auto; }
+/* S7 legend row (always visible) */
 .badge-legend {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
