@@ -125,7 +125,12 @@ class DockerGateway(Protocol):
         """Wait for a container to exit; returns its final state."""
         ...
 
-    def open_interactive(self, container: str, argv: List[str]) -> InteractiveResult:
+    def open_interactive(
+        self,
+        container: str,
+        argv: List[str],
+        env: Optional[Dict[str, str]] = None,
+    ) -> InteractiveResult:
         """Open an interactive exec session (SDK-first, resizable)."""
         ...
 
@@ -494,20 +499,31 @@ class SdkGateway:
 
     # -- interactive (SDK-first; D4-03 owns create/start/resize/stream/reap) --
 
-    def open_interactive(self, container: str, argv: List[str]) -> InteractiveResult:
+    def open_interactive(
+        self,
+        container: str,
+        argv: List[str],
+        env: Optional[Dict[str, str]] = None,
+    ) -> InteractiveResult:
         """Interactive TTY session via the Docker SDK, using the injected client.
 
         Lifecycle (D4-03/A-DG04-1): ``exec_create`` → ``exec_start`` (socket) →
         terminal-size watcher forwards ``exec_resize`` → raw stdout/stdin stream →
         ``exec_inspect`` poll for exit → join/reap all threads. No resource is
         left behind on error: the stop event is always set and threads joined.
+
+        v2.1.7 S6: *env* rides the exec environment only (never the image or a
+        profile) — the bash tutorial ``help`` function enters sessions this way.
         """
         import docker
 
         start = time.monotonic()
         try:
             client = self._client()
-            exec_id = client.api.exec_create(container, list(argv), tty=True, stdin=True)["Id"]
+            exec_kwargs: Dict[str, Any] = {"tty": True, "stdin": True}
+            if env:
+                exec_kwargs["environment"] = dict(env)
+            exec_id = client.api.exec_create(container, list(argv), **exec_kwargs)["Id"]
         except docker.errors.NotFound:
             return InteractiveResult(
                 operation=_new_operation(

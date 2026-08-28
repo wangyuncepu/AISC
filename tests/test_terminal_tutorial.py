@@ -11,39 +11,73 @@ Contract pins:
 
 from __future__ import annotations
 
+import subprocess
 import unittest
 
-from aisc.cli.tutorial import session_bash_prelude
+from aisc.cli.tutorial import help_function_env
 
 
-class TutorialPreludeTests(unittest.TestCase):
+class TutorialEnvTests(unittest.TestCase):
     def setUp(self):
-        self.prelude = session_bash_prelude()
+        self.env = help_function_env()
 
-    def test_defines_and_exports_help_then_execs_interactive_bash(self):
-        self.assertIn("help()", self.prelude)
-        self.assertIn("export -f help", self.prelude)
-        self.assertIn("exec bash", self.prelude)
-        # The prelude must END with the exec — nothing runs after it.
-        self.assertTrue(self.prelude.rstrip().endswith("exec bash"))
-
-    def test_bare_help_prints_tutorial_with_args_delegating_to_builtin(self):
-        # No-argument branch prints the tutorial…
-        self.assertIn("if [ $# -eq 0 ]", self.prelude)
-        self.assertIn("AISC Workbench 教学", self.prelude)
-        # …while `help foo` must delegate to the builtin verbatim.
-        self.assertIn('builtin help "$@"', self.prelude)
+    def test_encodes_help_as_a_bash_function_env_var(self):
+        self.assertEqual(list(self.env), ["BASH_FUNC_help%%"])
+        value = self.env["BASH_FUNC_help%%"]
+        self.assertTrue(value.startswith("() {"), "bash function-serial form")
+        # Bare help prints the tutorial; args delegate to the builtin.
+        self.assertIn("AISC Workbench 教学", value)
+        self.assertIn('builtin help "$@"', value)
 
     def test_tutorial_covers_three_sections_and_exercise(self):
+        value = self.env["BASH_FUNC_help%%"]
         for section in ("Claude Code", "Codex", "Workbench"):
-            self.assertIn(section, self.prelude)
-        self.assertIn("互动练习", self.prelude)
-        self.assertIn('claude -p', self.prelude)
+            self.assertIn(section, value)
+        self.assertIn("互动练习", value)
+        self.assertIn("claude -p", value)
 
-    def test_no_persistent_writes_in_prelude(self):
+    def test_no_persistent_writes_in_the_function_body(self):
         # A-21766: the injection must not touch any file (no >, >> or tee).
+        value = self.env["BASH_FUNC_help%%"]
         for forbidden in (">>", " > ", "tee "):
-            self.assertNotIn(forbidden, self.prelude)
+            self.assertNotIn(forbidden, value)
+
+    def test_real_bash_imports_and_delegates(self):
+        """Live proof (skipped when no bash exists): a bash that inherits the
+        env var re-imports `help` as a function; `help cd` still reaches the
+        builtin (A-21765)."""
+        bash = None
+        for candidate in (
+            r"C:\Program Files\Git\bin\bash.exe",
+            "/bin/bash",
+            "/usr/bin/bash",
+        ):
+            try:
+                subprocess.run(
+                    [candidate, "-c", "true"], capture_output=True, timeout=10
+                )
+                bash = candidate
+                break
+            except (OSError, subprocess.SubprocessError):
+                continue
+        if bash is None:
+            self.skipTest("no bash available")
+
+        probe = (
+            "type -t help; "
+            'help | head -1; '
+            "help cd 2>&1 | head -1"
+        )
+        result = subprocess.run(
+            [bash, "-c", probe],
+            capture_output=True,
+            timeout=15,
+            env={"PATH": "/usr/bin:/bin", **self.env},
+        )
+        lines = result.stdout.decode("utf-8", errors="replace").splitlines()
+        self.assertIn(lines[0], ("function", "file"))
+        self.assertIn("AISC Workbench 教学", lines[1])
+        self.assertIn("cd", lines[2])  # builtin help output, not the tutorial
 
 
 if __name__ == "__main__":

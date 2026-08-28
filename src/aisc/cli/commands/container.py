@@ -339,12 +339,11 @@ def cmd_shell(
             exit_code=1, error_code="AISC_ERR_CONTAINER_NOT_FOUND",
         )
 
-    # v2.1.7 S6 (Gate-S6/D10): interactive session opens inject the tutorial
-    # `help` function via `bash -c` + export -f + exec bash — per-session,
-    # no image/profile/workspace writes, non-interactive shells unaffected.
-    from aisc.cli.tutorial import session_bash_prelude
-
-    argv = ["exec", "-it", name, "bash", "-c", session_bash_prelude()]
+    # v2.1.7 S6 (Gate-S6/D10): interactive shells get the tutorial `help`
+    # via the exec environment (BASH_FUNC_* re-import) — see
+    # aisc.cli.tutorial.help_function_env. The plain `bash` argv is
+    # unchanged; nothing is written to the image or any profile.
+    argv = ["exec", "-it", name, "bash"]
     proc = exec_.run_streaming(argv)
 
     # Map transport errors — nonzero exit from docker exec is returned to caller

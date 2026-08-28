@@ -332,15 +332,11 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
             with patch("aisc.cli.commands.container.discover_container", return_value="test-container"):
                 result = cmd_shell(name_override="test-container", executor=fake_executor)
 
-            # Verify docker exec -it <name> bash -c <tutorial prelude> was
-            # called — v2.1.7 S6: interactive shells inject the `help`
-            # tutorial function via the argv (no image/profile writes).
+            # Verify docker exec -it <name> bash was called — v2.1.7 S6 rides
+            # the exec ENVIRONMENT (BASH_FUNC_*), not the argv.
             fake_executor.run_streaming.assert_called_once()
             call_args = fake_executor.run_streaming.call_args[0][0]
-            self.assertEqual(call_args[:4], ["exec", "-it", "test-container", "bash"])
-            self.assertEqual(call_args[4], "-c")
-            self.assertIn("export -f help", call_args[5])
-            self.assertTrue(call_args[5].rstrip().endswith("exec bash"))
+            self.assertEqual(call_args, ["exec", "-it", "test-container", "bash"])
 
     def test_stop_produces_docker_stop_and_is_idempotent(self):
         """Verify `aisc stop` produces 'docker stop <name>' and is idempotent."""

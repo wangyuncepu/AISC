@@ -19,6 +19,8 @@ their own short i18n summaries.
 
 from __future__ import annotations
 
+from typing import Dict
+
 _TUTORIAL = """\
 ╔══════════════ AISC Workbench 教学 ══════════════
 ║ 三、五分钟核心用法
@@ -72,3 +74,28 @@ def session_bash_prelude() -> str:
     """The ``bash -c`` script for interactive session opens (test seam)."""
     # Plain replace — .format would need every shell brace escaped.
     return _SESSION_BASH_PRELUDE_TEMPLATE.replace("__AISC_TUTORIAL_TEXT__", _TUTORIAL)
+
+
+_FUNC_BODY = """\
+  if [ $# -eq 0 ]; then
+    cat <<'__AISC_TUTORIAL_EOF__'
+{tutorial}
+__AISC_TUTORIAL_EOF__
+  else
+    builtin help "$@"
+  fi
+"""
+
+
+def help_function_env() -> Dict[str, str]:
+    """The exported-function env var for bash session opens.
+
+    bash re-imports ``BASH_FUNC_<name>%%`` env vars as functions at startup;
+    the wrapper's ``os.environ.copy()`` passes the docker-exec environment
+    straight through, so the function enters ONLY this session's shell (no
+    image, profile, or workspace writes — A-21766). ``help <args>`` delegates
+    to the builtin (A-21765).
+    """
+    body = _FUNC_BODY.replace("{tutorial}", _TUTORIAL)
+    return {"BASH_FUNC_help%%": f"() {{\n{body}}}"}
+
