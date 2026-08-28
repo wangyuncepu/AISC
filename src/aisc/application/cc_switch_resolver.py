@@ -13,7 +13,12 @@ Policies (03-build-version-resolution.md):
 - rate limiting never degrades into stale assets: with no usable cache the
   resolve fails closed and points at the explicit-manifest path;
 - an explicit ``vX.Y.Z`` may be served from a cache of any age (the pinned
-  release's digest is stable content), again with ``source=cache``.
+  release's digest is stable content), again with ``source=cache``;
+- as the LAST offline resort (2.1.7 #37), the per-build receipt written after
+  every successful resolve (``cache/cc-switch/last-resolved.json``, any age —
+  a pinned digest is stable content) may serve a network/rate-limit failure,
+  same semantics as ``docker_lifecycle._cc_switch_for_rebuild``; a receipt
+  that does not match the request (channel/version/arch/libc) is never used.
 """
 
 from __future__ import annotations
@@ -142,11 +147,18 @@ class CcSwitchResolver:
             cached = self._cached_resolve(channel, version, arch, libc)
             if cached is not None:
                 return cached
+            # 2.1.7 #37: last resort — the receipt from ANY previous
+            # successful resolve (any age, digest-stable pin).
+            receipt = self._last_resolved_fallback(channel, version, arch, libc)
+            if receipt is not None:
+                return receipt
             raise ResolveError(
                 network_error.code,
                 f"{network_error.message} "
-                f"(no usable cache; for offline builds pass a manifest file "
-                f"written by a previous resolve via --cc-switch-manifest)",
+                f"(no usable cache — check network/proxy access to "
+                f"api.github.com and retry; for fully offline builds pass a "
+                f"manifest file written by a previous resolve via "
+                f"--cc-switch-manifest)",
             ) from network_error
 
         selection = self._select(releases, channel, version, arch, libc, source=SOURCE_API)
@@ -273,6 +285,36 @@ class CcSwitchResolver:
             return self._select(releases, channel, version, arch, libc, source=SOURCE_CACHE)
         except ResolveError:
             return None
+
+    @property
+    def _last_resolved_file(self) -> Path:
+        # The per-build receipt ``aisc build`` writes after every successful
+        # resolve (cli.main._write_cc_switch_manifest — same shared-root
+        # cache dir as ``releases.json``).
+        return (self._cache_dir or _cache_dir()) / "last-resolved.json"
+
+    def _last_resolved_fallback(
+        self, channel: str, version: str, arch: str, libc: str
+    ) -> Optional[ResolvedRelease]:
+        """Offline last resort (2.1.7 #37): serve the request from the
+        last-resolved receipt, ANY age (a pinned digest is stable content —
+        same semantics as ``_cc_switch_for_rebuild``).
+
+        Strictly fail-closed on mismatch: a receipt that does not match the
+        requested channel/version/arch/libc must never silently build the
+        wrong pin, so it reads as "no fallback" and the network error
+        propagates. The served resolution keeps ``source=cache`` — surfaced,
+        never silent."""
+        try:
+            data = json.loads(self._last_resolved_file.read_text(encoding="utf-8"))
+            resolved = ResolvedRelease.from_manifest(data)
+            resolved.check_matches_request(channel, version)
+            if resolved.arch != arch or resolved.libc != libc:
+                return None
+        except (OSError, ValueError, ResolveError):
+            return None
+        # A receipt never masquerades as a live resolution.
+        return replace(resolved, source=SOURCE_CACHE)
 
     # --- selection wrapper -----------------------------------------------------
 
