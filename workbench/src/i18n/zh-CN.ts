@@ -134,6 +134,8 @@ export const zhCN = {
   "build.title": "构建镜像 {tag}",
   "build.logEmpty": "（等待 Docker 输出… 构建可能需要十几分钟）",
   "build.dockerError": "Docker 引擎未运行，构建无法开始。请先启动 Docker（如 Docker Desktop 已安装）。",
+  "build.cancel": "取消构建",
+  "build.durationHint": "初次构建需下载基础镜像并安装依赖，通常需要 10–20 分钟；之后的增量构建通常只需几分钟。",
   "build.backToSummary": "返回摘要",
 
   // --- conflict manager (ConflictManager.vue) ---
@@ -518,9 +520,7 @@ export const zhCN = {
   "onboarding.env.engine": "Docker 引擎",
   "onboarding.env.webview2": "WebView2",
   "onboarding.env.startDocker": "启动 Docker",
-  "onboarding.env.installDocker": "安装并启动 Docker",
-  "onboarding.env.installingDocker": "正在安装 Docker Desktop…",
-  "onboarding.env.installingHint": "正在下载并安装 Docker Desktop，可能需要几分钟，请稍候。",
+  "onboarding.env.selfInstallHint": "未检测到 Docker Desktop。请自行安装 Docker Desktop（官网 docker.com 或可信分发渠道），安装完成后点击「重新检测」，本页会自动识别。",
   "onboarding.env.starting": "等待引擎…",
   "onboarding.env.startingDocker": "启动中…",
   "onboarding.env.dockerProgress": "正在启动 Docker 引擎… 已等待 {sec} 秒（首次启动可能需要 1–2 分钟，就绪后自动继续）",

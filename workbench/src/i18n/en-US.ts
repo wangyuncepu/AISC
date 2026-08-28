@@ -134,6 +134,8 @@ export const enUS: Record<string, string> = {
   "build.title": "Building image {tag}",
   "build.logEmpty": "(Waiting for Docker output… the build may take a while)",
   "build.dockerError": "Docker engine is not running; the build cannot start. Start Docker first (e.g. Docker Desktop).",
+  "build.cancel": "Cancel build",
+  "build.durationHint": "A first build downloads base images and installs dependencies — typically 10–20 minutes. Later incremental builds usually take a few minutes.",
   "build.backToSummary": "Back to summary",
 
   // --- conflict manager (ConflictManager.vue) ---
@@ -518,9 +520,7 @@ export const enUS: Record<string, string> = {
   "onboarding.env.engine": "Docker Engine",
   "onboarding.env.webview2": "WebView2",
   "onboarding.env.startDocker": "Start Docker",
-  "onboarding.env.installDocker": "Install and start Docker",
-  "onboarding.env.installingDocker": "Installing Docker Desktop…",
-  "onboarding.env.installingHint": "Downloading and installing Docker Desktop. This may take a few minutes.",
+  "onboarding.env.selfInstallHint": "Docker Desktop was not detected. Please install it yourself (from docker.com or a trusted distribution channel), then click Re-check — this page detects it automatically.",
   "onboarding.env.starting": "Waiting for Engine…",
   "onboarding.env.startingDocker": "Starting…",
   "onboarding.env.dockerProgress": "Starting Docker engine… {sec}s elapsed (first boot can take 1–2 minutes; continues automatically when ready)",

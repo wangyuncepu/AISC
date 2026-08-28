@@ -96,12 +96,6 @@ async function retryEnv() {
 const dockerBusy = computed(
   () => environment.installing || environment.dockerStarting || environment.polling
 );
-/** The winget/bundled INSTALL only applies to a missing Docker Desktop; on an
- * installed-not-running machine the same `installing` window is just the
- * spawn (~1-2s) and must read 启动中, not 安装中. */
-const dockerInstallingMissing = computed(
-  () => environment.installing && environment.readiness.docker === "not_installed"
-);
 /** Sticky: this wizard session woke Docker up (drives the success note). */
 const dockerStartedHere = ref(false);
 watch(
@@ -334,12 +328,9 @@ async function finish() {
         </li>
       </ul>
 
-      <p v-if="dockerInstallingMissing" class="ob-note" role="status">
-        {{ t("onboarding.env.installingHint") }}
-      </p>
       <!-- KI-1 UX: visible wake-up progress — spinner + elapsed + first-boot
            hint, continuous until the engine answers (no flicker-then-silence). -->
-      <p v-else-if="dockerBusy" class="ob-note ob-progress" role="status">
+      <p v-if="dockerBusy" class="ob-note ob-progress" role="status">
         <span class="spinner" aria-hidden="true" />
         {{ t("onboarding.env.dockerProgress", { sec: dockerElapsedSec }) }}
       </p>
@@ -369,19 +360,25 @@ async function finish() {
       >{{ t("onboarding.env.engineDetail") }}: {{ environment.readiness.engineDetail }}</p>
 
       <div class="ob-actions">
+        <!-- S8h (2026-08-28 ruling): the program no longer offers a one-click
+             Docker INSTALL — the user installs Docker Desktop themselves.
+             Installed-but-stopped keeps the one-click engine wake-up (KI-1). -->
+        <p
+          v-if="environment.readiness.docker === 'not_installed'"
+          class="ob-note"
+          role="status"
+        >
+          {{ t("onboarding.env.selfInstallHint") }}
+        </p>
         <button
-          v-if="environment.dockerInstalling"
+          v-else-if="environment.dockerInstalling"
           class="ob-btn ui-button primary"
           :disabled="dockerBusy"
           @click="startDocker"
         >
-          {{ dockerInstallingMissing
-            ? t("onboarding.env.installingDocker")
-            : dockerBusy
-              ? t("onboarding.env.startingDocker")
-              : environment.readiness.docker === "not_installed"
-                ? t("onboarding.env.installDocker")
-                : t("onboarding.env.startDocker") }}
+          {{ dockerBusy
+            ? t("onboarding.env.startingDocker")
+            : t("onboarding.env.startDocker") }}
         </button>
         <!-- Never disabled: envReadiness is a cheap idempotent read, and the
              auto-poll already keeps this live. Disabling on `loading` made
