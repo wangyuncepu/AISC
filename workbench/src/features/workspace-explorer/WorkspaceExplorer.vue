@@ -21,10 +21,11 @@ import { errorCodeOf, useWorkspaceExplorerStore } from "../../stores/workspaceEx
 import { useRuntimeStore } from "../../stores/runtime";
 import { WORKSPACE_PATH_MIME } from "../../lib/workspaceDnd";
 import { validateBasename } from "./basename";
+import ChangeBadge from "./ChangeBadge.vue";
 import TypeIcon from "./TypeIcon.vue";
 import type { WorkspaceNode } from "../../types";
 
-const { t, te } = useI18n();
+const { t } = useI18n();
 const explorer = useWorkspaceExplorerStore();
 const runtime = useRuntimeStore();
 
@@ -710,11 +711,17 @@ function onRowContextMenu(node: WorkspaceNode, event: MouseEvent) {
 }
 
 /** Watcher change type → localized quiet label (raw enum never hits the UI). */
-function changeLabel(change: string): string {
-  const key = `explorer.change.${change}`;
-  const known = ["created", "modified", "deleted"];
-  return known.includes(change) ? te(key) ? t(key) : change : change;
+/** S7: watch a fact's badge type — "renamed" only surfaces when the backend
+ *  actually observed one (watcher ModifyKind::Name / record action); the
+ *  old name rides `detail` when recorded. */
+function badgeTypeOf(change: string): "created" | "modified" | "deleted" | "renamed" | null {
+  if (change === "created" || change === "modified" || change === "deleted" || change === "renamed") {
+    return change;
+  }
+  return null;
 }
+/** S7 legend (A-21774): collapsible; explains types × sources once. */
+const legendOpen = ref(false);
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -1061,11 +1068,11 @@ function onTreeKeydown(e: KeyboardEvent) {
                 class="explorer-badge"
                 >{{ badge }}</span
               >
-              <span
-                v-if="node.change_state && node.change_state !== 'unknown' && node.change_state !== 'artifact'"
-                class="change-label"
-                >{{ changeLabel(node.change_state) }}</span
-              >
+              <ChangeBadge
+                v-if="badgeTypeOf(node.change_state)"
+                :type="badgeTypeOf(node.change_state)!"
+                source="unattributed"
+              />
             </template>
           </div>
           <!-- Create input for a non-root target: first-child slot under the
@@ -1137,6 +1144,22 @@ function onTreeKeydown(e: KeyboardEvent) {
           >
             {{ t(`explorer.filter.${g}`) }}
           </button>
+          <!-- S7 legend: collapsible, explains types × sources once -->
+          <button
+            class="artifact-chip legend-chip"
+            :aria-expanded="legendOpen"
+            @click="legendOpen = !legendOpen"
+          >
+            {{ t("explorer.legend") }} {{ legendOpen ? "▾" : "▸" }}
+          </button>
+        </div>
+        <div v-if="legendOpen" class="badge-legend">
+          <ChangeBadge type="created" source="agent" agent="claude" />
+          <ChangeBadge type="modified" source="agent" agent="codex" />
+          <ChangeBadge type="renamed" source="agent" agent="claude" detail="/old/path.md" />
+          <ChangeBadge type="deleted" source="unattributed" />
+          <ChangeBadge type="created" source="unattributed" />
+          <span class="legend-note">{{ t("explorer.legendNote") }}</span>
         </div>
         <p
           v-if="searchQuery && !deliverablesFiltered.length && !sourceChangesFiltered.length && !generatedFiltered.length && !unattributedFiltered.length"
@@ -1169,6 +1192,13 @@ function onTreeKeydown(e: KeyboardEvent) {
                 {{ artifactLabel(a.workspace_relative_path) }}
               </span>
               <span v-if="a.label" class="explorer-label">{{ a.label }}</span>
+              <ChangeBadge
+                v-if="badgeTypeOf(a.action)"
+                :type="badgeTypeOf(a.action)!"
+                source="agent"
+                :agent="a.producer?.agent"
+                :detail="a.action === 'renamed' && a.previous_path ? `${t('explorer.badge.from')} ${a.previous_path}` : null"
+              />
             </div>
           </template>
         </section>
@@ -1258,7 +1288,11 @@ function onTreeKeydown(e: KeyboardEvent) {
               @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: u.relative_path, renamable: nodeOf(u.relative_path) !== null }, $event.clientX, $event.clientY)"
             >
               <span class="explorer-name" :title="hostPath(u.relative_path)">{{ artifactLabel(u.relative_path) }}</span>
-              <span class="change-label">{{ changeLabel(u.change_type) }}</span>
+              <ChangeBadge
+                v-if="badgeTypeOf(u.change_type)"
+                :type="badgeTypeOf(u.change_type)!"
+                source="unattributed"
+              />
             </div>
           </template>
         </section>
@@ -1703,6 +1737,14 @@ function onTreeKeydown(e: KeyboardEvent) {
   font-size: var(--font-xs); padding: 1px var(--space-2); cursor: pointer;
 }
 .artifact-chip.active { background: var(--accent-soft); color: var(--text); border-color: var(--border-strong); }
+/* S7 legend */
+.legend-chip { margin-left: auto; }
+.badge-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: var(--border-w) solid var(--border);
+}
+.legend-note { font-size: var(--font-xs); color: var(--text-faint); }
 .artifact-chip:hover:not(.active) { background: var(--surface-hover); }
 .artifacts-group-head {
   display: flex; align-items: center; gap: 6px; width: 100%;
