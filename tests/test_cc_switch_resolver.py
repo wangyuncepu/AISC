@@ -33,6 +33,7 @@ from aisc.domain.cc_switch_release import (
     select_release,
 )
 from aisc.application.cc_switch_resolver import CcSwitchResolver
+from aisc.domain.models import CliError
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
@@ -464,6 +465,73 @@ class BuildWiringTests(unittest.TestCase):
         self.assertEqual(result.cc_switch["version"], "v5.10.1")
         self.assertEqual(result.cc_switch_manifest_path, "/x/m.json")
         self.assertIn("cc_switch", result.to_dict())
+
+
+class UnpinnedFallbackTests(unittest.TestCase):
+    """S8b (ruling 2026-08-28): ``_cmd_build`` degrades NETWORK-shaped
+    resolution failures to an UNPINNED build (Dockerfile CN-mirror download,
+    unverified — same semantics as ``docker_rebuild``); non-network failures
+    (bad manifest, live-API version-not-found) and ``--require-pin`` stay
+    fail-closed. All seams mocked; hermetic."""
+
+    def _args(self, require_pin: bool = False):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            tag="t:1", no_cache=False, pull=False, dry_run=True,
+            aisc_root=None,
+            cc_switch_version=None, cc_switch_channel=None,
+            cc_switch_manifest=None, require_pin=require_pin,
+        )
+
+    def _run(self, resolver: mock.Mock, require_pin: bool = False):
+        import io
+
+        from aisc.cli import main as cli_main
+
+        stderr = io.StringIO()
+        with mock.patch(
+            "aisc.application.cc_switch_resolver.CcSwitchResolver",
+            return_value=resolver,
+        ), mock.patch("aisc.cli.commands.build.plan_build") as plan_build, \
+                mock.patch("aisc.cli.commands.build.run_build") as run_build, \
+                mock.patch("aisc.cli.main._write_cc_switch_manifest", return_value=None), \
+                mock.patch("aisc.application.resources.locate_aisc_root", return_value=Path("/bundle")), \
+                mock.patch("sys.stderr", stderr):
+            result = cli_main._cmd_build(self._args(require_pin), None, "json")
+        return result, plan_build, run_build, stderr
+
+    def test_network_failure_builds_unpinned_with_warning(self):
+        resolver = mock.Mock()
+        resolver.resolve.side_effect = ResolveError(CC_SWITCH_ERROR_NETWORK, "github unreachable")
+        (data, code, errors), plan_build, run_build, stderr = self._run(resolver)
+        self.assertEqual(code, 0)
+        # The plan is built WITHOUT the pin and the summary carries no pin.
+        self.assertIsNone(plan_build.call_args.kwargs["cc_switch"])
+        self.assertIsNone(run_build.call_args.kwargs["cc_switch_summary"])
+        # Fail-visible: the warning names the degraded state and the escape hatches.
+        self.assertIn("不带解析钉版", stderr.getvalue())
+        self.assertIn("--require-pin", stderr.getvalue())
+
+    def test_rate_limited_also_falls_back(self):
+        resolver = mock.Mock()
+        resolver.resolve.side_effect = ResolveError(CC_SWITCH_ERROR_RATE_LIMITED, "rate limited")
+        (data, code, errors), _, _, _ = self._run(resolver)
+        self.assertEqual(code, 0)
+
+    def test_require_pin_keeps_fail_closed(self):
+        resolver = mock.Mock()
+        resolver.resolve.side_effect = ResolveError(CC_SWITCH_ERROR_NETWORK, "down")
+        with self.assertRaises(CliError) as ctx:
+            self._run(resolver, require_pin=True)
+        self.assertEqual(ctx.exception.error_code, CC_SWITCH_ERROR_NETWORK)
+
+    def test_bad_manifest_never_falls_back(self):
+        resolver = mock.Mock()
+        resolver.resolve.side_effect = ResolveError(CC_SWITCH_ERROR_BAD_MANIFEST, "broken")
+        with self.assertRaises(CliError) as ctx:
+            self._run(resolver)
+        self.assertEqual(ctx.exception.error_code, CC_SWITCH_ERROR_BAD_MANIFEST)
 
 
 if __name__ == "__main__":

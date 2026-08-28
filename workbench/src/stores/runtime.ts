@@ -164,6 +164,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     buildLogPath: fwdRef("buildLogPath"),
     buildTag: fwdRef("buildTag"),
     buildError: fwdRef("buildError"),
+    buildWarnings: fwdRef("buildWarnings"),
     buildStartedAt: fwdRef("buildStartedAt"),
     buildFinishedAt: fwdRef("buildFinishedAt"),
     buildDurationMs: fwdRef("buildDurationMs"),

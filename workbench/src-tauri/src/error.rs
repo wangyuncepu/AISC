@@ -254,6 +254,18 @@ impl WorkbenchError {
                 ("AISC 无法访问 Docker 或工作区", false, Action::None)
             }
             "AISC_ERR_IMAGE_NOT_FOUND" => ("所选镜像不存在", false, Action::BuildImage),
+            // S8b (VM retest feedback #2): build-chain codes used to fall into
+            // the generic 「AISC CLI 返回错误」 bucket with the real diagnosis
+            // buried in technical_detail.
+            "AISC_ERR_BUILD_FAILED" => ("镜像构建失败", true, Action::None),
+            "AISC_ERR_GENERAL" => ("构建失败", true, Action::Retry),
+            "AISC_ERR_CANCELLED" => ("操作已取消", false, Action::None),
+            "AISC_ERR_CC_SWITCH_NETWORK" => {
+                ("无法访问 GitHub（网络受限）", true, Action::Retry)
+            }
+            "AISC_ERR_CC_SWITCH_RATE_LIMITED" => {
+                ("GitHub API 限流，请稍后重试", true, Action::Retry)
+            }
             _ => ("AISC CLI 返回错误", true, Action::Retry),
         };
         Self::new(code, message, retryable, action)

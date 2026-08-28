@@ -214,6 +214,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   const BUILD_LOG_RING_CHARS = 64 * 1024;
   const buildTag = ref("");
   const buildError = ref<WorkbenchError | null>(null);
+  // S8b: backend-emitted build.warning messages (e.g. the offline unpinned
+  // cc-switch fallback) — bounded to the last 5, cleared per build op.
+  const buildWarnings = ref<string[]>([]);
   /** G-17: per-pane PTY output buffer (base64 chunks). The store owns the
    * session channel; Terminals replay + stream from here, so remounts never
    * drop output or re-open the session. */
@@ -347,6 +350,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     buildProgress.value = null;
     buildLogPath.value = null;
     buildError.value = null;
+    buildWarnings.value = [];
     buildStatus.value = "building";
     buildStartedAt.value = Date.now();
     buildFinishedAt.value = null;
@@ -369,6 +373,14 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
         if (typeof p === "string" && p) buildLogPath.value = p;
       } else if (ev.type === "build.progress") {
         buildProgress.value = ev.data as unknown as BuildProgressData;
+      } else if (ev.type === "build.warning") {
+        // S8b: additive event — backend warns about degraded-but-continuing
+        // builds (e.g. offline unpinned cc-switch). Unknown to older CLIs,
+        // so absence is normal.
+        const m = ev.data?.message;
+        if (typeof m === "string" && m) {
+          buildWarnings.value = [...buildWarnings.value.slice(-4), m];
+        }
       }
     };
     try {
@@ -1714,6 +1726,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   revealBuildLog,
     buildTag,
     buildError,
+    buildWarnings,
     buildStartedAt,
     buildFinishedAt,
     buildDurationMs,

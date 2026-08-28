@@ -131,6 +131,10 @@ def _build_parser() -> _AiscArgumentParser:
     bp.add_argument("--cc-switch-manifest", type=str, default=None, metavar="PATH",
                     help="Build from a resolver manifest file (offline / "
                          "reproducible; skips the live resolve)")
+    bp.add_argument("--require-pin", action="store_true", default=False,
+                    help="Fail the build when the cc-switch version cannot be "
+                         "resolved (default: an offline build continues WITHOUT "
+                         "the pin — unverified, CN-mirror download)")
 
     # --- run ---
     rp = sub.add_parser("run", help="Run Docker container", allow_abbrev=False)
@@ -997,6 +1001,21 @@ def _cmd_build(
             "phase": "prerun",
         })
 
+    def _warn_unpinned_build(exc: ResolveError, emitter_: Optional[JsonlEmitter]) -> None:
+        """S8b: announce the degraded unpinned build (fail-visible, never
+        silent) — stderr for text mode, a build.warning event for the
+        Workbench stream (additive event type; older frontends ignore it)."""
+        warning = (
+            "cc-switch 版本解析失败（网络受限）：本次构建不带解析钉版，"
+            "Dockerfile 将从国内镜像源下载 cc-switch（无 sha256 校验，"
+            "不保证可复现）。配好网络后重试可恢复钉版；--require-pin 可将"
+            "此情况设为致命错误。原因: " + exc.message
+        )
+        sys.stderr.write(f"⚠️  {warning}\n")
+        sys.stderr.flush()
+        if emitter_ is not None:
+            emitter_.emit("build.warning", data={"message": warning})
+
 
     # Run wizard if in interactive text mode and no explicit flags provided
     tag = getattr(args, "tag", "super-claude:latest")
@@ -1024,39 +1043,60 @@ def _cmd_build(
     # Stage 8b: resolve the cc-switch release BEFORE planning (D8-02 — the
     # Dockerfile only consumes resolved facts, never resolves on its own).
     import platform as _platform
-    from aisc.domain.cc_switch_release import ResolveError, normalize_arch
+    from aisc.domain.cc_switch_release import (
+        CC_SWITCH_ERROR_NETWORK,
+        CC_SWITCH_ERROR_RATE_LIMITED,
+        ResolveError,
+        normalize_arch,
+    )
     from aisc.application.cc_switch_resolver import CcSwitchResolver
 
     cs_version = getattr(args, "cc_switch_version", None) or os.environ.get("CC_SWITCH_VERSION", "latest")
     cs_channel = getattr(args, "cc_switch_channel", None) or os.environ.get("CC_SWITCH_CHANNEL", "stable")
     cs_manifest = getattr(args, "cc_switch_manifest", None)
+    require_pin = bool(getattr(args, "require_pin", False)) or (
+        os.environ.get("AISC_REQUIRE_PIN", "").strip().lower() not in ("", "0", "false")
+    )
     try:
         cs_arch = normalize_arch(_platform.machine())
     except ResolveError:
         cs_arch = "x64"  # validated again inside the Dockerfile (arch assert)
     resolver = CcSwitchResolver()
+    resolved: Any = None
     try:
-        try:
-            resolved = resolver.resolve(
-                channel=cs_channel,
-                version=cs_version,
-                arch=cs_arch,
-                libc="musl",
-                manifest_path=Path(cs_manifest) if cs_manifest else None,
-            )
-        except ResolveError as exc:
-            raise CliError(
-                message=f"cc-switch release resolution failed: {exc.message}",
-                exit_code=1, error_code=exc.code,
-            ) from exc
-    except CliError as exc:
-        _emit_prerun_failure(exc)
-        raise
+        resolved = resolver.resolve(
+            channel=cs_channel,
+            version=cs_version,
+            arch=cs_arch,
+            libc="musl",
+            manifest_path=Path(cs_manifest) if cs_manifest else None,
+        )
+    except ResolveError as exc:
+        # S8b (2026-08-28 user ruling): a NETWORK-SHAPED failure degrades to
+        # an UNPINNED build instead of a fatal error — the Dockerfile's
+        # no-pin branch downloads cc-switch from CN mirrors (unverified,
+        # explicitly warned), the same semantics docker_rebuild has had
+        # since v2.1.6. Everything else (bad manifest, version not found on
+        # a LIVE api, invalid channel) and --require-pin stay fail-closed.
+        unpinned = (
+            exc.code in (CC_SWITCH_ERROR_NETWORK, CC_SWITCH_ERROR_RATE_LIMITED)
+            and not require_pin
+        )
+        cli_error = CliError(
+            message=f"cc-switch release resolution failed: {exc.message}",
+            exit_code=1, error_code=exc.code,
+        )
+        if not unpinned:
+            _emit_prerun_failure(cli_error)
+            raise cli_error from exc
+        _warn_unpinned_build(exc, emitter)
 
     # Reproducibility receipt: always written next to the build outputs.
-    manifest_path = _write_cc_switch_manifest(root, resolved)
+    manifest_path = (
+        _write_cc_switch_manifest(root, resolved) if resolved is not None else None
+    )
 
-    if effective_format == "text" and emitter is None:
+    if resolved is not None and effective_format == "text" and emitter is None:
         sys.stderr.write(
             f"cc-switch: {resolved.tag} ({resolved.asset_name}, "
             f"sha256 {resolved.asset_sha256[:12]}…, source {resolved.source})\n"
@@ -1078,7 +1118,7 @@ def _cmd_build(
         plan,
         emitter=emitter,
         streaming=is_streaming,
-        cc_switch_summary=resolved.to_manifest(),
+        cc_switch_summary=resolved.to_manifest() if resolved is not None else None,
         cc_switch_manifest_path=str(manifest_path) if manifest_path else "",
     )
     return result.to_dict(), 0, []

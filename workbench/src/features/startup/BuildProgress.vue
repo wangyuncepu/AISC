@@ -121,7 +121,13 @@ watch(
       <p v-if="building" class="hint">{{ t("build.durationHint") }}</p>
     </div>
 
+    <!-- S8b: degraded-but-continuing notices (e.g. offline unpinned build). -->
+    <p v-for="(w, i) in store.buildWarnings" :key="i" class="warn" role="status">{{ w }}</p>
+
     <p v-if="store.buildError" class="err">{{ store.buildError.message }}</p>
+    <!-- S8b: the failure's real diagnosis (backend detail, e.g. the cc-switch
+         network guidance) — never only the generic headline. -->
+    <p v-if="store.buildError?.technical_detail" class="err detail">{{ store.buildError.technical_detail }}</p>
     <p v-if="dockerError" class="err">{{ t("build.dockerError") }}</p>
 
     <div class="actions">
@@ -220,6 +226,13 @@ watch(
 }
 
 .err { font-size: var(--font-sm); color: var(--error); margin: 0; }
+.err.detail {
+  font-size: var(--font-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  opacity: 0.85;
+}
+.warn { font-size: var(--font-sm); color: var(--warn); margin: 0; overflow-wrap: anywhere; }
 .actions { display: flex; gap: 8px; }
 
 .drawer { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
