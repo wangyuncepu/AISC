@@ -1,6 +1,6 @@
 /**
  * svc-4+ (web services): the Services tab inside the Workspace Explorer —
- * parallel to 文件/产物, same cross-fade. Covers the capability gate, row
+ * parallel to 文件/变更, same cross-fade. Covers the capability gate, row
  * rendering (label fallback, gateway port), copy (clipboard) and the
  * ids-only open path through the runtime store.
  */
@@ -120,7 +120,7 @@ describe("svc-4+ explorer services tab", () => {
       const tabs = wrapper.findAll('[role="tab"]').map((b) => b.text());
       expect(tabs).not.toContain("服务");
       expect(tabs).toContain("文件");
-      expect(tabs).toContain("产物");
+      expect(tabs).toContain("变更");
     } finally {
       wrapper.unmount();
     }
