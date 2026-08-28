@@ -89,6 +89,18 @@ impl WorkbenchError {
         )
     }
 
+    /// S8h (2026-08-28 ruling): the program no longer auto-installs Docker —
+    /// `start_docker` is LAUNCH-ONLY and reports a missing Docker Desktop as
+    /// this error, so every entry point guides a manual install instead.
+    pub fn docker_not_installed() -> Self {
+        Self::new(
+            "WB_ERR_DOCKER_NOT_INSTALLED",
+            "Docker Desktop 未安装，请自行安装后再试",
+            false,
+            Action::None,
+        )
+    }
+
     pub fn capability_unsupported() -> Self {
         Self::new(
             "WB_ERR_CAPABILITY_UNSUPPORTED",

@@ -1159,6 +1159,9 @@ pub async fn start_docker(app: AppHandle) -> Result<(), WorkbenchError> {
 }
 
 async fn start_docker_inner(app: AppHandle) -> Result<(), WorkbenchError> {
+    // Launch-only (S8h): no branch uses the handle anymore (the install
+    // heartbeat used to emit through it).
+    let _ = app;
     #[cfg(windows)]
     {
         // Docker Desktop.exe already present → just launch it. KI-1: first
@@ -1173,27 +1176,10 @@ async fn start_docker_inner(app: AppHandle) -> Result<(), WorkbenchError> {
                 return Ok(());
             }
         }
-        // Missing → offline build bundles the latest Docker Desktop installer
-        // (like mihomo); run it silently. On any failure fall back to winget so
-        // an offline build degrades gracefully to the online path.
-        if let Some(installer) = bundled_docker_installer() {
-            match install_docker_desktop_bundled(&app, &installer).await {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    eprintln!("[docker] bundled install failed ({e}); falling back to winget");
-                }
-            }
-        }
-        // Missing → install via winget (awaited, bounded; Stage 5 A-ONB02/B):
-        // the first-run wizard's "Start Docker" must cover install, not just
-        // launch. No shell=True anywhere. Returns a real error on failure so
-        // the wizard can show it instead of silently timing out.
-        match install_docker_desktop_winget(&app).await {
-            Ok(()) => Ok(()),
-            Err(e) => Err(WorkbenchError::cli_protocol().with_detail(format!(
-                "Docker Desktop not found and automatic install failed: {e}"
-            ))),
-        }
+        // S8h (2026-08-28 ruling): no program-driven install anymore. Docker
+        // is user-managed — a missing Docker Desktop is a structured error
+        // (guides a manual install), never a silent winget/bundled install.
+        Err(WorkbenchError::docker_not_installed())
     }
     #[cfg(target_os = "macos")]
     {
@@ -1326,7 +1312,14 @@ pub(crate) fn notify_docker(app: &AppHandle, title: &str, body: &str) {
 /// Bundled offline Docker Desktop installer (offline build only). Placed next
 /// to the app by the NSIS installer under `aisc-bundle\docker-offline\`. The
 /// online build has none and falls back to winget.
+// -- Dormant install machinery (S8h, 2026-08-28 ruling) --
+// The program no longer drives a Docker install (user-managed), so the
+// winget/bundled installers + heartbeat below are unreachable. Kept intact
+// so the "temporary" ruling stays reversible: removing these would discard
+// the Gate-S4 heartbeat work. Re-enable by calling them from start_docker.
+
 #[cfg(windows)]
+#[allow(dead_code)]
 fn bundled_docker_installer() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let p = exe
@@ -1354,6 +1347,7 @@ struct DockerInstallProgress {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn emit_install_progress(app: &AppHandle, p: DockerInstallProgress) {
     use tauri::Emitter;
     let _ = app.emit("docker-install-progress", p);
@@ -1364,6 +1358,7 @@ fn emit_install_progress(app: &AppHandle, p: DockerInstallProgress) {
 /// reported (Gate-S4 §2 — a reported timeout never leaves an install
 /// running on in the background).
 #[cfg(windows)]
+#[allow(dead_code)]
 async fn wait_install_with_heartbeat(
     app: &AppHandle,
     op: &str,
@@ -1462,6 +1457,7 @@ fn engine_probe_ok() -> bool {
 /// awaiting and a clear failure on error. Console window is hidden. Returns
 /// Ok only when Docker Desktop.exe exists afterward.
 #[cfg(windows)]
+#[allow(dead_code)]
 async fn install_docker_desktop_winget(app: &AppHandle) -> Result<(), String> {
     if !winget_available() {
         return Err("winget (App Installer) not available".into());
@@ -1510,6 +1506,7 @@ async fn install_docker_desktop_winget(app: &AppHandle) -> Result<(), String> {
 /// Desktop Installer.exe silently (no shell=True). Same bounded await and
 /// existence check as the winget path; on success fires a toast.
 #[cfg(windows)]
+#[allow(dead_code)]
 async fn install_docker_desktop_bundled(
     app: &AppHandle,
     installer: &std::path::Path,
