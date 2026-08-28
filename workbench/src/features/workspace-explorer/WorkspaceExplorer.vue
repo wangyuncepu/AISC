@@ -1559,14 +1559,6 @@ function onTreeKeydown(e: KeyboardEvent) {
 .unattributed {
   opacity: 0.75;
 }
-/* 10d r4: watcher change states are QUIET text labels — a warn pill on
- * every changed row read as noise (user feedback). Attribution badges
- * (.explorer-badge) keep their pills; change kind does not. */
-.change-label {
-  font-size: var(--font-xs);
-  color: var(--warn);
-  white-space: nowrap;
-}
 .explorer-stale,
 .explorer-error {
   padding: var(--space-1) var(--space-2);
