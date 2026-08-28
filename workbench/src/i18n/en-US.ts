@@ -429,7 +429,7 @@ export const enUS: Record<string, string> = {
 
   // --- workspace explorer (Stage 3, 3c) ---
   "explorer.tab.files": "Files",
-  "explorer.tab.artifacts": "Artifacts",
+  "explorer.tab.artifacts": "Changes",
   "explorer.tab.services": "Services",
   "explorer.status.urlCopied": "Service URL copied",
   "explorer.refresh": "Refresh",
@@ -437,7 +437,7 @@ export const enUS: Record<string, string> = {
   "explorer.empty.workspace": "Select a workspace first.",
 
   "explorer.empty.files": "No files in this directory.",
-  "explorer.empty.artifacts": "Artifacts the agent generates will appear here.",
+  "explorer.empty.artifacts": "Agent deliverables and file changes will appear here.",
   "explorer.loading": "Loading…",
   "explorer.change.created": "new",
   "explorer.change.modified": "edited",
@@ -455,7 +455,7 @@ export const enUS: Record<string, string> = {
   "explorer.badge.sourceUnattributed": "Unattributed change (system-detected)",
   "explorer.badge.renameUnknownTip": "A rename event was observed; the original path is unknown",
   "explorer.searchFiles": "Search files…",
-  "explorer.searchArtifacts": "Search artifacts…",
+  "explorer.searchArtifacts": "Search changes…",
   "explorer.searchNoMatch": "No matches",
   "explorer.filterLabel": "Artifact kind filter",
   "explorer.filter.all": "All",
