@@ -29,12 +29,22 @@ class TutorialEnvTests(unittest.TestCase):
         self.assertIn("AISC Workbench 教学", value)
         self.assertIn('builtin help "$@"', value)
 
-    def test_tutorial_covers_three_sections_and_exercise(self):
+    def test_tutorial_covers_three_sections_and_free_exercises(self):
         value = self.env["BASH_FUNC_help%%"]
         for section in ("Claude Code", "Codex", "Workbench"):
             self.assertIn(section, value)
-        self.assertIn("互动练习", value)
-        self.assertIn("claude -p", value)
+        # A-21768: exercises are FREE by default — the billed one-shot
+        # (claude -p) is clearly marked as optional/post-configuration.
+        self.assertIn("上手练习", value)
+        self.assertIn("claude --version", value)
+        self.assertIn("产生用量", value)
+
+    def test_no_pager_no_fake_quit_hint(self):
+        # 2026-08-28 manual test: there is NO pager — the "退出教学: q" hint
+        # promised an interaction that does not exist. It must never return.
+        value = self.env["BASH_FUNC_help%%"]
+        self.assertNotIn("退出教学", value)
+        self.assertNotIn("q", value.split("上手练习")[1].split("\n")[0])
 
     def test_no_persistent_writes_in_the_function_body(self):
         # A-21766: the injection must not touch any file (no >, >> or tee).

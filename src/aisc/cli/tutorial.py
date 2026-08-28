@@ -42,12 +42,14 @@ _TUTORIAL = """\
 ║   右上 ⓘ 运行时状态抽屉 · Ctrl+, 设置 · + 号新建页
 ║   关闭工作区 = 自动清理临时容器（数据不丢）
 ║
-║ 互动练习（可选）：
-║   1. claude -p "用一句话介绍你自己"     ← 单次问答，试试
-║   2. 在 + ▾ 菜单打开 claude 页签，输入 /help 浏览命令
-║   3. 左侧切到「产物」页签，点分组标题收拢/展开
+║ 上手练习（复制即用）：
+║   1. claude --version    查看已安装的 Claude Code 版本
+║   2. codex --version     查看 Codex 版本
+║   3. 在 + ▾ 菜单打开 claude 页签，输入 /help 浏览命令
+║   4. 左侧切到「产物」页签，点分组标题收拢/展开
+║   配置好 Provider 后可试: claude -p "用一句话介绍自己"（调用 API，产生用量）
 ║
-║ 再次查看: help    退出教学: q
+║ 再次查看本教学: help
 ╚═══════════════════════════════════════════════"""
 
 # Shell fragment executed via `bash -c`. NOTE: kept POSIX-simple on purpose —
