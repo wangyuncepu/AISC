@@ -110,6 +110,8 @@ export const enUS: Record<string, string> = {
   // --- start progress (StartProgress.vue) ---
   "start.msg": "Starting Runtime… {sec}s",
   "start.hint": "The CLI reports no phase-level logs; total elapsed time is shown.",
+  "start.slowHint": "Still starting — a first start initializes the container environment and can take up to 3 minutes.",
+  "start.cancel": "Cancel start",
   "start.cancelled": "Checking Runtime state…{state}",
   "start.cancelledNotFound": "No runnable resource.",
   "start.cancelledExists": "Runtime created (container {name}); you may keep it.",

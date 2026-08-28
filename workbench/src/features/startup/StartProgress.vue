@@ -8,6 +8,7 @@ const { t } = useI18n();
 const store = useRuntimeStore();
 
 const elapsedSec = computed(() => (store.startElapsedMs / 1000).toFixed(1));
+const elapsedNum = computed(() => store.startElapsedMs / 1000);
 const cancelledSnap = computed(() => store.cancelInspect);
 </script>
 
@@ -16,7 +17,10 @@ const cancelledSnap = computed(() => store.cancelInspect);
     <template v-if="!cancelledSnap">
       <p class="msg">{{ t("start.msg", { sec: elapsedSec }) }}</p>
       <p class="hint">{{ t("start.hint") }}</p>
-      <button class="danger" @click="store.cancelStart()">Cancel</button>
+      <!-- S8d: after a short grace, set the cold-start expectation honestly
+           (first starts init the container environment; up to ~3 min). -->
+      <p v-if="elapsedNum > 15" class="hint">{{ t("start.slowHint") }}</p>
+      <button class="danger" @click="store.cancelStart()">{{ t("start.cancel") }}</button>
     </template>
     <template v-else>
       <p class="msg">{{ t("start.cancelled", { state: cancelledSnap.state }) }}</p>

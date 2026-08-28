@@ -605,6 +605,12 @@ _RUNTIME_CONTEXT_PATH = "/run/aisc/runtime-context.json"
 _RUNTIME_CONTEXT_SCHEMA = "aisc.runtime-context/v1"
 _READY_POLL_INTERVAL = 0.5
 _READY_DEFAULT_TIMEOUT = 60.0
+# S8d (VM retest feedback #4): a workspace's FIRST start pages the image
+# layers off disk and runs the entrypoint's first-time init — on weak
+# (nested-virtualization) hardware that takes multiples of the steady-state
+# budget, so "first use always times out at 60s". Cold starts get triple
+# budget; warm starts keep the fast-fail.
+_READY_COLD_TIMEOUT = 180.0
 
 
 def container_name_for(runtime_id: str) -> str:
@@ -763,6 +769,20 @@ def _list_docker_runtime_containers(
             "owner": owner.strip(),
         })
     return out
+
+
+def _registry_has_history(reg_root: Path) -> bool:
+    """S8d: True when this workspace's registry already records a runtime —
+    the proxy for "this host started this workspace before" (warm caches).
+    A missing/empty registry means a cold first start. An unreadable
+    (corrupt) registry keeps the steady-state timeout: the default must
+    never depend on a broken state file."""
+    from aisc.adapters.container_registry import list_containers_readonly
+
+    try:
+        return bool(list_containers_readonly(reg_root))
+    except Exception:
+        return True
 
 
 def _wait_ready(
@@ -982,6 +1002,15 @@ def start_runtime(
     ws_key = workspace_key_for(canonical_workspace)
     container_name = container_name_for(runtime_id)
     reg_root = _resolve_registry_root(canonical_workspace, registry_root)
+
+    # S8d: no registry history for this workspace ⇒ its first-ever start
+    # (cold) — widen the ready wait. Explicit overrides win.
+    if ready_timeout == _READY_DEFAULT_TIMEOUT and not _registry_has_history(reg_root):
+        ready_timeout = _READY_COLD_TIMEOUT
+        from aisc.applog import append_event as _append
+
+        _append("runtime_cold_start", source="cli", runtime_id=runtime_id,
+                ready_timeout=ready_timeout)
 
     _require_docker(executor)
     _require_image(image, executor)

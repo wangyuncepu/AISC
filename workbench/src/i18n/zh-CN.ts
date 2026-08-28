@@ -110,6 +110,8 @@ export const zhCN = {
   // --- start progress (StartProgress.vue) ---
   "start.msg": "正在启动 Runtime… {sec}s",
   "start.hint": "CLI 未提供分阶段日志，此处显示总耗时。",
+  "start.slowHint": "仍在启动——首次启动需要初始化容器环境，可能需要最长 3 分钟，请耐心等待。",
+  "start.cancel": "取消启动",
   "start.cancelled": "正在检查 Runtime 状态…{state}",
   "start.cancelledNotFound": "无可运行资源。",
   "start.cancelledExists": "Runtime 已创建（container {name}），可保留。",
