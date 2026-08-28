@@ -248,6 +248,102 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(resolved.source, "cache")
         self.assertEqual(resolved.tag, "v5.9.0")
 
+    # --- 2.1.7 #37: last-resolved receipt fallback (offline last resort) ---
+
+    def write_receipt(self, resolved: ResolvedRelease) -> None:
+        """Leave ONLY the last-resolved receipt (a successful resolve also
+        writes the TTL ``releases.json`` cache, which would otherwise serve
+        the request first — the receipt path is the target under test)."""
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        (self.cache_dir / "last-resolved.json").write_text(
+            json.dumps(resolved.to_manifest(resolved_at="2026-07-01T00:00:00Z")),
+            encoding="utf-8",
+        )
+        releases = self.cache_dir / "releases.json"
+        if releases.exists():
+            releases.unlink()
+
+    def test_network_failure_falls_back_to_last_resolved_receipt(self):
+        # Offline AND no releases.json cache: a receipt from a PREVIOUS
+        # successful build (any age) still pins the build (2.1.7 #37 —
+        # network-restricted upgrade/rebuild must not hard-fail).
+        live = self.resolver(fake_transport([[V510]]))
+        self.write_receipt(live.resolve(version="latest"))
+
+        def down(url, headers, timeout):
+            raise ResolveError(CC_SWITCH_ERROR_NETWORK, "down")
+
+        resolved = self.resolver(down).resolve(version="latest")
+        self.assertEqual(resolved.tag, "v5.10.1")
+        self.assertEqual(resolved.source, "cache")  # surfaced, never silent
+
+    def test_receipt_fallback_serves_explicit_version_any_age(self):
+        live = self.resolver(fake_transport([[V510]]))
+        self.write_receipt(live.resolve(version="v5.10.1"))
+
+        def down(url, headers, timeout):
+            raise ResolveError(CC_SWITCH_ERROR_NETWORK, "down")
+
+        resolved = self.resolver(down, ttl_s=0).resolve(version="v5.10.1")
+        self.assertEqual(resolved.tag, "v5.10.1")
+        self.assertEqual(resolved.source, "cache")
+
+    def test_receipt_version_mismatch_never_used(self):
+        # An explicit request for a DIFFERENT version must not silently build
+        # the receipt's pin — fail closed with the network error instead.
+        live = self.resolver(fake_transport([[V510]]))
+        self.write_receipt(live.resolve(version="v5.10.1"))
+
+        def down(url, headers, timeout):
+            raise ResolveError(CC_SWITCH_ERROR_NETWORK, "down")
+
+        with self.assertRaises(ResolveError) as ctx:
+            self.resolver(down).resolve(version="v5.9.0")
+        self.assertEqual(ctx.exception.code, CC_SWITCH_ERROR_NETWORK)
+
+    def test_receipt_arch_mismatch_never_used(self):
+        base = json.loads(json.dumps(
+            self.resolver(fake_transport([[V510]])).resolve(version="latest").to_manifest()
+        ))
+        base.update({
+            "arch": "arm64",
+            "asset_name": "cc-switch-cli-v5.10.1-linux-arm64-musl.tar.gz",
+        })
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        (self.cache_dir / "last-resolved.json").write_text(json.dumps(base), encoding="utf-8")
+        (self.cache_dir / "releases.json").unlink()  # isolate the receipt path
+
+        def down(url, headers, timeout):
+            raise ResolveError(CC_SWITCH_ERROR_NETWORK, "down")
+
+        with self.assertRaises(ResolveError) as ctx:
+            self.resolver(down).resolve(version="latest")
+        self.assertEqual(ctx.exception.code, CC_SWITCH_ERROR_NETWORK)
+
+    def test_no_cache_no_receipt_hard_fails_with_guidance(self):
+        def down(url, headers, timeout):
+            raise ResolveError(CC_SWITCH_ERROR_NETWORK, "down")
+
+        with self.assertRaises(ResolveError) as ctx:
+            self.resolver(down).resolve(version="latest")
+        self.assertEqual(ctx.exception.code, CC_SWITCH_ERROR_NETWORK)
+        # Guidance for the network-restricted first build (#37): what to
+        # check, and the offline escape hatch.
+        self.assertIn("api.github.com", ctx.exception.message)
+        self.assertIn("--cc-switch-manifest", ctx.exception.message)
+
+    def test_manifest_failure_does_not_fall_back_to_receipt(self):
+        # --cc-switch-manifest short-circuits ALL network/cache I/O: a broken
+        # manifest is a genuine manifest problem, never a fallback trigger.
+        live = self.resolver(fake_transport([[V510]]))
+        self.write_receipt(live.resolve(version="latest"))
+
+        bad = Path(self.tmp.name) / "bad.json"
+        bad.write_text("{}", encoding="utf-8")
+        with self.assertRaises(ResolveError) as ctx:
+            self.resolver(fake_transport([[V510]])).resolve(manifest_path=bad)
+        self.assertEqual(ctx.exception.code, CC_SWITCH_ERROR_BAD_MANIFEST)
+
     def test_offline_manifest_roundtrip_and_mismatch(self):
         r = self.resolver(fake_transport([[V510]]))
         resolved = r.resolve(version="latest")
