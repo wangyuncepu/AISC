@@ -147,14 +147,31 @@ fn is_temp_file(relative: &str) -> bool {
         || name.starts_with("~$")
 }
 
-/// Classify a notify event kind into a stable change type.
-fn change_type_of(kind: &EventKind) -> &'static str {
+/// Classify ONE changed path into a stable change type.
+///
+/// 2026-08-28 manual test ("mv a b"): a rename arrives as TWO events —
+/// `Name(From)` carrying the OLD path and `Name(To)` the NEW (or one `Both`
+/// event with both paths). Classifying the old path as "renamed" is wrong:
+/// it no longer exists — its honest type is "deleted". Only the NEW path is
+/// "renamed".
+fn change_type_of_path(kind: &EventKind, index: usize, total: usize) -> &'static str {
     use notify::event::*;
     match kind {
         EventKind::Create(_) => "created",
-        EventKind::Modify(ModifyKind::Name(_)) => "renamed",
-        EventKind::Modify(_) => "modified",
         EventKind::Remove(_) => "deleted",
+        EventKind::Modify(ModifyKind::Name(role)) => match role {
+            RenameMode::From => "deleted",
+            RenameMode::To => "renamed",
+            RenameMode::Both => {
+                if total == 2 && index == 0 {
+                    "deleted"
+                } else {
+                    "renamed"
+                }
+            }
+            _ => "renamed",
+        },
+        EventKind::Modify(_) => "modified",
         _ => "changed",
     }
 }
@@ -235,9 +252,11 @@ impl WorkspaceWatcher {
                 Ok(e) => e,
                 Err(_) => return,
             };
-            let change_type = change_type_of(&event.kind).to_string();
             let change_kind = change_kind_of(&event.kind).to_string();
-            for path in event.paths {
+            let total_paths = event.paths.len();
+            for (path_index, path) in event.paths.into_iter().enumerate() {
+                let change_type =
+                    change_type_of_path(&event.kind, path_index, total_paths).to_string();
                 let Some(rel) = relative_of(&ws_closure, &path) else {
                     continue;
                 };
@@ -466,10 +485,44 @@ mod tests {
     #[test]
     fn change_type_classification() {
         use notify::event::*;
-        assert_eq!(change_type_of(&EventKind::Create(CreateKind::File)), "created");
-        assert_eq!(change_type_of(&EventKind::Modify(ModifyKind::Name(RenameMode::To))), "renamed");
-        assert_eq!(change_type_of(&EventKind::Modify(ModifyKind::Data(DataChange::Any))), "modified");
-        assert_eq!(change_type_of(&EventKind::Remove(RemoveKind::File)), "deleted");
+        assert_eq!(
+            change_type_of_path(&EventKind::Create(CreateKind::File), 0, 1),
+            "created"
+        );
+        // Rename roles: the OLD path (From) is a deletion, the NEW (To) is a
+        // rename; a Both event splits by path index (2026-08-28 "mv" test).
+        assert_eq!(
+            change_type_of_path(&EventKind::Modify(ModifyKind::Name(RenameMode::From)), 0, 1),
+            "deleted"
+        );
+        assert_eq!(
+            change_type_of_path(&EventKind::Modify(ModifyKind::Name(RenameMode::To)), 0, 1),
+            "renamed"
+        );
+        assert_eq!(
+            change_type_of_path(
+                &EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+                0,
+                2
+            ),
+            "deleted"
+        );
+        assert_eq!(
+            change_type_of_path(
+                &EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+                1,
+                2
+            ),
+            "renamed"
+        );
+        assert_eq!(
+            change_type_of_path(&EventKind::Modify(ModifyKind::Data(DataChange::Any)), 0, 1),
+            "modified"
+        );
+        assert_eq!(
+            change_type_of_path(&EventKind::Remove(RemoveKind::File), 0, 1),
+            "deleted"
+        );
     }
 
     #[test]
