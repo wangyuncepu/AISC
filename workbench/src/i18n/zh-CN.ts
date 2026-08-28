@@ -134,6 +134,8 @@ export const zhCN = {
   "build.title": "构建镜像 {tag}",
   "build.logEmpty": "（等待 Docker 输出… 构建可能需要十几分钟）",
   "build.dockerError": "Docker 引擎未运行，构建无法开始。请先启动 Docker（如 Docker Desktop 已安装）。",
+  "build.cancel": "取消构建",
+  "build.durationHint": "初次构建需下载基础镜像并安装依赖，通常需要 10–20 分钟；之后的增量构建通常只需几分钟。",
   "build.backToSummary": "返回摘要",
 
   // --- conflict manager (ConflictManager.vue) ---

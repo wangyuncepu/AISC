@@ -116,13 +116,16 @@ watch(
         <div v-if="determinate" class="fill" :style="{ width: `${barPercent}%` }" />
       </div>
       <p v-if="summary && building" class="summary" :title="summary">{{ summary }}</p>
+      <!-- S8c (VM retest feedback #3): set the wait expectation — a cold
+           first build downloads base images and installs dependencies. -->
+      <p v-if="building" class="hint">{{ t("build.durationHint") }}</p>
     </div>
 
     <p v-if="store.buildError" class="err">{{ store.buildError.message }}</p>
     <p v-if="dockerError" class="err">{{ t("build.dockerError") }}</p>
 
     <div class="actions">
-      <button v-if="building" class="danger" @click="store.cancelBuild()">Cancel</button>
+      <button v-if="building" class="danger" @click="store.cancelBuild()">{{ t("build.cancel") }}</button>
       <template v-else>
         <button v-if="dockerError" class="primary" :disabled="store.dockerStarting" @click="store.startDockerAndRepreflight()">
           {{ store.dockerStarting ? t("summary.startingDocker") : t("summary.startDocker") }}
@@ -207,6 +210,9 @@ watch(
   margin: 0; font-family: var(--font-mono); font-size: var(--font-xs);
   color: var(--text-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hint {
+  margin: 0; font-size: var(--font-xs); color: var(--text-muted);
 }
 @media (prefers-reduced-motion: reduce) {
   .pct.pulsing, .bar.indeterminate.running::after { animation: none; }

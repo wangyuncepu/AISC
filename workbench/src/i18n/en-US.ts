@@ -134,6 +134,8 @@ export const enUS: Record<string, string> = {
   "build.title": "Building image {tag}",
   "build.logEmpty": "(Waiting for Docker output… the build may take a while)",
   "build.dockerError": "Docker engine is not running; the build cannot start. Start Docker first (e.g. Docker Desktop).",
+  "build.cancel": "Cancel build",
+  "build.durationHint": "A first build downloads base images and installs dependencies — typically 10–20 minutes. Later incremental builds usually take a few minutes.",
   "build.backToSummary": "Back to summary",
 
   // --- conflict manager (ConflictManager.vue) ---
