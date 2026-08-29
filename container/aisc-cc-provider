@@ -1243,6 +1243,17 @@ def _live_fetch_catalog_ids(
         ids = _openai_compatible_models(
             base_url.strip(), api_key, timeout=3.0, bearer_only=True
         )
+        # S9b diagnostic: log what the live fetch actually did, so a /model
+        # miss is explainable without a debugger (written to the shared
+        # /tmp log area, best-effort).
+        try:
+            with open("/tmp/aisc-live-catalog.log", "a") as _log:
+                _log.write(
+                    f"fetch base={base_url} key={'yes' if api_key else 'NO'} "
+                    f"→ {len(ids) if ids else 0} ids\n"
+                )
+        except OSError:
+            pass
         if ids:
             return list(ids)
     return []
