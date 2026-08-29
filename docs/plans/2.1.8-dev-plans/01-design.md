@@ -1,6 +1,6 @@
 # v2.1.8 设计文档：Agent 历史对话管理 + Bash 体验增强
 
-> 日期：2026-08-29 · 状态：待审阅（v3，审阅 v2 的 4 阻塞 + 5 高优已逐项回应）
+> 日期：2026-08-29 · 状态：待审阅（v4，审阅 v3 的 3 P0 + 4 P1 已逐项回应）
 > 方案 A（薄层直读）
 
 ## 0. 审阅回应摘要
@@ -36,7 +36,7 @@
 | timestamp 字段 | 每行 `timestamp`（ISO 8601） | 每行 `timestamp`（ISO 8601） |
 | 原生 title | 无 | 无 |
 | resume argv | `claude --resume <session-id>` | `codex resume <session-id>` |
-| max_file_size | 10MB（超限跳过，标 `resumable:false`） | 10MB（同左） |
+| max_file_size | 10MB（超限**不全文解析**：头部 200 行扫描出 title/time，返回占位 summary，`resumable:false` + `unavailable_reason=file_too_large`，`message_count:null`——详见 §1e） | 同左 |
 | malformed 行策略 | 跳过不完整 JSON 行；零可解析行 → 排除出列表 | 同左 |
 
 ### 1b. CLI 命令（冻结）
@@ -121,17 +121,32 @@ aisc conversation resume --workspace <path> --conversation-id <id> --agent <clau
 }
 ```
 
-### 1f. Rust IPC（冻结）
+### 1f. Rust IPC（v4 冻结：resume 直接接管 PTY）
 
 ```rust
 #[tauri::command]
-pub async fn conversation_list(workspace: String) -> Result<ConversationListResult, WorkbenchError>;
+pub async fn conversation_list(
+    workspace: String,
+) -> Result<ConversationListResult, WorkbenchError>;
 
+// 方案 A（冻结）：resume 即 open_session 的 resume 变体——同通道、同 PTY
+// 事件模型。runtime_id 由前端传入（与普通建 tab 相同来源：当前活跃
+// runtime）；on_event 是标准 PtyEvent Channel，agent 输出走既有 pane 流。
 #[tauri::command]
 pub async fn conversation_resume(
-    workspace: String, conversation_id: String, agent: String
+    app: AppHandle,
+    runtime_id: String,
+    workspace: String,
+    conversation_id: String,
+    agent: String,
+    on_event: Channel<PtyEvent>,
 ) -> Result<ConversationResumeResult, WorkbenchError>;
 ```
+
+内部实现 = `open_session` 复用：Rust `session_open_argv` 在有
+`resume_conversation_id` 时为 wrapper argv 追加 `--resume-id`；其余
+（reserve/spawn/事件）完全同现有路径。**无两阶段 token**（方案 B 否决：
+token 生命周期/清理/超时是净增复杂度，收益为零）。
 
 TS 侧对应类型：
 ```typescript
@@ -174,12 +189,27 @@ os.environ["AISC_TERMINAL_SESSION_ID"] = args.session_id
 
 Rust `open_session` 增加可选 `resume_conversation_id` 参数 → 透传 wrapper。
 
-**失败行为（冻结，取「不建 tab」）**：resume 失败（conversation 不存在 /
-provider 不支持 / 容器版本过旧）→ wrapper 以结构化错误退出（exit 3 +
-`AISC_ERR_CONVERSATION_UNRESUMABLE` 语义码）→ `conversation_resume` IPC 返回
-错误信封 → **前端不创建任何 tab**，在对话行内显示失败提示（行内，非弹窗）。
-理由：恢复失败时不存在可用终端会话，留 tab 只会制造来源不明的死页签；无独立
-retry 交互（用户重新点击行即重试）。
+**失败模型（v4 混合冻结——同步预校验 vs 异步 provider 失败分开处理）**：
+
+| 阶段 | 失败类型 | 行为 |
+|---|---|---|
+| PTY spawn **前**（wrapper 同步预校验） | conversation 文件不存在（对照挂载的 claude/codex 目录）/ `--resume-id` 传给不支持的 agent | wrapper 结构化错误退出（exit 3 + `AISC_ERR_CONVERSATION_UNRESUMABLE`）→ **sidecar 信封错误 → IPC 返回错误 → 前端不建 tab**，对话行内提示。此阶段失败发生在 spawn 之前，无 PTY 可泄漏 |
+| PTY spawn **后**（provider 内部） | 会话文件损坏、provider 版本不支持该 id、resume 后立即崩溃 | 走**现有 session-exit 生命周期**：tab 已建（PTY 在），agent 退出事件照常上屏——与普通 agent 启动失败完全一致（用户看到退出信息，可关 tab） |
+
+理由：open_session 的 reserve→spawn→返回 是既有原子路径（session.rs:347-483），
+「spawn 后不建 tab」需要新握手协议，净增复杂度买不到体验；预校验把可同步判定
+的失败（占绝大多数：点错/已删）拦在 spawn 前，剩余长尾沿用成熟失败 UX。
+
+**预校验实现**（wrapper 内，spawn 前）：
+```python
+if args.resume_id:
+    if agent == "claude":
+        base = Path(os.environ.get("CLAUDE_CONFIG_DIR", "")) / "projects"
+    elif agent == "codex":
+        base = Path(os.environ.get("CODEX_CONFIG_DIR", "")) / "sessions"
+    if not any(base.rglob(f"*{args.resume_id}*")):
+        _fail(3, "AISC_ERR_CONVERSATION_UNRESUMABLE", args.resume_id)
+```
 
 ## 3. Bash 体验增强
 
@@ -202,8 +232,11 @@ data-root 契约文档同步注记，不改挂载目标（改挂载会破坏存�
 ```
 start_runtime (Python, runtime.py)
   └─ docker create 追加 env：
-       -e AISC_WORKSPACE_HASH=<ws_key>     # workspace_key_for(canonical)
-       -e AISC_SCOPE=project|temporary     # 已有
+       -e AISC_WORKSPACE_HASH=<workspace_key>  # = workspace_key_for() 原始
+         # SHA-256 hex（区别于 data-root 目录名 sha256-v1-<hex>；后者仅用于
+         # 定位目录，SQLite 字段与诊断日志一律用原始 hex
+       （scope 沿用现有 -e CLI_SCOPE=project|temporary，runtime.py:1139——
+         不新造 AISC_SCOPE；bashrc 经 entrypoint 的 SCOPE 间接可得，不直接消费）
 
 entrypoint.sh（idle 分支，runtime-context 写入处）
   ├─ export AISC_BASH_HISTORY_DIR=/root/.local/state/cc-switch  # 挂载点常量
@@ -254,6 +287,13 @@ if agent == "bash":
 bashrc 内容：
 ```bash
 # /usr/local/share/aisc/bashrc — AISC-managed bash initialization
+# 0. RECURSION GUARD (P0)：wrapper --rcfile 与 /root/.bashrc shim 互指
+#    （rcfile source ~/.bashrc → shim source rcfile）。守卫保证只加载一次。
+if [ "${AISC_BASHRC_LOADED:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
+export AISC_BASHRC_LOADED=1
+
 # 1. Source user/system rc if present (non-blocking)
 [ -f /etc/bash.bashrc ] && source /etc/bash.bashrc
 [ -f ~/.bashrc ] && source ~/.bashrc
@@ -281,6 +321,7 @@ fi
 if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
   _aisc_prev_cmd=""
   _aisc_log_history() {
+    local _aisc_exit=$?                        # FIRST line: capture BEFORE anything
     local cmd
     cmd="$(history 1 | sed 's/^ *[0-9]* *//')"
     [ -z "$cmd" ] && return
@@ -290,27 +331,50 @@ if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
     AISC_HIST_WS_HASH="$AISC_WORKSPACE_HASH" \
     AISC_HIST_SESSION_ID="$AISC_TERMINAL_SESSION_ID" \
     AISC_HIST_CMD="$cmd" AISC_HIST_CWD="$PWD" \
-    AISC_HIST_EXIT="$?" \
+    AISC_HIST_EXIT="$_aisc_exit" \
     python3 /usr/local/bin/lib/aisc_bash_history.py append 2>/dev/null || true
   }
-  # Append to existing PROMPT_COMMAND, don't overwrite
-  PROMPT_COMMAND="_aisc_log_history;${PROMPT_COMMAND}"
+  # Append to existing PROMPT_COMMAND, don't overwrite; the guard above
+  # makes double-source impossible, so no double-append.
+  case ";$PROMPT_COMMAND;" in
+    *;_aisc_log_history;*) ;;                      # already present
+    *) PROMPT_COMMAND="_aisc_log_history;${PROMPT_COMMAND}" ;;
+  esac
+  # 退出码透传：hook 不得改变用户 prompt 行为
+  return $_aisc_exit 2>/dev/null || true
 fi
 
-helper（镜像新增 /usr/local/bin/lib/aisc_bash_history.py）：
+helper（镜像新增 /usr/local/bin/lib/aisc_bash_history.py；子命令冻结）：
+
 ```python
-conn = sqlite3.connect(os.environ["AISC_HIST_DB"], timeout=5)
-conn.execute("PRAGMA busy_timeout=5000")
-conn.execute(
-    "INSERT INTO history (workspace_hash, terminal_session_id, cmd, cwd,"
-    " started_at, exit_code, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    (os.environ["AISC_HIST_WS_HASH"], os.environ.get("AISC_HIST_SESSION_ID", ""),
-     os.environ["AISC_HIST_CMD"], os.environ["AISC_HIST_CWD"],
-     datetime.now(timezone.utc).isoformat(), int(os.environ.get("AISC_HIST_EXIT", "0") or 0),
-     "terminal"),
+# init    : 幂等建库（CREATE TABLE/INDEX IF NOT EXISTS + WAL + busy_timeout）
+# append  : 若表缺失先隐式 init（同事务内，幂等）→ 参数化 INSERT
+# retain  : 保留最近 10000 条（entrypoint 启动时调用一次）
+
+_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS history ("
+    " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    " workspace_hash TEXT NOT NULL, terminal_session_id TEXT,"
+    " cmd TEXT NOT NULL, cwd TEXT, started_at TEXT,"
+    " exit_code INTEGER, source TEXT NOT NULL DEFAULT 'terminal');"
+    "CREATE INDEX IF NOT EXISTS idx_history_ts ON history(started_at DESC);"
+    "CREATE INDEX IF NOT EXISTS idx_history_cmd ON history(cmd);"
 )
-conn.commit(); conn.close()
+
+def _connect(db):
+    conn = sqlite3.connect(db, timeout=5)
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA journal_mode=WAL")   # 幂等
+    conn.executescript(_SCHEMA)               # IF NOT EXISTS → 幂等
+    return conn
+
+# append: _connect → INSERT(?) 参数化 → commit
+# retain: DELETE FROM history WHERE id NOT IN
+#         (SELECT id FROM history ORDER BY id DESC LIMIT 10000)
 ```
+
+**初始化责任（冻结）**：`append` 首次调用即幂等初始化（不依赖 init 先行）；
+`init` 仅供显式预热/诊断；`retain` 由 entrypoint 启动时调用一次。
 
 **env 注入链（补 §3a-i）**：
 - `AISC_WORKSPACE_HASH`：start_runtime docker create 时 `-e` 注入（容器级，全 PTY 共享）
@@ -362,7 +426,8 @@ CREATE INDEX IF NOT EXISTS idx_history_cmd ON history(cmd);
 **并发策略**：
 - WAL 模式：`PRAGMA journal_mode=WAL`（初始化时设置一次）
 - busy timeout：`PRAGMA busy_timeout=5000`（每连接）
-- 多终端并发：WAL 允许并发读 + 串行写；sqlite3 CLI 每次调用独立连接（auto-commit）
+- 多终端并发：Python helper 每次独立连接；WAL 允许并发读 + 串行写 +
+  busy_timeout=5000 兜底
 - HISTFILE 并发：`histappend` 模式下 bash 以 O_APPEND 追加，行级原子性由内核保证
 
 **Retention**：保留最近 10000 条（entrypoint 启动时 `DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY id DESC LIMIT 10000)`）。
@@ -476,7 +541,8 @@ After completing a task, suggest 2-3 logical next steps in concise Chinese.
 | Claude resume argv 生成 | `claude --resume <id>` |
 | Codex resume argv 生成 | `codex resume <id>` |
 | conversation_id ≠ terminal_session_id | 新 UUID 生成，原 ID 保留 |
-| 恢复不存在的 conversation_id | 错误信封；**无 tab 创建**；对话行内提示 |
+| 恢复不存在的 conversation_id | 预校验拦截：错误信封；**无 tab**；行内提示 |
+| resume 后 provider 立即失败（损坏会话） | tab 已建，走现有 session-exit 失败 UX |
 | resume 会话文件损坏 | 错误信封 |
 | 无运行时容器时调 resume | 明确错误码 |
 | 重复点击恢复 | 第二次被防抖拦截 |
