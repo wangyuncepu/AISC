@@ -1,7 +1,7 @@
 # v2.1.8 设计文档：Agent 历史对话管理 + Bash 体验增强
 
-> 日期：2026-08-29 · 状态：待审阅（v2，补齐契约后重写）
-> 方案 A（薄层直读）· 审阅 v1 的 P0/P1/P2 已逐项回应
+> 日期：2026-08-29 · 状态：待审阅（v3，审阅 v2 的 4 阻塞 + 5 高优已逐项回应）
+> 方案 A（薄层直读）
 
 ## 0. 审阅回应摘要
 
@@ -61,11 +61,14 @@ aisc conversation resume --workspace <path> --conversation-id <id> --agent <clau
       "started_at": "2026-08-29T10:00:00Z",
       "last_at": "2026-08-29T10:05:00Z",
       "message_count": 12,
+      "file_size": 81920,
       "resumable": true
     }
   ]
 }
 ```
+
+`unavailable_reason?: "file_too_large" | "malformed" | "unsupported"`（resumable=false 时必有）。
 
 **resume 输出**：信封 `{terminal_session_id: "<new-uuid>", agent, conversation_id}` 或错误。
 
@@ -76,28 +79,47 @@ aisc conversation resume --workspace <path> --conversation-id <id> --agent <clau
 | `conversation_id` | provider 原生会话 ID（Claude/Codex 的 UUID） | provider CLI 写入 JSONL 文件名 |
 | `terminal_session_id` | Workbench PTY 生命周期 UUID（新生成） | Rust `uuid()` |
 
-恢复流程：
+恢复流程（参数命名统一：wrapper 层一律 `--resume-id`）：
 1. 前端调 IPC `conversation_resume(workspace, conversation_id, agent)`
 2. Rust 生成新 `terminal_session_id = uuid()`
-3. Rust 走现有 `open_session` 路径，wrapper 传 `--resume <conversation_id>` 作为 agent 额外参数
-4. wrapper 对 claude 执行 `claude --resume <id>`；对 codex 执行 `codex resume <id>`
+3. Rust 调现有 `open_session` 路径，wrapper argv 追加 `--resume-id <conversation_id>`
+4. wrapper 内部转换 provider argv：
+   - claude → `claude --resume <conversation_id>`
+   - codex  → `codex resume <conversation_id>`
 5. 返回 `{terminal_session_id, conversation_id, agent}` — 前端用 terminal_session_id 管理新页签
 
 ### 1d. 标题提取（脱敏规范）
 
 1. **优先级**：provider 原生 title/summary 字段（当前均无）→ 首条用户消息
-2. **提取**：取消息内容文本；`message.content` 为列表时取首个 `type='text'` 块
+2. **提取（按 provider 分派，与 §1a 格式表一一对应）**：
+   - **Claude**：`message.content` 为 string → 直接用；为 list → 取首个
+     `type == "text"` 块的 `text`
+   - **Codex**：`payload.content` 为 list → 取首个 `type == "input_text"` 块的 `text`
 3. **清洗**：
    - 删除换行符、ANSI escape、控制字符（`\x00-\x1f`）
    - 截断至 80 Unicode scalar values（不是字节）
 4. **脱敏**：匹配 `sk-[a-zA-Z0-9]{20,}` / `Bearer\s+\S+` / `api[_-]?key.*['\"]\s*\w{16,}` → 替换为 `[REDACTED]`
-5. **降级**：提取失败 → `"(无法读取)"`；单文件失败不阻断列表（该行标 `resumable:false`）
+5. **降级**：提取失败 → `"(无法读取)"`；单文件失败不阻断列表（按 §1e 标注）
+6. **测试**：Codex fixture 的 title 断言 == 真实用户输入文本（非仅「不崩溃」）
 
-### 1e. 过滤规则（替代 message_count < 2）
+### 1e. 过滤与不可恢复标注（替代 message_count < 2）
 
-- **排除条件**：零条可解析的用户消息（`type=user` 且 `message.role=user` 且有非空内容）
-- **保留单条用户消息**的会话，标 `resumable: true`（claude/codex 均可恢复）
-- **排除条件**：文件 > 10MB（性能护栏，标 `resumable:false` 而非静默丢弃）
+- **排除出列表**（不返回）：零条可解析的用户消息；零可解析行（完全 malformed）
+- **保留并标注**（返回 summary，`resumable:false` + `unavailable_reason`）：
+  - `file_too_large`（>10MB）：仍返回记录；title/time 从**前 200 个可解析行**（流式
+    头部扫描）提取，`message_count: null`；`file_size` 照实
+  - `malformed`：部分行损坏但存在可解析用户消息 → 正常 title，`resumable:false`
+  - `unsupported`：agent 非 claude/codex（防御，当前不可达）
+- **保留单条用户消息**的会话：`resumable: true`（claude/codex 均可恢复）
+
+**schema 增补**（list 输出与 TS 类型同步）：
+```json
+{
+  "file_size": 81920,
+  "unavailable_reason": "file_too_large",   // 可缺省；resumable=false 时必有
+  "message_count": 12                        // file_too_large 时为 null
+}
+```
 
 ### 1f. Rust IPC（冻结）
 
@@ -119,49 +141,90 @@ interface ConversationSummary {
   title: string;
   started_at: string | null;
   last_at: string | null;
-  message_count: number;
+  message_count: number | null;   // file_too_large 时 null
+  file_size: number;
   resumable: boolean;
+  unavailable_reason?: "file_too_large" | "malformed" | "unsupported";
 }
 ```
 
 ## 2. wrapper 扩展
 
-`aisc-session-wrapper open` 增加可选 `--resume-id <conversation_id>` 参数：
+`aisc-session-wrapper open` 增加可选 `--resume-id <conversation_id>`（唯一命名，
+全文一致；provider 专属形态只在 wrapper 内部出现）：
 
 ```python
-# wrapper 内部
+# wrapper argv（冻结）
+# open --session-id <terminal_session_id> --runtime-id <runtime_id>
+#      --agent <agent> [--resume-id <conversation_id>]
+
 if args.resume_id:
     if agent == "claude":
         argv = ["claude", "--resume", args.resume_id]
     elif agent == "codex":
         argv = ["codex", "resume", args.resume_id]
+    else:
+        raise UnsupportedResume(agent)  # bash/cc-switch 不支持 --resume-id
 else:
     argv = AGENT_BINARIES[agent]  # 现有路径
+
+# per-PTY 环境注入（SQLite 链用，见 §3c）
+os.environ["AISC_TERMINAL_SESSION_ID"] = args.session_id
 ```
 
 Rust `open_session` 增加可选 `resume_conversation_id` 参数 → 透传 wrapper。
 
-**容错**：resume 失败（会话不存在/provider 版本不支持）→ wrapper 退出码非零 → 现有 session-exit 流程报错 → 前端显示失败 tab（与普通 agent 启动失败一致）。
+**失败行为（冻结，取「不建 tab」）**：resume 失败（conversation 不存在 /
+provider 不支持 / 容器版本过旧）→ wrapper 以结构化错误退出（exit 3 +
+`AISC_ERR_CONVERSATION_UNRESUMABLE` 语义码）→ `conversation_resume` IPC 返回
+错误信封 → **前端不创建任何 tab**，在对话行内显示失败提示（行内，非弹窗）。
+理由：恢复失败时不存在可用终端会话，留 tab 只会制造来源不明的死页签；无独立
+retry 交互（用户重新点击行即重试）。
 
 ## 3. Bash 体验增强
 
-### 3a. 容器路径契约（runtime context 扩展）
+### 3a. 容器路径契约（v3 修正：复用现有挂载，不新建）
 
-宿主 `start_runtime` 在 runtime-context.json 中新增：
-```json
-{
-  "workspace_state_dir": "/root/.aisc-state"
-}
+**实际挂载（runtime.py:1184 已有，不改）**：
+```
+<workspace_state_dir>/runtime  →  /root/.local/state/cc-switch
 ```
 
-entrypoint 将该路径同步导出为环境变量：
-```bash
-export AISC_WORKSPACE_STATE_DIR="$(jq -r '.workspace_state_dir' /run/aisc/runtime-context.json 2>/dev/null || echo '')"
-export AISC_BASH_HISTORY_FILE="${AISC_WORKSPACE_STATE_DIR}/runtime/.bash_history"
-export AISC_BASH_HISTORY_DB="${AISC_WORKSPACE_STATE_DIR}/runtime/bash_history.db"
+**裁决：选项 2** —— Bash runtime 数据复用该挂载。目录名 `cc-switch` 是历史遗产，
+v3 起其定位扩展为「工作区 runtime 持久化目录」（承载 cc-switch 状态 + Bash 历史）；
+data-root 契约文档同步注记，不改挂载目标（改挂载会破坏存量卷）。
+
+**宿主内路径**：`workspaces/<hash>/runtime/`
+**容器内路径**：`/root/.local/state/cc-switch/`
+
+### 3a-i. 完整传递链（冻结）
+
+```
+start_runtime (Python, runtime.py)
+  └─ docker create 追加 env：
+       -e AISC_WORKSPACE_HASH=<ws_key>     # workspace_key_for(canonical)
+       -e AISC_SCOPE=project|temporary     # 已有
+
+entrypoint.sh（idle 分支，runtime-context 写入处）
+  ├─ export AISC_BASH_HISTORY_DIR=/root/.local/state/cc-switch  # 挂载点常量
+  ├─ export AISC_BASH_HISTORY_FILE=$AISC_BASH_HISTORY_DIR/.bash_history
+  ├─ export AISC_BASH_HISTORY_DB=$AISC_BASH_HISTORY_DIR/bash_history.db
+  └─ runtime-context.json 增字段：bash_history_file / bash_history_db
+
+aisc-session-wrapper open（每个 PTY 一次）
+  └─ exec 前导出：AISC_TERMINAL_SESSION_ID=<args.session_id>
+     （per-PTY 正确性：docker exec 每次新进程，wrapper 从自身 --session-id 注入）
+
+bash --rcfile /usr/local/share/aisc/bashrc
+  └─ 读 AISC_BASH_HISTORY_FILE / _DB / _WORKSPACE_HASH / _TERMINAL_SESSION_ID
 ```
 
-**挂载方式**：`workspaces/<hash>/runtime/` 已是 bind mount（容器内 `/root/.aisc-state/runtime/`）——project scope 通过 data-root 挂载链已有；temporary scope 无挂载（HISTFILE 退化为容器内存，SQLite 跳过）。
+**作用域差异**：
+- `project`：挂载存在 → HISTFILE + SQLite 均持久（宿主 data root）
+- `temporary`：同路径落在容器层（无挂载）→ 容器删除即失；代码不分支（临时工作区
+  本无持久承诺）
+
+**权限**：挂载目录 root 属主（容器 root 运行，天然可写）。
 
 ### 3b. ble.sh + fzf 安装（可复现）
 
@@ -213,8 +276,9 @@ if [ -f /usr/share/doc/fzf/examples/key-bindings.bash ]; then
   source /usr/share/doc/fzf/examples/key-bindings.bash
 fi
 
-# 5. SQLite history append (fail-open)
-if [ -n "$AISC_BASH_HISTORY_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+# 5. SQLite append via Python helper (参数化 API——shell 不拼 SQL，
+#    免疫引号/换行/Unicode; fail-open)
+if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
   _aisc_prev_cmd=""
   _aisc_log_history() {
     local cmd
@@ -222,23 +286,60 @@ if [ -n "$AISC_BASH_HISTORY_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
     [ -z "$cmd" ] && return
     [ "$cmd" = "$_aisc_prev_cmd" ] && return  # dedupe consecutive
     _aisc_prev_cmd="$cmd"
-    sqlite3 "$AISC_BASH_HISTORY_DB" "
-      INSERT INTO history (workspace_hash, terminal_session_id, cmd, cwd, started_at, exit_code, source)
-      VALUES ('${AISC_WORKSPACE_HASH:-}', '${AISC_TERMINAL_SESSION_ID:-}', 
-              '\''$(echo "$cmd" | sed "s/'/'\\\\''/g")'\'',
-              '$PWD', datetime('now'), $?, 'terminal');
-    " 2>/dev/null || true
+    AISC_HIST_DB="$AISC_BASH_HISTORY_DB" \
+    AISC_HIST_WS_HASH="$AISC_WORKSPACE_HASH" \
+    AISC_HIST_SESSION_ID="$AISC_TERMINAL_SESSION_ID" \
+    AISC_HIST_CMD="$cmd" AISC_HIST_CWD="$PWD" \
+    AISC_HIST_EXIT="$?" \
+    python3 /usr/local/bin/lib/aisc_bash_history.py append 2>/dev/null || true
   }
   # Append to existing PROMPT_COMMAND, don't overwrite
   PROMPT_COMMAND="_aisc_log_history;${PROMPT_COMMAND}"
 fi
+
+helper（镜像新增 /usr/local/bin/lib/aisc_bash_history.py）：
+```python
+conn = sqlite3.connect(os.environ["AISC_HIST_DB"], timeout=5)
+conn.execute("PRAGMA busy_timeout=5000")
+conn.execute(
+    "INSERT INTO history (workspace_hash, terminal_session_id, cmd, cwd,"
+    " started_at, exit_code, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    (os.environ["AISC_HIST_WS_HASH"], os.environ.get("AISC_HIST_SESSION_ID", ""),
+     os.environ["AISC_HIST_CMD"], os.environ["AISC_HIST_CWD"],
+     datetime.now(timezone.utc).isoformat(), int(os.environ.get("AISC_HIST_EXIT", "0") or 0),
+     "terminal"),
+)
+conn.commit(); conn.close()
 ```
 
-**边界**：
-- 非交互 bash（`bash -c`）：不加载 rcfile（`--rcfile` 仅 interactive），不写历史
-- tmux 子 shell：tmux 启动新 shell → 新 bash 进程 → 需 `$TERM` 且 interactive 才走 rcfile；tmux 的默认 shell 不会自动 source（用户可在 tmux 配置中手动 source）
-- 用户自定义 `~/.bashrc`：rcfile 先 source 它，AISC 追加在后（优先级不冲突）
-- ble.sh / fzf 初始化失败：不阻断 bash 启动（`|| true` 保护）
+**env 注入链（补 §3a-i）**：
+- `AISC_WORKSPACE_HASH`：start_runtime docker create 时 `-e` 注入（容器级，全 PTY 共享）
+- `AISC_TERMINAL_SESSION_ID`：wrapper 每个 PTY exec 前导出（per-PTY 正确）；
+  `aisc shell` 直连路径无 wrapper → 无此变量 → helper 跳过写库（HISTFILE 仍生效）
+```
+
+**tmux 闭环（v3）**：镜像 **拥有** `/root/.bashrc`（容器 root fs，非用户工作区文件；
+entrypoint「不改用户 bashrc」的约束针对挂载进来的工作区文件）。镜像层在该文件追加
+受保护 shim（标记块，幂等）：
+
+```bash
+# >>> aisc managed >>>
+if [ -f /usr/local/share/aisc/bashrc ] && [[ $- == *i* ]]; then
+    source /usr/local/share/aisc/bashrc
+fi
+# <<< aisc managed <<<
+```
+
+效果：tmux 新 pane 起交互 bash → 读 `/root/.bashrc` → shim source AISC rcfile →
+**ble.sh / Ctrl+R / HISTFILE / SQLite hook 全部继承**（HISTFILE 经 tmux 环境继承 +
+rcfile 重导出双保险）。wrapper `--rcfile` 与 shim 同源幂等不冲突；用户自有内容写在
+shim 之后不受影响。
+
+**其余边界**：
+- 非交互 bash（`bash -c`）：不加载 rcfile/shim（`[[ $- == *i* ]]` 守卫），不写历史
+- 用户自定义：wrapper 场景 rcfile 先 source `/etc/bash.bashrc` + `~/.bashrc`；
+  shim 场景 AISC 块在前、用户内容在后
+- ble.sh / fzf 初始化失败：不阻断 bash 启动（守卫 + `|| true`）
 - `bash --rcfile` 跳过 `/etc/profile`：rcfile 内显式 source `/etc/bash.bashrc` 弥补
 
 ### 3d. SQLite Schema（冻结）
@@ -302,8 +403,10 @@ interface ConversationSummary {
   title: string;
   started_at: string | null;
   last_at: string | null;
-  message_count: number;
+  message_count: number | null;   // file_too_large 时 null
+  file_size: number;
   resumable: boolean;
+  unavailable_reason?: "file_too_large" | "malformed" | "unsupported";
 }
 ```
 
@@ -373,7 +476,7 @@ After completing a task, suggest 2-3 logical next steps in concise Chinese.
 | Claude resume argv 生成 | `claude --resume <id>` |
 | Codex resume argv 生成 | `codex resume <id>` |
 | conversation_id ≠ terminal_session_id | 新 UUID 生成，原 ID 保留 |
-| 恢复不存在的 conversation_id | 错误信封，无 tab 创建 |
+| 恢复不存在的 conversation_id | 错误信封；**无 tab 创建**；对话行内提示 |
 | resume 会话文件损坏 | 错误信封 |
 | 无运行时容器时调 resume | 明确错误码 |
 | 重复点击恢复 | 第二次被防抖拦截 |
@@ -396,7 +499,7 @@ After completing a task, suggest 2-3 logical next steps in concise Chinese.
 
 - 对话内容预览/浏览（下周期）
 - Workbench 侧命令搜索 UI（SQLite 数据已就位，消费下周期）
-- AISC 侧 codex 提示注入（先试 AGENTS.md prompt 工程）
+- AISC 侧**运行时动态 prompt 注入**（本期仅做 §5 的镜像级可选 AGENTS.md 模板注入）
 - cross-workspace 全局命令历史
 - Claude/Codex 对话合并去重
 
