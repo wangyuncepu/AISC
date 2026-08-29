@@ -1169,6 +1169,17 @@ _LIVE_MODEL_JUNK = (
 _LIVE_APPEND_CAP = 50
 
 
+def _model_version_sort_key(model_id: str) -> list[int]:
+    """Numeric components for version-aware sorting (higher = newer).
+
+    "glm-5.4" → [-5, -4], "glm-5.3" → [-5, -3] → 5.4 sorts first.
+    "kimi-k4" → [-4], "gpt-5.7" → [-5, -7] — cross-family comparison is
+    meaningless but harmless within a single provider's catalog.
+    """
+    import re
+    return [-int(n) for n in re.findall(r"\d+", model_id)]
+
+
 def _merge_live_catalog_models(
     static_models: list[dict[str, Any]], fetched_ids: list[str]
 ) -> list[dict[str, Any]]:
@@ -1196,6 +1207,9 @@ def _merge_live_catalog_models(
         seen.add(mid)
         if len(merged) - len(static_models) >= _LIVE_APPEND_CAP:
             break
+    # S9c (user request): newest models on top of the /model picker —
+    # version-aware descending sort across the merged catalog.
+    merged.sort(key=lambda m: _model_version_sort_key(str(m.get("model") or "")))
     return merged
 
 

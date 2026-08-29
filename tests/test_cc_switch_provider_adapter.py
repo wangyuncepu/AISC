@@ -1298,7 +1298,9 @@ class CodexModelCatalogHookTests(unittest.TestCase):
             static, ["m1"] + [f"gen-{i}" for i in range(80)]
         )
         self.assertEqual(len(merged), 1 + A._LIVE_APPEND_CAP)
-        self.assertEqual(merged[0]["model"], "m1")  # curated stays first
+        # S9c: version-descending — the highest-numbered model sorts first.
+        self.assertEqual(merged[0]["model"], "gen-79")
+        self.assertIn("m1", [m["model"] for m in merged])  # still present
         self.assertEqual(merged[-1]["contextWindow"], 1_000_000)
 
     def test_official_switch_removes_our_key_and_file(self):
