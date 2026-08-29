@@ -866,15 +866,15 @@ class SqliteBackedCliTests(AdapterTestCase):
             db.close()
 
     def test_simple_codex_add_seeds_preset_api_format_meta(self):
-        # The router routes by meta.apiFormat; since S8g every preset
-        # declares openai_responses (upstream add seeds the same value, so
-        # the adapter's meta fix is now inert but must still hold the
-        # declared value — a future preset divergence would re-need it).
+        # The router routes by meta.apiFormat; since S9a every preset
+        # declares anthropic (the router translates Responses to Anthropic).
+        # Upstream add seeds its own default — the adapter must fix the meta
+        # or the fresh row routes wrong.
         self._install_sql_cli()
         A.op_add("codex", {"mode": "simple", "id": "deepseek",
                            "provider": "deepseek", "api_key": "sk-live-1"})
         self.assertEqual(self._row_meta("deepseek", "codex").get("apiFormat"),
-                         "openai_responses")
+                         "anthropic")
 
     def test_codex_edit_restores_row_meta_through_the_dance(self):
         # The re-add seeds upstream defaults (apiFormat=openai_responses);
@@ -1208,10 +1208,9 @@ class CodexModelCatalogHookTests(unittest.TestCase):
         self.assertIn(f'model_catalog_json = "{self.dir / ".codex" / A._CODEX_CATALOG_FILENAME}"', text)
         self.assertLess(text.index("model_catalog_json"), text.index("[model_providers"))
         # window fallback key also lands top-level; deepseek preset is
-        # openai_responses (S8g) → web_search stays ENABLED (the hosted tool
-        # works over native Responses; only the anthropic transform dropped it)
+        # anthropic (S9a) → the dead web_search hosted tool is disabled
         self.assertIn("model_context_window = 1000000", text)
-        self.assertNotIn("web_search", text)
+        self.assertIn('web_search = "disabled"', text)
 
     def test_live_model_1m_suffix_cleaned_to_catalog_slug(self):
         # the user's claude-convention typo ([1m]) is rewritten to the clean id

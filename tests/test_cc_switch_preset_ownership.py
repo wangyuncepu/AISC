@@ -88,7 +88,7 @@ class FixtureDrivenPresetTests(unittest.TestCase):
         # v7 (S8g): codex upstream format flips to openai_responses +
         # codesome joins — existing volumes must refresh, so the format
         # version is part of the revision hash.
-        self.assertEqual(H.PRESET_FORMAT_VERSION, 8)
+        self.assertEqual(H.PRESET_FORMAT_VERSION, 9)
         base_revision = H.preset_revision("claude")
         # A mutated fixture must yield a different revision (refresh triggers).
         mutated = json.loads(json.dumps(deepseek()))
@@ -199,8 +199,7 @@ class CodexModelCatalogTests(unittest.TestCase):
         # S8g (2026-08-29): codex presets speak Responses DIRECTLY to the
         # OpenAI-side base (official guides/responses_api) — no translation.
         self.assertIn("auth", settings)
-        self.assertIn('base_url = "https://api.deepseek.com"', settings["config"])
-        self.assertNotIn("/anthropic", settings["config"])
+        self.assertIn('base_url = "https://api.deepseek.com/anthropic"', settings["config"])
         self.assertIn('wire_api = "responses"', settings["config"])
         self.assertIn("model_context_window = 1000000", settings["config"])
 
@@ -219,22 +218,24 @@ class CodexModelCatalogTests(unittest.TestCase):
 
 
 class S8gUpstreamFormatTests(unittest.TestCase):
-    """S8g (user ruling + live-verified 2026-08-29): every codex preset
-    upstream is the OpenAI Responses API (meta.apiFormat=openai_responses);
-    codex rows point at the OpenAI-side base. codesome joins the presets."""
+    """S9a (2026-08-29 user ruling, supersedes S8g): every codex preset
+    upstream is the ANTHROPIC endpoint + format — the cc-switch local router
+    translates codex Responses into Anthropic Messages. codex rows point at
+    each provider anthropic_base_url (one endpoint per provider)."""
 
-    def test_every_preset_declares_openai_responses(self):
+    def test_every_preset_declares_anthropic(self):
         for provider in H.PRESET_PROVIDERS:
             self.assertEqual(
                 provider.get("codex_api_format"),
-                "openai_responses",
-                f"{provider['id']} must declare openai_responses",
+                "anthropic",
+                f"{provider['id']} must declare anthropic",
             )
 
-    def test_codex_rows_use_the_openai_side_base(self):
+    def test_codex_rows_use_the_anthropic_side_base(self):
         for provider in H.PRESET_PROVIDERS:
+            expected = provider.get("anthropic_base_url") or provider["base_url"]
             config = H._settings_config("codex", provider)["config"]
-            self.assertIn(f'base_url = "{provider["base_url"]}"', config)
+            self.assertIn(f'base_url = "{expected}"', config)
 
     def test_anthropic_format_still_routes_to_the_anthropic_base(self):
         # Legacy translation branch: a provider declaring anthropic keeps
@@ -249,12 +250,11 @@ class S8gUpstreamFormatTests(unittest.TestCase):
 
     def test_codesome_preset_shape(self):
         codesome = next(p for p in H.PRESET_PROVIDERS if p["id"] == "codesome")
-        # Codex side: the vendor's Codesome-Group gateway (user-supplied
-        # official shape, 2026-08-29) — Responses-native, gpt-5.6-sol default.
-        self.assertEqual(codesome["base_url"], "https://cc.codesome.ai")
+        # Codex side (S9a): unified on the anthropic endpoint — the SAME
+        # v5.codesome.cn/api the claude side uses; the router translates.
         self.assertEqual(codesome["model"], "gpt-5.6-sol")
         codex_config = H._settings_config("codex", codesome)["config"]
-        self.assertIn('base_url = "https://cc.codesome.ai"', codex_config)
+        self.assertIn('base_url = "https://v5.codesome.cn/api"', codex_config)
         self.assertIn('model = "gpt-5.6-sol"', codex_config)
         # Claude row: env-based, Anthropic side URL, no token written.
         self.assertEqual(codesome["anthropic_base_url"], "https://v5.codesome.cn/api")
@@ -265,9 +265,9 @@ class S8gUpstreamFormatTests(unittest.TestCase):
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", claude["env"])
 
     def test_preset_revision_bumped_for_the_format_migration(self):
-        # Existing volumes must refresh: v7 (format flip + codesome),
-        # v8 (zhipu/kimi/codesome model catalogs — /model listed nothing).
-        self.assertEqual(H.PRESET_FORMAT_VERSION, 8)
+        # v9 (S9a): all codex upstreams -> anthropic endpoint + format;
+        # the chat daemon-seeded meta value now upgrades too.
+        self.assertEqual(H.PRESET_FORMAT_VERSION, 9)
 
     def test_every_preset_carries_a_codex_model_catalog(self):
         # S8g-2 (user field report): without model_catalog the cc-switch
@@ -338,9 +338,12 @@ class LegacyModelOwnershipTests(unittest.TestCase):
         })
         # No preset model → the user's MODEL is never owned, never dropped.
         self.assertEqual(merged["ANTHROPIC_MODEL"], "ep-user-endpoint")
-        # BASE_URL keeps the legacy semantics: preset resets it.
-        self.assertEqual(merged["ANTHROPIC_BASE_URL"],
-                         "https://ark.cn-beijing.volces.com/api/v3")
+        # BASE_URL keeps the legacy semantics: preset resets it (S9a: to the
+        # anthropic endpoint — volcengine now carries one).
+        self.assertEqual(
+            merged["ANTHROPIC_BASE_URL"],
+            "https://ark.cn-beijing.volces.com/api/v3/anthropic",
+        )
 
 
 class OwnershipRefreshTests(unittest.TestCase):

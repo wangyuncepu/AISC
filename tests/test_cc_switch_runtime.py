@@ -453,23 +453,25 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
             settings = PROVIDER_HELPER._settings_config("claude", by_id[provider_id])
             self.assertEqual(settings["env"]["ANTHROPIC_BASE_URL"], anthropic_url)
 
-        # Volcengine has no confirmed Anthropic endpoint -> falls back to base_url
-        # (no regression versus the previous single-URL behavior).
+        # S9a: volcengine now HAS a documented anthropic endpoint; the
+        # claude side points at it like every other preset.
         volc = by_id["volcengine-ark"]
         settings = PROVIDER_HELPER._settings_config("claude", volc)
-        self.assertEqual(settings["env"]["ANTHROPIC_BASE_URL"], volc["base_url"])
+        self.assertEqual(
+            settings["env"]["ANTHROPIC_BASE_URL"],
+            "https://ark.cn-beijing.volces.com/api/v3/anthropic",
+        )
 
     def test_codex_presets_speak_responses_to_the_local_router(self):
-        # S8g (2026-08-29 ruling): every preset's codex upstream IS the OpenAI
-        # Responses API — codex speaks Responses straight to the OpenAI-side
-        # base (no local-router translation). DeepSeek's official
-        # guides/responses_api pins base https://api.deepseek.com.
+        # S9a (2026-08-29 ruling): every preset's codex upstream is the
+        # ANTHROPIC endpoint — codex still speaks Responses to the local
+        # router, which translates to Anthropic Messages upstream.
         for provider in PROVIDER_HELPER.PRESET_PROVIDERS:
             settings = PROVIDER_HELPER._settings_config("codex", provider)
             self.assertIn('wire_api = "responses"', settings["config"])
         deepseek = next(p for p in PROVIDER_HELPER.PRESET_PROVIDERS if p["id"] == "deepseek")
         self.assertIn(
-            'base_url = "https://api.deepseek.com"',
+            'base_url = "https://api.deepseek.com/anthropic"',
             PROVIDER_HELPER._settings_config("codex", deepseek)["config"],
         )
         for provider in PROVIDER_HELPER.PRESET_PROVIDERS:
@@ -558,16 +560,16 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
             self.assertEqual(rows["claude"][1], 1)
             self.assertNotEqual(rows["claude"][2], "old")  # notes refreshed
 
-            # Codex: new model + OpenAI Responses base (S8g direct, no
-            # translation), api_key + auth mirror preserved, is_current
-            # preserved. The key also rides auth.OPENAI_API_KEY — the live
-            # channel auth.json is written from (2026-08-21 probe; without it
-            # a refresh silently reverts the row to the placeholder-401 shape).
+            # Codex: new model + anthropic base (S9a unified), api_key +
+            # auth mirror preserved, is_current preserved. The key also rides
+            # auth.OPENAI_API_KEY — the live channel auth.json is written from
+            # (2026-08-21 probe; without it a refresh silently reverts the row
+            # to the placeholder-401 shape).
             codex_sc = json.loads(rows["codex"][0])
             self.assertIn('model = "deepseek-v4-pro"', codex_sc["config"])
             self.assertIn('wire_api = "responses"', codex_sc["config"])
             self.assertIn(
-                'base_url = "https://api.deepseek.com"',
+                'base_url = "https://api.deepseek.com/anthropic"',
                 codex_sc["config"],
             )
             self.assertIn(

@@ -144,12 +144,15 @@ def deepseek_provider_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         # contextWindow 同时取代 codex 的 fallback 元数据（消「Model
         # metadata not found」）。数值 fixture 冻结（context_length=1M）。
         "model_catalog": _codex_model_catalog(official_ids, fixture),
-        # S8g (2026-08-29 user ruling + official docs): every codex preset's
-        # upstream speaks the OpenAI Responses API natively — DeepSeek's
-        # official guide (guides/responses_api) pins base
-        # https://api.deepseek.com for Responses; no local-router protocol
-        # translation. The 2026-08-20 anthropic translation shape is retired.
-        "codex_api_format": "openai_responses",
+        # S9a (2026-08-29 user ruling, supersedes S8g): BOTH agents speak
+        # Anthropic to the upstream — the cc-switch local router translates
+        # codex's Responses into Anthropic Messages against the provider's
+        # anthropic endpoint. The user runs this shape manually on every
+        # provider and reports it as the most stable path (one endpoint per
+        # provider; these relays' anthropic sides are their best-maintained
+        # surfaces). web_search gets disabled for anthropic-format codex
+        # (the transform drops that hosted tool).
+        "codex_api_format": "anthropic",
         "claude_env": env,
         "_env_history": history,
         "_retired_env_keys": [],
@@ -201,13 +204,16 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "id": "volcengine-ark",
             "name": "Volcengine Ark",
             "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            # Ark anthropic-compat endpoint (documented; anthropic_base_url
+            # is what the S9a unified codex rows point at).
+            "anthropic_base_url": "https://ark.cn-beijing.volces.com/api/v3/anthropic",
             "model": "",
             # IDEA-5 (5c): historical preset-written MODEL values — the
             # ownership-merge discriminator (in-list → upgrade on refresh;
             # anything else is a user override and survives). Empty: this
             # preset never wrote a model.
             "_model_history": [],
-            "codex_api_format": "openai_responses",
+            "codex_api_format": "anthropic",
             "description": "Volcengine Ark inference service; configure an endpoint ID",
         },
         {
@@ -221,7 +227,7 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             # so existing volumes upgrade on refresh instead of sticking.
             "model": "glm-5.3",
             "_model_history": ["glm-5.2", "glm-5.3"],
-            "codex_api_format": "openai_responses",
+            "codex_api_format": "anthropic",
             # S8g-2 (2026-08-29, user field report): without a model catalog
             # codex /model lists NOTHING (the catalog IS the picker's data
             # source). GLM-5.3: 1M context per docs.bigmodel.cn.
@@ -235,7 +241,7 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "anthropic_base_url": "https://api.moonshot.cn/anthropic",
             "model": "kimi-k3",
             "_model_history": ["kimi-k3"],
-            "codex_api_format": "openai_responses",
+            "codex_api_format": "anthropic",
             # Kimi K3: up to 1M context (2.8T params, tiered by plan).
             "model_catalog": [{"model": "kimi-k3", "contextWindow": 1_000_000}],
             "description": "Moonshot Kimi K3 model service",
@@ -254,7 +260,7 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "anthropic_base_url": "https://v5.codesome.cn/api",
             "model": "gpt-5.6-sol",
             "_model_history": ["gpt-5.6-sol"],
-            "codex_api_format": "openai_responses",
+            "codex_api_format": "anthropic",
             # GPT-5.6 Sol: ~1.05M native context; the Codex-side convention
             # pins model_context_window = 1_000_000 (community 3-line config).
             "model_catalog": [{"model": "gpt-5.6-sol", "contextWindow": 1_000_000}],
@@ -277,7 +283,12 @@ MARKER_TEMPLATE = ".aisc-preset-providers-{agent}.sha256"
 # volumes must refresh their codex rows and metas.
 # v8 (S8g-2, 2026-08-29): zhipu/kimi/codesome gain model catalogs — without
 # one codex /model lists nothing. Existing volumes refresh their codex rows.
-PRESET_FORMAT_VERSION = 8
+# v9 (S9a, 2026-08-29): ALL codex upstreams unify on the Anthropic endpoint
+# + format (user ruling: manually proven most stable; the S8g same-day
+# "native Responses" experiment is retired). The meta migration also learns
+# "chat" — cc-switch's own daemon/proxy-enable seeds it and the v8 upgrade
+# rule wrongly treated it as a user choice (fresh-workspace field report).
+PRESET_FORMAT_VERSION = 9
 # Preset provider ids removed from PRESET_PROVIDERS, mapped to a fingerprint
 # that identifies the old preset's settings_config. On refresh an id is deleted
 # only if its stored config still carries the fingerprint, so a user who
@@ -667,9 +678,10 @@ def add_preset_providers(
             router's translation selector). Ownership: the key is only set
             when ABSENT; a user/TUI-written meta (e.g. their mapping-page
             saves) always wins, other meta keys are preserved verbatim.
-            S8g migration exception: ``anthropic`` was PRESET-written on the
-            deepseek row (v6 shape) — it upgrades like any other preset-owned
-            value; a user's own choice of any OTHER value still wins."""
+            S9a migration: ``anthropic`` and ``chat`` were both PRESET- or
+            daemon-written values — they upgrade to the declared format like
+            any other preset-owned value; a user's own choice of any OTHER
+            value still wins."""
             declared = provider.get("codex_api_format")
             meta: dict[str, Any] = {}
             if raw_meta:
@@ -680,7 +692,8 @@ def add_preset_providers(
                 except json.JSONDecodeError:
                     meta = {}
             if declared and (
-                "apiFormat" not in meta or meta.get("apiFormat") == "anthropic"
+                "apiFormat" not in meta
+                or meta.get("apiFormat") in ("anthropic", "chat")
             ):
                 meta["apiFormat"] = declared
             return json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
