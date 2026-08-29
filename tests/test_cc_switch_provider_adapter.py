@@ -1229,6 +1229,79 @@ class CodexModelCatalogHookTests(unittest.TestCase):
         self.assertEqual(catalog["models"][0]["context_window"], 128_000)
         self.assertIn("model_catalog_json", self._config_text())
 
+    # --- S9: live model catalog (spike 05) ----------------------------------
+
+    LIVE_ROW = {
+        "id": "deepseek",
+        "settings_config": {},
+        "settings": {"auth": {"OPENAI_API_KEY": "sk-live-9"}},
+    }
+
+    def _config_with_base(self):
+        self._config(
+            'model = "deepseek-v4-pro"\n\n'
+            "[model_providers.deepseek]\n"
+            'name = "deepseek"\n'
+            'base_url = "https://api.deepseek.com"\n'
+        )
+
+    def test_live_fetch_merges_new_ids_behind_curated_rows(self):
+        from unittest import mock
+
+        self._config_with_base()
+        payload = {"data": [
+            {"id": "deepseek-v4-pro"},          # dedupe against curated
+            {"id": "deepseek-v4-next"},          # NEW — appended
+            {"id": "text-embedding-3"},          # junk — dropped
+        ]}
+        with mock.patch.object(
+            A, "_http_get_json", return_value=(200, payload)
+        ) as http:
+            A._apply_codex_model_catalog(self.LIVE_ROW)
+        self.assertEqual(http.call_count, 1)
+        auth_header = http.call_args[0][1]["Authorization"]
+        self.assertEqual(auth_header, "Bearer sk-live-9")
+        self.assertEqual(http.call_args[0][2], 3.0)  # short switch-time budget
+        catalog = json.loads(
+            (self.dir / ".codex" / A._CODEX_CATALOG_FILENAME).read_text(encoding="utf-8"))
+        slugs = [m["slug"] for m in catalog["models"]]
+        self.assertEqual(
+            slugs, ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-next"]
+        )
+        # The appended row inherits the curated family window (1M).
+        self.assertEqual(catalog["models"][2]["context_window"], 1_000_000)
+
+    def test_live_fetch_failure_keeps_the_static_catalog(self):
+        from unittest import mock
+
+        self._config_with_base()
+        with mock.patch.object(A, "_http_get_json", return_value=(0, None)):
+            A._apply_codex_model_catalog(self.LIVE_ROW)
+        catalog = json.loads(
+            (self.dir / ".codex" / A._CODEX_CATALOG_FILENAME).read_text(encoding="utf-8"))
+        self.assertEqual(
+            [m["slug"] for m in catalog["models"]],
+            ["deepseek-v4-pro", "deepseek-v4-flash"],
+        )
+
+    def test_live_fetch_skipped_without_a_key(self):
+        from unittest import mock
+
+        self._config_with_base()
+        row = {"id": "deepseek", "settings_config": {}}  # no auth key
+        with mock.patch.object(A, "_http_get_json") as http:
+            A._apply_codex_model_catalog(row)
+        http.assert_not_called()
+
+    def test_merge_caps_and_dedupes(self):
+        static = [{"model": "m1", "contextWindow": 1_000_000}]
+        merged = A._merge_live_catalog_models(
+            static, ["m1"] + [f"gen-{i}" for i in range(80)]
+        )
+        self.assertEqual(len(merged), 1 + A._LIVE_APPEND_CAP)
+        self.assertEqual(merged[0]["model"], "m1")  # curated stays first
+        self.assertEqual(merged[-1]["contextWindow"], 1_000_000)
+
     def test_official_switch_removes_our_key_and_file(self):
         self._config(
             'model_catalog_json = "%s"\n\n[t]\na = 1\n'

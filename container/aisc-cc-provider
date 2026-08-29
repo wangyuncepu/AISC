@@ -1157,6 +1157,76 @@ def _set_codex_catalog_key(config_text: str, new_value: Optional[str]) -> str:
     return result
 
 
+# --- S9: live model catalog (spike 05-live-model-catalog-spike.md) ---------
+
+# Substrings that mark a fetched id as a non-chat model (never worth a slot
+# in codex's /model picker). Kept deliberately tight — over-filtering hides
+# real chat models (e.g. *-vision variants are chat-capable).
+_LIVE_MODEL_JUNK = (
+    "embedding", "whisper", "tts", "audio", "moderation",
+    "rerank", "dall-e", "bge-", "clip",
+)
+_LIVE_APPEND_CAP = 50
+
+
+def _merge_live_catalog_models(
+    static_models: list[dict[str, Any]], fetched_ids: list[str]
+) -> list[dict[str, Any]]:
+    """Append live-fetched ids behind the curated rows (S9).
+
+    Curated order/windows are untouched; fetched ids dedupe against the
+    existing slugs, drop junk shapes, cap at _LIVE_APPEND_CAP, and inherit
+    the first row's contextWindow (the family assumption — /models endpoints
+    return ids only, never window sizes; every preset family is 1M-class)."""
+    if not fetched_ids:
+        return static_models
+    window = (
+        int(static_models[0].get("contextWindow") or 128_000)
+        if static_models else 128_000
+    )
+    seen = {str(m.get("model")) for m in static_models}
+    merged = list(static_models)
+    for mid in fetched_ids:
+        mid = str(mid).strip()
+        if not mid or mid in seen:
+            continue
+        if any(j in mid.lower() for j in _LIVE_MODEL_JUNK):
+            continue
+        merged.append({"model": mid, "contextWindow": window})
+        seen.add(mid)
+        if len(merged) - len(static_models) >= _LIVE_APPEND_CAP:
+            break
+    return merged
+
+
+def _live_fetch_catalog_ids(
+    config_text: str, row: Optional[dict[str, Any]]
+) -> list[str]:
+    """Live /models fetch for the ACTIVE codex provider (S9). Fail-open:
+    no key / no parsable base / offline / 401 → [] and the caller keeps the
+    static catalog. Bearer-only + 3s budget (codex bases are OpenAI-style;
+    the switch path must not stall)."""
+    try:
+        toml = tomllib.loads(config_text)
+    except Exception:
+        return []
+    providers = toml.get("model_providers")
+    base_url = ""
+    if isinstance(providers, dict):
+        for entry in providers.values():
+            if isinstance(entry, dict) and entry.get("base_url"):
+                base_url = str(entry["base_url"])
+                break
+    if not base_url:
+        return []
+    auth = (row or {}).get("settings", {}).get("auth")
+    api_key = str(auth.get("OPENAI_API_KEY") or "") if isinstance(auth, dict) else ""
+    if not api_key:
+        return []
+    ids = _openai_compatible_models(base_url, api_key, timeout=3.0, bearer_only=True)
+    return list(ids) if ids else []
+
+
 def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
     """Post-switch hook: write the catalog file + point config.toml at it.
 
@@ -1217,6 +1287,12 @@ def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
                 or preset.get("codex_api_format")
         if not models and live_model:
             models = [{"model": live_model, "contextWindow": 128_000}]
+
+        # S9 live catalog: merge freshly-fetched ids behind the curated rows
+        # (fail-open — a fetch miss leaves the static catalog untouched).
+        models = _merge_live_catalog_models(
+            models, _live_fetch_catalog_ids(text, row)
+        )
 
         if models:
             slugs = {str(m["model"]) for m in models}
@@ -1532,23 +1608,28 @@ def _models_url_candidates(base_url: str) -> list[str]:
     return list(dict.fromkeys(candidates))
 
 
-def _openai_compatible_models(base_url: str, api_key: str) -> list[str] | None:
+def _openai_compatible_models(
+    base_url: str, api_key: str, *, timeout: float = 15.0, bearer_only: bool = False
+) -> list[str] | None:
     """The documented fetch path (user-manual 2.1 §自动获取模型), ported from
     upstream services/model_fetch.rs: walk the candidate model-list URLs and
     the two auth styles (Bearer default; x-api-key for anthropic-format
     providers — we don't track api_format per row, so both are tried).
-    Returns None when every candidate rejects us; the caller degrades."""
+    Returns None when every candidate rejects us; the caller degrades.
+    ``timeout``/``bearer_only`` tune the switch-time live-catalog path
+    (codex bases are OpenAI-style: Bearer alone, short budget)."""
     if not base_url:
         return None
     header_sets: list[dict[str, str]] = []
     if api_key:
         header_sets.append({"Authorization": f"Bearer {api_key}"})
-        header_sets.append({"x-api-key": api_key, "anthropic-version": "2023-06-01"})
+        if not bearer_only:
+            header_sets.append({"x-api-key": api_key, "anthropic-version": "2023-06-01"})
     else:
         header_sets.append({})
     for url in _models_url_candidates(base_url):
         for headers in header_sets:
-            status, payload = _http_get_json(url, headers, 15.0)
+            status, payload = _http_get_json(url, headers, timeout)
             if status != 200 or not isinstance(payload, dict):
                 continue
             data = payload.get("data")
