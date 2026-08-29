@@ -341,9 +341,9 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <p v-else-if="!loading && hasRuntime" class="empty">{{ t("ccswitch.empty") }}</p>
-    <p v-if="providers.length > visibleProviders.length" class="hidden-note">
-      {{ t("ccswitch.hiddenRows") }}
-    </p>
+    <!-- S8g-2 (user ruling 2026-08-29): the hidden-placeholder count note is
+         GONE; the footer is now a constant usage hint. -->
+    <p class="hidden-note">{{ t("ccswitch.usageHint") }}</p>
 
     <!-- add form -->
     <div v-if="addOpen" class="form-card" role="dialog" :aria-label="t('ccswitch.add')">
