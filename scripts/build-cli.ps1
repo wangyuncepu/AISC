@@ -35,3 +35,19 @@ Copy-Item -Force "dist\aisc-$TargetTriple.exe" $Dst1
 Copy-Item -Force "dist\aisc-$TargetTriple.exe" $Dst2
 Write-Host "== synced: $Dst1"
 Write-Host "== synced: $Dst2"
+
+# 2026-08-29 incident: the debug bundle (aisc build's resource root) is a
+# one-shot snapshot from the last cargo build — editing container/ files
+# never reaches it, so aisc build kept producing images with week-old
+# presets (v5 in the image while the repo was at v9). Sync the bundle from
+# the repo on every CLI rebuild so manual tests always test current code.
+$Bundle = "workbench\src-tauri\target\debug\aisc-bundle"
+if (Test-Path $Bundle) {
+    foreach ($Dir in @("container", "config", "vendor")) {
+        $DstDir = Join-Path $Bundle $Dir
+        if (Test-Path $DstDir) { Remove-Item -Recurse -Force $DstDir }
+        Copy-Item -Recurse -Force $Dir $DstDir
+    }
+    Copy-Item -Force VERSION (Join-Path $Bundle "VERSION")
+    Write-Host "== synced: $Bundle (container/config/vendor/VERSION)"
+}
