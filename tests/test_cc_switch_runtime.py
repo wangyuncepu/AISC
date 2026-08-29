@@ -460,15 +460,16 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
         self.assertEqual(settings["env"]["ANTHROPIC_BASE_URL"], volc["base_url"])
 
     def test_codex_presets_speak_responses_to_the_local_router(self):
-        # 用户实测工作形状 (2026-08-20): codex always speaks Responses to the
-        # cc-switch local router; the router translates per meta.apiFormat.
-        # DeepSeek additionally points at the Anthropic Messages endpoint.
+        # S8g (2026-08-29 ruling): every preset's codex upstream IS the OpenAI
+        # Responses API — codex speaks Responses straight to the OpenAI-side
+        # base (no local-router translation). DeepSeek's official
+        # guides/responses_api pins base https://api.deepseek.com.
         for provider in PROVIDER_HELPER.PRESET_PROVIDERS:
             settings = PROVIDER_HELPER._settings_config("codex", provider)
             self.assertIn('wire_api = "responses"', settings["config"])
         deepseek = next(p for p in PROVIDER_HELPER.PRESET_PROVIDERS if p["id"] == "deepseek")
         self.assertIn(
-            'base_url = "https://api.deepseek.com/anthropic"',
+            'base_url = "https://api.deepseek.com"',
             PROVIDER_HELPER._settings_config("codex", deepseek)["config"],
         )
         for provider in PROVIDER_HELPER.PRESET_PROVIDERS:
@@ -478,7 +479,7 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
     def test_codex_claude_preset_is_removed(self):
         ids = {p["id"] for p in PROVIDER_HELPER.PRESET_PROVIDERS}
         self.assertNotIn("codex-claude", ids)
-        self.assertEqual(len(PROVIDER_HELPER.PRESET_PROVIDERS), 4)
+        self.assertEqual(len(PROVIDER_HELPER.PRESET_PROVIDERS), 5)  # S8g: codesome
 
     def _seed_provider(self, config_dir, agent, provider_id, name,
                        settings_json, *, is_current=0, notes="",
@@ -557,16 +558,16 @@ class CcSwitchProviderPresetTests(unittest.TestCase):
             self.assertEqual(rows["claude"][1], 1)
             self.assertNotEqual(rows["claude"][2], "old")  # notes refreshed
 
-            # Codex: new model + anthropic endpoint + router wire (responses),
-            # api_key + auth mirror preserved, is_current preserved. The key
-            # also rides auth.OPENAI_API_KEY — the live channel auth.json is
-            # written from (2026-08-21 probe; without it a refresh silently
-            # reverts the row to the placeholder-401 shape).
+            # Codex: new model + OpenAI Responses base (S8g direct, no
+            # translation), api_key + auth mirror preserved, is_current
+            # preserved. The key also rides auth.OPENAI_API_KEY — the live
+            # channel auth.json is written from (2026-08-21 probe; without it
+            # a refresh silently reverts the row to the placeholder-401 shape).
             codex_sc = json.loads(rows["codex"][0])
             self.assertIn('model = "deepseek-v4-pro"', codex_sc["config"])
             self.assertIn('wire_api = "responses"', codex_sc["config"])
             self.assertIn(
-                'base_url = "https://api.deepseek.com/anthropic"',
+                'base_url = "https://api.deepseek.com"',
                 codex_sc["config"],
             )
             self.assertIn(

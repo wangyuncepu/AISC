@@ -85,10 +85,10 @@ class FixtureDrivenPresetTests(unittest.TestCase):
             self.assertNotIn(key, env)
 
     def test_preset_format_bumped_and_revision_is_fixture_sensitive(self):
-        # v6 (retest round 2): claude rows carry the settings base template —
-        # existing volumes must refresh, so the format version is part of the
-        # revision hash.
-        self.assertEqual(H.PRESET_FORMAT_VERSION, 6)
+        # v7 (S8g): codex upstream format flips to openai_responses +
+        # codesome joins — existing volumes must refresh, so the format
+        # version is part of the revision hash.
+        self.assertEqual(H.PRESET_FORMAT_VERSION, 7)
         base_revision = H.preset_revision("claude")
         # A mutated fixture must yield a different revision (refresh triggers).
         mutated = json.loads(json.dumps(deepseek()))
@@ -196,8 +196,11 @@ class CodexModelCatalogTests(unittest.TestCase):
         self.assertEqual(catalog[0]["contextWindow"], 1_000_000)
         self.assertEqual(catalog[1]["contextWindow"], 1_000_000)
         # 既有形态 + 用户实测工作形状：anthropic 端点 + responses（本地路由接管）
+        # S8g (2026-08-29): codex presets speak Responses DIRECTLY to the
+        # OpenAI-side base (official guides/responses_api) — no translation.
         self.assertIn("auth", settings)
-        self.assertIn('base_url = "https://api.deepseek.com/anthropic"', settings["config"])
+        self.assertIn('base_url = "https://api.deepseek.com"', settings["config"])
+        self.assertNotIn("/anthropic", settings["config"])
         self.assertIn('wire_api = "responses"', settings["config"])
         self.assertIn("model_context_window = 1000000", settings["config"])
 
@@ -213,6 +216,51 @@ class CodexModelCatalogTests(unittest.TestCase):
         self.assertEqual(f("131072"), 131072)
         self.assertEqual(f(""), 0)
         self.assertEqual(f("garbage"), 0)
+
+
+class S8gUpstreamFormatTests(unittest.TestCase):
+    """S8g (user ruling + live-verified 2026-08-29): every codex preset
+    upstream is the OpenAI Responses API (meta.apiFormat=openai_responses);
+    codex rows point at the OpenAI-side base. codesome joins the presets."""
+
+    def test_every_preset_declares_openai_responses(self):
+        for provider in H.PRESET_PROVIDERS:
+            self.assertEqual(
+                provider.get("codex_api_format"),
+                "openai_responses",
+                f"{provider['id']} must declare openai_responses",
+            )
+
+    def test_codex_rows_use_the_openai_side_base(self):
+        for provider in H.PRESET_PROVIDERS:
+            config = H._settings_config("codex", provider)["config"]
+            self.assertIn(f'base_url = "{provider["base_url"]}"', config)
+
+    def test_anthropic_format_still_routes_to_the_anthropic_base(self):
+        # Legacy translation branch: a provider declaring anthropic keeps
+        # pointing codex at anthropic_base_url (the router converts).
+        legacy = {
+            "id": "legacy", "base_url": "https://x.example",
+            "anthropic_base_url": "https://x.example/anthropic",
+            "model": "m", "codex_api_format": "anthropic",
+        }
+        config = H._settings_config("codex", legacy)["config"]
+        self.assertIn('base_url = "https://x.example/anthropic"', config)
+
+    def test_codesome_preset_shape(self):
+        codesome = next(p for p in H.PRESET_PROVIDERS if p["id"] == "codesome")
+        self.assertEqual(codesome["base_url"], "https://v5.codesome.cn/openai")
+        self.assertEqual(codesome["anthropic_base_url"], "https://v5.codesome.cn/api")
+        # Claude row: env-based, Anthropic side URL, no token written.
+        claude = H._settings_config("claude", codesome)
+        self.assertEqual(
+            claude["env"]["ANTHROPIC_BASE_URL"], "https://v5.codesome.cn/api"
+        )
+        self.assertNotIn("ANTHROPIC_AUTH_TOKEN", claude["env"])
+
+    def test_preset_revision_bumped_for_the_format_migration(self):
+        # Existing volumes must refresh: v7 (format flip + codesome).
+        self.assertEqual(H.PRESET_FORMAT_VERSION, 7)
 
 
 class LegacyModelOwnershipTests(unittest.TestCase):
@@ -355,8 +403,9 @@ class OwnershipRefreshTests(unittest.TestCase):
                 added, refreshed, removed = H.add_preset_providers(
                     config_dir, "claude", H.preset_revision("claude"), log_io
                 )
-            # deepseek existed (refreshed); the other three were added.
-            self.assertEqual((added, refreshed, removed), (3, 1, 0))
+            # deepseek existed (refreshed); the other four were added
+            # (S8g: codesome joined the preset set).
+            self.assertEqual((added, refreshed, removed), (4, 1, 0))
 
             db = sqlite3.connect(config_dir / "cc-switch.db")
             raw = db.execute(

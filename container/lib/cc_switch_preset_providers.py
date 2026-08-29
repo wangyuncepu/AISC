@@ -144,11 +144,12 @@ def deepseek_provider_from_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         # contextWindow 同时取代 codex 的 fallback 元数据（消「Model
         # metadata not found」）。数值 fixture 冻结（context_length=1M）。
         "model_catalog": _codex_model_catalog(official_ids, fixture),
-        # 用户实测工作形状（2026-08-20）：DeepSeek 走 Anthropic Messages——
-        # store base_url=/anthropic + wire_api=responses，切换时 cc-switch
-        # 本地路由接管 live 并按 meta.apiFormat=anthropic 做 Responses→
-        # Anthropic 转换（preset 刷新写入该 meta，见 add_preset_providers）。
-        "codex_api_format": "anthropic",
+        # S8g (2026-08-29 user ruling + official docs): every codex preset's
+        # upstream speaks the OpenAI Responses API natively — DeepSeek's
+        # official guide (guides/responses_api) pins base
+        # https://api.deepseek.com for Responses; no local-router protocol
+        # translation. The 2026-08-20 anthropic translation shape is retired.
+        "codex_api_format": "openai_responses",
         "claude_env": env,
         "_env_history": history,
         "_retired_env_keys": [],
@@ -206,6 +207,7 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             # anything else is a user override and survives). Empty: this
             # preset never wrote a model.
             "_model_history": [],
+            "codex_api_format": "openai_responses",
             "description": "Volcengine Ark inference service; configure an endpoint ID",
         },
         {
@@ -215,6 +217,7 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "anthropic_base_url": "https://open.bigmodel.cn/api/anthropic",
             "model": "glm-5.2",
             "_model_history": ["glm-5.2"],
+            "codex_api_format": "openai_responses",
             "description": "Zhipu GLM-5.2 flagship model service",
         },
         {
@@ -224,7 +227,22 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "anthropic_base_url": "https://api.moonshot.cn/anthropic",
             "model": "kimi-k3",
             "_model_history": ["kimi-k3"],
+            "codex_api_format": "openai_responses",
             "description": "Moonshot Kimi K3 model service",
+        },
+        {
+            # S8g (2026-08-29, user-provided): Responses-only relay —
+            # /openai/responses serves, /openai/chat/completions is a hard
+            # 404, and /api/v1/messages is the Anthropic side (probed live).
+            # No public model list yet: leave model empty, map via the UI.
+            "id": "codesome",
+            "name": "Codesome",
+            "base_url": "https://v5.codesome.cn/openai",
+            "anthropic_base_url": "https://v5.codesome.cn/api",
+            "model": "",
+            "_model_history": [],
+            "codex_api_format": "openai_responses",
+            "description": "Codesome relay (OpenAI Responses API)",
         },
     ]
 
@@ -237,7 +255,11 @@ MARKER_TEMPLATE = ".aisc-preset-providers-{agent}.sha256"
 # base template (statusLine/enabledPlugins) — the revision must bump so
 # EXISTING volumes refresh their rows instead of keeping env-only shapes
 # (an env-only row wipes the user's setup on the next switch).
-PRESET_FORMAT_VERSION = 6
+# v7 (S8g, 2026-08-29): every codex preset's upstream format becomes
+# openai_responses (DeepSeek flips off the anthropic translation and its
+# codex base off /anthropic), and the codesome preset joins — existing
+# volumes must refresh their codex rows and metas.
+PRESET_FORMAT_VERSION = 7
 # Preset provider ids removed from PRESET_PROVIDERS, mapped to a fingerprint
 # that identifies the old preset's settings_config. On refresh an id is deleted
 # only if its stored config still carries the fingerprint, so a user who
@@ -289,6 +311,19 @@ def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=True)
 
 
+def _codex_upstream_base(provider: dict[str, Any]) -> str:
+    """The URL codex's model_providers entry points at (S8g).
+
+    ``openai_responses`` upstreams (the ruling default): the OpenAI-side
+    base_url — codex speaks Responses straight to it, no translation.
+    An ``anthropic`` upstream keeps the historical translation shape: the
+    local router converts Responses→Anthropic against anthropic_base_url.
+    """
+    if provider.get("codex_api_format") == "openai_responses":
+        return provider["base_url"]
+    return provider.get("anthropic_base_url") or provider["base_url"]
+
+
 def _settings_config(
     agent: str, provider: dict[str, Any], *, api_key: str = ""
 ) -> dict[str, Any]:
@@ -331,10 +366,12 @@ def _settings_config(
                 "",
                 f"[model_providers.{provider_id}]",
                 f"name = {_toml_string(provider_id)}",
-                # 用户实测工作形状：codex 始终对本地路由说 Responses；路由按
-                # meta.apiFormat（anthropic/chat）改写上游协议。DeepSeek 走
-                # Anthropic Messages 端点（fixture anthropic_base_url）。
-                f"base_url = {_toml_string(provider.get('anthropic_base_url') or provider['base_url'])}",
+                # S8g (2026-08-29): codex presets speak Responses to the
+                # upstream DIRECTLY (apiFormat=openai_responses) — base is the
+                # OpenAI-side base_url, never the anthropic mirror. A provider
+                # still declaring an anthropic upstream keeps the translation
+                # shape (router talks Anthropic to anthropic_base_url).
+                f"base_url = {_toml_string(_codex_upstream_base(provider))}",
                 'wire_api = "responses"',
                 "requires_openai_auth = true",
             ]
@@ -611,7 +648,10 @@ def add_preset_providers(
             (``codex_api_format`` → cc-switch ``meta.apiFormat`` — the local
             router's translation selector). Ownership: the key is only set
             when ABSENT; a user/TUI-written meta (e.g. their mapping-page
-            saves) always wins, other meta keys are preserved verbatim."""
+            saves) always wins, other meta keys are preserved verbatim.
+            S8g migration exception: ``anthropic`` was PRESET-written on the
+            deepseek row (v6 shape) — it upgrades like any other preset-owned
+            value; a user's own choice of any OTHER value still wins."""
             declared = provider.get("codex_api_format")
             meta: dict[str, Any] = {}
             if raw_meta:
@@ -621,7 +661,9 @@ def add_preset_providers(
                         meta = parsed
                 except json.JSONDecodeError:
                     meta = {}
-            if declared and "apiFormat" not in meta:
+            if declared and (
+                "apiFormat" not in meta or meta.get("apiFormat") == "anthropic"
+            ):
                 meta["apiFormat"] = declared
             return json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
 
