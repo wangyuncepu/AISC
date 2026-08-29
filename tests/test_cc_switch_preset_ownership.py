@@ -308,8 +308,9 @@ class LegacyModelOwnershipTests(unittest.TestCase):
             "ANTHROPIC_MODEL": "glm-5.2",          # historical preset value
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.2-air",  # user-added role slot
         })
-        # The preset default upgrades (in history).
-        self.assertEqual(merged["ANTHROPIC_MODEL"], "glm-5.2")
+        # The preset-written 5.2 was superseded by 5.3 (both in history):
+        # refresh upgrades it, the way any preset value upgrade works.
+        self.assertEqual(merged["ANTHROPIC_MODEL"], "glm-5.3")
         # User-added role keys outside the owned set survive untouched.
         self.assertEqual(merged["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "glm-5.2-air")
 
