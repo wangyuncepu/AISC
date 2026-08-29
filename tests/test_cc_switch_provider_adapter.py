@@ -1298,8 +1298,9 @@ class CodexModelCatalogHookTests(unittest.TestCase):
             static, ["m1"] + [f"gen-{i}" for i in range(80)]
         )
         self.assertEqual(len(merged), 1 + A._LIVE_APPEND_CAP)
-        # S9c: version-descending — the highest-numbered model sorts first.
-        self.assertEqual(merged[0]["model"], "gen-79")
+        # S9c: version-descending — gen-49 is the highest among the
+        # capped-50 appended (gen-0..49), so it sorts first.
+        self.assertEqual(merged[0]["model"], "gen-49")
         self.assertIn("m1", [m["model"] for m in merged])  # still present
         self.assertEqual(merged[-1]["contextWindow"], 1_000_000)
 
