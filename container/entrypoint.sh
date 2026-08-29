@@ -497,6 +497,16 @@ if command -v cc-switch >/dev/null 2>&1; then
         # model_catalog_json key — without this, a workspace restart loses
         # the /model list until the next manual provider switch.
         python3 /usr/local/bin/aisc-cc-provider catalog-sync 2>/dev/null || true
+
+        # v2.1.8 T1: seed /root/AGENTS.md from the image template if the
+        # user hasn't created one (opt-out: AISC_AGENT_INSTRUCTIONS=off).
+        # NEVER overwrite an existing AGENTS.md.
+        if [ "${AISC_AGENT_INSTRUCTIONS:-}" != "off" ] \
+            && [ ! -f /root/AGENTS.md ] \
+            && [ -f /usr/local/share/aisc/agent-instructions.md ]; then
+            cp /usr/local/share/aisc/agent-instructions.md /root/AGENTS.md
+            echo "ℹ️  已创建默认 AGENTS.md（如需自定义请直接编辑；AISC_AGENT_INSTRUCTIONS=off 可禁用）"
+        fi
     else
         echo "⚠️  cc-switch 后台服务启动失败；启动日志: $CC_SWITCH_DAEMON_LOG" >&2
         [ ! -s "$CC_SWITCH_DAEMON_LOG" ] || sed -n '1,20p' "$CC_SWITCH_DAEMON_LOG" >&2

@@ -394,6 +394,11 @@ COPY container/lib/deepseek-official-facts.json /usr/local/bin/lib/deepseek-offi
 # 否则切换即抹掉用户插件/状态栏。preset 模块在运行时读取本文件。
 COPY container/claude-settings.json /usr/local/bin/lib/aisc-claude-settings-base.json
 
+# v2.1.8 T1: optional agent instructions template (AGENTS.md). Entrypoint
+# copies to /root/AGENTS.md ONLY if the user doesn't have one; disable with
+# AISC_AGENT_INSTRUCTIONS=off.
+COPY container/agent-instructions.md /usr/local/share/aisc/agent-instructions.md
+
 # cc-switch 离线 skills：元技能说明 + 已暂存插件中的实际 skill 内容。
 COPY container/cc-switch-skills/ /opt/aisc/skills/
 RUN set -eux; \
