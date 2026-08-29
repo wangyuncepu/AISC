@@ -1144,6 +1144,9 @@ def start_runtime(
                 "-e", "AISC_RUNTIME_MODE=idle",
                 "-e", f"AISC_RUNTIME_ID={runtime_id}",
                 "-e", "TERM=xterm-256color",
+                # v2.1.8 T2: workspace key for the SQLite bash history chain
+                # (raw hex — distinct from the sha256-v1- directory name).
+                "-e", f"AISC_WORKSPACE_HASH={ws_key}",
                 # runtime-lifecycle-ux 3a: the entrypoint stamps the toolchain
                 # environment baseline with the content-addressed image id.
                 "-e", f"AISC_IMAGE_ID={image_id_at_start}",
