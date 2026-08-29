@@ -36,18 +36,22 @@ Copy-Item -Force "dist\aisc-$TargetTriple.exe" $Dst2
 Write-Host "== synced: $Dst1"
 Write-Host "== synced: $Dst2"
 
-# 2026-08-29 incident: the debug bundle (aisc build's resource root) is a
-# one-shot snapshot from the last cargo build — editing container/ files
-# never reaches it, so aisc build kept producing images with week-old
-# presets (v5 in the image while the repo was at v9). Sync the bundle from
-# the repo on every CLI rebuild so manual tests always test current code.
-$Bundle = "workbench\src-tauri\target\debug\aisc-bundle"
-if (Test-Path $Bundle) {
-    foreach ($Dir in @("container", "config", "vendor")) {
-        $DstDir = Join-Path $Bundle $Dir
-        if (Test-Path $DstDir) { Remove-Item -Recurse -Force $DstDir }
-        Copy-Item -Recurse -Force $Dir $DstDir
+# 2026-08-29 incident: the bundle chain is repo container/ → nsis/bundle/aisc-bundle/
+# → (cargo build copies to) target/debug/aisc-bundle/ → (aisc build) → docker image.
+# The nsis/ directory is the SOURCE that cargo re-copies on every tauri dev restart —
+# leaving it stale means every dev restart reverts the debug bundle to old code.
+# Sync BOTH the source (nsis) and the current copy (target/debug).
+foreach ($Bundle in @(
+    "workbench\src-tauri\nsis\bundle\aisc-bundle",
+    "workbench\src-tauri\target\debug\aisc-bundle"
+)) {
+    if (Test-Path $Bundle) {
+        foreach ($Dir in @("container", "config", "vendor")) {
+            $DstDir = Join-Path $Bundle $Dir
+            if (Test-Path $DstDir) { Remove-Item -Recurse -Force $DstDir }
+            Copy-Item -Recurse -Force $Dir $DstDir
+        }
+        Copy-Item -Force VERSION (Join-Path $Bundle "VERSION")
+        Write-Host "== synced: $Bundle"
     }
-    Copy-Item -Force VERSION (Join-Path $Bundle "VERSION")
-    Write-Host "== synced: $Bundle (container/config/vendor/VERSION)"
 }
