@@ -1202,29 +1202,50 @@ def _merge_live_catalog_models(
 def _live_fetch_catalog_ids(
     config_text: str, row: Optional[dict[str, Any]]
 ) -> list[str]:
-    """Live /models fetch for the ACTIVE codex provider (S9). Fail-open:
+    """Live /models fetch for the ACTIVE codex provider (S9/S9b). Fail-open:
     no key / no parsable base / offline / 401 → [] and the caller keeps the
-    static catalog. Bearer-only + 3s budget (codex bases are OpenAI-style;
-    the switch path must not stall)."""
-    try:
-        toml = tomllib.loads(config_text)
-    except Exception:
-        return []
-    providers = toml.get("model_providers")
-    base_url = ""
-    if isinstance(providers, dict):
-        for entry in providers.values():
-            if isinstance(entry, dict) and entry.get("base_url"):
-                base_url = str(entry["base_url"])
-                break
-    if not base_url:
-        return []
+    static catalog. Bearer-only + 3s budget (the switch path must not stall).
+
+    S9b (2026-08-29 field report): since S9a the codex rows point at the
+    ANTHROPIC endpoint — but model lists live on the OpenAI side. Fetch
+    against the preset's declared OpenAI base_url first; fall back to the
+    config.toml base (the anthropic endpoint, whose stripped root may serve
+    lists for some providers like DeepSeek)."""
     auth = (row or {}).get("settings", {}).get("auth")
     api_key = str(auth.get("OPENAI_API_KEY") or "") if isinstance(auth, dict) else ""
     if not api_key:
         return []
-    ids = _openai_compatible_models(base_url, api_key, timeout=3.0, bearer_only=True)
-    return list(ids) if ids else []
+
+    candidates: list[str] = []
+    # 1) the preset's OpenAI-side base_url (where /models actually lives)
+    try:
+        preset = _preset_provider(str((row or {}).get("id") or ""))
+        openai_base = str(preset.get("base_url") or "")
+        if openai_base:
+            candidates.append(openai_base)
+    except AdapterError:
+        pass
+    # 2) the config.toml base (anthropic endpoint; stripped-root fallback)
+    try:
+        toml = tomllib.loads(config_text)
+        providers = toml.get("model_providers")
+        if isinstance(providers, dict):
+            for entry in providers.values():
+                if isinstance(entry, dict) and entry.get("base_url"):
+                    candidates.append(str(entry["base_url"]))
+                    break
+    except Exception:
+        pass
+
+    for base_url in dict.fromkeys(candidates):
+        if not base_url.strip():
+            continue
+        ids = _openai_compatible_models(
+            base_url.strip(), api_key, timeout=3.0, bearer_only=True
+        )
+        if ids:
+            return list(ids)
+    return []
 
 
 def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
