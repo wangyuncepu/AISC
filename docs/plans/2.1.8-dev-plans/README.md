@@ -1,12 +1,12 @@
 # v2.1.8 开发计划（Agent 历史对话 + Bash 体验）
 
-> 状态：设计 v6 待审阅 · 2026-08-29
+> 状态：设计 v7 待审阅 · 2026-08-29
 > 基线：develop HEAD（v2.1.7-dev S9 全收）
 > 主题：Agent 历史对话管理、Bash 体验增强、Codex 提示
 
 ## 文档索引
 
-- [`01-design.md`](01-design.md) — 设计 v6（审阅 v5：P0-3 残留清零——失败模型表/preFlight 子命令/两步边界冻结 + UUID v4 严格化）
+- [`01-design.md`](01-design.md) — 设计 v7（审阅 v6：前端编排冻结 + CLI resume 删除 + PROMPT_COMMAND 数组边界 + 措辞统一）
 
 ## 阶段总览（v6）
 

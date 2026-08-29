@@ -1,6 +1,6 @@
 # v2.1.8 设计文档：Agent 历史对话管理 + Bash 体验增强
 
-> 日期：2026-08-29 · 状态：待审阅（v6，审阅 v5 的 P0-3 残留 + UUID 严格化已修）
+> 日期：2026-08-29 · 状态：待审阅（v7，审阅 v6：前端编排 + CLI resume 冻结为删除）
 > 方案 A（薄层直读）
 
 ## 0. 审阅回应摘要
@@ -45,9 +45,14 @@
 # 列表（只读，不碰 Docker）
 aisc conversation list --workspace <path> [--format json|text]
 
-# 恢复（需要运行中的容器）
-aisc conversation resume --workspace <path> --conversation-id <id> --agent <claude|codex> [--format json]
+# 预校验（captured、非交互、纯 JSON envelope）
+aisc conversation preflight --workspace <path> --conversation-id <id> --agent <claude|codex> [--format json]
 ```
+
+**`conversation resume` 不作为公共 CLI 命令存在**（方案 B 冻结）：恢复动作
+是 Workbench Rust IPC 的两步编排（preflight + open_session --resume-id），
+完整流程依赖 PTY Channel 与 pane 生命周期，拆出独立 CLI 命令无使用场景且
+与 captured/interactive 边界冲突。§1b 仅暴露 `list` 与 `preflight`。
 
 **list 输出 schema**：
 ```json
@@ -208,8 +213,8 @@ Rust `open_session` 增加可选 `resume_conversation_id` 参数 → 透传 wrap
 **预校验实现（v5 重构：sidecar 层 captured preflight，不在 wrapper 内）**
 
 v4 的 wrapper 内预校验否决——`open_interactive` 是交互 PTY 路径，wrapper 的
-stderr 直接进终端，**无结构化控制面**供 sidecar 解析。v5 把预校验提到
-Python CLI 的 `conversation resume` 命令内（captured 模式）：
+stderr 直接进终端，**无结构化控制面**供 sidecar 解析。v5 起预校验是独立
+子命令 `aisc conversation preflight`（captured 模式，纯 JSON envelope）：
 
 ```python
 # src/aisc/cli/commands/conversation.py
@@ -395,7 +400,10 @@ if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
   }
   # Append to existing PROMPT_COMMAND, don't overwrite; the guard above
   # makes double-source impossible, so no double-append.
-  case ";$PROMPT_COMMAND;" in
+  # 注：仅支持字符串形式 PROMPT_COMMAND；Bash 数组形式（PROMPT_COMMAND=(a b)）
+  # 本期不兼容——rcfile 在用户 rc 之后 source，数组 hook 罕见于交互 shell；
+  # 如用户确用数组形式，AISC hook 不追加（无损降级，HISTFILE/ble.sh 不受影响）。
+  case ";${PROMPT_COMMAND};" in
     *;_aisc_log_history;*) ;;                      # already present
     *) PROMPT_COMMAND="_aisc_log_history;${PROMPT_COMMAND}" ;;
   esac
@@ -544,10 +552,35 @@ interface ConversationSummary {
 - 加载状态：现有 artifacts-panel 的 loading 复用
 - 刷新：进入变更页时刷新（现有 `refreshArtifacts` 时机）+ 手动刷新按钮
 
-### 4d. 恢复中状态
+### 4d. 恢复编排（v7：preflight 成功前不建 tab/pane/channel）
 
-- 恢复按钮点击 → loading → 成功：跳转新终端页签 / 失败：行内错误提示（不弹窗）
-- 重复点击防抖：恢复进行中禁用所有对话行的点击
+当前 `openPane` 是「先建 pane/session_id/Channel → 再调 IPC」（workspaceRuntime.ts:1110-1157）。
+conversation_resume 不能走这条路径（preflight 失败时 pane 已存在）。**前端编排冻结**：
+
+```
+对话行点击
+  → 设置 conversationResumePending = conversation_id（行内 spinner，全局禁点）
+  → 调 Rust IPC conversation_resume(runtime_id, workspace, conversation_id, agent, on_event)
+      │
+      ├─ Rust 内部第一步：run_control preflight 失败
+      │    → IPC 返回 WorkbenchError
+      │    → 前端：清 pending，行内错误提示；tab/pane/Channel 均未创建
+      │
+      └─ preflight 成功 → Rust 第二步 open_session
+           → 前端在 on_event 首次收到事件前：
+             ① 调 store.createTab(agent) 生成 tab/pane（现有路径，pane.sessionState=starting）
+             ② 用返回的 terminal_session_id 绑定 pane
+             ③ Channel 在 Rust 侧已创建并传入——前端不预建 Channel
+           → agent 输出流经 on_event → pane 渲染
+           → open_session 失败（provider 层）：tab 已建，走现有 session-exit 失败 UX
+```
+
+**关键规则**：Channel 由 Rust `conversation_resume` 参数携带（前端传入的是
+空 Channel 框架，Tauri 绑定后事件自动回流）——前端不预建任何 PTY 基础设施，
+也不需要「未提交 Channel 的释放」逻辑。pane/tab 创建发生在 IPC 调用**之后**
+（前端 `await` 返回或首个事件到达时），preflight 失败自然零残留。
+
+- 重复点击防抖：`conversationResumePending !== null` 时禁用所有对话行点击
 
 ### 4e. 工作区切换
 
