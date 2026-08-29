@@ -1,6 +1,6 @@
 # v2.1.8 设计文档：Agent 历史对话管理 + Bash 体验增强
 
-> 日期：2026-08-29 · 状态：待审阅（v4，审阅 v3 的 3 P0 + 4 P1 已逐项回应）
+> 日期：2026-08-29 · 状态：待审阅（v5，审阅 v4 的 2 P0 未过 + 4 P1 已逐项修正）
 > 方案 A（薄层直读）
 
 ## 0. 审阅回应摘要
@@ -35,7 +35,7 @@
 | 消息内容路径 | `message.content`（string 或 `[{type:'text',text}]` 列表） | `payload.content`（`[{type:'input_text',text}]` 列表） |
 | timestamp 字段 | 每行 `timestamp`（ISO 8601） | 每行 `timestamp`（ISO 8601） |
 | 原生 title | 无 | 无 |
-| resume argv | `claude --resume <session-id>` | `codex resume <session-id>` |
+| resume argv | `claude --resume <conversation_id>` | `codex resume <conversation_id>` |
 | max_file_size | 10MB（超限**不全文解析**：头部 200 行扫描出 title/time，返回占位 summary，`resumable:false` + `unavailable_reason=file_too_large`，`message_count:null`——详见 §1e） | 同左 |
 | malformed 行策略 | 跳过不完整 JSON 行；零可解析行 → 排除出列表 | 同左 |
 
@@ -200,16 +200,67 @@ Rust `open_session` 增加可选 `resume_conversation_id` 参数 → 透传 wrap
 「spawn 后不建 tab」需要新握手协议，净增复杂度买不到体验；预校验把可同步判定
 的失败（占绝大多数：点错/已删）拦在 spawn 前，剩余长尾沿用成熟失败 UX。
 
-**预校验实现**（wrapper 内，spawn 前）：
+**预校验实现（v5 重构：sidecar 层 captured preflight，不在 wrapper 内）**
+
+v4 的 wrapper 内预校验否决——`open_interactive` 是交互 PTY 路径，wrapper 的
+stderr 直接进终端，**无结构化控制面**供 sidecar 解析。v5 把预校验提到
+Python CLI 的 `conversation resume` 命令内（captured 模式）：
+
 ```python
-if args.resume_id:
-    if agent == "claude":
-        base = Path(os.environ.get("CLAUDE_CONFIG_DIR", "")) / "projects"
-    elif agent == "codex":
-        base = Path(os.environ.get("CODEX_CONFIG_DIR", "")) / "sessions"
-    if not any(base.rglob(f"*{args.resume_id}*")):
-        _fail(3, "AISC_ERR_CONVERSATION_UNRESUMABLE", args.resume_id)
+# src/aisc/cli/commands/conversation.py
+def cmd_conversation_resume(args, emitter, effective_format):
+    # ── captured preflight（非交互、结构化错误信封路径）──
+    ws_key = workspace_key_for(args.workspace)
+    state = DataRootResolver().resolve(Path(args.workspace))
+    conv_id = args.conversation_id
+
+    # 精确 ID 校验（拒绝非 UUID 输入，不做 glob 子串匹配）
+    if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+                        r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", conv_id):
+        raise CliError(message=f"Invalid conversation ID: {conv_id}",
+                       exit_code=2, error_code="AISC_ERR_CONVERSATION_INVALID_ID")
+
+    # provider-specific 精确文件匹配（非 rglob 子串）
+    if args.agent == "claude":
+        base = state.workspace_dir / "claude" / "projects"
+        # Claude: 文件名 = <conversation_id>.jsonl，精确 stem 匹配
+        hit = any(
+            p.is_file() and p.stem == conv_id
+            for p in base.rglob("*.jsonl")
+        )
+    elif args.agent == "codex":
+        base = state.workspace_dir / "codex" / "sessions"
+        # Codex: rollout-<timestamp>-<uuid>.jsonl，解析文件名尾段 UUID
+        pat = re.compile(
+            r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-"
+            r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+            r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$")
+        hit = any(
+            p.is_file() and (m := pat.match(p.name)) and m.group(1).lower() == conv_id.lower()
+            for p in base.rglob("*.jsonl")
+        )
+    else:
+        raise CliError(message=f"Unsupported agent for resume: {args.agent}",
+                       exit_code=2, error_code="AISC_ERR_CONVERSATION_INVALID_AGENT")
+
+    if not hit:
+        raise CliError(
+            message=f"Conversation {conv_id} not found for agent {args.agent}",
+            exit_code=3, error_code="AISC_ERR_CONVERSATION_UNRESUMABLE")
+
+    # ── preflight 通过 → 转入现有 open_interactive PTY 路径 ──
+    # （wrapper 收到 --resume-id；此后失败走 session-exit 生命周期）
+    return _cmd_session_open_resume(args, emitter, effective_format)
 ```
+
+**错误传递链（冻结）**：preflight `CliError` → sidecar 统一 envelope
+`errors[0].code = AISC_ERR_CONVERSATION_UNRESUMABLE / _INVALID_ID / _INVALID_AGENT`
+→ Rust `map_aisc()` 新增三条中文映射 → `conversation_resume` IPC 返回
+`WorkbenchError` → 前端行内提示。**全程走现有 envelope 协议**，不新增通道。
+
+**wrapper 侧改动降为纯透传**：wrapper 只新增 `--resume-id` 参数 + provider argv
+转换 + `AISC_TERMINAL_SESSION_ID` 环境注入。**不做文件校验**（preflight 已在
+sidecar 层完成）。wrapper 内 `_fail` 签名不动。
 
 ## 3. Bash 体验增强
 
@@ -235,6 +286,8 @@ start_runtime (Python, runtime.py)
        -e AISC_WORKSPACE_HASH=<workspace_key>  # = workspace_key_for() 原始
          # SHA-256 hex（区别于 data-root 目录名 sha256-v1-<hex>；后者仅用于
          # 定位目录，SQLite 字段与诊断日志一律用原始 hex
+         # ⚠ T2 实装任务：当前 runtime.py:1139-1145 尚未传此 env——T2 需在
+         # docker create 的 -e 列表中新增（与 CLI_SCOPE 并列），非已有实现
        （scope 沿用现有 -e CLI_SCOPE=project|temporary，runtime.py:1139——
          不新造 AISC_SCOPE；bashrc 经 entrypoint 的 SCOPE 间接可得，不直接消费）
 
@@ -292,7 +345,7 @@ bashrc 内容：
 if [ "${AISC_BASHRC_LOADED:-0}" = "1" ]; then
     return 0 2>/dev/null || exit 0
 fi
-export AISC_BASHRC_LOADED=1
+AISC_BASHRC_LOADED=1   # 故意不 export：tmux 子 shell 不继承 → 可完整初始化
 
 # 1. Source user/system rc if present (non-blocking)
 [ -f /etc/bash.bashrc ] && source /etc/bash.bashrc
@@ -324,15 +377,17 @@ if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
     local _aisc_exit=$?                        # FIRST line: capture BEFORE anything
     local cmd
     cmd="$(history 1 | sed 's/^ *[0-9]* *//')"
-    [ -z "$cmd" ] && return
-    [ "$cmd" = "$_aisc_prev_cmd" ] && return  # dedupe consecutive
+    if [ -z "$cmd" ] || [ "$cmd" = "$_aisc_prev_cmd" ]; then
+      return "$_aisc_exit"                     # dedupe/empty still preserves code
+    fi
     _aisc_prev_cmd="$cmd"
     AISC_HIST_DB="$AISC_BASH_HISTORY_DB" \
     AISC_HIST_WS_HASH="$AISC_WORKSPACE_HASH" \
     AISC_HIST_SESSION_ID="$AISC_TERMINAL_SESSION_ID" \
     AISC_HIST_CMD="$cmd" AISC_HIST_CWD="$PWD" \
     AISC_HIST_EXIT="$_aisc_exit" \
-    python3 /usr/local/bin/lib/aisc_bash_history.py append 2>/dev/null || true
+    python3 /usr/local/bin/lib/aisc_bash_history.py append 2>/dev/null
+    return "$_aisc_exit"                       # LAST: restore original code
   }
   # Append to existing PROMPT_COMMAND, don't overwrite; the guard above
   # makes double-source impossible, so no double-append.
@@ -340,8 +395,6 @@ if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
     *;_aisc_log_history;*) ;;                      # already present
     *) PROMPT_COMMAND="_aisc_log_history;${PROMPT_COMMAND}" ;;
   esac
-  # 退出码透传：hook 不得改变用户 prompt 行为
-  return $_aisc_exit 2>/dev/null || true
 fi
 
 helper（镜像新增 /usr/local/bin/lib/aisc_bash_history.py；子命令冻结）：
@@ -541,7 +594,10 @@ After completing a task, suggest 2-3 logical next steps in concise Chinese.
 | Claude resume argv 生成 | `claude --resume <id>` |
 | Codex resume argv 生成 | `codex resume <id>` |
 | conversation_id ≠ terminal_session_id | 新 UUID 生成，原 ID 保留 |
-| 恢复不存在的 conversation_id | 预校验拦截：错误信封；**无 tab**；行内提示 |
+| 恢复不存在的 conversation_id（精确 stem/UUID 匹配失败） | sidecar preflight 拦截：`AISC_ERR_CONVERSATION_UNRESUMABLE` 信封；**无 tab**；行内提示 |
+| conversation_id 非 UUID 格式 | preflight `AISC_ERR_CONVERSATION_INVALID_ID`（exit 2） |
+| conversation_id 是另一会话的子串 | 精确匹配拒绝（不做子串命中） |
+| agent=bash 传 --resume-id | preflight `AISC_ERR_CONVERSATION_INVALID_AGENT` |
 | resume 后 provider 立即失败（损坏会话） | tab 已建，走现有 session-exit 失败 UX |
 | resume 会话文件损坏 | 错误信封 |
 | 无运行时容器时调 resume | 明确错误码 |
@@ -552,6 +608,8 @@ After completing a task, suggest 2-3 logical next steps in concise Chinese.
 | 用例 | 期望 |
 |---|---|
 | wrapper 用 --rcfile 启动 bash | rcfile 加载链生效 |
+| 同一 bash 重复 source（wrapper+shim 双路径） | 守卫拦截：不递归、PROMPT_COMMAND 恰好一个 AISC hook |
+| tmux 新 pane（继承已设 AISC_BASHRC_LOADED=1？） | 守卫未 export → 新 shell 完整初始化（ble/fzf/PROMPT_COMMAND 均生效） |
 | HISTFILE 持久化 | 命令写入后容器重启可读 |
 | SQLite 表结构 | 字段齐全 + WAL 启用 |
 | 多行命令写入 | 整条保存（含换行） |
