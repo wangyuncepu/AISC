@@ -1260,7 +1260,7 @@ class CodexModelCatalogHookTests(unittest.TestCase):
         self.assertEqual(http.call_count, 1)
         auth_header = http.call_args[0][1]["Authorization"]
         self.assertEqual(auth_header, "Bearer sk-live-9")
-        self.assertEqual(http.call_args[0][2], 3.0)  # short switch-time budget
+        self.assertEqual(http.call_args[0][2], 6.0)  # switch-time budget (CN providers need DNS+TLS+API)
         catalog = json.loads(
             (self.dir / ".codex" / A._CODEX_CATALOG_FILENAME).read_text(encoding="utf-8"))
         slugs = [m["slug"] for m in catalog["models"]]
