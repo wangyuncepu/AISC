@@ -284,7 +284,7 @@ def cmd_conversation_preflight(args, emitter, effective_format):
 
 **错误传递链（冻结）**：preflight `CliError` → sidecar 统一 envelope
 `errors[0].code = AISC_ERR_CONVERSATION_UNRESUMABLE / _INVALID_ID / _INVALID_AGENT`
-→ Rust `map_aisc()` 新增三条中文映射 → `conversation_resume` IPC 返回
+→ Rust `map_aisc()` 新增三条中文映射 → `conversation_preflight` IPC 返回
 `WorkbenchError` → 前端行内提示。**全程走现有 envelope 协议**，不新增通道。
 
 **wrapper 侧改动降为纯透传**：wrapper 只新增 `--resume-id` 参数 + provider argv
@@ -563,7 +563,7 @@ interface ConversationSummary {
 ### 4c. 交互
 
 - 每行：`[agent 图标] 标题 · 相对时间`（如 `claude 帮我写排序 · 5 分钟前`）
-- 点击可恢复行 → 调 `conversation_resume` → 新终端页签 → 自动激活
+- 点击可恢复行 → 调 `conversationPreflight` → 成功后创建 dormant tab + Channel → 调 `openSession(..., resume_conversation_id)` → 自动激活
 - 点击不可恢复行 → 行内提示「此对话无法恢复」（不弹窗）
 - 搜索：变更页顶部搜索框**同时搜索对话标题**（matcher 复用）
 - 分组按 `last_at` 降序混合排列（不按 agent 分组——用户关心时间线）
@@ -582,16 +582,34 @@ interface ConversationSummary {
       ├─ 失败 → 清 pending，行内错误；tab/pane/Channel 均未创建（零残留）
       │
       └─ 成功 → 以下全在 preflight 成功后执行：
-           ① store.createTab(agent) → tab/pane 创建（现有路径）
+           ① store.createTab(agent, { autoOpen: false }) → **dormant tab**（见下）
            ② new Channel<PtyEvent>()（前端构造）
            ③ ipc.openSession(..., ch, resume_conversation_id=conversation_id)
-           ④ 激活 tab；agent 输出经 ch → pane 渲染
+           ④ 成功后 store.activateTab(tabId)；agent 输出经 ch → pane 渲染
            ⑤ openSession 失败（provider 层）：tab 已建，走现有 session-exit
 ```
 
 **Channel 创建方 = 前端**（Tauri `Channel<T>` 只能由前端构造传给 Rust——与
 现有 `openPane` 完全一致，无新生命周期模式）。pane/tab 创建在 preflight
 成功**之后**——失败零残留。无「未提交 Channel」需要释放。
+
+**dormant tab 创建入口（v9 冻结）**：现有 `createTab(agent)` 会自动走
+`maybeOpenCreated → openTab → openPane → openSession`（无 resume），恢复
+流程需要**不自动开启会话**的变体：
+
+```typescript
+// workspaceRuntime.ts — createTab 增加选项（默认 autoOpen: true 不变）
+function createTab(agent: LaunchAgent, opts?: { autoOpen?: boolean }): string | null
+// opts.autoOpen === false 时：
+//   ✓ 创建 tab/pane 结构（tabs.push、pane sessionState = starting）
+//   ✓ 生成 session_id（pane 绑定）
+//   ✗ 不调用 maybeOpenCreated / openTab / openPane / openSession
+// 恢复流程在 preflight 成功后调 createTab(agent, { autoOpen: false })，
+// 自行创建 Channel 并调 openSession（恰一次，携带 resume_conversation_id）。
+```
+
+**防重复会话铁律**：恢复路径中 `openSession` 总调用次数 == 1，且该唯一调用
+携带 `resume_conversation_id`；`maybeOpenCreated` 在 dormant 模式下不触发。
 
 - 重复点击防抖：`conversationResumePending !== null` 时禁用所有对话行点击
 
@@ -645,7 +663,8 @@ After completing a task, suggest 2-3 logical next steps in concise Chinese.
 | Codex resume argv 生成 | `codex resume <id>` |
 | conversation_id ≠ terminal_session_id | 新 UUID 生成，原 ID 保留 |
 | 恢复不存在的 conversation_id（精确 stem/UUID 匹配失败） | preflight 拦截：`AISC_ERR_CONVERSATION_UNRESUMABLE` 信封；**不调用 open_session、不 spawn PTY、不建 tab**；行内提示 |
-| preflight 成功后 open_session 正常 | open_session 调用恰一次；`--resume-id` 透传 wrapper；`on_event` 收到 provider 输出 |
+| preflight 成功后 open_session 正常 | open_session 调用**恰一次**；`--resume-id` 透传 wrapper；`on_event` 收到 provider 输出 |
+| dormant tab 不触发普通会话 | `maybeOpenCreated` / `openPane` 零调用；无第二个 session_id |
 | preflight 通过但 provider 启动失败 | tab 已建；走 session-exit UX |
 | conversation_id 非 UUID 格式 | preflight `AISC_ERR_CONVERSATION_INVALID_ID`（exit 2） |
 | conversation_id 是另一会话的子串 | 精确匹配拒绝（不做子串命中） |
