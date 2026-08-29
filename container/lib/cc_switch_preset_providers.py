@@ -215,14 +215,18 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "name": "Zhipu GLM",
             "base_url": "https://open.bigmodel.cn/api/paas/v4",
             "anthropic_base_url": "https://open.bigmodel.cn/api/anthropic",
-            "model": "glm-5.2",
-            "_model_history": ["glm-5.2"],
+            # S8g-2 fix (2026-08-29 user correction): GLM-5.3 is the current
+            # flagship (official migrate guide: glm-5.3, context 1M, output
+            # 128K). glm-5.2 stays in _model_history — it was preset-written,
+            # so existing volumes upgrade on refresh instead of sticking.
+            "model": "glm-5.3",
+            "_model_history": ["glm-5.2", "glm-5.3"],
             "codex_api_format": "openai_responses",
             # S8g-2 (2026-08-29, user field report): without a model catalog
             # codex /model lists NOTHING (the catalog IS the picker's data
-            # source). GLM-5.2: Solid 1M context per docs.bigmodel.cn.
-            "model_catalog": [{"model": "glm-5.2", "contextWindow": 1_000_000}],
-            "description": "Zhipu GLM-5.2 flagship model service",
+            # source). GLM-5.3: 1M context per docs.bigmodel.cn.
+            "model_catalog": [{"model": "glm-5.3", "contextWindow": 1_000_000}],
+            "description": "Zhipu GLM-5.3 flagship model service",
         },
         {
             "id": "kimi",
