@@ -249,9 +249,15 @@ class S8gUpstreamFormatTests(unittest.TestCase):
 
     def test_codesome_preset_shape(self):
         codesome = next(p for p in H.PRESET_PROVIDERS if p["id"] == "codesome")
-        self.assertEqual(codesome["base_url"], "https://v5.codesome.cn/openai")
-        self.assertEqual(codesome["anthropic_base_url"], "https://v5.codesome.cn/api")
+        # Codex side: the vendor's Codesome-Group gateway (user-supplied
+        # official shape, 2026-08-29) — Responses-native, gpt-5.6-sol default.
+        self.assertEqual(codesome["base_url"], "https://cc.codesome.ai")
+        self.assertEqual(codesome["model"], "gpt-5.6-sol")
+        codex_config = H._settings_config("codex", codesome)["config"]
+        self.assertIn('base_url = "https://cc.codesome.ai"', codex_config)
+        self.assertIn('model = "gpt-5.6-sol"', codex_config)
         # Claude row: env-based, Anthropic side URL, no token written.
+        self.assertEqual(codesome["anthropic_base_url"], "https://v5.codesome.cn/api")
         claude = H._settings_config("claude", codesome)
         self.assertEqual(
             claude["env"]["ANTHROPIC_BASE_URL"], "https://v5.codesome.cn/api"

@@ -231,18 +231,21 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "description": "Moonshot Kimi K3 model service",
         },
         {
-            # S8g (2026-08-29, user-provided): Responses-only relay —
-            # /openai/responses serves, /openai/chat/completions is a hard
-            # 404, and /api/v1/messages is the Anthropic side (probed live).
-            # No public model list yet: leave model empty, map via the UI.
+            # S8g (2026-08-29, user-supplied official shape): the codex side
+            # is the vendor's Codesome-Group gateway — base cc.codesome.ai
+            # (probed live: /responses exists with Bearer auth; every other
+            # path falls through to the web console), Responses-native, default
+            # model gpt-5.6-sol. The claude side stays on the Anthropic-
+            # compatible v5 domain the user pinned. The API key never rides
+            # the preset (user-owned, by design).
             "id": "codesome",
-            "name": "Codesome",
-            "base_url": "https://v5.codesome.cn/openai",
+            "name": "Codesome-Group",
+            "base_url": "https://cc.codesome.ai",
             "anthropic_base_url": "https://v5.codesome.cn/api",
-            "model": "",
-            "_model_history": [],
+            "model": "gpt-5.6-sol",
+            "_model_history": ["gpt-5.6-sol"],
             "codex_api_format": "openai_responses",
-            "description": "Codesome relay (OpenAI Responses API)",
+            "description": "Codesome relay (OpenAI Responses API native)",
         },
     ]
 
