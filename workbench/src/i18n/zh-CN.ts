@@ -47,7 +47,6 @@ export const zhCN = {
   "picker.next": "下一步",
   "picker.hint": "Workbench 不会自动创建目录或 runtime；选择后执行只读预检。",
   "picker.recents": "最近工作区",
-  "picker.recentAgent": "-",
   "picker.showAll": "查看全部（还有 {n} 个）",
   "picker.collapse": "收起",
   "picker.rowMenu": "工作区操作菜单",

@@ -171,7 +171,6 @@ async function confirmForget(): Promise<void> {
             >
               <span class="r-name">{{ basename(w.path) }}</span>
               <span class="r-path">{{ w.path }}</span>
-              <span class="r-agent">{{ w.last_agent || "-" }}</span>
             </button>
             <button
               class="kebab"
@@ -266,7 +265,6 @@ async function confirmForget(): Promise<void> {
   color: var(--text-muted); font-family: var(--font-mono); font-size: var(--font-xs);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.r-agent { color: var(--info); font-size: var(--font-xs); }
 .kebab {
   flex: none; width: 28px; border: none; background: transparent; color: var(--text-muted);
   cursor: pointer; font-size: var(--font-md); border-radius: var(--radius-sm);

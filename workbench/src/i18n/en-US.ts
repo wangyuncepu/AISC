@@ -47,7 +47,6 @@ export const enUS: Record<string, string> = {
   "picker.next": "Next",
   "picker.hint": "Workbench does not create directories or runtimes; preflight is read-only.",
   "picker.recents": "Recent workspaces",
-  "picker.recentAgent": "-",
   "picker.showAll": "Show all ({n} more)",
   "picker.collapse": "Collapse",
   "picker.rowMenu": "Workspace actions menu",
