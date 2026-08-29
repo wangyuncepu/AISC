@@ -1,0 +1,1 @@
+{"type": "response_item", "timestamp": "2026-08-29T10:00:00Z", "ordinal": 1, "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Help me sort an array"}]}}
