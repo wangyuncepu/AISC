@@ -1,6 +1,6 @@
 # v2.1.8 设计文档：Agent 历史对话管理 + Bash 体验增强
 
-> 日期：2026-08-29 · 状态：待审阅（v5，审阅 v4 的 2 P0 未过 + 4 P1 已逐项修正）
+> 日期：2026-08-29 · 状态：待审阅（v6，审阅 v5 的 P0-3 残留 + UUID 严格化已修）
 > 方案 A（薄层直读）
 
 ## 0. 审阅回应摘要
@@ -79,14 +79,18 @@ aisc conversation resume --workspace <path> --conversation-id <id> --agent <clau
 | `conversation_id` | provider 原生会话 ID（Claude/Codex 的 UUID） | provider CLI 写入 JSONL 文件名 |
 | `terminal_session_id` | Workbench PTY 生命周期 UUID（新生成） | Rust `uuid()` |
 
-恢复流程（参数命名统一：wrapper 层一律 `--resume-id`）：
-1. 前端调 IPC `conversation_resume(workspace, conversation_id, agent)`
-2. Rust 生成新 `terminal_session_id = uuid()`
-3. Rust 调现有 `open_session` 路径，wrapper argv 追加 `--resume-id <conversation_id>`
+恢复流程（v6：Rust 编排两步——captured preflight + interactive open）：
+1. 前端调 IPC `conversation_resume(runtime_id, workspace, conversation_id, agent, on_event)`（签名同 §1f）
+2. **Rust 第一步**：`run_control`（captured）执行 `aisc conversation preflight --workspace <path> --conversation-id <id> --agent <agent>`
+   → 失败：envelope 错误 → IPC 返回 `WorkbenchError` → **不建 tab**，行内提示
+   → 成功：进入第二步
+3. **Rust 第二步**：生成新 `terminal_session_id = uuid()` → 调现有 `open_session` 路径（含 `on_event` Channel），sidecar argv 追加 `--resume-id <conversation_id>`
 4. wrapper 内部转换 provider argv：
    - claude → `claude --resume <conversation_id>`
    - codex  → `codex resume <conversation_id>`
 5. 返回 `{terminal_session_id, conversation_id, agent}` — 前端用 terminal_session_id 管理新页签
+
+**两步边界（冻结）**：preflight 是独立 CLI 子命令 `aisc conversation preflight`（非交互、纯 JSON envelope 输出），与 `open_session` 的交互 PTY 路径完全解耦——不引入 token、不共用 I/O 模式。Rust `conversation_resume` 编排两步的调用顺序。
 
 ### 1d. 标题提取（脱敏规范）
 
@@ -121,7 +125,7 @@ aisc conversation resume --workspace <path> --conversation-id <id> --agent <clau
 }
 ```
 
-### 1f. Rust IPC（v4 冻结：resume 直接接管 PTY）
+### 1f. Rust IPC（v6 冻结：resume 接管 PTY + sidecar preflight 编排）
 
 ```rust
 #[tauri::command]
@@ -129,9 +133,10 @@ pub async fn conversation_list(
     workspace: String,
 ) -> Result<ConversationListResult, WorkbenchError>;
 
-// 方案 A（冻结）：resume 即 open_session 的 resume 变体——同通道、同 PTY
-// 事件模型。runtime_id 由前端传入（与普通建 tab 相同来源：当前活跃
-// runtime）；on_event 是标准 PtyEvent Channel，agent 输出走既有 pane 流。
+// 方案 A（冻结）：resume = Rust 编排两步——
+//   1) run_control captured: aisc conversation preflight（§2 代码草案）
+//   2) open_session(..., --resume-id, on_event)（现有 PTY 事件模型）
+// runtime_id 由前端传入；on_event 是标准 PtyEvent Channel。
 #[tauri::command]
 pub async fn conversation_resume(
     app: AppHandle,
@@ -193,7 +198,7 @@ Rust `open_session` 增加可选 `resume_conversation_id` 参数 → 透传 wrap
 
 | 阶段 | 失败类型 | 行为 |
 |---|---|---|
-| PTY spawn **前**（wrapper 同步预校验） | conversation 文件不存在（对照挂载的 claude/codex 目录）/ `--resume-id` 传给不支持的 agent | wrapper 结构化错误退出（exit 3 + `AISC_ERR_CONVERSATION_UNRESUMABLE`）→ **sidecar 信封错误 → IPC 返回错误 → 前端不建 tab**，对话行内提示。此阶段失败发生在 spawn 之前，无 PTY 可泄漏 |
+| PTY spawn **前**（sidecar captured preflight，见 §2 代码草案） | conversation 文件不存在（精确 ID 匹配）/ conversation_id 非 UUID v4 / agent 不支持 resume | sidecar `conversation preflight` CliError → **现有 envelope 协议**（`errors[0].code`）→ Rust `map_aisc` → IPC 返回 `WorkbenchError` → **前端不建 tab**，对话行内提示。全程 captured 模式，无 PTY 泄漏 |
 | PTY spawn **后**（provider 内部） | 会话文件损坏、provider 版本不支持该 id、resume 后立即崩溃 | 走**现有 session-exit 生命周期**：tab 已建（PTY 在），agent 退出事件照常上屏——与普通 agent 启动失败完全一致（用户看到退出信息，可关 tab） |
 
 理由：open_session 的 reserve→spawn→返回 是既有原子路径（session.rs:347-483），
@@ -208,15 +213,15 @@ Python CLI 的 `conversation resume` 命令内（captured 模式）：
 
 ```python
 # src/aisc/cli/commands/conversation.py
-def cmd_conversation_resume(args, emitter, effective_format):
-    # ── captured preflight（非交互、结构化错误信封路径）──
+def cmd_conversation_preflight(args, emitter, effective_format):
+    """独立子命令：aisc conversation preflight（captured、非交互、纯 JSON）。"""
     ws_key = workspace_key_for(args.workspace)
     state = DataRootResolver().resolve(Path(args.workspace))
     conv_id = args.conversation_id
 
     # 精确 ID 校验（拒绝非 UUID 输入，不做 glob 子串匹配）
-    if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
-                        r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", conv_id):
+    if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}"
+                        r"-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}", conv_id):
         raise CliError(message=f"Invalid conversation ID: {conv_id}",
                        exit_code=2, error_code="AISC_ERR_CONVERSATION_INVALID_ID")
 
@@ -233,8 +238,8 @@ def cmd_conversation_resume(args, emitter, effective_format):
         # Codex: rollout-<timestamp>-<uuid>.jsonl，解析文件名尾段 UUID
         pat = re.compile(
             r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-"
-            r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
-            r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$")
+            r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}"
+            r"-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})\.jsonl$")
         hit = any(
             p.is_file() and (m := pat.match(p.name)) and m.group(1).lower() == conv_id.lower()
             for p in base.rglob("*.jsonl")
@@ -248,9 +253,8 @@ def cmd_conversation_resume(args, emitter, effective_format):
             message=f"Conversation {conv_id} not found for agent {args.agent}",
             exit_code=3, error_code="AISC_ERR_CONVERSATION_UNRESUMABLE")
 
-    # ── preflight 通过 → 转入现有 open_interactive PTY 路径 ──
-    # （wrapper 收到 --resume-id；此后失败走 session-exit 生命周期）
-    return _cmd_session_open_resume(args, emitter, effective_format)
+    # preflight 通过 → 返回成功 envelope（Rust 接着调 open_session + --resume-id）
+    return {"preflight_ok": True, "conversation_id": conv_id, "agent": args.agent}, 0, []
 ```
 
 **错误传递链（冻结）**：preflight `CliError` → sidecar 统一 envelope
@@ -594,7 +598,9 @@ After completing a task, suggest 2-3 logical next steps in concise Chinese.
 | Claude resume argv 生成 | `claude --resume <id>` |
 | Codex resume argv 生成 | `codex resume <id>` |
 | conversation_id ≠ terminal_session_id | 新 UUID 生成，原 ID 保留 |
-| 恢复不存在的 conversation_id（精确 stem/UUID 匹配失败） | sidecar preflight 拦截：`AISC_ERR_CONVERSATION_UNRESUMABLE` 信封；**无 tab**；行内提示 |
+| 恢复不存在的 conversation_id（精确 stem/UUID 匹配失败） | preflight 拦截：`AISC_ERR_CONVERSATION_UNRESUMABLE` 信封；**不调用 open_session、不 spawn PTY、不建 tab**；行内提示 |
+| preflight 成功后 open_session 正常 | open_session 调用恰一次；`--resume-id` 透传 wrapper；`on_event` 收到 provider 输出 |
+| preflight 通过但 provider 启动失败 | tab 已建；走 session-exit UX |
 | conversation_id 非 UUID 格式 | preflight `AISC_ERR_CONVERSATION_INVALID_ID`（exit 2） |
 | conversation_id 是另一会话的子串 | 精确匹配拒绝（不做子串命中） |
 | agent=bash 传 --resume-id | preflight `AISC_ERR_CONVERSATION_INVALID_AGENT` |
