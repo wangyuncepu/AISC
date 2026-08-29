@@ -701,6 +701,30 @@ os.chmod(tmp, 0o600)
 os.replace(tmp, "/run/aisc/runtime-context.json")
 PYEOF
     echo "✅ AISC runtime idle 模式就绪 (runtime_id=${AISC_RUNTIME_ID:-}, scope=${SCOPE})"
+
+    # v2.1.8 T2: bash history paths — reuse the existing runtime mount
+    # (workspaces/<hash>/runtime → /root/.local/state/cc-switch). The
+    # directory name is legacy; its role now includes bash runtime data.
+    AISC_BASH_HISTORY_DIR="/root/.local/state/cc-switch"
+    export AISC_BASH_HISTORY_DIR
+    export AISC_BASH_HISTORY_FILE="${AISC_BASH_HISTORY_DIR}/.bash_history"
+    export AISC_BASH_HISTORY_DB="${AISC_BASH_HISTORY_DIR}/bash_history.db"
+    # Also expose into the runtime context for host-side tooling.
+    python3 -c "
+import json
+p = '/run/aisc/runtime-context.json'
+ctx = json.load(open(p))
+ctx['bash_history_file'] = '${AISC_BASH_HISTORY_FILE}'
+ctx['bash_history_db'] = '${AISC_BASH_HISTORY_DB}'
+json.dump(ctx, open(p, 'w'), indent=2, ensure_ascii=False)
+" 2>/dev/null || true
+
+    # Retention: trim to the most recent N rows (best-effort).
+    if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -f "$AISC_BASH_HISTORY_DB" ]; then
+        AISC_HIST_DB="$AISC_BASH_HISTORY_DB" \
+            python3 /usr/local/bin/lib/aisc_bash_history.py retain 2>/dev/null || true
+    fi
+
     exec sleep infinity
 fi
 

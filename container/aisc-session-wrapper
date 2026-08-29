@@ -167,7 +167,7 @@ def _binary_available(binary: str) -> bool:
     return shutil.which(binary) is not None
 
 
-def _spawn_agent_foreground(binary: str, env: Dict[str, str]):
+def _spawn_agent_foreground(binary: str, argv: list, env: Dict[str, str]):
     """Fork+exec the agent in its own process group, foreground on the PTY.
 
     The child blocks before ``exec`` until the parent has called
@@ -186,7 +186,7 @@ def _spawn_agent_foreground(binary: str, env: Dict[str, str]):
             os.close(sync_w)
             os.read(sync_r, 1)  # block until parent made us foreground
             os.close(sync_r)
-            os.execvpe(binary, [binary], env)
+            os.execvpe(binary, argv, env)
         except BaseException:
             os._exit(127)
     # parent
@@ -237,7 +237,15 @@ def _cmd_open(args: argparse.Namespace) -> int:
             f"context={ctx.get('runtime_id')} request={args.runtime_id}"
         )
     env = _rebuild_env(ctx)
+    # v2.1.8 T2: per-PTY session ID for the SQLite history chain.
+    env["AISC_TERMINAL_SESSION_ID"] = args.session_id
+
     binary = AGENT_BINARIES[args.agent]
+    argv = [binary]
+    # v2.1.8 T2: bash uses the AISC-managed rcfile (HISTFILE, ble.sh, fzf,
+    # SQLite hook). Other agents use their own init paths.
+    if args.agent == "bash" and os.path.isfile("/usr/local/share/aisc/bashrc"):
+        argv = ["bash", "--rcfile", "/usr/local/share/aisc/bashrc"]
 
     if not _binary_available(binary):
         record = _new_record(args, "failed")
@@ -252,7 +260,7 @@ def _cmd_open(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTTOU, signal.SIG_IGN)
     signal.signal(signal.SIGTTIN, signal.SIG_IGN)
 
-    pid, old_fg = _spawn_agent_foreground(binary, env)
+    pid, old_fg = _spawn_agent_foreground(binary, argv, env)
 
     start_ticks = _read_start_ticks(pid)
     record = _new_record(args, "running")

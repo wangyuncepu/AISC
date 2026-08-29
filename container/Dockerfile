@@ -56,7 +56,9 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 #   git/curl/tmux      — Claude Code 常用底层依赖
 #   iptables/iproute2  — Mihomo TUN auto-route 操纵 iptables 与路由表所必需
 #   ca-certificates    — mihomo/geodata 经 https 下载所需
+#   fzf/neovim/ripgrep — v2.1.8 T2 Bash 体验增强（模糊搜索/编辑器/快速搜索）
 RUN apt-get update && apt-get install -y git curl tmux iptables iproute2 ca-certificates \
+    fzf neovim ripgrep unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # ==========================================
@@ -380,6 +382,48 @@ RUN set -eux; \
     rm -f /tmp/ccs.tar.gz; \
     /usr/local/bin/cc-switch-real --version
 
+# ==========================================
+# v2.1.8 T2: yazi 文件管理器（静态二进制，GitHub release，CN mirror fallback）
+# ==========================================
+ARG YAZI_VERSION=25.2.26
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in amd64) yazi_arch=x86_64-unknown-linux-musl;; arm64|aarch64) yazi_arch=aarch64-unknown-linux-musl;; *) echo "unsupported arch $arch for yazi"; exit 1 ;; esac; \
+    yazi_base="https://github.com/sxyazi/yazi/releases/download/v${YAZI_VERSION}/yazi-${yazi_arch}.zip"; \
+    if [ "$USE_CN_MIRROR" = "1" ]; then yazi_mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ "; else yazi_mirrors=""; fi; \
+    ok=0; \
+    for m in $yazi_mirrors ""; do \
+        u="${m}${yazi_base}"; echo "⬇️  yazi try: $u"; \
+        if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
+                --connect-timeout 8 --max-time 60 "$u" -o /tmp/yazi.zip; then ok=1; break; fi; \
+    done; \
+    [ "$ok" = "1" ] || { echo "❌ yazi 下载失败"; exit 1; }; \
+    unzip -o /tmp/yazi.zip -d /tmp/yazi-extract; \
+    mv "/tmp/yazi-extract/yazi-${yazi_arch}/yazi" /usr/local/bin/yazi; \
+    chmod +x /usr/local/bin/yazi; \
+    rm -rf /tmp/yazi.zip /tmp/yazi-extract; \
+    /usr/local/bin/yazi --version
+
+# ==========================================
+# v2.1.8 T2: ble.sh（fish-style ghost text for bash）
+# 版本 pin：冻结 nightly-20250829（可复现构建）
+# ==========================================
+ARG BLE_SH_VERSION=nightly-20250829
+RUN set -eux; \
+    ble_base="https://github.com/akinomyoga/ble.sh/releases/download/${BLE_SH_VERSION}/ble-${BLE_SH_VERSION}.tar.xz"; \
+    if [ "$USE_CN_MIRROR" = "1" ]; then ble_mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ "; else ble_mirrors=""; fi; \
+    ok=0; \
+    for m in $ble_mirrors ""; do \
+        u="${m}${ble_base}"; echo "⬇️  ble.sh try: $u"; \
+        if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
+                --connect-timeout 8 --max-time 60 "$u" -o /tmp/ble.tar.xz; then ok=1; break; fi; \
+    done; \
+    [ "$ok" = "1" ] || { echo "❌ ble.sh 下载失败"; exit 1; }; \
+    mkdir -p /usr/local/share/ble.sh; \
+    tar -xJf /tmp/ble.tar.xz -C /usr/local/share/ble.sh --strip-components=1; \
+    rm -f /tmp/ble.tar.xz; \
+    [ -f /usr/local/share/ble.sh/ble.sh ] || { echo "❌ ble.sh 文件缺失"; exit 1; }
+
 COPY container/cc-switch-wrapper /usr/local/bin/cc-switch
 RUN sed -i 's/\r$//' /usr/local/bin/cc-switch \
     && chmod +x /usr/local/bin/cc-switch
@@ -398,6 +442,17 @@ COPY container/claude-settings.json /usr/local/bin/lib/aisc-claude-settings-base
 # copies to /root/AGENTS.md ONLY if the user doesn't have one; disable with
 # AISC_AGENT_INSTRUCTIONS=off.
 COPY container/agent-instructions.md /usr/local/share/aisc/agent-instructions.md
+
+# v2.1.8 T2: AISC-managed bashrc (recursion-guarded, HISTFILE, ble.sh, fzf,
+# SQLite hook via Python helper) + the /root/.bashrc shim that sources it
+# (tmux sub-shell closure). The helper lives in lib/ alongside the adapter.
+COPY container/aisc-bashrc /usr/local/share/aisc/bashrc
+COPY container/lib/aisc_bash_history.py /usr/local/bin/lib/aisc_bash_history.py
+RUN echo '# >>> aisc managed >>>' >> /root/.bashrc \
+    && echo 'if [ -f /usr/local/share/aisc/bashrc ] && [[ $- == *i* ]]; then' >> /root/.bashrc \
+    && echo '    source /usr/local/share/aisc/bashrc' >> /root/.bashrc \
+    && echo 'fi' >> /root/.bashrc \
+    && echo '# <<< aisc managed <<<' >> /root/.bashrc
 
 # cc-switch 离线 skills：元技能说明 + 已暂存插件中的实际 skill 内容。
 COPY container/cc-switch-skills/ /opt/aisc/skills/
