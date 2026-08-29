@@ -88,7 +88,7 @@ class FixtureDrivenPresetTests(unittest.TestCase):
         # v7 (S8g): codex upstream format flips to openai_responses +
         # codesome joins — existing volumes must refresh, so the format
         # version is part of the revision hash.
-        self.assertEqual(H.PRESET_FORMAT_VERSION, 7)
+        self.assertEqual(H.PRESET_FORMAT_VERSION, 8)
         base_revision = H.preset_revision("claude")
         # A mutated fixture must yield a different revision (refresh triggers).
         mutated = json.loads(json.dumps(deepseek()))
@@ -265,8 +265,31 @@ class S8gUpstreamFormatTests(unittest.TestCase):
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", claude["env"])
 
     def test_preset_revision_bumped_for_the_format_migration(self):
-        # Existing volumes must refresh: v7 (format flip + codesome).
-        self.assertEqual(H.PRESET_FORMAT_VERSION, 7)
+        # Existing volumes must refresh: v7 (format flip + codesome),
+        # v8 (zhipu/kimi/codesome model catalogs — /model listed nothing).
+        self.assertEqual(H.PRESET_FORMAT_VERSION, 8)
+
+    def test_every_preset_carries_a_codex_model_catalog(self):
+        # S8g-2 (user field report): without model_catalog the cc-switch
+        # switch generates no catalog file and codex /model shows NOTHING.
+        # Exception: volcengine-ark carries no model at all (the user
+        # configures an endpoint ID) — nothing to catalog.
+        for provider in H.PRESET_PROVIDERS:
+            if not provider.get("model"):
+                self.assertNotIn(
+                    "modelCatalog",
+                    H._settings_config("codex", provider),
+                    provider["id"],
+                )
+                continue
+            catalog = provider.get("model_catalog") or []
+            self.assertTrue(
+                catalog and catalog[0].get("model"),
+                f"{provider['id']} must carry a codex model catalog",
+            )
+            settings = H._settings_config("codex", provider)
+            self.assertIn("modelCatalog", settings, provider["id"])
+            self.assertIn("model_context_window", settings["config"], provider["id"])
 
 
 class LegacyModelOwnershipTests(unittest.TestCase):

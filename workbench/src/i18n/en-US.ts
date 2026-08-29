@@ -289,7 +289,7 @@ export const enUS: Record<string, string> = {
   "ccswitch.activateHint": "Click to switch to this provider",
   "ccswitch.currentHint": "Current provider",
   "ccswitch.notConfiguredHint": "Not configured (set its base URL / key first)",
-  "ccswitch.hiddenRows": "Hidden: direct-official placeholder rows (claude-official, default) that cannot be switched to",
+  "ccswitch.usageHint": "Add an API key, then click a row to activate its proxy route",
   "ccswitch.cancelProxyConfirm": "Stop using {name} and go back to the official direct configuration?",
   "ccswitch.cancelProxyHint": "Click to cancel the proxy and restore official direct",
   "ccswitch.officialDirect": "Official direct",

@@ -289,7 +289,7 @@ export const zhCN = {
   "ccswitch.activateHint": "点击切换到此 provider",
   "ccswitch.currentHint": "当前使用的 provider",
   "ccswitch.notConfiguredHint": "未配置（需先填写 Base URL / 密钥）",
-  "ccswitch.hiddenRows": "已隐藏 N 个不可切换的官方/直连占位行（claude-official、default 等）",
+  "ccswitch.usageHint": "添加 API Key 后，点击对应条目即可启动代理",
   "ccswitch.cancelProxyConfirm": "取消使用 {name}，恢复官方直连配置？",
   "ccswitch.cancelProxyHint": "点击取消代理，恢复官方直连",
   "ccswitch.officialDirect": "官方直连",

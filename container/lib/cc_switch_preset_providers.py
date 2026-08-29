@@ -218,6 +218,10 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "model": "glm-5.2",
             "_model_history": ["glm-5.2"],
             "codex_api_format": "openai_responses",
+            # S8g-2 (2026-08-29, user field report): without a model catalog
+            # codex /model lists NOTHING (the catalog IS the picker's data
+            # source). GLM-5.2: Solid 1M context per docs.bigmodel.cn.
+            "model_catalog": [{"model": "glm-5.2", "contextWindow": 1_000_000}],
             "description": "Zhipu GLM-5.2 flagship model service",
         },
         {
@@ -228,6 +232,8 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "model": "kimi-k3",
             "_model_history": ["kimi-k3"],
             "codex_api_format": "openai_responses",
+            # Kimi K3: up to 1M context (2.8T params, tiered by plan).
+            "model_catalog": [{"model": "kimi-k3", "contextWindow": 1_000_000}],
             "description": "Moonshot Kimi K3 model service",
         },
         {
@@ -245,6 +251,9 @@ def build_preset_providers(fixture_path: Path = FIXTURE_PATH) -> list[dict[str, 
             "model": "gpt-5.6-sol",
             "_model_history": ["gpt-5.6-sol"],
             "codex_api_format": "openai_responses",
+            # GPT-5.6 Sol: ~1.05M native context; the Codex-side convention
+            # pins model_context_window = 1_000_000 (community 3-line config).
+            "model_catalog": [{"model": "gpt-5.6-sol", "contextWindow": 1_000_000}],
             "description": "Codesome relay (OpenAI Responses API native)",
         },
     ]
@@ -262,7 +271,9 @@ MARKER_TEMPLATE = ".aisc-preset-providers-{agent}.sha256"
 # openai_responses (DeepSeek flips off the anthropic translation and its
 # codex base off /anthropic), and the codesome preset joins — existing
 # volumes must refresh their codex rows and metas.
-PRESET_FORMAT_VERSION = 7
+# v8 (S8g-2, 2026-08-29): zhipu/kimi/codesome gain model catalogs — without
+# one codex /model lists nothing. Existing volumes refresh their codex rows.
+PRESET_FORMAT_VERSION = 8
 # Preset provider ids removed from PRESET_PROVIDERS, mapped to a fingerprint
 # that identifies the old preset's settings_config. On refresh an id is deleted
 # only if its stored config still carries the fingerprint, so a user who
