@@ -75,7 +75,7 @@ aisc conversation preflight --workspace <path> --conversation-id <id> --agent <c
 
 `unavailable_reason?: "file_too_large" | "malformed" | "unsupported"`（resumable=false 时必有）。
 
-**resume 输出**：信封 `{terminal_session_id: "<new-uuid>", agent, conversation_id}` 或错误。
+**preflight 输出**：成功 `{conversation_id, agent}` / 失败 `WorkbenchError`。恢复动作由前端两调用完成（§1c）。
 
 ### 1c. ID 分离（冻结）
 
@@ -84,18 +84,27 @@ aisc conversation preflight --workspace <path> --conversation-id <id> --agent <c
 | `conversation_id` | provider 原生会话 ID（Claude/Codex 的 UUID） | provider CLI 写入 JSONL 文件名 |
 | `terminal_session_id` | Workbench PTY 生命周期 UUID（新生成） | Rust `uuid()` |
 
-恢复流程（v6：Rust 编排两步——captured preflight + interactive open）：
-1. 前端调 IPC `conversation_resume(runtime_id, workspace, conversation_id, agent, on_event)`（签名同 §1f）
-2. **Rust 第一步**：`run_control`（captured）执行 `aisc conversation preflight --workspace <path> --conversation-id <id> --agent <agent>`
-   → 失败：envelope 错误 → IPC 返回 `WorkbenchError` → **不建 tab**，行内提示
-   → 成功：进入第二步
-3. **Rust 第二步**：生成新 `terminal_session_id = uuid()` → 调现有 `open_session` 路径（含 `on_event` Channel），sidecar argv 追加 `--resume-id <conversation_id>`
-4. wrapper 内部转换 provider argv：
-   - claude → `claude --resume <conversation_id>`
-   - codex  → `codex resume <conversation_id>`
-5. 返回 `{terminal_session_id, conversation_id, agent}` — 前端用 terminal_session_id 管理新页签
+恢复流程（v8：前端编排两调用——与 Tauri Channel 模型一致）：
 
-**两步边界（冻结）**：preflight 是独立 CLI 子命令 `aisc conversation preflight`（非交互、纯 JSON envelope 输出），与 `open_session` 的交互 PTY 路径完全解耦——不引入 token、不共用 I/O 模式。Rust `conversation_resume` 编排两步的调用顺序。
+**调用 1**：前端调 IPC `conversation_preflight(workspace, conversation_id, agent)`
+  → Rust `run_control`（captured）执行 `aisc conversation preflight`
+  → 失败：`WorkbenchError` → **前端不建 tab/pane/Channel**，行内提示
+  → 成功：进入调用 2
+
+**调用 2**（前端在 preflight 成功后执行）：
+  a. 创建 tab/pane（现有 `openPane` 路径：生成 session_id、pane.sessionState=starting）
+  b. 创建 `Channel<PtyEvent>`（前端创建——**Tauri Channel 只能由前端构造传给 Rust**）
+  c. 调现有 `open_session(runtime_id, workspace, session_id, agent, ch, resume_conversation_id)`
+     → Rust 透传 `--resume-id <conversation_id>` 给 wrapper
+     → wrapper 转换 provider argv：
+       - claude → `claude --resume <conversation_id>`
+       - codex  → `codex resume <conversation_id>`
+  d. 成功：激活 tab；agent 输出经 Channel → pane 渲染
+     失败（provider 层）：tab 已建，走现有 session-exit 失败 UX
+
+**两步边界（v8 冻结）**：编排在前端；Channel 创建/生命周期完全归前端（与现有
+openPane 一致）；无 Rust 侧 Channel 构造、无 token、无未提交 Channel 释放。
+`conversation_resume` 作为 Rust IPC **不存在**——它是前端两调用的逻辑名称。
 
 ### 1d. 标题提取（脱敏规范）
 
@@ -130,7 +139,7 @@ aisc conversation preflight --workspace <path> --conversation-id <id> --agent <c
 }
 ```
 
-### 1f. Rust IPC（v6 冻结：resume 接管 PTY + sidecar preflight 编排）
+### 1f. Rust IPC（v8 冻结：preflight 独立 IPC + open_session resume 变体）
 
 ```rust
 #[tauri::command]
@@ -138,25 +147,36 @@ pub async fn conversation_list(
     workspace: String,
 ) -> Result<ConversationListResult, WorkbenchError>;
 
-// 方案 A（冻结）：resume = Rust 编排两步——
-//   1) run_control captured: aisc conversation preflight（§2 代码草案）
-//   2) open_session(..., --resume-id, on_event)（现有 PTY 事件模型）
-// runtime_id 由前端传入；on_event 是标准 PtyEvent Channel。
+// 独立 preflight IPC（captured、无 Channel、无 PTY）
 #[tauri::command]
-pub async fn conversation_resume(
+pub async fn conversation_preflight(
     app: AppHandle,
-    runtime_id: String,
     workspace: String,
     conversation_id: String,
     agent: String,
-    on_event: Channel<PtyEvent>,
-) -> Result<ConversationResumeResult, WorkbenchError>;
+) -> Result<ConversationPreflightResult, WorkbenchError>;
+// 成功 → ConversationPreflightResult { conversation_id, agent }
+// 失败 → WorkbenchError（AISC_ERR_CONVERSATION_UNRESUMABLE / _INVALID_ID / _INVALID_AGENT）
 ```
 
-内部实现 = `open_session` 复用：Rust `session_open_argv` 在有
-`resume_conversation_id` 时为 wrapper argv 追加 `--resume-id`；其余
-（reserve/spawn/事件）完全同现有路径。**无两阶段 token**（方案 B 否决：
-token 生命周期/清理/超时是净增复杂度，收益为零）。
+**`open_session` 扩展**（非新 IPC）：现有签名增可选参数：
+
+```rust
+// session.rs — 现有 open_session 增加可选 resume 参数
+pub async fn open_session(
+    app: AppHandle,
+    runtime_id: String,
+    workspace: String,
+    session_id: String,
+    agent: String,
+    on_event: Channel<PtyEvent>,          // 前端创建（现有）
+    resume_conversation_id: Option<String>, // v8 新增；None = 普通打开
+) -> Result<SessionSnapshot, WorkbenchError>;
+```
+
+内部：`resume_conversation_id.is_some()` 时 `session_open_argv` 追加
+`--resume-id <id>`；其余（reserve/spawn/事件）完全同现有路径。**前端两调用
+编排**（§1c），无 Rust 侧 Channel 构造、无 conversation_resume IPC。
 
 TS 侧对应类型：
 ```typescript
@@ -552,33 +572,26 @@ interface ConversationSummary {
 - 加载状态：现有 artifacts-panel 的 loading 复用
 - 刷新：进入变更页时刷新（现有 `refreshArtifacts` 时机）+ 手动刷新按钮
 
-### 4d. 恢复编排（v7：preflight 成功前不建 tab/pane/channel）
-
-当前 `openPane` 是「先建 pane/session_id/Channel → 再调 IPC」（workspaceRuntime.ts:1110-1157）。
-conversation_resume 不能走这条路径（preflight 失败时 pane 已存在）。**前端编排冻结**：
+### 4d. 恢复编排（v8：两调用，Channel 归前端，与 openPane 模型一致）
 
 ```
 对话行点击
-  → 设置 conversationResumePending = conversation_id（行内 spinner，全局禁点）
-  → 调 Rust IPC conversation_resume(runtime_id, workspace, conversation_id, agent, on_event)
+  → conversationResumePending = conversation_id（行内 spinner，全局禁点）
+  → 调用 1：ipc.conversationPreflight(workspace, conversation_id, agent)
       │
-      ├─ Rust 内部第一步：run_control preflight 失败
-      │    → IPC 返回 WorkbenchError
-      │    → 前端：清 pending，行内错误提示；tab/pane/Channel 均未创建
+      ├─ 失败 → 清 pending，行内错误；tab/pane/Channel 均未创建（零残留）
       │
-      └─ preflight 成功 → Rust 第二步 open_session
-           → 前端在 on_event 首次收到事件前：
-             ① 调 store.createTab(agent) 生成 tab/pane（现有路径，pane.sessionState=starting）
-             ② 用返回的 terminal_session_id 绑定 pane
-             ③ Channel 在 Rust 侧已创建并传入——前端不预建 Channel
-           → agent 输出流经 on_event → pane 渲染
-           → open_session 失败（provider 层）：tab 已建，走现有 session-exit 失败 UX
+      └─ 成功 → 以下全在 preflight 成功后执行：
+           ① store.createTab(agent) → tab/pane 创建（现有路径）
+           ② new Channel<PtyEvent>()（前端构造）
+           ③ ipc.openSession(..., ch, resume_conversation_id=conversation_id)
+           ④ 激活 tab；agent 输出经 ch → pane 渲染
+           ⑤ openSession 失败（provider 层）：tab 已建，走现有 session-exit
 ```
 
-**关键规则**：Channel 由 Rust `conversation_resume` 参数携带（前端传入的是
-空 Channel 框架，Tauri 绑定后事件自动回流）——前端不预建任何 PTY 基础设施，
-也不需要「未提交 Channel 的释放」逻辑。pane/tab 创建发生在 IPC 调用**之后**
-（前端 `await` 返回或首个事件到达时），preflight 失败自然零残留。
+**Channel 创建方 = 前端**（Tauri `Channel<T>` 只能由前端构造传给 Rust——与
+现有 `openPane` 完全一致，无新生命周期模式）。pane/tab 创建在 preflight
+成功**之后**——失败零残留。无「未提交 Channel」需要释放。
 
 - 重复点击防抖：`conversationResumePending !== null` 时禁用所有对话行点击
 
