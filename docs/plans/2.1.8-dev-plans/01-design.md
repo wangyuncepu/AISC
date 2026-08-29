@@ -84,7 +84,7 @@ aisc conversation preflight --workspace <path> --conversation-id <id> --agent <c
 | `conversation_id` | provider 原生会话 ID（Claude/Codex 的 UUID） | provider CLI 写入 JSONL 文件名 |
 | `terminal_session_id` | Workbench PTY 生命周期 UUID（新生成） | Rust `uuid()` |
 
-恢复流程（v8：前端编排两调用——与 Tauri Channel 模型一致）：
+恢复流程（v9 已批准：前端编排两调用——与 Tauri Channel 模型一致）：
 
 **调用 1**：前端调 IPC `conversation_preflight(workspace, conversation_id, agent)`
   → Rust `run_control`（captured）执行 `aisc conversation preflight`
