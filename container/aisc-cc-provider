@@ -1240,9 +1240,7 @@ def _live_fetch_catalog_ids(
     for base_url in dict.fromkeys(candidates):
         if not base_url.strip():
             continue
-        ids = _openai_compatible_models(
-            base_url.strip(), api_key, timeout=3.0, bearer_only=True
-        )
+        ids = _openai_compatible_models(base_url.strip(), api_key, timeout=6.0)
         # S9b diagnostic: log what the live fetch actually did, so a /model
         # miss is explainable without a debugger (written to the shared
         # /tmp log area, best-effort).
