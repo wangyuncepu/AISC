@@ -1748,7 +1748,7 @@ def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aisc-cc-provider")
     parser.add_argument("op", choices=["list", "add", "edit", "switch", "delete",
-                                       "usage", "fetch-models"])
+                                       "usage", "fetch-models", "catalog-sync"])
     parser.add_argument("--agent", default=None, choices=list(AGENTS),
                         help="agent (required for every op except usage)")
     parser.add_argument("--id", default=None, help="provider id (add/edit/delete)")
@@ -1756,6 +1756,25 @@ def main(argv: list[str] | None = None) -> int:
                         help="usage: epoch-seconds cutoff computed host-side "
                              "(local timezone semantics)")
     args = parser.parse_args(argv)
+
+    if args.op == "catalog-sync":
+        # S9d: container-start catalog sync — the daemon/preset refresh
+        # rewrites config.toml WITHOUT our model_catalog_json key, so a
+        # workspace restart loses the /model list until the next manual
+        # switch. This op regenerates the catalog for the CURRENT codex
+        # provider (best-effort; entrypoint calls it with || true).
+        snapshot = read_snapshot("codex")
+        row = next((r for r in snapshot if r["is_current"]), None)
+        if row is not None and _settings_are_real("codex", row):
+            _apply_codex_model_catalog(row)
+            print(json.dumps(_envelope("catalog-sync", True,
+                                       provider=row["id"])))
+        else:
+            # No current provider or it's the official row — clear the
+            # catalog so codex falls back to its built-in list.
+            _apply_codex_model_catalog(None)
+            print(json.dumps(_envelope("catalog-sync", True, provider=None)))
+        return 0
 
     if args.op == "usage":
         try:

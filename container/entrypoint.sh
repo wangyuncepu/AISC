@@ -491,6 +491,12 @@ if command -v cc-switch >/dev/null 2>&1; then
         else
             echo "⚠️  cc-switch 状态对账失败；日志: $CC_SWITCH_RECONCILE_LOG" >&2
         fi
+
+        # S9d: regenerate the codex model catalog for the CURRENT provider.
+        # The daemon/preset refresh rewrites config.toml WITHOUT our
+        # model_catalog_json key — without this, a workspace restart loses
+        # the /model list until the next manual provider switch.
+        python3 /usr/local/bin/aisc-cc-provider catalog-sync 2>/dev/null || true
     else
         echo "⚠️  cc-switch 后台服务启动失败；启动日志: $CC_SWITCH_DAEMON_LOG" >&2
         [ ! -s "$CC_SWITCH_DAEMON_LOG" ] || sed -n '1,20p' "$CC_SWITCH_DAEMON_LOG" >&2
