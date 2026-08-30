@@ -58,7 +58,7 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 #   ca-certificates    — mihomo/geodata 经 https 下载所需
 #   fzf/neovim/ripgrep — v2.1.8 T2 Bash 体验增强（模糊搜索/编辑器/快速搜索）
 RUN apt-get update && apt-get install -y git curl tmux iptables iproute2 ca-certificates \
-    fzf neovim ripgrep unzip \
+    fzf neovim ripgrep unzip xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # ==========================================
@@ -406,19 +406,10 @@ RUN set -eux; \
 
 # ==========================================
 # v2.1.8 T2: ble.sh（fish-style ghost text for bash）
-# 版本 pin：冻结 nightly-20250829（可复现构建）
+# 宿主预下载进 vendor/（免疫构建网络——CN mirror 对 .tar.xz 返回 HTML）
 # ==========================================
-ARG BLE_SH_VERSION=nightly-20250829
+COPY container/vendor/ble-0.4.0-devel3.tar.xz /tmp/ble.tar.xz
 RUN set -eux; \
-    ble_base="https://github.com/akinomyoga/ble.sh/releases/download/${BLE_SH_VERSION}/ble-${BLE_SH_VERSION}.tar.xz"; \
-    if [ "$USE_CN_MIRROR" = "1" ]; then ble_mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ "; else ble_mirrors=""; fi; \
-    ok=0; \
-    for m in $ble_mirrors ""; do \
-        u="${m}${ble_base}"; echo "⬇️  ble.sh try: $u"; \
-        if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
-                --connect-timeout 8 --max-time 60 "$u" -o /tmp/ble.tar.xz; then ok=1; break; fi; \
-    done; \
-    [ "$ok" = "1" ] || { echo "❌ ble.sh 下载失败"; exit 1; }; \
     mkdir -p /usr/local/share/ble.sh; \
     tar -xJf /tmp/ble.tar.xz -C /usr/local/share/ble.sh --strip-components=1; \
     rm -f /tmp/ble.tar.xz; \
