@@ -12,8 +12,10 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from aisc.application.conversation import (
+    delete_conversation,
     list_conversations,
     preflight_conversation,
+    rename_conversation,
 )
 
 
@@ -26,6 +28,18 @@ def cmd_conversation_preflight(workspace: str, conversation_id: str,
                                agent: str) -> Dict[str, Any]:
     """Execute ``aisc conversation preflight`` per design §2."""
     return preflight_conversation(workspace, conversation_id, agent)
+
+
+def cmd_conversation_delete(workspace: str, conversation_id: str,
+                            agent: str) -> Dict[str, Any]:
+    """Execute ``aisc conversation delete`` (v2.1.8 T4 手测反馈 #4)."""
+    return delete_conversation(workspace, conversation_id, agent)
+
+
+def cmd_conversation_rename(workspace: str, conversation_id: str, agent: str,
+                            title: str) -> Dict[str, Any]:
+    """Execute ``aisc conversation rename`` (v2.1.8 T4 手测反馈 #2)."""
+    return rename_conversation(workspace, conversation_id, agent, title)
 
 
 def print_conversation_text(subcommand: str, data: Any, errors: list) -> None:
@@ -50,3 +64,9 @@ def print_conversation_text(subcommand: str, data: Any, errors: list) -> None:
     elif subcommand == "preflight":
         print(f"preflight ok: {data.get('conversation_id', '')} "
               f"agent={data.get('agent', '')}")
+    elif subcommand == "delete":
+        print(f"deleted: {data.get('conversation_id', '')} "
+              f"agent={data.get('agent', '')}")
+    elif subcommand == "rename":
+        print(f"renamed: {data.get('conversation_id', '')} "
+              f"agent={data.get('agent', '')} title={data.get('title', '')}")

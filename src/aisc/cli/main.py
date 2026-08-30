@@ -655,6 +655,8 @@ def _build_parser() -> _AiscArgumentParser:
                      help="Agent type (claude|codex|bash|cc-switch)")
     sso.add_argument("--workspace", type=str, default=None,
                      help="Workspace path (default: current directory)")
+    sso.add_argument("--resume-id", type=str, default=None,
+                     help="Provider conversation ID to resume (claude|codex only, v2.1.8 T4)")
 
     # session list
     ssl = ssub.add_parser("list", help="List sessions in a runtime", allow_abbrev=False)
@@ -703,6 +705,30 @@ def _build_parser() -> _AiscArgumentParser:
     # not as an argparse usage error.
     cvp2.add_argument("--agent", type=str, required=True,
                       help="Agent type (claude|codex)")
+
+    # conversation delete (v2.1.8 T4 手测反馈 #4)
+    cvd = cvsub.add_parser("delete", help="Delete a conversation's session file",
+                           allow_abbrev=False)
+    _add_global_args(cvd, is_subparser=True)
+    cvd.add_argument("--workspace", type=str, default=None,
+                     help="Workspace path (default: current directory)")
+    cvd.add_argument("--conversation-id", type=str, required=True,
+                     help="Provider-native conversation ID (UUID)")
+    cvd.add_argument("--agent", type=str, required=True,
+                     help="Agent type (claude|codex)")
+
+    # conversation rename (v2.1.8 T4 手测反馈 #2): Workbench display title
+    cvr = cvsub.add_parser("rename", help="Set a conversation's display title",
+                           allow_abbrev=False)
+    _add_global_args(cvr, is_subparser=True)
+    cvr.add_argument("--workspace", type=str, default=None,
+                     help="Workspace path (default: current directory)")
+    cvr.add_argument("--conversation-id", type=str, required=True,
+                     help="Provider-native conversation ID (UUID)")
+    cvr.add_argument("--agent", type=str, required=True,
+                     help="Agent type (claude|codex)")
+    cvr.add_argument("--title", type=str, required=True,
+                     help="New display title (sanitized, ≤80 chars)")
 
     # --- artifact (Stage 3, ART-02) ---
     arp = sub.add_parser("artifact", help="Agent Artifact fact protocol (Stage 3)",
@@ -1811,6 +1837,7 @@ def _cmd_session(
             session_id=args.session_id,
             agent=args.agent,
             workspace=args.workspace,
+            resume_conversation_id=args.resume_id,
         )
         errors: List[Dict[str, Any]] = []
         if exit_code != 0 and data.get("error"):
@@ -1851,8 +1878,10 @@ def _cmd_conversation(
     layer (AISC_ERR_CONVERSATION_*) propagate to the unified terminal.
     """
     from aisc.cli.commands.conversation import (
+        cmd_conversation_delete,
         cmd_conversation_list,
         cmd_conversation_preflight,
+        cmd_conversation_rename,
     )
 
     sub = args.conversation_command
@@ -1865,6 +1894,21 @@ def _cmd_conversation(
             workspace=args.workspace,
             conversation_id=args.conversation_id,
             agent=args.agent,
+        )
+        return data, 0, []
+    elif sub == "delete":
+        data = cmd_conversation_delete(
+            workspace=args.workspace,
+            conversation_id=args.conversation_id,
+            agent=args.agent,
+        )
+        return data, 0, []
+    elif sub == "rename":
+        data = cmd_conversation_rename(
+            workspace=args.workspace,
+            conversation_id=args.conversation_id,
+            agent=args.agent,
+            title=args.title,
         )
         return data, 0, []
     else:

@@ -48,12 +48,16 @@ def cmd_session_open(
     agent: str,
     workspace: Optional[str] = None,
     executor: Optional[DockerExecutor] = None,
+    resume_conversation_id: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], int]:
     """Execute ``aisc session open`` per contract §6.1.
 
     This is a text-only interactive command. It validates inputs, resolves
     the running container, then runs ``docker exec -it`` with inherited
     stdio. The agent's exit code becomes the process exit code.
+
+    v2.1.8 T4: ``resume_conversation_id`` forwards to the wrapper
+    (``--resume-id``) for provider-native conversation resume.
 
     Returns (data_dict, exit_code). The caller is expected to ``sys.exit()``
     with the exit code; the interactive streams are already inherited.
@@ -67,6 +71,7 @@ def cmd_session_open(
         agent=agent,
         executor=exec_,
         registry_root=reg_root,
+        resume_conversation_id=resume_conversation_id,
     )
 
     exit_code = proc.exit_code if proc.exit_code >= 0 else 1

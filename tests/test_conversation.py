@@ -18,6 +18,7 @@ from aisc.application.conversation import (
     MAX_JSONL_BYTES,
     TITLE_MAX_CHARS,
     UNREADABLE_TITLE,
+    delete_conversation,
     list_conversations,
     preflight_conversation,
     sanitize_title,
@@ -86,18 +87,16 @@ class TestConversationList:
         assert entry["file_size"] > 0
 
     def test_codex_title_is_real_user_text(self, ws_env):
-        """Design §1d-6: the Codex title must be the real user input text,
-        not merely a non-crash placeholder."""
+        """Design §1d-6 + 手测反馈 #1: the Codex title must be the REAL user
+        input, not the injected AGENTS.md context block recorded as a user
+        message before it."""
         ws, ws_dir = ws_env
         _install_codex(ws_dir, "codex_normal.jsonl")
         entry = _by_id(list_conversations(str(ws)), CODEX_ID)
         assert entry["agent"] == "codex"
-        # First user line of the fixture is the AGENTS.md instruction block
-        # — sanitized (newlines dropped) and truncated, never a fallback.
-        assert entry["title"].startswith("# AGENTS.md instructions")
-        assert "\n" not in entry["title"]
-        assert len(entry["title"]) <= TITLE_MAX_CHARS
-        assert entry["title"] != UNREADABLE_TITLE
+        # user[0] is the AGENTS.md injection (context-like, skipped);
+        # user[1] is what the user actually typed.
+        assert entry["title"] == "test"
         assert entry["message_count"] == 2
 
     def test_codex_single_user_exact_title(self, ws_env):
@@ -168,6 +167,36 @@ class TestConversationList:
         ws, _ws_dir = ws_env
         data = list_conversations(str(ws))
         assert data == {"schema_version": 1, "conversations": []}
+
+    def test_context_first_session_falls_back(self, ws_env):
+        """Every user message context-like → fall back to the first."""
+        ws, ws_dir = ws_env
+        dest = ws_dir / "claude" / "projects" / "-"
+        dest.mkdir(parents=True)
+        (dest / f"{CLAUDE_ID}.jsonl").write_text(
+            "\n".join([
+                json.dumps({"type": "user", "timestamp": "2026-08-29T10:00:00Z",
+                            "message": {"role": "user",
+                                        "content": "<INSTRUCTIONS>context"}}),
+                json.dumps({"type": "user", "timestamp": "2026-08-29T10:00:01Z",
+                            "message": {"role": "user",
+                                        "content": "<system-reminder>more"}}),
+            ]),
+            encoding="utf-8",
+        )
+        entry = _by_id(list_conversations(str(ws)), CLAUDE_ID)
+        assert entry["title"].startswith("<INSTRUCTIONS>")
+
+    def test_delete_removes_file(self, ws_env):
+        ws, ws_dir = ws_env
+        _install_codex(ws_dir, "codex_normal.jsonl")
+        result = delete_conversation(str(ws), CODEX_ID, "codex")
+        assert result == {"deleted": True, "conversation_id": CODEX_ID, "agent": "codex"}
+        assert list_conversations(str(ws))["conversations"] == []
+        # Deleting again reports the same not-found anomaly as preflight.
+        with pytest.raises(CliError) as exc:
+            delete_conversation(str(ws), CODEX_ID, "codex")
+        assert exc.value.error_code == "AISC_ERR_CONVERSATION_UNRESUMABLE"
 
     def test_non_uuid_jsonl_ignored(self, ws_env):
         ws, ws_dir = ws_env
@@ -258,3 +287,50 @@ class TestSanitizeTitle:
 
     def test_empty_falls_back(self):
         assert sanitize_title("   \n\t ") == UNREADABLE_TITLE
+
+
+class TestConversationRename:
+    def test_rename_overrides_list_title(self, ws_env):
+        from aisc.application.conversation import rename_conversation
+        ws, ws_dir = ws_env
+        _install_codex(ws_dir, "codex_single_user.jsonl")
+        result = rename_conversation(str(ws), CODEX_ID, "codex", "我的排序任务")
+        assert result["renamed"] is True
+        assert result["title"] == "我的排序任务"
+        entry = _by_id(list_conversations(str(ws)), CODEX_ID)
+        assert entry["title"] == "我的排序任务"
+
+    def test_rename_persists_across_calls(self, ws_env):
+        from aisc.application.conversation import rename_conversation
+        ws, ws_dir = ws_env
+        _install_claude(ws_dir, "claude_single_user.jsonl")
+        rename_conversation(str(ws), CLAUDE_ID, "claude", "renamed once")
+        rename_conversation(str(ws), CLAUDE_ID, "claude", "renamed twice")
+        entry = _by_id(list_conversations(str(ws)), CLAUDE_ID)
+        assert entry["title"] == "renamed twice"
+
+    def test_delete_clears_override(self, ws_env):
+        from aisc.application.conversation import delete_conversation, rename_conversation
+        ws, ws_dir = ws_env
+        _install_claude(ws_dir, "claude_single_user.jsonl")
+        rename_conversation(str(ws), CLAUDE_ID, "claude", "to be deleted")
+        delete_conversation(str(ws), CLAUDE_ID, "claude")
+        # Recreate the same conversation: no stale override may resurface.
+        _install_claude(ws_dir, "claude_single_user.jsonl")
+        entry = _by_id(list_conversations(str(ws)), CLAUDE_ID)
+        assert entry["title"] == "Hello world test"
+
+    def test_rename_empty_title_rejected(self, ws_env):
+        from aisc.application.conversation import rename_conversation
+        ws, ws_dir = ws_env
+        _install_claude(ws_dir, "claude_single_user.jsonl")
+        with pytest.raises(CliError) as exc:
+            rename_conversation(str(ws), CLAUDE_ID, "claude", "   ")
+        assert exc.value.exit_code == 2
+
+    def test_rename_missing_conversation(self, ws_env):
+        from aisc.application.conversation import rename_conversation
+        ws, _ws_dir = ws_env
+        with pytest.raises(CliError) as exc:
+            rename_conversation(str(ws), CLAUDE_ID, "claude", "nope")
+        assert exc.value.error_code == "AISC_ERR_CONVERSATION_UNRESUMABLE"

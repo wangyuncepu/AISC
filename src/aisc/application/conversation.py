@@ -22,6 +22,7 @@ still rejected (the check's stated intent).
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,6 +72,21 @@ _REDACT_PATTERNS = (
 )
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 
+# Injected-context user messages (手测反馈 #1: providers record setup context
+# — AGENTS.md/skills/permissions blocks, command caveats — as user role, so
+# the FIRST user line is often not what the user typed). Title selection
+# prefers the first message that does not look like injected context and
+# falls back to the first message when every candidate does.
+_CONTEXT_TITLE_RE = re.compile(
+    r"^(?:"
+    r"<"                              # XML-ish context blocks (<INSTRUCTIONS>,
+                                      # <skills_instructions>, <local-command-
+                                      # caveat>, <command-name>, <environment…)
+    r"|# AGENTS\.md instructions"     # Codex AGENTS.md injection preamble
+    r"|Caveat:"                       # Claude command caveat body
+    r")"
+)
+
 
 def sanitize_title(text: str) -> str:
     """Sanitize a raw user message into a display title.
@@ -92,26 +108,30 @@ def sanitize_title(text: str) -> str:
 # Per-provider user-message extraction (design §1a)
 # ---------------------------------------------------------------------------
 
-def _extract_claude_user(obj: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-    """Return (is_user_line, extracted_text_or_None) for a Claude line."""
+def _extract_claude_user(obj: Dict[str, Any]) -> Tuple[bool, Optional[str], bool]:
+    """Return (is_user_line, extracted_text, title_eligible) for a Claude
+    line. ``title_eligible`` excludes SDK-internal prompts ("init" and
+    friends — 手测反馈 #1) from title selection."""
     if obj.get("type") != "user":
-        return False, None
+        return False, None, False
     msg = obj.get("message")
     if not isinstance(msg, dict) or msg.get("role") != "user":
-        return False, None
-    return True, _text_from_content(msg.get("content"), "text")
+        return False, None, False
+    sdk = msg.get("promptSource") == "sdk"
+    return True, _text_from_content(msg.get("content"), "text"), not sdk
 
 
-def _extract_codex_user(obj: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-    """Return (is_user_line, extracted_text_or_None) for a Codex line."""
+def _extract_codex_user(obj: Dict[str, Any]) -> Tuple[bool, Optional[str], bool]:
+    """Return (is_user_line, extracted_text, title_eligible) for a Codex
+    line. Title eligibility is decided later by the context-text heuristic."""
     if obj.get("type") != "response_item":
-        return False, None
+        return False, None, False
     payload = obj.get("payload")
     if not isinstance(payload, dict) or payload.get("type") != "message":
-        return False, None
+        return False, None, False
     if payload.get("role") != "user":
-        return False, None
-    return True, _text_from_content(payload.get("content"), "input_text")
+        return False, None, False
+    return True, _text_from_content(payload.get("content"), "input_text"), True
 
 
 def _text_from_content(content: Any, block_type: str) -> Optional[str]:
@@ -135,6 +155,12 @@ _EXTRACTORS = {
 }
 
 
+def is_conversation_uuid(value: str) -> bool:
+    """True for a well-formed conversation id — any RFC-4122 version (D-5:
+    Codex ships UUIDv7). Non-UUID garbage is rejected."""
+    return bool(value) and bool(_UUID_RE.match(value))
+
+
 # ---------------------------------------------------------------------------
 # File scanning
 # ---------------------------------------------------------------------------
@@ -147,6 +173,8 @@ class _FileScan:
     last_ts: Optional[str] = None
     title: Optional[str] = None
     malformed_seen: bool = False
+    _first_raw: Optional[str] = None
+    _good_raw: Optional[str] = None
 
 
 def _scan_file(path: Path, agent: str, head_only: bool) -> _FileScan:
@@ -173,13 +201,22 @@ def _scan_file(path: Path, agent: str, head_only: bool) -> _FileScan:
                 if state.first_ts is None:
                     state.first_ts = ts
                 state.last_ts = ts
-            is_user, text = extract(obj)
+            is_user, text, title_eligible = extract(obj)
             if is_user:
                 state.user_messages += 1
-                if state.title is None and text:
-                    state.title = sanitize_title(text)
+                if text:
+                    # 手测反馈 #1: prefer the first non-context user message
+                    # for the title; fall back to the first message when
+                    # every candidate is injected context.
+                    if state._first_raw is None:
+                        state._first_raw = text
+                    if state._good_raw is None and title_eligible \
+                            and not _CONTEXT_TITLE_RE.match(text.lstrip()):
+                        state._good_raw = text
             if head_only and state.parseable >= HEAD_SCAN_PARSEABLE_LINES:
                 break
+    chosen = state._good_raw if state._good_raw else state._first_raw
+    state.title = sanitize_title(chosen) if chosen else None
     return state
 
 
@@ -259,6 +296,46 @@ def _workspace_dir(workspace: str) -> Path:
     return DataRootResolver().resolve(ws).workspace_dir
 
 
+# ---------------------------------------------------------------------------
+# Title overrides (v2.1.8 T4 手测反馈 #2: 右键重命名). Providers own session
+# titles (first user message); the Workbench label lives in a small override
+# map under the workspace runtime dir (设计 3a: that dir is the workspace
+# runtime persistence home). <agent>:<id-lowercase> → display title.
+# ---------------------------------------------------------------------------
+
+_TITLES_SCHEMA = "aisc.conversation-titles/v1"
+
+
+def _titles_path(ws_dir: Path) -> Path:
+    return ws_dir / "runtime" / "conversation_titles.json"
+
+
+def _load_titles(ws_dir: Path) -> Dict[str, str]:
+    try:
+        data = json.loads(_titles_path(ws_dir).read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
+    if not isinstance(data, dict) or not isinstance(data.get("titles"), dict):
+        return {}
+    return {
+        str(k): str(v)
+        for k, v in data["titles"].items()
+        if isinstance(v, str) and v
+    }
+
+
+def _save_titles(ws_dir: Path, titles: Dict[str, str]) -> None:
+    path = _titles_path(ws_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(
+        {"schema": _TITLES_SCHEMA, "titles": titles},
+        ensure_ascii=False, indent=2, sort_keys=True,
+    ) + "\n"
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    tmp.write_text(payload, encoding="utf-8")
+    os.replace(tmp, path)  # atomic — readers never see a partial file
+
+
 def list_conversations(workspace: str) -> Dict[str, Any]:
     """List agent history conversations for a workspace (design §1b).
 
@@ -273,7 +350,39 @@ def list_conversations(workspace: str) -> Dict[str, Any]:
         key=lambda e: (e["last_at"] or "", e["conversation_id"]),
         reverse=True,
     )
+    # Title overrides (rename) win over the extracted first-user-message.
+    overrides = _load_titles(ws_dir)
+    if overrides:
+        for entry in entries:
+            key = f"{entry['agent']}:{entry['conversation_id'].lower()}"
+            if key in overrides:
+                entry["title"] = overrides[key]
     return {"schema_version": 1, "conversations": entries}
+
+
+def _find_conversation_file(ws_dir: Path, agent: str,
+                            conversation_id: str) -> Optional[Path]:
+    """Exact provider-specific file match for a conversation id (design §2).
+    Claude: filename stem == id. Codex: rollout filename's trailing id,
+    case-insensitive. Returns None when absent — never a glob substring."""
+    if agent == "claude":
+        base = ws_dir / "claude" / "projects"
+        if not base.is_dir():
+            return None
+        for p in base.rglob("*.jsonl"):
+            if p.is_file() and p.stem == conversation_id:
+                return p
+        return None
+    base = ws_dir / "codex" / "sessions"
+    if not base.is_dir():
+        return None
+    for p in base.rglob("*.jsonl"):
+        if not p.is_file():
+            continue
+        m = _CODEX_FILENAME_RE.match(p.name)
+        if m is not None and m.group(1).lower() == conversation_id.lower():
+            return p
+    return None
 
 
 def preflight_conversation(workspace: str, conversation_id: str,
@@ -281,7 +390,7 @@ def preflight_conversation(workspace: str, conversation_id: str,
     """Validate a conversation is resumable BEFORE any PTY spawn (design
     §2: sidecar captured preflight). Exact provider-specific file match —
     never glob substring matching."""
-    if not isinstance(conversation_id, str) or not _UUID_RE.match(conversation_id):
+    if not is_conversation_uuid(conversation_id):
         raise CliError(
             message=f"Invalid conversation ID: {conversation_id}",
             exit_code=2,
@@ -295,25 +404,7 @@ def preflight_conversation(workspace: str, conversation_id: str,
         )
 
     ws_dir = _workspace_dir(workspace)
-    if agent == "claude":
-        base = ws_dir / "claude" / "projects"
-        # Claude: filename = <conversation_id>.jsonl — exact stem match.
-        hit = base.is_dir() and any(
-            p.is_file() and p.stem == conversation_id
-            for p in base.rglob("*.jsonl")
-        )
-    else:
-        base = ws_dir / "codex" / "sessions"
-        # Codex: rollout-<timestamp>-<uuid>.jsonl — parse the trailing id
-        # from the filename, case-insensitive equality.
-        hit = base.is_dir() and any(
-            p.is_file()
-            and (m := _CODEX_FILENAME_RE.match(p.name)) is not None
-            and m.group(1).lower() == conversation_id.lower()
-            for p in base.rglob("*.jsonl")
-        )
-
-    if not hit:
+    if _find_conversation_file(ws_dir, agent, conversation_id) is None:
         raise CliError(
             message=f"Conversation {conversation_id} not found for agent {agent}",
             exit_code=3,
@@ -323,4 +414,90 @@ def preflight_conversation(workspace: str, conversation_id: str,
         "preflight_ok": True,
         "conversation_id": conversation_id,
         "agent": agent,
+    }
+
+
+def delete_conversation(workspace: str, conversation_id: str,
+                        agent: str) -> Dict[str, Any]:
+    """Delete a conversation's session file (v2.1.8 T4 手测反馈 #4: 变更页
+    右键删除). Exact match only; the id must be well-formed. Idempotent
+    failure mode: an absent conversation raises the same UNRESUMABLE error
+    as preflight — the caller has just shown it in a list, so absence is
+    an anomaly worth reporting, not a silent success."""
+    if not is_conversation_uuid(conversation_id):
+        raise CliError(
+            message=f"Invalid conversation ID: {conversation_id}",
+            exit_code=2,
+            error_code=ERROR_INVALID_ID,
+        )
+    if agent not in _AGENTS:
+        raise CliError(
+            message=f"Unsupported agent: {agent}",
+            exit_code=2,
+            error_code=ERROR_INVALID_AGENT,
+        )
+    ws_dir = _workspace_dir(workspace)
+    path = _find_conversation_file(ws_dir, agent, conversation_id)
+    if path is None:
+        raise CliError(
+            message=f"Conversation {conversation_id} not found for agent {agent}",
+            exit_code=3,
+            error_code=ERROR_UNRESUMABLE,
+        )
+    try:
+        path.unlink()
+    except OSError as exc:
+        raise CliError(
+            message=f"Failed to delete conversation {conversation_id}: {exc}",
+            exit_code=1,
+            error_code="AISC_ERR_GENERAL",
+        ) from exc
+    # Drop the rename override with the conversation (best-effort — a stale
+    # entry is inert but must not accumulate).
+    titles = _load_titles(ws_dir)
+    key = f"{agent}:{conversation_id.lower()}"
+    if key in titles:
+        del titles[key]
+        _save_titles(ws_dir, titles)
+    return {"deleted": True, "conversation_id": conversation_id, "agent": agent}
+
+
+def rename_conversation(workspace: str, conversation_id: str, agent: str,
+                        title: str) -> Dict[str, Any]:
+    """Set a Workbench display title for a conversation (手测反馈 #2). The
+    provider's own title is untouched; the override wins in ``list``."""
+    if not is_conversation_uuid(conversation_id):
+        raise CliError(
+            message=f"Invalid conversation ID: {conversation_id}",
+            exit_code=2,
+            error_code=ERROR_INVALID_ID,
+        )
+    if agent not in _AGENTS:
+        raise CliError(
+            message=f"Unsupported agent: {agent}",
+            exit_code=2,
+            error_code=ERROR_INVALID_AGENT,
+        )
+    if not isinstance(title, str) or not title.strip():
+        raise CliError(
+            message="Title must be a non-empty string",
+            exit_code=2,
+            error_code="AISC_ERR_USAGE",
+        )
+    ws_dir = _workspace_dir(workspace)
+    if _find_conversation_file(ws_dir, agent, conversation_id) is None:
+        raise CliError(
+            message=f"Conversation {conversation_id} not found for agent {agent}",
+            exit_code=3,
+            error_code=ERROR_UNRESUMABLE,
+        )
+    clean = sanitize_title(title.strip())
+    titles = _load_titles(ws_dir)
+    titles[f"{agent}:{conversation_id.lower()}"] = clean
+    _save_titles(ws_dir, titles)
+    return {
+        "renamed": True,
+        "conversation_id": conversation_id,
+        "agent": agent,
+        "title": clean,
     }

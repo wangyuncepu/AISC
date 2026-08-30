@@ -75,6 +75,7 @@ def open_session(
     agent: str,
     executor: Any,
     registry_root: Any,
+    resume_conversation_id: Optional[str] = None,
 ) -> Any:
     """Open an interactive agent session via ``docker exec -it``.
 
@@ -124,6 +125,31 @@ def open_session(
         "--runtime-id", runtime_id,
         "--agent", agent,
     ]
+
+    # v2.1.8 T4 (design §1f/§2): forward the Workbench's resume request to
+    # the wrapper, which converts it to the provider-native form (claude
+    # --resume <id> / codex resume <id>). Defense in depth: the Workbench
+    # preflight already validated id + file; reject malformed requests here
+    # too so a Rust regression can never spawn a garbage resume.
+    if resume_conversation_id is not None:
+        from aisc.application.conversation import (
+            ERROR_INVALID_AGENT as _CONV_INVALID_AGENT,
+            is_conversation_uuid,
+        )
+
+        if not is_conversation_uuid(resume_conversation_id):
+            raise CliError(
+                message=f"Invalid conversation ID: {resume_conversation_id}",
+                exit_code=2,
+                error_code="AISC_ERR_CONVERSATION_INVALID_ID",
+            )
+        if agent not in ("claude", "codex"):
+            raise CliError(
+                message=f"agent does not support --resume-id: {agent}",
+                exit_code=2,
+                error_code=_CONV_INVALID_AGENT,
+            )
+        docker_argv += ["--resume-id", resume_conversation_id]
 
     # v2.1.7 S6: bash sessions import the tutorial `help` function from the
     # exec environment (bash re-imports BASH_FUNC_* vars at startup; the
