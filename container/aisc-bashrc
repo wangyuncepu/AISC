@@ -27,6 +27,8 @@ if [ -n "$AISC_BASH_HISTORY_FILE" ]; then
 fi
 
 # 3. ble.sh (fish-style ghost text; interactive shells only; fail-open)
+#    --noattach loads the engine; ble-attach at the END of the rcfile
+#    connects it to the terminal (AFTER all other hooks are installed).
 if [ -f /usr/local/share/ble.sh/ble.sh ] && [[ $- == *i* ]]; then
     source /usr/local/share/ble.sh/ble.sh --noattach 2>/dev/null || true
 fi
@@ -63,3 +65,7 @@ if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
         PROMPT_COMMAND="_aisc_log_history;${PROMPT_COMMAND}"
     fi
 fi
+
+# 6. Attach ble.sh LAST — connects the engine to the terminal after all
+#    other hooks (PROMPT_COMMAND, fzf, HISTFILE) are installed.
+[[ ${BLE_VERSION-} ]] && ble-attach
