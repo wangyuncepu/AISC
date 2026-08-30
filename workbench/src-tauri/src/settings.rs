@@ -107,7 +107,9 @@ pub struct TerminalSettings {
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
-            font_family: "Cascadia Mono, Cascadia Code, Consolas, monospace".into(),
+            // v2.1.8 T2 (D-3): Nerd Font first so yazi/terminal icons work
+            // out of the box; machines without it fall through to Cascadia.
+            font_family: "JetBrainsMono Nerd Font Mono, JetBrainsMono Nerd Font, Cascadia Mono, Cascadia Code, Consolas, monospace".into(),
             font_size: 14,
             line_height: 1.2,
             letter_spacing: 0,
@@ -879,7 +881,7 @@ mod tests {
             "aisc_cli_path": null,
             "ui": { "language": "auto", "font_scale": 1.0, "theme": "system", "default_tab_agent": "bash", "default_new_page": "workspace" },
             "terminal": {
-                "font_family": "Cascadia Mono, Cascadia Code, Consolas, monospace",
+                "font_family": "JetBrainsMono Nerd Font Mono, JetBrainsMono Nerd Font, Cascadia Mono, Cascadia Code, Consolas, monospace",
                 "font_size": 14, "line_height": 1.2, "letter_spacing": 0,
                 "scrollback": 5000, "renderer": "auto", "smooth_scroll_duration": 100
             },
