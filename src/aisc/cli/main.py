@@ -673,6 +673,37 @@ def _build_parser() -> _AiscArgumentParser:
     sst.add_argument("--grace", type=float, default=5.0,
                      help="Grace period in seconds before SIGKILL (default: 5.0)")
 
+    # --- conversation (v2.1.8 T3) ---
+    cvp = sub.add_parser("conversation",
+                         help="Agent conversation discovery (Workbench v2.1.8)",
+                         allow_abbrev=False)
+    _add_global_args(cvp, is_subparser=True)
+    cvsub = cvp.add_subparsers(dest="conversation_command",
+                               title="conversation commands",
+                               parser_class=_AiscArgumentParser)
+
+    # conversation list
+    cvl = cvsub.add_parser("list", help="List agent history conversations in a workspace",
+                           allow_abbrev=False)
+    _add_global_args(cvl, is_subparser=True)
+    cvl.add_argument("--workspace", type=str, default=None,
+                     help="Workspace path (default: current directory)")
+
+    # conversation preflight
+    cvp2 = cvsub.add_parser("preflight",
+                            help="Validate a conversation is resumable (captured, JSON)",
+                            allow_abbrev=False)
+    _add_global_args(cvp2, is_subparser=True)
+    cvp2.add_argument("--workspace", type=str, default=None,
+                      help="Workspace path (default: current directory)")
+    cvp2.add_argument("--conversation-id", type=str, required=True,
+                      help="Provider-native conversation ID (UUID)")
+    # No argparse choices: an unsupported agent must surface as
+    # AISC_ERR_CONVERSATION_INVALID_AGENT in the JSON envelope (design §2),
+    # not as an argparse usage error.
+    cvp2.add_argument("--agent", type=str, required=True,
+                      help="Agent type (claude|codex)")
+
     # --- artifact (Stage 3, ART-02) ---
     arp = sub.add_parser("artifact", help="Agent Artifact fact protocol (Stage 3)",
                          allow_abbrev=False)
@@ -1809,6 +1840,40 @@ def _cmd_session(
         )]
 
 
+def _cmd_conversation(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Any, int, List[Dict[str, Any]]]:
+    """Execute ``aisc conversation`` subcommands (v2.1.8 T3).
+
+    Both subcommands are captured/read-only and return JSON-serializable
+    data under the aisc.cli/v1 envelope. CliErrors from the application
+    layer (AISC_ERR_CONVERSATION_*) propagate to the unified terminal.
+    """
+    from aisc.cli.commands.conversation import (
+        cmd_conversation_list,
+        cmd_conversation_preflight,
+    )
+
+    sub = args.conversation_command
+
+    if sub == "list":
+        data = cmd_conversation_list(workspace=args.workspace)
+        return data, 0, []
+    elif sub == "preflight":
+        data = cmd_conversation_preflight(
+            workspace=args.workspace,
+            conversation_id=args.conversation_id,
+            agent=args.agent,
+        )
+        return data, 0, []
+    else:
+        return None, 2, [build_error(
+            "AISC_ERR_USAGE",
+            f"Unknown conversation subcommand: {sub}"
+        )]
+
+
 def _cmd_artifact(
     args: argparse.Namespace,
     effective_format: str,
@@ -2136,6 +2201,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         "runtime": "runtime_command",
         "session": "session_command",
         "artifact": "artifact_command",
+        "conversation": "conversation_command",
     }
     if args.command in _grouped_dests:
         if getattr(args, _grouped_dests[args.command], None) is None:
@@ -2236,6 +2302,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_runtime(args, effective_format)
         elif args.command == "session":
             data, exit_code, errors = _cmd_session(args, effective_format)
+        elif args.command == "conversation":
+            data, exit_code, errors = _cmd_conversation(args, effective_format)
         elif args.command == "artifact":
             data, exit_code, errors = _cmd_artifact(args, effective_format)
         elif args.command == "data-root":

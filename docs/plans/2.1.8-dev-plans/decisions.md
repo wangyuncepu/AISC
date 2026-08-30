@@ -67,3 +67,18 @@ D-1 停用，fzf 是该链条上最后一个仅炫技项。
 
 **兼容性说明**：`agent` 字段仍为 `bash`（Workbench API/会话记录不变）；tmux
 面板仍走 bash 链（$SHELL=/bin/bash → bashrc），需要 zsh 时手动 `zsh`。
+
+## D-5：conversation id 校验放宽为任意版本 UUID（2026-08-30，T3 实装发现）
+
+**结论**：T3 的 preflight ID 校验与 codex 文件名正则从"UUID v4 严格"放宽为
+"任意 RFC-4122 版本"（仍拒绝非 UUID 垃圾输入，保留"精确 ID 匹配、不做 glob
+子串"的意图）。
+
+**原因**：设计 §2 的校验正则钉死 v4，但 T0 冻结的 codex 真实探针 fixture
+（`codex_normal.jsonl` 等）的会话 ID 是 `01a04ca9-d3f6-7021-…`——**v7**
+（Codex CLI 使用时间序 UUIDv7）。按冻结正则，真实 codex 会话 100% 被
+preflight 拒绝，T4 恢复功能对 codex 直接不可用。设计文档与冻结 fixture 自相
+矛盾，fixture 来自真实探针，故以 fixture 为准。
+
+**影响面**：`application/conversation.py` 的 `_UUID_RE` / `_CODEX_FILENAME_RE`
+两处；claude 的 id（真实 v4）不受影响。错误码、exit code、envelope 契约均不变。
