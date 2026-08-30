@@ -31,7 +31,7 @@ import shutil
 import signal
 import sys
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 CONTEXT_PATH = "/run/aisc/runtime-context.json"
 SESSIONS_DIR = "/run/aisc/sessions"
@@ -174,6 +174,37 @@ def _binary_available(binary: str) -> bool:
     return shutil.which(binary) is not None
 
 
+def _agent_argv(agent: str, resume_id: Optional[str]) -> Tuple[str, list]:
+    """Resolve (binary, argv) for an ``open`` request.
+
+    v2.1.8 T4 (design §2): ``--resume-id`` converts to the provider-native
+    resume form and applies ONLY to provider agents (claude/codex). The id
+    and its backing file were already validated by
+    ``aisc conversation preflight`` (sidecar, captured); the wrapper just
+    converts. Raises ValueError for agents that cannot resume (defense in
+    depth — preflight rejects them first).
+    """
+    if resume_id:
+        if agent == "claude":
+            return "claude", ["claude", "--resume", resume_id]
+        if agent == "codex":
+            return "codex", ["codex", "resume", resume_id]
+        raise ValueError(f"agent does not support --resume-id: {agent}")
+    if agent == "bash":
+        # v2.1.8 T2/D-4: the interactive shell is zsh (ghost text via
+        # zsh-autosuggestions; ble.sh froze the Workbench PTY chain — D-1).
+        # ZDOTDIR points at the managed rc dir (the zsh --rcfile equivalent).
+        # Falls back to bash + the managed bashrc when zsh/zshrc is absent
+        # (older images), and to plain bash when neither exists.
+        if os.path.isfile("/usr/local/share/aisc/zsh/.zshrc") \
+                and shutil.which("zsh"):
+            return "zsh", ["zsh"]
+        if os.path.isfile("/usr/local/share/aisc/bashrc"):
+            return "bash", ["bash", "--rcfile", "/usr/local/share/aisc/bashrc"]
+    binary = AGENT_BINARIES[agent]
+    return binary, [binary]
+
+
 def _spawn_agent_foreground(binary: str, argv: list, env: Dict[str, str]):
     """Fork+exec the agent in its own process group, foreground on the PTY.
 
@@ -247,21 +278,12 @@ def _cmd_open(args: argparse.Namespace) -> int:
     # v2.1.8 T2: per-PTY session ID for the SQLite history chain.
     env["AISC_TERMINAL_SESSION_ID"] = args.session_id
 
-    binary = AGENT_BINARIES[args.agent]
-    argv = [binary]
-    # v2.1.8 T2/D-4: the interactive shell is zsh (ghost text via
-    # zsh-autosuggestions; ble.sh froze the Workbench PTY chain — D-1).
-    # ZDOTDIR points at the managed rc dir (the zsh --rcfile equivalent).
-    # Falls back to bash + the managed bashrc when zsh/zshrc is absent
-    # (older images), and to plain bash when neither exists.
-    if args.agent == "bash":
-        if os.path.isfile("/usr/local/share/aisc/zsh/.zshrc") \
-                and shutil.which("zsh"):
-            binary = "zsh"
-            argv = ["zsh"]
-            env["ZDOTDIR"] = "/usr/local/share/aisc/zsh"
-        elif os.path.isfile("/usr/local/share/aisc/bashrc"):
-            argv = ["bash", "--rcfile", "/usr/local/share/aisc/bashrc"]
+    try:
+        binary, argv = _agent_argv(args.agent, args.resume_id)
+    except ValueError as exc:
+        _fail(str(exc))
+    if binary == "zsh":
+        env["ZDOTDIR"] = "/usr/local/share/aisc/zsh"
 
     if not _binary_available(binary):
         record = _new_record(args, "failed")
@@ -477,6 +499,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_open.add_argument("--session-id", required=True)
     p_open.add_argument("--runtime-id", required=True)
     p_open.add_argument("--agent", required=True)
+    # v2.1.8 T4: optional provider conversation id → provider-native resume
+    # argv (claude --resume <id> / codex resume <id>); see _agent_argv.
+    p_open.add_argument("--resume-id", default=None)
 
     sub.add_parser("list")
 
