@@ -229,6 +229,14 @@ impl WorkbenchError {
             }
             "AISC_ERR_SESSION_NOT_FOUND" => ("Session 不存在", false, Action::Refresh),
             "AISC_ERR_SESSION_FAILED" => ("Session 启动失败", true, Action::Retry),
+            // v2.1.8 T4: conversation resume preflight (D-5 contracts)。
+            "AISC_ERR_CONVERSATION_UNRESUMABLE" => {
+                ("会话已不存在或无法恢复", false, Action::None)
+            }
+            "AISC_ERR_CONVERSATION_INVALID_ID" => ("会话 ID 无效", false, Action::None),
+            "AISC_ERR_CONVERSATION_INVALID_AGENT" => {
+                ("该 agent 不支持恢复会话", false, Action::None)
+            }
             "AISC_ERR_PROVIDER_STATUS_FAILED" => {
                 ("Provider 状态检查失败", false, Action::None)
             }

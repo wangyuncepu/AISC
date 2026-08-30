@@ -57,8 +57,60 @@ export const openSession = (
   sessionId: string,
   agent: string,
   workspace: string,
-  onEvent: Channel<PtyEvent>
-) => invoke<SessionSnapshot>("open_session", { runtimeId, sessionId, agent, workspace, onEvent });
+  onEvent: Channel<PtyEvent>,
+  resumeConversationId?: string | null,
+) =>
+  invoke<SessionSnapshot>("open_session", {
+    runtimeId,
+    sessionId,
+    agent,
+    workspace,
+    onEvent,
+    // v2.1.8 T4: provider conversation id for resume (None = normal open).
+    resumeConversationId: resumeConversationId ?? null,
+  });
+
+// --- v2.1.8 T4: agent conversation discovery (captured, no PTY) ---
+
+export const conversationList = (workspace: string) =>
+  invoke<import("../types").ConversationListResult>("conversation_list", {
+    workspace,
+  });
+
+export const conversationPreflight = (
+  workspace: string,
+  conversationId: string,
+  agent: string,
+) =>
+  invoke<import("../types").ConversationPreflightResult>("conversation_preflight", {
+    workspace,
+    conversationId,
+    agent,
+  });
+
+export const conversationDelete = (
+  workspace: string,
+  conversationId: string,
+  agent: string,
+) =>
+  invoke<import("../types").ConversationDeleteResult>("conversation_delete", {
+    workspace,
+    conversationId,
+    agent,
+  });
+
+export const conversationRename = (
+  workspace: string,
+  conversationId: string,
+  agent: string,
+  title: string,
+) =>
+  invoke<import("../types").ConversationRenameResult>("conversation_rename", {
+    workspace,
+    conversationId,
+    agent,
+    title,
+  });
 
 export const writeSession = (sessionId: string, bytes: number[]) =>
   invoke<void>("write_session", { sessionId, bytes });

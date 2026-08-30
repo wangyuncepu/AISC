@@ -123,6 +123,46 @@ export interface SessionSnapshot {
 
 export type AckResult = "acknowledged" | "already_acknowledged";
 
+// --- v2.1.8 T4: agent conversation discovery (design §1f) ---
+
+/** One agent history conversation (thin read over provider JSONL; the CLI
+ *  owns the schema — workspaces/<hash>/{claude,codex}). */
+export interface ConversationSummary {
+  conversation_id: string;
+  agent: "claude" | "codex";
+  title: string;
+  started_at: string | null;
+  last_at: string | null;
+  /** null when only a head scan was taken (file_too_large). */
+  message_count: number | null;
+  file_size: number;
+  resumable: boolean;
+  unavailable_reason?: "file_too_large" | "malformed" | "unsupported";
+}
+
+export interface ConversationListResult {
+  schema_version: number;
+  conversations: ConversationSummary[];
+}
+
+export interface ConversationPreflightResult {
+  conversation_id: string;
+  agent: string;
+}
+
+export interface ConversationDeleteResult {
+  deleted: boolean;
+  conversation_id: string;
+  agent: string;
+}
+
+export interface ConversationRenameResult {
+  renamed: boolean;
+  conversation_id: string;
+  agent: string;
+  title: string;
+}
+
 /** Result of the unified exit coordinator (03 §4.3; runtime-lifecycle-ux
  * 02 §4 adds the per-runtime cleanup entries — absent on the legacy
  * sessions-only path). */
@@ -802,6 +842,10 @@ export interface Tab {
   activePaneId: string;
   /** G-17: per-pane live state keyed by pane id (always holds the active pane). */
   panes: Record<string, PaneRuntime>;
+  /** v2.1.8 T4: the provider conversation this tab resumed (undefined for
+   *  non-resume tabs). Lets the History tab activate the live tab instead
+   *  of spawning a duplicate resume that the provider would refuse. */
+  resumeConversationId?: string;
 }
 
 // --- Step 3: typed settings (02 §三.4; wire sections are snake_case, the

@@ -26,6 +26,13 @@ vi.mock("../../../lib/ipc", () => ({
   artifactList: vi.fn(async () => ({
     schema_version: 1, artifacts: [], next_cursor: null,
   })),
+  // v2.1.8 T4: the store module imports these at top level.
+  conversationList: vi.fn(async () => ({
+    schema_version: 1, conversations: [],
+  })),
+  conversationPreflight: vi.fn(async () => ({
+    conversation_id: "", agent: "",
+  })),
 }));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
   writeText: vi.fn().mockResolvedValue(undefined),
@@ -166,8 +173,10 @@ describe("artifacts tab: kind chips + collapse + search (S5c)", () => {
     return w;
   }
 
-  it("renders all four groups; a chip hides other groups", async () => {
+  it("renders all four artifact groups; a chip hides other groups", async () => {
     const w = await seedArtifacts();
+    // v2.1.8 T4: conversations moved to their own 历史 tab — the 变更 panel
+    // is back to exactly the four artifact groups.
     expect(w.findAll(".artifacts-group-head")).toHaveLength(4);
 
     const chips = w.findAll(".artifact-chip");

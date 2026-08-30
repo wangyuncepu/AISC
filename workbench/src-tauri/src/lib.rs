@@ -5,6 +5,7 @@
 // See docs/gui-planning/06-implementation-plan.md §四.
 
 pub mod cli;
+pub mod conversation;
 pub mod data_root;
 pub mod docker_ownership;
 pub mod doctor;
@@ -47,6 +48,9 @@ use trace::op_traces;
 use locale::resolve_locale;
 use env::{env_poll_engine, env_readiness};
 use installer::installer_handoff;
+use conversation::{
+    conversation_delete, conversation_list, conversation_preflight, conversation_rename,
+};
 use onboarding::{onboarding_load, onboarding_update};
 use runtime::{
     build_image, cancel_build, cancel_runtime_start, cc_switch_add, cc_switch_delete,
@@ -88,6 +92,10 @@ pub fn run(cli_arg: Option<String>) {
             cli_clear_pin,
             negotiate_capabilities,
             open_session,
+            conversation_list,
+            conversation_preflight,
+            conversation_delete,
+            conversation_rename,
             write_session,
             resize_session,
             close_session,

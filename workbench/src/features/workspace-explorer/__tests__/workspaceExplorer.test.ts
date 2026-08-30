@@ -63,6 +63,10 @@ vi.mock("../../../lib/ipc", () => ({
   artifactList: vi.fn().mockResolvedValue({ schema_version: 1, artifacts: [], next_cursor: null }),
   artifactInspect: vi.fn(),
   artifactRefresh: vi.fn(),
+  // v2.1.8 T4: the store module imports these at top level.
+  conversationList: vi.fn(async () => ({ schema_version: 1, conversations: [] })),
+  conversationPreflight: vi.fn(async () => ({ conversation_id: "", agent: "" })),
+  conversationDelete: vi.fn(async () => ({ deleted: true, conversation_id: "", agent: "" })),
 }));
 
 async function setup() {
@@ -216,7 +220,12 @@ describe("WorkspaceExplorer artifacts panel (WX-04)", () => {
     await setup();
     const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
     // Switch to the Artifacts tab.
-    await wrapper.findAll("[role=tab]")[1].trigger("click");
+    // v2.1.8 T4: the History tab sits between Files and Changes — click by
+    // text, not index.
+    await wrapper
+      .findAll("[role=tab]")
+      .find((t) => t.text() === "变更")!
+      .trigger("click");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const row = wrapper.find(".artifact-row");
@@ -277,7 +286,12 @@ describe("WorkspaceExplorer artifacts panel (WX-04)", () => {
 
     await setup();
     const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
-    await wrapper.findAll("[role=tab]")[1].trigger("click");
+    // v2.1.8 T4: the History tab sits between Files and Changes — click by
+    // text, not index.
+    await wrapper
+      .findAll("[role=tab]")
+      .find((t) => t.text() === "变更")!
+      .trigger("click");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const names = wrapper.findAll(".artifact-row .explorer-name").map((n) => n.text());
@@ -295,7 +309,12 @@ describe("WorkspaceExplorer artifacts panel (WX-04)", () => {
       { relative_path: "a/result.md", change_type: "created", kind: "file", revision: 1 },
       { relative_path: "b/result.md", change_type: "modified", kind: "file", revision: 2 },
     ]);
-    await wrapper.findAll("[role=tab]")[1].trigger("click");
+    // v2.1.8 T4: the History tab sits between Files and Changes — click by
+    // text, not index.
+    await wrapper
+      .findAll("[role=tab]")
+      .find((t) => t.text() === "变更")!
+      .trigger("click");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const names = wrapper.findAll(".unattributed .explorer-name").map((n) => n.text());
@@ -335,7 +354,12 @@ describe("WorkspaceExplorer artifacts panel (WX-04)", () => {
     explorer.handleWorkspaceChanges([
       { relative_path: "scratch/result.md", change_type: "created", kind: "file", revision: 1 },
     ]);
-    await wrapper.findAll("[role=tab]")[1].trigger("click");
+    // v2.1.8 T4: the History tab sits between Files and Changes — click by
+    // text, not index.
+    await wrapper
+      .findAll("[role=tab]")
+      .find((t) => t.text() === "变更")!
+      .trigger("click");
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const artifactName = wrapper.find(".artifact-row .explorer-name").text();
@@ -690,5 +714,45 @@ describe("WorkspaceExplorer drag & icons (11d)", () => {
     expect(twisties[0].text()).toBe("▸"); // collapsed dir
     expect(twisties[1].text()).toBe("");
     wrapper.unmount();
+  });
+});
+
+// --- v2.1.8 T4: conversations store (stale-list fix) ---
+describe("conversations store (v2.1.8 T4)", () => {
+  it("force reload picks up newly created conversations; cached reads do not", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    const { conversationList } = await import("../../../lib/ipc");
+    const explorer = useWorkspaceExplorerStore();
+    explorer.workspace = "/ws";
+    const conv = (id: string) => ({
+      conversation_id: id,
+      agent: "claude" as const,
+      title: `t-${id}`,
+      started_at: null,
+      last_at: null,
+      message_count: 1,
+      file_size: 10,
+      resumable: true,
+    });
+    vi.mocked(conversationList).mockResolvedValueOnce({
+      schema_version: 1,
+      conversations: [conv("a")],
+    });
+    await explorer.loadConversations();
+    expect(explorer.conversations.map((c) => c.conversation_id)).toEqual(["a"]);
+
+    // A new session lands afterwards: a plain (cached) read keeps the old
+    // list — this was the 手测 stale symptom.
+    vi.mocked(conversationList).mockResolvedValueOnce({
+      schema_version: 1,
+      conversations: [conv("a"), conv("b")],
+    });
+    await explorer.loadConversations();
+    expect(explorer.conversations).toHaveLength(1);
+
+    // Tab activation / toolbar refresh pass force=true → rescans.
+    await explorer.loadConversations(true);
+    expect(explorer.conversations.map((c) => c.conversation_id)).toEqual(["a", "b"]);
   });
 });

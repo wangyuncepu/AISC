@@ -1107,7 +1107,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
    * the session channel + output buffer so a Terminal remount (e.g. a split
    * restructuring the tree) never re-opens or drops the session (A-G17-2:
    * open failure keeps a failed pane). */
-  async function openPane(tab: Tab, paneId: string) {
+  async function openPane(tab: Tab, paneId: string, resumeConversationId?: string | null) {
     const p = tab.panes[paneId];
     if (!p || p.sessionState === "starting" || p.sessionState === "running") return;
     const agent = findLeaf(tab.tree, paneId)?.sessionType;
@@ -1154,7 +1154,20 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       }
     };
     try {
-      await ipc.openSession(runtimeId.value, sid, agent, workspace.value.trim(), ch);
+      await ipc.openSession(
+        runtimeId.value,
+        sid,
+        agent,
+        workspace.value.trim(),
+        ch,
+        resumeConversationId ?? null,
+      );
+      // v2.1.8 T4: remember the conversation this tab resumed so the
+      // History panel can activate the live tab instead of re-resuming
+      // (a second provider resume on a live session fails).
+      if (resumeConversationId) {
+        tab.resumeConversationId = resumeConversationId;
+      }
       if (p.sessionState === "starting") {
         p.sessionState = "running";
         syncProjection(tab);
@@ -1278,12 +1291,14 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   }
 
   /** Open (or reopen) a tab's session: binds the tab's ACTIVE pane via the
-   * store-owned session channel (openPane). G-17. */
-  function openTab(tabId: string) {
+   * store-owned session channel (openPane). G-17. v2.1.8 T4: an optional
+   * resume conversation id applies to THIS open only (reopen flows pass
+   * nothing and behave exactly as before). */
+  function openTab(tabId: string, resumeConversationId?: string | null) {
     const tab = findTab(tabId);
     if (!tab) return;
     activeTabId.value = tabId;
-    void openPane(tab, tab.activePaneId);
+    void openPane(tab, tab.activePaneId, resumeConversationId);
     scheduleSave();
   }
 
@@ -1309,14 +1324,15 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   /** G-08 (Step 5): create a dynamic tab (A-G08-1/8). Refused beyond the
    * per-Runtime leaf cap. The tab opens immediately (Step 5c routes
-   * unconfigured claude/codex to the guide state instead). */
-  function createTab(agent: LaunchAgent): string | null {
+   * unconfigured claude/codex to the guide state instead). v2.1.8 T4:
+   * `resumeConversationId` rides to open_session for history resume. */
+  function createTab(agent: LaunchAgent, resumeConversationId?: string | null): string | null {
     // G-17 (A-G17-6): the global leaf cap governs (a split tab holds >1 leaf).
     if (totalLeaves() >= MAX_PANES) return null;
     const tabId = uuid();
     tabs.value.push(newPaneTab(tabId, agent, AGENT_TITLE[agent], null));
     activeTabId.value = tabId;
-    void maybeOpenCreated(tabId, agent);
+    void maybeOpenCreated(tabId, agent, resumeConversationId);
     scheduleSave();
     return tabId;
   }
@@ -1328,7 +1344,11 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
    * Step 8 (04 §三 rule table): login_required and unknown ALSO route to the
    * guide state (supersedes the 2026-08-10 decision that login_required opened
    * directly - the spec now requires the conservative flow). */
-  async function maybeOpenCreated(tabId: string, agent: LaunchAgent) {
+  async function maybeOpenCreated(
+    tabId: string,
+    agent: LaunchAgent,
+    resumeConversationId?: string | null,
+  ) {
     if (agent === "claude" || agent === "codex") {
       await loadProviderStatus(agent);
       const st = providerStatuses.value[agent];
@@ -1339,7 +1359,21 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
         return;
       }
     }
-    openTab(tabId);
+    openTab(tabId, resumeConversationId);
+  }
+
+  /** v2.1.8 T4: a LIVE tab that already resumed this conversation. The
+   * History panel activates it instead of spawning a duplicate resume —
+   * the provider refuses a second resume of a live session (手测). */
+  function findLiveResumeTab(conversationId: string): Tab | null {
+    for (const tab of tabs.value) {
+      if (tab.resumeConversationId !== conversationId) continue;
+      const live = Object.values(tab.panes).some(
+        (p) => p.sessionState === "running" || p.sessionState === "starting"
+      );
+      if (live) return tab;
+    }
+    return null;
   }
 
   /** G-12 (Step 8): activate an existing cc-switch tab or create one -
@@ -1781,6 +1815,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     closeTab,
     reopenTab,
     createTab,
+    findLiveResumeTab,
     removeTab,
     openCcSwitch,
     onTabOpenOk,

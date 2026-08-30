@@ -233,8 +233,9 @@ fn session_open_argv(
     session_id: &str,
     agent: &str,
     workspace: &str,
+    resume_conversation_id: Option<&str>,
 ) -> Vec<String> {
-    vec![
+    let mut argv = vec![
         "session".into(),
         "open".into(),
         "--runtime-id".into(),
@@ -245,7 +246,32 @@ fn session_open_argv(
         agent.into(),
         "--workspace".into(),
         workspace.into(),
-    ]
+    ];
+    // v2.1.8 T4 (design §1f): the wrapper converts this to the provider
+    // resume form (claude --resume <id> / codex resume <id>).
+    if let Some(id) = resume_conversation_id {
+        argv.push("--resume-id".into());
+        argv.push(id.into());
+    }
+    argv
+}
+
+/// v2.1.8 T4: resume pre-validation (design §1c/§1f). Pure so the unit
+/// tests cover it without an AppHandle. The conversation id is provider-
+/// native — any RFC-4122 version is accepted (D-5: Codex ships UUIDv7).
+fn validate_resume(
+    agent: &str,
+    resume_conversation_id: Option<&str>,
+) -> Result<(), WorkbenchError> {
+    if let Some(id) = resume_conversation_id {
+        if !crate::conversation::is_conversation_uuid(id) {
+            return Err(WorkbenchError::map_aisc("AISC_ERR_CONVERSATION_INVALID_ID"));
+        }
+        if agent != "claude" && agent != "codex" {
+            return Err(WorkbenchError::map_aisc("AISC_ERR_CONVERSATION_INVALID_AGENT"));
+        }
+    }
+    Ok(())
 }
 
 fn session_terminate_argv(runtime_id: &str, session_id: &str, workspace: &str) -> Vec<String> {
@@ -324,6 +350,7 @@ pub async fn open_session(
     agent: String,
     workspace: String,
     on_event: Channel<PtyEvent>,
+    resume_conversation_id: Option<String>,
 ) -> Result<SessionSnapshot, WorkbenchError> {
     if !is_uuid_v4(&runtime_id) {
         return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_RUNTIME_ID"));
@@ -334,6 +361,7 @@ pub async fn open_session(
     if !AGENTS.contains(&agent.as_str()) {
         return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_AGENT"));
     }
+    validate_resume(&agent, resume_conversation_id.as_deref())?;
     // Canonicalize before any spawn: the frontend raw string never becomes
     // Session identity (05 §4.1). Missing/unreadable workspace -> stable
     // workspace error, no child is started.
@@ -370,7 +398,8 @@ pub async fn open_session(
     };
 
     let pin = resolve_cli(&app).await?;
-    let argv = session_open_argv(&runtime_id, &session_id, &agent, &ws);
+    let argv =
+        session_open_argv(&runtime_id, &session_id, &agent, &ws, resume_conversation_id.as_deref());
 
     let (event_tx, event_rx) = mpsc::channel::<PtyEvent>(EVENT_CHANNEL_CAP);
     let spawned = spawn_pipe_session(&pin, argv, DEFAULT_COLS, DEFAULT_ROWS, event_tx);
@@ -1090,18 +1119,50 @@ mod tests {
 
     #[test]
     fn open_argv_is_text_only_no_format() {
-        let argv = session_open_argv("rid", "sid", "bash", "/ws");
+        let argv = session_open_argv("rid", "sid", "bash", "/ws", None);
         assert_eq!(argv[0], "session");
         assert_eq!(argv[1], "open");
         assert!(argv.contains(&"--agent".into()));
         assert!(!argv.iter().any(|a| a == "--format"));
+        assert!(!argv.iter().any(|a| a == "--resume-id"));
     }
 
     #[test]
     fn open_argv_includes_canonical_workspace() {
-        let argv = session_open_argv("rid", "sid", "bash", "C:/ws");
+        let argv = session_open_argv("rid", "sid", "bash", "C:/ws", None);
         let i = argv.iter().position(|a| a == "--workspace").unwrap();
         assert_eq!(argv[i + 1], "C:/ws");
+    }
+
+    #[test]
+    fn open_argv_appends_resume_id() {
+        // v2.1.8 T4: a resume conversation id rides at the END of the argv.
+        let argv = session_open_argv(
+            "rid",
+            "sid",
+            "claude",
+            "/ws",
+            Some("24b70882-2d45-4cec-a9e2-66f8c012481f"),
+        );
+        let i = argv.iter().position(|a| a == "--resume-id").unwrap();
+        assert_eq!(argv[i + 1], "24b70882-2d45-4cec-a9e2-66f8c012481f");
+        assert_eq!(argv.last().unwrap(), "24b70882-2d45-4cec-a9e2-66f8c012481f");
+    }
+
+    #[test]
+    fn validate_resume_accepts_v7_codex_and_rejects_garbage() {
+        // D-5: Codex ids are UUIDv7 — accepted; garbage is not.
+        assert!(validate_resume("codex", Some("01a04ca9-d3f6-7021-b9e7-50d48d818c65")).is_ok());
+        assert!(validate_resume("claude", Some("24b70882-2d45-4cec-a9e2-66f8c012481f")).is_ok());
+        assert!(validate_resume("claude", Some("not-a-uuid")).is_err());
+        assert!(validate_resume("claude", None).is_ok());
+    }
+
+    #[test]
+    fn validate_resume_rejects_non_provider_agents() {
+        assert!(validate_resume("bash", Some("24b70882-2d45-4cec-a9e2-66f8c012481f")).is_err());
+        assert!(validate_resume("cc-switch", Some("24b70882-2d45-4cec-a9e2-66f8c012481f"))
+            .is_err());
     }
 
     #[test]

@@ -11,6 +11,10 @@ import { listen } from "@tauri-apps/api/event";
 import {
   artifactList,
   artifactRefresh,
+  conversationDelete,
+  conversationList,
+  conversationPreflight,
+  conversationRename,
   workspaceCopyEntry,
   workspaceCopyPath,
   workspaceCreateDir,
@@ -26,6 +30,7 @@ import {
 import { useSettingsStore } from "./settings";
 import type {
   ArtifactRecord,
+  ConversationSummary,
   WorkspaceMutationResult,
   WorkspaceNode,
   WorkspacePreviewResult,
@@ -60,7 +65,7 @@ interface ExplorerCache {
   stale: boolean;
 }
 
-export type ExplorerKind = "explorer" | "artifacts" | "services";
+export type ExplorerKind = "explorer" | "conversations" | "artifacts" | "services";
 
 /** Stage 11 (D11-02/D11-03): the in-app file clipboard. Short-lived store
  *  state — copy never touches the OS text clipboard. Single source entry
@@ -157,6 +162,13 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
     artifactsNextCursor: null as number | null,
     /** Watcher overflow: Explorer may be stale until a bounded rescan. */
     stale: false,
+    /** v2.1.8 T4: agent history conversations (变更页第 5 组). */
+    conversations: [] as ConversationSummary[],
+    conversationsLoading: false,
+    conversationsError: null as string | null,
+    /** Per-conversation inline resume error (preflight failure keeps the
+     *  layout — no tab is created; design §1c). */
+    resumeErrors: {} as Record<string, string>,
     /** Unattributed changes (watcher projection, never agent provenance). */
     unattributed: {} as Record<string, string>,
     activeKind: "explorer" as ExplorerKind,
@@ -281,6 +293,10 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
         this.artifacts = [];
         this.artifactsNextCursor = null;
         this.preview = null;
+        // v2.1.8 T4: conversations belong to the outgoing workspace; inline
+        // resume errors equally so.
+        this.conversations = [];
+        this.resumeErrors = {};
         // A copied entry belongs to its workspace; pasting into another
         // workspace must be refused (02 §3), so drop the buffer on switch.
         this.clipboard = null;
@@ -548,8 +564,7 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
       }
     },
 
-    async loadMoreArtifacts() {
-      if (!this.workspace) return;
+    async loadMoreArtifacts() {      if (!this.workspace) return;
       if (this.artifactsLoadingMore) return;
       if (this.artifactsNextCursor === null) return;
       this.artifactsLoadingMore = true;
@@ -564,6 +579,75 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
       } finally {
         this.artifactsLoadingMore = false;
       }
+    },
+
+    // --- v2.1.8 T4: agent history conversations (变更页第 5 组) ---
+
+    /** Load the workspace's agent history conversations (most recent first;
+     *  the CLI owns ordering). Called when the 变更 tab activates. */
+    async loadConversations(force = false) {
+      if (!this.workspace) return;
+      if (this.conversationsLoading) return;
+      if (!force && this.conversations.length > 0) return;
+      this.conversationsLoading = true;
+      this.conversationsError = null;
+      try {
+        const result = await conversationList(this.workspace);
+        this.conversations = result.conversations;
+      } catch (e) {
+        this.conversationsError = String(e);
+      } finally {
+        this.conversationsLoading = false;
+      }
+    },
+
+    /** Two-call resume orchestration (design §1c): preflight FIRST — its
+     *  failure keeps the current layout (no tab/pane/Channel) and surfaces
+     *  an inline row error; success hands off to createTab, which threads
+     *  the id through openPane → open_session → wrapper `--resume-id`.
+     *  Returns true when the resume tab was created. */
+    async resumeConversation(c: ConversationSummary): Promise<boolean> {
+      if (!this.workspace) return false;
+      delete this.resumeErrors[c.conversation_id];
+      try {
+        await conversationPreflight(this.workspace, c.conversation_id, c.agent);
+      } catch (e) {
+        // WorkbenchError serializes { code, message }; prefer its message.
+        const msg =
+          e && typeof e === "object" && "message" in e
+            ? String((e as { message?: unknown }).message)
+            : String(e);
+        this.resumeErrors[c.conversation_id] = msg;
+        return false;
+      }
+      const { useRuntimeStore } = await import("./runtime");
+      const runtime = useRuntimeStore();
+      // A live tab that already resumed this conversation: activate it
+      // instead of spawning a duplicate resume — the provider refuses a
+      // second resume of a live session (手测反馈).
+      const live = runtime.findLiveResumeTab?.(c.conversation_id);
+      if (live) {
+        runtime.activateTab(live.tabId);
+        return true;
+      }
+      return runtime.createTab(c.agent, c.conversation_id) !== null;
+    },
+
+    /** Rename a conversation (手测反馈 #2): persists a title override in the
+     *  workspace runtime dir (the CLI owns the storage) and refreshes. */
+    async renameConversation(c: ConversationSummary, title: string): Promise<void> {
+      if (!this.workspace) return;
+      await conversationRename(this.workspace, c.conversation_id, c.agent, title);
+      await this.loadConversations(true);
+    },
+
+    /** Delete a conversation after the UI's confirm dialog; the list
+     *  refreshes so the row disappears immediately (手测反馈 #4). */
+    async deleteConversation(c: ConversationSummary): Promise<void> {
+      if (!this.workspace) return;
+      delete this.resumeErrors[c.conversation_id];
+      await conversationDelete(this.workspace, c.conversation_id, c.agent);
+      await this.loadConversations(true);
     },
 
     // --- file actions (containment enforced in Rust) ---
