@@ -82,3 +82,27 @@ preflight 拒绝，T4 恢复功能对 codex 直接不可用。设计文档与冻
 
 **影响面**：`application/conversation.py` 的 `_UUID_RE` / `_CODEX_FILENAME_RE`
 两处；claude 的 id（真实 v4）不受影响。错误码、exit code、envelope 契约均不变。
+
+## D-6：T4 手测轮迭代（2026-08-30，三轮手测收敛）
+
+首轮反馈修正：
+- **标题提取跳过注入上下文**：provider 会把 AGENTS.md/skills/permissions 块、
+  `<local-command-caveat>`、SDK "init" 记为 user 角色消息——标题选择跳过
+  context-like 文本与 claude `promptSource=="sdk"`，取第一条真实用户输入；
+  全部命中上下文时回退首条。
+- **历史对话独立"历史"tab**（文件→历史→变更→服务）：塞进变更页时与产物分组
+  语义混淆（用户原话"非常令人困惑"）。
+- **会话行右键菜单**：打开 / 重命名 / 删除（删除带确认框，删的是会话 JSONL
+  文件本身）；左键单击=打开（resume）。
+- **`session open --resume-id` 链路补全**：Rust 发了参数但 Python CLI 的
+  session open 没有——argparse 直接 exit 2（首轮 codex resume 全挂的根因）。
+  CLI→wrapper 全链穿透 + CLI 层防御校验。
+
+次轮反馈修正：
+- **历史列表 stale**：tab 激活与工具栏刷新都命中缓存/不覆盖历史——激活与刷新
+  均改为强制重扫（本地 JSONL 头扫，开销小）。
+- **活会话重复 resume**：恢复过的 tab 记住 `resumeConversationId`；历史里再点
+  同一条时激活现有 tab 而非新建（provider 拒绝对活会话二次 resume）。
+- **右键重命名**：标题覆盖写入 `workspaces/<hash>/runtime/conversation_titles.json`
+  （`aisc.conversation-titles/v1`，原子写；list 覆盖展示；delete 顺带清理）。
+  provider 自身标题不动，覆盖仅是 Workbench 显示层。
