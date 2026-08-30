@@ -56,9 +56,16 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 #   git/curl/tmux      — Claude Code 常用底层依赖
 #   iptables/iproute2  — Mihomo TUN auto-route 操纵 iptables 与路由表所必需
 #   ca-certificates    — mihomo/geodata 经 https 下载所需
-#   fzf/neovim/ripgrep — v2.1.8 T2 Bash 体验增强（模糊搜索/编辑器/快速搜索）
+#   neovim/ripgrep    — v2.1.8 T2 Bash 体验增强（编辑器/快速搜索）
+#   zsh 三件套         — Workbench 交互 shell + 幽灵文本 + 语法高亮（D-4；
+#                        ble.sh 冻结 Workbench PTY 链，见 decisions.md D-1）
+#   file               — yazi mime 探测硬依赖（缺失时所有预览永远 "Loading..."，
+#                        2026-08-30 PTY 装置实证；Debian slim 默认不带）
+#   procps             — ps/pgrep/pkill；ble.sh 初始化的环境检查要求 ps 存在
+#                        （缺失时报 "insane environment: ps not found" 并拒绝加载）
 RUN apt-get update && apt-get install -y git curl tmux iptables iproute2 ca-certificates \
-    fzf neovim ripgrep unzip xz-utils \
+    neovim ripgrep unzip xz-utils procps file \
+    zsh zsh-autosuggestions zsh-syntax-highlighting \
     && rm -rf /var/lib/apt/lists/*
 
 # ==========================================
@@ -434,10 +441,11 @@ COPY container/claude-settings.json /usr/local/bin/lib/aisc-claude-settings-base
 # AISC_AGENT_INSTRUCTIONS=off.
 COPY container/agent-instructions.md /usr/local/share/aisc/agent-instructions.md
 
-# v2.1.8 T2: AISC-managed bashrc (recursion-guarded, HISTFILE, ble.sh, fzf,
-# SQLite hook via Python helper) + the /root/.bashrc shim that sources it
-# (tmux sub-shell closure). The helper lives in lib/ alongside the adapter.
+# v2.1.8 T2: AISC-managed bashrc (recursion-guarded, HISTFILE, ble.sh behind
+# experiment gate, SQLite hook via Python helper) + the /root/.bashrc shim
+# that sources it (tmux sub-shell closure). The helper lives in lib/.
 COPY container/aisc-bashrc /usr/local/share/aisc/bashrc
+COPY container/aisc-zshrc /usr/local/share/aisc/zsh/.zshrc
 COPY container/lib/aisc_bash_history.py /usr/local/bin/lib/aisc_bash_history.py
 RUN echo '# >>> aisc managed >>>' >> /root/.bashrc \
     && echo 'if [ -f /usr/local/share/aisc/bashrc ] && [[ $- == *i* ]]; then' >> /root/.bashrc \

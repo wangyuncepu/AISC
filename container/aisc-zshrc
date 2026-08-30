@@ -1,0 +1,67 @@
+# /usr/local/share/aisc/zsh/.zshrc — AISC-managed zsh initialization
+# v2.1.8 T2/D-4: the Workbench terminal's interactive shell (agent=bash).
+# Loaded via ZDOTDIR (set by aisc-session-wrapper). Falls back to bash +
+# /usr/local/share/aisc/bashrc when zsh or this file is absent (old images).
+#
+# Why zsh: ble.sh attach froze the Workbench terminal chain
+# (xterm.js ↔ conPTY ↔ docker pty; see decisions.md D-1/#50). zsh ZLE +
+# zsh-autosuggestions delivers the same fish-style ghost text without
+# aggressive terminal state manipulation, and survives the chain (2026-08-30
+# 手测).
+
+# 1. Source user rc if present (container-local; non-blocking)
+[ -f /root/.zshrc ] && source /root/.zshrc
+
+# 2. HISTFILE persistence (workspace-scoped; immediate append — closing a
+#    tab SIGTERMs the shell and zsh would otherwise write nothing; same
+#    failure the bashrc fixes with `history -a`)
+if [ -n "$AISC_ZSH_HISTORY_FILE" ]; then
+    HISTFILE="$AISC_ZSH_HISTORY_FILE"
+    HISTSIZE=10000
+    SAVEHIST=10000
+    setopt inc_append_history
+    setopt no_beep
+fi
+
+# 3. Prompt (zsh default `%m# ` is terse; bash-like layout with colors)
+PS1='%F{green}%n@%m%f:%F{blue}%~%f$ '
+
+# 4. Tab completion (commands/paths/flags); dump lives on the persistent
+#    runtime mount so each container start reuses it instead of rebuilding
+autoload -Uz compinit
+compinit -d "${AISC_BASH_HISTORY_DIR:-/tmp}/.zcompdump"
+
+# 5. fish-style ghost text (gray suggestion, → to accept) + syntax
+#    highlighting. syntax-highlighting must be sourced LAST — it wraps the
+#    ZLE widgets that autosuggestions installs.
+[ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ] && \
+    source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+[ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ] && \
+    source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+
+# 6. SQLite history append via the shared Python helper (parity with the
+#    bashrc hook; parameterized API — no shell SQL; fail-open). preexec
+#    captures the command line, precmd captures its exit status.
+if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
+    typeset -g _aisc_prev_cmd=""
+    typeset -g _aisc_last_cmd=""
+    _aisc_preexec() { _aisc_last_cmd="$1"; }
+    _aisc_precmd_log() {
+        local st=$?
+        [ -z "$_aisc_last_cmd" ] && return 0
+        if [ "$_aisc_last_cmd" = "$_aisc_prev_cmd" ]; then
+            return 0    # dup guard: prompt redraws / second precmd pass
+        fi
+        _aisc_prev_cmd="$_aisc_last_cmd"
+        AISC_HIST_DB="$AISC_BASH_HISTORY_DB" \
+        AISC_HIST_WS_HASH="$AISC_WORKSPACE_HASH" \
+        AISC_HIST_SESSION_ID="$AISC_TERMINAL_SESSION_ID" \
+        AISC_HIST_CMD="$_aisc_last_cmd" AISC_HIST_CWD="$PWD" \
+        AISC_HIST_EXIT="$st" \
+        python3 /usr/local/bin/lib/aisc_bash_history.py append 2>/dev/null
+        return 0
+    }
+    autoload -Uz add-zsh-hook
+    add-zsh-hook preexec _aisc_preexec
+    add-zsh-hook precmd _aisc_precmd_log
+fi

@@ -709,6 +709,9 @@ PYEOF
     export AISC_BASH_HISTORY_DIR
     export AISC_BASH_HISTORY_FILE="${AISC_BASH_HISTORY_DIR}/.bash_history"
     export AISC_BASH_HISTORY_DB="${AISC_BASH_HISTORY_DIR}/bash_history.db"
+    # v2.1.8 T2/D-4: zsh is the Workbench interactive shell; separate file
+    # (zsh metadata lines are not bash-readable on write-back).
+    export AISC_ZSH_HISTORY_FILE="${AISC_BASH_HISTORY_DIR}/.zsh_history"
     # Also expose into the runtime context for host-side tooling.
     python3 -c "
 import json
@@ -716,6 +719,7 @@ p = '/run/aisc/runtime-context.json'
 ctx = json.load(open(p))
 ctx['bash_history_file'] = '${AISC_BASH_HISTORY_FILE}'
 ctx['bash_history_db'] = '${AISC_BASH_HISTORY_DB}'
+ctx['zsh_history_file'] = '${AISC_ZSH_HISTORY_FILE}'
 json.dump(ctx, open(p, 'w'), indent=2, ensure_ascii=False)
 " 2>/dev/null || true
 

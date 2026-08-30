@@ -141,6 +141,13 @@ def _rebuild_env(ctx: Dict[str, Any]) -> Dict[str, str]:
     # separate field, so derive it to rebuild the documented config boundary.
     env["CODEX_HOME"] = codex_dir
     env["CC_SWITCH_CONFIG_DIR"] = ctx.get("cc_switch_config_dir", "")
+    # v2.1.8 T2: bash history paths are entrypoint runtime exports, not
+    # container-config env — docker exec sessions never see them. The
+    # entrypoint stamps them into the context; rebuild here (empty when the
+    # running image predates T2, in which case bashrc skips those hooks).
+    env["AISC_BASH_HISTORY_FILE"] = ctx.get("bash_history_file", "")
+    env["AISC_BASH_HISTORY_DB"] = ctx.get("bash_history_db", "")
+    env["AISC_ZSH_HISTORY_FILE"] = ctx.get("zsh_history_file", "")
     return env
 
 
@@ -242,10 +249,19 @@ def _cmd_open(args: argparse.Namespace) -> int:
 
     binary = AGENT_BINARIES[args.agent]
     argv = [binary]
-    # v2.1.8 T2: bash uses the AISC-managed rcfile (HISTFILE, ble.sh, fzf,
-    # SQLite hook). Other agents use their own init paths.
-    if args.agent == "bash" and os.path.isfile("/usr/local/share/aisc/bashrc"):
-        argv = ["bash", "--rcfile", "/usr/local/share/aisc/bashrc"]
+    # v2.1.8 T2/D-4: the interactive shell is zsh (ghost text via
+    # zsh-autosuggestions; ble.sh froze the Workbench PTY chain — D-1).
+    # ZDOTDIR points at the managed rc dir (the zsh --rcfile equivalent).
+    # Falls back to bash + the managed bashrc when zsh/zshrc is absent
+    # (older images), and to plain bash when neither exists.
+    if args.agent == "bash":
+        if os.path.isfile("/usr/local/share/aisc/zsh/.zshrc") \
+                and shutil.which("zsh"):
+            binary = "zsh"
+            argv = ["zsh"]
+            env["ZDOTDIR"] = "/usr/local/share/aisc/zsh"
+        elif os.path.isfile("/usr/local/share/aisc/bashrc"):
+            argv = ["bash", "--rcfile", "/usr/local/share/aisc/bashrc"]
 
     if not _binary_available(binary):
         record = _new_record(args, "failed")
