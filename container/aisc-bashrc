@@ -56,11 +56,10 @@ if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
         python3 /usr/local/bin/lib/aisc_bash_history.py append 2>/dev/null
         return "$_aisc_exit"         # LAST: restore original code
     }
-    # Note: string-form PROMPT_COMMAND only. Bash array form
-    # (PROMPT_COMMAND=(a b)) degrades gracefully — hook not appended,
-    # HISTFILE/ble.sh unaffected.
-    case ";${PROMPT_COMMAND};" in
-        *;_aisc_log_history;*) ;;                      # already present
-        *) PROMPT_COMMAND="_aisc_log_history;${PROMPT_COMMAND}" ;;
-    esac
+    # Idempotent append: only add if not already present.
+    # (case-in patterns treat ';' as separator — use string match instead.)
+    # Note: string-form PROMPT_COMMAND only. Bash array form degrades gracefully.
+    if [[ ";${PROMPT_COMMAND};" != *"_aisc_log_history"* ]]; then
+        PROMPT_COMMAND="_aisc_log_history;${PROMPT_COMMAND}"
+    fi
 fi
