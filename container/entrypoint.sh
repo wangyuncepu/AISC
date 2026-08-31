@@ -729,6 +729,41 @@ json.dump(ctx, open(p, 'w'), indent=2, ensure_ascii=False)
             python3 /usr/local/bin/lib/aisc_bash_history.py retain 2>/dev/null || true
     fi
 
+    # 2.1.9 T3b 补丁（#3）：存量工作区的 agent 指令面停在首次建区时的工厂副本
+    # ——工厂后来加的登记节与 env 缺省技能从未同步进去，agent 自登记因此从未
+    # 触发。每次启动幂等回填：
+    #   a) artifact 技能完全 AISC 所有 → 直接以工厂版覆盖
+    #   b) CLAUDE.md / AGENTS.md 仅在标记块缺失时追加登记节（不动用户其余内容）
+    for _sk_dir in "$CLAUDE_CONFIG_DIR/skills/artifact" "$CODEX_CONFIG_DIR/skills/artifact"; do
+        if [ -d "$_sk_dir" ] && [ -f /opt/aisc/factory/.claude/skills/artifact/SKILL.md ]; then
+            cp /opt/aisc/factory/.claude/skills/artifact/SKILL.md "$_sk_dir/SKILL.md"
+        fi
+    done
+    _reg_mark=">>> aisc artifact-register >>>"
+    _reg_block='## Deliverable registration (变更页归因)
+
+Your session env carries `AISC_AGENT`, `AISC_TERMINAL_SESSION_ID` and
+`AISC_RUNTIME_ID`; `aisc artifact record` reads them as defaults. When a
+task produces files the user will want to open, register each one as you
+finish:
+
+```sh
+aisc artifact record --path <relative/path> --kind deliverable --action created --label "<short label>"
+```
+
+See the `artifact` skill for the full classification table and when NOT
+to register. Unregistered files still show in the Changes panel, but
+without your name on them.'
+    for _instr in "$CLAUDE_CONFIG_DIR/CLAUDE.md" "$CODEX_CONFIG_DIR/AGENTS.md" "/root/AGENTS.md"; do
+        if [ ! -f "$_instr" ]; then
+            continue
+        fi
+        if ! grep -qF "$_reg_mark" "$_instr" 2>/dev/null; then
+            printf '\n# %s\n%s\n# <<< aisc artifact-register <<<\n' \
+                "$_reg_mark" "$_reg_block" >> "$_instr"
+        fi
+    done
+
     exec sleep infinity
 fi
 
