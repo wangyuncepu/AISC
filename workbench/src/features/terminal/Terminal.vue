@@ -81,6 +81,9 @@ let resizeObserver: ResizeObserver | null = null;
 // forces the heal tick to retry after a rejected resize_session.
 let lastConfirmedSize: TermSize | null = null;
 let resizeSyncFailed = false;
+/** 2.1.9 T4 (#28): the settled cell metrics for THIS terminal instance —
+ *  see fitGrid. Reset on term re-init (font/renderer rebuild). */
+let stickyCell: { w: number; h: number } | null = null;
 let healTimer: number | null = null;
 
 // B-05 手测 2 (narrow-TUI guard): full-screen TUIs (claude/codex/cc-switch)
@@ -218,6 +221,7 @@ function rebuildTerminal() {
   webgl = null;
   searchAddon = null;
   searchResult.value = null;
+  stickyCell = null; // 2.1.9 T4: re-derive from the new font/renderer
   term = new Terminal(terminalOptions());
   fit = new FitAddon();
   term.loadAddon(fit);
@@ -354,8 +358,29 @@ function fitGrid(): void {
   // the same zoom subtree, so every zoom factor cancels.
   const probe = measureCell();
   const real = actualCell();
-  const cellW = real?.w ?? probe?.w ?? 0;
-  const cellH = real?.h ?? probe?.h ?? 0;
+  // 2.1.9 T4 (#28): sticky settled metrics. Under software rendering
+  // (RDP into a nested-virt VM) the two sources disagree by fractions of
+  // a pixel AND actualCell intermittently returns null mid-paint — the
+  // per-tick source flip made floor(rect/cell) alternate between two
+  // grids forever (the bash pane visibly oscillating between two sizes,
+  // observed only over remote sessions). Once measured, noise-level
+  // deltas (<0.25px/axis: device-snap and probe/real skew) reuse the
+  // settled cell; genuine shifts (font/zoom move the cell ≥0.4px)
+  // refresh it. Source-stable math leaves the RO→fit feedback loop
+  // nothing to amplify.
+  const candidate = real ?? probe;
+  if (
+    stickyCell &&
+    candidate &&
+    Math.abs(candidate.w - stickyCell.w) < 0.25 &&
+    Math.abs(candidate.h - stickyCell.h) < 0.25
+  ) {
+    // Noise-level disagreement: keep the settled cell.
+  } else if (candidate) {
+    stickyCell = candidate;
+  }
+  const cellW = stickyCell?.w ?? 0;
+  const cellH = stickyCell?.h ?? 0;
   if (cellW <= 0 || cellH <= 0) {
     fit?.fit();
     if (term) applyGrid(term.cols, term.rows);
@@ -364,16 +389,22 @@ function fitGrid(): void {
   const cols = Math.max(2, Math.floor(rect.width / cellW));
   const rows = Math.max(1, Math.floor(rect.height / cellH));
   applyGrid(cols, rows);
-  // One correction pass: the resize may have re-snapped the rendered cell
-  // (rare); re-derive once so the settled grid never overflows the box.
+  // One correction pass — gated on a WHOLE-CELL overflow (≥1px aggregate
+  // against the box), never on sub-pixel snap noise: the old 0.01px gate
+  // re-derived on every renderer rounding difference, which on
+  // software-rendered VMs fed the same oscillation.
   const real2 = actualCell();
-  if (
-    real2 &&
-    (Math.abs(real2.w - cellW) > 0.01 || Math.abs(real2.h - cellH) > 0.01)
-  ) {
-    const cols2 = Math.max(2, Math.floor(rect.width / real2.w));
-    const rows2 = Math.max(1, Math.floor(rect.height / real2.h));
-    if (cols2 !== cols || rows2 !== rows) applyGrid(cols2, rows2);
+  if (real2) {
+    const wSlack = rect.width - cols * real2.w;
+    const hSlack = rect.height - rows * real2.h;
+    if (wSlack < -1 || hSlack < -1) {
+      const cols2 = Math.max(2, Math.floor(rect.width / real2.w));
+      const rows2 = Math.max(1, Math.floor(rect.height / real2.h));
+      if (cols2 !== cols || rows2 !== rows) {
+        stickyCell = real2;
+        applyGrid(cols2, rows2);
+      }
+    }
   }
 }
 
@@ -781,6 +812,7 @@ const streamTruncatedBytes = computed(
 let consumed = 0;
 
 onMounted(() => {
+  stickyCell = null; // 2.1.9 T4: fresh instance, fresh metrics
   term = new Terminal(terminalOptions());
   fit = new FitAddon();
   term.loadAddon(fit);

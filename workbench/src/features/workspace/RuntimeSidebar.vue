@@ -97,9 +97,13 @@ const SESSION_LABEL_KEY: Record<string, string> = {
   disconnected: "session.state.disconnected",
 };
 
-/** Semantic keys (04 §4.2): stable key -> untouched DOM subtree. */
+/** Semantic keys (04 §4.2): stable key -> untouched DOM subtree.
+ *  2.1.9 T4 (#28): `freshness` is deliberately OUT — on slow-Docker hosts
+ *  (nested-virt VMs over RDP) the stale↔fresh flap used to destroy and
+ *  rebuild the whole section every poll cycle (a :key change remounts the
+ *  subtree). The stale badge itself renders fine off-key. */
 const runtimeKey = computed(
-  () => `${snap.value?.state ?? "none"}|${store.freshness}|${store.runtimeState}`
+  () => `${snap.value?.state ?? "none"}|${store.runtimeState}`
 );
 const sessionsKey = computed(
   () =>
@@ -119,7 +123,7 @@ const providerStatus = computed(() => {
 });
 const providerKey = computed(
   () =>
-    `${snap.value?.runtime_id}|${activeAgent.value ?? "none"}|${providerStatus.value?.provider_name ?? ""}|${providerStatus.value?.route_mode ?? ""}|${providerStatus.value?.auth_status ?? ""}|${store.freshness}`
+    `${snap.value?.runtime_id}|${activeAgent.value ?? "none"}|${providerStatus.value?.provider_name ?? ""}|${providerStatus.value?.route_mode ?? ""}|${providerStatus.value?.auth_status ?? ""}`
 );
 const providerInFlightLabel = computed(() => {
   const a = activeAgent.value;

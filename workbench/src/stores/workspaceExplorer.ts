@@ -146,6 +146,29 @@ function activeAgentSessionNow(): "claude" | "codex" | null {
   }
 }
 
+/** 2.1.9 T4 (#28): semantic equality for one directory listing — every
+ *  field the tree rows render or the projection consumes. */
+function nodesEquivalent(a: WorkspaceNode[], b: WorkspaceNode[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      x.relative_path !== y.relative_path ||
+      x.name !== y.name ||
+      x.kind !== y.kind ||
+      x.expandable !== y.expandable ||
+      x.change_state !== y.change_state ||
+      x.artifact_badges.length !== y.artifact_badges.length ||
+      x.artifact_badges.some((bd, j) => bd !== y.artifact_badges[j])
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** Non-reactive module-level cleanup handles for Tauri event subscriptions. */
 let watcherUnlisteners: Array<() => void> = [];
 
@@ -463,7 +486,16 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
       this.errors[dir] = "";
       try {
         const result = await workspaceList(this.workspace, dir, null);
-        this.tree[dir] = result.nodes;
+        // 2.1.9 T4 (#28): identity gate — a semantically identical listing
+        // keeps the previous array REFERENCE. The 1.5s poll used to swap in
+        // a fresh array of fresh node objects on every silent tick, which
+        // re-ran visibleNodes and re-patched every row 40×/min even on an
+        // idle workspace (whole-tree repaint flicker on software-rendered
+        // VMs; the runtime store's snapshot gate solved the same pattern
+        // for its 5s poll in v2.1.7 s5b).
+        if (!nodesEquivalent(previous, result.nodes)) {
+          this.tree[dir] = result.nodes;
+        }
         this.nextCursors[dir] = result.next_cursor;
         this.truncatedDirs[dir] = result.truncated;
         // When this is a forced refresh of an already-loaded directory, mark
