@@ -28,7 +28,6 @@ import {
   workspaceWatchStop,
 } from "../lib/ipc";
 import { useSettingsStore } from "./settings";
-import { useRuntimeStore } from "./runtime";
 import type {
   ArtifactRecord,
   ConversationSummary,
@@ -63,8 +62,6 @@ interface ExplorerCache {
   nextCursors: Record<string, string | null>;
   truncatedDirs: Record<string, boolean>;
   unattributed: Record<string, string>;
-  /** 2.1.9 T3c: inferred attribution rides the same per-workspace cache. */
-  inferred: Record<string, { agent: "claude" | "codex"; change_type: string }>;
   stale: boolean;
 }
 
@@ -134,18 +131,6 @@ function isIgnoredPath(relative: string): boolean {
   return relative.split("/").some((part) => ignore.has(part));
 }
 
-/** 2.1.9 T3c (R3): the live provider-agent session, via the runtime store
- *  (lazy pinia lookup — cheap per change batch). Null when pinia isn't
- *  active or no provider session is live → changes stay unattributed. */
-function activeAgentSessionNow(): "claude" | "codex" | null {
-  try {
-    const runtime = useRuntimeStore();
-    return runtime.activeAgentSession?.() ?? null;
-  } catch {
-    return null;
-  }
-}
-
 /** 2.1.9 T4 (#28): semantic equality for one directory listing — every
  *  field the tree rows render or the projection consumes. */
 function nodesEquivalent(a: WorkspaceNode[], b: WorkspaceNode[]): boolean {
@@ -200,11 +185,6 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
     artifactsNextCursor: null as number | null,
     /** Watcher overflow: Explorer may be stale until a bounded rescan. */
     stale: false,
-    /** 2.1.9 T3c (R3): watcher changes that arrived while a provider-agent
-     *  session was LIVE — labeled with that agent as an inference (the
-     *  watcher itself stays provenance-pure). Parallel map to
-     *  `unattributed`; entries here render as inferred badges. */
-    inferred: {} as Record<string, { agent: "claude" | "codex"; change_type: string }>,
     /** v2.1.8 T4: agent history conversations (变更页第 5 组). */
     conversations: [] as ConversationSummary[],
     conversationsLoading: false,
@@ -236,12 +216,7 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
     isTruncated: (s) => (dir: string) => !!s.truncatedDirs[dir] && !!s.nextCursors[dir],
     unattributedEntries: (
       s,
-    ): Array<{
-      relative_path: string;
-      change_type: string;
-      /** Present when the change was inferred to a live provider session. */
-      inferred_agent?: "claude" | "codex";
-    }> => {
+    ): Array<{ relative_path: string; change_type: string }> => {
       // Directories are structural containers, not artifacts: a newly-created
       // (possibly empty) folder must not appear in the Artifacts panel even
       // though the watcher reports it as an unattributed change. Only files
@@ -254,20 +229,10 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
         }
       }
       const visible = (p: string) => !isIgnoredPath(p) && !dirPaths.has(p);
-      const plain = Object.entries(s.unattributed)
+      return Object.entries(s.unattributed)
         .filter(([p]) => visible(p))
-        .map(([relative_path, change_type]) => ({ relative_path, change_type }));
-      // 2.1.9 T3c: inferred entries carry their agent for the badge.
-      const inferred = Object.entries(s.inferred)
-        .filter(([p]) => visible(p))
-        .map(([relative_path, v]) => ({
-          relative_path,
-          change_type: v.change_type,
-          inferred_agent: v.agent,
-        }));
-      return [...inferred, ...plain].sort((a, b) =>
-        a.relative_path.localeCompare(b.relative_path),
-      );
+        .map(([relative_path, change_type]) => ({ relative_path, change_type }))
+        .sort((a, b) => a.relative_path.localeCompare(b.relative_path));
     },
     /** Flatten the currently expanded tree for APG keyboard navigation.
      *  Only expanded directories are descended into; unexpanded subtrees stay lazy. */
@@ -322,7 +287,6 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
             nextCursors: this.nextCursors,
             truncatedDirs: this.truncatedDirs,
             unattributed: this.unattributed,
-            inferred: this.inferred,
             stale: this.stale,
           };
         }
@@ -336,7 +300,6 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
           this.nextCursors = cached.nextCursors;
           this.truncatedDirs = cached.truncatedDirs;
           this.unattributed = cached.unattributed;
-          this.inferred = cached.inferred;
           this.stale = cached.stale;
         } else {
           this.tree = {};
@@ -347,7 +310,6 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
           this.nextCursors = {};
           this.truncatedDirs = {};
           this.unattributed = {};
-          this.inferred = {};
           this.stale = false;
         }
         this.workspace = workspace;
@@ -409,12 +371,8 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
       }
     },
 
-    /** Update unattributed state and refresh/drop affected directory caches.
-     *  2.1.9 T3c (R3): when a provider-agent session is live, changes land
-     *  in `inferred` carrying that agent (an explicitly-labeled projection);
-     *  otherwise they stay `unattributed` exactly as before. */
+    /** Update unattributed state and refresh/drop affected directory caches. */
     handleWorkspaceChanges(changes: WorkspaceChangeBatch["changes"]) {
-      const liveAgent = activeAgentSessionNow();
       const parents = new Set<string>();
       for (const c of changes) {
         if (isIgnoredPath(c.relative_path)) {
@@ -422,13 +380,7 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
           // Artifacts panel even when the watcher already emitted it.
           continue;
         }
-        if (liveAgent) {
-          this.inferred[c.relative_path] = { agent: liveAgent, change_type: c.change_type };
-          delete this.unattributed[c.relative_path];
-        } else {
-          this.unattributed[c.relative_path] = c.change_type;
-          delete this.inferred[c.relative_path];
-        }
+        this.unattributed[c.relative_path] = c.change_type;
         const idx = c.relative_path.lastIndexOf("/");
         const parent = idx >= 0 ? c.relative_path.slice(0, idx) : "";
         parents.add(parent);
@@ -462,9 +414,7 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
       for (const list of lists) {
         if (!list) continue;
         for (const node of list) {
-          const change =
-            this.inferred[node.relative_path]?.change_type ??
-            this.unattributed[node.relative_path];
+          const change = this.unattributed[node.relative_path];
           if (change) {
             node.change_state = change;
           }
@@ -844,19 +794,6 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
           }
         }
         Object.assign(this.unattributed, movedUnattributed);
-        // 2.1.9 T3c: inferred entries move with their directory too.
-        const movedInferred: Record<
-          string,
-          { agent: "claude" | "codex"; change_type: string }
-        > = {};
-        for (const [path, v] of Object.entries(this.inferred)) {
-          if (path === relativePath || path.startsWith(`${relativePath}/`)) {
-            delete this.inferred[path];
-            const next = `${result.relative_path}${path.slice(relativePath.length)}`;
-            movedInferred[next] = v;
-          }
-        }
-        Object.assign(this.inferred, movedInferred);
       }
       await this.loadDir(parent, true);
       return result;

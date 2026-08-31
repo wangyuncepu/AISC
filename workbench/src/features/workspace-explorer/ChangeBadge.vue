@@ -1,25 +1,19 @@
 <script setup lang="ts">
 /**
- * v2.1.7 S7 (④): the shared change badge — 变更类型 × 来源.
- *
- * Two orthogonal facts, each rendered only when the backing data exists
- * (Gate-S7: never guess):
- *  - type: created | modified | deleted | renamed (icon + shape + hue + text;
- *    never color alone, A-21774);
- *  - source: agent (manifest-attributed, shows the agent name) |
- *    inferred (2.1.9 T3c: watcher-derived, attributed to the live provider
- *    session — dashed border like unattributed, but carries the agent name
- *    and an explicit "inferred" label) | unattributed (watcher-derived).
- * `detail` carries fact-qualified extras: for an attributed rename this is
- * the previous path (a real recorded fact); for an unattributed rename it is
- * the honest "original name unknown" note.
+ * v2.1.7 S7 (④) / 2.1.9 T6: the change badge, reduced to its TYPE fact —
+ * created | modified | deleted | renamed (icon + hue + text; never color
+ * alone, A-21774). The source/attribution layer (agent | inferred |
+ * unattributed) was cut per user ruling 2026-08-31: agent self-registration
+ * proved unreliable, so the label would have been noise most of the time.
+ * `source` stays accepted (agent rows render the agent name) for any
+ * future caller; the Changes panel now passes type only.
  */
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 const props = defineProps<{
   type: "created" | "modified" | "deleted" | "renamed";
-  source: "agent" | "inferred" | "unattributed";
+  source?: "agent" | "unattributed";
   agent?: string;
   /** Recorded previous path (attributed rename) or the unknown marker. */
   detail?: string | null;
@@ -39,18 +33,13 @@ const aria = computed(() => {
   const who =
     props.source === "agent"
       ? t("explorer.badge.sourceAgent", { agent: props.agent ?? "" })
-      : props.source === "inferred"
-      ? t("explorer.badge.sourceInferred", { agent: props.agent ?? "" })
-      : t("explorer.badge.sourceUnattributed");
-  return props.detail
-    ? `${who} · ${text.value} · ${props.detail}`
-    : `${who} · ${text.value}`;
+      : props.source === "unattributed"
+      ? t("explorer.badge.sourceUnattributed")
+      : "";
+  return who ? `${who} · ${text.value}` : text.value;
 });
 const tooltip = computed(() => {
-  if (
-    props.type === "renamed" &&
-    (props.source === "unattributed" || props.source === "inferred")
-  ) {
+  if (props.type === "renamed" && props.source === "unattributed") {
     return t("explorer.badge.renameUnknownTip");
   }
   return aria.value;
@@ -68,7 +57,7 @@ const tooltip = computed(() => {
   >
     <span class="badge-icon" aria-hidden="true">{{ icon }}</span>
     <span class="badge-text">{{ text }}</span>
-    <span v-if="source === 'agent' || source === 'inferred'" class="badge-agent" aria-hidden="true">{{
+    <span v-if="source === 'agent'" class="badge-agent" aria-hidden="true">{{
       agent
     }}</span>
   </span>

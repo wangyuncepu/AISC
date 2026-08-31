@@ -169,31 +169,15 @@ const searchMatches = computed(() => {
   );
   return out;
 });
-/** Artifact kind filter chips (all | deliverables | sourceChanges |
- *  generated | unattributed) + collapsible groups. */
-type ArtifactGroup = "all" | "deliverables" | "sourceChanges" | "generated" | "unattributed";
-const artifactKindFilter = ref<ArtifactGroup>("all");
-const collapsedGroups = ref(new Set<string>());
-function toggleGroup(key: string): void {
-  const next = new Set(collapsedGroups.value);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
-  collapsedGroups.value = next;
-}
-function artifactHit(a: { workspace_relative_path: string; label?: string }): boolean {
+/** 2.1.9 T6: the Changes panel is a FLAT list — the shared search matcher
+ *  (substring > subsequence fuzzy, `/regex/` for patterns) is the only
+ *  filter. Classification (kind sections/chips/attribution) was cut per
+ *  user ruling: agent self-registration proved unreliable. */
+const changesFiltered = computed(() => {
   const matcher = searchMatcher.value;
-  if (matcher === null) return true;
-  return matcher(`${a.workspace_relative_path} ${a.label ?? ""}`.toLowerCase()) > 0;
-}
-function filterArtifacts<
-  T extends { workspace_relative_path: string; label?: string },
->(list: T[], group: Exclude<ArtifactGroup, "all">): T[] {
-  if (artifactKindFilter.value !== "all" && artifactKindFilter.value !== group) return [];
-  return list.filter(artifactHit);
-}
-function groupVisible(key: string): boolean {
-  return !collapsedGroups.value.has(key);
-}
+  if (matcher === null) return explorer.unattributedEntries;
+  return explorer.unattributedEntries.filter((e) => matcher(e.relative_path.toLowerCase()) > 0);
+});
 // --- v2.1.8 T4: agent history conversations ---
 
 /** Two-call resume orchestration happens in the store (preflight →
@@ -268,32 +252,12 @@ function conversationReasonText(reason?: string): string {
   if (reason === "malformed") return t("explorer.conversations.reason.malformed");
   return t("explorer.conversations.reason.unknown");
 }
-/** Filtered group lists (search + kind chips) — plain computed over the
- *  store getters; the store contract stays untouched. */
-const deliverablesFiltered = computed(() =>
-  filterArtifacts(explorer.artifactDeliverables, "deliverables"),
-);
 /** v2.1.8 T4: history rows filtered by the shared search box (title match). */
 const conversationsFiltered = computed(() => {
   const matcher = searchMatcher.value;
   if (matcher === null) return explorer.conversations;
   return explorer.conversations.filter((c) => matcher(c.title.toLowerCase()) > 0);
 });
-const sourceChangesFiltered = computed(() =>
-  filterArtifacts(explorer.artifactSourceChanges, "sourceChanges"),
-);
-const generatedFiltered = computed(() =>
-  filterArtifacts(explorer.artifactGenerated, "generated"),
-);
-const unattributedFiltered = computed(() =>
-  filterArtifacts(
-    explorer.unattributedEntries.map((e) => ({
-      ...e,
-      workspace_relative_path: e.relative_path,
-    })),
-    "unattributed",
-  ),
-);
 function dirOf(p: string): string {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
   return i === -1 ? "" : p.slice(0, i);
@@ -301,9 +265,6 @@ function dirOf(p: string): string {
 
 async function switchKind(kind: "explorer" | "conversations" | "artifacts" | "services") {
   explorer.activeKind = kind;
-  if (kind === "artifacts") {
-    await explorer.refreshArtifacts();
-  }
   if (kind === "conversations") {
     // v2.1.8 T4 手测反馈: ALWAYS rescan on activation — new sessions land
     // when the user opens the tab, never a stale cached list. The scan is
@@ -1311,175 +1272,29 @@ function onTreeKeydown(e: KeyboardEvent) {
       </template>
     </div>
 
+    <!-- 2.1.9 T6 (user ruling 2026-08-31): agent self-registration proved
+         unreliable — drop the classification taxonomy (kind sections,
+         filter chips, attribution badges). The panel is a FLAT change list
+         + the shared search box (substring/subsequence fuzzy + /regex/). -->
     <div v-else-if="artifactFilter === 'artifacts'" key="artifacts" class="explorer-body artifacts-panel">
-      <p v-if="explorer.artifactsLoading">{{ t("explorer.loading") }}</p>
-      <template v-else>
-        <p
-          v-if="explorer.artifacts.length === 0 && explorer.unattributedEntries.length === 0"
-          class="explorer-empty"
-        >
-          {{ t("explorer.empty.artifacts") }}
-        </p>
-
-        <!-- S5c: kind filter chips + collapsible groups. Empty-after-filter
-             groups hide entirely; the counts reflect the CURRENT filter. -->
-        <div
-          v-if="explorer.artifacts.length > 0 || explorer.unattributedEntries.length > 0"
-          class="artifact-chips"
-          role="group"
-          :aria-label="t('explorer.filterLabel')"
-        >
-          <button
-            v-for="g in ['all', 'deliverables', 'sourceChanges', 'generated', 'unattributed'] as const"
-            :key="g"
-            class="artifact-chip"
-            :class="{ active: artifactKindFilter === g }"
-            :aria-pressed="artifactKindFilter === g"
-            @click="artifactKindFilter = g"
-          >
-            {{ t(`explorer.filter.${g}`) }}
-          </button>
-          <!-- S7: no legend row — badges are self-describing (icon + text +
-               agent name) and the hover tooltip carries the full source
-               note; a permanent legend row read as clutter (manual test). -->
-        </div>
-        <p
-          v-if="searchQuery && !deliverablesFiltered.length && !sourceChangesFiltered.length && !generatedFiltered.length && !unattributedFiltered.length"
-          class="explorer-empty"
-        >
-          {{ t("explorer.searchNoMatch") }}
-        </p>
-
-        <section v-if="deliverablesFiltered.length">
-          <button
-            class="artifacts-group-head"
-            :aria-expanded="groupVisible('deliverables')"
-            @click="toggleGroup('deliverables')"
-          >
-            <span class="twisty" aria-hidden="true">{{ groupVisible('deliverables') ? "▾" : "▸" }}</span>
-            {{ t("explorer.artifacts.deliverables") }}
-            <span class="group-count">{{ deliverablesFiltered.length }}</span>
-          </button>
-          <template v-if="groupVisible('deliverables')">
-            <div
-              v-for="a in deliverablesFiltered"
-              :key="a.artifact_id"
-              class="explorer-row artifact-row"
-              :class="{ selected: selected === a.workspace_relative_path }"
-              @click="onArtifactSelect(a.workspace_relative_path)"
-              @dblclick="explorer.openFile(a.workspace_relative_path)"
-              @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: a.workspace_relative_path, renamable: nodeOf(a.workspace_relative_path) !== null }, $event.clientX, $event.clientY)"
-            >
-              <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
-                {{ artifactLabel(a.workspace_relative_path) }}
-              </span>
-              <span v-if="a.label" class="explorer-label">{{ a.label }}</span>
-              <ChangeBadge
-                v-if="badgeTypeOf(a.action)"
-                :type="badgeTypeOf(a.action)!"
-                source="agent"
-                :agent="a.producer?.agent"
-                :detail="a.action === 'renamed' && a.previous_path ? `${t('explorer.badge.from')} ${a.previous_path}` : null"
-              />
-            </div>
-          </template>
-        </section>
-
-        <section v-if="sourceChangesFiltered.length">
-          <button
-            class="artifacts-group-head"
-            :aria-expanded="groupVisible('sourceChanges')"
-            @click="toggleGroup('sourceChanges')"
-          >
-            <span class="twisty" aria-hidden="true">{{ groupVisible('sourceChanges') ? "▾" : "▸" }}</span>
-            {{ t("explorer.artifacts.sourceChanges") }}
-            <span class="group-count">{{ sourceChangesFiltered.length }}</span>
-          </button>
-          <template v-if="groupVisible('sourceChanges')">
-            <div
-              v-for="a in sourceChangesFiltered"
-              :key="a.artifact_id"
-              class="explorer-row artifact-row"
-              :class="{ selected: selected === a.workspace_relative_path }"
-              @click="onArtifactSelect(a.workspace_relative_path)"
-              @dblclick="explorer.openFile(a.workspace_relative_path)"
-              @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: a.workspace_relative_path, renamable: nodeOf(a.workspace_relative_path) !== null }, $event.clientX, $event.clientY)"
-            >
-              <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
-                {{ artifactLabel(a.workspace_relative_path) }}
-              </span>
-            </div>
-          </template>
-        </section>
-
-        <section v-if="generatedFiltered.length">
-          <button
-            class="artifacts-group-head"
-            :aria-expanded="groupVisible('generated')"
-            @click="toggleGroup('generated')"
-          >
-            <span class="twisty" aria-hidden="true">{{ groupVisible('generated') ? "▾" : "▸" }}</span>
-            {{ t("explorer.artifacts.generatedOutputs") }}
-            <span class="group-count">{{ generatedFiltered.length }}</span>
-          </button>
-          <template v-if="groupVisible('generated')">
-            <div
-              v-for="a in generatedFiltered"
-              :key="a.artifact_id"
-              class="explorer-row artifact-row"
-              :class="{ selected: selected === a.workspace_relative_path }"
-              @click="onArtifactSelect(a.workspace_relative_path)"
-              @dblclick="explorer.openFile(a.workspace_relative_path)"
-              @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: a.workspace_relative_path, renamable: nodeOf(a.workspace_relative_path) !== null }, $event.clientX, $event.clientY)"
-            >
-              <span class="explorer-name" :title="hostPath(a.workspace_relative_path)">
-                {{ artifactLabel(a.workspace_relative_path) }}
-              </span>
-            </div>
-          </template>
-        </section>
-
-        <div v-if="explorer.artifactsNextCursor !== null" class="explorer-more">
-          <button
-            class="explorer-mini"
-            :disabled="explorer.artifactsLoadingMore"
-            @click="explorer.loadMoreArtifacts()"
-          >
-            {{ explorer.artifactsLoadingMore ? t("explorer.loading") : t("explorer.loadMoreArtifacts") }}
-          </button>
-        </div>
-
-        <section v-if="unattributedFiltered.length">
-          <button
-            class="artifacts-group-head"
-            :aria-expanded="groupVisible('unattributed')"
-            @click="toggleGroup('unattributed')"
-          >
-            <span class="twisty" aria-hidden="true">{{ groupVisible('unattributed') ? "▾" : "▸" }}</span>
-            {{ t("explorer.artifacts.workspaceChanges") }}
-            <span class="group-count">{{ unattributedFiltered.length }}</span>
-          </button>
-          <template v-if="groupVisible('unattributed')">
-            <div
-              v-for="u in unattributedFiltered"
-              :key="u.relative_path"
-              class="explorer-row unattributed"
-              :class="{ selected: selected === u.relative_path }"
-              @click="onArtifactSelect(u.relative_path)"
-              @dblclick="explorer.openFile(u.relative_path)"
-              @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: u.relative_path, renamable: nodeOf(u.relative_path) !== null }, $event.clientX, $event.clientY)"
-            >
-              <span class="explorer-name" :title="hostPath(u.relative_path)">{{ artifactLabel(u.relative_path) }}</span>
-              <ChangeBadge
-                v-if="badgeTypeOf(u.change_type)"
-                :type="badgeTypeOf(u.change_type)!"
-                :source="u.inferred_agent ? 'inferred' : 'unattributed'"
-                :agent="u.inferred_agent"
-              />
-            </div>
-          </template>
-        </section>
-      </template>
+      <p
+        v-if="!changesFiltered.length"
+        class="explorer-empty"
+      >
+        {{ searchQuery ? t("explorer.searchNoMatch") : t("explorer.empty.artifacts") }}
+      </p>
+      <div
+        v-for="u in changesFiltered"
+        :key="u.relative_path"
+        class="explorer-row artifact-row"
+        :class="{ selected: selected === u.relative_path }"
+        @click="onArtifactSelect(u.relative_path)"
+        @dblclick="explorer.openFile(u.relative_path)"
+        @contextmenu.prevent.stop="openMenuAt({ kind: 'file', relativePath: u.relative_path, renamable: nodeOf(u.relative_path) !== null }, $event.clientX, $event.clientY)"
+      >
+        <span class="explorer-name" :title="hostPath(u.relative_path)">{{ artifactLabel(u.relative_path) }}</span>
+        <ChangeBadge v-if="badgeTypeOf(u.change_type)" :type="badgeTypeOf(u.change_type)!" />
+      </div>
     </div>
 
     <!-- svc-4+: Web services panel (gateway state + registered services) -->

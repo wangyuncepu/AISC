@@ -3,7 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { i18n } from "../../../i18n";
 import { useRuntimeStore } from "../../../stores/runtime";
 import { useWorkspaceExplorerStore } from "../../../stores/workspaceExplorer";
@@ -191,35 +191,10 @@ describe("WorkspaceExplorer keyboard (3f, A-WX05-1)", () => {
   });
 });
 
-describe("WorkspaceExplorer artifacts panel (WX-04)", () => {
-  it("artifact rows have no open/reveal buttons; dblclick opens and right-click shows the menu", async () => {
-    const { artifactList, workspaceOpen } = await import("../../../lib/ipc");
-    vi.mocked(artifactList).mockResolvedValue({
-      schema_version: 1,
-      artifacts: [
-        {
-          schema_version: 1,
-          artifact_id: "aaaaaaaa-0000-4000-8000-000000000001",
-          workspace_relative_path: "reports/result.md",
-          action: "created",
-          kind: "deliverable",
-          media_type: "text/markdown",
-          label: "报告",
-          open_with: "preview",
-          producer: { agent: "claude", session_id: "s", runtime_id: "r" },
-          state: "present",
-          provenance: "manifest",
-          recorded_at: "t",
-          previous_path: null,
-          extra: {},
-        },
-      ],
-      next_cursor: null,
-    });
-
+describe("WorkspaceExplorer changes panel (WX-04, T6 flat)", () => {
+  async function mountChanges() {
     await setup();
     const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
-    // Switch to the Artifacts tab.
     // v2.1.8 T4: the History tab sits between Files and Changes — click by
     // text, not index.
     await wrapper
@@ -227,10 +202,21 @@ describe("WorkspaceExplorer artifacts panel (WX-04)", () => {
       .find((t) => t.text() === "变更")!
       .trigger("click");
     await new Promise((resolve) => setTimeout(resolve, 10));
+    return wrapper;
+  }
+
+  it("change rows have no open/reveal buttons; dblclick opens and right-click shows the menu", async () => {
+    const { workspaceOpen } = await import("../../../lib/ipc");
+    const wrapper = await mountChanges();
+    const explorer = useWorkspaceExplorerStore();
+    explorer.handleWorkspaceChanges([
+      { relative_path: "reports/result.md", change_type: "created", kind: "file", revision: 1 },
+    ]);
+    await flushPromises();
 
     const row = wrapper.find(".artifact-row");
     expect(row.exists()).toBe(true);
-    // No Open / Reveal / Copy buttons in the artifacts panel.
+    // No Open / Reveal / Copy buttons in the changes panel.
     expect(wrapper.findAll(".artifact-row .explorer-mini").length).toBe(0);
     // Single-click previews; double-click opens.
     await row.trigger("dblclick");
@@ -244,55 +230,13 @@ describe("WorkspaceExplorer artifacts panel (WX-04)", () => {
   });
 
   it("shows the workspace-relative path when basenames collide", async () => {
-    const { artifactList } = await import("../../../lib/ipc");
-    vi.mocked(artifactList).mockResolvedValue({
-      schema_version: 1,
-      artifacts: [
-        {
-          schema_version: 1,
-          artifact_id: "aaaaaaaa-0000-4000-8000-000000000001",
-          workspace_relative_path: "a/result.md",
-          action: "created",
-          kind: "deliverable",
-          media_type: "text/markdown",
-          label: "",
-          open_with: "preview",
-          producer: { agent: "claude", session_id: "s", runtime_id: "r" },
-          state: "present",
-          provenance: "manifest",
-          recorded_at: "t",
-          previous_path: null,
-          extra: {},
-        },
-        {
-          schema_version: 1,
-          artifact_id: "aaaaaaaa-0000-4000-8000-000000000002",
-          workspace_relative_path: "b/result.md",
-          action: "created",
-          kind: "deliverable",
-          media_type: "text/markdown",
-          label: "",
-          open_with: "preview",
-          producer: { agent: "claude", session_id: "s", runtime_id: "r" },
-          state: "present",
-          provenance: "manifest",
-          recorded_at: "t",
-          previous_path: null,
-          extra: {},
-        },
-      ],
-      next_cursor: null,
-    });
-
-    await setup();
-    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
-    // v2.1.8 T4: the History tab sits between Files and Changes — click by
-    // text, not index.
-    await wrapper
-      .findAll("[role=tab]")
-      .find((t) => t.text() === "变更")!
-      .trigger("click");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    const wrapper = await mountChanges();
+    const explorer = useWorkspaceExplorerStore();
+    explorer.handleWorkspaceChanges([
+      { relative_path: "a/result.md", change_type: "created", kind: "file", revision: 1 },
+      { relative_path: "b/result.md", change_type: "created", kind: "file", revision: 2 },
+    ]);
+    await flushPromises();
 
     const names = wrapper.findAll(".artifact-row .explorer-name").map((n) => n.text());
     // Ambiguous basename `result.md` → show the full relative path to disambiguate.
@@ -300,73 +244,24 @@ describe("WorkspaceExplorer artifacts panel (WX-04)", () => {
     wrapper.unmount();
   });
 
-  it("shows relative paths for colliding unattributed entries (created + modified)", async () => {
-    await setup();
-    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
+  it("shows relative paths for colliding entries of different types (created + modified)", async () => {
+    const wrapper = await mountChanges();
     const explorer = useWorkspaceExplorerStore();
-    // Watcher projection: same basename, different folders, one created one modified.
     explorer.handleWorkspaceChanges([
       { relative_path: "a/result.md", change_type: "created", kind: "file", revision: 1 },
       { relative_path: "b/result.md", change_type: "modified", kind: "file", revision: 2 },
     ]);
-    // v2.1.8 T4: the History tab sits between Files and Changes — click by
-    // text, not index.
-    await wrapper
-      .findAll("[role=tab]")
-      .find((t) => t.text() === "变更")!
-      .trigger("click");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await flushPromises();
 
-    const names = wrapper.findAll(".unattributed .explorer-name").map((n) => n.text());
-    // Ambiguous basename across the panel → full relative path on BOTH rows.
+    const names = wrapper.findAll(".artifact-row .explorer-name").map((n) => n.text());
     expect(names).toEqual(["a/result.md", "b/result.md"]);
     wrapper.unmount();
   });
 
-  it("shows relative paths when a manifest artifact collides with an unattributed entry", async () => {
-    const { artifactList } = await import("../../../lib/ipc");
-    vi.mocked(artifactList).mockResolvedValue({
-      schema_version: 1,
-      artifacts: [
-        {
-          schema_version: 1,
-          artifact_id: "aaaaaaaa-0000-4000-8000-000000000001",
-          workspace_relative_path: "reports/result.md",
-          action: "created",
-          kind: "deliverable",
-          media_type: "text/markdown",
-          label: "",
-          open_with: "preview",
-          producer: { agent: "claude", session_id: "s", runtime_id: "r" },
-          state: "present",
-          provenance: "manifest",
-          recorded_at: "t",
-          previous_path: null,
-          extra: {},
-        },
-      ],
-      next_cursor: null,
-    });
-
-    await setup();
-    const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
-    const explorer = useWorkspaceExplorerStore();
-    explorer.handleWorkspaceChanges([
-      { relative_path: "scratch/result.md", change_type: "created", kind: "file", revision: 1 },
-    ]);
-    // v2.1.8 T4: the History tab sits between Files and Changes — click by
-    // text, not index.
-    await wrapper
-      .findAll("[role=tab]")
-      .find((t) => t.text() === "变更")!
-      .trigger("click");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    const artifactName = wrapper.find(".artifact-row .explorer-name").text();
-    const unattributedName = wrapper.find(".unattributed .explorer-name").text();
-    // Both rows show the relative path because the basename is ambiguous.
-    expect(artifactName).toBe("reports/result.md");
-    expect(unattributedName).toBe("scratch/result.md");
+  it("empty state when nothing changed yet", async () => {
+    const wrapper = await mountChanges();
+    expect(wrapper.findAll(".artifact-row")).toHaveLength(0);
+    expect(wrapper.text()).toContain("Agent 产出的交付物与文件变更会显示在这里");
     wrapper.unmount();
   });
 });

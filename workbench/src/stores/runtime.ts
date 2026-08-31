@@ -221,7 +221,6 @@ export const useRuntimeStore = defineStore("runtime", () => {
     reopenTab: fwdFn("reopenTab"),
     createTab: fwdFn("createTab"),
     findLiveResumeTab: fwdFn("findLiveResumeTab"),
-    activeAgentSession: fwdFn("activeAgentSession"),
     removeTab: fwdFn("removeTab"),
     openCcSwitch: fwdFn("openCcSwitch"),
     onTabOpenOk: fwdFn("onTabOpenOk"),

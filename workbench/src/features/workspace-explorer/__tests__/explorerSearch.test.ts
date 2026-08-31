@@ -60,15 +60,6 @@ function node(fullPath: string, kind: "file" | "dir") {
   } as never;
 }
 
-function art(id: string, path: string, kind: string, label = "") {
-  return {
-    artifact_id: id,
-    workspace_relative_path: path,
-    kind,
-    label,
-    state: "present",
-  } as never;
-}
 
 async function mountExplorer() {
   const w = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
@@ -159,55 +150,51 @@ describe("files tab: flat search over loaded dirs (S5c)", () => {
   });
 });
 
-describe("artifacts tab: kind chips + collapse + search (S5c)", () => {
-  async function seedArtifacts() {
+describe("changes tab: flat list + search (2.1.9 T6)", () => {
+  async function seedChanges() {
     const w = await mountExplorer();
     const explorer = useWorkspaceExplorerStore();
-    explorer.artifacts = [
-      art("a1", "docs/report.md", "deliverable", "报告"),
-      art("a2", "src/changed.ts", "source_change"),
-      art("a3", "out/gen.bin", "generated_output"),
-    ];
-    explorer.unattributed = { "notes/x.md": "created" };
+    explorer.unattributed = {
+      "docs/report.md": "created",
+      "src/changed.ts": "modified",
+      "notes/x.md": "created",
+    };
     explorer.activeKind = "artifacts";
     return w;
   }
 
-  it("renders all four artifact groups; a chip hides other groups", async () => {
-    const w = await seedArtifacts();
-    // v2.1.8 T4: conversations moved to their own 历史 tab — the 变更 panel
-    // is back to exactly the four artifact groups.
-    expect(w.findAll(".artifacts-group-head")).toHaveLength(4);
-
-    const chips = w.findAll(".artifact-chip");
-    await chips.find((c) => c.text() === "交付物")!.trigger("click");
-    // Only the deliverables group remains; its one row is visible.
-    expect(w.findAll(".artifacts-group-head")).toHaveLength(1);
+  it("renders ONE flat change list — no groups, no chips", async () => {
+    const w = await seedChanges();
+    expect(w.findAll(".artifacts-group-head")).toHaveLength(0);
+    expect(w.find(".artifact-chips").exists()).toBe(false);
+    expect(w.findAll(".artifact-row")).toHaveLength(3);
     expect(w.text()).toContain("report.md");
-    expect(w.text()).not.toContain("changed.ts");
-  });
-
-  it("a group head toggles its rows", async () => {
-    const w = await seedArtifacts();
-    // zh label for deliverables is 可交付文件.
-    const deliverablesHead = () =>
-      w.findAll(".artifacts-group-head").find((h) => h.text().includes("可交付文件"))!;
-    await deliverablesHead().trigger("click");
-    expect(w.text()).not.toContain("report.md"); // collapsed
-    expect(w.text()).toContain("changed.ts"); // other groups untouched
-
-    await deliverablesHead().trigger("click");
-    expect(w.text()).toContain("report.md");
-  });
-
-  it("the shared search filters artifact rows by path and label", async () => {
-    const w = await seedArtifacts();
-    await w.find('[data-testid="explorer-search"]').setValue("报告");
-    expect(w.text()).toContain("report.md");
-    expect(w.text()).not.toContain("changed.ts");
-
-    await w.find('[data-testid="explorer-search"]').setValue("changed");
     expect(w.text()).toContain("changed.ts");
-    expect(w.text()).not.toContain("report.md");
+  });
+
+  it("the shared search filters the flat list (substring)", async () => {
+    const w = await seedChanges();
+    await w.find('[data-testid="explorer-search"]').setValue("report");
+    expect(w.findAll(".artifact-row")).toHaveLength(1);
+    expect(w.text()).toContain("report.md");
+    expect(w.text()).not.toContain("changed.ts");
+
+    await w.find('[data-testid="explorer-search"]').setValue("");
+    expect(w.findAll(".artifact-row")).toHaveLength(3);
+  });
+
+  it("fuzzy subsequence and /regex/ modes still work on the flat list", async () => {
+    const w = await seedChanges();
+    // Subsequence: chars in order, gaps allowed.
+    await w.find('[data-testid="explorer-search"]').setValue("rpt");
+    expect(w.findAll(".artifact-row").length).toBeGreaterThanOrEqual(1);
+    expect(w.text()).toContain("report.md");
+    // Regex form.
+    await w.find('[data-testid="explorer-search"]').setValue("/^src\\//");
+    expect(w.findAll(".artifact-row")).toHaveLength(1);
+    expect(w.text()).toContain("changed.ts");
+    // No match message.
+    await w.find('[data-testid="explorer-search"]').setValue("/^zzz/")
+    expect(w.text()).toContain("无匹配结果");
   });
 });
