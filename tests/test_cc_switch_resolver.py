@@ -536,3 +536,47 @@ class UnpinnedFallbackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DefaultTransportRobustnessTests(unittest.TestCase):
+    """2.1.9 (#59): transport-level failures must surface as ResolveError so
+    the S8b fallback chain (online → cache → receipt → unpinned) runs — a
+    raw crash bypasses it (observed 2026-08-31: IncompleteRead on a flaky
+    direct connection to the GitHub releases listing)."""
+
+    def test_incomplete_read_becomes_resolve_error(self):
+        import http.client
+        from unittest import mock
+
+        from aisc.application.cc_switch_resolver import default_transport
+
+        def boom(*args, **kwargs):
+            raise http.client.IncompleteRead(b"partial-bytes")
+
+        with mock.patch("urllib.request.urlopen", side_effect=boom):
+            with self.assertRaises(ResolveError) as ctx:
+                default_transport("https://api.github.com/x", {}, 5.0)
+        self.assertEqual(ctx.exception.code, CC_SWITCH_ERROR_NETWORK)
+
+    def test_truncated_200_body_becomes_resolve_error(self):
+        from unittest import mock
+
+        from aisc.application.cc_switch_resolver import default_transport
+
+        class FakeResp:
+            status = 200
+            headers = {"content-type": "application/json"}
+
+            def read(self):
+                return b'{"a": "trunc'  # valid HTTP, invalid JSON
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with mock.patch("urllib.request.urlopen", return_value=FakeResp()):
+            with self.assertRaises(ResolveError) as ctx:
+                default_transport("https://api.github.com/x", {}, 5.0)
+        self.assertEqual(ctx.exception.code, CC_SWITCH_ERROR_NETWORK)

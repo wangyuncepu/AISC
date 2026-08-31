@@ -23,6 +23,7 @@ Policies (03-build-version-resolution.md):
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import time
@@ -64,20 +65,38 @@ def default_transport(url: str, headers: Dict[str, str], timeout: float) -> Tupl
     req = urllib.request.Request(url, headers={"User-Agent": "aisc-resolver", **headers})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            return int(resp.status), {k.lower(): v for k, v in resp.headers.items()}, body
+            raw = resp.read()
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        raw = exc.read() if exc.fp else b""
         try:
-            body: Any = json.loads(raw) if raw else {}
+            body: Any = json.loads(raw.decode("utf-8", errors="replace")) if raw else {}
         except json.JSONDecodeError:
-            body = {"message": raw}
+            body = {"message": raw.decode("utf-8", errors="replace")}
         return int(exc.code), {k.lower(): v for k, v in exc.headers.items()}, body
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        # http.client.HTTPException covers IncompleteRead: a truncated body
+        # on a large releases listing (observed on flaky direct connections,
+        # 2026-08-31 — it used to escape as a raw crash instead of feeding
+        # the S8b fallback chain: online → cache → receipt → unpinned).
+        http.client.HTTPException,
+    ) as exc:
         raise ResolveError(
             CC_SWITCH_ERROR_NETWORK,
             f"github api unreachable: {exc}",
         ) from exc
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        # A truncated-but-200 body parses as garbage — treat as network
+        # failure so the fallback chain (not a crash) handles it.
+        raise ResolveError(
+            CC_SWITCH_ERROR_NETWORK,
+            f"github api returned an unparseable (likely truncated) body: {exc}",
+        ) from exc
+    return int(resp.status), {k.lower(): v for k, v in resp.headers.items()}, body
 
 
 def _cache_dir() -> Path:
