@@ -44,6 +44,26 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(_cli_argv(*args), capture_output=True, text=True)
 
 
+@contextlib.contextmanager
+def _pinned_data_root_env():
+    """Subprocess env with ``AISC_DATA_ROOT`` pinned to a throwaway tempdir.
+
+    lifecycle-logging P1 writes one ``cli_exit`` line to
+    ``<data root>/logs/aisc.log`` on EVERY CLI exit — including successful
+    ``version``/``doctor`` (main.py success terminal). Without this pin, a
+    standalone run of these tests writes into the developer's real data
+    root; the full-suite run only masks that because sibling test modules
+    ``setdefault`` ``AISC_DATA_ROOT`` at import time (an env leak, not a
+    guarantee — see 2.1.9 decisions D-0). Yields ``(env, data_root_path)``.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="aisc-test-data-") as data:
+        env = os.environ.copy()
+        env["AISC_DATA_ROOT"] = data
+        yield env, Path(data)
+
+
 def _run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
     return subprocess.run(argv, capture_output=True, text=True, **kwargs)
 
@@ -143,7 +163,8 @@ class ErrorCodesFixtureTests(unittest.TestCase):
 class RedactionSmokeTests(unittest.TestCase):
     def test_version_envelope_has_no_secret_shapes(self):
         """B-A08: the CLI's public JSON output must not carry secret shapes."""
-        result = _run_cli("version", "--format", "json")
+        with _pinned_data_root_env() as (env, _data):
+            result = _run(_cli_argv("version", "--format", "json"), env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         lowered = result.stdout.lower()
         for bad in ("sk-", "api_key", "authorization", "bearer "):
@@ -160,7 +181,10 @@ class RedactionSmokeTests(unittest.TestCase):
             "sessionid=", "correct-horse-battery",
         ]
         for argv in (["version", "--format", "json"], ["doctor", "--format", "json"]):
-            result = _run_cli(*argv)
+            # Pinned data root: the cli_exit log line must not land in the
+            # developer's real data root on a standalone run.
+            with _pinned_data_root_env() as (env, _data):
+                result = _run(_cli_argv(*argv), env=env)
             lowered = result.stdout.lower()
             for marker in markers:
                 self.assertNotIn(marker, lowered,
@@ -175,20 +199,36 @@ class InstallIsolationTests(unittest.TestCase):
         import tempfile
 
         with tempfile.TemporaryDirectory(prefix="aisc-isolated-") as d:
-            env = os.environ.copy()
-            env.update({"HOME": d, "XDG_CONFIG_HOME": d, "APPDATA": d, "LOCALAPPDATA": d})
-            # The repo's CLI is a user-site editable install (its .pth lives
-            # under %APPDATA%); repointing APPDATA hides it, so pin PYTHONPATH
-            # to src/ to keep `python -m aisc` resolvable. The assertion is
-            # that the CLI writes nothing to the isolated config dirs.
-            env["PYTHONPATH"] = str(ROOT / "src")
-            result = subprocess.run(
-                _cli_argv("version", "--format", "json"),
-                capture_output=True, text=True, env=env,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            leftovers = list(Path(d).rglob("*"))
-            self.assertEqual(leftovers, [], f"CLI created files in isolated dirs: {leftovers}")
+            # lifecycle-logging's cli_exit line is a DESIGNATED data write to
+            # the data root, not a config/credential leak. Pin the data root
+            # to a second throwaway dir so the assertion isolates exactly
+            # what it claims: nothing appears in the isolated CONFIG dirs.
+            # (Without the pin this test failed on any standalone run — the
+            # full suite only passed via sibling modules' import-time env
+            # leak; see 2.1.9 decisions D-0.)
+            with tempfile.TemporaryDirectory(prefix="aisc-isolated-data-") as data:
+                env = os.environ.copy()
+                env.update({
+                    "HOME": d, "XDG_CONFIG_HOME": d, "APPDATA": d, "LOCALAPPDATA": d,
+                    "AISC_DATA_ROOT": data,
+                })
+                # The repo's CLI is a user-site editable install (its .pth lives
+                # under %APPDATA%); repointing APPDATA hides it, so pin PYTHONPATH
+                # to src/ to keep `python -m aisc` resolvable. The assertion is
+                # that the CLI writes nothing to the isolated config dirs.
+                env["PYTHONPATH"] = str(ROOT / "src")
+                result = subprocess.run(
+                    _cli_argv("version", "--format", "json"),
+                    capture_output=True, text=True, env=env,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                leftovers = list(Path(d).rglob("*"))
+                self.assertEqual(leftovers, [], f"CLI created files in isolated dirs: {leftovers}")
+                # The designated write landed where pinned — contract, not luck.
+                self.assertTrue(
+                    (Path(data) / "logs" / "aisc.log").exists(),
+                    "cli_exit log should land in the pinned AISC_DATA_ROOT",
+                )
 
     def test_subprocess_install_does_not_alter_caller_path(self):
         # The caller's PATH is captured before and after a pip install of the
