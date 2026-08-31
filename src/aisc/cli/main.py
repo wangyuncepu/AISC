@@ -740,11 +740,23 @@ def _build_parser() -> _AiscArgumentParser:
     arrec = arsub.add_parser("record", help="Record an agent artifact fact",
                              allow_abbrev=False)
     _add_global_args(arrec, is_subparser=True)
-    arrec.add_argument("--runtime-id", type=str, required=True, help="Runtime ID (UUID v4)")
-    arrec.add_argument("--session-id", type=str, required=True, help="Session ID (UUID v4)")
-    arrec.add_argument("--agent", type=str, required=True,
+    # v2.1.9 T3a (R2): the Workbench injects AISC_RUNTIME_ID (docker create)
+    # and AISC_TERMINAL_SESSION_ID (session wrapper) into every agent
+    # process — use them as argparse defaults so agents don't need to know
+    # their IDs. Flag still wins when both are present; explicit check in
+    # the command layer reports a stable usage error when neither is given
+    # (instead of argparse's bare "required" wall of text).
+    arrec.add_argument("--runtime-id", type=str,
+                       default=os.environ.get("AISC_RUNTIME_ID"),
+                       help="Runtime ID (UUID v4; default: env AISC_RUNTIME_ID)")
+    arrec.add_argument("--session-id", type=str,
+                       default=os.environ.get("AISC_TERMINAL_SESSION_ID"),
+                       help="Session ID (UUID v4; default: env AISC_TERMINAL_SESSION_ID)")
+    arrec.add_argument("--agent", type=str,
+                       default=os.environ.get("AISC_AGENT"),
+                       required=os.environ.get("AISC_AGENT") is None,
                        choices=["claude", "codex", "bash", "cc-switch"],
-                       help="Producer agent")
+                       help="Producer agent (default: env AISC_AGENT)")
     arrec.add_argument("--path", type=str, required=True,
                        help="Workspace-relative path of the artifact")
     arrec.add_argument("--action", type=str, choices=ArtifactAction.ALL, default="created",
@@ -1937,6 +1949,23 @@ def _cmd_artifact(
     sub = args.artifact_command
 
     if sub == "record":
+        # T3a: env defaults mean argparse no longer enforces these — report
+        # a stable usage error when neither flag nor env provided them.
+        missing = [n for n, v in (
+            ("--runtime-id", args.runtime_id),
+            ("--session-id", args.session_id),
+        ) if not v]
+        if missing:
+            raise CliError(
+                message=(
+                    "missing required arguments: "
+                    + ", ".join(missing)
+                    + " (or set AISC_RUNTIME_ID / AISC_TERMINAL_SESSION_ID — "
+                      "the Workbench injects both into agent sessions)"
+                ),
+                exit_code=2,
+                error_code="AISC_ERR_USAGE",
+            )
         data = cmd_artifact_record(
             runtime_id=args.runtime_id,
             session_id=args.session_id,
