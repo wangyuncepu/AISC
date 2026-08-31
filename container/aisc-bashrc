@@ -1,12 +1,13 @@
 # /usr/local/share/aisc/bashrc — AISC-managed bash initialization
-# v2.1.8 T2: HISTFILE persistence + SQLite history append (via Python
-# helper, parameterized — no shell SQL). ble.sh ghost text available behind
-# AISC_BLE_EXPERIMENT=1 (see section 3 — Workbench PTY chain incompatibility).
-# Ctrl+R history search: native bash incremental search (fzf fuzzy search
-# cut per D-3, 2026-08-30).
+# v2.1.8 T2 (2.1.9 D-1 修订): HISTFILE persistence + SQLite history append
+# (via Python helper, parameterized — no shell SQL). Ctrl+R history search:
+# native bash incremental search (fzf fuzzy search cut per 2.1.8 D-3).
+# Ghost text/highlighting live in the zsh rcfile (2.1.8 D-4) — ble.sh was
+# REMOVED in 2.1.9 (its attach froze the Workbench PTY chain; diagnostics
+# archived in docs/archive/2.1.8-dev-plans/decisions.md D-1).
 #
 # Loaded by:
-#   - wrapper: bash --rcfile /usr/local/share/aisc/bashrc
+#   - wrapper fallback: bash --rcfile /usr/local/share/aisc/bashrc
 #   - /root/.bashrc shim: source /usr/local/share/aisc/bashrc (tmux sub-shells)
 
 # 0. RECURSION GUARD: wrapper --rcfile and the /root/.bashrc shim
@@ -36,22 +37,6 @@ if [ -n "$AISC_BASH_HISTORY_FILE" ]; then
     esac
 fi
 
-# 3. ble.sh (fish-style ghost text) — ⚠️ DEFAULT OFF (2026-08-30 手测).
-#    Attaching through the Workbench terminal chain (xterm.js ↔ conPTY ↔
-#    docker exec pty) freezes the shell: init prints "bash: 2: Bad file
-#    descriptor" twice and keystrokes/paste are never processed. Fail-open
-#    must degrade to "no completion", never "no terminal". Per-shell
-#    experiment opt-in:
-#      AISC_BLE_EXPERIMENT=1 bash --rcfile /usr/local/share/aisc/bashrc
-#    Follow-up (挂账): try inside tmux — tmux answers the ESC[6n queries
-#    ble.sh issues at attach, which isolates whether the raw PTY chain is
-#    the incompatibility.
-if [ "${AISC_BLE_EXPERIMENT:-0}" = "1" ] \
-   && [ -f /usr/local/share/ble.sh/ble.sh ] && [[ $- == *i* ]]; then
-    source /usr/local/share/ble.sh/ble.sh --noattach 2>/dev/null || \
-        echo "aisc: ble.sh 加载失败（幽灵文本/高亮不可用，bash 不受影响）" >&2
-fi
-
 # 5. SQLite append via Python helper (参数化 API——shell 不拼 SQL,
 #    免疫引号/换行/Unicode; fail-open)
 if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
@@ -79,9 +64,3 @@ if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
         PROMPT_COMMAND="_aisc_log_history;${PROMPT_COMMAND}"
     fi
 fi
-
-# 6. Attach ble.sh LAST — connects the engine to the terminal after all
-#    other hooks (PROMPT_COMMAND, HISTFILE) are installed.
-#    Same experiment gate as section 3: attach freezes the Workbench PTY
-#    chain (see note above) — opt-in only.
-[ "${AISC_BLE_EXPERIMENT:-0}" = "1" ] && [[ ${BLE_VERSION-} ]] && ble-attach

@@ -13,6 +13,17 @@
   setdefault AISC_DATA_ROOT 的 env 泄漏——整 suite 跑时侥幸通过，单 node id
   任何 OS 都红（本机 Windows 已双证：suite 1044 绿 / 单 node 红）。
 
-## D-1：ble.sh 移除（待 T2 落地时补记实施细节）
+## D-1：ble.sh 移除（T2，2026-08-31）
 
-修订 2.1.8 D-1：zsh 方案已稳定交付幽灵文本，vendor 包与门控代码一并移除。
+修订 2.1.8 D-1（"镜像继续 vendor 供实验"）——用户裁决关闭并移除：
+
+- `container/Dockerfile`：删除 vendor COPY 与解压 RUN 段；apt 行移除
+  `xz-utils`（其为 ble.sh tar -xJf 而来，无其他消费者）；`procps` 保留
+  （排障独立价值：entrypoint 进程判活曾因缺 pgrep 误报，2026-08-19 实测），
+  注释改为独立理由
+- `container/vendor/ble-0.4.0-devel3.tar.xz`：git rm
+- `container/aisc-bashrc`：删第 3 节（AISC_BLE_EXPERIMENT 门控加载）与第 6 节
+  （门控 attach）；保留 HISTFILE/history -a/SQLite 钩子（bashrc 服务 tmux
+  子 shell 与 wrapper 的旧镜像回退路径）
+- wrapper `_agent_argv` 的 ble.sh 提法保留（历史注释，解释 zsh 由来）
+- 幽灵文本/高亮能力不受影响：zsh 套件（2.1.8 D-4）独立交付

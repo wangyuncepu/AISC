@@ -57,14 +57,13 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 #   iptables/iproute2  — Mihomo TUN auto-route 操纵 iptables 与路由表所必需
 #   ca-certificates    — mihomo/geodata 经 https 下载所需
 #   neovim/ripgrep    — v2.1.8 T2 Bash 体验增强（编辑器/快速搜索）
-#   zsh 三件套         — Workbench 交互 shell + 幽灵文本 + 语法高亮（D-4；
-#                        ble.sh 冻结 Workbench PTY 链，见 decisions.md D-1）
+#   zsh 三件套         — Workbench 交互 shell + 幽灵文本 + 语法高亮（2.1.8 D-4）
 #   file               — yazi mime 探测硬依赖（缺失时所有预览永远 "Loading..."，
 #                        2026-08-30 PTY 装置实证；Debian slim 默认不带）
-#   procps             — ps/pgrep/pkill；ble.sh 初始化的环境检查要求 ps 存在
-#                        （缺失时报 "insane environment: ps not found" 并拒绝加载）
+#   procps             — ps/pgrep/pkill：容器内排障必需（entrypoint 进程判活
+#                        曾因缺 pgrep 误报，2026-08-19 实测）
 RUN apt-get update && apt-get install -y git curl tmux iptables iproute2 ca-certificates \
-    neovim ripgrep unzip xz-utils procps file \
+    neovim ripgrep unzip procps file \
     zsh zsh-autosuggestions zsh-syntax-highlighting \
     && rm -rf /var/lib/apt/lists/*
 
@@ -411,16 +410,8 @@ RUN set -eux; \
     rm -rf /tmp/yazi.zip /tmp/yazi-extract; \
     /usr/local/bin/yazi --version
 
-# ==========================================
-# v2.1.8 T2: ble.sh（fish-style ghost text for bash）
-# 宿主预下载进 vendor/（免疫构建网络——CN mirror 对 .tar.xz 返回 HTML）
-# ==========================================
-COPY container/vendor/ble-0.4.0-devel3.tar.xz /tmp/ble.tar.xz
-RUN set -eux; \
-    mkdir -p /usr/local/share/ble.sh; \
-    tar -xJf /tmp/ble.tar.xz -C /usr/local/share/ble.sh --strip-components=1; \
-    rm -f /tmp/ble.tar.xz; \
-    [ -f /usr/local/share/ble.sh/ble.sh ] || { echo "❌ ble.sh 文件缺失"; exit 1; }
+# （v2.1.8 曾内置 ble.sh；2.1.9 D-1 修订移除——attach 冻结 Workbench PTY 链，
+#  幽灵文本由 zsh 套件交付。诊断存档 docs/archive/2.1.8-dev-plans/decisions.md）
 
 COPY container/cc-switch-wrapper /usr/local/bin/cc-switch
 RUN sed -i 's/\r$//' /usr/local/bin/cc-switch \
