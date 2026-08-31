@@ -1376,6 +1376,21 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     return null;
   }
 
+  /** 2.1.9 T3c (R3): the ACTIVE tab's live provider-agent session — the
+   *  inference source for watcher-derived attribution (变更页 inferred
+   *  badges). bash/cc-switch and non-live states yield null → the change
+   *  stays unattributed (the watcher itself never guesses provenance; this
+   *  is an explicitly-labeled projection on top of it). */
+  function activeAgentSession(): "claude" | "codex" | null {
+    const tab = tabs.value.find((t) => t.tabId === activeTabId.value) ?? tabs.value[0];
+    if (!tab || (tab.agent !== "claude" && tab.agent !== "codex")) return null;
+    const pane = tab.panes[tab.activePaneId];
+    if (!pane) return null;
+    return pane.sessionState === "running" || pane.sessionState === "starting"
+      ? tab.agent
+      : null;
+  }
+
   /** G-12 (Step 8): activate an existing cc-switch tab or create one -
    * shared by the sidebar auth action and the guide banner. */
   function openCcSwitch() {
@@ -1816,6 +1831,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     reopenTab,
     createTab,
     findLiveResumeTab,
+    activeAgentSession,
     removeTab,
     openCcSwitch,
     onTabOpenOk,

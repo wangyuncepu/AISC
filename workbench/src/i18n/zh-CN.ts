@@ -481,6 +481,7 @@ export const zhCN = {
   "explorer.badge.from": "原路径:",
   "explorer.badge.sourceAgent": "Agent 产物（{agent} 登记）",
   "explorer.badge.sourceUnattributed": "未归因变化（系统检测）",
+  "explorer.badge.sourceInferred": "{agent} 会话期间（系统推断）",
   "explorer.badge.renameUnknownTip": "检测到重命名事件；原路径未知",
   "explorer.searchFiles": "搜索文件…",
   "explorer.searchArtifacts": "搜索变更…",

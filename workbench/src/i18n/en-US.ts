@@ -481,6 +481,7 @@ export const enUS: Record<string, string> = {
   "explorer.badge.from": "from:",
   "explorer.badge.sourceAgent": "Agent artifact (registered by {agent})",
   "explorer.badge.sourceUnattributed": "Unattributed change (system-detected)",
+  "explorer.badge.sourceInferred": "During {agent} session (inferred)",
   "explorer.badge.renameUnknownTip": "A rename event was observed; the original path is unknown",
   "explorer.searchFiles": "Search files…",
   "explorer.searchArtifacts": "Search changes…",

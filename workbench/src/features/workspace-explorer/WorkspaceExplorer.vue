@@ -1473,7 +1473,8 @@ function onTreeKeydown(e: KeyboardEvent) {
               <ChangeBadge
                 v-if="badgeTypeOf(u.change_type)"
                 :type="badgeTypeOf(u.change_type)!"
-                source="unattributed"
+                :source="u.inferred_agent ? 'inferred' : 'unattributed'"
+                :agent="u.inferred_agent"
               />
             </div>
           </template>

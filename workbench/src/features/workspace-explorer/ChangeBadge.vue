@@ -7,7 +7,9 @@
  *  - type: created | modified | deleted | renamed (icon + shape + hue + text;
  *    never color alone, A-21774);
  *  - source: agent (manifest-attributed, shows the agent name) |
- *    unattributed (watcher-derived).
+ *    inferred (2.1.9 T3c: watcher-derived, attributed to the live provider
+ *    session — dashed border like unattributed, but carries the agent name
+ *    and an explicit "inferred" label) | unattributed (watcher-derived).
  * `detail` carries fact-qualified extras: for an attributed rename this is
  * the previous path (a real recorded fact); for an unattributed rename it is
  * the honest "original name unknown" note.
@@ -17,7 +19,7 @@ import { useI18n } from "vue-i18n";
 
 const props = defineProps<{
   type: "created" | "modified" | "deleted" | "renamed";
-  source: "agent" | "unattributed";
+  source: "agent" | "inferred" | "unattributed";
   agent?: string;
   /** Recorded previous path (attributed rename) or the unknown marker. */
   detail?: string | null;
@@ -37,13 +39,18 @@ const aria = computed(() => {
   const who =
     props.source === "agent"
       ? t("explorer.badge.sourceAgent", { agent: props.agent ?? "" })
+      : props.source === "inferred"
+      ? t("explorer.badge.sourceInferred", { agent: props.agent ?? "" })
       : t("explorer.badge.sourceUnattributed");
   return props.detail
     ? `${who} · ${text.value} · ${props.detail}`
     : `${who} · ${text.value}`;
 });
 const tooltip = computed(() => {
-  if (props.type === "renamed" && props.source === "unattributed") {
+  if (
+    props.type === "renamed" &&
+    (props.source === "unattributed" || props.source === "inferred")
+  ) {
     return t("explorer.badge.renameUnknownTip");
   }
   return aria.value;
@@ -61,7 +68,7 @@ const tooltip = computed(() => {
   >
     <span class="badge-icon" aria-hidden="true">{{ icon }}</span>
     <span class="badge-text">{{ text }}</span>
-    <span v-if="source === 'agent'" class="badge-agent" aria-hidden="true">{{
+    <span v-if="source === 'agent' || source === 'inferred'" class="badge-agent" aria-hidden="true">{{
       agent
     }}</span>
   </span>
@@ -88,4 +95,10 @@ const tooltip = computed(() => {
 .change-badge[data-type="renamed"] { color: var(--warn-fg); border-color: var(--warn-border, var(--border)); }
 .change-badge[data-source="unattributed"] { border-style: dashed; }
 .change-badge[data-source="agent"] { background: var(--accent-soft); }
+/* 2.1.9 T3c: inferred = agent-colored (soft bg + name) but DASHED — system
+ * detection during that agent's session, not a manifest fact. */
+.change-badge[data-source="inferred"] {
+  border-style: dashed;
+  background: var(--accent-soft);
+}
 </style>
