@@ -1161,17 +1161,10 @@ function onTreeKeydown(e: KeyboardEvent) {
             </template>
             <template v-else>
               <span class="explorer-name" :title="hostPath(node.relative_path)">{{ node.name }}</span>
-              <span
-                v-for="badge in node.artifact_badges"
-                :key="badge"
-                class="explorer-badge"
-                >{{ badge }}</span
-              >
-              <ChangeBadge
-                v-if="badgeTypeOf(node.change_state)"
-                :type="badgeTypeOf(node.change_state)!"
-                source="unattributed"
-              />
+              <!-- 2.1.9 T6: the tree shows ONLY names — the raw manifest-kind
+                   pills (source_change/deliverable enums) and per-node change
+                   badges were the classification layer the user cut; changes
+                   live in the flat Changes panel, period. -->
             </template>
           </div>
           <!-- Create input for a non-root target: first-child slot under the
