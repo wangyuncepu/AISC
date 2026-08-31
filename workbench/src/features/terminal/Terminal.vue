@@ -356,32 +356,30 @@ function fitGrid(): void {
   // Cell metrics: xterm's own rendered screen first (self-calibrating),
   // the settings-font probe as the first-screen bootstrap. Both live in
   // the same zoom subtree, so every zoom factor cancels.
-  const probe = measureCell();
   const real = actualCell();
-  // 2.1.9 T4 (#28): sticky settled metrics. Under software rendering
-  // (RDP into a nested-virt VM) the two sources disagree by fractions of
-  // a pixel AND actualCell intermittently returns null mid-paint — the
-  // per-tick source flip made floor(rect/cell) alternate between two
-  // grids forever (the bash pane visibly oscillating between two sizes,
-  // observed only over remote sessions). Once measured, noise-level
-  // deltas (<0.25px/axis: device-snap and probe/real skew) reuse the
-  // settled cell; genuine shifts (font/zoom move the cell ≥0.4px)
-  // refresh it. Source-stable math leaves the RO→fit feedback loop
-  // nothing to amplify.
-  const candidate = real ?? probe;
-  if (
-    stickyCell &&
-    candidate &&
-    Math.abs(candidate.w - stickyCell.w) < 0.25 &&
-    Math.abs(candidate.h - stickyCell.h) < 0.25
-  ) {
-    // Noise-level disagreement: keep the settled cell.
-  } else if (candidate) {
-    stickyCell = candidate;
-  }
+  // 2.1.9 T4 (#28, round 2): the probe BOOTSTRAPS ONLY. When the settings
+  // font chain falls back (VMs without the configured fonts), the CSS
+  // probe and xterm's own rendering resolve to different fallback fonts
+  // with different cell widths (~1.7px apart — 20%!). actualCell
+  // intermittently returns null mid-paint under software rendering, and
+  // each null tick let the probe re-enter the math → cols jumped between
+  // two distant grids (screen overflowing the window with unwrapped
+  // lines ↔ fitting the window with wrapped lines). Once xterm's own
+  // screen has been measured, that value is THE truth for this terminal
+  // instance: sticky is only ever refreshed from `real`, never from the
+  // probe. Font/renderer rebuilds reset it (see init sites).
+  if (real) stickyCell = real;
   const cellW = stickyCell?.w ?? 0;
   const cellH = stickyCell?.h ?? 0;
   if (cellW <= 0 || cellH <= 0) {
+    // Pre-screen bootstrap only: the settings-font probe.
+    const probe = measureCell();
+    if (probe && probe.w > 0 && probe.h > 0) {
+      const cols0 = Math.max(2, Math.floor(rect.width / probe.w));
+      const rows0 = Math.max(1, Math.floor(rect.height / probe.h));
+      applyGrid(cols0, rows0);
+      return;
+    }
     fit?.fit();
     if (term) applyGrid(term.cols, term.rows);
     return;
