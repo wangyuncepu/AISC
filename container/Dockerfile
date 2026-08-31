@@ -327,6 +327,16 @@ RUN python3 -m py_compile /usr/local/bin/lib/aisc_web_registry.py \
         /usr/local/bin/aisc-web-gateway /usr/local/bin/aisc-web-expose \
         /usr/local/bin/aisc-web-unexpose /usr/local/bin/aisc-web-list
 
+# 2.1.9 T3b (R1): 容器侧 aisc 桥（仅 artifact record）。镜像不装完整 aisc
+#   （拒绝嵌套），但登记链路此前因此从未通过（探针定性，decisions D-2）。
+#   shim 与宿主 CLI 写同一 JSONL registry（挂载自 <data-root>/artifacts）。
+COPY container/lib/aisc_shim.py /usr/local/bin/lib/aisc_shim.py
+RUN sed -i 's/\r$//' /usr/local/bin/lib/aisc_shim.py \
+    && printf '#!/bin/sh\nexec python3 /usr/local/bin/lib/aisc_shim.py "$@"\n' \
+        > /usr/local/bin/aisc \
+    && chmod +x /usr/local/bin/aisc \
+    && python3 -m py_compile /usr/local/bin/lib/aisc_shim.py
+
 # 设置工作目录；宿主工作区挂载到 /root/app。
 WORKDIR /root/app
 

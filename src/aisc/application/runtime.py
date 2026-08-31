@@ -1147,6 +1147,11 @@ def start_runtime(
                 # v2.1.8 T2: workspace key for the SQLite bash history chain
                 # (raw hex — distinct from the sha256-v1- directory name).
                 "-e", f"AISC_WORKSPACE_HASH={ws_key}",
+                # 2.1.9 T3b (R1): artifact registry bridge mount — the
+                # container-side `aisc` shim writes the same JSONL registry
+                # the host CLI/Workbench reads. Created host-side so the
+                # bind mount is real.
+                "-e", "AISC_ARTIFACT_ROOT=/root/.local/state/aisc-artifacts",
                 # runtime-lifecycle-ux 3a: the entrypoint stamps the toolchain
                 # environment baseline with the content-addressed image id.
                 "-e", f"AISC_IMAGE_ID={image_id_at_start}",
@@ -1165,6 +1170,15 @@ def start_runtime(
 
             gw_exclude = registry_host_ports(list_containers_readonly(reg_root))
             gw_host_port = allocate_gateway_host_port(exclude=gw_exclude)
+            # 2.1.9 T3b (R1): host-side artifacts root for the container
+            # bridge mount (see the AISC_ARTIFACT_ROOT env above).
+            from aisc.application.data_root import shared_root as _shared_root
+
+            artifacts_root = _shared_root() / "artifacts"
+            artifacts_root.mkdir(parents=True, exist_ok=True)
+            argv.extend([
+                "-v", f"{artifacts_root}:/root/.local/state/aisc-artifacts",
+            ])
             # Stage 7 (DATA-01): project-scope agent config mounts from the
             # data root; dirs are created host-side so bind mounts are real.
             # Fail closed: resolver errors propagate — never copy agent state

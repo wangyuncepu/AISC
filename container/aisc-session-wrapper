@@ -277,6 +277,10 @@ def _cmd_open(args: argparse.Namespace) -> int:
     env = _rebuild_env(ctx)
     # v2.1.8 T2: per-PTY session ID for the SQLite history chain.
     env["AISC_TERMINAL_SESSION_ID"] = args.session_id
+    # v2.1.9 T3a (R2): the agent's own name for artifact recording — lets
+    # `aisc artifact record` default --agent from env instead of the SKILL
+    # example hardcoding claude (which mis-attributed codex work).
+    env["AISC_AGENT"] = args.agent
 
     try:
         binary, argv = _agent_argv(args.agent, args.resume_id)

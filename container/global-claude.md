@@ -48,6 +48,22 @@ For multi-step tasks, use a brief plan with verification points:
 
 Loop until the task is verified, blocked, or explicitly deferred.
 
+## Deliverable registration (变更页归因)
+
+Your session env already carries your identity (`AISC_AGENT`,
+`AISC_TERMINAL_SESSION_ID`, `AISC_RUNTIME_ID`) and `aisc artifact record`
+reads them as defaults. When a task produces files the user will want to
+open (reports, docs, exports, configs), register each one as you finish:
+
+```sh
+aisc artifact record --path <relative/path> --kind deliverable --action created --label "<short label>"
+```
+
+See the `artifact` skill for the full classification table
+(deliverable / source_change / generated_output), actions, and when NOT to
+register. Unregistered files still show in the Changes panel, but without
+your name on them.
+
 ## Container web services (how users open your dev servers)
 
 You are running inside a container: a URL like `localhost:<port>` from your

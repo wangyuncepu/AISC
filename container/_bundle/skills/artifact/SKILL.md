@@ -29,13 +29,13 @@ should look at, it's a `deliverable`.
 
 ## Register
 
-For each deliverable, run (workspace-relative path, never absolute):
+The session environment already knows your identity — `AISC_AGENT`,
+`AISC_TERMINAL_SESSION_ID` and `AISC_RUNTIME_ID` are set in every Workbench
+terminal — and `aisc artifact record` reads them as defaults. The minimal
+registration is therefore:
 
 ```sh
 aisc artifact record \
-  --session-id <session_id> \
-  --runtime-id <runtime_id> \
-  --agent claude \
   --path <relative/path> \
   --kind deliverable \
   --action created \
@@ -43,15 +43,21 @@ aisc artifact record \
   --label "<short human label>"
 ```
 
-- `--path` MUST be relative to the workspace root and use `/` separators
-  (no leading `/`, no `..`, no backslashes).
-- `--session-id` / `--runtime-id` come from the session context when present;
-  omit them if the environment does not provide them — the host resolves them.
+- `--path` MUST be relative to the workspace root, never absolute, using
+  `/` separators (no leading `/`, no `..`, no backslashes). A
+  `/root/app/...` prefix is tolerated and stripped, but relative is
+  preferred.
+- `--agent` / `--session-id` / `--runtime-id` default from the session env
+  (`AISC_AGENT`, `AISC_TERMINAL_SESSION_ID`, `AISC_RUNTIME_ID`). Pass flags
+  only when the env is missing — never hardcode another agent's name.
 - `--action` is `created` | `modified` | `deleted` | `renamed`
   (`renamed` requires `--previous-path`).
 - `--media-type` uses `type/subtype` (e.g. `text/markdown`, `application/pdf`).
-- If `aisc` is not on PATH, do NOT fake a registry — just list the relative
-  paths in your final answer; the Workbench watcher will show the change as
+- Registration is idempotent per (path, action, kind): re-recording the same
+  fact updates it instead of duplicating.
+- If `aisc` is genuinely unavailable (`command not found`), do NOT fake a
+  registry — list the relative paths in your final answer and say the
+  registration could not run; the Workbench watcher will show the change as
   unattributed.
 
 ## Output in your final answer
