@@ -66,3 +66,13 @@ store）：watcher.rs:3-4 的"绝不猜测 provenance"契约原样保留——�
 claude/codex 会话 → 归因为该 agent（ChangeBadge 新增 `inferred` 来源：agent
 色 + 虚线框 + "会话期间（系统推断）"文案）；bash/cc-switch/无会话 → 未归因。
 不写 manifest（推断不是事实）。
+
+## D-4：resolver 传输层失败接入 S8b 回退（#59，2026-08-31，T3 期间新生）
+
+`aisc build` 的 cc-switch 解析在 GitHub releases 大响应被截断时
+（`IncompleteRead`，直连环境连续复现）裸崩为 PyInstaller traceback——
+绕过了 S8b 设计的四级回退。根因：`IncompleteRead` 属 `HTTPException`，
+不在既有 `URLError/TimeoutError/OSError` 捕获链；截断 200 体还会以
+`JSONDecodeError` 逃逸。修复：两者都转
+`ResolveError(CC_SWITCH_ERROR_NETWORK)`，回退链（在线→缓存→回执→无钉版）
+恢复生效（a2f6407，2 条 mock urlopen 测试）。
