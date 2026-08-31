@@ -76,3 +76,29 @@ claude/codex 会话 → 归因为该 agent（ChangeBadge 新增 `inferred` 来�
 `JSONDecodeError` 逃逸。修复：两者都转
 `ResolveError(CC_SWITCH_ERROR_NETWORK)`，回退链（在线→缓存→回执→无钉版）
 恢复生效（a2f6407，2 条 mock urlopen 测试）。
+
+## D-5：#28 VM 终端振荡——三轮收敛与终局（T4，2026-08-31）
+
+**症状重定义（VM 复现实证）**：非"轮询闪烁"，而是 bash 终端区在两个
+尺寸间振荡——窄态屏幕超出窗口且长行不换行，宽态适配窗口但长行换行
+（教学框 CJK 双宽）。仅 RDP 远程会话 + 低分辨率出现；提分辨率 + 最大化
+消失。真机从未复现。
+
+**根因链（B-05 家族的间歇变体）**：字体链回退时，CSS 探针与 xterm 渲染
+器解析到不同回退字体（cell 宽差 ~20%）；软渲染下 `actualCell` 间歇返回
+null，每个 null tick 探针值重返计算 → 列数在两个相距甚远的网格间跳；
+r2 曾把 sticky 改为每 tick 无条件覆写，自洽的"测量→网格→再测量"循环
+仍在追自己的两个状态。
+
+**终局修复（r2+r3 组合，VM 实证 PASS）**：
+- 探针降级为**仅首屏引导**（首次拿到有效 `.xterm-screen` 测量后，本终端
+  实例永不再询探针；字体/渲染重建时重置）
+- sticky 刷新加 **1s 冷却**（首测即时），断掉自洽循环
+- 校正 pass 门槛从 0.01px/单元格改为 ≥1px 整格溢出
+- 附带两刀降源噪声：RuntimeSidebar 语义 `:key` 移出 freshness（stale↔fresh
+  翻转不再整块重挂载）；explorer 1.5s 静默轮询加 identity 门控（零变化保
+  持数组引用，对齐 v2.1.7 s5b 快照门控模式）
+
+**保留物**：fit 遥测 + 振荡自诊断浮层（≥6 次/5s 自动弹出，截图即含
+rect/cell/sticky/DPR/zoom 数值）——修复已生效但保留为安全网，野外复发
+时第一手数据自带上门。
