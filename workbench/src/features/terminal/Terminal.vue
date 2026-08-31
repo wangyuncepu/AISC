@@ -84,7 +84,38 @@ let resizeSyncFailed = false;
 /** 2.1.9 T4 (#28): the settled cell metrics for THIS terminal instance —
  *  see fitGrid. Reset on term re-init (font/renderer rebuild). */
 let stickyCell: { w: number; h: number } | null = null;
+/** 2.1.9 T4 r3: cooldown — sticky accepts a NEW value at most once per
+ *  second (the first measurement is immediate). A self-consistent
+ *  measure→grid→measure loop otherwise overwrites sticky every tick and
+ *  the two states chase each other forever. */
+let stickyCellAt = 0;
 let healTimer: number | null = null;
+
+// --- 2.1.9 T4 r3 (#28): fit telemetry + oscillation self-diagnostic ---
+// Repro is RDP-only; guessing has missed twice. Every fitGrid call logs
+// its inputs/outputs; ≥6 grid changes within 5s auto-opens an overlay
+// with the last 80 entries — the user screenshots it, we read the truth.
+const fitLog: string[] = [];
+const fitDiag = ref<string[]>([]);
+const fitDiagOpen = ref(false);
+let gridChanges: number[] = [];
+
+function fitLogLine(s: string): void {
+  fitLog.push(s);
+  if (fitLog.length > 300) fitLog.splice(0, fitLog.length - 300);
+}
+
+function noteGridChange(cols: number, rows: number): void {
+  const now = performance.now();
+  gridChanges.push(now);
+  gridChanges = gridChanges.filter((t) => now - t < 5000);
+  if (gridChanges.length >= 6) {
+    fitDiag.value = fitLog.slice(-80);
+    fitDiagOpen.value = true;
+    gridChanges = [];
+  }
+  fitLogLine(`  -> grid ${cols}x${rows} (term now)`);
+}
 
 // B-05 手测 2 (narrow-TUI guard): full-screen TUIs (claude/codex/cc-switch)
 // render structural garbage below a minimum width; instead of showing the
@@ -222,6 +253,7 @@ function rebuildTerminal() {
   searchAddon = null;
   searchResult.value = null;
   stickyCell = null; // 2.1.9 T4: re-derive from the new font/renderer
+  stickyCellAt = 0;
   term = new Terminal(terminalOptions());
   fit = new FitAddon();
   term.loadAddon(fit);
@@ -340,6 +372,7 @@ function applyGrid(cols: number, rows: number): void {
   const grid = clampToFloor(cols);
   if (grid !== term.cols || rows !== term.rows) {
     term.resize(grid, rows);
+    noteGridChange(grid, rows);
   }
 }
 
@@ -357,23 +390,28 @@ function fitGrid(): void {
   // the settings-font probe as the first-screen bootstrap. Both live in
   // the same zoom subtree, so every zoom factor cancels.
   const real = actualCell();
-  // 2.1.9 T4 (#28, round 2): the probe BOOTSTRAPS ONLY. When the settings
-  // font chain falls back (VMs without the configured fonts), the CSS
-  // probe and xterm's own rendering resolve to different fallback fonts
-  // with different cell widths (~1.7px apart — 20%!). actualCell
-  // intermittently returns null mid-paint under software rendering, and
-  // each null tick let the probe re-enter the math → cols jumped between
-  // two distant grids (screen overflowing the window with unwrapped
-  // lines ↔ fitting the window with wrapped lines). Once xterm's own
-  // screen has been measured, that value is THE truth for this terminal
-  // instance: sticky is only ever refreshed from `real`, never from the
-  // probe. Font/renderer rebuilds reset it (see init sites).
-  if (real) stickyCell = real;
+  // 2.1.9 T4 r2/r3: the probe BOOTSTRAPS ONLY, and sticky refreshes from
+  // `real` under a 1s cooldown — an unconditional per-tick overwrite let
+  // a self-consistent measure→grid→measure loop chase its own two states
+  // (r2 miss; see telemetry above the next time it happens).
+  const now = performance.now();
+  if (real && now - stickyCellAt > 1000) {
+    stickyCell = real;
+    stickyCellAt = now;
+  }
+  fitLogLine(
+    `fit rect=${rect.width.toFixed(1)}x${rect.height.toFixed(1)} ` +
+      `real=${real ? real.w.toFixed(2) + "/" + real.h.toFixed(2) : "-"} ` +
+      `sticky=${stickyCell ? stickyCell.w.toFixed(2) + "/" + stickyCell.h.toFixed(2) : "-"} ` +
+      `dpr=${window.devicePixelRatio} zoom=${document.querySelector<HTMLElement>(".app")?.offsetWidth ? (document.querySelector<HTMLElement>(".app")!.getBoundingClientRect().width / document.querySelector<HTMLElement>(".app")!.offsetWidth).toFixed(2) : "?"} ` +
+      `cols=${term.cols} rows=${term.rows}`,
+  );
   const cellW = stickyCell?.w ?? 0;
   const cellH = stickyCell?.h ?? 0;
   if (cellW <= 0 || cellH <= 0) {
     // Pre-screen bootstrap only: the settings-font probe.
     const probe = measureCell();
+    fitLogLine(`  probe=${probe ? probe.w.toFixed(2) + "/" + probe.h.toFixed(2) : "-"}`);
     if (probe && probe.w > 0 && probe.h > 0) {
       const cols0 = Math.max(2, Math.floor(rect.width / probe.w));
       const rows0 = Math.max(1, Math.floor(rect.height / probe.h));
@@ -388,7 +426,7 @@ function fitGrid(): void {
   const rows = Math.max(1, Math.floor(rect.height / cellH));
   applyGrid(cols, rows);
   // One correction pass — gated on a WHOLE-CELL overflow (≥1px aggregate
-  // against the box), never on sub-pixel snap noise: the old 0.01px gate
+  // against the box), never for sub-pixel snap noise: the old 0.01px gate
   // re-derived on every renderer rounding difference, which on
   // software-rendered VMs fed the same oscillation.
   const real2 = actualCell();
@@ -400,6 +438,7 @@ function fitGrid(): void {
       const rows2 = Math.max(1, Math.floor(rect.height / real2.h));
       if (cols2 !== cols || rows2 !== rows) {
         stickyCell = real2;
+        stickyCellAt = now;
         applyGrid(cols2, rows2);
       }
     }
@@ -811,6 +850,7 @@ let consumed = 0;
 
 onMounted(() => {
   stickyCell = null; // 2.1.9 T4: fresh instance, fresh metrics
+  stickyCellAt = 0;
   term = new Terminal(terminalOptions());
   fit = new FitAddon();
   term.loadAddon(fit);
@@ -1106,10 +1146,49 @@ defineExpose({
       </button>
     </div>
     </Transition>
+
+    <!-- 2.1.9 T4 r3 (#28): fit self-diagnostic. Auto-opens when the grid
+         changes ≥6 times within 5s (the RDP oscillation); screenshot this
+         and the rect/cell/sticky/dpr/zoom lines name the flip source. -->
+    <div v-if="fitDiagOpen" class="fit-diag">
+      <div class="fit-diag-head">
+        <span>fit 诊断（网格 5s 内 ≥6 次变化）— 截图反馈</span>
+        <button @click="fitDiagOpen = false">关闭</button>
+      </div>
+      <pre>{{ fitDiag.join("\n") }}</pre>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* 2.1.9 T4 r3 (#28): fit self-diagnostic overlay. */
+.fit-diag {
+  position: absolute;
+  inset: auto 8px 8px 8px;
+  max-height: 60%;
+  z-index: 60;
+  background: var(--bg);
+  color: var(--error);
+  border: 2px solid var(--error-border, var(--border));
+  border-radius: var(--radius-sm);
+  font-size: var(--font-xs);
+  display: flex;
+  flex-direction: column;
+}
+.fit-diag-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  font-weight: 600;
+}
+.fit-diag pre {
+  margin: 0;
+  padding: 4px 8px 8px;
+  overflow: auto;
+  white-space: pre;
+}
+
 .terminal {
   height: 100%;
   width: 100%;
