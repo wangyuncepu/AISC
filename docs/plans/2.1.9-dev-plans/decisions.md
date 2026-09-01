@@ -160,6 +160,28 @@ IncompleteRead 裸崩）同类病。已排除：镜像完整（1.45GB 差值 =
 测试：transport-failure 单测 6 条（两实现对称）+ stderr 流入单测 +
 真实 stderr 文本断言；全量 pytest 1067 绿 / cargo 全绿。
 
+**r3 根因闭环（HOTFIX2 的可见性立功，用户 VM 复现）**：中文用户名
+VM 装包开 bash，stderr 流进终端后 traceback 直接点名——
+`docker.from_env()` 在 DOCKER_HOST 未设时读 docker CLI context 的
+`meta.json`，**docker-py 7.x 的 open() 不带 encoding** → zh-CN Windows
+按 GBK 解码 Docker Desktop（中文环境）写入的 UTF-8 字节 →
+`UnicodeDecodeError` 包成普通 `Exception`（"corrupted meta file"），
+非 DockerException，直接穿透裸死。这解释了全部疑团：**只有 bash 会话
+坏**（open_interactive 是全程序唯一 docker-py 路径，其余走 docker CLI
+子进程，Go 的 UTF-8 无恙）；**只有中文环境机器坏**（英文环境
+meta.json 纯 ASCII，GBK 恰好能解）；本机同链路实验"正常"是因为测不
+出该分支。已本地伪造中文 context 逐字复现同款崩溃。
+
+**r3 修复（双保险）**：① `ensure_sidecar_utf8()`（lib.rs 启动时
+`PYTHONUTF8=1`，尊重显式覆盖）——所有 sidecar 子进程按 UTF-8 打开
+文件，根治 GBK 一类；② `_client_from_env_safe`/`_default_client`
+安全工厂（docker_.py + docker_gateway.py）——from_env 抛任何异常时
+回退平台默认端点（显式 base_url 不读 meta.json，绕开 context 解析），
+裸跑 CLI（无 PYTHONUTF8）也自愈；③ 顺手修 gateway 的隐藏 bug：
+`_client_factory` 字段 default_factory 写成 `lambda: _default_client()`
+——构造即急切 from_env（CJK 机器上连查询路径都会炸）且字段值不可
+调用，改为普通函数默认值。测试 +4（含伪造 meta 复现断言）。
+
 **伴生发现**：nairong 镜像是 resolver 失败后**无钉回退**构建（构建日志
 #56 build-arg 为空走了手动 v5.9.0 分支）——S8b 回退链按设计工作，但
 "构建完成"未提示降级，后续考虑在 build 事件里标出。另：其首日构建

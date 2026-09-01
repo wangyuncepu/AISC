@@ -32,6 +32,21 @@ pub mod web_services;
 pub mod window;
 pub mod workspace;
 
+/// 2.1.9 hotfix r3 (nairong #61): force Python UTF-8 mode for every sidecar
+/// spawn. On zh-CN Windows the PyInstaller CLI defaults to GBK for files
+/// third-party code opens without an explicit encoding (docker-py's context
+/// meta.json), which crashed every terminal session with a bare
+/// UnicodeDecodeError. Must run before the first child spawn; set_var races
+/// are avoided by calling this once at startup, pre-async-runtime.
+pub fn ensure_sidecar_utf8() {
+    // set_default (not overwrite): an explicit PYTHONUTF8=0 from a power user
+    // is respected... except 0 still disables UTF-8 mode, so treat any
+    // existing value as intentional.
+    if std::env::var_os("PYTHONUTF8").is_none() {
+        std::env::set_var("PYTHONUTF8", "1");
+    }
+}
+
 use artifact::{artifact_inspect, artifact_list, artifact_refresh};
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use watcher::{workspace_rescan, workspace_watch_start, workspace_watch_stop, WatcherState};
@@ -74,6 +89,15 @@ use window::{capture_window_geometry, restore_window_geometry};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(cli_arg: Option<String>) {
+    // 2.1.9 hotfix r3 (nairong #61, user VM repro): the PyInstaller sidecar
+    // inherits the Windows locale; on zh-CN systems Python's default text
+    // encoding is GBK, which corrupts UTF-8 files third-party code opens
+    // without an explicit encoding (docker-py's context meta.json →
+    // UnicodeDecodeError → "exit 1, zero output"). Force Python UTF-8 mode
+    // for every sidecar spawn — env is set before any thread that might
+    // race a child spawn, and it is inherited by all aisc.exe children.
+    ensure_sidecar_utf8();
+
     let cli_arg_state = CliArg(std::sync::Arc::new(std::sync::Mutex::new(cli_arg)));
     tauri::Builder::default()
         .manage(WatcherState::default())
@@ -209,4 +233,30 @@ pub fn run(cli_arg: Option<String>) {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod utf8_env_tests {
+    // 2.1.9 hotfix r3 (#61): the sidecar env must force Python UTF-8 mode
+    // (zh-CN GBK crashes in docker-py's context loading) and respect an
+    // explicit user override. One test, sequential phases — env vars are
+    // process-global and parallel #[test]s would race on the same key.
+    #[test]
+    fn ensure_sidecar_utf8_sets_when_unset_and_respects_override() {
+        let key = "PYTHONUTF8";
+        let prev = std::env::var_os(key);
+
+        std::env::remove_var(key);
+        super::ensure_sidecar_utf8();
+        assert_eq!(std::env::var(key).unwrap(), "1");
+
+        std::env::set_var(key, "0");
+        super::ensure_sidecar_utf8();
+        assert_eq!(std::env::var(key).unwrap(), "0");
+
+        match prev {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
 }
