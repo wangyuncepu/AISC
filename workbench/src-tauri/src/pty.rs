@@ -301,7 +301,12 @@ pub fn spawn_pipe_session(
         .env("AISC_RESIZE_FILE", &resize_file)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        // 2.1.9 hotfix (nairong #61): stderr used to be nulled, which made
+        // a sidecar dying mid-session (e.g. a docker-py transport traceback)
+        // look like "exit 1 with zero terminal output". A real `docker exec
+        // -it` interleaves stderr into the TTY stream — stream it as Output
+        // events so the failure text lands in the terminal scrollback.
+        .stderr(Stdio::piped());
 
     // Windows: prevent a console window from flashing. The sidecar is a
     // console subsystem app; without this flag a brief window appears.
@@ -324,6 +329,7 @@ pub fn spawn_pipe_session(
         .stdout
         .take()
         .ok_or_else(|| WorkbenchError::cli_protocol().with_detail("no stdout"))?;
+    let stderr = child.stderr.take();
 
     let cancel = CancellationToken::new();
     let reader_errored = Arc::new(AtomicBool::new(false));
@@ -401,6 +407,34 @@ pub fn spawn_pipe_session(
             }
         }
     });
+
+    // stderr reader task (2.1.9 hotfix, nairong #61): same Output events as
+    // stdout (a real TTY interleaves both). Errors here just stop the pump —
+    // stderr is diagnostics, never a reason to kill the child.
+    if let Some(stderr) = stderr {
+        let event_tx_e = event_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut stderr = stderr;
+            let mut buf = vec![0u8; READ_BUF];
+            let mut seq = 0u64;
+            loop {
+                match stderr.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        seq += 1;
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
+                        if event_tx_e
+                            .blocking_send(PtyEvent::Output { seq, bytes: b64 })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
 
     // wait task: own the child, block on wait(), set exit signal.
     let event_tx_w = event_tx.clone();
@@ -609,6 +643,44 @@ mod tests {
         assert!(
             tx.try_send(vec![0u8]).is_err(),
             "channel must refuse writes beyond WRITE_CHANNEL_CAP={WRITE_CHANNEL_CAP}"
+        );
+    }
+
+    // 2.1.9 hotfix (nairong #61): stderr used to be Stdio::null() — a sidecar
+    // dying mid-session (docker-py transport traceback) surfaced as "exit 1
+    // with zero terminal output". It must now stream as Output events.
+    #[tokio::test]
+    async fn pipe_session_streams_child_stderr_as_output() {
+        #[cfg(windows)]
+        let (exe, argv) = (
+            Path::new("cmd"),
+            vec!["/C".to_string(), "echo aisc-stderr-probe 1>&2".to_string()],
+        );
+        #[cfg(unix)]
+        let (exe, argv) = (
+            Path::new("sh"),
+            vec!["-c".to_string(), "echo aisc-stderr-probe 1>&2".to_string()],
+        );
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let (_session, signal) = spawn_pipe_session(exe, argv, 80, 24, tx).unwrap();
+        let exit = signal.wait().await;
+        assert_eq!(exit.exit_code, Some(0));
+
+        let mut saw_stderr_marker = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let PtyEvent::Output { bytes, .. } = ev {
+                let raw = base64::engine::general_purpose::STANDARD
+                    .decode(bytes.as_bytes())
+                    .unwrap();
+                if String::from_utf8_lossy(&raw).contains("aisc-stderr-probe") {
+                    saw_stderr_marker = true;
+                }
+            }
+        }
+        assert!(
+            saw_stderr_marker,
+            "child stderr text must reach the Output stream"
         );
     }
 }

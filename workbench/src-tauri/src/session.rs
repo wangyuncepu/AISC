@@ -489,8 +489,27 @@ pub async fn open_session(
     let reg_obs = reg.clone();
     let sig_obs = signal.clone();
     let sid_obs = session_id.clone();
+    let agent_obs = agent.clone();
     tokio::spawn(async move {
         let exit = sig_obs.wait().await;
+        // 2.1.9 hotfix (nairong #61): session open/exit used to be the ONE
+        // app path with zero log trail (spawn bypasses run_control, and the
+        // sidecar's stderr was nulled) — a dying session left no evidence
+        // anywhere. Land every terminal transition in the app log.
+        let clean = exit.reason == REASON_USER_CLOSE
+            || (exit.reason == "process_exit" && exit.exit_code == Some(0));
+        crate::logging::append_event(
+            if clean { "info" } else { "error" },
+            "app",
+            "session_exit",
+            None,
+            serde_json::json!({
+                "session_id": sid_obs.as_str(),
+                "agent": agent_obs.as_str(),
+                "reason": exit.reason.as_str(),
+                "exit_code": exit.exit_code,
+            }),
+        );
         if let Ok(mut g) = reg_obs.lock() {
             if let Some(e) = g.get_mut(&sid_obs) {
                 e.state = if exit.reason == REASON_TRANSPORT_ERROR {
