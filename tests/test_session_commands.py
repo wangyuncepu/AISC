@@ -345,6 +345,23 @@ class TestCmdSessionWiring(unittest.TestCase):
         assert code == 1
         assert data["error"] == "docker command not found"
 
+    def test_cmd_session_open_surfaces_real_failure_text(self):
+        """2.1.9 hotfix (#61): open_interactive's stderr carries the true
+        failure (transport/exec stage) — it must become data["error"] so
+        print_session_text shows the cause IN the terminal instead of the
+        misleading "docker command not found"."""
+        from aisc.cli.commands.session import cmd_session_open
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("aisc.cli.commands.session.open_session",
+                       return_value=ProcessResult(
+                           exit_code=-1, command_not_found=True,
+                           stderr="exec start failed: ReadTimeout('npipe')")):
+                data, code = cmd_session_open(RT, SID, "bash", workspace=tmp,
+                                              executor=FakeDockerExecutor())
+        assert code == 1
+        assert "exec start failed" in data["error"]
+        assert "ReadTimeout" in data["error"]
+
 
 # ---------------------------------------------------------------------------
 # aisc.cli/v1 JSON envelope (contract §二.2)

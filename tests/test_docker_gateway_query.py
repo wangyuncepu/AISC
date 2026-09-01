@@ -454,5 +454,121 @@ class SdkInteractiveTests(unittest.TestCase):
         self.assertGreaterEqual(len(resized), 1)
 
 
+class TransportFailureToleranceTests(unittest.TestCase):
+    """2.1.9 hotfix (nairong #61): requests-level transport failures are NOT
+    DockerException subclasses — they used to escape as bare tracebacks with
+    the sidecar's stderr discarded (exit 1, zero terminal output)."""
+
+    def _gw(self, api):
+        return SdkGateway(client=FakeClient(api=api))
+
+    def _run(self, g):
+        import sys as _sys
+        import tempfile
+        from unittest import mock as _mock
+
+        with tempfile.TemporaryFile() as stdin:
+            with _mock.patch.object(_sys, "stdin", stdin):
+                return g.open_interactive("aisc-wb-1", ["sh"])
+
+    def test_exec_create_connection_error_is_orderly(self):
+        import requests
+
+        class TransportDownApi(_FakeApi):
+            def exec_create(self, container, cmd, **kwargs):
+                raise requests.exceptions.ConnectionError("npipe refused")
+
+        r = self._run(self._gw(TransportDownApi()))
+        self.assertEqual(r.operation.error_code, "DOCKER_ERR_DAEMON_UNREACHABLE")
+        self.assertIn("npipe refused", r.operation.error_message)
+
+    def test_exec_start_read_timeout_is_orderly(self):
+        import requests
+
+        class TimeoutApi(_FakeApi):
+            def exec_start(self, exec_id, **kwargs):
+                raise requests.exceptions.ReadTimeout("npipe 60s timeout")
+
+        r = self._run(self._gw(TimeoutApi()))
+        self.assertEqual(r.operation.error_code, "DOCKER_ERR_UNKNOWN")
+        self.assertIn("exec start failed", r.operation.error_message)
+
+    def test_transient_inspect_failures_are_tolerated(self):
+        """Two consecutive transport hiccups in the inspect poll must NOT
+        kill a healthy session; the third recovery still delivers the exit."""
+        import requests
+
+        class FlakyThenExitApi(_FakeApi):
+            def __init__(self):
+                super().__init__(inspect_once=False)
+                self._fails = 0
+
+            def exec_inspect(self, exec_id):
+                self.calls.append(("exec_inspect", exec_id))
+                if self._fails < 2:
+                    self._fails += 1
+                    raise requests.exceptions.ConnectionError("transient")
+                return {"Running": False, "ExitCode": 0}
+
+        api = FlakyThenExitApi()
+        r = self._run(self._gw(api))
+        self.assertTrue(r.waited)
+        self.assertEqual(r.operation.exit_code, 0)
+        self.assertEqual(r.operation.error_code, "")
+
+    def test_persistent_inspect_failures_end_orderly(self):
+        import requests
+
+        class DeadInspectApi(_FakeApi):
+            def exec_inspect(self, exec_id):
+                self.calls.append(("exec_inspect", exec_id))
+                raise requests.exceptions.ReadTimeout("pipe is gone")
+
+        r = self._run(self._gw(DeadInspectApi()))
+        self.assertEqual(r.operation.error_code, "DOCKER_ERR_UNKNOWN")
+        self.assertIn("pipe is gone", r.operation.error_message)
+
+
+class RealExecutorTransportTests(unittest.TestCase):
+    """Same hardening on the RealDockerExecutor path the session CLI uses
+    (docker.from_env is patched; the fake API rides the real code path)."""
+
+    def _run(self, api):
+        import sys
+        import tempfile
+        from unittest import mock
+
+        import docker as _docker
+
+        fake_client = FakeClient(api=api)
+        with tempfile.TemporaryFile() as stdin:
+            with mock.patch.object(_docker, "from_env", return_value=fake_client):
+                with mock.patch.object(sys, "stdin", stdin):
+                    from aisc.adapters.docker_ import RealDockerExecutor
+                    return RealDockerExecutor().open_interactive("aisc-wb-1", ["sh"])
+
+    def test_exec_create_transport_error_is_orderly(self):
+        import requests
+
+        class DownApi(_FakeApi):
+            def exec_create(self, container, cmd, **kwargs):
+                raise requests.exceptions.ConnectionError("npipe broken")
+
+        r = self._run(DownApi())
+        self.assertEqual(r.exit_code, -1)
+        self.assertIn("exec create", r.stderr)
+
+    def test_exec_start_transport_error_is_orderly(self):
+        import requests
+
+        class DownApi(_FakeApi):
+            def exec_start(self, exec_id, **kwargs):
+                raise requests.exceptions.ReadTimeout("headers never came")
+
+        r = self._run(DownApi())
+        self.assertEqual(r.exit_code, -1)
+        self.assertIn("exec start", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

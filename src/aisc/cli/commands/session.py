@@ -83,7 +83,11 @@ def cmd_session_open(
         "exit_code": exit_code,
     }
     if proc.command_not_found:
-        data["error"] = "docker command not found"
+        # 2.1.9 hotfix (#61): open_interactive packs the real failure text
+        # (daemon unreachable / exec create / exec start / transport) into
+        # stderr — surface it so print_session_text shows the true cause in
+        # the terminal instead of a misleading "docker command not found".
+        data["error"] = (proc.stderr or "").strip()[:200] or "docker command not found"
     elif proc.timed_out:
         data["error"] = "session timed out"
 

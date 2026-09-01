@@ -516,6 +516,7 @@ class SdkGateway:
         profile) — the bash tutorial ``help`` function enters sessions this way.
         """
         import docker
+        import requests  # 2.1.9 hotfix (#61): transport failures are not DockerExceptions
 
         start = time.monotonic()
         try:
@@ -542,10 +543,19 @@ class SdkGateway:
                 ),
                 session_id="",
             )
+        except (requests.RequestException, OSError) as exc:
+            return InteractiveResult(
+                operation=_new_operation(
+                    "sdk", exit_code=3, duration_ms=_elapsed(start),
+                    error_code=DockerErrorCode.DAEMON_UNREACHABLE,
+                    error_message=f"exec create transport failure: {exc}",
+                ),
+                session_id="",
+            )
 
         try:
             sock = client.api.exec_start(exec_id, socket=True, tty=True)
-        except docker.errors.APIError as exc:
+        except (docker.errors.DockerException, requests.RequestException, OSError) as exc:
             return InteractiveResult(
                 operation=_new_operation(
                     "sdk", exit_code=3, duration_ms=_elapsed(start),
@@ -666,15 +676,26 @@ class SdkGateway:
 
         exit_code = -1
         waited = False
+        # 2.1.9 hotfix (#61): tolerate transient inspect failures (npipe
+        # hiccups) before giving up — mirrors RealDockerExecutor.
+        inspect_failures = 0
         try:
             while True:
-                info = client.api.exec_inspect(exec_id)
+                try:
+                    info = client.api.exec_inspect(exec_id)
+                    inspect_failures = 0
+                except (docker.errors.APIError, requests.RequestException, OSError) as exc:
+                    inspect_failures += 1
+                    if inspect_failures >= 3:
+                        raise
+                    time.sleep(0.5)
+                    continue
                 if not info.get("Running"):
                     exit_code = int(info.get("ExitCode", 0))
                     waited = True
                     break
                 time.sleep(0.2)
-        except docker.errors.APIError as exc:
+        except (docker.errors.APIError, requests.RequestException, OSError) as exc:
             errors.append(exc)
         finally:
             stop.set()

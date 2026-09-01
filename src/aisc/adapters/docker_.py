@@ -480,14 +480,25 @@ class RealDockerExecutor:
         (100ms) and calls ``exec_resize``. (G-02, 2026-08-10.)
         """
         import docker  # lazy: every other path stays dependency-free
+        import requests  # docker SDK dependency: transport-layer exceptions
+
+        # 2.1.9 hotfix (nairong #61): transport-layer failures (npipe
+        # ReadTimeout / ConnectionError) are NOT DockerException subclasses —
+        # they used to escape as a bare traceback with the sidecar's stderr
+        # discarded by the pty supervisor (Stdio::null), surfacing as
+        # "exit 1 with zero terminal output". Catch them here so every
+        # failure becomes an orderly ProcessResult whose message reaches
+        # the terminal. Same class of bug as #59 (resolver IncompleteRead).
+        def _transport_failure(stage: str, exc: Exception) -> ProcessResult:
+            return ProcessResult(
+                stdout="", stderr=f"{stage} failed: {exc}",
+                exit_code=-1, command_not_found=True,
+            )
 
         try:
             client = docker.from_env()
-        except docker.errors.DockerException as exc:
-            return ProcessResult(
-                stdout="", stderr=f"docker daemon unreachable: {exc}",
-                exit_code=-1, command_not_found=True,
-            )
+        except (docker.errors.DockerException, requests.RequestException, OSError) as exc:
+            return _transport_failure("docker daemon unreachable", exc)
         try:
             exec_kwargs: Dict[str, Any] = {"tty": True, "stdin": True}
             if env:
@@ -500,18 +511,12 @@ class RealDockerExecutor:
                 stdout="", stderr="container not found",
                 exit_code=-1, command_not_found=True,
             )
-        except docker.errors.APIError as exc:
-            return ProcessResult(
-                stdout="", stderr=f"exec create failed: {exc}",
-                exit_code=-1, command_not_found=True,
-            )
+        except (docker.errors.DockerException, requests.RequestException, OSError) as exc:
+            return _transport_failure("exec create", exc)
         try:
             sock = client.api.exec_start(exec_id, socket=True, tty=True)
-        except docker.errors.APIError as exc:
-            return ProcessResult(
-                stdout="", stderr=f"exec start failed: {exc}",
-                exit_code=-1, command_not_found=True,
-            )
+        except (docker.errors.DockerException, requests.RequestException, OSError) as exc:
+            return _transport_failure("exec start", exc)
 
         stop = threading.Event()
         errors: List[Exception] = []
@@ -634,14 +639,27 @@ class RealDockerExecutor:
         t_resize.start()
 
         exit_code = -1
+        # 2.1.9 hotfix (nairong #61): exec_inspect polls every 200ms over the
+        # same npipe; a single transient transport hiccup used to escape as a
+        # bare traceback (only APIError was caught), killing a HEALTHY session.
+        # Tolerate a few consecutive failures before giving up orderly.
+        inspect_failures = 0
         try:
             while True:
-                info = client.api.exec_inspect(exec_id)
+                try:
+                    info = client.api.exec_inspect(exec_id)
+                    inspect_failures = 0
+                except (docker.errors.APIError, requests.RequestException, OSError) as exc:
+                    inspect_failures += 1
+                    if inspect_failures >= 3:
+                        raise
+                    time.sleep(0.5)
+                    continue
                 if not info.get("Running"):
                     exit_code = int(info.get("ExitCode", 0))
                     break
                 time.sleep(0.2)
-        except docker.errors.APIError as exc:
+        except (docker.errors.APIError, requests.RequestException, OSError) as exc:
             errors.append(exc)
         finally:
             stop.set()
