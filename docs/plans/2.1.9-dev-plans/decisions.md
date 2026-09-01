@@ -121,3 +121,48 @@ rect/cell/sticky/DPR/zoom 数值）——修复已生效但保留为安全网，
 
 **复活条件**（若未来重启归因）：模型对登记指令的遵从率可实测（镜像内
 shim 就绪，起会话产文件统计实底率）；遵从率达标再谈呈现。
+
+## D-7：nairong 热修——"bash 零输出退出"两轮诊断反转与传输层加固（T-hotfix，2026-09-01）
+
+**症状（nairong 设备，v2.1.8）**：bash 标签只有前端欢迎卡可见，
+会话零 PTY 输出，稍后 `[Session exited: process_exit, code 1]`
+（用户初报 exit 0，截图纠正为 1）。镜像 1.45GB（本机 2.23GB）。
+
+**第一轮（fit 假说，HOTFIX1，证伪）**：误判为 #28 fit 塌缩家族——
+但用户实测装包无效且自诊断浮层未触发（浮层只在网格振荡时弹出，
+没弹 = 渲染层从未收到字节）。教训：欢迎卡是前端 writeWelcomeCard
+写入 xterm 的，它能显示恰恰证明渲染/字体/适配全正常。
+
+**第二轮（排除法定位）**：CLI 所有有序失败路径最终都会往 stdout 打
+`Error: ...` 或 `session ... exit_code=1`（print_session_text）——截
+图中没有 → aisc.exe 带未捕获异常裸死（Python traceback → 退出码
+1）→ traceback 打到 stderr，而 Rust 侧 spawn_pipe_session 把 CLI
+stderr `Stdio::null()` 黑洞了 → 零可见输出。open_interactive 只捕
+`APIError`，requests 层 `ReadTimeout/ConnectionError`（npipe 抖动，
+非 DockerException 子类）直接穿透炸掉——与 #59（resolver
+IncompleteRead 裸崩）同类病。已排除：镜像完整（1.45GB 差值 =
+`npm install --no-cache` 不留缓存，构建日志 68 步全过）、容器健康
+（entrypoint 全绿）、代理 env（本机带 ALL_PROXY 同链路首字节
+0.04s）、docker 版本一致（双方 29.7.2）。
+
+**HOTFIX2 修复（三层）**：
+1. `docker_.py`/`docker_gateway.py` open_interactive：exec_create/
+   exec_start/from_env 捕获扩到 `requests.RequestException`+`OSError`
+   → orderly ProcessResult；exec_inspect 轮询容忍 ≤2 次连续瞬时失败
+   （每 200ms 一发的 npipe 调用不再一抖就杀健康会话），第 3 次才
+   orderly 收场
+2. `commands/session.py`：`data["error"]` 透传 proc.stderr 真因（原来
+   无脑 "docker command not found"），报错文本进终端
+3. `pty.rs`：stderr 改 piped 并以 Output 事件流入终端（对齐真实
+   `docker exec -it` 的 stderr 交错）；`session.rs` 观察者在会话终态
+   落 `session_exit` 事件到 app 日志（原先 spawn 旁路 run_control，
+   整条会话生命周期零日志痕迹）
+测试：transport-failure 单测 6 条（两实现对称）+ stderr 流入单测 +
+真实 stderr 文本断言；全量 pytest 1067 绿 / cargo 全绿。
+
+**伴生发现**：nairong 镜像是 resolver 失败后**无钉回退**构建（构建日志
+#56 build-arg 为空走了手动 v5.9.0 分支）——S8b 回退链按设计工作，但
+"构建完成"未提示降级，后续考虑在 build 事件里标出。另：其首日构建
+直连 docker.1ms.run 拉基础镜像 ~10min（无代理直连极慢），网络环境
+恶劣是这台设备的底色（也是 #59/#61 两类传输层 bug 都先在他机器上
+现形的原因）。
