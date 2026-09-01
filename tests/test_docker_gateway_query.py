@@ -569,6 +569,69 @@ class RealExecutorTransportTests(unittest.TestCase):
         self.assertEqual(r.exit_code, -1)
         self.assertIn("exec start", r.stderr)
 
+    def test_client_from_env_survives_corrupted_context_meta(self):
+        """2.1.9 hotfix r3 (#61, user VM repro): docker.from_env() on zh-CN
+        Windows raises a PLAIN Exception (GBK UnicodeDecodeError from the
+        docker CLI context meta.json, "corrupted meta file"). The safe
+        factory must fall back to the platform DEFAULT endpoint — an
+        explicit base_url never reads meta.json."""
+        import os
+        from unittest import mock
+
+        import docker as _docker
+
+        made = {}
+
+        def fake_client(**kwargs):
+            made.update(kwargs)
+            return object()
+
+        with mock.patch.object(_docker, "from_env",
+                               side_effect=Exception("corrupted meta file")):
+            with mock.patch.object(_docker, "DockerClient", side_effect=fake_client):
+                from aisc.adapters.docker_ import RealDockerExecutor
+                client = RealDockerExecutor._client_from_env_safe()
+
+        self.assertIsNotNone(client)
+        expected = ("npipe:////./pipe/docker_engine"
+                    if os.name == "nt" else "unix:///var/run/docker.sock")
+        self.assertEqual(made.get("base_url"), expected)
+
+    def test_gateway_default_client_survives_corrupted_context_meta(self):
+        import os
+        from unittest import mock
+
+        import docker as _docker
+
+        made = {}
+
+        def fake_client(**kwargs):
+            made.update(kwargs)
+            return object()
+
+        with mock.patch.object(_docker, "from_env",
+                               side_effect=Exception("corrupted meta file")):
+            with mock.patch.object(_docker, "DockerClient", side_effect=fake_client):
+                from aisc.adapters.docker_gateway import _default_client
+                client = _default_client()
+
+        self.assertIsNotNone(client)
+        expected = ("npipe:////./pipe/docker_engine"
+                    if os.name == "nt" else "unix:///var/run/docker.sock")
+        self.assertEqual(made.get("base_url"), expected)
+
+    def test_gateway_default_factory_field_is_callable_and_lazy(self):
+        """The dataclass default must be the FUNCTION (lazy, callable), not
+        from_env()'s result — the old default_factory=lambda: _default_client()
+        eagerly constructed a client at SdkGateway() time (a zh-CN GBK
+        landmine) and left a non-callable in the field."""
+        from aisc.adapters import docker_gateway as gw
+
+        self.assertTrue(callable(gw.SdkGateway._client_factory))
+        # Constructing bare must not touch docker.from_env.
+        with mock.patch("docker.from_env", side_effect=AssertionError("eager call")):
+            gw.SdkGateway()
+
 
 if __name__ == "__main__":
     unittest.main()

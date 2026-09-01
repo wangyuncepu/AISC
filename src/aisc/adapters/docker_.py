@@ -462,6 +462,26 @@ class RealDockerExecutor:
     # open_interactive (G-02 resize chain)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _client_from_env_safe():
+        """2.1.9 hotfix r3 (nairong #61, user VM repro): ``docker.from_env()``
+        with DOCKER_HOST unset loads the docker CLI context metadata, and
+        docker-py 7.x opens meta.json WITHOUT an encoding — on zh-CN Windows
+        that decodes as GBK while Docker Desktop (Chinese-language installs)
+        writes UTF-8 bytes into it, raising a bare UnicodeDecodeError wrapped
+        in a plain Exception ("corrupted meta file"). Not a DockerException,
+        so it escaped as a traceback → exit 1, zero output. Fall back to the
+        platform DEFAULT endpoint: an explicit base_url never reads
+        meta.json, skipping context resolution entirely."""
+        import docker  # lazy: every other path stays dependency-free
+
+        try:
+            return docker.from_env()
+        except Exception:  # noqa: BLE001 — context meta unreadable
+            if os.name == "nt":
+                return docker.DockerClient(base_url="npipe:////./pipe/docker_engine")
+            return docker.DockerClient(base_url="unix:///var/run/docker.sock")
+
     def open_interactive(
         self,
         container: str,
@@ -496,7 +516,7 @@ class RealDockerExecutor:
             )
 
         try:
-            client = docker.from_env()
+            client = self._client_from_env_safe()
         except (docker.errors.DockerException, requests.RequestException, OSError) as exc:
             return _transport_failure("docker daemon unreachable", exc)
         try:

@@ -32,7 +32,7 @@ import sys
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, List, Optional, Protocol, runtime_checkable
 
 from aisc.adapters.docker_ import _poll_resize_step
@@ -161,8 +161,22 @@ def _elapsed(start: float) -> int:
 
 
 def _default_client():
+    """2.1.9 hotfix r3 (#61): docker.from_env() with DOCKER_HOST unset reads
+    the docker CLI context meta.json WITHOUT an encoding — on zh-CN Windows
+    that GBK-decodes Docker Desktop's UTF-8 context file and raises a plain
+    Exception ("corrupted meta file"), not a DockerException. Fall back to
+    the platform DEFAULT endpoint (explicit base_url never reads meta.json).
+    Mirror of RealDockerExecutor._client_from_env_safe."""
     import docker
-    return docker.from_env()
+
+    try:
+        return docker.from_env()
+    except Exception:  # noqa: BLE001 — context meta unreadable
+        import os as _os
+
+        if _os.name == "nt":
+            return docker.DockerClient(base_url="npipe:////./pipe/docker_engine")
+        return docker.DockerClient(base_url="unix:///var/run/docker.sock")
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +193,11 @@ class SdkGateway:
 
     client: object = None  # docker.DockerClient (duck-typed to keep SDK optional)
     timeout: float = 10.0
-    _client_factory: Callable[[], object] = field(default_factory=lambda: _default_client())
+    # 2.1.9 hotfix r3: the default_factory CALLS _default_client() at
+    # construction — eager docker.from_env() (a zh-CN GBK landmine) and a
+    # client instance where _client() expects a callable. A plain function
+    # default keeps the field lazy AND callable.
+    _client_factory: Callable[[], object] = _default_client
 
     @property
     def backend(self) -> str:
