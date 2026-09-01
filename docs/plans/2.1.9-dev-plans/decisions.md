@@ -241,3 +241,13 @@ preset+镜像链+指引）。
 **Backlog（记账未实施）**：CLAUDE_CODE_VERSION=latest 版本漂移（且
 claude-code 2.1.251 要求 node≥22，基底 node:20，EBADENGINE 已现）；
 NODE_IMAGE_DIGEST 未钉；resolver 无钉回退在 UI 无提示（D-7 伴生发现）。
+
+## D-10：F1/F2 新特性立项与方案定稿（2026-09-01，用户七项裁决）
+
+两轮只读探底（工作区身份链 / 容器-宿主网络与 MCP 注入面）+ 产品裁决
+后，设计文档定稿：`f1-f2-design.md`（含触点附录与待决清单）。裁决：
+F1=双向同步（影子目录=真工作区，身份链零改动，mutagen，MIT 可 vendor）；
+F2=宿主 MCP（白名单默认空 + 程序级/只读筛，文本流+文件产物）；顺序
+F2 先。**实施不排期**——用户裁决优化批次优先于新功能，F1/F2 等优化
+议题定案后开工。注意 F2 的 P0 前置实测：WSL2 下容器→宿主 loopback
+通道（--add-host host-gateway）+ proxy 模式 TUN 放行。

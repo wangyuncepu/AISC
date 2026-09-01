@@ -14,7 +14,7 @@
 
 | # | 特性 | 状态 |
 |---|---|---|
-| F1 | **远程 SSH 工作区**：本地镜像 + 异步双向同步（候选 Mutagen，选型对比与六个设计问题已存档于会话记录：认证/忽略规则/冲突策略/首次同步进度/分发/离线语义） | 需求已登记 |
-| F2 | **容器内 Agent 调用宿主工具**：用户设想=宿主跑 MCP 服务（streamable-http），容器内 claude/codex 经 host.docker.internal 以 MCP 客户端调用宿主 exe 取回结果。可行性初判：成立，但**安全模型是主战场**（沙箱逃逸按设计发生，需工具白名单/无任意 exec/结果与文件回流路径）。对应 docs/todo.md 既有"调研：容器调用宿主工具"项 | 待讨论 |
+| F1 | **远程 SSH 工作区**：双向同步（mutagen），影子目录=真工作区（身份链零改动）。方案已定稿 → [f1-f2-design.md](f1-f2-design.md)（D-10） | 方案定稿，等优化批次后排期 |
+| F2 | **容器内 Agent 调用宿主工具**：宿主 MCP 服务（streamable-http，白名单+只读筛），容器经 host.docker.internal 调用。方案已定稿 → [f1-f2-design.md](f1-f2-design.md)（D-10，含 P0 通道实测项） | 方案定稿，等优化批次后排期 |
 
 规约：VERSION 冻结前保持 2.1.8.dev0；container/ 改动后必跑 vendor-refresh；每 T 项独立提交 + 四条 CI 全绿进下一项；周期全部完成后 plans 归档。
