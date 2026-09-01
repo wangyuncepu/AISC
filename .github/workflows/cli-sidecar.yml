@@ -62,6 +62,20 @@ jobs:
           ls -la dist/
         if: always()
 
+      # 2.1.9 (D-9 期间两起实证): windows-latest 的 Docker 引擎冷启动与
+      # parity smoke 赛跑——A 轨跑在引擎就绪前、B 轨 19 秒后已通，中间态
+      # 差异即误报（e39d5bd/221b180 两轮同族 flake）。就绪门只挡 Windows：
+      # ubuntu 开机即有 daemon；mac 无 daemon 时双轨确定性一致不受影响。
+      - name: Wait for Docker engine (Windows cold-start guard)
+        shell: bash
+        if: runner.os == 'Windows'
+        run: |
+          for i in $(seq 1 30); do
+            if docker info >/dev/null 2>&1; then echo "docker ready after ${i}0s"; exit 0; fi
+            sleep 10
+          done
+          echo "::warning::docker engine not ready after 300s; parity smoke may compare cold-start states"
+
       # Stage 2 (S2.5, CLI-A05): the pip-installed CLI (editable console
       # script from `pip install -e .`) and the frozen sidecar must agree on
       # the aisc.cli/v1 command matrix. Any difference fails the build. The
