@@ -38,6 +38,7 @@ class _BuildEnv:
     use_cn_mirror: str = "1"
     node_image: str = ""
     node_image_cn: str = ""
+    node_image_mirrors: tuple = ()
 
 
 def _parse_build_env(root: Path) -> _BuildEnv:
@@ -46,7 +47,16 @@ def _parse_build_env(root: Path) -> _BuildEnv:
     use_cn = env.get("USE_CN_MIRROR", "1")
     node_image = env.get("NODE_IMAGE", "")
     node_image_cn = env.get("NODE_IMAGE_CN", "")
-    return _BuildEnv(use_cn_mirror=use_cn, node_image=node_image, node_image_cn=node_image_cn)
+    # T8a: comma-separated registry prefixes for the pre-pull chain.
+    mirrors = tuple(
+        m.strip().rstrip("/")
+        for m in env.get("NODE_IMAGE_MIRRORS", "").split(",")
+        if m.strip()
+    )
+    return _BuildEnv(
+        use_cn_mirror=use_cn, node_image=node_image,
+        node_image_cn=node_image_cn, node_image_mirrors=mirrors,
+    )
 
 
 def _open_build_log() -> Optional[Path]:
@@ -207,6 +217,7 @@ def plan_build(
         no_cache=no_cache,
         pull=pull,
         build_arg_use_cn_mirror=build_env.use_cn_mirror,
+        node_image_mirrors=build_env.node_image_mirrors,
         build_arg_node_image=selected_node_image,
         dry_run=dry_run,
         **cc_kwargs,
@@ -245,6 +256,89 @@ class BuildResult:
 # ---------------------------------------------------------------------------
 # Run the build (orchestration)
 # ---------------------------------------------------------------------------
+
+# T8a (2.1.9 D-9): host-side base-image pre-pull through a mirror chain.
+# Evidence: nairong's first build crawled docker.1ms.run for ~10 minutes and
+# was abandoned — buildkit's FROM has no mirror fallback, no retry, no
+# guidance. aisc build therefore pre-pulls the base itself: local hit →
+# zero docker calls; otherwise walk the chain (selected image first, then
+# NODE_IMAGE_MIRRORS entries), `docker tag` the first success to the bare
+# local name so buildkit hits the local store, and only fail (with guidance)
+# when every mirror failed.
+_PULL_TIMEOUT_S = 600.0
+
+
+def _base_image_candidates(plan: "BuildPlan") -> list:
+    """Pull candidates in priority order: the plan's selected image, then
+    each mirror prefix joined with the bare image name (deduped)."""
+    selected = plan.build_arg_node_image
+    bare = selected.rsplit("/", 1)[-1]
+    seen = {selected}
+    out = [selected]
+    for prefix in plan.node_image_mirrors:
+        ref = f"{str(prefix).rstrip('/')}/{bare}"
+        if ref not in seen:
+            seen.add(ref)
+            out.append(ref)
+    return out
+
+
+def _ensure_base_image(exec_, plan, emitter, streaming: bool) -> str:
+    """Pre-pull the base image through the mirror chain.
+
+    Returns the node image reference the build argv should use (the bare
+    local name once tagged). Raises CliError (exit 4) when every candidate
+    fails — with actionable guidance for mainland-network users.
+    """
+    from aisc.domain.models import ImageInspectStatus
+
+    candidates = _base_image_candidates(plan)
+    bare = candidates[0].rsplit("/", 1)[-1]
+
+    def _say(line: str) -> None:
+        if emitter is not None:
+            emitter.emit("build.output", data={"stream": "stderr", "chunk": line})
+        if streaming and emitter is None:
+            _sys.stderr.write(line)
+            _sys.stderr.flush()
+
+    # Local store hit → buildkit needs no network at all.
+    if exec_.inspect_image(bare).status == ImageInspectStatus.EXISTS:
+        return bare
+
+    for ref in candidates:
+        _say(f"⬇️  基础镜像 try: {ref}\n")
+        proc = exec_.run_captured(["pull", ref], timeout=_PULL_TIMEOUT_S)
+        if proc.exit_code == 0:
+            if ref == bare:
+                return bare
+            # Retag to the bare local name; if tagging fails, build directly
+            # from the pulled (now local) reference instead of failing.
+            if exec_.run_captured(["tag", ref, bare], timeout=30.0).exit_code == 0:
+                return bare
+            return ref
+
+    raise CliError(
+        message=(
+            "基础镜像预拉失败（所有镜像源均不可达）：" + ", ".join(candidates) +
+            "。可依次尝试：① Docker Desktop 设置里配置 registry-mirrors 后重试；"
+            "② 手动 docker pull <任一镜像源>/node:20-slim 成功后重新构建；"
+            "③ 切换到可直连 Docker Hub 的网络。"
+        ),
+        exit_code=4, error_code="AISC_ERR_BUILD_FAILED",
+        data={"base_image_candidates": candidates},
+    )
+
+
+def _rewrite_node_image(argv: list, new_value: str) -> list:
+    """Replace the NODE_IMAGE build-arg value in a docker build argv copy."""
+    out = list(argv)
+    for i, tok in enumerate(out):
+        if tok == "--build-arg" and i + 1 < len(out) and out[i + 1].startswith("NODE_IMAGE="):
+            out[i + 1] = f"NODE_IMAGE={new_value}"
+            break
+    return out
+
 
 def run_build(
     plan: BuildPlan,
@@ -348,8 +442,13 @@ def run_build(
             "step_total": _dockerfile_instruction_count(plan),
         })
 
+    # --- T8a: pre-pull the base image through the mirror chain (CN 网络兜底;
+    # local hit is a zero-IPC no-op) and point the build at the local name ---
+    effective_node_image = _ensure_base_image(exec_, plan, emitter, streaming)
+
     # --- execute docker build ---
-    argv = list(plan.docker_argv)
+    argv = _rewrite_node_image(plan.docker_argv, effective_node_image)
+    result.docker_argv = argv  # error payloads carry the argv that actually ran
 
     if streaming:
         # Text mode: inherit streams for real-time build log

@@ -317,6 +317,10 @@ class BuildPlan:
     pull: bool = False
     build_arg_use_cn_mirror: str = "1"
     build_arg_node_image: str = "node:20-slim"
+    # T8a (2.1.9 D-9): fallback registry prefixes for the host-side pre-pull
+    # chain (versions.env NODE_IMAGE_MIRRORS). Each entry joins the bare
+    # node_image name; the first candidate is always build_arg_node_image.
+    node_image_mirrors: tuple = ()
     dry_run: bool = False
     # Stage 8 (CS-01/CS-02): the resolver-pinned cc-switch release. Empty
     # strings = manual/legacy `docker build` (Dockerfile ARG fallback path,

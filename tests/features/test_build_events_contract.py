@@ -73,8 +73,13 @@ class TestBuildOutputStream(unittest.TestCase):
         events, _ = _run_with_capture(
             lambda: run_build(_plan(), emitter=em, executor=fake, streaming=False))
         outputs = [e for e in events if e["type"] == "build.output"]
-        assert outputs[0]["data"] == {"stream": "stderr", "chunk": "Step 1\n"}
-        assert outputs[1]["data"] == {"stream": "stdout", "chunk": "done\n"}
+        # T8a (2.1.9 D-9): the pre-pull mirror-chain lines ride the SAME
+        # build.output stream (stderr) BEFORE docker output — the fake
+        # executor reports the base image missing, so one try line prepends.
+        assert outputs[0]["data"]["stream"] == "stderr"
+        assert "基础镜像 try" in outputs[0]["data"]["chunk"]
+        assert outputs[1]["data"] == {"stream": "stderr", "chunk": "Step 1\n"}
+        assert outputs[2]["data"] == {"stream": "stdout", "chunk": "done\n"}
 
     def test_failure_raises_after_output(self):
         fake = self._fake([("stderr", "error detail\n")], 1)
