@@ -202,3 +202,42 @@ meta.json 纯 ASCII，GBK 恰好能解）；本机同链路实验"正常"是因�
 `tests/test_tutorial_zsh.py` 把 zshrc heredoc 与 `_TUTORIAL` 钉成字节级
 相等（双处文本永不静默漂移）；bash env 注入保留（旧镜像 bash 回退路径
 仍依赖）。已知边界：tmux 子 shell 的 bash 无 help（未报障，未处理）。
+
+## D-9：镜像构建 CN 网络韧性硬化（T8，2026-09-01，用户裁决范围）
+
+**审计驱动**：nairong 构建实锤（首日基础镜像在 docker.1ms.run 爬 10 分钟
+放弃、resolver 失败静默无钉降级）。对 Dockerfile 构建期全部网络动作
+过堂，风险定级：基础镜像 pull（单镜像零兜底）**高**、pip 升级
+（pypi 直连无镜像无重试硬失败）**高**、npm 安装（npmmirror 单源）**
+中-高**、yazi（无 preset 逃生）**中**、apt ×2（无重试）**低-中**；
+mihomo/geodata/cc-switch/宿主 resolver 已是完备范式（金标准：mihomo 的
+preset+镜像链+指引）。
+
+**实施**（用户裁决：预拉链做、npm 重试+离线逃生都做）：
+- **T8a** `build.py` 预拉链：本地命中零开销跳过；否则按
+  `NODE_IMAGE_MIRRORS`（versions.env，1ms.run→daocloud→dockerproxy）链式
+  `docker pull`（600s/个）→ 首胜 `docker tag` 本地名 → build argv 改指
+  本地名（buildkit 零网命中）；全链失败 exit 4 + 三条指引。try 行走
+  build.output 事件（UI 构建日志可见）
+- **T8b** pip 升级：CN 走清华源 + 失败软放过（venv 自带 pip 够用）
+- **T8c** npm：downloads/ 预置→**file: 清单离线安装**（`scripts/
+  stage-npm.sh` 预下载）；否则外层重试 ×2 + `--fetch-retries=5`（顺手
+  删掉一直非法的 `--no-cache` flag——npm 常年 warning "invalid config
+  cache=false"）。**离线路线三坑实录**：① 原生二进制在平台伴生包里
+  （claude 主包 27KB 纯 JS，linux-x64 伴生 95MB）；② codex 平台包是
+  **npm alias**（`npm:@openai/codex@0.152.0-linux-x64`，平台包名不存在
+  于 registry）——文件直装同名冲突，`npm cache add`+`--offline` 又缺
+  packument（ENOTCACHED），终局 = /opt/aisc/npm 写 file: 依赖清单、
+  平台包按**别名键**声明、`npm install --offline` + symlink bins（
+  node:20-slim 实测零 registry 通过，claude -p 跑到模型校验层证明原生
+  二进制真实落位）；③ tgz **不入 git/安装包**（.gitignore，单架构
+  ~215MB）——escape hatch 按需 stage，默认单架构（--all-arches 可选），
+  mihomo/geodata 小预置继续 tracked。**清理顺序重构**：geodata 段原
+  `rm -rf /tmp/dl` 会删掉未消费的预置包——各段改为只删自己的文件，
+  yazi 段最终清场
+- **T8d** apt ×2 处外层 3 次重试（if 条件语境豁免 set -e）
+- **T8e** yazi 对齐 mihomo preset 模式 + 承接 /tmp/dl 终清
+
+**Backlog（记账未实施）**：CLAUDE_CODE_VERSION=latest 版本漂移（且
+claude-code 2.1.251 要求 node≥22，基底 node:20，EBADENGINE 已现）；
+NODE_IMAGE_DIGEST 未钉；resolver 无钉回退在 UI 无提示（D-7 伴生发现）。

@@ -76,3 +76,9 @@ workbench/src-tauri/binaries/
 # CI-staged AISC CLI bundle (workbench/src-tauri/nsis/bundle/aisc-bundle)
 # staged by nsis-installer.yml before `tauri build`; generated at build time
 workbench/src-tauri/nsis/bundle/
+
+# 2.1.9 D-9 (T8c): npm 离线逃生预置包——本机按需 stage（scripts/stage-npm.sh），
+# 不入 git/安装包（claude-code 平台伴生包 ~95MB/架构，codex ~123MB）。
+# mihomo/geodata 预置继续 tracked（小且版本钉死）。
+container/downloads/*.tgz
+container/downloads/yazi-*.zip

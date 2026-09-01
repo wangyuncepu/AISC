@@ -62,10 +62,20 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
 #                        2026-08-30 PTY 装置实证；Debian slim 默认不带）
 #   procps             — ps/pgrep/pkill：容器内排障必需（entrypoint 进程判活
 #                        曾因缺 pgrep 误报，2026-08-19 实测）
-RUN apt-get update && apt-get install -y git curl tmux iptables iproute2 ca-certificates \
-    neovim ripgrep unzip procps file \
-    zsh zsh-autosuggestions zsh-syntax-highlighting \
-    && rm -rf /var/lib/apt/lists/*
+# T8d (2.1.9 D-9): apt 无重试 → 外层 3 次重试包住（瞬时抖动兜底；镜像源
+#   本身已由 USE_CN_MIRROR 选清华）。if 条件语境天然豁免 set -e。
+RUN set -eux; \
+    apt_ok=0; \
+    for apt_try in 1 2 3; do \
+        if apt-get update && apt-get install -y git curl tmux iptables iproute2 ca-certificates \
+                neovim ripgrep unzip procps file \
+                zsh zsh-autosuggestions zsh-syntax-highlighting; then \
+            apt_ok=1; break; \
+        fi; \
+        echo "⚠️  apt 第 ${apt_try} 次失败，重试..."; sleep 3; \
+    done; \
+    [ "$apt_ok" = "1" ] || { echo "❌ apt 安装失败（连续 3 次；可检查网络，或 --build-arg USE_CN_MIRROR=0 切官方源重试）"; exit 1; }; \
+    rm -rf /var/lib/apt/lists/*
 
 # ==========================================
 # 运行身份
@@ -128,8 +138,9 @@ RUN set -eux; \
             done; \
             [ "$ok" = "1" ] || echo "⚠️  geodata $f 下载失败（mihomo 仍可启动，GEO 规则可能受限）"; \
         fi; \
-    done; \
-    rm -rf /tmp/dl
+    done
+    # T8c (2.1.9 D-9): 这里原来的 rm -rf /tmp/dl 会删掉尚未消费的 npm/yazi
+    #   预置包——各段改为只删自己消费的文件，最终清场挪到 yazi 段。
 
 # ==========================================
 # 容器内 UTF-8 locale：解决 ls / 中文文件名八进制转义乱码 (no.5)
@@ -139,13 +150,46 @@ ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
 # 替换 NPM 源（按 USE_CN_MIRROR）并全局安装 Claude Code 和 Codex CLI
-# --no-cache + 版本校验：防止镜像源返回损坏 tarball 导致装出的二进制 segfault
-RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
+# 版本校验：防止镜像源返回损坏 tarball 导致装出的二进制 segfault
+# T8c (2.1.9 D-9): npmmirror 单源无兜底 → ① downloads/ 预置 tgz 离线安装
+#   （scripts/stage-npm.sh 预下载主包+linux 伴生包——原生二进制在伴生包里，
+#   codex 平台包还是 npm alias，file: 清单按别名键装才能全离线；实测
+#   node:20-slim + file: 清单零 registry 通过）；② 外层重试 ×2 + 显式
+#   --fetch-retries（npm 内建默认仅 2 次且仅限单请求）。
+RUN set -eux; \
+    if [ "$USE_CN_MIRROR" = "1" ]; then \
         npm config set registry https://registry.npmmirror.com/ ; echo "npm: 淘宝镜像" ; \
-    else echo "npm: 官方源" ; fi \
-    && npm install -g --no-cache @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    && npm install -g --no-cache @openai/codex@${CODEX_VERSION} \
-    && claude --version \
+    else echo "npm: 官方源" ; fi ; \
+    npm_arch=""; \
+    case "$(dpkg --print-architecture)" in amd64) npm_arch=x64;; arm64|aarch64) npm_arch=arm64;; *) npm_arch=x64;; esac; \
+    claude_tgz="$(ls /tmp/dl/claude-code-[0-9]*.tgz 2>/dev/null | head -1 || true)"; \
+    claude_comp="$(ls /tmp/dl/claude-code-linux-${npm_arch}-*.tgz 2>/dev/null | head -1 || true)"; \
+    codex_tgz="$(ls /tmp/dl/codex-[0-9]*.tgz 2>/dev/null | head -1 || true)"; \
+    codex_comp="$(ls /tmp/dl/codex-linux-${npm_arch}-*.tgz 2>/dev/null | head -1 || true)"; \
+    if [ -n "$claude_tgz" ] && [ -n "$claude_comp" ] && [ -n "$codex_tgz" ] && [ -n "$codex_comp" ]; then \
+        echo "📦 使用本地预置 npm 包: $(basename "$claude_tgz") + $(basename "$claude_comp") + $(basename "$codex_tgz") + $(basename "$codex_comp")"; \
+        mkdir -p /opt/aisc/npm && cd /opt/aisc/npm; \
+        printf '{"name":"aisc-offline-npm","private":true,"dependencies":{"@anthropic-ai/claude-code":"file:%s","@anthropic-ai/claude-code-linux-%s":"file:%s","@openai/codex":"file:%s","@openai/codex-linux-%s":"file:%s"}}' \
+            "$claude_tgz" "$npm_arch" "$claude_comp" "$codex_tgz" "$npm_arch" "$codex_comp" \
+            > package.json; \
+        npm install --offline --no-audit --no-fund --loglevel=warn; \
+        ln -sf /opt/aisc/npm/node_modules/.bin/claude /usr/local/bin/claude; \
+        ln -sf /opt/aisc/npm/node_modules/.bin/codex /usr/local/bin/codex; \
+        rm -f "$claude_tgz" "$claude_comp" "$codex_tgz" "$codex_comp"; \
+        cd /; \
+    else \
+        npm_ok=0; \
+        for npm_try in 1 2; do \
+            if npm install -g --fetch-retries=5 --fetch-retry-mintimeout=10000 \
+                    @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+                    @openai/codex@${CODEX_VERSION}; then \
+                npm_ok=1; break; \
+            fi; \
+            echo "⚠️  npm 安装第 ${npm_try} 次失败，重试..."; sleep 3; \
+        done; \
+        [ "$npm_ok" = "1" ] || { echo "❌ npm 安装失败（可运行 bash scripts/stage-npm.sh 预下载离线包到 container/downloads/ 后重建，或检查 npmmirror 可达性）"; exit 1; }; \
+    fi; \
+    claude --version \
     && codex --version
 
 # ==========================================
@@ -317,9 +361,17 @@ RUN sed -i 's/\r$//' \
 #   Claude Code 可直接用 python/pip。放靠后，避免使前面 npm/claude 重型层缓存失效。
 #   Debian 12 PEP 668 限制系统 pip install → 建默认 venv并挂 PATH 头。
 # ==========================================
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-pip python3-venv python-is-python3 \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    apt_ok=0; \
+    for apt_try in 1 2 3; do \
+        if apt-get update && apt-get install -y --no-install-recommends \
+                python3 python3-pip python3-venv python-is-python3; then \
+            apt_ok=1; break; \
+        fi; \
+        echo "⚠️  apt(python) 第 ${apt_try} 次失败，重试..."; sleep 3; \
+    done; \
+    [ "$apt_ok" = "1" ] || { echo "❌ apt(python) 安装失败（连续 3 次）"; exit 1; }; \
+    rm -rf /var/lib/apt/lists/*
 
 # svc-1 可执行性冒烟：web gateway/注册三件套/共享注册库在此 py_compile
 #   （语法层校验；运行时行为由宿主测试与 Docker 集成测试覆盖）。
@@ -348,8 +400,17 @@ RUN git config --system core.autocrlf input
 # 默认 Python venv（root 可写，pip install 不受 PEP 668 限制）
 #   python/pip → venv（PATH 优先）；pip install 直达，无需 --break-system-packages。
 #   venv 在镜像内（--rm 容器每次重启重置为出厂；如需持久化包，加 requirements.txt + 启动安装）。
+# T8b (2.1.9 D-9): pip 升级曾直连 pypi.org——CN 网络下无镜像无重试的硬失败
+#   点。现 CN 走清华源；升级失败软放过（venv 自带 pip 足够，不值得毁构建）。
 RUN python3 -m venv /opt/aisc/venv \
-    && /opt/aisc/venv/bin/python -m pip install --upgrade pip --quiet
+    && if [ "$USE_CN_MIRROR" = "1" ]; then \
+           /opt/aisc/venv/bin/python -m pip install --upgrade pip --quiet \
+               -i https://pypi.tuna.tsinghua.edu.cn/simple \
+               || echo "⚠️  pip 升级失败，沿用内置版本"; \
+       else \
+           /opt/aisc/venv/bin/python -m pip install --upgrade pip --quiet \
+               || echo "⚠️  pip 升级失败，沿用内置版本"; \
+       fi
 ENV PATH="/opt/aisc/venv/bin:${PATH}"
 
 # ==========================================
@@ -400,24 +461,33 @@ RUN set -eux; \
 
 # ==========================================
 # v2.1.8 T2: yazi 文件管理器（静态二进制，GitHub release，CN mirror fallback）
+# T8e (2.1.9 D-9): 对齐 mihomo 的 downloads/ 预置模式；本段是 /tmp/dl 的最后
+#   消费者，负责最终清场（geodata 段不再整删，见 T8c 注）。
 # ==========================================
 ARG YAZI_VERSION=25.2.26
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in amd64) yazi_arch=x86_64-unknown-linux-musl;; arm64|aarch64) yazi_arch=aarch64-unknown-linux-musl;; *) echo "unsupported arch $arch for yazi"; exit 1 ;; esac; \
-    yazi_base="https://github.com/sxyazi/yazi/releases/download/v${YAZI_VERSION}/yazi-${yazi_arch}.zip"; \
-    if [ "$USE_CN_MIRROR" = "1" ]; then yazi_mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ "; else yazi_mirrors=""; fi; \
-    ok=0; \
-    for m in $yazi_mirrors ""; do \
-        u="${m}${yazi_base}"; echo "⬇️  yazi try: $u"; \
-        if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
-                --connect-timeout 8 --max-time 60 "$u" -o /tmp/yazi.zip; then ok=1; break; fi; \
-    done; \
-    [ "$ok" = "1" ] || { echo "❌ yazi 下载失败"; exit 1; }; \
+    yazi_preset="$(ls /tmp/dl/yazi-*.zip 2>/dev/null | head -1 || true)"; \
+    if [ -n "$yazi_preset" ]; then \
+        echo "📦 使用本地预置 yazi: $(basename "$yazi_preset")（期望 arch: ${yazi_arch}）"; \
+        cp "$yazi_preset" /tmp/yazi.zip; \
+        rm -f "$yazi_preset"; \
+    else \
+        yazi_base="https://github.com/sxyazi/yazi/releases/download/v${YAZI_VERSION}/yazi-${yazi_arch}.zip"; \
+        if [ "$USE_CN_MIRROR" = "1" ]; then yazi_mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ "; else yazi_mirrors=""; fi; \
+        ok=0; \
+        for m in $yazi_mirrors ""; do \
+            u="${m}${yazi_base}"; echo "⬇️  yazi try: $u"; \
+            if curl -fSL --http1.1 --retry 2 --retry-delay 1 --retry-all-errors \
+                    --connect-timeout 8 --max-time 60 "$u" -o /tmp/yazi.zip; then ok=1; break; fi; \
+        done; \
+        [ "$ok" = "1" ] || { echo "❌ yazi 下载失败（可 bash scripts/stage-npm.sh 预下载 yazi 到 downloads/ 后重建，或 --build-arg GH_PROXY=<镜像前缀>）"; exit 1; }; \
+    fi; \
     unzip -o /tmp/yazi.zip -d /tmp/yazi-extract; \
     mv "/tmp/yazi-extract/yazi-${yazi_arch}/yazi" /usr/local/bin/yazi; \
     chmod +x /usr/local/bin/yazi; \
-    rm -rf /tmp/yazi.zip /tmp/yazi-extract; \
+    rm -rf /tmp/yazi.zip /tmp/yazi-extract /tmp/dl; \
     /usr/local/bin/yazi --version
 
 # （v2.1.8 曾内置 ble.sh；2.1.9 D-1 修订移除——attach 冻结 Workbench PTY 链，
