@@ -13,6 +13,12 @@ the tutorial; ``help foo`` delegates to the shell builtin so nothing else
 changes (A-21765). Non-interactive shells never see any of this — the
 injection rides ONLY the interactive session-open path.
 
+2.1.9: the interactive shell is now **zsh** (2.1.8 T2/D-4), and zsh has no
+env-var function import — ``help`` is defined directly in the managed
+``container/aisc-zshrc`` (§7). The text SSOT stays HERE; the zshrc copy is
+pinned byte-for-byte by ``tests/test_tutorial_zsh.py``. The bash env path
+above still serves the bash fallback (older images without the zsh suite).
+
 The tutorial text lives here (content SSOT); the Workbench UI cards carry
 their own short i18n summaries.
 """

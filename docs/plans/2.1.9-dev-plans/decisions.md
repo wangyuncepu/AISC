@@ -188,3 +188,17 @@ meta.json 纯 ASCII，GBK 恰好能解）；本机同链路实验"正常"是因�
 直连 docker.1ms.run 拉基础镜像 ~10min（无代理直连极慢），网络环境
 恶劣是这台设备的底色（也是 #59/#61 两类传输层 bug 都先在他机器上
 现形的原因）。
+
+## D-8：zsh 下 help 教学引导缺失（T7，2026-09-01，用户报障）
+
+**根因**：教学 `help` 靠 v2.1.7 S6 的 `BASH_FUNC_help%%` 环境变量注入
+（session.py → docker exec env），bash 启动时重新导入为函数；zsh 没有
+环境变量导入函数的机制，2.1.8 D-4 把交互 shell 换成 zsh 后没人补这条
+链——`help` 在 zsh 下"无此命令"。
+
+**修复**：`container/aisc-zshrc` §7 直接定义 `help()`（heredoc 教学文本；
+`help <cmd>` 委托 man——zsh 无 help 内建）。托管 rc 是产品自有面，不违
+反 A-21766 的"不碰用户 profile"精神。**SSOT 仍在 tutorial.py**，
+`tests/test_tutorial_zsh.py` 把 zshrc heredoc 与 `_TUTORIAL` 钉成字节级
+相等（双处文本永不静默漂移）；bash env 注入保留（旧镜像 bash 回退路径
+仍依赖）。已知边界：tmux 子 shell 的 bash 无 help（未报障，未处理）。

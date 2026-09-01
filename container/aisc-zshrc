@@ -65,3 +65,51 @@ if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
     add-zsh-hook preexec _aisc_preexec
     add-zsh-hook precmd _aisc_precmd_log
 fi
+
+# 7. Interactive tutorial `help` (2.1.9: parity with the bash path — bash
+#    imports BASH_FUNC_help%% from the session env, but zsh has NO env
+#    function import, so after the D-4 zsh switch `help` went missing here).
+#    Text SSOT: src/aisc/cli/tutorial.py::_TUTORIAL — pinned byte-for-byte
+#    by tests/test_tutorial_zsh.py; edit BOTH or neither. `help <cmd>`
+#    delegates to man (zsh has no help builtin).
+help() {
+    if (( $# == 0 )); then
+        cat <<'__AISC_TUTORIAL_EOF__'
+╔══════════════ AISC Workbench 教学 ══════════════
+║ 三、五分钟核心用法
+║
+║ [Claude Code]
+║   claude              开始交互对话
+║   claude -c           继续最近一次会话
+║   claude -p "问题"     单次提问，直接返回答案
+║   claude --resume     挑选历史会话恢复
+║   会话内: /help 命令列表 · /clear 清空 · /compact 压缩上下文
+║
+║ [Codex]
+║   codex               开始交互对话
+║   codex e "任务"      单次执行任务
+║   会话内: /help · /new 新会话 · Ctrl+C 中断
+║
+║ [Workbench]
+║   左侧栏  文件/变更/服务 三个页签（顶部可搜索）
+║   右上 ⓘ 运行时状态抽屉 · Ctrl+, 设置 · + 号新建页
+║   关闭工作区 = 自动清理临时容器（数据不丢）
+║
+║ 上手练习（复制即用）：
+║   1. claude --version    查看已安装的 Claude Code 版本
+║   2. codex --version     查看 Codex 版本
+║   3. 在 + ▾ 菜单打开 claude 页签，输入 /help 浏览命令
+║   4. 左侧切到「变更」页签，点分组标题收拢/展开
+║   配置好 Provider 后可试: claude -p "用一句话介绍自己"（调用 API，产生用量）
+║
+║ 再次查看本教学: help
+╚═══════════════════════════════════════════════
+__AISC_TUTORIAL_EOF__
+    else
+        if command -v man >/dev/null 2>&1; then
+            man "$@"
+        else
+            print -u2 "help: 本镜像未装 man；试试 ${1} --help，或直接输入 help 查看教学"
+        fi
+    fi
+}
