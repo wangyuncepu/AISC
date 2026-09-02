@@ -77,6 +77,13 @@
   aisc.log 单文件 `cli_exit` 555 / `op` 540（轮询链海量 spawn）。待用户裁决：
   #5a bash 内唤起 agent 的 scrollback 混看（语义/产品题）、#8 变更页"⇄ 移动"
   类型标签去留。
+- **两项用户裁决落地（`49dc539`）**：**#8 误报根治**（用户指认该文件实为 claude
+  新生成）——agent 原子写 = 写临时文件 → rename 成正式名，notify 的 From(temp)
+  半边被 is_temp_file 过滤吞掉、孤儿 To 被判 renamed → 新文件误标"⇄ 移动"；
+  TempRenameTracker 让 1s 窗内配对的 To 判 created（真 mv 语义不变，watcher
+  +3 单测）。**#5a 滚动回看指示器**（裁决：不唤起清屏）——视口位于活尾部之上
+  时左上角 chip"已上滚 N 行（正在查看历史输出）"+ 一键回到底部，挂
+  .xterm-viewport 原生 scroll 事件。本地门：vitest 421 / vue-tsc / cargo 265。
 
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
