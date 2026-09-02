@@ -161,7 +161,9 @@ else
             mkdir -p "$PROJECT_CODEX_DIR/skills"
             cp -ru "$FACTORY_CODEX_DIR/skills/." "$PROJECT_CODEX_DIR/skills/" 2>/dev/null || true
         fi
-        cp "$FV_IMG" "$FV_PRJ" 2>/dev/null || true
+        # 直接重定向写（cp 的覆盖语义在启动早期的挂载窗口上曾静默失败，
+        # 导致 FV 不前进而每次启动重跑同步；幂等无害但白费 4s）。
+        cat "$FV_IMG" > "$FV_PRJ" 2>/dev/null || true
         echo "    ✅ 出厂 skills/plugins/commands 已增量同步（用户自建文件保持不变）。"
     fi
 
