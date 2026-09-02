@@ -25,7 +25,26 @@ const store = useRuntimeStore();
 // Layer contract (F-A01): all ipc fact commands live in the store.
 const ui = useCcSwitchUiStore();
 // storeToRefs keeps the reactive link (plain destructuring would break it).
-const { agent, providers, loading, busy, error } = storeToRefs(ui);
+const { agent, providers, loading, busy, busyOp, error } = storeToRefs(ui);
+// O4 (D-11): scoping — mutating ops (add/edit/switch/delete) stay mutually
+// exclusive; `fetch` is a read-only query and no longer freezes the panel.
+const mutating = computed(() => busyOp.value !== "" && busyOp.value !== "fetch");
+// O4: an honest switch progress read-out — the op is one docker exec with no
+// step events, so show a live elapsed counter instead of a fake stepper.
+const switchElapsed = ref(0);
+let switchTimer: number | null = null;
+watch(busyOp, (op) => {
+  if (op === "switch" && switchTimer === null) {
+    switchElapsed.value = 0;
+    switchTimer = window.setInterval(() => (switchElapsed.value += 1), 1000);
+  } else if (op !== "switch" && switchTimer !== null) {
+    window.clearInterval(switchTimer);
+    switchTimer = null;
+  }
+}, { immediate: true });
+onBeforeUnmount(() => {
+  if (switchTimer !== null) window.clearInterval(switchTimer);
+});
 
 async function refresh(): Promise<void> {
   if (!store.runtimeId || !store.workspace) return;
@@ -144,8 +163,18 @@ const modelOptions = computed<string[]>(() => {
 const fetchHint = computed<string | null>(() => {
   if (!editId.value) return null;
   const r = ui.fetchedModels[editId.value];
-  if (!r || r.available) return null;
-  return r.message || t("ccswitch.fetchUnavailable");
+  if (!r) return null;
+  // O4-反馈 #3 (2026-09-02): feedback for BOTH outcomes — a silent success
+  // left the user wondering whether anything happened. The failure message
+  // rides the template's fetchFailed wrapper; success carries its own text.
+  if (!r.available) return r.message || t("ccswitch.fetchUnavailable");
+  return null;
+});
+const fetchDone = computed<string | null>(() => {
+  if (!editId.value) return null;
+  const r = ui.fetchedModels[editId.value];
+  if (!r || !r.available) return null;
+  return t("ccswitch.fetchDone", { n: r.models.length });
 });
 
 function openEdit(p: CcSwitchProvider): void {
@@ -161,7 +190,7 @@ function openEdit(p: CcSwitchProvider): void {
 }
 
 async function fetchModelList(): Promise<void> {
-  if (!editId.value || busy.value) return;
+  if (!editId.value || busyOp.value === "fetch") return;
   await ui.fetchModels(store.workspace, store.runtimeId, editId.value);
 }
 
@@ -200,7 +229,7 @@ const flashId = ref("");
 let rowFlashTimer: number | null = null;
 
 function canActivate(p: CcSwitchProvider): boolean {
-  if (busy.value !== "") return false;
+  if (mutating.value) return false;
   // A current PROXY row offers "cancel proxy" (click → confirm → official
   // direct). Non-current rows need a usable configuration (no base_url =
   // cc-switch's official/direct placeholders — hidden, see visibleProviders).
@@ -277,7 +306,7 @@ onBeforeUnmount(() => {
         >{{ t(`tabbar.menu.${a}`) }}</button>
       </div>
       <span class="spacer" />
-      <button class="primary" :disabled="!hasRuntime || busy !== ''" @click="openAdd">
+      <button class="primary" :disabled="!hasRuntime || mutating" @click="openAdd">
         {{ t("ccswitch.add") }}
       </button>
       <button :disabled="!hasRuntime || loading" @click="refresh">
@@ -287,6 +316,11 @@ onBeforeUnmount(() => {
 
     <p v-if="!hasRuntime" class="banner warn">{{ t("ccswitch.noRuntime") }}</p>
     <p v-if="error" class="banner err" role="alert">{{ error }}</p>
+    <!-- O4 (D-11): live switch progress — honest elapsed counter (the op is
+         a single docker exec; no step events exist to render a stepper). -->
+    <p v-if="busyOp === 'switch'" class="banner" role="status">
+      {{ t("ccswitch.switching", { sec: switchElapsed }) }}
+    </p>
 
     <!-- IDEA-5 (5d): switch feedback — a floating top toast (teleported to
          body so the pane's zoom/scroll never clips it), alongside the row
@@ -333,8 +367,8 @@ onBeforeUnmount(() => {
           {{ p.has_api_key ? p.api_key_mask : t("ccswitch.noKey") }}
         </span>
         <span class="actions" @click.stop>
-          <button :disabled="busy !== ''" @click="openEdit(p)">{{ t("ccswitch.edit") }}</button>
-          <button class="danger" :disabled="busy !== ''" @click="remove(p)">
+          <button :disabled="mutating" @click="openEdit(p)">{{ t("ccswitch.edit") }}</button>
+          <button class="danger" :disabled="mutating" @click="remove(p)">
             {{ t("ccswitch.delete") }}
           </button>
         </span>
@@ -379,10 +413,10 @@ onBeforeUnmount(() => {
       </label>
       <p class="hint">{{ t("ccswitch.secretHint") }}</p>
       <div class="form-actions">
-        <button class="primary" :disabled="busy !== ''" @click="submitAdd">
+        <button class="primary" :disabled="mutating" @click="submitAdd">
           {{ busy.startsWith("add:") ? t("ccswitch.working") : t("ccswitch.add") }}
         </button>
-        <button :disabled="busy !== ''" @click="addOpen = false">{{ t("ccswitch.cancel") }}</button>
+        <button :disabled="mutating" @click="addOpen = false">{{ t("ccswitch.cancel") }}</button>
       </div>
     </div>
 
@@ -399,7 +433,7 @@ onBeforeUnmount(() => {
           <span class="roles-title">{{ t("ccswitch.rolesTitle") }}</span>
           <button
             class="ghost"
-            :disabled="busy !== ''"
+            :disabled="busyOp === 'fetch'"
             :title="t('ccswitch.fetchHint')"
             @click="fetchModelList"
           >{{ busy.startsWith("fetch:") ? t("ccswitch.fetching") : t("ccswitch.fetchModels") }}</button>
@@ -421,6 +455,7 @@ onBeforeUnmount(() => {
           />
         </label>
         <p v-if="fetchHint" class="hint warn">{{ t("ccswitch.fetchFailed", { message: fetchHint }) }}</p>
+        <p v-else-if="fetchDone" class="hint ok" role="status">{{ fetchDone }}</p>
         <p class="hint">{{ t("ccswitch.rolesHint") }}</p>
       </template>
       <label v-else class="field"><span>{{ t("ccswitch.model") }}</span><input v-model="editForm.model" /></label>
@@ -430,10 +465,10 @@ onBeforeUnmount(() => {
       </label>
       <p class="hint">{{ t("ccswitch.editKeyHint") }}</p>
       <div class="form-actions">
-        <button class="primary" :disabled="busy !== ''" @click="submitEdit">
+        <button class="primary" :disabled="mutating" @click="submitEdit">
           {{ busy === `edit:${editId}` ? t("ccswitch.working") : t("ccswitch.save") }}
         </button>
-        <button :disabled="busy !== ''" @click="editId = null">{{ t("ccswitch.cancel") }}</button>
+        <button :disabled="mutating" @click="editId = null">{{ t("ccswitch.cancel") }}</button>
       </div>
     </div>
   </section>
@@ -530,6 +565,7 @@ button.danger { background: var(--error-bg); color: var(--error-fg); }
 }
 .hint { font-size: var(--font-xs); color: var(--text-faint); margin: 0; }
 .hint.warn { color: var(--warn); }
+.hint.ok { color: var(--success); }
 .form-actions { display: flex; gap: 8px; }
 /* [1m] toggle rides inline at the end of the three applicable slots. */
 .field input.one-m { width: auto; flex: 0 0 auto; margin-left: 0; }
