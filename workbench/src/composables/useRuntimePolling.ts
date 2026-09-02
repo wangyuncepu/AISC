@@ -9,11 +9,22 @@
  *   external-stop detection stay fresh at a fraction of the cost.
  *
  * Started/stopped by App.vue watching "any workspace open".
+ *
+ * O6 (opt-batch, D-11): ADAPTIVE BACKOFF ladder on the focused interval.
+ * A slow engine's inspect chain (aisc.exe + docker info/ps/inspect + gateway
+ * probe) runs 1.5-2.8s per call — 40-60% duty cycle at 5s, which is the
+ * user-perceived "docker 负载" on low-end machines. One slow refresh steps
+ * the ladder 5s → 10s → 20s; three consecutive fast (<1s) refreshes step it
+ * back down. A fast machine never leaves 5s (zero behavior change).
  */
 import { useRuntimeStore } from "../stores/runtime";
 import { useWorkspacesStore } from "../stores/workspaces";
+import {
+  focusIntervalMs,
+  initialBackoffState,
+  nextBackoffState,
+} from "./pollBackoff";
 
-const FOCUS_INTERVAL_MS = 5000;
 const BLUR_INTERVAL_MS = 15000;
 const BACKGROUND_INTERVAL_MS = 25000;
 const JITTER = 0.1; // ±10%
@@ -30,15 +41,29 @@ export function useRuntimePolling() {
   let running = false;
   /** Last background poll per workspace id (non-reactive bookkeeping). */
   const lastBackgroundPoll = new Map<string, number>();
+  /** O6: adaptive ladder state (see pollBackoff.ts). */
+  let backoff = initialBackoffState();
+
+  /** Test/diagnostic view of the adaptive state. */
+  function adaptiveRung(): number {
+    return backoff.rung;
+  }
 
   function intervalMs(): number {
     if (document.hidden) return 0; // paused while minimized/hidden
     const focused = document.hasFocus();
-    return jittered(focused ? FOCUS_INTERVAL_MS : BLUR_INTERVAL_MS);
+    const base = focused ? focusIntervalMs(backoff) : BLUR_INTERVAL_MS;
+    return jittered(base);
   }
 
   async function tick(): Promise<void> {
-    await store.refreshRuntime(); // the ACTIVE instance (facade forward)
+    const t0 = performance.now();
+    try {
+      await store.refreshRuntime(); // the ACTIVE instance (facade forward)
+    } finally {
+      // Measure even on failure: a TIMEOUT is the strongest slow signal.
+      backoff = nextBackoffState(backoff, performance.now() - t0);
+    }
     // Background workspaces: only READY ones (launch flows own their state
     // until then), at the downshifted cadence, fire-and-forget (each instance
     // dedupes itself via its own inspectInFlight).
@@ -106,5 +131,5 @@ export function useRuntimePolling() {
     window.removeEventListener("blur", scheduleNext);
   }
 
-  return { start, stop };
+  return { start, stop, adaptiveRung };
 }
