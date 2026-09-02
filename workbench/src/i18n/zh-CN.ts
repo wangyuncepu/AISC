@@ -339,6 +339,8 @@ export const zhCN = {
   "terminal.outputTruncated": "[较早输出已截断：为保持最新输出，已丢弃 {bytes}]",
   "terminal.loadEarlier": "加载更早的输出",
   "terminal.noEarlierOutput": "已到最早输出",
+  "terminal.scrolledBack": "已上滚 {lines} 行（正在查看历史输出）",
+  "terminal.backToBottom": "回到底部",
   // --- search overlay (G-03/A-G03-1) ---
   "terminal.search": "搜索",
   "terminal.searchPlaceholder": "搜索终端…",

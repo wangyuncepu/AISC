@@ -176,6 +176,39 @@ fn change_type_of_path(kind: &EventKind, index: usize, total: usize) -> &'static
     }
 }
 
+/// O9-反馈 #8 (2026-09-02): atomic-write (temp rename) tracker.
+///
+/// Agents (claude/codex) save files via `write temp -> rename over the real
+/// name`. notify reports the rename-From carrying the TEMP path (which
+/// `is_temp_file` filters) and the rename-To carrying the REAL path — the
+/// orphan To classified as "renamed", putting a false "⇄ 移动" badge on a
+/// brand-new file. Remember the filtered temp-From; a rename-To arriving
+/// within the window is a file BIRTH ("created"). A real `mv a b` has its
+/// From NOT filtered (no marker is set), so it stays "renamed".
+#[derive(Debug, Default)]
+struct TempRenameTracker {
+    at: Option<std::time::Instant>,
+}
+
+impl TempRenameTracker {
+    /// A rename-From whose path was dropped by the temp filter just fired.
+    fn note_temp_from(&mut self) {
+        self.at = Some(std::time::Instant::now());
+    }
+
+    /// Reclassify a rename-To: "created" when it completes a filtered
+    /// temp-rename (consumes the marker); otherwise the raw type stands.
+    fn classify_to(&mut self, raw: &'static str) -> &'static str {
+        match self.at {
+            Some(t) if t.elapsed() < std::time::Duration::from_millis(1000) => {
+                self.at = None;
+                "created"
+            }
+            _ => raw,
+        }
+    }
+}
+
 /// Best-effort target kind. We only need this reliably for newly-created
 /// directories so the frontend can list their children immediately.
 fn change_kind_of(kind: &EventKind) -> &'static str {
@@ -247,19 +280,40 @@ impl WorkspaceWatcher {
         let extra_closure = extra_ignore;
         let (raw_tx, raw_rx) = mpsc::sync_channel::<(String, String, String)>(RAW_CHANNEL_CAP);
 
+        // O9-反馈 #8: see TempRenameTracker — temp-From/real-To pairs from
+        // atomic writes must surface as "created", never "renamed".
+        let mut temp_renames = TempRenameTracker::default();
+
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
             let event = match res {
                 Ok(e) => e,
                 Err(_) => return,
             };
+            use notify::event::{EventKind, ModifyKind, RenameMode};
             let change_kind = change_kind_of(&event.kind).to_string();
             let total_paths = event.paths.len();
             for (path_index, path) in event.paths.into_iter().enumerate() {
-                let change_type =
+                let mut change_type =
                     change_type_of_path(&event.kind, path_index, total_paths).to_string();
                 let Some(rel) = relative_of(&ws_closure, &path) else {
                     continue;
                 };
+                // O9-反馈 #8: classify the rename halves BEFORE the ignore
+                // filter drops them — the temp half never reaches the send.
+                let (from_half, to_half) = match &event.kind {
+                    EventKind::Modify(ModifyKind::Name(RenameMode::From)) => (true, false),
+                    EventKind::Modify(ModifyKind::Name(RenameMode::To)) => (false, true),
+                    EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
+                        (path_index == 0, total_paths == 2 && path_index == 1)
+                    }
+                    _ => (false, false),
+                };
+                if from_half && is_temp_file(&rel) {
+                    temp_renames.note_temp_from();
+                }
+                if to_half && change_type == "renamed" {
+                    change_type = temp_renames.classify_to("renamed").to_string();
+                }
                 if is_watch_ignored(&rel, &extra_closure) {
                     continue; // dependency/build noise must not reload the tree
                 }
@@ -531,5 +585,34 @@ mod tests {
         assert_eq!(change_kind_of(&EventKind::Create(CreateKind::Folder)), "dir");
         assert_eq!(change_kind_of(&EventKind::Create(CreateKind::File)), "file");
         assert_eq!(change_kind_of(&EventKind::Modify(ModifyKind::Data(DataChange::Any))), "file");
+    }
+
+    // --- O9-反馈 #8 (2026-09-02): atomic-write temp renames read as created ---
+
+    #[test]
+    fn temp_rename_tracker_turns_paired_to_into_created() {
+        // claude writes `report.md.tmp.1234` then renames it over
+        // `report.md`: the temp From is filtered, the real To is a BIRTH.
+        let mut t = TempRenameTracker::default();
+        t.note_temp_from();
+        assert_eq!(t.classify_to("renamed"), "created");
+        // One marker serves one rename; an unpaired later To stays renamed.
+        assert_eq!(t.classify_to("renamed"), "renamed");
+    }
+
+    #[test]
+    fn temp_rename_tracker_marker_expires() {
+        let mut t = TempRenameTracker::default();
+        t.at = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(5));
+        assert_eq!(t.classify_to("renamed"), "renamed");
+    }
+
+    #[test]
+    fn temp_rename_tracker_without_marker_is_transparent() {
+        // A real `mv a b`: From is NOT temp (never filtered, no marker), so
+        // the To keeps its honest "renamed" classification.
+        let mut t = TempRenameTracker::default();
+        assert_eq!(t.classify_to("renamed"), "renamed");
     }
 }

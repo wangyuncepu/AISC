@@ -882,6 +882,12 @@ onMounted(() => {
   if (container.value) resizeObserver.observe(container.value);
   window.addEventListener("resize", onWindowResize);
 
+  // O9-反馈 #5a: the scrollback position indicator. xterm's viewport is a
+  // real scrollable node (.xterm-viewport); ride its native scroll events.
+  // Absent under the test stub (term.open builds no DOM) — tolerate null.
+  viewportEl = container.value?.querySelector(".xterm-viewport") ?? null;
+  viewportEl?.addEventListener("scroll", onViewportScroll, { passive: true });
+
   // B-05 (fix F1, remount case): a Terminal that mounts onto an
   // ALREADY-running pane (pane restructure remount) gets no state
   // transition, so sync immediately.
@@ -997,6 +1003,26 @@ onMounted(() => {
   );
 });
 
+// 2.1.9 O9-反馈 #5a (2026-09-02, user ruling): an agent TUI launched inside
+// bash leaves the shell's earlier output reachable by scrolling (standard
+// terminal semantics; clearing on launch was ruled OUT). Instead, make the
+// scrollback position VISIBLE: while the viewport sits above the live tail,
+// a corner chip shows how far back the user is reading, with a one-click
+// jump back to the bottom.
+const scrolledBackLines = ref(0);
+let viewportEl: HTMLElement | null = null;
+function onViewportScroll(): void {
+  // viewportY = rows between the viewport top and the live tail; > 0 means
+  // the user is reading history.
+  const b = term?.buffer?.active;
+  scrolledBackLines.value = b ? Math.max(0, b.viewportY) : 0;
+}
+function backToBottom(): void {
+  term?.scrollToBottom();
+  scrolledBackLines.value = 0;
+  term?.focus();
+}
+
 // O2 (opt-batch, D-11): "load earlier output" — the in-memory window dropped
 // the head, but the Rust sidecar spools the FULL raw stream to disk. The
 // corner chip became a button that pages the spool backwards. A loaded page
@@ -1073,6 +1099,9 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  // O9-反馈 #5a: scrollback-position listener rides the xterm viewport node.
+  viewportEl?.removeEventListener("scroll", onViewportScroll);
+  viewportEl = null;
   if (resizeObserver) resizeObserver.disconnect();
   if (resizeTimer !== null) window.clearTimeout(resizeTimer);
   if (healTimer !== null) window.clearInterval(healTimer);
@@ -1109,6 +1138,15 @@ defineExpose({
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
+    <!-- O9-反馈 #5a: scrollback position indicator — while the viewport sits
+         above the live tail (e.g. reading the shell's earlier output behind
+         an agent TUI launched inside bash), show how far back the user is
+         and offer a one-click jump back down. -->
+    <div v-if="scrolledBackLines > 0" class="scrollback-chip" role="status">
+      <span>↑ {{ t("terminal.scrolledBack", { lines: scrolledBackLines }) }}</span>
+      <button @click="backToBottom">{{ t("terminal.backToBottom") }}</button>
+    </div>
+
     <!-- O2 (D-11): the truncation chip became a RECOVERY button — the full
          stream is spooled on disk; click pages earlier output back in. Offered
          only while the session is live (the spool file is deleted with the
@@ -1277,6 +1315,35 @@ defineExpose({
   outline: var(--focus-ring-width) dashed var(--accent);
   outline-offset: calc(-2 * var(--focus-ring-width));
 }
+
+/* O9-反馈 #5a (2026-09-02): scrollback position chip — top-LEFT pill (the
+ * top-right corner is already spoken for: pane × + load-earlier). Muted,
+ * non-modal; the jump button is the only interactive part. */
+.scrollback-chip {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+  opacity: 0.75;
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-full);
+}
+.scrollback-chip button {
+  font-size: var(--font-xs);
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.scrollback-chip button:hover { text-decoration: underline; }
 
 /* S1.3 → O2 (D-11): the persistent truncation chip is now a "load earlier"
  * BUTTON (pages the on-disk spool backwards) — same muted corner pill, but
