@@ -159,6 +159,18 @@
   sidecar 重建（PyInstaller）+ 三处同步（binaries/target debug/bundle）。
   单测：pytest 8 + cargo 5；vitest 426。O7b doctor 阈值检查项记 backlog
   （df 已在卡片可见，阈值提示收益小）。
+- **O8（`f1d95be` + 两补丁）冷启动两刀 + 实证基线修正**：本机实测首启
+  22.6s（含全量复制）/ 二次冷启动 **1.9s**——spec 的 70s 分解（复制 29s/
+  daemon 10s/mihomo 12s）是慢速 bind mount + proxy 首启的极端场景，跳过门
+  与 daemon 就绪轮询本已达标（快照漂移记录，daemon 等待无需改）。两刀：
+  ① factory-version 变化从"仅提示"升级为出厂资产增量同步（cp -ru 只写
+  新增/更新，范围限 skills/plugins/commands；用户自建不删不动；顶层用户态
+  绝不触碰）+ FV 推进写后校验重试；② mihomo 探测 3x(4s+10s)→3x(3s+8s)。
+  **容器内终验 PASS**：假 FV → restart → FV 前进至镜像版 + USER-OWNED 文件
+  保留；二次冷启动 1.86s 无回归。验证插曲：诊断中发现前几轮"FV 写失败"
+  实为验证 exec 早于 entrypoint 写入（grep 匹配旧日志提前放行）——时间线
+  错觉非真故障；diag 铁证 cat 写 rc=0 且读回相等。**至此 opt-batch O1-O9
+  全部完成。**
 
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
