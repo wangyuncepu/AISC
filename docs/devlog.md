@@ -84,6 +84,15 @@
   +3 单测）。**#5a 滚动回看指示器**（裁决：不唤起清屏）——视口位于活尾部之上
   时左上角 chip"已上滚 N 行（正在查看历史输出）"+ 一键回到底部，挂
   .xterm-viewport 原生 scroll 事件。本地门：vitest 421 / vue-tsc / cargo 265。
+- **第二轮手测反馈（`fa66d6a` + `00c67ab`）**：**#1b codex 新文件误标"修改"**——
+  codex 写新文件 = Create → Modify(Data) 事件对，ChangeBatcher 裸 last-write-wins
+  让 modified 覆盖 created；改批次内类型格合并（出生粘性/删除终态/rename 高于写，
+  watcher +2 单测）。**#5a 裁决反转**（指示器实测未生效——xterm 6 的滚动节点
+  已不是 .xterm-viewport，且用户判定不必要）→ 撤 scrollback-chip，改为三
+  wrapper（claude/codex/cc-switch）手动唤起即 clear（含 E3 回滚区）；判据
+  AISC_AGENT——agent 页签直启（session wrapper 注入自身名）不清屏，bash 会话
+  （继承 bash）与外部手动（未注入）清屏。vendor-refresh 重校验 1513 files。
+  **待办：cls 需重建镜像后手测**（wrapper COPY 进镜像层）。
 
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
