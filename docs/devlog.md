@@ -95,6 +95,15 @@
   **镜像重建 + 手测 PASS（2026-09-02）**：cls 生效、codex 新文件正确显示
   ＋新建；期间揪出暂存失同步问题——target/debug/aisc-bundle 的 wrapper 三副本
   STALE（首次"没效果"的根因），同步后重建 `super-claude:latest` 并容器内验证。
+  **13 commit 推送 + 四 lane CI 全绿**（Workbench/CLI sidecar/Bundle/NSIS）。
+- **O5（`8027de7`）cc-switch daemon 60s 健康巡检自愈**：entrypoint 后台循环
+  （探测 status → 失联则 stop 清 pidfile → start --detach → 就绪等待 → 重跑
+  reconcile 幂等收敛），日志 /tmp/cc-switch-patrol.log，AISC_CC_SWITCH_PATROL=off
+  可关。探针快照校对（§G.8）：spec 中"real 判定依赖 base_url 可解析"实证不
+  成立（实际只查 env/TOML 键存在）——判定保持现状。**容器内注入验证 PASS**：
+  kill -9 daemon → Connection refused → 巡检 60s 窗内恢复新 daemon 进程 +
+  reconcile 执行（裸容器 current=official 正确 disable）。8G 笔记本实机复验
+  待外部证据（doctor 导出）。
 
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
