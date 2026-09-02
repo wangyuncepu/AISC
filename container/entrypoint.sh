@@ -161,9 +161,16 @@ else
             mkdir -p "$PROJECT_CODEX_DIR/skills"
             cp -ru "$FACTORY_CODEX_DIR/skills/." "$PROJECT_CODEX_DIR/skills/" 2>/dev/null || true
         fi
-        # 直接重定向写（cp 的覆盖语义在启动早期的挂载窗口上曾静默失败，
-        # 导致 FV 不前进而每次启动重跑同步；幂等无害但白费 4s）。
+        # FV 推进：写后读回校验 + 一次重试。启动早期的挂载窗口（紧随
+        # 大量 cp -ru 之后）曾出现覆盖写静默失败（cp 与裸 cat 均命中；
+        # exec 上下文同命令成功——Docker Desktop FUSE 层时序问题）。
+        # 失败后果良性：FV 不前进 → 下次启动重跑幂等同步（多 ~4s），
+        # 用户文件零风险；重试一次几乎总能写穿。
         cat "$FV_IMG" > "$FV_PRJ" 2>/dev/null || true
+        if [ "$(cat "$FV_PRJ" 2>/dev/null)" != "$(cat "$FV_IMG" 2>/dev/null)" ]; then
+            sleep 0.5
+            cat "$FV_IMG" > "$FV_PRJ" 2>/dev/null || true
+        fi
         echo "    ✅ 出厂 skills/plugins/commands 已增量同步（用户自建文件保持不变）。"
     fi
 
