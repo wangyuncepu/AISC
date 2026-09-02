@@ -118,6 +118,14 @@
   稳态 128-463ms。本地门：adapter 69（+3 新测：主路径零网络/spawn 静默/
   单探）/ pytest 1084 / vitest 421 / vue-tsc 干净。镜像已重建（O5+O4 叠加），
   与 O5 合并交用户手测。
+- **第三轮手测（2026-09-02 晚）**：用户报切换/取消代理依旧 ~10s。日志取证
+  `op cc-switch 8330/9275ms`（14:01Z）确凿；但容器内新代码 A/B 实测主路径
+  110-180ms（exec 链 177ms + provider list 45ms），结论——**用户容器锁定旧
+  镜像**（O4 镜像 21:0x 重建，runtime 容器是 19:4x cls 版启动的，未 remove+
+  start 吃不到新 provider）→ 指引用户重建容器复测。**产品缺陷记 backlog**：
+  镜像更新对已存在容器不可见（启动时比对 image id 提示重建，归 O8/后续）。
+  fetch-models 成功反馈落地（`009b3f2`，绿色 hint.ok + i18n 双语）——此前
+  仅失败有提示。O5 用户采纳注入验证免测。
 
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
