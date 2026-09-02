@@ -215,7 +215,11 @@ defineExpose({ focusActivePane });
 }
 .pane[data-active="true"] { background: var(--bg); }
 .pane-close {
-  position: absolute; top: 4px; right: 4px; z-index: 2;
+  /* O1 (D-11): × 让出 xterm 滚动条带（贴右缘最宽 14px，.visible 时 z11 且
+     接管指针）——right 4→18 出带；z 2→--z-overlay(20) 使淡入的滚动条
+     恒压不过 ×。仍低于 Terminal 内 fit-diag(60)。几何契约由
+     paneCloseHit.test.ts 钉死。 */
+  position: absolute; top: 4px; right: 18px; z-index: var(--z-overlay);
   /* 半透明：悬浮于终端输出之上需透底（rgba 白名单：pane-close overlay，10f 评估专用 token） */
   background: rgba(30, 30, 30, 0.8); border: var(--border-w) solid var(--border-2); color: var(--text-muted);
   width: 20px; height: 20px; line-height: 1; border-radius: var(--radius-sm);

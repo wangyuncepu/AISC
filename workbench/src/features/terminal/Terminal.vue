@@ -1212,7 +1212,8 @@ defineExpose({
 .truncation-banner {
   position: absolute;
   top: 4px;
-  right: 10px;
+  /* O1 (D-11): 与 .pane-close（right 18-38px 带）错位，药丸不再压在 × 上。 */
+  right: 48px;
   z-index: var(--z-overlay);
   padding: 1px 8px;
   font-size: var(--font-xs);
