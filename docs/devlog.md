@@ -92,7 +92,9 @@
   wrapper（claude/codex/cc-switch）手动唤起即 clear（含 E3 回滚区）；判据
   AISC_AGENT——agent 页签直启（session wrapper 注入自身名）不清屏，bash 会话
   （继承 bash）与外部手动（未注入）清屏。vendor-refresh 重校验 1513 files。
-  **待办：cls 需重建镜像后手测**（wrapper COPY 进镜像层）。
+  **镜像重建 + 手测 PASS（2026-09-02）**：cls 生效、codex 新文件正确显示
+  ＋新建；期间揪出暂存失同步问题——target/debug/aisc-bundle 的 wrapper 三副本
+  STALE（首次"没效果"的根因），同步后重建 `super-claude:latest` 并容器内验证。
 
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
