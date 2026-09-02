@@ -35,5 +35,6 @@
 |---|---|---|
 | F1 | **远程 SSH 工作区**：双向同步（mutagen），影子目录=真工作区（身份链零改动）。方案已定稿 → [f1-f2-design.md](f1-f2-design.md)（D-10） | 方案定稿，等优化批次后排期 |
 | F2 | **容器内 Agent 调用宿主工具**：宿主 MCP 服务（streamable-http，白名单+只读筛），容器经 host.docker.internal 调用。方案已定稿 → [f1-f2-design.md](f1-f2-design.md)（D-10，含 P0 通道实测项） | 方案定稿，等优化批次后排期 |
+| PP | **Provider 页对标 cc-switch 桌面端**：专属编辑页+简易/高级两档+完全卡片化+上游格式双侧暴露+双侧映射编辑器。方案已定稿 → [provider-parity-design.md](provider-parity-design.md)（D-12） | 方案定稿，四点裁决齐 |
 
 规约：VERSION 冻结前保持 2.1.8.dev0；container/ 改动后必跑 vendor-refresh；每 T 项独立提交 + 四条 CI 全绿进下一项；周期全部完成后 plans 归档。

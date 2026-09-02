@@ -273,3 +273,21 @@ F2 先。**实施不排期**——用户裁决优化批次优先于新功能，F
   （用户直接下令，重开工作区全量恢复）
 外部证据依赖：8G 笔记本 doctor 导出、长对话恢复复现样本（独立 bug 另
 开项）。
+
+## D-12：Provider 页对标 cc-switch 桌面端（2026-09-02，调研 + 四点裁决）
+
+手测反馈 provider 页与 cc-switch 配置能力不对等（upstream format 无 UI 为
+代表）。五张桌面端截图 + 官方手册/changelog 调研后用户四点裁决 + 一条边界：
+
+1. 长尾取舍：**图标对等做，端点测速不做**（备注/网站链接 db 列现成一并
+   纳入一期）
+2. 列表**完全卡片化**（弃表格）
+3. codex 映射**按 preset 预填**（优于桌面端的手动添加）
+4. 上游格式**双侧都露**：claude 默认 `anthropic`，codex 默认
+   `openai_responses`（而非 chat）
+5. 边界：**不做**桌面端的 JSON 编辑器形态
+
+关键事实：上游格式数据层早已存在（`row.meta.apiFormat`，`_db_merge_meta`
+通道）——纯 UI 缺口。设计全档 →
+[provider-parity-design.md](provider-parity-design.md)（组件结构/契约变更/
+测试矩阵/实施序列 P1-P4）。排期：opt-batch 收口后，或用户点名提前。
