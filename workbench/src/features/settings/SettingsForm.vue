@@ -237,7 +237,7 @@ async function reopenOnboarding() {
         </template>
 
         <!-- window section -->
-        <template v-else>
+        <template v-else-if="group === 'window'">
           <div v-for="f in FIELDS.filter((x) => x.key.startsWith('window.'))" :key="f.key" class="field">
             <label :for="f.key" class="label">{{ t(f.labelKey) }}</label>
             <input v-if="f.key === 'window.remember_geometry'" :id="f.key" v-model="windowS.remember_geometry" type="checkbox" :disabled="store.readOnly" />
