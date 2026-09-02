@@ -104,6 +104,20 @@
   kill -9 daemon → Connection refused → 巡检 60s 窗内恢复新 daemon 进程 +
   reconcile 执行（裸容器 current=official 正确 disable）。8G 笔记本实机复验
   待外部证据（doctor 导出）。
+- **O4（`dd2ff9b`）provider 切换链重构**：改前基线（op 遥测）n=10 p50=1455ms
+  p95=9700ms 双峰。容器侧四刀——① codex 在线 /models 抓取（每候选 6s×2 串联）
+  移出切换主路径：静态 catalog 同步落盘（零网络）+ `_spawn_catalog_refresh`
+  后台 spawn `catalog-sync --live` 异步合并；② 幂等快路径单次 TCP 探测；
+  ③ `_recover_route` 盲睡 1.0s → daemon 就绪轮询；④ `_real_run_cli/_raw`
+  per-hop duration trace（/tmp/aisc-provider-trace.log）。超时对齐：网络移出后
+  内层最坏 ≈11s+恢复余量 < Rust 30s，外层不动。前端 busyOp 语义化（fetch
+  只读解禁全面板）+ 切换中实时计时横幅（无流式事件下的诚实进度）。
+  **A/B 实测（同容器同 db）**：挂起端点直调旧 `_live_fetch_catalog_ids` =
+  **12074ms**（每候选 6s 超时串联，p95 9.7s 场景完美复现）；新主路径
+  **稳态 110-115ms / 冷启 486-747ms，网络恒 0**（结构性移除）；同环境旧版
+  稳态 128-463ms。本地门：adapter 69（+3 新测：主路径零网络/spawn 静默/
+  单探）/ pytest 1084 / vitest 421 / vue-tsc 干净。镜像已重建（O5+O4 叠加），
+  与 O5 合并交用户手测。
 
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
