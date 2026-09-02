@@ -1561,23 +1561,12 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   async function startFromSummary() {
     if (!preflight.value) return;
-    // O9 (D-11): the saved layout restores IN FULL — every tab opens its
-    // sessions immediately (the lazy dormant-placeholder scheme is gone).
-    // No layout (first open / cleared) falls back to the G-08 single Bash
-    // tab; more tabs come from the + menu.
-    const rec = (deps.getHistory()?.workspaces ?? []).find((w) =>
-      sameWorkspace(w.path, workspace.value)
-    );
-    const histTabs = rec?.layout?.tabs ?? [];
-    if (histTabs.length > 0) {
-      const records = [...histTabs]
-        .sort((a, b) => a.position - b.position)
-        .slice(0, MAX_TABS);
-      await launchRuntime(records, {
-        activeSavedId: rec?.layout?.active_tab_id ?? null,
-      });
-      return;
-    }
+    // O9 r2 (D-11, user ruling 2026-09-02): NO layout restore at all —
+    // closing the workspace closes it; reopening always starts FRESH from
+    // the G-08 single Bash tab. (r1 restored the layout in full after the
+    // lazy scheme was cut; the user then ruled restore itself unwanted.)
+    // The history layout record stays saved (harmless diagnostics) but has
+    // no consumer on the start path; more tabs come from the + menu.
     const records: TabRecord[] = [
       { tab_id: uuid(), agent: "bash", title: AGENT_TITLE["bash"], position: 0 },
     ];

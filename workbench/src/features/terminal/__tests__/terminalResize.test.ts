@@ -312,12 +312,14 @@ describe("Terminal PTY size convergence (B-05)", () => {
     wrapper.unmount();
   });
 
-  it("narrow-TUI guard: bash wraps fine and never shows the hint", async () => {
+  it("narrow-TUI guard: bash ALSO covered below the floor (agent TUIs run inside bash)", async () => {
+    // 2.1.9 O9-反馈 #5c: the bash exemption was removed — a claude/codex TUI
+    // launched at the bash prompt garbles at 40 cols just the same.
     vi.useFakeTimers();
     h.fitSize.cols = 40;
     const { wrapper } = await mountTerminal("running", "bash");
     await vi.advanceTimersByTimeAsync(0);
-    expect(wrapper.find('[data-testid="narrow-tui-overlay"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="narrow-tui-overlay"]').exists()).toBe(true);
     wrapper.unmount();
   });
 });
@@ -364,15 +366,21 @@ describe("resize veil (review P0/P1)", () => {
     wrapper.unmount();
   });
 
-  it("a newly created tab mounts under the veil (手测十三轮)", async () => {
+  it("a newly created tab mounts WITHOUT the veil (2.1.9 O9-反馈 #4)", async () => {
+    // 手测十三轮 reversed: the first-frame veil on a fresh term read as a
+    // loading animation on every new agent pane. A brand-new term has no
+    // stale grid to cover — no veil until its first RE-show.
     vi.useFakeTimers();
-    const { wrapper } = await mountTerminal("starting");
+    const { runtime, wrapper } = await mountTerminal("starting");
     await nextTick();
-    // Mounted straight into view: the veil covers the first frames.
-    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
-    // Quiet case (never goes running here): the fallback fades it out.
-    await vi.advanceTimersByTimeAsync(1000);
     expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(false);
+
+    // Hide, then re-show: NOW the veil applies (stale-grid case intact).
+    runtime.activeTabId = "other";
+    await vi.advanceTimersByTimeAsync(10);
+    runtime.activeTabId = "t1";
+    await nextTick();
+    expect(wrapper.find('[data-testid="resize-veil"]').exists()).toBe(true);
     wrapper.unmount();
   });
 

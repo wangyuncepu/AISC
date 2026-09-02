@@ -121,13 +121,15 @@ function noteGridChange(cols: number, rows: number): void {
 // render structural garbage below a minimum width; instead of showing the
 // wreckage, cover the pane with a "widen the window" hint. The session keeps
 // running underneath — widening lifts the overlay and the final WINCH-driven
-// redraw lands cleanly. bash wraps fine and is exempt.
+// redraw lands cleanly.
+// 2.1.9 O9-反馈 (2026-09-02 #5c): the bash EXEMPTION was removed — an agent
+// TUI launched INSIDE bash garbles just the same and previously had no guard
+// at all; below 60 cols a pane is unusable for plain shell work too.
 const NARROW_TUI_MIN_COLS = 60;
 const termCols = ref(80);
 const narrowTui = computed(
   () =>
     leafSessionType.value !== null &&
-    leafSessionType.value !== "bash" &&
     visible.value &&
     termCols.value < NARROW_TUI_MIN_COLS,
 );
@@ -885,15 +887,11 @@ onMounted(() => {
   // transition, so sync immediately.
   if (pane.value?.sessionState === "running") doResize("mount");
 
-  // B-05 手测十三轮: a NEWLY CREATED tab mounts straight into view —
-  // cover its first frames (welcome line / starting blank) with the same
-  // veil. The starting→running hop re-pins via doResize("running") and
-  // releases on ok+grace; the fallback below fades the quiet case.
-  if (visible.value) {
-    veilHold(veilGrace());
-    const gen = veilGen;
-    window.setTimeout(() => veilRelease(gen), veilGraceMs + 160);
-  }
+  // B-05 手测十三轮 → 2.1.9 O9-反馈 r2 (2026-09-02): the first-frame veil on a
+  // NEWLY created tab was REMOVED — the term is brand new (no stale grid to
+  // cover) and the fade read as a loading animation on every new agent pane
+  // (手测反馈 #4). The starting→running resize hop keeps its own veil via
+  // doResize("running"); only re-SHOWS of an already-rendered term veil.
 
   // B-05 (fix F3): self-heal tick. The size mismatch shows up randomly (no
   // reproducible trigger), so convergence cannot rely on user-driven resize
@@ -907,17 +905,23 @@ onMounted(() => {
   // display:none; xterm does not repaint automatically on re-display, which
   // leaves a blank screen while the buffer/session stay intact. Force a full
   // viewport repaint after the re-fit.
+  // A term that MOUNTS already-visible has been shown (fresh render, no
+  // veil); one that mounts hidden veils its first real show.
+  let shownOnce = visible.value;
   watch(visible, (v) => {
     if (v) {
-      // B-05 手测十一轮: pin the veil BEFORE the first paint — on EVERY
-      // tab switch (hidden panes keep a stale grid; and even an unchanged
-      // grid repaints on show). Release paths: a resize send confirms →
-      // ok+grace (sendResize); no resize happens → the fallback timer
-      // below fades the veil after the grace (token-guarded, so it can
-      // never expose a veil held by a newer show).
-      veilHold(veilGrace());
-      const gen = veilGen;
-      window.setTimeout(() => veilRelease(gen), veilGraceMs + 160);
+      if (shownOnce) {
+        // B-05 手测十一轮: pin the veil BEFORE the first paint — on every
+        // RE-show (hidden panes keep a stale grid; and even an unchanged
+        // grid repaints on show). Release paths: a resize send confirms →
+        // ok+grace (sendResize); no resize happens → the fallback timer
+        // below fades the veil after the grace (token-guarded, so it can
+        // never expose a veil held by a newer show).
+        veilHold(veilGrace());
+        const gen = veilGen;
+        window.setTimeout(() => veilRelease(gen), veilGraceMs + 160);
+      }
+      shownOnce = true;
       setTimeout(() => {
         doResize("show");
         term?.refresh(0, term.rows - 1);

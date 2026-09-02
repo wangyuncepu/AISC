@@ -1,20 +1,16 @@
 /**
- * runtime-lifecycle-ux Stage 5 → O9 (opt-batch, D-11): FULL layout restore.
- *
- * The lazy dormant-placeholder scheme was removed by user ruling — a
- * reopened workspace restores its complete layout with live sessions
- * immediately:
- * - history layout → EVERY tab opens a session at start (no dormant state)
- * - no layout → the default single Bash tab (G-08 fallback)
- * - re-activating a running tab never double-opens (gate bails on starting)
- * - the layout persists without any session state (records carry no state)
+ * runtime-lifecycle-ux Stage 5 → O9 r2 (D-11, user ruling 2026-09-02):
+ * NO layout restore. The lazy dormant-placeholder scheme (r0) and the
+ * full-restore scheme (r1) are both gone — the user ruled that closing a
+ * workspace closes it: reopening ALWAYS starts fresh from the default
+ * single Bash tab, regardless of what the history layout records hold.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { i18n } from "../../i18n";
 import { useWorkspacesStore } from "../workspaces";
 import { useRuntimeStore } from "../runtime";
-import type { HistoryPatch, TabRecord } from "../../types";
+import type { TabRecord } from "../../types";
 
 const PASSING_PREFLIGHT = {
   spec: {}, checks: [], can_start: true,
@@ -82,12 +78,6 @@ function layoutRecord(tabs: TabRecord[], activeTabId: string | null) {
   };
 }
 
-function lastRec() {
-  const calls = mockIpc.saveHistory.mock.calls as [number, HistoryPatch][];
-  const patch = calls[calls.length - 1]?.[1];
-  return patch?.workspaces?.find((w) => w.path?.includes("ws"));
-}
-
 function bashRecord(id: string, pos: number): TabRecord {
   return { tab_id: id, agent: "bash", title: "Bash", position: pos };
 }
@@ -110,8 +100,9 @@ beforeEach(() => {
 });
 afterEach(() => vi.clearAllMocks());
 
-describe("full layout restore (O9, D-11)", () => {
-  it("history layout restores IN FULL — every tab opens a session, none dormant", async () => {
+describe("no layout restore (O9 r2, D-11)", () => {
+  it("reopening a workspace with a saved layout starts FRESH: one default Bash tab", async () => {
+    // A rich saved layout (two tabs, a split codex) must be IGNORED.
     const saved = layoutRecord(
       [bashRecord("saved-a", 0), bashRecord("saved-b", 1)],
       "saved-b"
@@ -119,21 +110,15 @@ describe("full layout restore (O9, D-11)", () => {
     mockIpc.loadHistory.mockResolvedValue(saved);
     await launch();
     const rt = useRuntimeStore();
-    expect(rt.tabs).toHaveLength(2);
-    // Every restored tab opened its session at start — the saved active one
-    // too, and no pane ever sits in a placeholder state.
-    expect(mockIpc.openSession).toHaveBeenCalledTimes(2);
-    for (const tab of rt.tabs) {
-      expect(tab.sessionState).not.toBe("dormant");
-      expect(tab.sessionState).not.toBe("idle");
-      expect(tab.sessionId).not.toBeNull();
-    }
-    // Active = saved-b.
-    const active = rt.tabs.find((t) => t.tabId === rt.activeTabId);
-    expect(active).toBeTruthy();
+    expect(rt.tabs).toHaveLength(1); // fresh default, not the 2 saved tabs
+    expect(rt.tabs[0].agent).toBe("bash");
+    // Fresh ids: the new tab binds to NONE of the saved records.
+    expect(rt.tabs[0].savedTabId).not.toBe("saved-a");
+    expect(rt.tabs[0].savedTabId).not.toBe("saved-b");
+    expect(mockIpc.openSession).toHaveBeenCalledTimes(1); // only its session
   });
 
-  it("no history layout → default single Bash tab", async () => {
+  it("no history at all → the same single Bash tab (identical path)", async () => {
     mockIpc.loadHistory.mockResolvedValue({ schema_version: 1, revision: 0, workspaces: [] });
     await launch();
     const rt = useRuntimeStore();
@@ -142,44 +127,15 @@ describe("full layout restore (O9, D-11)", () => {
     expect(mockIpc.openSession).toHaveBeenCalledTimes(1);
   });
 
-  it("re-activating a running tab never double-opens its session", async () => {
-    const saved = layoutRecord(
-      [bashRecord("saved-a", 0), bashRecord("saved-b", 1)],
-      "saved-b"
-    );
-    mockIpc.loadHistory.mockResolvedValue(saved);
+  it("re-activating the running tab never double-opens its session", async () => {
     await launch();
     const ws = useWorkspacesStore();
     const rt = useRuntimeStore();
-    const other = rt.tabs.find((t) => t.tabId !== rt.activeTabId)!;
-    expect(other.sessionState).not.toBe("dormant"); // already live
-
     const inst = ws.runtimes.find((r) => r.workspace.value === "/ws")!;
-    inst.activateTab(other.tabId); // switch: no new session (already running)
-    await Promise.resolve();
-    expect(mockIpc.openSession).toHaveBeenCalledTimes(2);
-
+    const id = rt.tabs[0].tabId;
     const before = mockIpc.openSession.mock.calls.length;
-    inst.activateTab(other.tabId); // re-activation: no double session
+    inst.activateTab(id);
     await Promise.resolve();
     expect(mockIpc.openSession.mock.calls.length).toBe(before);
-  });
-
-  it("the layout persists without session state (records carry no state)", async () => {
-    const saved = layoutRecord(
-      [bashRecord("saved-a", 0), bashRecord("saved-b", 1)],
-      "saved-b"
-    );
-    mockIpc.loadHistory.mockResolvedValue(saved);
-    await launch();
-    // The save is debounced 300ms — wait for the patch that carries BOTH
-    // restored tabs (the first preflight-time save predates the tab set).
-    let rec: Awaited<ReturnType<typeof lastRec>> | undefined;
-    await vi.waitFor(() => {
-      rec = lastRec();
-      expect(rec?.layout?.tabs?.length).toBe(2);
-    });
-    expect(JSON.stringify(rec?.layout)).not.toContain("dormant");
-    expect(JSON.stringify(rec?.layout)).not.toContain("sessionState");
   });
 });
