@@ -52,7 +52,8 @@ def create_db(dir_path: Path):
 
 
 def seed_provider(dir_path: Path, pid: str, env: dict, *, is_current=False,
-                  name=None, agent="claude", settings=None, meta=None):
+                  name=None, agent="claude", settings=None, meta=None,
+                  notes="", website_url="", icon="", icon_color=""):
     if settings is None:
         raw = json.dumps({"env": env})
     elif isinstance(settings, str):
@@ -64,7 +65,8 @@ def seed_provider(dir_path: Path, pid: str, env: dict, *, is_current=False,
         conn.execute(
             "INSERT INTO providers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (pid, agent, name or pid, raw,
-             "https://x", "custom", 1, 0, "", None, None,
+             website_url or "https://x", "custom", 1, 0, notes or "",
+             icon or None, icon_color or None,
              json.dumps(meta or {}),
              1 if is_current else 0, 0),
         )
@@ -133,6 +135,32 @@ class AdapterTestCase(unittest.TestCase):
                 "Switched to provider 'x'\n✓ ok")
             return subprocess.CompletedProcess(args, 0, stdout=stdout,
                                                stderr="")
+        A.run_cli = fake_cli
+
+    def _install_dance_cli(self):
+        """RecordingCli whose provider-add ALSO inserts the row into the
+        sqlite db (the real CLI would), so delete-re-add dances are
+        observable via op_list. PP (D-12) tests assert on views."""
+        def fake_cli(args, stdin_text, secrets):
+            call = FakeCall(list(args), stdin_text)
+            self.cli.calls.append(call)
+            joined = " ".join(args)
+            if "provider" in joined and " add" in joined:
+                agent = args[args.index("-a") + 1]
+                pid = args[args.index("--id") + 1]
+                name = args[args.index("--name") + 1]
+                conn = sqlite3.connect(self.dir / "cc-switch.db")
+                try:
+                    conn.execute(
+                        "INSERT INTO providers VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (pid, agent, name, stdin_text or "{}",
+                         "", "custom", 1, 99, "", None, None, "{}", 0, 0),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+            return subprocess.CompletedProcess(
+                args, 0, stdout="Switched to provider 'x'\nOK", stderr="")
         A.run_cli = fake_cli
 
     @staticmethod
@@ -1420,3 +1448,116 @@ class CodexModelCatalogHookTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProviderParityTests(AdapterTestCase):
+    """PP (D-12, 2026-09-03): desktop-parity fields — upstream format,
+    display columns, and the codex mapping catalog."""
+
+    def test_api_format_priority_meta_over_preset_over_default(self):
+        toml = ('model_provider = "d"\n[model_providers.d]\n'
+                'base_url = "https://x"\n')
+        # meta wins over everything
+        row_meta = {"id": "deepseek", "settings": {"auth": {}, "config": toml},
+                    "meta": {"apiFormat": "anthropic"}}
+        self.assertEqual(A.resolve_api_format("codex", row_meta), "anthropic")
+        # no meta -> preset declaration (deepseek preset says anthropic)
+        row_preset = {"id": "deepseek", "settings": {"auth": {}, "config": toml},
+                      "meta": {}}
+        self.assertEqual(A.resolve_api_format("codex", row_preset), "anthropic")
+        # unknown id (no preset) -> agent default
+        row_unknown = {"id": "my-own", "settings": {"auth": {}, "config": toml},
+                       "meta": {}}
+        self.assertEqual(A.resolve_api_format("codex", row_unknown),
+                         "openai_responses")
+        self.assertEqual(A.resolve_api_format("claude", row_unknown), "anthropic")
+
+    def test_provider_view_surfaces_pp_fields_secret_free(self):
+        toml = ('model_provider = "d"\n[model_providers.d]\n'
+                'base_url = "https://x"\n')
+        seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,
+                      settings={"auth": {"OPENAI_API_KEY": "sk-secret-value-1"},
+                                "config": toml,
+                                "modelCatalog": {"models": [
+                                    {"model": "m1", "contextWindow": 64000,
+                                     "display_name": "M One"}]}},
+                      meta={"apiFormat": "openai_chat"},
+                      notes="my note", website_url="https://deepseek.com",
+                      icon="star", icon_color="#ff0")
+        views = A.op_list("codex")
+        v = next(x for x in views if x["id"] == "deepseek")
+        self.assertEqual(v["api_format"], "openai_chat")
+        self.assertEqual(v["notes"], "my note")
+        self.assertEqual(v["website_url"], "https://deepseek.com")
+        self.assertEqual(v["icon"], "star")
+        self.assertEqual(v["icon_color"], "#ff0")
+        self.assertEqual(v["model_catalog"], [
+            {"model": "m1", "display_name": "M One", "context_window": 64000}])
+        # secret-free: no key anywhere in the view
+        self.assertNotIn("sk-secret-value-1", json.dumps(views))
+
+    def test_edit_patch_writes_format_and_display_columns_through_dance(self):
+        self._install_dance_cli()
+        seed_provider(self.dir, "kimi", {"ANTHROPIC_BASE_URL": "https://kimi"})
+        seed_provider(self.dir, "zhipu", CLAUDE_ENV, is_current=True,
+                      notes="old note", icon="old-icon")
+        views = A.op_edit("claude", "zhipu", {"patch": {
+            "api_format": "openai_responses",
+            "notes": "new note",
+            "icon": "zap",
+            "icon_color": "#0f0",
+        }})
+        v = next(x for x in views if x["id"] == "zhipu")
+        self.assertEqual(v["api_format"], "openai_responses")
+        self.assertEqual(v["notes"], "new note")
+        self.assertEqual(v["icon"], "zap")
+        self.assertEqual(v["icon_color"], "#0f0")
+        # (currency through the dance is covered by the EditDance suite; the
+        # dance CLI does not flip db is_current on switch)
+
+    def test_edit_rejects_unknown_api_format(self):
+        seed_provider(self.dir, "zhipu", CLAUDE_ENV, is_current=True)
+        with self.assertRaises(A.AdapterError) as ctx:
+            A.op_edit("claude", "zhipu", {"patch": {"api_format": "grpc"}})
+        self.assertIn("api_format", ctx.exception.message)
+
+    def test_add_persists_extras(self):
+        self._install_dance_cli()
+        views = A.op_add("claude", {
+            "mode": "custom", "id": "acme", "name": "Acme",
+            "base_url": "https://acme", "api_key": "sk-acme-key-123",
+            "api_format": "openai_chat",
+            "notes": "acme note", "website_url": "https://acme.dev",
+            "icon": "bolt", "icon_color": "#00f",
+        })
+        v = next(x for x in views if x["id"] == "acme")
+        self.assertEqual(v["api_format"], "openai_chat")
+        self.assertEqual(v["notes"], "acme note")
+        self.assertEqual(v["website_url"], "https://acme.dev")
+        self.assertEqual(v["icon"], "bolt")
+        self.assertEqual(v["icon_color"], "#00f")
+
+    def test_codex_edit_mapping_patch_replaces_catalog(self):
+        self._install_dance_cli()
+        toml = ('model_provider = "d"\n[model_providers.d]\n'
+                'base_url = "https://x"\n')
+        seed_provider(self.dir, "kimi", {}, agent="codex",
+                      settings={"auth": {}, "config": toml + 'x = "k"\n'})
+        seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": toml,
+                                "modelCatalog": {"models": [
+                                    {"model": "old-model", "contextWindow": 1}]}})
+        views = A.op_edit("codex", "deepseek", {"patch": {
+            "model_catalog": {"models": [
+                {"model": "new-a", "contextWindow": 128000,
+                 "display_name": "A"},
+                {"model": "", "contextWindow": 5},      # dropped: no model
+                {"model": "new-b"},                     # default window
+            ]},
+        }})
+        v = next(x for x in views if x["id"] == "deepseek")
+        self.assertEqual(
+            v["model_catalog"],
+            [{"model": "new-a", "display_name": "A", "context_window": 128000},
+             {"model": "new-b", "display_name": "", "context_window": 128000}],
+        )

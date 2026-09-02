@@ -135,7 +135,8 @@ def read_snapshot(agent: str) -> list[dict[str, Any]]:
     try:
         conn.execute("PRAGMA busy_timeout=10000")
         rows = conn.execute(
-            "SELECT id, name, settings_config, is_current, sort_index, meta "
+            "SELECT id, name, settings_config, is_current, sort_index, meta, "
+            "notes, website_url, icon, icon_color "
             "FROM providers WHERE app_type = ? ORDER BY sort_index, id",
             (agent,),
         ).fetchall()
@@ -145,7 +146,7 @@ def read_snapshot(agent: str) -> list[dict[str, Any]]:
         conn.close()
 
     snapshot: list[dict[str, Any]] = []
-    for pid, name, raw, is_current, sort_index, raw_meta in rows:
+    for pid, name, raw, is_current, sort_index, raw_meta, notes, website, icon, icon_color in rows:
         try:
             settings = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
@@ -162,6 +163,12 @@ def read_snapshot(agent: str) -> list[dict[str, Any]]:
                 "is_current": bool(is_current),
                 "sort_index": int(sort_index or 0),
                 "meta": meta if isinstance(meta, dict) else {},
+                # PP (D-12): display columns ride the row (edit re-add loses
+                # them; op_edit writes them back via _db_merge_row_extra).
+                "notes": str(notes or ""),
+                "website_url": str(website or ""),
+                "icon": str(icon or ""),
+                "icon_color": str(icon_color or ""),
             }
         )
     return snapshot
@@ -341,6 +348,29 @@ def _preset_known_models(provider_id: str) -> list[str]:
     return []
 
 
+# PP (D-12, 2026-09-03): upstream-format vocabulary + per-agent defaults.
+# The local router's protocol selector (meta.apiFormat). claude defaults to
+# the native Anthropic protocol; codex to native Responses (NOT chat — the
+# explicit user ruling when exposing the selector on BOTH agents).
+API_FORMATS = ("anthropic", "openai_chat", "openai_responses")
+DEFAULT_API_FORMAT: dict[str, str] = {"claude": "anthropic",
+                                      "codex": "openai_responses"}
+
+
+def resolve_api_format(agent: str, row: dict[str, Any]) -> str:
+    """Read-side priority: row meta > preset declaration > agent default."""
+    meta_fmt = (row.get("meta") or {}).get("apiFormat")
+    if meta_fmt in API_FORMATS:
+        return str(meta_fmt)
+    try:
+        declared = _preset_provider(str(row.get("id") or "")).get("codex_api_format")
+        if declared in API_FORMATS:
+            return str(declared)
+    except AdapterError:
+        pass
+    return DEFAULT_API_FORMAT.get(agent, "anthropic")
+
+
 def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
     """The secret-free v1 view of one provider row."""
     settings = row["settings"]
@@ -369,6 +399,22 @@ def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
         secret = fields["api_key"]
         role_env = {}
         known_models = []
+    # PP (D-12): the desktop-parity fields — upstream format (read-side
+    # priority in resolve_api_format), display columns, and the codex model
+    # catalog the mapping editor owns. All secret-free.
+    model_catalog: list[dict[str, Any]] = []
+    if agent == "codex":
+        stored_cat = (settings.get("modelCatalog") or {}).get("models")
+        if isinstance(stored_cat, list):
+            model_catalog = [
+                {
+                    "model": str(m.get("model") or ""),
+                    "display_name": str(m.get("display_name") or ""),
+                    "context_window": int(m.get("contextWindow") or 0),
+                }
+                for m in stored_cat
+                if isinstance(m, dict) and m.get("model")
+            ]
     return {
         "id": row["id"],
         "name": row["name"],
@@ -380,6 +426,12 @@ def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
         "is_current": row["is_current"],
         "role_env": role_env,
         "known_models": known_models,
+        "api_format": resolve_api_format(agent, row),
+        "notes": str(row.get("notes") or ""),
+        "website_url": str(row.get("website_url") or ""),
+        "icon": str(row.get("icon") or ""),
+        "icon_color": str(row.get("icon_color") or ""),
+        "model_catalog": model_catalog,
     }
 
 
@@ -711,6 +763,61 @@ def _db_merge_meta(agent: str, provider_id: str, extra: dict[str, Any]) -> None:
         conn.close()
 
 
+def _db_merge_row_extra(
+    agent: str, provider_id: str, extra: dict[str, Any]
+) -> None:
+    """PP (D-12): write meta + display columns back after the edit dance.
+
+    The delete→re-add dance seeds a FRESH row: meta (apiFormat…) AND the
+    display columns (notes/website_url/icon/icon_color) would all reset.
+    Callers pass the ORIGINAL row's values overlaid with any patch changes.
+    Empty strings write as NULL so the desktop UI shows its placeholders.
+    """
+    if not extra:
+        return
+    meta = dict(extra.get("meta") or {})
+    path = _db_path()
+    conn = sqlite3.connect(path, timeout=15)
+    try:
+        conn.execute("PRAGMA busy_timeout=15000")
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT meta FROM providers WHERE id = ? AND app_type = ?",
+            (provider_id, agent),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return
+        if row[0]:
+            try:
+                parsed = json.loads(row[0])
+                if isinstance(parsed, dict):
+                    parsed.update(meta)
+                    meta = parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
+        conn.execute(
+            "UPDATE providers SET meta = ?, notes = ?, website_url = ?, "
+            "icon = ?, icon_color = ? WHERE id = ? AND app_type = ?",
+            (
+                json.dumps(meta, ensure_ascii=False, separators=(",", ":")),
+                str(extra.get("notes") or "") or None,
+                str(extra.get("website_url") or "") or None,
+                str(extra.get("icon") or "") or None,
+                str(extra.get("icon_color") or "") or None,
+                provider_id, agent,
+            ),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+    finally:
+        conn.close()
+
+
 def _proxy_listen_port(agent: str) -> Optional[int]:
     """The agent's local-route port from `proxy show` ("configured NNNN" —
     persisted route config, the same source the daemon binds from). The
@@ -862,14 +969,31 @@ def op_add(agent: str, request: dict[str, Any]) -> list[dict[str, Any]]:
         raise AdapterError(ERR_BAD_REQUEST, "request.name is required")
     secrets = _request_secrets(request)
     _cli_add(agent, provider_id, name, settings, secrets)
-    if agent == "codex" and str(request.get("mode") or "simple") == "simple":
+    # PP (D-12): meta starts at the explicit request value or the preset's
+    # declaration; display columns persist as requested.
+    extra: dict[str, Any] = {
+        "notes": str(request.get("notes") or ""),
+        "website_url": str(request.get("website_url") or ""),
+        "icon": str(request.get("icon") or ""),
+        "icon_color": str(request.get("icon_color") or ""),
+    }
+    fmt = str(request.get("api_format") or "")
+    if fmt:
+        if fmt not in API_FORMATS:
+            raise AdapterError(
+                ERR_BAD_REQUEST,
+                f"api_format must be one of {API_FORMATS}, got: {fmt!r}",
+            )
+        extra["meta"] = {"apiFormat": fmt}
+    elif agent == "codex" and str(request.get("mode") or "simple") == "simple":
         # A preset's upstream format must reach meta.apiFormat — the local
         # router's protocol selector. Upstream add seeds openai_responses
         # and knows nothing about the preset's anthropic endpoint.
         provider = _preset_provider(str(request.get("provider") or ""))
         declared = provider.get("codex_api_format")
         if declared:
-            _db_merge_meta(agent, provider_id, {"apiFormat": declared})
+            extra["meta"] = {"apiFormat": declared}
+    _db_merge_row_extra(agent, provider_id, extra)
     return op_list(agent)
 
 
@@ -961,6 +1085,22 @@ def _merge_patch(
     for key_name, value in current_settings.items():
         if key_name not in result:
             result[key_name] = value  # e.g. codex "modelCatalog"
+    # PP (D-12): an explicit mapping-table patch wins over the carried
+    # catalog. Shape: {"models": [{"model", "contextWindow", "display_name"?}]}
+    raw_cat = patch.get("model_catalog")
+    if isinstance(raw_cat, dict) and isinstance(raw_cat.get("models"), list):
+        cleaned: list[dict[str, Any]] = []
+        for m in raw_cat["models"]:
+            if not isinstance(m, dict) or not m.get("model"):
+                continue
+            entry: dict[str, Any] = {
+                "model": str(m["model"]),
+                "contextWindow": int(m.get("contextWindow") or 0) or 128_000,
+            }
+            if m.get("display_name"):
+                entry["display_name"] = str(m["display_name"])
+            cleaned.append(entry)
+        result["modelCatalog"] = {"models": cleaned}
     return result
 
 
@@ -978,6 +1118,28 @@ def op_edit(agent: str, provider_id: str, request: dict[str, Any]) -> list[dict[
     new_name = str(patch.get("name") or row["name"])
     secrets = _request_secrets(request) + snapshot_secrets(agent, snapshot)
 
+    # PP (D-12): the edit dance (delete -> re-add) resets meta AND the display
+    # columns; the original row's extras overlaid with any patch changes go
+    # back after the re-add.
+    extra: dict[str, Any] = {
+        "meta": dict(row.get("meta") or {}),
+        "notes": row.get("notes") or "",
+        "website_url": row.get("website_url") or "",
+        "icon": row.get("icon") or "",
+        "icon_color": row.get("icon_color") or "",
+    }
+    for col in ("notes", "website_url", "icon", "icon_color"):
+        if col in patch:
+            extra[col] = str(patch.get(col) or "")
+    if "api_format" in patch:
+        fmt = str(patch.get("api_format") or "")
+        if fmt not in API_FORMATS:
+            raise AdapterError(
+                ERR_BAD_REQUEST,
+                f"api_format must be one of {API_FORMATS}, got: {fmt!r}",
+            )
+        extra["meta"] = {**(extra.get("meta") or {}), "apiFormat": fmt}
+
     was_current = row["is_current"]
     switch_back_to = ""
     if was_current:
@@ -991,7 +1153,7 @@ def op_edit(agent: str, provider_id: str, request: dict[str, Any]) -> list[dict[
         # restore of the exact previous state, then surface the failure.
         try:
             _cli_add(agent, provider_id, row["name"], row["settings"], secrets)
-            _db_merge_meta(agent, provider_id, row.get("meta") or {})
+            _db_merge_row_extra(agent, provider_id, extra)
             if was_current:
                 _cli_switch(agent, provider_id, secrets)
         except AdapterError as restore_exc:
@@ -1004,7 +1166,7 @@ def op_edit(agent: str, provider_id: str, request: dict[str, Any]) -> list[dict[
     # The re-add seeded fresh defaults — the original row's meta (e.g. the
     # router's codex apiFormat selector, user/TUI-written) must survive the
     # dance or every routed request 404s.
-    _db_merge_meta(agent, provider_id, row.get("meta") or {})
+    _db_merge_row_extra(agent, provider_id, extra)
     if switch_back_to:
         _cli_switch(agent, switch_back_to, secrets)
     return op_list(agent)
