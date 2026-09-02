@@ -1749,3 +1749,33 @@ Windows `.bat` 的 no.4 需在 Windows + Windows Terminal 环境实测确认。
 - [x] ~~Skill 引入（andrej-karpathy-skills）~~ → v1.1.0 完成
 - [x] ~~全局 claude-switch 命令~~ → v1.1.0 完成
 - [ ] Termius SSH 配置文档未编写
+
+# PP (2026-09-03) — Provider 页对标 cc-switch 桌面端（D-12，P1-P4）
+
+opt-batch 收口后按用户指令开工。四段全部落地：
+
+- **P1（`c523ae4`）数据契约**：provider_view 透出 api_format（优先级
+  meta>preset>agent 默认；claude=anthropic、codex=openai_responses，双侧
+  都露的裁决）/notes/website_url/icon/icon_color/codex model_catalog；
+  read_snapshot 扩列；_db_merge_row_extra（meta+显示列舞步后一次性回写
+  ——edit 的 delete→re-add 会重置全部）；patch 白名单扩展（api_format
+  三枚举校验/model_catalog 清洗）；+6 契约测试，_install_dance_cli 使
+  fake add 同步写 db、舞步可经 view 断言。adapter 75 全绿。
+- **P2（`70cafc7`）ProviderEditPage**：整页编辑器（返回+保存头），
+  简易/高级两档；add 态预设快速添加（服务端全联动=按 preset 预填裁决）
+  /自定义双路；上游格式三选+非 anthropic 路由提示；ModelMappingEditor
+  （claude 三档角色行+[1m] 切换——round-4 语义保留+折叠高级槽位；codex
+  三列 catalog 编辑器= /model 列表源）；fetch-models 行内反馈；备注/
+  网站/图标（内置图形集+色板）；未保存返回确认。旧弹层测试全量迁移
+  （16/16）。
+- **P3（`9a3cac1`）完全卡片化**：ProviderCard（图标 db 值或首字符圆标/
+  名称/备注标记/端点/启用中徽章；悬浮操作组=编辑/删除，触屏常显）；
+  卡体点击=启用（当前卡=取消代理，IDEA-4 r3 语义）；key 掩码不上卡；
+  旧表格样式与悬空 --ccs-grid 清除；行闪烁动画迁卡并补 keyframes。
+- **P4（后续 commit）死代码清除**：旧 add/edit 弹层模板、脚本岛
+  （addForm/editForm/editRoles/submit*/ROLE_SLOTS 旧块/oneM 旧实现/
+  modelOptions/fetchHint）与 popover-only 样式全部移除——
+  CcSwitchUiTab 600+ 行 → ~350 行。
+- 门禁：adapter 75 / pytest 相关 54 / vitest 426 / vue-tsc / vite build
+  全过；镜像重建烧入 P1 adapter。手测矩阵：新增（预设/自定义）→ 编辑
+  （上游格式/映射/图标/备注）→ 切换 → codex /model 列表生效。
