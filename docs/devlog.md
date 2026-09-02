@@ -126,6 +126,16 @@
   镜像更新对已存在容器不可见（启动时比对 image id 提示重建，归 O8/后续）。
   fetch-models 成功反馈落地（`009b3f2`，绿色 hint.ok + i18n 双语）——此前
   仅失败有提示。O5 用户采纳注入验证免测。
+- **O4 r2（`2294348`）舞步重排根治 8-9s 切换**：用户复测"重启 npm run dev
+  依旧 ~8s"（重启前端不换容器，且——更关键——慢的根因根本不在镜像新旧）。
+  全链自建 runtime 复现 8.5s → 二分法排除（key 网络验证/PID1 全 env/subprocess
+  形态/provider 进程上下文/连打锁竞争逐一 320ms）→ **完整舞步复刻实锤**：
+  上游 cc-switch 5.10.4 在 proxy disable 紧跟 provider switch 时，switch 的
+  daemon 交互阻塞 ~6.5s（disable 触发 worker teardown，switch 等超时回退）。
+  绕法 = 舞步重排 switch → disable → enable（§G.7 只绕不改；token 捕获
+  不变量与全部失败恢复路径保持）。**端到端 4 轮：8.5s → 2.2s**，路由终态
+  健康。O4 r1 的容器侧优化（catalog 移出/单探/轮询/trace）全部保留——trace
+  正是这次根因定位的功臣。镜像重建中。
 
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
