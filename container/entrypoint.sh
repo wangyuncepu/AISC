@@ -144,7 +144,25 @@ else
     FV_PRJ="$PROJECT_CLAUDE_DIR/.factory-version"
     if [ -f "$FV_IMG" ] && [ "$(cat "$FV_IMG" 2>/dev/null)" != "$(cat "$FV_PRJ" 2>/dev/null)" ]; then
         echo "⚠️  镜像出厂配置已更新（skills/插件/命令等）。"
-        echo "    可删除旧出厂副本后重启容器，或使用 cc-switch skills sync 同步 skills。"
+        # O8 (D-11, 2026-09-02): 出厂资产增量同步取代"仅提示"。语义：
+        # - 仅同步工厂产物目录（.claude 的 skills/plugins/commands、.codex
+        #   的 skills）；出厂资产以工厂新版为准（工厂更新覆盖旧出厂文件）。
+        # - `cp -ru` = 只写 新增/mtime 更新 的文件；用户自建文件（工厂没有
+        #   的路径）永不触碰；任何现有文件都不删除。
+        # - .claude/.codex 顶层的用户态文件（settings.json/CLAUDE.md 等）
+        #   绝不在同步范围（跳过门哲学保持）。
+        for _sub in skills plugins commands; do
+            if [ -d "$FACTORY_CLAUDE_DIR/$_sub" ]; then
+                mkdir -p "$PROJECT_CLAUDE_DIR/$_sub"
+                cp -ru "$FACTORY_CLAUDE_DIR/$_sub/." "$PROJECT_CLAUDE_DIR/$_sub/" 2>/dev/null || true
+            fi
+        done
+        if [ -d "$FACTORY_CODEX_DIR/skills" ]; then
+            mkdir -p "$PROJECT_CODEX_DIR/skills"
+            cp -ru "$FACTORY_CODEX_DIR/skills/." "$PROJECT_CODEX_DIR/skills/" 2>/dev/null || true
+        fi
+        cp "$FV_IMG" "$FV_PRJ" 2>/dev/null || true
+        echo "    ✅ 出厂 skills/plugins/commands 已增量同步（用户自建文件保持不变）。"
     fi
 
     # 项目 .codex 初始化：从镜像内置完整出厂目录复制（类似 .claude 逻辑）
@@ -589,9 +607,11 @@ if [ -f /etc/mihomo/config.yaml ]; then
         # 信息假节点（"剩余流量/官网地址"等）也可能拖慢首个可用节点选定；
         # 探测 3 轮 × 4s，进程退出则提前收手。
         probe_ok=0
+        # O8 (D-11): 3x(3s+8s) worst case — was 3x(4s+10s); a healthy proxy
+        # answers on the first round either way, only the failing tail shrinks.
         for _ in 1 2 3; do
-            sleep 4
-            if curl -sS --max-time 10 -o /dev/null https://api.anthropic.com 2>/dev/null; then
+            sleep 3
+            if curl -sS --max-time 8 -o /dev/null https://api.anthropic.com 2>/dev/null; then
                 probe_ok=1
                 break
             fi
