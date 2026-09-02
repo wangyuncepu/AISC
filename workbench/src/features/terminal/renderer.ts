@@ -20,6 +20,42 @@ export function resolveRenderer(setting: string, webglAvailable: boolean): Activ
   return webglAvailable ? "webgl" : "default"; // auto
 }
 
+/** O3 (opt-batch, D-11): one-shot GPU summary for renderer telemetry —
+ * whether the WebGL context actually lands on hardware or a software raster
+ * (SwiftShader/llvmpipe — the low-end-device path fit oscillation lived on).
+ * The probe canvas is never attached and the context dropped immediately;
+ * null wherever WebGL or the debug extension is unavailable (jsdom,
+ * hardened browsers). */
+export interface WebglGpuSummary {
+  renderer: string;
+  software: boolean;
+}
+
+export function webglGpuSummary(): WebglGpuSummary | null {
+  try {
+    const canvas = document.createElement("canvas");
+    const gl = (canvas.getContext("webgl2") ?? canvas.getContext("webgl")) as
+      | (WebGLRenderingContext & {
+          getExtension(name: string): {
+            UNMASKED_RENDERER_WEBGL: number;
+          } | null;
+        })
+      | null;
+    if (!gl) return null;
+    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = String(
+      dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+    );
+    if (!renderer) return null;
+    return {
+      renderer,
+      software: /swiftshader|llvmpipe|softpipe|software/i.test(renderer),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Dark terminal palette aligned with the Workbench CSS tokens (A-G06-5):
  * foreground #d4d4d4 on background #1e1e1e ≈ 12.6:1, selection foreground

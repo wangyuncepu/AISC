@@ -34,7 +34,7 @@ import { resizeSession, writeSession } from "../../lib/ipc";
 import { sameTermSize, shouldSendSize, type TermSize } from "./resizeSync";
 import { WORKSPACE_PATH_MIME } from "../../lib/workspaceDnd";
 import { containerPathFor, quoteForTerminal } from "./dropPath";
-import { resolveRenderer, terminalTheme } from "./renderer";
+import { resolveRenderer, terminalTheme, webglGpuSummary } from "./renderer";
 import { effectiveTheme } from "../../theme";
 import { findLeaf } from "../../stores/paneTree";
 import { prefersReducedMotion } from "../../lib/accessibility";
@@ -165,7 +165,10 @@ function terminalOptions(): ITerminalOptions {
 
 /** G-06 (A-G06-1/2): load the WebglAddon per the Workbench renderer setting.
  * Construction failure and context loss both dispose the addon, falling back
- * to the DOM renderer - the session/PTY are untouched. */
+ * to the DOM renderer - the session/PTY are untouched.
+ * O3 (D-11): every outcome lands on the shared timeline via the store
+ * choke point — renderer activation was previously invisible, so low-end
+ * devices silently soft-rendered with nothing to correlate against. */
 function mountWebgl() {
   const choice = resolveRenderer(settingsStore.doc?.terminal.renderer ?? "auto", true);
   if (choice !== "webgl") return;
@@ -175,11 +178,19 @@ function mountWebgl() {
       // Disposal hands rendering back to the DOM renderer automatically.
       addon.dispose();
       if (webgl === addon) webgl = null;
+      store.logRendererEvent("context_loss", "error", "webgl|fallback_to_dom");
     });
     term!.loadAddon(addon);
     webgl = addon;
+    const gpu = webglGpuSummary();
+    store.logRendererEvent(
+      "mount",
+      "ok",
+      `webgl|gpu=${gpu?.renderer ?? "unknown"}|soft=${gpu?.software ?? "unknown"}`,
+    );
   } catch {
     /* construction failure (A-G06-2): stay on the DOM renderer */
+    store.logRendererEvent("mount", "error", "webgl|construction_failed");
   }
 }
 
@@ -404,6 +415,7 @@ function fitGrid(): void {
       `real=${real ? real.w.toFixed(2) + "/" + real.h.toFixed(2) : "-"} ` +
       `sticky=${stickyCell ? stickyCell.w.toFixed(2) + "/" + stickyCell.h.toFixed(2) : "-"} ` +
       `dpr=${window.devicePixelRatio} zoom=${document.querySelector<HTMLElement>(".app")?.offsetWidth ? (document.querySelector<HTMLElement>(".app")!.getBoundingClientRect().width / document.querySelector<HTMLElement>(".app")!.offsetWidth).toFixed(2) : "?"} ` +
+      `renderer=${webgl ? "webgl" : "dom"} ` +
       `cols=${term.cols} rows=${term.rows}`,
   );
   const cellW = stickyCell?.w ?? 0;

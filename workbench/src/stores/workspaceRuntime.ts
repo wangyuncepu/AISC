@@ -1739,6 +1739,19 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     void ipc.logUiEvent?.("terminal_resize", "error", code);
   }
 
+  /** O3 (opt-batch, D-11): renderer-path telemetry — WebGL mount outcome,
+   * construction failure, and runtime context loss each land on the shared
+   * timeline with the GPU probe summary (WEBGL_debug_renderer_info; software
+   * rasterizers are the low-end-device signal). Same layer contract as
+   * logTerminalResizeError. */
+  function logRendererEvent(
+    kind: "mount" | "context_loss",
+    outcome: "ok" | "error",
+    detail?: string,
+  ): void {
+    void ipc.logUiEvent?.(`renderer_${kind}`, outcome, detail);
+  }
+
   return {
     id,
     status,
@@ -1749,6 +1762,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     preflight,
     reconcile,
     logTerminalResizeError,
+    logRendererEvent,
     launch,
     showAdvanced,
     startElapsedMs,

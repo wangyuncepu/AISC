@@ -4,8 +4,14 @@
  * `webgl`/`auto` resolve to webgl when available. Theme tokens carry the
  * documented contrast claims (A-G06-5 spot checks).
  */
-import { describe, expect, it } from "vitest";
-import { LIGHT_TERMINAL_THEME, resolveRenderer, TERMINAL_THEME, terminalTheme } from "../renderer";
+import { describe, expect, it, vi, afterEach } from "vitest";
+import {
+  LIGHT_TERMINAL_THEME,
+  resolveRenderer,
+  TERMINAL_THEME,
+  terminalTheme,
+  webglGpuSummary,
+} from "../renderer";
 
 describe("resolveRenderer (A-G06-1/2)", () => {
   it("explicit default always wins, even when webgl is available", () => {
@@ -21,6 +27,40 @@ describe("resolveRenderer (A-G06-1/2)", () => {
   it("auto prefers webgl like an explicit choice", () => {
     expect(resolveRenderer("auto", true)).toBe("webgl");
     expect(resolveRenderer("auto", false)).toBe("default");
+  });
+});
+
+describe("webglGpuSummary (O3, D-11)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns null when no WebGL context exists (jsdom, hardened browsers)", () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    expect(webglGpuSummary()).toBeNull();
+  });
+
+  it("reports the unmasked renderer and flags software rasterizers", () => {
+    const fake = {
+      getExtension: (name: string) =>
+        name === "WEBGL_debug_renderer_info" ? { UNMASKED_RENDERER_WEBGL: 0x9246 } : null,
+      getParameter: (k: number) => (k === 0x9246 ? "SwiftShader (software)" : "GL"),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(fake as unknown as WebGLRenderingContext);
+    expect(webglGpuSummary()).toEqual({
+      renderer: "SwiftShader (software)",
+      software: true,
+    });
+  });
+
+  it("hardware renderer is not flagged software", () => {
+    const fake = {
+      RENDERER: 0x1f01, // gl.RENDERER — read off the context object itself
+      getExtension: () => null, // no debug ext -> falls back to RENDERER
+      getParameter: (k: number) => (k === 0x1f01 ? "ANGLE (NVIDIA GeForce)" : "GL"),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(fake as unknown as WebGLRenderingContext);
+    expect(webglGpuSummary()?.software).toBe(false);
   });
 });
 
