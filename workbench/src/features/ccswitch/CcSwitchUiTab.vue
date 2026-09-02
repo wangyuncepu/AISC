@@ -26,6 +26,7 @@ const store = useRuntimeStore();
 const ui = useCcSwitchUiStore();
 // storeToRefs keeps the reactive link (plain destructuring would break it).
 import ProviderEditPage from "./ProviderEditPage.vue";
+import ProviderCard from "./ProviderCard.vue";
 const { agent, providers, loading, busy, busyOp, error } = storeToRefs(ui);
 
 // PP (D-12): the dedicated editor view replaces the popover workflow.
@@ -201,19 +202,6 @@ const fetchDone = computed<string | null>(() => {
   return t("ccswitch.fetchDone", { n: r.models.length });
 });
 
-function openEdit(p: CcSwitchProvider): void {
-  openEditPage(p);  // PP (D-12): dedicated page replaces the popover
-  return;
-  editId.value = p.id;
-  editForm.name = p.name;
-  editForm.baseUrl = p.base_url;
-  editForm.model = p.model;
-  editForm.apiKey = "";
-  const env = p.role_env ?? {};
-  for (const slot of ROLE_SLOTS) {
-    editRoles[slot.key] = env[slot.key] ?? "";
-  }
-}
 
 async function fetchModelList(): Promise<void> {
   if (!editId.value || busyOp.value === "fetch") return;
@@ -371,46 +359,20 @@ onBeforeUnmount(() => {
       </Transition>
     </Teleport>
 
-    <div class="list" v-if="visibleProviders.length">
-      <!-- v2.1.7 S1 (⑤/A-21715): frozen column header — same grid template
-           as .row so header and cells stay aligned at every width; the
-           pid/url cells carry the same truncation classes as data rows. -->
-      <div class="head-row">
-        <span>{{ t("ccswitch.colStatus") }}</span>
-        <span class="pid">{{ t("ccswitch.colId") }}</span>
-        <span>{{ t("ccswitch.colName") }}</span>
-        <span class="url">{{ t("ccswitch.colEndpoint") }}</span>
-        <span>{{ t("ccswitch.colModel") }}</span>
-        <span>{{ t("ccswitch.colKey") }}</span>
-        <span>{{ t("ccswitch.colActions") }}</span>
-      </div>
-      <div
+    <div class="cards" v-if="visibleProviders.length">
+      <!-- PP (D-12): the fully card-ified list (user ruling) — icon + name +
+           endpoint + current badge; hover surfaces the action group; the card
+           body activates (current = cancel-proxy, IDEA-4 r3 semantics). -->
+      <ProviderCard
         v-for="p in visibleProviders"
         :key="p.id"
-        class="row"
-        :class="{ current: p.is_current, flash: p.id === flashId, activatable: canActivate(p), cancelable: p.is_current && p.base_url }"
-        :title="p.is_current
-          ? t('ccswitch.cancelProxyHint')
-          : p.base_url ? t('ccswitch.activateHint') : t('ccswitch.notConfiguredHint')"
-        @click="activate(p)"
-      >
-        <span class="cur" :class="{ on: p.is_current }">
-          {{ p.is_current ? t("ccswitch.currentChip") : "" }}
-        </span>
-        <span class="pid" :title="p.id">{{ p.id }}</span>
-        <span class="name">{{ p.name }}</span>
-        <span class="url" :title="p.base_url">{{ p.base_url }}</span>
-        <span class="model">{{ p.model }}</span>
-        <span class="key" :class="{ none: !p.has_api_key }">
-          {{ p.has_api_key ? p.api_key_mask : t("ccswitch.noKey") }}
-        </span>
-        <span class="actions" @click.stop>
-          <button :disabled="mutating" @click="openEdit(p)">{{ t("ccswitch.edit") }}</button>
-          <button class="danger" :disabled="mutating" @click="remove(p)">
-            {{ t("ccswitch.delete") }}
-          </button>
-        </span>
-      </div>
+        :provider="p"
+        :busy="mutating"
+        :class="{ flash: p.id === flashId }"
+        @activate="activate(p)"
+        @edit="openEditPage(p)"
+        @remove="remove(p)"
+      />
     </div>
     <p v-else-if="!loading && hasRuntime" class="empty">{{ t("ccswitch.empty") }}</p>
     <!-- S8g-2 (user ruling 2026-08-29): the hidden-placeholder count note is
@@ -540,44 +502,17 @@ onBeforeUnmount(() => {
  * track is FIXED, not auto — an auto track sizes to its own content
  * (buttons in rows vs "操作" text in the header), which desynced the 1fr
  * column and shifted everything after it (user evidence @zoom 1.5). */
-.list {
-  --ccs-grid: 64px 130px 120px 1fr 160px 110px 150px;
-  display: flex; flex-direction: column; gap: 2px; margin-top: 10px;
+.cards {
+  display: flex; flex-direction: column; gap: 8px;
 }
-.row {
-  display: grid; grid-template-columns: var(--ccs-grid);
-  gap: var(--space-2); align-items: center; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm);
-  font-size: var(--font-sm); color: var(--text-2);
+.cards .flash { animation: row-flash 1.3s var(--ease); }
+@keyframes row-flash {
+  0% { background: var(--accent-soft); }
+  100% { background: var(--surface-2); }
 }
-.head-row {
-  display: grid; grid-template-columns: var(--ccs-grid);
-  gap: var(--space-2); align-items: center; padding: var(--space-1) var(--space-2);
-  font-size: var(--font-xs); color: var(--text-faint); font-weight: 600;
-}
-.head-row > span { min-width: 0; }
-.head-row .pid, .head-row .url {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.row.current { background: var(--accent-soft); }
-/* B-03: every text cell truncates inside its grid track — a long provider
- * name must never overlap the neighbouring column (user evidence C-08.png). */
-.row > span { min-width: 0; }
-.row .name, .row .pid, .row .key {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.row.activatable { cursor: pointer; }
-.row.activatable:hover { background: var(--surface-hover); }
-.row.cancelable .cur.on { cursor: pointer; }
-.cur { color: var(--text-faint); font-size: var(--font-xs); }
-.cur.on { color: var(--accent); font-weight: 600; }
+/* PP (D-12): the old table styles (.row/.head-row/.cur…) went with the
+ * card-ification; row-flash still animates the newly-current CARD. */
 .banner.ok { background: var(--success-bg); color: var(--success); }
-.hidden-note { font-size: var(--font-xs); color: var(--text-faint); }
-.pid { font-family: var(--font-mono); }
-.url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
-.model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.key { color: var(--success); font-family: var(--font-mono); }
-.key.none { color: var(--text-faint); }
-.actions { display: flex; gap: 6px; }
 .empty { color: var(--text-muted); font-size: var(--font-md); }
 button {
   background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong);

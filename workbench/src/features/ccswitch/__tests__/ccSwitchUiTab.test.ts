@@ -55,8 +55,9 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
   it("loads the secret-free snapshot on mount (mask, current marker)", async () => {
     setup();
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
-    expect(w.text()).toContain("****abcd");
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
+    // PP (D-12): cards show icon/name/endpoint/badge (no key mask — the
+    // desktop parity shape); the secret-free invariant stays: no raw key.
     expect(w.text()).not.toContain("sk-");
     w.unmount();
   });
@@ -65,7 +66,7 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     setup();
     vi.mocked(ipc.ccSwitchAdd).mockResolvedValue(RESULT(["deepseek"]));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
 
     await w.find("header .primary").trigger("click"); // 添加 → edit page
     await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(true));
@@ -88,7 +89,7 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     setup();
     vi.mocked(ipc.ccSwitchAdd).mockResolvedValue(RESULT(["mine"]));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
 
     await w.find("header .primary").trigger("click");
     await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(true));
@@ -144,9 +145,9 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     setup();
     vi.mocked(ipc.ccSwitchSwitch).mockResolvedValue(RESULT(["deepseek", "zhipu"]));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
     // Row 1 (zhipu) is not current — clicking it activates.
-    await w.findAll(".row")[1]!.trigger("click");
+    await w.findAll(".card")[1]!.trigger("click");
     await vi.waitFor(() => expect(ipc.ccSwitchSwitch).toHaveBeenCalledTimes(1));
     expect(vi.mocked(ipc.ccSwitchSwitch).mock.calls[0]![3]).toBe("zhipu");
     await vi.waitFor(() =>
@@ -162,7 +163,7 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     vi.mocked(ipc.ccSwitchProviders).mockResolvedValue(bare);
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     // Only the activatable + current rows render; the bare row is gone.
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(1));
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(1));
     expect(w.find(".hidden-note").exists()).toBe(true);
     w.unmount();
   });
@@ -171,8 +172,8 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     setup();
     vi.mocked(ipc.ccSwitchSwitch).mockResolvedValue(RESULT(["zhipu"]));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
-    await w.findAll(".row")[0]!.trigger("click");
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
+    await w.findAll(".card")[0]!.trigger("click");
     const { confirm } = await import("@tauri-apps/plugin-dialog");
     await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(ipc.ccSwitchSwitch).toHaveBeenCalledTimes(1));
@@ -189,8 +190,8 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     const { confirm } = await import("@tauri-apps/plugin-dialog");
     vi.mocked(confirm).mockResolvedValueOnce(false);
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
-    await w.findAll(".row")[0]!.trigger("click");
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
+    await w.findAll(".card")[0]!.trigger("click");
     await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
     expect(ipc.ccSwitchSwitch).not.toHaveBeenCalled();
     w.unmount();
@@ -201,8 +202,8 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     const { confirm } = await import("@tauri-apps/plugin-dialog");
     vi.mocked(ipc.ccSwitchDelete).mockResolvedValue(RESULT(["zhipu"]));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
-    await w.findAll(".row")[0]!.find(".danger").trigger("click");
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
+    await w.findAll(".card")[0]!.find(".danger").trigger("click");
     await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(ipc.ccSwitchDelete).toHaveBeenCalledTimes(1));
     expect(vi.mocked(ipc.ccSwitchDelete).mock.calls[0]![3]).toBe("deepseek");
@@ -215,12 +216,12 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
       .mockResolvedValueOnce(RESULT(["deepseek"]))
       .mockRejectedValueOnce(new Error("AISC_ERR_CC_SWITCH_PROVIDER_NO_SWITCH_TARGET"));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(1));
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(1));
     await w.findAll(".agent-toggle button")[1]!.trigger("click");
     await vi.waitFor(() => expect(w.find(".banner.err").exists()).toBe(true));
     await w.findAll(".agent-toggle button")[0]!.trigger("click");
     // Switching back refetches (default mock: 2 rows) and clears the error.
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
     await vi.waitFor(() => expect(w.find(".banner.err").exists()).toBe(false));
     w.unmount();
   });
@@ -249,8 +250,8 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     vi.mocked(ipc.ccSwitchProviders).mockResolvedValue(resultWithRoles());
     vi.mocked(ipc.ccSwitchEdit).mockResolvedValue(resultWithRoles());
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(1));
-    await w.findAll(".row")[0]!.findAll("button")[0]!.trigger("click"); // 编辑
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(1));
+    await w.findAll(".card")[0]!.findAll("button")[0]!.trigger("click"); // 编辑
     await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(true));
 
     // Advanced tier to reach the mapping editor.
@@ -296,10 +297,10 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     setup();
     vi.mocked(ipc.ccSwitchEdit).mockResolvedValue(RESULT(["deepseek"]));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
     await w.findAll(".agent-toggle button")[1]!.trigger("click"); // codex
     await vi.waitFor(() => expect(ipc.ccSwitchProviders).toHaveBeenCalledTimes(2));
-    await w.findAll(".row")[0]!.findAll("button")[0]!.trigger("click");
+    await w.findAll(".card")[0]!.findAll("button")[0]!.trigger("click");
     await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(true));
     expect(w.find(".mapping input[list]").exists()).toBe(false); // no role rows on simple tier
     await w.find(".edit-page .head .primary").trigger("click");
@@ -317,8 +318,8 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
       available: true, models: ["remote-model-x"], message: "",
     });
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(1));
-    await w.findAll(".row")[0]!.findAll("button")[0]!.trigger("click");
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(1));
+    await w.findAll(".card")[0]!.findAll("button")[0]!.trigger("click");
     await w.findAll(".tiers button").find((b) => b.text().includes("高级模式"))!.trigger("click");
     await vi.waitFor(() => expect(w.findAll(".mapping input[list]").length).toBe(3));
 
@@ -343,8 +344,8 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
       available: false, models: [], message: "HTTP 401 Unauthorized",
     });
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(1));
-    await w.findAll(".row")[0]!.findAll("button")[0]!.trigger("click");
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(1));
+    await w.findAll(".card")[0]!.findAll("button")[0]!.trigger("click");
     await w.findAll(".tiers button").find((b) => b.text().includes("高级模式"))!.trigger("click");
     await w.findAll("button").find((b) => b.text().includes("拉取模型列表"))!.trigger("click");
     await vi.waitFor(() => expect(w.find(".hint.warn").exists()).toBe(true));
@@ -358,12 +359,12 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     const switched = RESULT(["zhipu", "deepseek"]); // zhipu now current
     vi.mocked(ipc.ccSwitchSwitch).mockResolvedValue(switched);
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
-    await w.findAll(".row")[1]!.trigger("click"); // activate deepseek→target id
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
+    await w.findAll(".card")[1]!.trigger("click"); // activate deepseek→target id
     await vi.waitFor(() => expect(ipc.ccSwitchSwitch).toHaveBeenCalledTimes(1));
     // flashId targets the row id ("deepseek"), present until the 1.3s timer.
     await vi.waitFor(() =>
-      expect(w.findAll(".row").some((r) => r.classes().includes("flash"))).toBe(true));
+      expect(w.findAll(".card").some((r) => r.classes().includes("flash"))).toBe(true));
     w.unmount();
   });
 });
