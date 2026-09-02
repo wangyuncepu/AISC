@@ -15,6 +15,13 @@ if [ -f "$CODEX_SETTINGS" ]; then
     env_inject "$CODEX_SETTINGS"
 fi
 
+# 2.1.9 O9-反馈 #5a (2026-09-02): 清屏（含回滚缓冲）——bash/zsh 手动唤起
+# 清屏；Workbench codex 页签直启（AISC_AGENT=codex）不受影响（详见
+# claude-wrapper 同段注释）。
+if [ -t 1 ] && [ "${AISC_AGENT:-manual}" != "codex" ]; then
+    clear 2>/dev/null || printf '\033[H\033[2J\033[3J'
+fi
+
 # 容器本身是外部沙箱（IS_SANDBOX=1），默认给 Codex 完全执行权限，
 # 与 Claude 的 --dangerously-skip-permissions 模式保持一致。
 # 若用户显式指定权限/沙箱参数，则尊重用户选择，不再追加默认值。

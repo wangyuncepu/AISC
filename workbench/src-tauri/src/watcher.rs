@@ -52,14 +52,51 @@ pub struct WorkspaceChangeBatch {
 /// Dedup + order changes within a debounce window.
 #[derive(Debug, Default)]
 struct ChangeBatcher {
-    // BTreeMap path -> (type, kind); last write wins within the window.
+    // BTreeMap path -> (type, kind); types MERGE within the window (see
+    // merge_change_type — last-write-wins mislabeled agent-created files).
     by_path: std::collections::BTreeMap<String, (String, String)>,
     overflow: bool,
 }
 
+/// O9-反馈 #1b (2026-09-02): merge two change types for the same path inside
+/// one debounce window. Codex writes a brand-new file as `Create` followed by
+/// `Modify(Data)` — last-write-wins labeled it "modified". Birth is sticky:
+/// a path created in this window stays "created" no matter what the writer
+/// follows up with; deletions are terminal; renames outrank plain writes.
+fn merge_change_type(prev: &str, next: &str) -> String {
+    match (prev, next) {
+        // A later birth always wins (delete-and-recreate included)…
+        (_, "created") => "created".into(),
+        // …but a deletion is terminal for the window (born-then-removed).
+        (_, "deleted") => "deleted".into(),
+        ("deleted", _) => "deleted".into(),
+        // Birth is sticky: later writes/rename-To keep "created".
+        ("created", _) => "created".into(),
+        ("renamed", _) | (_, "renamed") => "renamed".into(),
+        _ => next.to_string(),
+    }
+}
+
+/// Directories outrank files when both kinds are seen for one path.
+fn merge_kind(prev: &str, next: &str) -> String {
+    if prev == "dir" || next == "dir" {
+        "dir".into()
+    } else {
+        next.to_string()
+    }
+}
+
 impl ChangeBatcher {
     fn push(&mut self, path: String, change_type: String, kind: String) {
-        self.by_path.insert(path, (change_type, kind));
+        match self.by_path.get_mut(&path) {
+            Some((t, k)) => {
+                *t = merge_change_type(t, &change_type).to_string();
+                *k = merge_kind(k, &kind).to_string();
+            }
+            None => {
+                self.by_path.insert(path, (change_type, kind));
+            }
+        }
     }
 
     fn mark_overflow(&mut self) {
@@ -473,7 +510,9 @@ mod tests {
     fn batcher_dedups_and_reports_overflow() {
         let mut b = ChangeBatcher::default();
         b.push("a.md".into(), "created".into(), "file".into());
-        b.push("a.md".into(), "modified".into(), "file".into()); // last wins
+        // O9-反馈 #1b: birth is sticky — the followup write no longer
+        // overwrites "created" (last-write-wins mislabeled agent files).
+        b.push("a.md".into(), "modified".into(), "file".into());
         b.push("b.md".into(), "deleted".into(), "file".into());
         b.mark_overflow();
         let batch = b.drain(1);
@@ -482,7 +521,7 @@ mod tests {
         assert!(batch.stale);
         assert_eq!(batch.changes.len(), 2);
         assert_eq!(batch.changes[0].relative_path, "a.md");
-        assert_eq!(batch.changes[0].change_type, "modified");
+        assert_eq!(batch.changes[0].change_type, "created");
         assert_eq!(batch.changes[0].kind, "file");
         // drain clears; next drain is empty and no longer stale.
         let next = b.drain(2);
@@ -614,5 +653,38 @@ mod tests {
         // the To keeps its honest "renamed" classification.
         let mut t = TempRenameTracker::default();
         assert_eq!(t.classify_to("renamed"), "renamed");
+    }
+
+    // --- O9-反馈 #1b (2026-09-02): birth is sticky within a batch ---
+
+    #[test]
+    fn batcher_keeps_created_over_followup_writes() {
+        // codex writes a new file as Create -> Modify(Data): "created" must
+        // survive (last-write-wins mislabeled it "modified").
+        let mut b = ChangeBatcher::default();
+        b.push("report.md".into(), "created".into(), "file".into());
+        b.push("report.md".into(), "modified".into(), "file".into());
+        let batch = b.drain(0);
+        assert_eq!(batch.changes[0].change_type, "created");
+    }
+
+    #[test]
+    fn batcher_merge_table() {
+        let cases: &[(&str, &str, &str)] = &[
+            ("modified", "created", "created"), // delete+recreate
+            ("created", "deleted", "deleted"),  // born then removed
+            ("modified", "deleted", "deleted"),
+            ("deleted", "created", "created"),
+            ("renamed", "modified", "renamed"), // rename then write
+            ("modified", "renamed", "renamed"),
+            ("modified", "modified", "modified"),
+        ];
+        for (prev, next, want) in cases {
+            assert_eq!(
+                merge_change_type(prev, next).as_str(),
+                *want,
+                "merge({prev}, {next})"
+            );
+        }
     }
 }

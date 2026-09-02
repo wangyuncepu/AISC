@@ -12,6 +12,14 @@ SETTINGS_FILE="${CFG_DIR}/settings.json"
 
 env_inject "$SETTINGS_FILE"
 
+# 2.1.9 O9-反馈 #5a (2026-09-02): 清屏（含回滚缓冲）——用户在 bash/zsh 手动
+# 唤起 agent TUI 时执行，旧 shell 输出不再可回滚混看。Workbench agent 页签
+# 直启（AISC_AGENT=claude，由 session wrapper exec 注入）不受影响；bash 会话
+# 继承 AISC_AGENT=bash，外部手动 docker exec 则未注入，两者都清屏。
+if [ -t 1 ] && [ "${AISC_AGENT:-manual}" != "claude" ]; then
+    clear 2>/dev/null || printf '\033[H\033[2J\033[3J'
+fi
+
 # 默认以 --dangerously-skip-permissions 模式运行（跳过权限确认，适合容器内自动流）。
 # 用户若已手动传入则不重复追加，避免重复 flag 报错。
 skip_perm="--dangerously-skip-permissions"

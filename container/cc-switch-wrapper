@@ -17,4 +17,11 @@ else
     export HOME="/root/app"
 fi
 
+# 2.1.9 O9-反馈 #5a (2026-09-02): 清屏（含回滚缓冲）——bash/zsh 手动唤起
+# TUI 时清屏；Workbench cc-switch 页签直启（AISC_AGENT=cc-switch）不受
+# 影响（详见 claude-wrapper 同段注释）。
+if [ -t 1 ] && [ "${AISC_AGENT:-manual}" != "cc-switch" ]; then
+    clear 2>/dev/null || printf '\033[H\033[2J\033[3J'
+fi
+
 exec cc-switch-real "$@"
