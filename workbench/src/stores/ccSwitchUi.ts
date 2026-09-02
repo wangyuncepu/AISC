@@ -5,7 +5,7 @@
  * pass through as call arguments only (never stored here).
  */
 import { defineStore } from "pinia";
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import * as ipc from "../lib/ipc";
 import type { CcSwitchProvider, CcSwitchRequest, FetchModelsResult } from "../types";
 
@@ -108,8 +108,14 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
     }
   }
 
+  /** O4 (D-11): the op segment of `busy` ("" | "add" | "edit" | "switch" |
+   * "delete" | "fetch") — the tab uses it to scope disabling: mutating ops
+   * stay mutually exclusive, while `fetch` (a read-only network query) no
+   * longer freezes the whole panel. */
+  const busyOp = computed(() => (busy.value ? busy.value.split(":")[0]! : ""));
+
   return {
-    agent, providers, loading, busy, error, fetchedModels,
+    agent, providers, loading, busy, busyOp, error, fetchedModels,
     list, switchAgent, add, edit, activate, remove, fetchModels,
   };
 });
