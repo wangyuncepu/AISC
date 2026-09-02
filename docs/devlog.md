@@ -2,6 +2,71 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+# v2.1.9-dev (2026-08-20 ~) — 四挂账清偿 · nairong 根因链 · 构建韧性 · 优化批次（分支 develop）
+
+> 规划入口：`docs/plans/2.1.9-dev-plans/`（README 阶段表 + decisions.md D-1..D-11 +
+> opt-batch-spec.md + f1-f2-design.md）。VERSION 冻结前保持 2.1.8.dev0。
+
+- **T1-T6（四挂账统一清偿）**：#53 隔离测试钉第二 tempdir；#50 ble.sh 移除（vendor +
+  门控 + D-1 修订）；#3 归因全量修复（R1 容器登记桥 / R2 env 兜底 / R3 呈现层按 D-6
+  降级）；#28 VM 闪烁主攻（fit 遥测 + 振荡自诊断浮层 + sticky cell 冷却）；T5 全矩阵
+  回归收口；T6 变更页朴素化（归因呈现降级，D-6）。
+- **nairong #61 三轮根因链（hotfix）**：bash 零输出退出 → HOTFIX1（fit 方向，证伪回滚）
+  → HOTFIX2（传输异常捕获 + stderr 可见性——本轮回溯发现了真凶）→ HOTFIX3 **根因**：
+  zh-CN 下 docker-py `from_env()` 读 docker context `meta.json` 不带 encoding → GBK
+  UnicodeDecodeError → sidecar 崩溃 exit 1 零输出。三层修复：`docker.from_env` 安全
+  工厂（任意异常回退 npipe 默认端点，docker_.py + docker_gateway.py 双侧）、pty.rs
+  stderr 改 piped 并作为 Output 事件入流（真实 TTY 交错语义）、session 生命周期落
+  时间线（session_exit info/error）。`lib.rs` `ensure_sidecar_utf8()`（PYTHONUTF8=1）
+  进程级兜底。用户 VM 中文用户名路径复现 PASS 确认（2026-09-01 前）。
+- **T7（D-8）**：zsh 换默认 shell 后 help 教学引导缺失 → aisc-zshrc §7 help() 以
+  `__AISC_TUTORIAL_EOF__` heredoc 逐字节复刻 tutorial.py `_TUTORIAL`（SSOT 防漂移测试
+  三连：zshrc help 存在 / heredoc==_TUTORIAL / bash env 回退）。
+- **T8（D-9）构建网络韧性硬化**：Dockerfile 全动作审查出 CN 网络五个无兜底点。修复：
+  apt 重试×3 循环、pip 清华源兜底、npm 三坑落地（`npm i -g file.tgz` 同名平台包冲突 /
+  `npm cache add`+`--offline`=ENOTCACHED 无 packument / 终局=file: manifest + alias key
+  装进 /opt/aisc/npm + symlink——**离线重装实证通过**）、yazi 预设经 ghproxy 链、
+  geodata 下载清理；宿主侧 `stage-npm.sh`（PY 探针绕 WindowsApps stub、多架构、
+  `npm:` alias spec 解析、skip-if-current）+ `_ensure_base_image` 镜像链预拉
+  （本地命中跳过 → 三镜像链 600s → tag 本地名，失败给 registry-mirrors 三段指引）。
+  中毒链演练 + 离线全量重装验证。CI Windows Docker 冷启动竞态 → 就绪门（30×10s，
+  `b4dd1e8` 后四 lane 稳定绿）。
+- **F1/F2 设计定稿（D-10，未实施）**：F2 宿主工具 MCP（streamable-http + 白名单 +
+  只读筛，streamable-http 是 Rust 侧第一个本地监听服务；P0 通道 PoC 待实测）先于
+  F1 SSH 双向同步（mutagen，影子目录=真工作区→身份链 11 触点零改动）。裁决表 +
+  安全模型 + 待决问题五项全档 `f1-f2-design.md`。用户裁定：**优化批次优先于新功能**。
+- **优化批次规格冻结（D-11）**：三路只读探针（前端流/渲染/分屏 · provider 链/daemon ·
+  性能旋钮/缓存/冷启动）+ 用户五条报障 + 五点裁决 → `opt-batch-spec.md` O1-O9 合并
+  规格 + §G 八条实施红线。关键实证：分屏 × 与滚动条 z11 同 stacking context 6px 重叠带、
+  渲染路径零遥测、外层 30s < 内层串行舞步可超 30s、daemon 无 watchdog 被 OOM 即静默躺平、
+  build cache 6.7GB 无 UI 入口、冷启动 70s 中全量复制占 29s。
+- **O1（`ee62b07`）分屏 × z 序修复**：`.pane-close` right 4→18px 让出 xterm 滚动条带 +
+  z 2→--z-overlay(20) 恒可点；截断角标 right 10→48px 错位。几何契约钉进
+  paneCloseHit.test.ts（源码契约扫描 + 真挂载点击双范式——jsdom 无布局，几何断言沿
+  tokens.test.ts 源码扫描范式）。
+- **O3（`e664208`）渲染路径三态遥测**：mountWebgl 成功/构造失败/context-loss 经 store
+  choke point `logRendererEvent` 落共享时间线（组件不直接 import logUiEvent，沿
+  logTerminalResizeError 层契约）；事件带 WEBGL_debug_renderer_info 摘要 + 软渲染判定
+  （SwiftShader/llvmpipe 低配信号）；fit 遥测行补 renderer 字段。
+- **O9（`7fd6111`）取消懒布局**：用户直接下令。重开工作区全量恢复——initTabs 删 lazy
+  分支 + wakeDormantTab、activateTab 删唤醒路径、TabSessionState 删 "dormant" 枚举、
+  TabBar/i18n 双语同步收缩；layoutLazyRestore.test.ts 改写 layoutRestore.test.ts
+  （全量恢复语义：每 tab 立即开 session、重激活不双开）。
+- **O2（`8ca2423`）输出截断 → 磁盘 spool**：用户裁决"难道就非截断不可吗"的终局答案。
+  Rust：PtyEvent::Output 带全局 raw offset（stdout/stderr 双泵共享 SpoolWriter 互斥
+  推进）；`<数据根>/sessions/<sid>.spool` 追加写（unix 0600），写失败降级内存-only +
+  一次性时间线事件；offset/committed 分离防半写错位回放；新 ipc `session_read_spool`
+  （≤2MiB/页）；spool 随 entry 生命周期删除（ack/close/TTL sweep）+ 启动清扫 24h 残留。
+  TS：streamBuffer offsets 平行数组（headOffset 锚点）；常驻截断角标改"加载更早"按钮
+  （活会话限定）——clear + spool 段 64KiB 分块 + 窗口全量重放，consumed 重置到 cursor
+  活流无缝续接；eof/失败禁用。三不变式（streamCursor 单调/每帧单响应式替换/服务端阻塞
+  背压）全保持。**顺手修存量 bug**：session.rs `snapshot_serializes_camel_case` 缺
+  闭合 `}` 致其后 5 个测试被吞成嵌套函数从未运行（复活首跑即暴露
+  shutdown_request 的 JSON 转义存量错，一并修复）。
+- **本地门（每项独立 commit 前）**：vitest 422 / vue-tsc 干净 / cargo 262+25 集成 /
+  pytest 全量绿。O5-O8 待实施；外部证据待收：8G 笔记本 doctor 导出（O5）、长对话
+  恢复复现样本（独立 bug）。
+
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
 > 规划入口：`docs/plans/aisc-next-followup/stage-7-windows-data-root/`。把初始化/运行产生的配置、状态、runtime、日志、缓存、artifact、诊断和迁移文件统一收纳到 `%LOCALAPPDATA%\AISC\data`，workspace 只留用户文件；提供旧布局迁移。证据台账：`stage-7-windows-data-root/acceptance.md`。
