@@ -44,6 +44,8 @@ const FORBIDDEN_IN_COMPONENTS = new Set([
 const ALLOWED_IN_COMPONENTS = new Set([
   "writeSession",
   "resizeSession",
+  // O2 (D-11): spool readback — same session data-plane class as write/resize.
+  "sessionReadSpool",
   "captureWindowGeometry",
   "resolveLocale",
   "shutdownWorkbenchV2",

@@ -31,6 +31,7 @@ import type {
   ShutdownRequest,
   SaveOutcome,
   SessionExit,
+  SpoolPage,
   SessionSnapshot,
   SettingsDocument,
   SettingsPatch,
@@ -117,6 +118,11 @@ export const writeSession = (sessionId: string, bytes: number[]) =>
 
 export const resizeSession = (sessionId: string, cols: number, rows: number) =>
   invoke<void>("resize_session", { sessionId, cols, rows });
+
+/** O2 (D-11): page earlier output back from the session's on-disk spool.
+ * Reads the RAW byte range [offset, offset+limit); server caps the page. */
+export const sessionReadSpool = (sessionId: string, offset: number, limit: number) =>
+  invoke<SpoolPage>("session_read_spool", { sessionId, offset, limit });
 
 export const closeSession = (sessionId: string) => invoke<SessionExit>("close_session", { sessionId });
 

@@ -30,7 +30,7 @@ import { useRuntimeStore } from "../../stores/runtime";
 import { computeDisplayFrom } from "../../domain/streamBuffer";
 import { useSettingsStore } from "../../stores/settings";
 import { AGENTS } from "../../stores/tabLayout";
-import { resizeSession, writeSession } from "../../lib/ipc";
+import { resizeSession, sessionReadSpool, writeSession } from "../../lib/ipc";
 import { sameTermSize, shouldSendSize, type TermSize } from "./resizeSync";
 import { WORKSPACE_PATH_MIME } from "../../lib/workspaceDnd";
 import { containerPathFor, quoteForTerminal } from "./dropPath";
@@ -993,6 +993,55 @@ onMounted(() => {
   );
 });
 
+// O2 (opt-batch, D-11): "load earlier output" — the in-memory window dropped
+// the head, but the Rust sidecar spools the FULL raw stream to disk. The
+// corner chip became a button that pages the spool backwards. A loaded page
+// is displayed by rebuilding the scrollback as [spool page | full window];
+// `consumed` resets to the cursor so live streaming continues at the tail.
+// View-local by design: a remount starts over from the window head (the
+// default replay), per spec.
+const LOAD_EARLIER_STEP = 1024 * 1024; // raw bytes per click
+const loadEarlierBusy = ref(false);
+const loadEarlierDone = ref(false); // reached the beginning / spool unusable
+let earliestShown = -1; // raw offset the display already covers
+
+async function loadEarlier(): Promise<void> {
+  const sid = sessionId.value;
+  if (!sid || !term || loadEarlierBusy.value || loadEarlierDone.value) return;
+  const head = store.paneStreamMeta[props.paneId]?.headOffset ?? -1;
+  if (head < 0) return;
+  if (earliestShown < 0) earliestShown = head;
+  if (earliestShown === 0) {
+    loadEarlierDone.value = true;
+    return;
+  }
+  loadEarlierBusy.value = true;
+  try {
+    const from = Math.max(0, earliestShown - LOAD_EARLIER_STEP);
+    const page = await sessionReadSpool(sid, from, earliestShown - from);
+    if (page.length === 0) {
+      loadEarlierDone.value = true;
+      return;
+    }
+    term.clear();
+    const u8 = b64ToUint8(page.bytes);
+    // 64 KiB slices: one huge write can stall the xterm parse loop.
+    for (let i = 0; i < u8.length; i += 65536) {
+      term.write(u8.subarray(i, Math.min(i + 65536, u8.length)));
+    }
+    writeChunks(store.paneStreams[props.paneId] ?? []);
+    consumed = store.streamCursor[props.paneId] ?? 0;
+    earliestShown = page.start;
+    if (page.eof || page.start === 0) loadEarlierDone.value = true;
+  } catch {
+    // Spool degraded mid-session / session registry entry gone — the in-stream
+    // note still records the truncation; stop offering the button.
+    loadEarlierDone.value = true;
+  } finally {
+    loadEarlierBusy.value = false;
+  }
+}
+
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
@@ -1056,11 +1105,19 @@ defineExpose({
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <!-- S1.3: fixed, persistent truncation notice (the terminal-flow note
-         scrolls away under sustained output). -->
-    <div v-if="streamTruncated" class="truncation-banner" role="status">
-      {{ t("terminal.outputTruncated", { bytes: formatBytes(streamTruncatedBytes) }) }}
-    </div>
+    <!-- O2 (D-11): the truncation chip became a RECOVERY button — the full
+         stream is spooled on disk; click pages earlier output back in. Offered
+         only while the session is live (the spool file is deleted with the
+         registry entry once the exit is acknowledged). -->
+    <button
+      v-if="streamTruncated && sessionLive"
+      class="truncation-banner"
+      :disabled="loadEarlierBusy || loadEarlierDone"
+      :title="t('terminal.outputTruncated', { bytes: formatBytes(streamTruncatedBytes) })"
+      @click.stop="loadEarlier"
+    >
+      {{ loadEarlierDone ? t("terminal.noEarlierOutput") : t("terminal.loadEarlier") }}
+    </button>
     <!-- B-05 手测十轮: DECLARATIVE resize veil (review P0 — an imperative
          createElement node carries no data-v scope attribute and matches no
          scoped rule). v-if keeps the node in the DOM exactly while the veil
@@ -1217,10 +1274,9 @@ defineExpose({
   outline-offset: calc(-2 * var(--focus-ring-width));
 }
 
-/* S1.3: persistent truncation notice pinned to the top edge (does not consume
- * terminal scrollback, so it cannot be pushed out of view).
- * 手测反馈 (2026-08-20): truncation under sustained output is NORMAL — the
- * notice must not read like a warning. Small muted corner chip, no bar. */
+/* S1.3 → O2 (D-11): the persistent truncation chip is now a "load earlier"
+ * BUTTON (pages the on-disk spool backwards) — same muted corner pill, but
+ * interactive: pointer events on, hover affordance, disabled state. */
 .truncation-banner {
   position: absolute;
   top: 4px;
@@ -1234,7 +1290,15 @@ defineExpose({
   background: var(--surface-2);
   border: var(--border-w) solid var(--border);
   border-radius: var(--radius-full);
-  pointer-events: none;
+  cursor: pointer;
+}
+.truncation-banner:hover:not(:disabled) {
+  opacity: 1;
+  color: var(--text-2);
+  border-color: var(--border-strong);
+}
+.truncation-banner:disabled {
+  cursor: default;
 }
 
 /* B-05 手测十轮: repaint veil (declarative node — carries the scoped

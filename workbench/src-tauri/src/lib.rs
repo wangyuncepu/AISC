@@ -80,8 +80,8 @@ use runtime::{
 };
 use lease::{lease_claim, lease_release, lease_supervisor_info, LeaseSupervisor};
 use session::{
-    ack_session_exit, close_session, open_session, resize_session, shutdown_workbench,
-    shutdown_workbench_v2, write_session, SessionRegistry,
+    ack_session_exit, close_session, open_session, resize_session, session_read_spool,
+    shutdown_workbench, shutdown_workbench_v2, write_session, SessionRegistry,
 };
 use settings::{load_settings, reset_gui_settings, save_settings};
 use tray::{build_tray, tray_available, tray_remove};
@@ -122,6 +122,7 @@ pub fn run(cli_arg: Option<String>) {
             conversation_rename,
             write_session,
             resize_session,
+            session_read_spool,
             close_session,
             ack_session_exit,
             shutdown_workbench,
@@ -225,6 +226,35 @@ pub fn run(cli_arg: Option<String>) {
             if let Err(e) = restore_window_geometry(app_handle) {
                 eprintln!("[geometry] restore failed: {:?}", e);
             }
+            // O2 (D-11): sweep orphaned output spools. Spools are deleted with
+            // their registry entry (ack/close/evict); only a killed process
+            // leaves them behind. No session can ever reference a spool from
+            // a previous process (session ids are fresh uuids), so anything
+            // older than 24h is garbage — off-thread, never blocking startup.
+            std::thread::spawn(|| {
+                if let Some(dir) = crate::data_root::sessions_dir() {
+                    if let Ok(entries) = std::fs::read_dir(&dir) {
+                        let cutoff = std::time::SystemTime::now()
+                            .checked_sub(std::time::Duration::from_secs(24 * 3600));
+                        for e in entries.flatten() {
+                            let p = e.path();
+                            if p.extension().and_then(|x| x.to_str()) != Some("spool") {
+                                continue;
+                            }
+                            let stale = e
+                                .metadata()
+                                .and_then(|m| m.modified())
+                                .ok()
+                                .zip(cutoff)
+                                .map(|(mtime, cutoff)| mtime < cutoff)
+                                .unwrap_or(false);
+                            if stale {
+                                let _ = std::fs::remove_file(&p);
+                            }
+                        }
+                    }
+                }
+            });
             // G-16: optional tray; init failure falls back to quit-only.
             if let Err(e) = build_tray(app.handle()) {
                 eprintln!("[tray] init failed, falling back to quit-only: {e}");

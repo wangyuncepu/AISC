@@ -21,8 +21,10 @@ describe("S1.7 10 MiB output budget", () => {
 
     let state = emptyStream();
     const started = performance.now();
+    let rawOffset = 0;
     for (let i = 0; i < totalChunks; i++) {
-      state = appendWithBudget(state, [chunk]);
+      state = appendWithBudget(state, [{ b64: chunk, offset: rawOffset }]);
+      rawOffset += chunk.length;
     }
     const elapsedMs = performance.now() - started;
 
@@ -41,7 +43,7 @@ describe("S1.7 10 MiB output budget", () => {
   });
 
   it("no reactive growth: batching replaces the array, never pushes per chunk", () => {
-    const chunk = "x".repeat(512);
+    const chunk = { b64: "x".repeat(512), offset: 0 };
     let state = emptyStream();
     state = appendWithBudget(state, [chunk, chunk, chunk], { byteBudget: 10_000 });
     const replacement = appendWithBudget(state, [chunk], { byteBudget: 10_000 });

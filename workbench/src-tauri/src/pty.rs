@@ -25,12 +25,16 @@ const READ_BUF: usize = 8192;
 const WRITE_CHANNEL_CAP: usize = 16;
 
 /// Streamed to the frontend via a Tauri Channel. `bytes` is base64-encoded.
+/// `offset` (O2, D-11) is the chunk's starting position in the session's RAW
+/// byte stream — monotonic across BOTH pumps (stdout+stderr), so the
+/// frontend can request "earlier output" from the on-disk spool by position.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "type")]
 pub enum PtyEvent {
     Output {
         seq: u64,
         bytes: String,
+        offset: u64,
     },
     Exit {
         reason: String,
@@ -40,6 +44,114 @@ pub enum PtyEvent {
         code: String,
         message: String,
     },
+}
+
+/// O2 (opt-batch, D-11): session output spool. The full raw byte stream is
+/// appended to `<data-root>/sessions/<session-id>.spool` so output the
+/// frontend's 4 MiB rolling window dropped stays loadable ("加载更早输出").
+///
+/// One instance is shared (Arc<Mutex>) by the stdout and stderr pumps: every
+/// append returns its starting offset, keeping the stream positions of both
+/// interleaved sources monotonic and consistent.
+///
+/// Backpressure semantics: a disk write failure DEGRADES to memory-only —
+/// the stream itself never stops. `offset` (stream position) keeps advancing
+/// so event offsets stay consistent, while `committed` (durably written
+/// prefix) freezes and `broken` latches; `session_read_spool` refuses past
+/// the committed prefix so a partially-written file can never replay
+/// misaligned content.
+pub struct SpoolWriter {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+    offset: u64,
+    committed: u64,
+    broken: bool,
+}
+
+impl SpoolWriter {
+    /// Open (create) the spool at `path`. Failure is NOT fatal: the writer
+    /// starts disabled and the session runs memory-only.
+    pub fn create(path: &Path) -> Self {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok();
+        // §G.6: terminal streams can carry user-typed secrets — user-only.
+        #[cfg(unix)]
+        if file.is_some() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                path,
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
+        Self {
+            path: path.to_path_buf(),
+            file,
+            offset: 0,
+            committed: 0,
+            broken: false,
+        }
+    }
+
+    /// A writer with no file — offset bookkeeping only (spool disabled, e.g.
+    /// the data root failed validation).
+    pub fn disabled() -> Self {
+        Self {
+            path: PathBuf::new(),
+            file: None,
+            offset: 0,
+            committed: 0,
+            broken: false,
+        }
+    }
+
+    /// Append one raw chunk; returns its starting offset in the stream.
+    /// `offset` always advances; a write failure latches `broken` and drops
+    /// the file handle (one timeline event, then silent degradation).
+    pub fn append(&mut self, bytes: &[u8]) -> u64 {
+        let start = self.offset;
+        self.offset += bytes.len() as u64;
+        if let Some(f) = self.file.as_mut() {
+            if f.write_all(bytes).is_ok() {
+                self.committed = self.offset;
+            } else {
+                self.file = None;
+                if !self.broken {
+                    self.broken = true;
+                    crate::logging::append_event(
+                        "warn",
+                        "app",
+                        "spool_write_failed",
+                        None,
+                        serde_json::json!({ "path": self.path.display().to_string() }),
+                    );
+                }
+            }
+        }
+        start
+    }
+
+    pub fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    /// Bytes durably in the file — the readable prefix upper bound.
+    pub fn committed(&self) -> u64 {
+        self.committed
+    }
+
+    pub fn broken(&self) -> bool {
+        self.broken
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 /// Terminal result for a session (03 §五). `finished_at_ms` is epoch millis.
@@ -117,6 +229,10 @@ pub struct PtySession {
     resize_file: Option<PathBuf>,
     kill_fn: Arc<dyn Fn() + Send + Sync>,
     cancel: CancellationToken,
+    /// O2 (D-11): the session's output spool (always present; `disabled`
+    /// when no file backs it). The session registry clones this so the
+    /// terminal entry keeps serving `session_read_spool` after exit.
+    pub spool: Arc<Mutex<SpoolWriter>>,
 }
 
 /// Spawn `executable argv` under a PTY. Returns the session handle + an
@@ -134,6 +250,7 @@ pub fn spawn_pty_session(
     cols: u16,
     rows: u16,
     event_tx: mpsc::Sender<PtyEvent>,
+    spool_path: Option<PathBuf>,
 ) -> Result<(PtySession, ExitSignal), WorkbenchError> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -167,6 +284,11 @@ pub fn spawn_pty_session(
     let reader_errored = Arc::new(AtomicBool::new(false));
     let signal = ExitSignal::new();
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(WRITE_CHANNEL_CAP);
+    // O2 (D-11): full-stream spool; absent path -> disabled (memory-only).
+    let spool: Arc<Mutex<SpoolWriter>> = Arc::new(Mutex::new(match &spool_path {
+        Some(p) => SpoolWriter::create(p),
+        None => SpoolWriter::disabled(),
+    }));
 
     // kill_fn wraps the portable-pty killer for force_kill().
     let killer_for_fn = Arc::clone(&killer);
@@ -192,6 +314,7 @@ pub fn spawn_pty_session(
     let event_tx_r = event_tx.clone();
     let killer_r = Arc::clone(&killer);
     let reader_errored_r = Arc::clone(&reader_errored);
+    let spool_r = Arc::clone(&spool);
     tokio::task::spawn_blocking(move || {
         let mut reader = reader;
         let mut buf = vec![0u8; READ_BUF];
@@ -201,8 +324,17 @@ pub fn spawn_pty_session(
                 Ok(0) => break, // EOF
                 Ok(n) => {
                     seq += 1;
+                    // Lock poisoning needs a panic inside append (none exists);
+                    // the fallback offset only matters in that impossible case.
+                    let offset = spool_r
+                        .lock()
+                        .map(|mut w| w.append(&buf[..n]))
+                        .unwrap_or(0);
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
-                    if event_tx_r.blocking_send(PtyEvent::Output { seq, bytes: b64 }).is_err() {
+                    if event_tx_r
+                        .blocking_send(PtyEvent::Output { seq, bytes: b64, offset })
+                        .is_err()
+                    {
                         break; // consumer gone
                     }
                 }
@@ -263,6 +395,7 @@ pub fn spawn_pty_session(
         resize_file: None,
         kill_fn,
         cancel,
+        spool,
     };
     Ok((session, signal))
 }
@@ -284,6 +417,7 @@ pub fn spawn_pipe_session(
     cols: u16,
     rows: u16,
     event_tx: mpsc::Sender<PtyEvent>,
+    spool_path: Option<PathBuf>,
 ) -> Result<(PtySession, ExitSignal), WorkbenchError> {
     use std::process::{Command, Stdio};
 
@@ -335,6 +469,12 @@ pub fn spawn_pipe_session(
     let reader_errored = Arc::new(AtomicBool::new(false));
     let signal = ExitSignal::new();
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(WRITE_CHANNEL_CAP);
+    // O2 (D-11): full-stream spool shared by BOTH pumps (stdout + stderr
+    // interleave through the same lock, keeping raw offsets monotonic).
+    let spool: Arc<Mutex<SpoolWriter>> = Arc::new(Mutex::new(match &spool_path {
+        Some(p) => SpoolWriter::create(p),
+        None => SpoolWriter::disabled(),
+    }));
 
     // kill_fn: taskkill /PID /T /F on Windows, kill -9 on Unix.
     let kill_fn: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
@@ -374,6 +514,7 @@ pub fn spawn_pipe_session(
     let event_tx_r = event_tx.clone();
     let killer_r = Arc::clone(&kill_fn);
     let reader_errored_r = Arc::clone(&reader_errored);
+    let spool_r = Arc::clone(&spool);
     tokio::task::spawn_blocking(move || {
         let mut stdout = stdout;
         let mut buf = vec![0u8; READ_BUF];
@@ -383,9 +524,13 @@ pub fn spawn_pipe_session(
                 Ok(0) => break,
                 Ok(n) => {
                     seq += 1;
+                    let offset = spool_r
+                        .lock()
+                        .map(|mut w| w.append(&buf[..n]))
+                        .unwrap_or(0);
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
                     if event_tx_r
-                        .blocking_send(PtyEvent::Output { seq, bytes: b64 })
+                        .blocking_send(PtyEvent::Output { seq, bytes: b64, offset })
                         .is_err()
                     {
                         break;
@@ -413,6 +558,7 @@ pub fn spawn_pipe_session(
     // stderr is diagnostics, never a reason to kill the child.
     if let Some(stderr) = stderr {
         let event_tx_e = event_tx.clone();
+        let spool_e = Arc::clone(&spool);
         tokio::task::spawn_blocking(move || {
             let mut stderr = stderr;
             let mut buf = vec![0u8; READ_BUF];
@@ -422,9 +568,13 @@ pub fn spawn_pipe_session(
                     Ok(0) => break,
                     Ok(n) => {
                         seq += 1;
+                        let offset = spool_e
+                            .lock()
+                            .map(|mut w| w.append(&buf[..n]))
+                            .unwrap_or(0);
                         let b64 = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
                         if event_tx_e
-                            .blocking_send(PtyEvent::Output { seq, bytes: b64 })
+                            .blocking_send(PtyEvent::Output { seq, bytes: b64, offset })
                             .is_err()
                         {
                             break;
@@ -475,6 +625,7 @@ pub fn spawn_pipe_session(
         resize_file: Some(resize_file),
         kill_fn,
         cancel,
+        spool,
     };
     Ok((session, signal))
 }
@@ -541,10 +692,11 @@ mod tests {
 
     #[test]
     fn pty_event_output_serializes_base64() {
-        let ev = PtyEvent::Output { seq: 3, bytes: base64::engine::general_purpose::STANDARD.encode(b"hi") };
+        let ev = PtyEvent::Output { seq: 3, bytes: base64::engine::general_purpose::STANDARD.encode(b"hi"), offset: 7 };
         let s = serde_json::to_string(&ev).unwrap();
         assert!(s.contains(r#""type":"output""#));
         assert!(s.contains(r#""seq":3"#));
+        assert!(s.contains(r#""offset":7"#));
         assert!(s.contains("aGk=")); // base64("hi")
     }
 
@@ -620,6 +772,7 @@ mod tests {
             80,
             24,
             tx,
+            None,
         );
         let err = match result {
             Ok(_) => panic!("missing executable must fail spawn"),
@@ -663,13 +816,19 @@ mod tests {
         );
 
         let (tx, mut rx) = mpsc::channel(32);
-        let (_session, signal) = spawn_pipe_session(exe, argv, 80, 24, tx).unwrap();
+        let (_session, signal) = spawn_pipe_session(exe, argv, 80, 24, tx, None).unwrap();
         let exit = signal.wait().await;
         assert_eq!(exit.exit_code, Some(0));
 
         let mut saw_stderr_marker = false;
+        let mut last_offset: Option<u64> = None;
         while let Ok(ev) = rx.try_recv() {
-            if let PtyEvent::Output { bytes, .. } = ev {
+            if let PtyEvent::Output { bytes, offset, .. } = ev {
+                // O2 (D-11): raw offsets are monotonic across BOTH pumps.
+                if let Some(prev) = last_offset {
+                    assert!(offset > prev, "offset must strictly increase: {offset} after {prev}");
+                }
+                last_offset = Some(offset);
                 let raw = base64::engine::general_purpose::STANDARD
                     .decode(bytes.as_bytes())
                     .unwrap();
@@ -682,5 +841,41 @@ mod tests {
             saw_stderr_marker,
             "child stderr text must reach the Output stream"
         );
+    }
+
+    // --- O2 (opt-batch, D-11): output spool ---
+
+    #[test]
+    fn spool_writer_roundtrip_and_offsets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions").join("s1.spool");
+        let mut w = SpoolWriter::create(&path);
+        let a = w.append(b"hello ");
+        let b = w.append(b"world");
+        assert_eq!((a, b), (0, 6));
+        assert_eq!(w.committed(), 11);
+        assert!(!w.broken());
+        // The file holds the raw stream verbatim.
+        let on_disk = std::fs::read(&path).unwrap();
+        assert_eq!(on_disk, b"hello world");
+    }
+
+    #[test]
+    fn spool_writer_disabled_is_memory_only() {
+        let mut w = SpoolWriter::disabled();
+        assert_eq!(w.append(b"x"), 0);
+        assert_eq!(w.append(b"yy"), 1); // offsets still advance monotonically
+        assert_eq!(w.committed(), 0); // nothing durable
+        assert!(!w.broken()); // degraded-by-design, not a failure
+    }
+
+    #[test]
+    fn spool_writer_create_failure_degrades_not_panics() {
+        // An un-openable path (a directory) must not panic the pump.
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().to_path_buf(); // opening a dir as a file fails
+        let mut w = SpoolWriter::create(&bad);
+        assert_eq!(w.append(b"data"), 0);
+        assert!(w.committed() == 0);
     }
 }

@@ -183,9 +183,24 @@ export interface SessionExit {
 }
 
 export type PtyEvent =
-  | { type: "output"; seq: number; bytes: string }
+  /** `offset` (O2, D-11): the chunk's starting position in the session's
+   * RAW byte stream — monotonic across both pumps, used to page earlier
+   * output back from the on-disk spool. */
+  | { type: "output"; seq: number; bytes: string; offset: number }
   | { type: "exit"; reason: string; exitCode: number | null }
   | { type: "error"; code: string; message: string };
+
+// --- O2 (opt-batch, D-11): output spool readback ---
+
+/** One page of earlier output read from the session spool (raw positions). */
+export interface SpoolPage {
+  start: number;
+  length: number;
+  /** base64 of the raw [start, start+length) byte range */
+  bytes: string;
+  /** true when the page reached the beginning of the durable prefix */
+  eof: boolean;
+}
 
 // --- S1.4: runtime control ---
 

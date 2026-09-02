@@ -12,7 +12,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { useRuntimeStore } from "../runtime";
 import { AGENT_TITLE, newPaneTab } from "../tabLayout";
 
-type EventLike = { type: string; bytes?: string; reason?: string; exitCode?: number | null };
+type EventLike = { type: string; bytes?: string; offset?: number; reason?: string; exitCode?: number | null };
 
 const channelInstances: Array<{ onmessage: (ev: EventLike) => void }> = [];
 
@@ -73,15 +73,15 @@ describe("S1.8 IPC fake → store buffer", () => {
     const channel = channelInstances[0];
     expect(channel).toBeDefined();
 
-    channel.onmessage({ type: "output", bytes: "aGVsbG8=" }); // "hello"
+    channel.onmessage({ type: "output", bytes: "aGVsbG8=", offset: 0 }); // "hello"
     await flushFrame();
 
     const paneId = tab.activePaneId;
     expect(s.paneStreams[paneId]).toContain("aGVsbG8=");
     expect(s.streamCursor[paneId]).toBe(1);
     // Batching: two more chunks in one flush land together, order preserved.
-    channel.onmessage({ type: "output", bytes: "IHdvcmxk" }); // " world"
-    channel.onmessage({ type: "output", bytes: "IQ==" }); // "!"
+    channel.onmessage({ type: "output", bytes: "IHdvcmxk", offset: 5 }); // " world"
+    channel.onmessage({ type: "output", bytes: "IQ==", offset: 11 }); // "!"
     await flushFrame();
     expect(s.paneStreams[paneId]).toEqual(["aGVsbG8=", "IHdvcmxk", "IQ=="]);
     expect(s.streamCursor[paneId]).toBe(3);
@@ -97,14 +97,14 @@ describe("S1.8 IPC fake → store buffer", () => {
 
     await s.openTab("t1");
     const first = channelInstances[0]!;
-    first.onmessage({ type: "output", bytes: "aGVsbG8=" });
+    first.onmessage({ type: "output", bytes: "aGVsbG8=", offset: 0 });
     await flushFrame();
     expect(s.paneStreams[tab.activePaneId]).toHaveLength(1);
 
     // A reopen moves the pane to a NEW session id; the old channel's late
     // events must be dropped (F-R04) and never count as liveness proof.
     tab.panes[tab.activePaneId]!.sessionId = "new-session-id";
-    first.onmessage({ type: "output", bytes: "b2xk" }); // stale "old"
+    first.onmessage({ type: "output", bytes: "b2xk", offset: 20 }); // stale "old"
     await flushFrame();
     expect(s.paneStreams[tab.activePaneId]).toEqual(["aGVsbG8="]); // unchanged
   });

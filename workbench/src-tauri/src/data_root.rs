@@ -216,6 +216,14 @@ pub fn validate_data_root() -> Result<PathBuf, DataRootError> {
     Ok(root)
 }
 
+/// O2 (opt-batch, D-11): `<data-root>/sessions` — terminal output spools
+/// (`<session-id>.spool`, raw byte streams, user-only permissions). None
+/// when the data root fails validation: the session then runs memory-only
+/// (the frontend's rolling window), never blocked by a bad data root.
+pub fn sessions_dir() -> Option<PathBuf> {
+    validate_data_root().ok().map(|root| root.join("sessions"))
+}
+
 /// Copy src→dst only when dst is absent (hardlink create = no-overwrite
 /// under a concurrent adopter; never touches the source).
 fn adopt_file(src: &Path, dst: &Path) {

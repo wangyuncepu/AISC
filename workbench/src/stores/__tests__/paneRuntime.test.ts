@@ -115,7 +115,7 @@ describe("store session ops route through the active pane (A-G17-5)", () => {
     const id = s.createTab("bash")!;
     const tab = s.tabs.find((t) => t.tabId === id)!;
     expect(tab.panes[id].sessionState).toBe("starting"); // invoke still pending
-    lastChannel().onmessage?.({ type: "output", bytes: "eA==" }); // bash prompt arrives
+    lastChannel().onmessage?.({ type: "output", bytes: "eA==", offset: 0 }); // bash prompt arrives
     expect(tab.panes[id].sessionState).toBe("running"); // output => running
     expect(tab.sessionState).toBe("running"); // projection synced
   });

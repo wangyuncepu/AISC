@@ -59,7 +59,7 @@ import {
   splitLeaf,
 } from "./paneTree";
 import type { NavDir } from "./paneTree";
-import { appendWithBudget } from "../domain/streamBuffer";
+import { appendWithBudget, type StreamChunk } from "../domain/streamBuffer";
 
 /** S2.1.a/b startup state machine (02-startup-flow.md §三). S2.2.b adds `conflict`. */
 export type WorkbenchStatus =
@@ -225,10 +225,14 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   // land in `pendingChunks` and are flushed once per animation frame through
   // appendWithBudget (bounded, truncation observable) into `paneStreams` as a
   // single array replacement - high-frequency writes never hit the reactive
-  // tree per chunk.
-  const pendingChunks: Record<string, string[]> = {};
+  // tree per chunk. O2 (D-11): chunks carry RAW offsets; the durable offsets
+  // array rides the (non-reactive) paneByteCounts pattern.
+  const pendingChunks: Record<string, StreamChunk[]> = {};
   const paneByteCounts: Record<string, number> = {};
-  const paneStreamMeta = ref<Record<string, { truncated: boolean; truncatedBytes: number }>>({});
+  const paneOffsets: Record<string, number[]> = {};
+  const paneStreamMeta = ref<
+    Record<string, { truncated: boolean; truncatedBytes: number; headOffset: number }>
+  >({});
   // Monotonic per-pane count of chunks ever appended to the buffer. The rolling
   // window drops the HEAD, so Terminal cannot advance by array length (it never
   // changes once full); it advances by this cursor instead (S1.3 hand-test fix).
@@ -243,10 +247,12 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
         const incoming = pendingChunks[id];
         if (!incoming || incoming.length === 0) continue;
         pendingChunks[id] = [];
-        const meta = paneStreamMeta.value[id] ?? { truncated: false, truncatedBytes: 0 };
+        const meta =
+          paneStreamMeta.value[id] ?? { truncated: false, truncatedBytes: 0, headOffset: -1 };
         const state = appendWithBudget(
           {
             chunks: paneStreams.value[id] ?? [],
+            offsets: paneOffsets[id] ?? [],
             bytes: paneByteCounts[id] ?? 0,
             truncated: meta.truncated,
             truncatedBytes: meta.truncatedBytes,
@@ -254,11 +260,13 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
           incoming,
         );
         paneStreams.value[id] = state.chunks;
+        paneOffsets[id] = state.offsets;
         paneByteCounts[id] = state.bytes;
         streamCursor.value[id] = (streamCursor.value[id] ?? 0) + incoming.length;
         paneStreamMeta.value[id] = {
           truncated: state.truncated,
           truncatedBytes: state.truncatedBytes,
+          headOffset: state.offsets[0] ?? -1,
         };
       }
     });
@@ -1096,8 +1104,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     p.exit = null;
     paneStreams.value[paneId] = []; // reset the per-pane output buffer
     paneByteCounts[paneId] = 0;
+    paneOffsets[paneId] = [];
     streamCursor.value[paneId] = 0;
-    paneStreamMeta.value[paneId] = { truncated: false, truncatedBytes: 0 };
+    paneStreamMeta.value[paneId] = { truncated: false, truncatedBytes: 0, headOffset: -1 };
     pendingChunks[paneId] = [];
     syncProjection(tab);
     const ch = new Channel<PtyEvent>();
@@ -1114,8 +1123,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
         // (G-17 feedback 2026-08-10).
         onTabOpenOk(paneId);
         // S1.3: buffer into the non-reactive pending queue; a single rAF flush
-        // applies budget + emits one reactive replacement.
-        (pendingChunks[paneId] ??= []).push(ev.bytes);
+        // applies budget + emits one reactive replacement. O2 (D-11): the raw
+        // offset rides along for the spool ("load earlier output") anchor.
+        (pendingChunks[paneId] ??= []).push({ b64: ev.bytes, offset: ev.offset });
         scheduleStreamFlush();
       } else if (ev.type === "exit") {
         if (!p.exit) {

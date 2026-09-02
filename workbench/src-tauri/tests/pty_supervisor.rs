@@ -96,6 +96,7 @@ async fn echo_child_streams_output_and_exit_code() {
         80,
         24,
         tx,
+        None,
     )
     .expect("spawn");
 
@@ -116,6 +117,7 @@ async fn write_input_is_echoed_and_close_is_user_close() {
         80,
         24,
         tx,
+        None,
     )
     .expect("spawn");
 
@@ -164,6 +166,7 @@ async fn resize_does_not_error() {
         80,
         24,
         tx,
+        None,
     )
     .expect("spawn");
 
@@ -201,7 +204,7 @@ async fn real_aisc_session_open_bash() {
         "--agent".into(),
         "bash".into(),
     ];
-    let (session, signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx).expect("spawn");
+    let (session, signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx, None).expect("spawn");
 
     session.write(b"echo hi_aisc\n".to_vec()).await.expect("write");
 
@@ -272,7 +275,7 @@ async fn reopen_25_cycles_leaves_no_orphan_sessions() {
             "--agent".into(),
             "bash".into(),
         ];
-        let (session, signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx).expect("spawn");
+        let (session, signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx, None).expect("spawn");
         // Answer the cursor query if the container bash emits one.
         let writer = session.writer_sender();
         let answer = tokio::spawn(async move {
@@ -314,7 +317,7 @@ async fn reopen_25_cycles_leaves_no_orphan_sessions() {
         "--workspace".into(),
         std::env::temp_dir().to_string_lossy().into_owned(),
     ];
-    let (session, signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx).expect("final spawn");
+    let (session, signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx, None).expect("final spawn");
     let writer = session.writer_sender();
     tokio::spawn(async move {
         loop {
@@ -372,7 +375,7 @@ async fn perf_runtime_stop_with_eight_sessions() {
             "--agent".into(),
             "bash".into(),
         ];
-        let (session, _signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx).expect("spawn");
+        let (session, _signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx, None).expect("spawn");
         sessions.push(session);
     }
     tokio::time::sleep(Duration::from_millis(500)).await; // let execs settle
@@ -427,7 +430,7 @@ async fn resize_chain_stty_probe_three_sizes_20_reps() {
         "--workspace".into(),
         std::env::temp_dir().to_string_lossy().into_owned(),
     ];
-    let (session, signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx).expect("spawn");
+    let (session, signal) = spawn_pty_session(Path::new(&aisc), argv, 80, 24, tx, None).expect("spawn");
     let writer = session.writer_sender();
 
     // Input sanity: one echo through the session stdin (the resize chain is

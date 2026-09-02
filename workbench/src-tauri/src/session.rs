@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tauri::{ipc::Channel, AppHandle, Manager};
 use tokio::sync::mpsc;
@@ -23,7 +24,7 @@ use crate::cli::run_control;
 use crate::error::WorkbenchError;
 use crate::pty::{
     spawn_pipe_session, now_ms, ExitSignal, PtyEvent, PtySession, SessionExit, SessionState,
-    REASON_TRANSPORT_ERROR, REASON_USER_CLOSE,
+    SpoolWriter, REASON_TRANSPORT_ERROR, REASON_USER_CLOSE,
 };
 use crate::settings::Settings;
 
@@ -78,6 +79,10 @@ pub struct SessionEntry {
     /// Shared closing completion: concurrent closes await the same result
     /// (03 §2.3.4); set once the terminal exit is known.
     pub close: Option<Arc<ExitSignal>>,
+    /// O2 (D-11): the session's output spool, kept on the entry so
+    /// `session_read_spool` keeps serving after the child exited (the
+    /// PtySession handle is taken by close). None until spawn commits.
+    pub spool: Option<Arc<Mutex<SpoolWriter>>>,
 }
 
 /// Managed Tauri state: `session_id -> SessionEntry`, with the spawn-reserve
@@ -316,10 +321,15 @@ fn is_terminal(state: SessionState) -> bool {
 fn sweep_terminal_entries(map: &mut HashMap<String, SessionEntry>) {
     let now = now_ms();
     map.retain(|_, e| {
-        e.exit
+        let keep = e
+            .exit
             .as_ref()
             .map(|x| x.finished_at_ms + TERMINAL_TTL_MS > now)
-            .unwrap_or(true)
+            .unwrap_or(true);
+        if !keep {
+            drop_spool_file(e); // O2: evicted entries take their spool with them
+        }
+        keep
     });
     let mut per_runtime: HashMap<String, Vec<(String, i64)>> = HashMap::new();
     for (id, e) in map.iter() {
@@ -337,7 +347,9 @@ fn sweep_terminal_entries(map: &mut HashMap<String, SessionEntry>) {
         entries.sort_by_key(|(_, finished)| *finished);
         let surplus = entries.len().saturating_sub(MAX_TERMINAL_ENTRIES_PER_RUNTIME);
         for (id, _) in entries.into_iter().take(surplus) {
-            map.remove(&id);
+            if let Some(e) = map.remove(&id) {
+                drop_spool_file(&e);
+            }
         }
     }
 }
@@ -392,6 +404,7 @@ pub async fn open_session(
                 workspace: ws.clone(),
                 generation: gen,
                 close: None,
+                spool: None,
             },
         );
         gen
@@ -401,8 +414,14 @@ pub async fn open_session(
     let argv =
         session_open_argv(&runtime_id, &session_id, &agent, &ws, resume_conversation_id.as_deref());
 
+    // O2 (D-11): full output spool at <data-root>/sessions/<sid>.spool.
+    // A missing/invalid data root means NO spool — memory-only degradation,
+    // never a failed session.
+    let spool_path = crate::data_root::sessions_dir()
+        .map(|d| d.join(format!("{session_id}.spool")));
+
     let (event_tx, event_rx) = mpsc::channel::<PtyEvent>(EVENT_CHANNEL_CAP);
-    let spawned = spawn_pipe_session(&pin, argv, DEFAULT_COLS, DEFAULT_ROWS, event_tx);
+    let spawned = spawn_pipe_session(&pin, argv, DEFAULT_COLS, DEFAULT_ROWS, event_tx, spool_path);
     let (session, signal) = match spawned {
         Ok(pair) => pair,
         Err(e) => {
@@ -434,6 +453,7 @@ pub async fn open_session(
         let mut g = reg.lock()?;
         match g.get_mut(&session_id) {
             Some(en) if en.state == SessionState::Starting && en.session.is_none() => {
+                en.spool = Some(Arc::clone(&session.spool));
                 en.session = Some(session);
                 en.signal = signal.clone();
                 en.state = SessionState::Running;
@@ -586,6 +606,97 @@ pub enum AckResult {
     AlreadyAcknowledged,
 }
 
+// --- O2 (opt-batch, D-11): output spool readback ---
+
+/// One page of earlier output read back from the spool. `bytes` is base64;
+/// `start`/`length` are RAW byte positions in the session stream; `eof`
+/// means the page reached the beginning of the durable prefix.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpoolPage {
+    pub start: u64,
+    pub length: u64,
+    pub bytes: String,
+    pub eof: bool,
+}
+
+/// Hard cap per readback page (raw bytes) — the frontend loads history
+/// progressively ("加载更早" button), never in one shot.
+const MAX_SPOOL_READ: u64 = 2 * 1024 * 1024;
+
+/// Read `[offset, offset+limit)` of the session's raw output stream from the
+/// on-disk spool (O2, D-11). Serves live AND terminal entries — the spool
+/// outlives the child until the entry is acknowledged/closed.
+#[tauri::command]
+pub async fn session_read_spool(
+    app: AppHandle,
+    session_id: String,
+    offset: u64,
+    limit: u64,
+) -> Result<SpoolPage, WorkbenchError> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let limit = limit.clamp(1, MAX_SPOOL_READ);
+    let reg = registry(&app);
+    let g = reg.lock()?;
+    let entry = g
+        .get(&session_id)
+        .ok_or_else(|| WorkbenchError::map_aisc("AISC_ERR_SESSION_NOT_FOUND"))?;
+    let spool = entry
+        .spool
+        .clone()
+        .ok_or_else(|| session_failed("session has no output spool"))?;
+    drop(g);
+
+    let (committed, broken, path) = {
+        let w = spool
+            .lock()
+            .map_err(|_| session_failed("spool lock poisoned"))?;
+        (w.committed(), w.broken(), w.path().to_path_buf())
+    };
+    // A broken spool froze mid-stream: bytes past its durable prefix would
+    // replay MISALIGNED content. Refuse instead of corrupting the display.
+    if broken {
+        return Err(session_failed("output spool degraded (disk write failed mid-session)"));
+    }
+    if offset >= committed {
+        return Ok(SpoolPage {
+            start: offset,
+            length: 0,
+            bytes: String::new(),
+            eof: true,
+        });
+    }
+    let end = offset.saturating_add(limit).min(committed);
+    let mut file = std::fs::File::open(&path)
+        .map_err(|e| session_failed(format!("open spool: {e}")))?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|e| session_failed(format!("seek spool: {e}")))?;
+    let mut buf = vec![0u8; (end - offset) as usize];
+    file.read_exact(&mut buf)
+        .map_err(|e| session_failed(format!("read spool: {e}")))?;
+    let eof = end == committed;
+    let bytes = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &buf);
+    Ok(SpoolPage {
+        start: offset,
+        length: buf.len() as u64,
+        bytes,
+        eof,
+    })
+}
+
+/// Best-effort spool file removal (O2 §G.6: spools never outlive their
+/// registry entry — they may hold user-typed secrets).
+fn drop_spool_file(entry: &SessionEntry) {
+    if let Some(spool) = &entry.spool {
+        if let Ok(w) = spool.lock() {
+            if !w.path().as_os_str().is_empty() {
+                let _ = std::fs::remove_file(w.path());
+            }
+        }
+    }
+}
+
 /// Natural-exit ack (03 §3.3): removes a terminal registry entry; idempotent
 /// for already-deleted entries; live sessions return a stable error.
 #[tauri::command]
@@ -598,6 +709,7 @@ pub async fn ack_session_exit(
     match g.get(&session_id) {
         None => Ok(AckResult::AlreadyAcknowledged),
         Some(en) if en.exit.is_some() => {
+            drop_spool_file(en); // O2: spool never outlives its entry
             g.remove(&session_id);
             sweep_terminal_entries(&mut g);
             Ok(AckResult::Acknowledged)
@@ -643,6 +755,7 @@ fn plan_close(
             if let Some(exit) = en.exit.clone() {
                 // Cached terminal exit: return it and drop the entry; a later
                 // ack stays idempotent (03 §3.3.4).
+                drop_spool_file(en); // O2: spool never outlives its entry
                 g.remove(session_id);
                 ClosePlan::Terminal(exit)
             } else {
@@ -1233,6 +1346,7 @@ mod tests {
             workspace: "/ws".into(),
             generation: 0,
             close: None,
+            spool: None,
         }
     }
 
@@ -1247,6 +1361,7 @@ mod tests {
             workspace: workspace.into(),
             generation: 0,
             close: None,
+            spool: None,
         }
     }
 
@@ -1352,6 +1467,7 @@ mod tests {
                 workspace: "/ws".into(),
                 generation: 1,
                 close: None,
+                spool: None,
             },
         );
         let plan = plan_close(&mut map, "s1");
@@ -1392,14 +1508,17 @@ mod tests {
         assert!(json.contains(r#""runtimeId":"rid""#));
         assert!(json.contains(r#""state":"running""#));
         assert!(json.contains(r#""generation":3"#));
+    }
 
     // --- runtime-lifecycle-ux Stage 2: structured shutdown (02 §4) ---------
 
     #[test]
     fn shutdown_request_decodes_camel_case_and_defaults_retention() {
+        // (O2 顺手修: 该测试曾因 snapshot_serializes_camel_case 缺闭合 }
+        // 被吞成嵌套函数、从未运行——首跑即暴露 JSON 转义错误。)
         let req: ShutdownRequest = serde_json::from_str(
             r#"{"workspaces":[{"workspace":"C:\\ws","runtimeId":"rid-1"},
-                            {"workspace":"C:\w2","runtimeId":"rid-2",
+                            {"workspace":"C:\\w2","runtimeId":"rid-2",
                              "retention":"keep_stopped"}],
                "reason":"window_close"}"#,
         )
@@ -1438,5 +1557,45 @@ mod tests {
         assert_eq!(normalize_state("starting"), "unknown");
         assert_eq!(normalize_state("unknown"), "unknown");
     }
+
+    // --- O2 (opt-batch, D-11): spool lifecycle ---
+
+    #[test]
+    fn drop_spool_file_removes_the_backing_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("s.spool");
+        let mut w = crate::pty::SpoolWriter::create(&path);
+        w.append(b"stream");
+        assert!(path.exists());
+        let entry = SessionEntry {
+            session: None,
+            signal: ExitSignal::new(),
+            state: SessionState::Exited,
+            exit: None,
+            runtime_id: "r1".into(),
+            agent: "bash".into(),
+            workspace: "/ws".into(),
+            generation: 0,
+            close: None,
+            spool: Some(Arc::new(Mutex::new(w))),
+        };
+        drop_spool_file(&entry);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn sweep_deletes_evicted_entry_spools() {
+        let dir = tempdir().unwrap();
+        let spool_path = dir.path().join("old.spool");
+        let mut w = crate::pty::SpoolWriter::create(&spool_path);
+        w.append(b"x");
+        let mut old = terminal_entry("r1", now_ms() - 61_000);
+        old.spool = Some(Arc::new(Mutex::new(w)));
+        let mut map = HashMap::new();
+        map.insert("old".into(), old);
+        assert!(spool_path.exists());
+        sweep_terminal_entries(&mut map);
+        assert!(!map.contains_key("old"));
+        assert!(!spool_path.exists(), "evicted entry must take its spool file");
     }
 }

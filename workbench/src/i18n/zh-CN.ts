@@ -337,6 +337,8 @@ export const zhCN = {
   "terminal.sessionError": "[Session error: {code} {message}]",
   "terminal.openFailed": "[open_session failed: {code}]",
   "terminal.outputTruncated": "[较早输出已截断：为保持最新输出，已丢弃 {bytes}]",
+  "terminal.loadEarlier": "加载更早的输出",
+  "terminal.noEarlierOutput": "已到最早输出",
   // --- search overlay (G-03/A-G03-1) ---
   "terminal.search": "搜索",
   "terminal.searchPlaceholder": "搜索终端…",
