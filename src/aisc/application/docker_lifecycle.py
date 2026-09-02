@@ -530,3 +530,130 @@ def _log_tail(stdout: str, lines: int = 20) -> str:
     # Redaction-by-construction: build output contains no secrets; cap the
     # size so the envelope stays bounded either way.
     return tail[-4000:]
+
+
+# ---------------------------------------------------------------------------
+# O7 (opt-batch, D-11): build-cache cleanup — builder prune + dangling images
+# with filters. Extends the module's safety invariants: NEVER a global
+# `docker system prune`, NEVER `-a` (non-dangling images stay), and the
+# `until=` filter keeps caches/entries younger than the window untouched.
+# ---------------------------------------------------------------------------
+
+CACHE_USAGE_SCHEMA = "aisc.docker-cache-usage/v1"
+CACHE_CLEANUP_SCHEMA = "aisc.docker-cache-cleanup/v1"
+
+
+def _cache_cleanup_argv(kind: str, min_age_hours: int) -> List[str]:
+    """Pure argv builder for the two prune kinds (test-pinned invariants).
+
+    builder → `docker builder prune --force --filter until=<h>h`
+    dangling → `docker image prune --force --filter until=<h>h` (NO -a)
+    """
+    if kind == "builder":
+        return ["builder", "prune", "--force",
+                "--filter", f"until={min_age_hours}h"]
+    if kind == "dangling":
+        # image prune WITHOUT -a removes DANGLING (<none>) images only.
+        return ["image", "prune", "--force",
+                "--filter", f"until={min_age_hours}h"]
+    raise ValueError(f"unknown cache-cleanup kind: {kind}")
+
+
+def _system_df(executor: Any) -> Dict[str, Dict[str, str]]:
+    """`docker system df` rows keyed by type (Images/Containers/Local Volumes/
+    Build Cache). Unavailable docker → empty dict (caller surfaces it)."""
+    result = executor.run_captured(
+        ["system", "df", "--format", "{{json .}}"], timeout=30.0
+    )
+    import json as _json
+
+    rows: Dict[str, Dict[str, str]] = {}
+    if getattr(result, "exit_code", 1) != 0:
+        return rows
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            row = _json.loads(line)
+        except ValueError:
+            continue
+        kind = str(row.get("Type") or "")
+        if kind:
+            rows[kind] = {
+                "total_count": str(row.get("TotalCount") or ""),
+                "active": str(row.get("Active") or ""),
+                "size": str(row.get("Size") or ""),
+                "reclaimable": str(row.get("Reclaimable") or ""),
+            }
+    return rows
+
+
+def cache_usage(executor: Any) -> Dict[str, Any]:
+    """Read-only df summary for the settings card."""
+    df = _system_df(executor)
+    return {
+        "schema_version": CACHE_USAGE_SCHEMA,
+        "docker_available": bool(df),
+        "df": df,
+    }
+
+
+def docker_cache_cleanup(
+    executor: Any,
+    *,
+    min_age_hours: int = 24,
+    data_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Prune the build cache and dangling images (both until-filtered).
+
+    Never a global prune; never `-a`; running containers' layers are never
+    candidates (docker enforces this for both prune kinds). Reports the df
+    before/after deltas plus each prune's own reclaimed line.
+    """
+    if min_age_hours < 1:
+        raise CliError(
+            message="min_age_hours must be >= 1 (refusing unfiltered prune)",
+            exit_code=RuntimeExitCode.USAGE_ERROR,
+            error_code="AISC_ERR_USAGE",
+        )
+
+    from aisc.adapters.maintenance_lock import docker_maintenance_lock_at_root
+    from aisc.application.data_root import shared_root
+
+    root = Path(data_root) if data_root else shared_root()
+    before = _system_df(executor)
+    if not before:
+        raise CliError(
+            message="Docker unavailable; cache cleanup refused",
+            exit_code=RuntimeExitCode.DOCKER_UNAVAILABLE,
+            error_code=RuntimeErrorCode.DOCKER_UNAVAILABLE,
+        )
+
+    result: Dict[str, Any] = {
+        "schema_version": CACHE_CLEANUP_SCHEMA,
+        "action": "cache-cleanup",
+        "min_age_hours": min_age_hours,
+        "prunes": [],
+        "df_before": before,
+        "df_after": {},
+        "warnings": [],
+    }
+    with docker_maintenance_lock_at_root(root):
+        for kind in ("builder", "dangling"):
+            argv = _cache_cleanup_argv(kind, min_age_hours)
+            pr = executor.run_captured(argv, timeout=300.0)
+            reclaimed = ""
+            for line in (pr.stdout or "").splitlines():
+                if "reclaimed" in line.lower():
+                    reclaimed = line.strip()
+                    break
+            entry = {"kind": kind, "argv": argv,
+                     "exit_code": pr.exit_code, "reclaimed": reclaimed}
+            if pr.exit_code != 0:
+                entry["error"] = (pr.stderr or pr.stdout or "").strip()[:200]
+                result["warnings"].append(f"{kind} prune failed")
+            result["prunes"].append(entry)
+
+    result["df_after"] = _system_df(executor)
+    return result

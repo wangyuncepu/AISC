@@ -348,6 +348,40 @@ export const captureWindowGeometry = () => invoke<boolean>("capture_window_geome
 
 export const runDoctor = () => invoke<DoctorReport>("run_doctor");
 
+// --- O7 (D-11): docker disk & cache panel (settings card) ---
+
+export interface CacheDfRow {
+  kind: string;
+  total_count: string;
+  active: string;
+  size: string;
+  reclaimable: string;
+}
+
+export interface CacheUsage {
+  dockerAvailable: boolean;
+  rows: CacheDfRow[];
+}
+
+export interface CachePruneEntry {
+  kind: string;
+  exit_code: number;
+  reclaimed: string;
+  error?: string | null;
+}
+
+export interface CacheCleanupResult {
+  prunes: CachePruneEntry[];
+  warnings: string[];
+  rows_after: CacheDfRow[];
+}
+
+export const cacheUsage = () => invoke<CacheUsage>("cache_usage");
+
+/** Prune builder cache + dangling images (until-filtered; CLI owns safety). */
+export const cacheCleanup = (minAgeHours: number) =>
+  invoke<CacheCleanupResult>("cache_cleanup", { minAgeHours });
+
 // --- Stage 6 (REL-01): op-trace ring + redacted diagnostic bundle ---
 
 export const opTraces = () => invoke<OpTrace[]>("op_traces");

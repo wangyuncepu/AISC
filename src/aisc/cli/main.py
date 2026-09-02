@@ -466,6 +466,17 @@ def _build_parser() -> _AiscArgumentParser:
     mtr.add_argument("--no-cache", action="store_true", default=True)
     mtr.add_argument("--pull", action="store_true", default=False)
 
+    mtu = mtsub.add_parser("cache-usage", help="Read-only docker system df summary",
+                           allow_abbrev=False)
+    _add_global_args(mtu, is_subparser=True)
+
+    mtcc = mtsub.add_parser("cache-cleanup",
+                            help="Prune builder cache + dangling images (until-filtered)",
+                            allow_abbrev=False)
+    _add_global_args(mtcc, is_subparser=True)
+    mtcc.add_argument("--min-age-hours", type=int, default=24,
+                      help="Only clear cache entries older than this (default 24)")
+
     # --- runtime ---
     rtp = sub.add_parser("runtime", help="Runtime control plane (Workbench Phase 0)", allow_abbrev=False)
     _add_global_args(rtp, is_subparser=True)
@@ -1681,6 +1692,13 @@ def _cmd_maintenance(
                               old_image_id=args.old_image_id,
                               no_cache=args.no_cache, pull=args.pull)
         return data, (1 if data.get("failed") else 0), []
+    if sub == "cache-usage":
+        from aisc.application.docker_lifecycle import cache_usage
+        return cache_usage(executor), 0, []
+    if sub == "cache-cleanup":
+        from aisc.application.docker_lifecycle import docker_cache_cleanup
+        data = docker_cache_cleanup(executor, min_age_hours=args.min_age_hours)
+        return data, (1 if data.get("warnings") else 0), []
     return None, 2, [build_error("AISC_ERR_USAGE", f"Unknown maintenance subcommand: {sub}")]
 
 

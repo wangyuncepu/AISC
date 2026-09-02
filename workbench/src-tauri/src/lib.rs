@@ -4,6 +4,7 @@
 // S1.3: PTY supervisor + session data-plane commands.
 // See docs/gui-planning/06-implementation-plan.md §四.
 
+pub mod cache;
 pub mod cli;
 pub mod conversation;
 pub mod data_root;
@@ -83,6 +84,7 @@ use session::{
     ack_session_exit, close_session, open_session, resize_session, session_read_spool,
     shutdown_workbench, shutdown_workbench_v2, write_session, SessionRegistry,
 };
+use cache::{cache_cleanup, cache_usage};
 use settings::{load_settings, reset_gui_settings, save_settings};
 use tray::{build_tray, tray_available, tray_remove};
 use window::{capture_window_geometry, restore_window_geometry};
@@ -123,6 +125,8 @@ pub fn run(cli_arg: Option<String>) {
             write_session,
             resize_session,
             session_read_spool,
+            cache_usage,
+            cache_cleanup,
             close_session,
             ack_session_exit,
             shutdown_workbench,

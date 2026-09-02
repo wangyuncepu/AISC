@@ -86,6 +86,7 @@ const GROUP_KEY: Record<string, string> = {
   ui: "settings.group.ui",
   terminal: "settings.group.terminal",
   window: "settings.group.window",
+  disk: "settings.group.disk",
 };
 
 // Explicit non-null section models (rendered only under `v-if="store.doc"`);
@@ -116,6 +117,8 @@ const savedFlash = ref(false);
 
 onMounted(async () => {
   if (!store.loaded) await store.load();
+  // O7 (D-11): fill the disk & cache card (read-only df summary).
+  void store.loadCacheUsage();
 });
 
 async function onSave() {
@@ -123,6 +126,14 @@ async function onSave() {
   if (!outcome) return; // error banner shows the reason
   savedFlash.value = true;
   window.setTimeout(() => (savedFlash.value = false), 2000);
+}
+
+/** O7 (D-11): destructive-ish op — confirm, then the until-filtered prune. */
+async function onCacheCleanup() {
+  const { confirm } = await import("@tauri-apps/plugin-dialog");
+  const ok = await confirm(t("settings.disk.cleanupConfirm"));
+  if (!ok) return;
+  await store.runCacheCleanup(24);
 }
 
 async function onReset() {
@@ -166,7 +177,7 @@ async function reopenOnboarding() {
     </p>
 
     <div v-if="store.doc" class="body">
-      <template v-for="group in ['ui', 'terminal', 'window']" :key="group">
+      <template v-for="group in ['ui', 'terminal', 'window', 'disk']" :key="group">
         <h3 class="group">{{ t(GROUP_KEY[group]) }}</h3>
 
         <!-- ui section -->
@@ -242,6 +253,26 @@ async function reopenOnboarding() {
             {{ store.doc.window.geometry.maximized ? "" : "" }}
           </p>
         </template>
+
+        <!-- O7 (D-11): disk & cache card — df summary + until-filtered prune.
+             NOT a settings document field: live ops via the settings store. -->
+        <template v-else-if="group === 'disk'">
+          <p class="help">{{ t("settings.disk.hint") }}</p>
+          <p v-if="store.cacheError" class="err-text">{{ store.cacheError }}</p>
+          <template v-if="store.cacheUsage?.dockerAvailable">
+            <div v-for="row in store.cacheUsage.rows" :key="row.kind" class="field disk-row">
+              <span class="label">{{ row.kind }}</span>
+              <span class="val">{{ row.size }}</span>
+              <span class="effect">{{ t("settings.disk.reclaimable", { n: row.reclaimable, c: row.total_count }) }}</span>
+            </div>
+          </template>
+          <p v-else-if="!store.cacheError" class="note">{{ t("settings.disk.unavailable") }}</p>
+          <div class="field">
+            <button :disabled="store.cacheBusy" @click="store.loadCacheUsage()">{{ t("settings.disk.refresh") }}</button>
+            <button class="primary" :disabled="store.cacheBusy" @click="onCacheCleanup">{{ t("settings.disk.cleanup") }}</button>
+          </div>
+          <p v-for="(line, i) in store.cacheLog" :key="i" class="note">{{ line }}</p>
+        </template>
       </template>
     </div>
     <div v-else class="body">
@@ -296,6 +327,7 @@ input:disabled, select:disabled { opacity: 0.5; }
 .help { font-size: var(--font-xs); color: var(--text-faint); width: 100%; }
 .err-text { font-size: var(--font-xs); color: var(--error); width: 100%; }
 .note { font-size: var(--font-xs); color: var(--text-faint); margin-top: 8px; }
+.disk-row .label { color: var(--text-2); }
 .loading { color: var(--text-muted); font-size: var(--font-md); }
 .foot {
   display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border);

@@ -121,12 +121,56 @@ export const useSettingsStore = defineStore("settings", () => {
     }
   }
 
+  // --- O7 (D-11): docker disk & cache panel (settings card) ---
+  const cacheUsage = ref<import("../lib/ipc").CacheUsage | null>(null);
+  const cacheBusy = ref(false);
+  const cacheError = ref<string | null>(null);
+  const cacheLog = ref<string[]>([]);
+
+  async function loadCacheUsage(): Promise<void> {
+    cacheBusy.value = true;
+    cacheError.value = null;
+    try {
+      cacheUsage.value = await ipc.cacheUsage();
+    } catch (e) {
+      cacheError.value = (e as { message?: string })?.message ?? String(e);
+    } finally {
+      cacheBusy.value = false;
+    }
+  }
+
+  async function runCacheCleanup(minAgeHours: number): Promise<void> {
+    cacheBusy.value = true;
+    cacheError.value = null;
+    try {
+      const result = await ipc.cacheCleanup(minAgeHours);
+      for (const p of result.prunes) {
+        cacheLog.value.push(
+          `${p.kind}: ${p.reclaimed || (p.error ? "失败 " + p.error : "无回收")}`
+        );
+      }
+      for (const w of result.warnings) cacheLog.value.push(`⚠ ${w}`);
+      if (cacheLog.value.length > 20) cacheLog.value.splice(0, cacheLog.value.length - 20);
+      cacheUsage.value = { dockerAvailable: true, rows: result.rows_after };
+    } catch (e) {
+      cacheError.value = (e as { message?: string })?.message ?? String(e);
+    } finally {
+      cacheBusy.value = false;
+    }
+  }
+
   return {
     doc,
     lastSaved,
     saveState,
     error,
     loaded,
+    cacheUsage,
+    cacheBusy,
+    cacheError,
+    cacheLog,
+    loadCacheUsage,
+    runCacheCleanup,
     readOnly,
     corrupted,
     dirty,
