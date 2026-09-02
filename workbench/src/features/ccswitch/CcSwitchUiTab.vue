@@ -27,7 +27,7 @@ const ui = useCcSwitchUiStore();
 // storeToRefs keeps the reactive link (plain destructuring would break it).
 import ProviderEditPage from "./ProviderEditPage.vue";
 import ProviderCard from "./ProviderCard.vue";
-const { agent, providers, loading, busy, busyOp, error } = storeToRefs(ui);
+const { agent, providers, loading, busyOp, error } = storeToRefs(ui);
 
 // PP (D-12): the dedicated editor view replaces the popover workflow.
 // `undefined` = list view; `null` = add; a provider = edit.
@@ -90,7 +90,6 @@ function switchAgent(a: "claude" | "codex"): void {
   void ui.switchAgent(a, store.workspace, store.runtimeId);
 }
 
-// --- add ---
 const PRESETS = ["deepseek", "volcengine-ark", "zhipu", "kimi"] as const;
 const addOpen = ref(false);
 const addMode = ref<"simple" | "custom">("simple");
@@ -114,124 +113,6 @@ function openAdd(): void {
   addForm.model = "";
   addForm.apiKey = "";
   addOpen.value = true;
-}
-
-async function submitAdd(): Promise<void> {
-  let ok = false;
-  if (addMode.value === "simple") {
-    const id = (addForm.id || addForm.provider).trim();
-    ok = await ui.add(store.workspace, store.runtimeId, {
-      mode: "simple", id, provider: addForm.provider, api_key: addForm.apiKey,
-    });
-  } else {
-    if (!addForm.baseUrl.trim() || !addForm.name.trim()) return;
-    ok = await ui.add(store.workspace, store.runtimeId, {
-      mode: "custom",
-      id: addForm.id.trim(),
-      name: addForm.name.trim(),
-      base_url: addForm.baseUrl.trim(),
-      model: addForm.model.trim(),
-      api_key: addForm.apiKey,
-    });
-  }
-  addForm.apiKey = ""; // transient: cleared the moment it leaves the channel
-  if (ok) addOpen.value = false;
-}
-
-// --- edit ---
-const editId = ref<string | null>(null);
-const editForm = reactive({ name: "", baseUrl: "", model: "", apiKey: "" });
-
-/** IDEA-5 (5d): the five claude role slots the mapping section edits.
- * Upstream fans ANTHROPIC_MODEL out to the DEFAULT_* slots when they are
- * unset — every save writes ALL FIVE explicitly (empty ⇒ null ⇒ the key is
- * deleted and the server-side alias fallback applies). */
-const ROLE_SLOTS = [
-  { key: "ANTHROPIC_MODEL", labelKey: "ccswitch.role.model", titleKey: "ccswitch.role.modelEnv", oneM: true },
-  { key: "ANTHROPIC_DEFAULT_OPUS_MODEL", labelKey: "ccswitch.role.opus", titleKey: "ccswitch.role.opusEnv", oneM: true },
-  { key: "ANTHROPIC_DEFAULT_SONNET_MODEL", labelKey: "ccswitch.role.sonnet", titleKey: "ccswitch.role.sonnetEnv", oneM: true },
-  { key: "ANTHROPIC_DEFAULT_HAIKU_MODEL", labelKey: "ccswitch.role.haiku", titleKey: "ccswitch.role.haikuEnv", oneM: false },
-  { key: "CLAUDE_CODE_SUBAGENT_MODEL", labelKey: "ccswitch.role.subagent", titleKey: "ccswitch.role.subagentEnv", oneM: false },
-] as const;
-const editRoles = reactive<Record<string, string>>({});
-const ONE_M_SUFFIX = "[1m]";
-
-/** The fixture rule: the 1M-context suffix is legal on MODEL/OPUS/SONNET
- * only. The toggle appends/strips it on the slot's current value — the
- * stored string is exactly what cc-switch's mapping keeps. */
-function hasOneM(key: string): boolean {
-  return editRoles[key]?.endsWith(ONE_M_SUFFIX) ?? false;
-}
-function toggleOneM(key: string): void {
-  const value = editRoles[key] ?? "";
-  editRoles[key] = hasOneM(key)
-    ? value.slice(0, -ONE_M_SUFFIX.length)
-    : (value ? value + ONE_M_SUFFIX : value);
-}
-
-/** The dropdown's option pool (three tiers): fetched remote models ∪ the
- * preset's known list ∪ the provider's current slot values — with the [1m]
- * variant offered for every id (the suffix is a plain string part, exactly
- * like cc-switch's mapping stores it). */
-const modelOptions = computed<string[]>(() => {
-  const p = providers.value.find((x) => x.id === editId.value);
-  if (!p) return [];
-  const pool = [
-    ...(ui.fetchedModels[p.id]?.models ?? []),
-    ...(p.known_models ?? []),
-    ...ROLE_SLOTS.map((s) => editRoles[s.key]).filter(Boolean),
-  ];
-  const withVariants = pool.flatMap((m) =>
-    m.endsWith(ONE_M_SUFFIX) ? [m] : [m, m + ONE_M_SUFFIX]);
-  return [...new Set(withVariants)];
-});
-const fetchHint = computed<string | null>(() => {
-  if (!editId.value) return null;
-  const r = ui.fetchedModels[editId.value];
-  if (!r) return null;
-  // O4-反馈 #3 (2026-09-02): feedback for BOTH outcomes — a silent success
-  // left the user wondering whether anything happened. The failure message
-  // rides the template's fetchFailed wrapper; success carries its own text.
-  if (!r.available) return r.message || t("ccswitch.fetchUnavailable");
-  return null;
-});
-const fetchDone = computed<string | null>(() => {
-  if (!editId.value) return null;
-  const r = ui.fetchedModels[editId.value];
-  if (!r || !r.available) return null;
-  return t("ccswitch.fetchDone", { n: r.models.length });
-});
-
-
-async function fetchModelList(): Promise<void> {
-  if (!editId.value || busyOp.value === "fetch") return;
-  await ui.fetchModels(store.workspace, store.runtimeId, editId.value);
-}
-
-async function submitEdit(): Promise<void> {
-  if (!editId.value) return;
-  const id = editId.value;
-  const isClaude = agent.value === "claude";
-  const patch: NonNullable<CcSwitchRequest["patch"]> = {
-    name: editForm.name.trim(),
-    base_url: editForm.baseUrl.trim(),
-    // Claude's model rides the five-slot env block (all five explicit);
-    // codex keeps the single TOML model field.
-    model: isClaude ? undefined : editForm.model.trim(),
-  };
-  if (isClaude) {
-    patch.env = {};
-    for (const slot of ROLE_SLOTS) {
-      const value = (editRoles[slot.key] ?? "").trim();
-      patch.env[slot.key] = value === "" ? null : value;
-    }
-  }
-  const ok = await ui.edit(store.workspace, store.runtimeId, id, {
-    patch,
-    api_key: editForm.apiKey || undefined,
-  });
-  editForm.apiKey = "";
-  if (ok) editId.value = null;
 }
 
 // --- activate (IDEA-4): click a row to make that provider current ---
@@ -380,97 +261,6 @@ onBeforeUnmount(() => {
     <p class="hidden-note">{{ t("ccswitch.usageHint") }}</p>
 
     <!-- add form -->
-    <div v-if="addOpen" class="form-card" role="dialog" :aria-label="t('ccswitch.add')">
-      <div class="mode-toggle">
-        <button :class="{ active: addMode === 'simple' }" @click="addMode = 'simple'">
-          {{ t("ccswitch.mode.simple") }}
-        </button>
-        <button :class="{ active: addMode === 'custom' }" @click="addMode = 'custom'">
-          {{ t("ccswitch.mode.custom") }}
-        </button>
-      </div>
-      <template v-if="addMode === 'simple'">
-        <label class="field">
-          <span>{{ t("ccswitch.preset") }}</span>
-          <select v-model="addForm.provider">
-            <option v-for="preset in PRESETS" :key="preset" :value="preset">{{ preset }}</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>{{ t("ccswitch.id") }}</span>
-          <input v-model="addForm.id" :placeholder="addForm.provider" />
-        </label>
-      </template>
-      <template v-else>
-        <label class="field"><span>{{ t("ccswitch.id") }}</span><input v-model="addForm.id" /></label>
-        <label class="field"><span>{{ t("ccswitch.name") }}</span><input v-model="addForm.name" /></label>
-        <label class="field"><span>{{ t("ccswitch.baseUrl") }}</span><input v-model="addForm.baseUrl" /></label>
-        <label class="field"><span>{{ t("ccswitch.model") }}</span><input v-model="addForm.model" /></label>
-      </template>
-      <label class="field">
-        <span>{{ t("ccswitch.apiKey") }}</span>
-        <input v-model="addForm.apiKey" type="password" autocomplete="off" />
-      </label>
-      <p class="hint">{{ t("ccswitch.secretHint") }}</p>
-      <div class="form-actions">
-        <button class="primary" :disabled="mutating" @click="submitAdd">
-          {{ busy.startsWith("add:") ? t("ccswitch.working") : t("ccswitch.add") }}
-        </button>
-        <button :disabled="mutating" @click="addOpen = false">{{ t("ccswitch.cancel") }}</button>
-      </div>
-    </div>
-
-    <!-- edit form -->
-    <div v-if="editId" class="form-card" role="dialog" :aria-label="t('ccswitch.edit')">
-      <h3>{{ t("ccswitch.edit") }}: {{ editId }}</h3>
-      <label class="field"><span>{{ t("ccswitch.name") }}</span><input v-model="editForm.name" /></label>
-      <label class="field"><span>{{ t("ccswitch.baseUrl") }}</span><input v-model="editForm.baseUrl" /></label>
-      <!-- IDEA-5 (5d): the claude mapping section — five role slots with the
-           three-tier dropdown (fetched ∪ known ∪ current); codex keeps its
-           single TOML model field. -->
-      <template v-if="agent === 'claude'">
-        <div class="roles-head">
-          <span class="roles-title">{{ t("ccswitch.rolesTitle") }}</span>
-          <button
-            class="ghost"
-            :disabled="busyOp === 'fetch'"
-            :title="t('ccswitch.fetchHint')"
-            @click="fetchModelList"
-          >{{ busy.startsWith("fetch:") ? t("ccswitch.fetching") : t("ccswitch.fetchModels") }}</button>
-        </div>
-        <datalist id="cc-model-options">
-          <option v-for="m in modelOptions" :key="m" :value="m" />
-        </datalist>
-        <label v-for="slot in ROLE_SLOTS" :key="slot.key" class="field">
-          <span :title="t(slot.titleKey)">{{ t(slot.labelKey) }}</span>
-          <input v-model="editRoles[slot.key]" list="cc-model-options" spellcheck="false" />
-          <input
-            v-if="slot.oneM"
-            class="one-m"
-            type="checkbox"
-            :checked="hasOneM(slot.key)"
-            :title="t('ccswitch.oneMHint')"
-            :aria-label="t('ccswitch.oneMLabel')"
-            @change="toggleOneM(slot.key)"
-          />
-        </label>
-        <p v-if="fetchHint" class="hint warn">{{ t("ccswitch.fetchFailed", { message: fetchHint }) }}</p>
-        <p v-else-if="fetchDone" class="hint ok" role="status">{{ fetchDone }}</p>
-        <p class="hint">{{ t("ccswitch.rolesHint") }}</p>
-      </template>
-      <label v-else class="field"><span>{{ t("ccswitch.model") }}</span><input v-model="editForm.model" /></label>
-      <label class="field">
-        <span>{{ t("ccswitch.newKey") }}</span>
-        <input v-model="editForm.apiKey" type="password" autocomplete="off" />
-      </label>
-      <p class="hint">{{ t("ccswitch.editKeyHint") }}</p>
-      <div class="form-actions">
-        <button class="primary" :disabled="mutating" @click="submitEdit">
-          {{ busy === `edit:${editId}` ? t("ccswitch.working") : t("ccswitch.save") }}
-        </button>
-        <button :disabled="mutating" @click="editId = null">{{ t("ccswitch.cancel") }}</button>
-      </div>
-    </div>
     </template>
   </section>
 </template>
@@ -485,16 +275,7 @@ onBeforeUnmount(() => {
 }
 .head { display: flex; align-items: center; gap: 8px; }
 .spacer { flex: 1; }
-.agent-toggle button, .mode-toggle button {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-height: var(--control-h-sm);
-  background: var(--surface-3); border: var(--border-w) solid transparent; border-radius: var(--radius-sm);
-  padding: 0 var(--space-3); cursor: pointer; color: var(--text-2); font-size: var(--font-sm);
-  transition: background-color var(--duration-normal) var(--ease), color var(--duration-normal) var(--ease);
-}
-.agent-toggle button.active, .mode-toggle button.active {
-  background: var(--accent-soft); color: var(--text); font-weight: 600;
-}
+
 .banner { padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); font-size: var(--font-sm); }
 .banner.warn { background: var(--warn-bg); color: var(--warn-fg); }
 .banner.err { background: var(--error-bg); color: var(--error-fg); }
@@ -521,31 +302,11 @@ button {
 button:disabled { opacity: 0.45; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
 button.danger { background: var(--error-bg); color: var(--error-fg); }
-.form-card {
-  margin-top: var(--space-3); padding: var(--space-3); max-width: 560px;
-  background: var(--surface-2); border: var(--border-w) solid var(--border-2); border-radius: var(--radius-lg);
-  display: flex; flex-direction: column; gap: var(--space-2);
-  box-shadow: var(--shadow-soft);
-}
-.form-card h3 { margin: 0; font-size: var(--font-md); color: var(--text-2); }
-.mode-toggle { display: flex; gap: 6px; }
-.field { display: flex; align-items: center; gap: 8px; font-size: var(--font-sm); }
-.field span { width: 90px; color: var(--text-muted); }
-.field input, .field select {
-  flex: 1; min-height: var(--control-h-sm); box-sizing: border-box;
-  background: var(--surface-3); color: var(--text);
-  border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
-}
-.hint { font-size: var(--font-xs); color: var(--text-faint); margin: 0; }
-.hint.warn { color: var(--warn); }
-.hint.ok { color: var(--success); }
-.form-actions { display: flex; gap: 8px; }
+
 /* [1m] toggle rides inline at the end of the three applicable slots. */
-.field input.one-m { width: auto; flex: 0 0 auto; margin-left: 0; }
 
 /* --- IDEA-5 (5d): the mapping section --- */
-.roles-head { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+
 .roles-title { font-size: var(--font-sm); color: var(--text-2); font-weight: 600; }
 button.ghost { background: transparent; }
 
