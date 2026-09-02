@@ -1566,18 +1566,29 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
         return op_list(agent)
     secrets = snapshot_secrets(agent, snapshot)
     to_official = provider_id.endswith("-official")
-    # The pre-switch disable is PRECAUTIONARY (worker token-capture timing
-    # for codex) — in broken states (dead daemon, zombie worker) the CLI
-    # itself errors ("managed proxy session did not exit", live-probed
-    # 2026-08-21) and that must not abort the switch: correctness is owned
-    # by the end-state guard below, and a failed disable forces the
-    # unconditional recovery there (an orphaned old worker can hold the
-    # port OPEN while serving a STALE route).
-    disable_ok = _run_cli_quiet(["proxy", "-a", agent, "disable"], secrets)
+    # O4 r2 (2026-09-02): the dance is REORDERED switch -> disable -> enable.
+    # Live-probed root cause of the user's 8-9s switch: a `proxy disable`
+    # right BEFORE `provider switch` leaves the daemon mid-teardown and the
+    # switch's daemon interaction then blocks ~6.5s (upstream cc-switch
+    # 5.10.4 behavior — bypassed by ordering, never patched, §G.7).
+    # The load-bearing invariant is UNCHANGED: the switch rewrites the live
+    # files BEFORE enable re-arms the route (the codex worker captures the
+    # upstream token from live auth.json at ENABLE time — live-probed
+    # 2026-08-21). The old pre-switch disable only narrowed a milliseconds
+    # window where a stale worker kept serving; the end-state guard
+    # (show + TCP verify + unconditional recovery) owns correctness either
+    # way. A failed disable still forces the recovery below.
     if _settings_are_real(agent, row):
         _cli_switch(agent, provider_id, secrets)
     else:
         _cli_switch_empty_config(agent, provider_id)
+    # The disable is PRECAUTIONARY — in broken states (dead daemon, zombie
+    # worker) the CLI itself errors ("managed proxy session did not exit",
+    # live-probed 2026-08-21) and that must not abort the switch: correctness
+    # is owned by the end-state guard below (an orphaned old worker can hold
+    # the port OPEN while serving a STALE route → the failed disable forces
+    # the unconditional recovery there).
+    disable_ok = _run_cli_quiet(["proxy", "-a", agent, "disable"], secrets)
     if not to_official:
         _cli(["proxy", "-a", agent, "enable"], secrets=secrets,
              what=f"{agent} proxy route enable")

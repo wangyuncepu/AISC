@@ -620,7 +620,7 @@ class RouteGuardTests(AdapterTestCase):
         self._seed_codex_switch()
         A.op_switch("codex", "deepseek")  # must NOT raise
         argvs = [" ".join(c.args) for c in self.cli.calls]
-        self.assertIn("switch", argvs[1])  # the switch itself ran
+        self.assertIn("switch", argvs[0])  # O4 r2: the switch runs FIRST now
         self.assertTrue(any("daemon" in a and "stop" in a for a in argvs))
         self.assertTrue(any("daemon" in a and "start" in a for a in argvs))
         self.assertEqual(sum("enable" in a for a in argvs), 2)  # forced
@@ -645,12 +645,15 @@ class SwitchTests(AdapterTestCase):
         # Retest round 2 (2026-08-21): the provider-page choice owns the
         # agent's proxy route — disable → switch → enable for BOTH agents.
         argvs = [" ".join(c.args) for c in self.cli.calls]
-        # Round 3: the enable is followed by a route liveness verify
-        # (`proxy show` for the port — unparseable output skips the check).
+        # O4 r2: the dance is switch -> disable -> enable -> show (a disable
+        # right before the switch makes the upstream CLI block ~6.5s in
+        # daemon teardown — live-probed 2026-09-02). The enable is followed
+        # by a route liveness verify (`proxy show` for the port —
+        # unparseable output skips the check).
         self.assertEqual(len(argvs), 4)
-        self.assertIn("proxy -a claude disable", argvs[0])
-        self.assertIn("switch", argvs[1])
-        self.assertTrue(argvs[1].endswith("zhipu"))
+        self.assertIn("switch", argvs[0])
+        self.assertTrue(argvs[0].endswith("zhipu"))
+        self.assertIn("proxy -a claude disable", argvs[1])
         self.assertIn("proxy -a claude enable", argvs[2])
         self.assertIn("proxy -a claude show", argvs[3])
         # snapshot returned unchanged (the CLI owns is_current truth)
@@ -665,8 +668,8 @@ class SwitchTests(AdapterTestCase):
         seed_provider(self.dir, "zhipu", {"ANTHROPIC_BASE_URL": "https://z"})
         A.op_switch("claude", "zhipu")
         argvs = [" ".join(c.args) for c in self.cli.calls]
-        self.assertEqual(argvs[0], "proxy -a claude disable")
-        self.assertIn("switch", argvs[1])
+        self.assertIn("switch", argvs[0])  # O4 r2: switch first
+        self.assertEqual(argvs[1], "proxy -a claude disable")
         self.assertEqual(argvs[2], "proxy -a claude enable")
 
     def test_claude_switch_to_official_leaves_route_disabled(self):
@@ -678,8 +681,8 @@ class SwitchTests(AdapterTestCase):
         self.cli.stdout_for = None
         A.op_switch("claude", "official")
         argvs = [" ".join(c.args) for c in self.cli.calls]
-        self.assertIn("proxy -a claude disable", argvs[0])
-        self.assertTrue(any("provider switch claude-official" in a for a in argvs))
+        self.assertIn("provider switch claude-official", argvs[0])  # O4 r2: first
+        self.assertIn("proxy -a claude disable", argvs[1])
         self.assertFalse(any("enable" in a for a in argvs))
 
     def test_codex_switch_reenables_proxy_route_after_switch(self):
@@ -698,8 +701,9 @@ class SwitchTests(AdapterTestCase):
                       settings={"auth": {}, "config": toml_cfg})
         A.op_switch("codex", "deepseek")
         argvs = [" ".join(c.args) for c in self.cli.calls]
-        self.assertIn("proxy -a codex disable", argvs[0])
-        self.assertIn("switch", argvs[1])
+        # O4 r2: switch first, disable second (see the claude twin above).
+        self.assertIn("switch", argvs[0])
+        self.assertIn("proxy -a codex disable", argvs[1])
         self.assertIn("proxy -a codex enable", argvs[2])
 
     def test_codex_switch_manages_auth_placeholder(self):
@@ -766,7 +770,9 @@ class SwitchTests(AdapterTestCase):
         seed_provider(self.dir, "codex-official", {}, agent="codex",
                       settings={"auth": {}, "config": ""})
         A.op_switch("codex", "official")
-        self.assertIn("proxy -a codex disable", " ".join(self.cli.calls[0].args))
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertIn("switch", argvs[0])  # O4 r2: switch first
+        self.assertIn("proxy -a codex disable", argvs[1])
 
     def test_switch_to_current_is_idempotent_plus_tail_heal(self):
         # Idempotent success for the current row — but the cheap post-heal
