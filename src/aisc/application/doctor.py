@@ -378,6 +378,94 @@ def _check_docker_compose(
     )
 
 
+def _check_wsl_memory(
+    home: Optional[Path] = None,
+    total_ram_gb: Optional[Callable[[], Optional[float]]] = None,
+    platform: Optional[str] = None,
+) -> CheckResult:
+    """O6 (opt-batch, D-11): WSL2 memory guidance on low-RAM Windows hosts.
+
+    Docker Desktop's WSL2 backend defaults to ~50%/8GB of host RAM (whichever
+    is less) for the utility VM — on an 8GB machine the VM, Vmmem, and the
+    host then fight for memory and the container side (cc-switch daemon OOM,
+    see O5) suffers first. When the host has ≤8GB and `%USERPROFILE%\\.wslconfig`
+    does not cap `memory` under [wsl2], surface a WARN with the recommended
+    snippet. Advisory ONLY — never edits system config. Non-Windows hosts SKIP.
+    """
+    if (platform or sys.platform) != "win32":
+        return CheckResult(name="wsl-memory", status=CheckStatus.SKIP,
+                           message="Windows-only check")
+
+    home = home or Path.home()
+    cfg = home / ".wslconfig"
+
+    def _default_total_ram_gb() -> Optional[float]:
+        import ctypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            return None
+        return stat.ullTotalPhys / (1024 ** 3)
+
+    ram = (total_ram_gb or _default_total_ram_gb)()
+    if ram is None:
+        return CheckResult(name="wsl-memory", status=CheckStatus.SKIP,
+                           message="Could not read physical memory")
+
+    capped = False
+    try:
+        if cfg.is_file():
+            in_wsl2 = False
+            for line in cfg.read_text(encoding="utf-8", errors="replace").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("["):
+                    in_wsl2 = stripped.lower() == "[wsl2]"
+                elif in_wsl2 and stripped.lower().startswith("memory"):
+                    capped = True  # any memory= cap counts, value not judged
+                    break
+    except OSError:
+        pass
+
+    if capped or ram > 8.5:
+        return CheckResult(
+            name="wsl-memory",
+            status=CheckStatus.PASS,
+            message=(
+                f"物理内存 {ram:.0f}GB"
+                + ("，.wslconfig 已设 memory 上限" if capped else "，无需 WSL 内存上限")
+            ),
+        )
+    return CheckResult(
+        name="wsl-memory",
+        status=CheckStatus.WARN,
+        message=(
+            f"物理内存 {ram:.0f}GB 且 .wslconfig 未限制 WSL2 内存——"
+            "Docker 的 WSL2 虚拟机默认可占约 50% 内存，低配机上易与宿主争抢"
+            "（容器侧 cc-switch daemon 可能被 OOM）"
+        ),
+        hint=(
+            "建议在 %USERPROFILE%\\.wslconfig 添加：\n"
+            "[wsl2]\n"
+            f"memory={'4GB' if ram <= 4.5 else '5GB'}\n"
+            "保存后运行 `wsl --shutdown` 生效（仅建议，AISC 不会自动修改）"
+        ),
+    )
+
+
 def _check_root_writable(root: Optional[Path]) -> CheckResult:
     """Check 10: Project root directory writability (read-only diagnostic)."""
     if root is None:
@@ -596,6 +684,9 @@ def run_doctor(
 
     # 10. root writability
     checks.append(_check_root_writable(root))
+
+    # 11. WSL2 memory guidance (O6: WARN-only advisory, never a gate)
+    checks.append(_check_wsl_memory())
 
     exit_code, error_code, error_message = _compute_exit_code(checks)
 

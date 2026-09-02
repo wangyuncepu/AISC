@@ -136,6 +136,20 @@
   不变量与全部失败恢复路径保持）。**端到端 4 轮：8.5s → 2.2s**，路由终态
   健康。O4 r1 的容器侧优化（catalog 移出/单探/轮询/trace）全部保留——trace
   正是这次根因定位的功臣。镜像重建中。
+- **推送事故与修复（2026-09-02 深夜）**：13 commit 推送后三条 lane（Bundle/
+  Workbench/NSIS）类型失败——dd2ff9b 提交 O4 时**漏 add ccSwitchUi.ts**，
+  busyOp 定义留在本地而引用随 009b3f2 入库；本地 vue-tsc 因工作区文件齐全
+  一直干净遮住了缺口。补提交（`35043e7`）+ 教训记入 commit message：commit
+  前核对 staged 清单覆盖 message 声称的全部文件。
+- **O6（`96a7ff0` + doctor 提交）轮询自适应退避 + WSL 内存引导**：纯函数
+  pollBackoff 状态机（单次慢刷新 >1.5s 升档 5s→10s→20s，连续 3 次快 <1s
+  降一档，快机恒 5s 零变化；失败也计时——超时是最强慢信号）+ useRuntimePolling
+  接线 + 5 单测；doctor 新增 wsl-memory 检查（Windows ≤8GB 且 .wslconfig 无
+  memory 上限 → WARN + 建议片段，advisory 永不阻断；ctypes GlobalMemoryStatusEx
+  无新依赖；8 单测含大小写/节外行/平台注入）。**O6b 记 backlog**：lease 心跳
+  每 15s spawn 完整 aisc.exe 只为文件 mtime 续期（lease.rs 文档实证）——Rust
+  直写可根治（每工作区每小时省 240 次进程 spawn），跨 Python 域契约需单独
+  实施与契约测试。
 
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
