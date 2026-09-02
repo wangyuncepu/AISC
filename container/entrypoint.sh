@@ -498,6 +498,51 @@ if command -v cc-switch >/dev/null 2>&1; then
         # the /model list until the next manual provider switch.
         python3 /usr/local/bin/aisc-cc-provider catalog-sync 2>/dev/null || true
 
+        # O5 (opt-batch, D-11, 2026-09-02): cc-switch daemon 健康巡检。容器
+        # PID1=sleep infinity、daemon 无自带 watchdog、docker 无 restart 策略
+        # ——8G 低配机上 daemon 被 OOM 杀后 proxy 路由静默躺平，直到容器重启
+        # （8G 笔记本"proxy 全 off"的根因链）。每 60s 探测一次 daemon；失联则
+        # 重启（含陈旧 pidfile 清理）并重跑一次 reconcile（幂等收敛：路由跟随
+        # current provider，不动用户选择），全过程写 /tmp/cc-switch-patrol.log。
+        # AISC_CC_SWITCH_PATROL=off 可关闭。
+        if [ "${AISC_CC_SWITCH_PATROL:-on}" != "off" ]; then
+            (
+                CC_SWITCH_PATROL_LOG="/tmp/cc-switch-patrol.log"
+                _patrol_stamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+                while true; do
+                    sleep 60
+                    _patrol_status="$(cc-switch daemon status 2>&1 || true)"
+                    case "$_patrol_status" in
+                        "cc-switch daemon"*) continue ;;
+                    esac
+                    echo "[$(_patrol_stamp)] daemon unhealthy: ${_patrol_status:-<no output>}" \
+                        >>"$CC_SWITCH_PATROL_LOG"
+                    # 陈旧 pidfile 可能让 start 拒绝——先 stop 清理再启动。
+                    cc-switch daemon stop >>"$CC_SWITCH_PATROL_LOG" 2>&1 || true
+                    if cc-switch daemon start --detach >>"$CC_SWITCH_PATROL_LOG" 2>&1; then
+                        for _p in $(seq 1 20); do
+                            _patrol_status="$(cc-switch daemon status 2>&1 || true)"
+                            case "$_patrol_status" in
+                                "cc-switch daemon"*) break ;;
+                            esac
+                            sleep 0.25
+                        done
+                        # 幂等对账：enable/disable 均幂等（live-probed 2026-08-21），
+                        # 路由重新跟随 current provider。
+                        python3 /usr/local/bin/lib/cc_switch_preset_providers.py \
+                            --config-dir "$CC_SWITCH_CONFIG_DIR" \
+                            --log "$CC_SWITCH_PATROL_LOG" \
+                            --reconcile >/dev/null 2>&1 || true
+                        echo "[$(_patrol_stamp)] daemon recovered + reconciled" \
+                            >>"$CC_SWITCH_PATROL_LOG"
+                    else
+                        echo "[$(_patrol_stamp)] daemon restart FAILED" \
+                            >>"$CC_SWITCH_PATROL_LOG"
+                    fi
+                done
+            ) &
+        fi
+
         # v2.1.8 T1: seed /root/AGENTS.md from the image template if the
         # user hasn't created one (opt-out: AISC_AGENT_INSTRUCTIONS=off).
         # NEVER overwrite an existing AGENTS.md.
