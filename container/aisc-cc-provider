@@ -405,10 +405,26 @@ def snapshot_secrets(agent: str, snapshot: list[dict[str, Any]]) -> list[str]:
 # cc-switch CLI runner (the ONLY write path; stdout is untrusted)
 # ---------------------------------------------------------------------------
 
+def _trace_step(argv_head: list[str], elapsed_s: float, rc: int) -> None:
+    """O4 (D-11): per-CLI timing trace — every upstream hop lands in the
+    shared /tmp log with its duration so a slow switch is decomposable
+    without a debugger (secrets never ride argv; only the first words).
+    Best-effort: log failures are silently dropped."""
+    try:
+        with open("/tmp/aisc-provider-trace.log", "a") as _f:
+            _f.write(
+                f"{_utc_now_iso()} {elapsed_s * 1000:7.0f}ms rc={rc} "
+                f"{' '.join(argv_head[:5])}\n"
+            )
+    except OSError:
+        pass
+
+
 def _real_run_cli(
     args: list[str], stdin_text: str, secrets: list[str]
 ) -> subprocess.CompletedProcess:
     env = dict(os.environ)
+    _t0 = time.monotonic()
     completed = subprocess.run(
         ["cc-switch", *args],
         input=stdin_text,
@@ -417,6 +433,8 @@ def _real_run_cli(
         timeout=CLI_TIMEOUT_S,
         env=env,
     )
+    _trace_step(["cc-switch", *args], time.monotonic() - _t0,
+                completed.returncode)
     # Redact in place: nothing downstream may ever see a raw key, including
     # diagnostics (the CLI echoes "API Key: sk-…" on add).
     completed.stdout = redact(completed.stdout or "", secrets)
@@ -433,6 +451,7 @@ def _real_run_raw(argv: list[str], input_text: str) -> subprocess.CompletedProce
 
     Output still goes through redaction — no code path may emit a raw key.
     """
+    _t0 = time.monotonic()
     completed = subprocess.run(
         argv,
         input=input_text,
@@ -441,6 +460,7 @@ def _real_run_raw(argv: list[str], input_text: str) -> subprocess.CompletedProce
         timeout=CLI_TIMEOUT_S,
         env=dict(os.environ),
     )
+    _trace_step(argv, time.monotonic() - _t0, completed.returncode)
     completed.stdout = redact(completed.stdout or "", [])
     completed.stderr = redact(completed.stderr or "", [])
     return completed
@@ -737,12 +757,19 @@ def _recover_route(agent: str, secrets: list[str]) -> None:
     A restarted daemon has EMPTY supervisor state, so the re-enable can no
     longer no-op on stale "already running" beliefs (live-probed 2026-08-21:
     daemon restart + enable reliably re-spawns workers).
+    O4 (D-11): the post-start wait is a READINESS POLL (0.2s × 10, typically
+    ready in well under a second) instead of a blind 1.0s sleep — the
+    recovery path is rare, but it sat directly on the user-perceived tail.
     """
     port = _proxy_listen_port(agent)
     run_cli(["daemon", "stop"], "", secrets)  # best-effort both ways
     time.sleep(0.5)
     run_cli(["daemon", "start", "--detach"], "", secrets)
-    time.sleep(1.0)
+    for _ in range(10):
+        _st = run_cli(["daemon", "status"], "", secrets)
+        if (getattr(_st, "stdout", "") or "").startswith("cc-switch daemon"):
+            break
+        time.sleep(0.2)
     _cli(["proxy", "-a", agent, "enable"], secrets=secrets,
          what=f"{agent} proxy route re-enable")
     if port is not None and not _tcp_listening(port):
@@ -754,7 +781,9 @@ def _recover_route(agent: str, secrets: list[str]) -> None:
         )
 
 
-def _ensure_route_serving(agent: str, secrets: list[str]) -> None:
+def _ensure_route_serving(
+    agent: str, secrets: list[str], *, probe_attempts: int = 4
+) -> None:
     """Post-enable guard (manual round 3, live-probed 2026-08-21):
 
     upstream `proxy enable` is a SILENT no-op when (a) the daemon's
@@ -765,9 +794,13 @@ def _ensure_route_serving(agent: str, secrets: list[str]) -> None:
     LISTENS; on failure restart the daemon (a fresh supervisor re-spawns on
     the next enable) and re-enable; still down = hard error — a switch must
     never "succeed" with a dead route.
+
+    O4 (D-11): ``probe_attempts`` — the idempotent fast path probes ONCE
+    (a healthy route answers in ~ms); a miss still lands in the full
+    recovery, so broken-tail healing is unchanged.
     """
     port = _proxy_listen_port(agent)
-    if port is None or _tcp_listening(port):
+    if port is None or _tcp_listening(port, attempts=probe_attempts):
         return
     _recover_route(agent, secrets)
 
@@ -1271,7 +1304,9 @@ def _live_fetch_catalog_ids(
     return []
 
 
-def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
+def _apply_codex_model_catalog(
+    row: Optional[dict[str, Any]], *, live: bool = True
+) -> None:
     """Post-switch hook: write the catalog file + point config.toml at it.
 
     Catalog source = the db row's ``settings_config.modelCatalog`` (the same
@@ -1293,6 +1328,11 @@ def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
     ``row`` None (official switch) or a provider without any model info →
     remove OUR key/file so codex falls back to its bundled list. Best-effort:
     a failure never fails the switch itself.
+
+    O4 (D-11): ``live=False`` skips the ONLINE /models fetch (up to ~12s of
+    network in the switch path — the p95 culprit). The switch path writes
+    the static catalog immediately and spawns ``catalog-sync --live`` in the
+    background to merge fresh ids asynchronously (fail-open either way).
     """
     try:
         config_path = _codex_config_dir() / "config.toml"
@@ -1334,9 +1374,12 @@ def _apply_codex_model_catalog(row: Optional[dict[str, Any]]) -> None:
 
         # S9 live catalog: merge freshly-fetched ids behind the curated rows
         # (fail-open — a fetch miss leaves the static catalog untouched).
-        models = _merge_live_catalog_models(
-            models, _live_fetch_catalog_ids(text, row)
-        )
+        # O4: the switch path passes live=False (no network in the critical
+        # path) and refreshes in the background instead.
+        if live:
+            models = _merge_live_catalog_models(
+                models, _live_fetch_catalog_ids(text, row)
+            )
 
         if models:
             slugs = {str(m["model"]) for m in models}
@@ -1455,6 +1498,29 @@ def _set_codex_top_level_int(config_text: str, key: str, value: Optional[int]) -
     return "\n".join(out)
 
 
+def _spawn_catalog_refresh(agent: str) -> None:
+    """O4 (D-11): background live-catalog refresh. The switch path already
+    wrote the STATIC catalog synchronously; this spawns a detached
+    catalog-sync --live that re-reads the CURRENT row and merges fresh
+    /models ids (up to ~12s of network — no one is waiting on it). Re-reads
+    the current row at run time, so a provider switched again meanwhile
+    refreshes the new current (and any result for a switched-away row is
+    overwritten by that switch's own static write). Best-effort."""
+    if agent != "codex":
+        return
+    try:
+        subprocess.Popen(
+            [sys.executable, "/usr/local/bin/aisc-cc-provider",
+             "catalog-sync", "--live"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        pass
+
+
 def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
     """Activate a provider (IDEA-4): official non-interactive `provider switch`.
 
@@ -1489,10 +1555,14 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
         # re-click then "succeeded" while /model still showed codex's
         # built-in official models (report 2026-08-21). Re-run the cheap
         # post-healing for real provider rows before returning.
+        # O4 (D-11): fast path — a SINGLE TCP probe (no retry ring); a miss
+        # falls into the full recovery, which keeps the healing semantics.
         if _settings_are_real(agent, row):
-            _ensure_route_serving(agent, snapshot_secrets(agent, snapshot))
+            _ensure_route_serving(agent, snapshot_secrets(agent, snapshot),
+                                  probe_attempts=1)
             if agent == "codex":
-                _apply_codex_model_catalog(row)
+                _apply_codex_model_catalog(row, live=False)
+                _spawn_catalog_refresh(agent)
         return op_list(agent)
     secrets = snapshot_secrets(agent, snapshot)
     to_official = provider_id.endswith("-official")
@@ -1529,8 +1599,11 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
         # real ChatGPT login is managed post-switch.
         _manage_codex_auth_placeholder(remove=to_official)
         # Zero-step goal: /model lists the provider's models right after the
-        # switch (no TUI visit, no manual model entry).
-        _apply_codex_model_catalog(None if to_official else row)
+        # switch (no TUI visit, no manual model entry). O4 (D-11): the
+        # STATIC catalog lands synchronously (zero network); fresh /models
+        # ids merge in the background.
+        _apply_codex_model_catalog(None if to_official else row, live=False)
+        _spawn_catalog_refresh(agent)
     return op_list(agent)
 
 
@@ -1755,6 +1828,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--since", type=float, default=0.0,
                         help="usage: epoch-seconds cutoff computed host-side "
                              "(local timezone semantics)")
+    parser.add_argument("--live", action="store_true", default=False,
+                        help="catalog-sync: ALSO merge a live /models fetch "
+                             "(background refresh — up to ~12s of network; "
+                             "the switch path spawns this detached)")
     args = parser.parse_args(argv)
 
     if args.op == "catalog-sync":
@@ -1763,16 +1840,19 @@ def main(argv: list[str] | None = None) -> int:
         # workspace restart loses the /model list until the next manual
         # switch. This op regenerates the catalog for the CURRENT codex
         # provider (best-effort; entrypoint calls it with || true).
+        # O4 (D-11): the base op is the FAST STATIC path (no network —
+        # startup must not stall); --live adds the online /models merge and
+        # is spawned detached by the switch path.
         snapshot = read_snapshot("codex")
         row = next((r for r in snapshot if r["is_current"]), None)
         if row is not None and _settings_are_real("codex", row):
-            _apply_codex_model_catalog(row)
+            _apply_codex_model_catalog(row, live=args.live)
             print(json.dumps(_envelope("catalog-sync", True,
                                        provider=row["id"])))
         else:
             # No current provider or it's the official row — clear the
             # catalog so codex falls back to its built-in list.
-            _apply_codex_model_catalog(None)
+            _apply_codex_model_catalog(None, live=args.live)
             print(json.dumps(_envelope("catalog-sync", True, provider=None)))
         return 0
 

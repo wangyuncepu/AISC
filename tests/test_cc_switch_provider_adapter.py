@@ -125,6 +125,24 @@ class AdapterTestCase(unittest.TestCase):
         A.run_raw = lambda argv, inp, _cli=self.cli: _cli(argv, inp, [])
         self.addCleanup(setattr, A, "run_raw", self._orig_raw)
 
+    def _install_show_cli(self, show_stdout_fn):
+        def fake_cli(args, stdin_text, secrets):
+            call = FakeCall(list(args), stdin_text)
+            self.cli.calls.append(call)
+            stdout = show_stdout_fn(args) or (
+                "Switched to provider 'x'\n✓ ok")
+            return subprocess.CompletedProcess(args, 0, stdout=stdout,
+                                               stderr="")
+        A.run_cli = fake_cli
+
+    @staticmethod
+    def _open_listener():
+        import socket as _socket
+        listener = _socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(4)
+        return listener, listener.getsockname()[1]
+
 
 class SnapshotAndRedactionTests(AdapterTestCase):
     def test_list_masks_keys_and_never_emits_secrets(self):
@@ -807,6 +825,71 @@ class SwitchTests(AdapterTestCase):
         env = json.loads(buf.getvalue())
         self.assertTrue(env["ok"])
         self.assertEqual(env["op"], "switch")
+
+
+    # --- O4 (opt-batch, D-11, 2026-09-02): switch-path slimming ---
+
+    def test_switch_writes_static_catalog_without_live_fetch(self):
+        # The critical path must be ZERO-network for codex: the static
+        # catalog lands synchronously, the live /models fetch is spawned in
+        # the background instead (it was the p95 culprit at up to ~12s).
+        live_called = []
+        spawned = []
+        orig_live = A._live_fetch_catalog_ids
+        orig_spawn = A._spawn_catalog_refresh
+        A._live_fetch_catalog_ids = lambda *a, **k: live_called.append(1) or []
+        A._spawn_catalog_refresh = lambda agent: spawned.append(agent)
+        self.addCleanup(setattr, A, "_live_fetch_catalog_ids", orig_live)
+        self.addCleanup(setattr, A, "_spawn_catalog_refresh", orig_spawn)
+
+        import socket as _socket
+        listener = _socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        self.addCleanup(listener.close)
+        self._install_show_cli(
+            lambda args: f"- Codex: enabled, configured {port}\n"
+            if "show" in args else None)
+        toml_cfg = ('model_provider = "deepseek"\n[model_providers.deepseek]\n'
+                    'base_url = "https://api.deepseek.com"\n')
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"auth": {}, "config": toml_cfg,
+                                "modelCatalog": {"models": [
+                                    {"model": "deepseek-v4-pro",
+                                     "contextWindow": 1000000}]}})
+        A.op_switch("codex", "deepseek")
+        self.assertEqual(live_called, [], "live fetch must stay off the switch path")
+        self.assertEqual(spawned, ["codex"], "background refresh must spawn once")
+        # The STATIC catalog still landed synchronously.
+        self.assertIn("deepseek-v4-pro",
+                      (self.dir / "aisc-model-catalog.json")
+                      .read_text(encoding="utf-8"))
+
+    def test_spawn_catalog_refresh_is_codex_only_and_silent_on_failure(self):
+        # claude needs no catalog refresh; a failed Popen (path absent on
+        # the host) is silently dropped — the spawn is best-effort.
+        A._spawn_catalog_refresh("claude")  # no-op, no exception
+        A._spawn_catalog_refresh("codex")   # host: path absent -> OSError swallowed
+
+    def test_idempotent_switch_probes_the_route_once(self):
+        # Fast path: a single TCP attempt (not the 4× retry ring) — a
+        # healthy route answers in ~ms; a miss still heals via full recovery.
+        attempts_seen = []
+        orig = A._tcp_listening
+        A._tcp_listening = (
+            lambda port, attempts=4, delay=0.4:
+            attempts_seen.append(attempts) or True)
+        self.addCleanup(setattr, A, "_tcp_listening", orig)
+        self._install_show_cli(
+            lambda args: f"- Codex: enabled, configured 12345\n"
+            if "show" in args else None)
+        toml_cfg = ('model_provider = "deepseek"\n[model_providers.deepseek]\n'
+                    'base_url = "https://api.deepseek.com"\n')
+        seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": toml_cfg})
+        A.op_switch("codex", "deepseek")
+        self.assertEqual(attempts_seen, [1])
 
 
 class DeleteTests(AdapterTestCase):
