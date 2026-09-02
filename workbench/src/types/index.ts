@@ -489,6 +489,23 @@ export interface CcSwitchProvider {
    * offline dropdown tier); custom rows carry an empty list. Optional for
    * the same envelope-compat reason. */
   known_models?: string[];
+  /** PP (D-12): the upstream wire format (the local router's protocol
+   * selector) — read-side priority meta > preset > agent default. */
+  api_format?: "anthropic" | "openai_chat" | "openai_responses";
+  /** PP (D-12): display columns (db-backed; survive the edit dance). */
+  notes?: string;
+  website_url?: string;
+  icon?: string;
+  icon_color?: string;
+  /** PP (D-12): codex mapping catalog (the /model list source). */
+  model_catalog?: CcSwitchCatalogEntry[];
+}
+
+/** PP (D-12): one codex mapping row (model id / display name / window). */
+export interface CcSwitchCatalogEntry {
+  model: string;
+  display_name: string;
+  context_window: number;
 }
 
 /** `aisc cc-switch fetch-models` result — tier 1 of the mapping dropdown.
@@ -516,11 +533,24 @@ export interface CcSwitchRequest {
   base_url?: string;
   model?: string;
   api_key?: string;
+  /** PP (D-12): extras accepted by add (top level) and edit (patch). */
+  api_format?: "anthropic" | "openai_chat" | "openai_responses";
+  notes?: string;
+  website_url?: string;
+  icon?: string;
+  icon_color?: string;
+  model_catalog?: { models: Array<{ model: string; contextWindow?: number; display_name?: string }> };
   patch?: {
     name?: string;
     base_url?: string;
     model?: string;
     env?: Record<string, string | null>;
+    api_format?: "anthropic" | "openai_chat" | "openai_responses";
+    notes?: string;
+    website_url?: string;
+    icon?: string;
+    icon_color?: string;
+    model_catalog?: { models: Array<{ model: string; contextWindow?: number; display_name?: string }> };
   };
 }
 

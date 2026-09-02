@@ -25,7 +25,29 @@ const store = useRuntimeStore();
 // Layer contract (F-A01): all ipc fact commands live in the store.
 const ui = useCcSwitchUiStore();
 // storeToRefs keeps the reactive link (plain destructuring would break it).
+import ProviderEditPage from "./ProviderEditPage.vue";
 const { agent, providers, loading, busy, busyOp, error } = storeToRefs(ui);
+
+// PP (D-12): the dedicated editor view replaces the popover workflow.
+// `undefined` = list view; `null` = add; a provider = edit.
+const editTarget = ref<CcSwitchProvider | null | undefined>(undefined);
+function openEditPage(p: CcSwitchProvider): void {
+  editTarget.value = p;
+}
+function openAddPage(): void {
+  editTarget.value = null;
+}
+function closeEditPage(): void {
+  editTarget.value = undefined;
+}
+async function saveFromEditPage(
+  request: CcSwitchRequest, editingId: string | null,
+): Promise<void> {
+  const ok = editingId
+    ? await ui.edit(store.workspace, store.runtimeId, editingId, request)
+    : await ui.add(store.workspace, store.runtimeId, request);
+  if (ok) closeEditPage();
+}
 // O4 (D-11): scoping — mutating ops (add/edit/switch/delete) stay mutually
 // exclusive; `fetch` is a read-only query and no longer freezes the panel.
 const mutating = computed(() => busyOp.value !== "" && busyOp.value !== "fetch");
@@ -81,6 +103,8 @@ const addForm = reactive({
 });
 
 function openAdd(): void {
+  openAddPage();  // PP (D-12): dedicated page
+  return;
   addMode.value = "simple";
   addForm.provider = "deepseek";
   addForm.id = "";
@@ -178,6 +202,8 @@ const fetchDone = computed<string | null>(() => {
 });
 
 function openEdit(p: CcSwitchProvider): void {
+  openEditPage(p);  // PP (D-12): dedicated page replaces the popover
+  return;
   editId.value = p.id;
   editForm.name = p.name;
   editForm.baseUrl = p.base_url;
@@ -294,6 +320,18 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="ccswitch-tab">
+    <!-- PP (D-12): the dedicated editor replaces the whole pane while open. -->
+    <ProviderEditPage
+      v-if="editTarget !== undefined"
+      :agent="agent"
+      :provider="editTarget"
+      :presets="[...PRESETS]"
+      :busy="busyOp === 'add' || busyOp === 'edit'"
+      :busy-op="busyOp"
+      @save="saveFromEditPage"
+      @back="closeEditPage"
+    />
+    <template v-else>
     <header class="head">
       <div class="agent-toggle" role="tablist">
         <button
@@ -471,6 +509,7 @@ onBeforeUnmount(() => {
         <button :disabled="mutating" @click="editId = null">{{ t("ccswitch.cancel") }}</button>
       </div>
     </div>
+    </template>
   </section>
 </template>
 

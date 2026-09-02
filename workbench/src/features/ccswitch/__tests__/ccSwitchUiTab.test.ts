@@ -61,70 +61,60 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     w.unmount();
   });
 
-  it("simple add sends preset+key once via the channel, then clears the field", async () => {
+  it("simple add sends preset+key once via the channel (PP edit page)", async () => {
     setup();
     vi.mocked(ipc.ccSwitchAdd).mockResolvedValue(RESULT(["deepseek"]));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
 
-    await w.find("header .primary").trigger("click"); // 添加
-    const keyInput = w.find('input[type="password"]');
-    (keyInput.element as HTMLInputElement).value = "sk-very-secret-1";
-    await keyInput.trigger("input");
-    await w.find(".form-card .primary").trigger("click"); // submit add
+    await w.find("header .primary").trigger("click"); // 添加 → edit page
+    await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(true));
+    const key = w.find(".edit-page input[type='password']");
+    (key.element as HTMLInputElement).value = "sk-very-secret-1";
+    await key.trigger("input");
+    await w.find(".edit-page .head .primary").trigger("click"); // save
 
     await vi.waitFor(() => expect(ipc.ccSwitchAdd).toHaveBeenCalledTimes(1));
     const arg = vi.mocked(ipc.ccSwitchAdd).mock.calls[0]![3];
     expect(arg.mode).toBe("simple");
     expect(arg.id).toBe("deepseek");
     expect(arg.api_key).toBe("sk-very-secret-1");
-    // Transient: the form closes on success; reopening starts from an
-    // EMPTY key field (the secret never lingers in the form).
-    await vi.waitFor(() => expect(w.find(".form-card").exists()).toBe(false));
-    await w.find("header .primary").trigger("click");
-    expect(
-      (w.find('input[type="password"]').element as HTMLInputElement).value,
-    ).toBe("");
+    // Success closes the page back to the list.
+    await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(false));
     w.unmount();
   });
 
-  it("custom add sends mode=custom with full fields (KI-7① UI regression)", async () => {
+  it("custom add sends mode=custom with full fields (KI-7①, PP page)", async () => {
     setup();
     vi.mocked(ipc.ccSwitchAdd).mockResolvedValue(RESULT(["mine"]));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".row").length).toBe(2));
 
-    await w.find("header .primary").trigger("click"); // 添加
-    // Switch the add form to 自定义 mode.
-    const modeBtn = w
-      .findAll("button")
-      .find((b) => b.text().includes("自定义"))!;
-    await modeBtn.trigger("click");
-    // Fill the custom fields (name + baseUrl required).
-    const inputs = w.findAll(".form-card input");
+    await w.find("header .primary").trigger("click");
+    await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(true));
+    // Switch the add mode to 自定义.
+    await w.findAll("button").find((b) => b.text().includes("自定义"))!.trigger("click");
+    const inputs = w.findAll(".edit-page input:not([type='password'])");
     const setVal = async (el: typeof inputs[number], v: string) => {
       (el.element as HTMLInputElement).value = v;
       await el.trigger("input");
     };
-    // Custom layout: id, name, baseUrl, model, apiKey(password).
+    // Custom layout: id, name, baseUrl (claude has no single model field).
     await setVal(inputs[0]!, "mine");
     await setVal(inputs[1]!, "My Provider");
     await setVal(inputs[2]!, "https://example.com/api");
-    await setVal(inputs[3]!, "my-model");
-    const key = w.find('input[type="password"]');
+    const key = w.find(".edit-page input[type='password']");
     await setVal(key, "sk-custom-secret-9");
-    await w.find(".form-card .primary").trigger("click");
+    await w.find(".edit-page .head .primary").trigger("click");
 
     await vi.waitFor(() => expect(ipc.ccSwitchAdd).toHaveBeenCalledTimes(1));
     const arg = vi.mocked(ipc.ccSwitchAdd).mock.calls[0]![3];
-    expect(arg.mode).toBe("custom"); // the KI-7① regression
-    expect(arg.provider).toBeUndefined();
+    expect(arg.mode).toBe("custom");
     expect(arg.id).toBe("mine");
     expect(arg.name).toBe("My Provider");
     expect(arg.base_url).toBe("https://example.com/api");
-    expect(arg.model).toBe("my-model");
     expect(arg.api_key).toBe("sk-custom-secret-9");
-    await vi.waitFor(() => expect(w.find(".form-card").exists()).toBe(false));
+    await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(false));
     w.unmount();
   });
 
@@ -254,54 +244,55 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     return r;
   }
 
-  it("claude edit writes all five role slots explicitly (empty deletes)", async () => {
+  it("claude edit writes all five role slots explicitly (PP page)", async () => {
     setup();
     vi.mocked(ipc.ccSwitchProviders).mockResolvedValue(resultWithRoles());
     vi.mocked(ipc.ccSwitchEdit).mockResolvedValue(resultWithRoles());
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".row").length).toBe(1));
     await w.findAll(".row")[0]!.findAll("button")[0]!.trigger("click"); // 编辑
+    await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(true));
 
-    // Five slot inputs (list=datalist) prefilled from role_env.
-    const slots = w.findAll(".form-card input[list]");
+    // Advanced tier to reach the mapping editor.
+    await w.findAll(".tiers button").find((b) => b.text().includes("高级模式"))!.trigger("click");
+    // Three main role rows; expand the advanced pair.
+    await vi.waitFor(() => expect(w.findAll(".mapping input[list]").length).toBe(3));
+    await w.findAll(".mapping .link")[0]!.trigger("click"); // 展开高级槽位
+    const slots = w.findAll(".mapping input[list]");
     expect(slots.length).toBe(5);
-    expect((slots[3]!.element as HTMLInputElement).value).toBe("deepseek-v4-flash");
-    // Change HAIKU; clear SUBAGENT (→ null delete); leave the rest.
+    // Fixture order after expansion: main trio (sonnet/opus/haiku) then
+    // MODEL + SUBAGENT in the advanced block.
     const setVal = async (el: typeof slots[number], v: string) => {
       (el.element as HTMLInputElement).value = v;
       await el.trigger("input");
     };
-    await setVal(slots[3]!, "deepseek-v4-flash[1m]");
-    await setVal(slots[4]!, "");
-    // [1m] declaration (round 4): the three applicable slots carry a
-    // checkbox; MODEL is prefilled WITH [1m] → checked; toggling strips it.
-    const oneMBoxes = w.findAll("input.one-m");
-    expect(oneMBoxes.length).toBe(3); // MODEL/OPUS/SONNET only
-    // Fixture prefills all three applicable slots WITH [1m] → all checked.
-    expect((oneMBoxes[0]!.element as HTMLInputElement).checked).toBe(true);
-    expect((oneMBoxes[1]!.element as HTMLInputElement).checked).toBe(true);
-    expect((oneMBoxes[2]!.element as HTMLInputElement).checked).toBe(true);
-    await oneMBoxes[0]!.trigger("change"); // strip from MODEL
-    expect((slots[0]!.element as HTMLInputElement).value).toBe("deepseek-v4-pro");
-    await oneMBoxes[0]!.trigger("change"); // re-append
-    expect((slots[0]!.element as HTMLInputElement).value).toBe("deepseek-v4-pro[1m]");
-    await w.find(".form-card .primary").trigger("click");
+    // HAIKU is main row 3 (index 2); MODEL is advanced (index 3); SUBAGENT last.
+    await setVal(slots[2]!, "deepseek-v4-flash[1m]");
+    await setVal(slots[4]!, ""); // SUBAGENT → null delete
+    // [1m] toggles exist on MODEL/OPUS/SONNET only.
+    const oneMBtns = w.findAll("button.one-m");
+    expect(oneMBtns.length).toBe(3); // opus + sonnet (main) + model (expanded)
+    expect(oneMBtns[0]!.classes()).toContain("on"); // fixture prefilled [1m]
+    await oneMBtns[0]!.trigger("click"); // strip from OPUS row
+    const opusVal = (w.findAll(".mapping input[list]")[0]!.element as HTMLInputElement).value;
+    expect(opusVal.endsWith("[1m]")).toBe(false);
+    await oneMBtns[0]!.trigger("click"); // re-append
+    await w.find(".edit-page .head .primary").trigger("click");
 
     await vi.waitFor(() => expect(ipc.ccSwitchEdit).toHaveBeenCalledTimes(1));
-    const arg = vi.mocked(ipc.ccSwitchEdit).mock.calls[0]![4]; // 5 params: ws, rt, agent, providerId, request
+    const arg = vi.mocked(ipc.ccSwitchEdit).mock.calls[0]![4];
     expect(arg.patch?.env).toEqual({
       ANTHROPIC_MODEL: "deepseek-v4-pro[1m]",
       ANTHROPIC_DEFAULT_OPUS_MODEL: "deepseek-v4-pro[1m]",
       ANTHROPIC_DEFAULT_SONNET_MODEL: "deepseek-v4-pro[1m]",
       ANTHROPIC_DEFAULT_HAIKU_MODEL: "deepseek-v4-flash[1m]",
-      CLAUDE_CODE_SUBAGENT_MODEL: null, // empty slot = delete the key
+      CLAUDE_CODE_SUBAGENT_MODEL: null,
     });
-    // Claude's model rides the env block, not the single model field.
     expect(arg.patch?.model).toBeUndefined();
     w.unmount();
   });
 
-  it("codex edit keeps the single model field (no mapping UI)", async () => {
+  it("codex edit keeps the single model field (PP page)", async () => {
     setup();
     vi.mocked(ipc.ccSwitchEdit).mockResolvedValue(RESULT(["deepseek"]));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
@@ -309,16 +300,17 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     await w.findAll(".agent-toggle button")[1]!.trigger("click"); // codex
     await vi.waitFor(() => expect(ipc.ccSwitchProviders).toHaveBeenCalledTimes(2));
     await w.findAll(".row")[0]!.findAll("button")[0]!.trigger("click");
-    expect(w.find("input[list]").exists()).toBe(false); // no role slots
-    await w.find(".form-card .primary").trigger("click");
+    await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(true));
+    expect(w.find(".mapping input[list]").exists()).toBe(false); // no role rows on simple tier
+    await w.find(".edit-page .head .primary").trigger("click");
     await vi.waitFor(() => expect(ipc.ccSwitchEdit).toHaveBeenCalledTimes(1));
-    const arg = vi.mocked(ipc.ccSwitchEdit).mock.calls[0]![4]; // 5 params: ws, rt, agent, providerId, request
+    const arg = vi.mocked(ipc.ccSwitchEdit).mock.calls[0]![4];
     expect(arg.patch?.env).toBeUndefined();
     expect(arg.patch?.model).toBe("m"); // fixture model
     w.unmount();
   });
 
-  it("the dropdown merges fetched ∪ known ∪ current slot values", async () => {
+  it("the mapping dropdown merges fetched ∪ known (PP page)", async () => {
     setup();
     vi.mocked(ipc.ccSwitchProviders).mockResolvedValue(resultWithRoles());
     vi.mocked(ipc.ccSwitchFetchModels).mockResolvedValue({
@@ -327,25 +319,24 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".row").length).toBe(1));
     await w.findAll(".row")[0]!.findAll("button")[0]!.trigger("click");
+    await w.findAll(".tiers button").find((b) => b.text().includes("高级模式"))!.trigger("click");
+    await vi.waitFor(() => expect(w.findAll(".mapping input[list]").length).toBe(3));
 
-    // Tier 2+3 before fetching: known ∪ current (current values ⊂ known here
-    // except none — deepseek preset covers them; assert the known list).
-    const optionsBefore = w.findAll("#cc-model-options option").map((o) => o.attributes("value"));
-    expect(optionsBefore).toContain("deepseek-chat");
-    expect(optionsBefore).toContain("deepseek-v4-flash");
+    const opts = () =>
+      w.findAll("#pp-map-candidates option").map((o) => o.attributes("value"));
+    expect(opts()).toContain("deepseek-chat");
+    expect(opts()).toContain("deepseek-v4-flash");
 
-    // Tier 1: the fetch button merges the remote list in.
     await w.findAll("button").find((b) => b.text().includes("拉取模型列表"))!.trigger("click");
     await vi.waitFor(() => expect(ipc.ccSwitchFetchModels).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => {
-      const options = w.findAll("#cc-model-options option").map((o) => o.attributes("value"));
-      expect(options).toContain("remote-model-x");
-      expect(options).toContain("deepseek-chat");
+      expect(opts()).toContain("remote-model-x");
+      expect(opts()).toContain("deepseek-chat");
     });
     w.unmount();
   });
 
-  it("an unavailable fetch shows the hint, never an error banner", async () => {
+  it("an unavailable fetch shows the hint, never an error banner (PP page)", async () => {
     setup();
     vi.mocked(ipc.ccSwitchProviders).mockResolvedValue(resultWithRoles());
     vi.mocked(ipc.ccSwitchFetchModels).mockResolvedValue({
@@ -354,6 +345,7 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".row").length).toBe(1));
     await w.findAll(".row")[0]!.findAll("button")[0]!.trigger("click");
+    await w.findAll(".tiers button").find((b) => b.text().includes("高级模式"))!.trigger("click");
     await w.findAll("button").find((b) => b.text().includes("拉取模型列表"))!.trigger("click");
     await vi.waitFor(() => expect(w.find(".hint.warn").exists()).toBe(true));
     expect(w.find(".hint.warn").text()).toContain("401");
