@@ -66,6 +66,17 @@
 - **本地门（每项独立 commit 前）**：vitest 422 / vue-tsc 干净 / cargo 262+25 集成 /
   pytest 全量绿。O5-O8 待实施；外部证据待收：8G 笔记本 doctor 导出（O5）、长对话
   恢复复现样本（独立 bug）。
+- **手测反馈批次（`1775fe2`，2026-09-02 八条反馈）**：O1（×可点 + Ctrl+Shift+W）、
+  O3（renderer_mount 33 次落时间线，Intel Arc D3D11 硬渲）手测 PASS；三项行为修正：
+  **O9 r2**（用户裁决升级——重开工作区不恢复布局，恒全新默认单 bash tab，r1 全量
+  恢复被否）；**#4** 新建 agent 分屏"加载动画"感 = B-05 首帧 resize veil（全新 term
+  无 stale grid 可盖 → 删首帧 veil，re-show 保留）；**#5c** narrowTui 去 bash 豁免
+  （bash 内嵌 claude/codex TUI 同样乱码，<60 列一律 overlay）。诊断定性三条：#5b
+  "分屏后长间隔自动重绘"= claude 自身 TUI 空闲点重绘（上游行为）；#6"反复输出"
+  图中为 Claude Code 后台 agent 正常进度块（各仅一次）；日志实证 O6 铁证——
+  aisc.log 单文件 `cli_exit` 555 / `op` 540（轮询链海量 spawn）。待用户裁决：
+  #5a bash 内唤起 agent 的 scrollback 混看（语义/产品题）、#8 变更页"⇄ 移动"
+  类型标签去留。
 
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
