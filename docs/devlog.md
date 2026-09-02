@@ -150,6 +150,15 @@
   每 15s spawn 完整 aisc.exe 只为文件 mtime 续期（lease.rs 文档实证）——Rust
   直写可根治（每工作区每小时省 240 次进程 spawn），跨 Python 域契约需单独
   实施与契约测试。
+- **O7（`f67d9e0`）build cache 清理产品化**：application 层 cache_usage +
+  docker_cache_cleanup（builder prune + dangling 镜像，均 --filter until=；
+  不变量钉死：绝不 system prune、绝不 -a、<1h 拒绝）+ maintenance 新子命令；
+  Rust cache.rs（doctor.rs 同模式 envelope 校验）；设置页新"磁盘与缓存"组
+  （df 四行摘要 + 刷新 + 确认一键清理 24h + 清理日志），settings store 层
+  契约。真机 df 冒烟 ✓（本机 Images 2.6GB/Build Cache 6.7GB 4.1GB 可回收）。
+  sidecar 重建（PyInstaller）+ 三处同步（binaries/target debug/bundle）。
+  单测：pytest 8 + cargo 5；vitest 426。O7b doctor 阈值检查项记 backlog
+  （df 已在卡片可见，阈值提示收益小）。
 
 # Stage 7 (2026-08-17) — Windows Data Root（AISC Next Follow-up，分支 stage-7-windows-data-root）
 
