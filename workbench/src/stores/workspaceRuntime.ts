@@ -959,16 +959,16 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   /** Build tabs from TabRecords and open fresh sessions (new id, never
    * reattaching a PTY - 03 §六). Fresh start passes the fixed 4 records and
-   * opens only the requested agents; Stage 5 lazy restore passes the history
-   * records with `lazy: true` — only the ACTIVE tab opens sessions, the rest
-   * become dormant placeholders that wake on activation (01 §4.2). */
+   * opens only the requested agents; layout restore passes the history
+   * records and opens EVERY tab (O9, D-11: the lazy dormant-placeholder
+   * scheme was removed — a reopened workspace restores its full layout
+   * with live sessions immediately). */
   async function initTabs(
     records: TabRecord[],
     opts: {
       activeSavedId?: string | null;
       activeAgent?: LaunchAgent | null;
       openAgents?: LaunchAgent[];
-      lazy?: boolean;
     } = {}
   ) {
     lastRuntimeRef.value = {
@@ -990,20 +990,11 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     });
     const gates: Promise<void>[] = [];
     for (const tab of created) {
-      if (opts.lazy && tab.tabId !== activeTabId.value) {
-        // Stage 5 (01 §4.2): dormant placeholder — no session until the tab
-        // is activated; closing it only touches history (never terminate).
-        for (const pane of Object.values(tab.panes)) {
-          pane.sessionState = "dormant";
-        }
-        syncProjection(tab);
-        continue;
-      }
       for (const leaf of listLeaves(tab.tree)) {
         if (opts.openAgents && !opts.openAgents.includes(leaf.sessionType)) continue;
         // bash/cc-switch open synchronously ("starting"); claude/codex await a
         // provider query. Wait for the latter so a restored claude/codex pane
-        // resolves to guide/session BEFORE "ready" - never a dormant flash
+        // resolves to guide/session BEFORE "ready" - never an idle flash
         // (G-17 feedback 2026-08-10). Bounded so a hung query can't block start.
         if (leaf.sessionType === "claude" || leaf.sessionType === "codex") {
           gates.push(maybeOpenPaneCreated(tab, leaf.paneId, leaf.sessionType));
@@ -1022,19 +1013,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     status.value = "ready";
     scheduleSave();
     deps.onReady?.(); // 3c: the launcher materializes into a workspace here
-  }
-
-  /** Stage 5 (01 §4.2): activating a dormant tab wakes its placeholder
-   * panes — fresh sessions through the same provider gates as a + menu tab.
-   * Re-activation is a no-op (starting/running panes bail inside the gate). */
-  function wakeDormantTab(tab: Tab): void {
-    for (const leaf of listLeaves(tab.tree)) {
-      const p = tab.panes[leaf.paneId];
-      if (!p || p.sessionState !== "dormant") continue;
-      p.sessionState = "idle";
-      void maybeOpenPaneCreated(tab, leaf.paneId, leaf.sessionType);
-    }
-    syncProjection(tab);
   }
 
   function findTab(tabId: string): Tab | undefined {
@@ -1307,12 +1285,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     const tab = findTab(tabId);
     if (!tab) return;
     activeTabId.value = tabId;
-    // Stage 5: first activation of a dormant placeholder opens its sessions.
-    if (Object.values(tab.panes).some((p) => p.sessionState === "dormant")) {
-      wakeDormantTab(tab);
-      scheduleSave();
-      return;
-    }
     if (activePane(tab).sessionState === "idle") openTab(tabId);
     scheduleSave();
   }
@@ -1536,7 +1508,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       activeSavedId?: string | null;
       activeAgent?: LaunchAgent | null;
       openAgents?: LaunchAgent[];
-      lazy?: boolean;
     } = {}
   ) {
     error.value = null;
@@ -1580,8 +1551,8 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   async function startFromSummary() {
     if (!preflight.value) return;
-    // Stage 5 (01 §4.2): the saved layout restores as dormant placeholders —
-    // only the active tab opens a session now; the rest wake on activation.
+    // O9 (D-11): the saved layout restores IN FULL — every tab opens its
+    // sessions immediately (the lazy dormant-placeholder scheme is gone).
     // No layout (first open / cleared) falls back to the G-08 single Bash
     // tab; more tabs come from the + menu.
     const rec = (deps.getHistory()?.workspaces ?? []).find((w) =>
@@ -1594,7 +1565,6 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
         .slice(0, MAX_TABS);
       await launchRuntime(records, {
         activeSavedId: rec?.layout?.active_tab_id ?? null,
-        lazy: true,
       });
       return;
     }

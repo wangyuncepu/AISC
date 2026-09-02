@@ -1,21 +1,19 @@
 /**
- * runtime-lifecycle-ux Stage 5: lazy layout restore (01 §4.2).
+ * runtime-lifecycle-ux Stage 5 → O9 (opt-batch, D-11): FULL layout restore.
  *
- * - history layout → dormant placeholder tabs; ONLY the active tab opens a
- *   session at start; others wake on activation (fresh ids, never a reattach)
+ * The lazy dormant-placeholder scheme was removed by user ruling — a
+ * reopened workspace restores its complete layout with live sessions
+ * immediately:
+ * - history layout → EVERY tab opens a session at start (no dormant state)
  * - no layout → the default single Bash tab (G-08 fallback)
- * - re-activating a woken tab never double-opens (gate bails on starting)
- * - closing a dormant placeholder never terminates anything (no sessionId,
- *   no closeSession call) — only history changes
- * - dormant renders distinct from exited (TabBar label/class)
+ * - re-activating a running tab never double-opens (gate bails on starting)
+ * - the layout persists without any session state (records carry no state)
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { mount } from "@vue/test-utils";
 import { i18n } from "../../i18n";
 import { useWorkspacesStore } from "../workspaces";
 import { useRuntimeStore } from "../runtime";
-import TabBar from "../../features/workspace/TabBar.vue";
 import type { HistoryPatch, TabRecord } from "../../types";
 
 const PASSING_PREFLIGHT = {
@@ -49,7 +47,7 @@ const mockIpc = vi.hoisted(() => ({
 }));
 
 vi.mock("../../lib/ipc", () => mockIpc);
-vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn(), open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn().mockResolvedValue(true), open: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {
     onmessage: unknown = null;
@@ -112,8 +110,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.clearAllMocks());
 
-describe("lazy layout restore (Stage 5)", () => {
-  it("history layout restores as dormant placeholders; only the active tab opens", async () => {
+describe("full layout restore (O9, D-11)", () => {
+  it("history layout restores IN FULL — every tab opens a session, none dormant", async () => {
     const saved = layoutRecord(
       [bashRecord("saved-a", 0), bashRecord("saved-b", 1)],
       "saved-b"
@@ -122,15 +120,17 @@ describe("lazy layout restore (Stage 5)", () => {
     await launch();
     const rt = useRuntimeStore();
     expect(rt.tabs).toHaveLength(2);
-    // active = saved-b → its session opened; saved-a stays dormant.
-    const b = rt.tabs.find((t) => t.savedTabId === "saved-b" || t.title === "Bash");
+    // Every restored tab opened its session at start — the saved active one
+    // too, and no pane ever sits in a placeholder state.
+    expect(mockIpc.openSession).toHaveBeenCalledTimes(2);
+    for (const tab of rt.tabs) {
+      expect(tab.sessionState).not.toBe("dormant");
+      expect(tab.sessionState).not.toBe("idle");
+      expect(tab.sessionId).not.toBeNull();
+    }
+    // Active = saved-b.
     const active = rt.tabs.find((t) => t.tabId === rt.activeTabId);
     expect(active).toBeTruthy();
-    expect(mockIpc.openSession).toHaveBeenCalledTimes(1); // only the active tab
-    const dormant = rt.tabs.find((t) => t.tabId !== rt.activeTabId);
-    expect(dormant?.sessionState).toBe("dormant");
-    expect(dormant?.sessionId).toBeNull();
-    void b;
   });
 
   it("no history layout → default single Bash tab", async () => {
@@ -142,7 +142,7 @@ describe("lazy layout restore (Stage 5)", () => {
     expect(mockIpc.openSession).toHaveBeenCalledTimes(1);
   });
 
-  it("activating a dormant tab wakes it once; re-activation never double-opens", async () => {
+  it("re-activating a running tab never double-opens its session", async () => {
     const saved = layoutRecord(
       [bashRecord("saved-a", 0), bashRecord("saved-b", 1)],
       "saved-b"
@@ -151,39 +151,21 @@ describe("lazy layout restore (Stage 5)", () => {
     await launch();
     const ws = useWorkspacesStore();
     const rt = useRuntimeStore();
-    const dormant = rt.tabs.find((t) => t.tabId !== rt.activeTabId)!;
-    expect(dormant.sessionState).toBe("dormant");
+    const other = rt.tabs.find((t) => t.tabId !== rt.activeTabId)!;
+    expect(other.sessionState).not.toBe("dormant"); // already live
 
     const inst = ws.runtimes.find((r) => r.workspace.value === "/ws")!;
-    inst.activateTab(dormant.tabId);
+    inst.activateTab(other.tabId); // switch: no new session (already running)
     await Promise.resolve();
-    expect(mockIpc.openSession).toHaveBeenCalledTimes(2); // active + woken
-    expect(dormant.sessionState).not.toBe("dormant");
+    expect(mockIpc.openSession).toHaveBeenCalledTimes(2);
 
     const before = mockIpc.openSession.mock.calls.length;
-    inst.activateTab(dormant.tabId); // re-activation: no double session
+    inst.activateTab(other.tabId); // re-activation: no double session
     await Promise.resolve();
     expect(mockIpc.openSession.mock.calls.length).toBe(before);
   });
 
-  it("closing a dormant placeholder never terminates (no closeSession)", async () => {
-    const saved = layoutRecord(
-      [bashRecord("saved-a", 0), bashRecord("saved-b", 1)],
-      "saved-b"
-    );
-    mockIpc.loadHistory.mockResolvedValue(saved);
-    await launch();
-    const ws = useWorkspacesStore();
-    const rt = useRuntimeStore();
-    const dormant = rt.tabs.find((t) => t.tabId !== rt.activeTabId)!;
-    const inst = ws.runtimes.find((r) => r.workspace.value === "/ws")!;
-    mockIpc.closeSession.mockClear();
-    inst.removeTab(dormant.tabId);
-    expect(mockIpc.closeSession).not.toHaveBeenCalled(); // history-only change
-    expect(rt.tabs).toHaveLength(1);
-  });
-
-  it("the layout persists (dormant never serialized — records carry no state)", async () => {
+  it("the layout persists without session state (records carry no state)", async () => {
     const saved = layoutRecord(
       [bashRecord("saved-a", 0), bashRecord("saved-b", 1)],
       "saved-b"
@@ -198,27 +180,6 @@ describe("lazy layout restore (Stage 5)", () => {
       expect(rec?.layout?.tabs?.length).toBe(2);
     });
     expect(JSON.stringify(rec?.layout)).not.toContain("dormant");
-  });
-
-  it("TabBar renders dormant distinctly from exited", async () => {
-    const saved = layoutRecord(
-      [bashRecord("saved-a", 0), bashRecord("saved-b", 1)],
-      "saved-b"
-    );
-    mockIpc.loadHistory.mockResolvedValue(saved);
-    await launch();
-    const rt = useRuntimeStore();
-    const w = mount(TabBar, { global: { plugins: [i18n] } });
-    try {
-      // B-02: the state label only surfaces after persisting 150ms.
-      expect(w.find(".tab.dormant").exists()).toBe(true);
-      await vi.waitFor(() => {
-        expect(w.find(".tab.dormant").text()).toContain("待启动");
-      });
-      expect(w.find(".tab.dormant").text()).not.toContain("已退出");
-    } finally {
-      w.unmount();
-      void rt;
-    }
+    expect(JSON.stringify(rec?.layout)).not.toContain("sessionState");
   });
 });

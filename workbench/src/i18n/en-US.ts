@@ -222,7 +222,6 @@ export const enUS: Record<string, string> = {
 
   // --- tab bar (TabBar.vue) ---
   "tabbar.idle": "Idle",
-  "tabbar.dormant": "Dormant",
   "tabbar.guide": "Not configured",
   "tabbar.starting": "Starting",
   "tabbar.closing": "Closing",

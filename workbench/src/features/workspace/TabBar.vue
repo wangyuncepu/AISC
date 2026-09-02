@@ -273,9 +273,6 @@ function stateLabel(tab: Tab): string {
   switch (tab.sessionState) {
     case "idle":
       return t("tabbar.idle");
-    case "dormant":
-      // Stage 5: lazy-restored placeholder — muted, distinct from exited.
-      return t("tabbar.dormant");
     case "guide":
       return t("tabbar.guide");
     case "starting":
@@ -344,12 +341,10 @@ onBeforeUnmount(() => {
 });
 
 function canClose(s: TabSessionState): boolean {
-  // guide/dormant tabs have no session to terminate but must stay
-  // removable (×) — closing a dormant placeholder only touches history
-  // (runtime-lifecycle-ux 01 §4.2.5).
+  // guide tabs have no session to terminate but must stay removable (×).
   return (
     s === "starting" || s === "running" || s === "closing" ||
-    s === "guide" || s === "dormant"
+    s === "guide"
   );
 }
 
@@ -554,7 +549,6 @@ function canReopen(s: TabSessionState): boolean {
 }
 .tab .state { font-size: var(--font-xs); color: var(--text-muted); }
 .tab.idle { color: var(--text-faint); }
-.tab.dormant { color: var(--text-faint); font-style: italic; }
 .tab.starting .state, .tab.closing .state { color: var(--warn); }
 .tab.exited .state { color: var(--text-muted); }
 .tab.failed .state { color: var(--error); }

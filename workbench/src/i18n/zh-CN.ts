@@ -222,7 +222,6 @@ export const zhCN = {
 
   // --- tab bar (TabBar.vue) ---
   "tabbar.idle": "未启动",
-  "tabbar.dormant": "待启动",
   "tabbar.guide": "未配置",
   "tabbar.starting": "启动中",
   "tabbar.closing": "关闭中",

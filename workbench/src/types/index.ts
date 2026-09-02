@@ -803,11 +803,10 @@ export type Freshness = "fresh" | "stale" | "unknown";
 
 // --- S2.2.a: multi-tab (03 §五/§六) ---
 
-/** Per-tab session lifecycle. `idle` = never opened; the rest mirror SessionState. */
-/** runtime-lifecycle-ux Stage 5: "dormant" marks a lazy-restored placeholder
- * pane — no session until its tab is activated (01 §4.2). Never persisted
- * (TabRecord carries no state) and visually distinct from exited. */
-export type TabSessionState = "idle" | "guide" | "dormant" | SessionState;
+/** Per-tab session lifecycle. `idle` = never opened; the rest mirror SessionState.
+ * (O9, D-11: the "dormant" lazy-restored placeholder state was removed — a
+ * reopened workspace restores every tab with live sessions immediately.) */
+export type TabSessionState = "idle" | "guide" | SessionState;
 
 /** Minimal exit info shown on an exited/failed tab (reason + code only). */
 export interface TabExit {
