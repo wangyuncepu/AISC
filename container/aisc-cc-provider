@@ -1372,12 +1372,17 @@ def _codex_catalog_key_value(config_text: str) -> Optional[str]:
     return None
 
 
-def _set_codex_catalog_key(config_text: str, new_value: Optional[str]) -> str:
+def _set_codex_catalog_key(config_text: str, new_value: Optional[str],
+                           *, force: bool = False) -> str:
     """Set/remove OUR catalog key (top-level). Ownership rule (mirrors
     cc-switch's): a foreign value (cc-switch's managed file or a user path)
-    is never touched; removal only ever drops our own filename."""
+    is never touched; removal only ever drops our own filename.
+    PP r6: force=True (provider switch / catalog-sync) retargets a foreign
+    value — it is a stale list bound to the PREVIOUS provider."""
     current = _codex_catalog_key_value(config_text)
-    if current is not None and Path(current).name != _CODEX_CATALOG_FILENAME:
+    if (current is not None
+            and Path(current).name != _CODEX_CATALOG_FILENAME
+            and not force):
         return config_text
     key_line_re = re.compile(r"^\s*model_catalog_json\s*=")
     out: list[str] = []
@@ -1516,7 +1521,8 @@ def _live_fetch_catalog_ids(
 
 
 def _apply_codex_model_catalog(
-    row: Optional[dict[str, Any]], *, live: bool = True
+    row: Optional[dict[str, Any]], *, live: bool = True,
+    override_foreign: bool = False,
 ) -> None:
     """Post-switch hook: write the catalog file + point config.toml at it.
 
@@ -1554,8 +1560,17 @@ def _apply_codex_model_catalog(
         # models via the TUI), it owns the whole codex tail state — our window
         # key would OVERRIDE its catalog rows (codex's with_config_overrides
         # takes the config key over entry windows). Touch nothing.
+        # PP r6 (live report 2026-09-03): the deference protects a CATALOG
+        # BOUND TO THE PROVIDER IT WAS MAPPED UNDER. After a provider switch
+        # that foreign file is STALE (old provider's models) yet still pinned
+        # — the switch/catalog-sync paths pass override_foreign=True to take
+        # over (the db row's modelCatalog IS the TUI mapping data, so a user
+        # mapping still wins through the row). The idempotent fast path keeps
+        # deferring (same provider, the file is the user's live intent).
         current_key = _codex_catalog_key_value(text)
-        if current_key is not None and Path(current_key).name != _CODEX_CATALOG_FILENAME:
+        if (current_key is not None
+                and Path(current_key).name != _CODEX_CATALOG_FILENAME
+                and not override_foreign):
             return
 
         models: list[dict[str, Any]] = []
@@ -1606,7 +1621,8 @@ def _apply_codex_model_catalog(
                 json.dumps({"models": entries}, ensure_ascii=True, indent=2) + "\n",
                 encoding="utf-8",
             )
-            new_text = _set_codex_catalog_key(text, str(catalog_path))
+            new_text = _set_codex_catalog_key(text, str(catalog_path),
+                                              force=override_foreign)
             # window fallback for the no-catalog path + [1m] cleanup
             window = int(models[0].get("contextWindow") or 128_000)
             new_text = _set_codex_top_level_int(new_text, "model_context_window", window)
@@ -1622,7 +1638,7 @@ def _apply_codex_model_catalog(
             else:
                 new_text = _set_codex_top_level_str(new_text, "web_search", None)
         else:
-            new_text = _set_codex_catalog_key(text, None)
+            new_text = _set_codex_catalog_key(text, None, force=override_foreign)
             new_text = _set_codex_top_level_int(new_text, "model_context_window", None)
             new_text = _set_codex_top_level_str(new_text, "web_search", None)
             try:
@@ -1823,8 +1839,11 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
         # Zero-step goal: /model lists the provider's models right after the
         # switch (no TUI visit, no manual model entry). O4 (D-11): the
         # STATIC catalog lands synchronously (zero network); fresh /models
-        # ids merge in the background.
-        _apply_codex_model_catalog(None if to_official else row, live=False)
+        # ids merge in the background. PP r6: override_foreign — a foreign
+        # (TUI-written) catalog pinned in config.toml belongs to the PREVIOUS
+        # provider after this point.
+        _apply_codex_model_catalog(None if to_official else row, live=False,
+                                   override_foreign=True)
         _spawn_catalog_refresh(agent)
     return op_list(agent)
 
@@ -2027,6 +2046,7 @@ def op_fetch_models(agent: str, provider_id: str,
 def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
               usage: Optional[dict] = None,
               fetch_models: Optional[dict] = None,
+              provider: Optional[str] = None,
               error: Optional[dict] = None) -> dict[str, Any]:
     out: dict[str, Any] = {
         "schema": PROTOCOL,
@@ -2040,6 +2060,8 @@ def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
         out["usage"] = usage
     if fetch_models is not None:
         out["fetch_models"] = fetch_models
+    if provider is not None:
+        out["provider"] = provider
     if error is not None:
         out["error"] = error
     return out
@@ -2072,14 +2094,18 @@ def main(argv: list[str] | None = None) -> int:
         # is spawned detached by the switch path.
         snapshot = read_snapshot("codex")
         row = next((r for r in snapshot if r["is_current"]), None)
+        # PP r6: override_foreign — a foreign (TUI-written) catalog pinned in
+        # config.toml can be a PREVIOUS provider's stale list after a switch
+        # + container restart; this op's whole point is that the CURRENT
+        # provider's catalog is the one in place.
         if row is not None and _settings_are_real("codex", row):
-            _apply_codex_model_catalog(row, live=args.live)
+            _apply_codex_model_catalog(row, live=args.live, override_foreign=True)
             print(json.dumps(_envelope("catalog-sync", True,
                                        provider=row["id"])))
         else:
             # No current provider or it's the official row — clear the
             # catalog so codex falls back to its built-in list.
-            _apply_codex_model_catalog(None, live=args.live)
+            _apply_codex_model_catalog(None, live=args.live, override_foreign=True)
             print(json.dumps(_envelope("catalog-sync", True, provider=None)))
         return 0
 

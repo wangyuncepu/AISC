@@ -1411,6 +1411,72 @@ class CodexModelCatalogHookTests(unittest.TestCase):
         self.assertEqual(catalog["models"][0]["context_window"], 128_000)
         self.assertIn("model_catalog_json", self._config_text())
 
+    def test_switch_takes_over_a_stale_foreign_catalog(self):
+        # PP r6 (live report 2026-09-03): config.toml pinned cc-switch's own
+        # catalog file — written under the PREVIOUS provider via the TUI
+        # mapping page. After switching providers that file is a stale list
+        # of the OLD provider's models, yet the deference guard kept it
+        # pinned. The switch/catalog-sync paths (override_foreign=True) take
+        # over: our file, our key, the NEW provider's preset list.
+        foreign = self.dir / ".codex" / "cc-switch-model-catalog.json"
+        foreign.write_text(json.dumps({"models": [
+            {"slug": "deepseek-v4-pro"}, {"slug": "deepseek-v4-flash"},
+        ]}), encoding="utf-8")
+        self._config(
+            'model = "glm-5.3"\n'
+            f'model_catalog_json = "{foreign}"\n'
+            '\n[model_providers.zhipu]\nname = "zhipu"\n'
+        )
+        row = {"id": "zhipu", "settings_config": {}}
+        # Default (no override) still DEFERS — the idempotent fast path keeps
+        # the user's live TUI intent untouched.
+        A._apply_codex_model_catalog(row)
+        self.assertNotIn(A._CODEX_CATALOG_FILENAME, self._config_text())
+        # The switch path's override takes over with the new provider's list.
+        A._apply_codex_model_catalog(row, override_foreign=True)
+        catalog = json.loads(
+            (self.dir / ".codex" / A._CODEX_CATALOG_FILENAME).read_text(encoding="utf-8"))
+        self.assertEqual([m["slug"] for m in catalog["models"]], ["glm-5.3"])
+        self.assertIn(A._CODEX_CATALOG_FILENAME, self._config_text())
+        self.assertNotIn("cc-switch-model-catalog.json", self._config_text())
+
+    def test_catalog_sync_main_envelope_and_takeover(self):
+        # PP r6: the catalog-sync main branch passes provider= to _envelope —
+        # a live TypeError (the write landed, then the envelope crashed, so
+        # every background --live refresh exited nonzero and silently).
+        import os
+        import sqlite3
+        db_dir = self.dir / ".cc-switch"
+        db_dir.mkdir(exist_ok=True)
+        conn = sqlite3.connect(db_dir / "cc-switch.db")
+        conn.execute(
+            "CREATE TABLE providers (id TEXT, app_type TEXT, name TEXT, "
+            "settings_config TEXT, is_current INTEGER, sort_index INTEGER, "
+            "meta TEXT, notes TEXT, website_url TEXT, icon TEXT, "
+            "icon_color TEXT)")
+        settings = {"config": 'model = "glm-5.3"\n\n[model_providers.zhipu]\n'
+                               'name = "zhipu"\n'
+                               'base_url = "https://open.bigmodel.cn/api/anthropic"\n'}
+        conn.execute(
+            "INSERT INTO providers VALUES ('zhipu', 'codex', 'Zhipu', ?, "
+            "1, 0, '{}', '', '', '', '')",
+            (json.dumps(settings),))
+        conn.commit()
+        conn.close()
+        with mock.patch.dict(
+                os.environ,
+                {"CC_SWITCH_CONFIG_DIR": str(db_dir),
+                 "CODEX_CONFIG_DIR": str(self.dir / ".codex")}):
+            self._config('model = "glm-5.3"\n')
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = A.main(["catalog-sync"])
+        self.assertEqual(code, 0)
+        envelope = json.loads(buf.getvalue().strip().splitlines()[-1])
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["provider"], "zhipu")
+        self.assertIn(A._CODEX_CATALOG_FILENAME, self._config_text())
+
     # --- S9: live model catalog (spike 05) ----------------------------------
 
     LIVE_ROW = {

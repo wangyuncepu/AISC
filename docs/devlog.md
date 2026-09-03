@@ -1865,3 +1865,25 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   铁证。门禁：vitest 429 / vue-tsc / vite build。追加：切换成功 toast
   与「切换中」进度卡统一到同一位置（底部居中）——完成时同位置渐变
   交接（进度卡渐隐、✓ 成功卡渐入），滑入方向随位翻转。
+- **r6 热切换实测 + codex catalog stale 接管（2026-09-03 晚）**：用户在
+  claude 实测热切换，请求日志铁证三条：current=zhipu、全程请求记 zhipu
+  名下（路由热切换生效）、最终 glm-5.3-flash 200 对话成功；**修正 r5 结
+  论**——claude 路由热但**模型映射不热**（env 进程态）：切换后旧会话仍发
+  claude-opus-5 逻辑名 → zhipu 401 十余条，换真实模型名立即通。codex
+  /model 列表刷新问题：ZZZ-TEST 假模型注入实验定案——**codex 列表启动
+  时进内存，连重开 /model 面板都不重读**（外部无解，上游架构）。顺藤
+  摸出真 bug：**切 provider 后 catalog 还是旧 provider 的模型**——
+  `_apply_codex_model_catalog` 的 FULL DEFERENCE 守卫 + `_set_codex_
+  catalog_key` 的所有权守卫把 TUI 映射页在**旧 provider** 下写的
+  cc-switch-model-catalog.json 保护成了跨切换 stale（用户 zhipu 现场：
+  列表全是 deepseek）。修复：两守卫加 `override_foreign/force` 让位参数，
+  op_switch 尾部 + catalog-sync 接管（db 行 modelCatalog 即 TUI 映射数据，
+  用户映射经行仍胜出），幂等快路径保持 deferre（同 provider 时外来文件
+  是用户活跃意图）；顺手修 catalog-sync envelope 存量 TypeError
+  （`provider=` kwarg 不在 _envelope 签名——文件写完才炸，后台 --live
+  refresh 一直在静默非零退出）。+2 测试（接管双向 + main envelope）。
+  活体容器热修验证：catalog-sync 干净 envelope、config 键改指
+  aisc-model-catalog.json、内容=['glm-5.3']。**codex 切换后仍需重开会话
+  才能看到新列表**（列表内存态不可外部刷新——重开即正确）。门禁：
+  adapter 79 / vendor-refresh + 双 staging + aisc build 镜像重建（用户
+  容器已 docker cp 热修）。
