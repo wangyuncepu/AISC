@@ -1,9 +1,26 @@
 # F1/F2 新特性设计文档（SSH 工作区 · 宿主工具 MCP）
 
-> 状态：**方案定稿待细化，未排期实施**。2026-09-01 两轮只读探底 + 用户
-> 裁决后成文。用户裁决：**后续先做优化批次讨论，优化优先级高于新功能
-> 添加**；F2/F1 实施等优化批次定案后再排期。探底证据（文件:行号）见
-> 文末触点附录。
+> 状态：**F2 实施中（2026-09-03 开工）**。2026-09-01 两轮只读探底 + 用户
+> 裁决后成文；优化批次（opt-batch O1-O9 + PP）完成后用户发令 F1/F2 开工。
+> 探底证据（文件:行号）见文末触点附录。
+>
+> **T-F2a 通道 PoC 报告（2026-09-03 实测，Docker Desktop 29.7.2/WSL2）**：
+> - **direct 模式全通**：Desktop 自带 `host.docker.internal` 与
+>   `--add-host host-gateway` 两形态 × 宿主监听 `127.0.0.1`/`0.0.0.0`
+>   四组全部 200——Desktop backend 代理宿主 loopback，**host_mcp 绑
+>   127.0.0.1 即可**（安全面最小，不必暴露 0.0.0.0）。
+> - **proxy 模式（TUN up）默认不通**：双杀——①`dns-hijack any:53` 连
+>   Docker embedded DNS（127.0.0.11）的查询一起劫走，fake-ip 把
+>   `host.docker.internal` 解析成 198.18.x.x 假地址；②auto-route 策略
+>   路由把直连桥网关 IP（172.17.0.1）的流量也截进 TUN。逐一对策实测：
+>   fake-ip-filter ✗（劫持点在上游解析）、nameserver-policy 指回
+>   127.0.0.11 ✗、**dns-hijack 收窄到公共 DNS（8.8.8.8/1.1.1.1）+
+>   `DOMAIN-SUFFIX,docker.internal,DIRECT` + 私网 CIDR DIRECT 规则 ✓
+>   （200）**。对策落点=AISC 注入的规范 tun/dns 块（mihomo-build-config.js
+>   所有权，不动用户订阅 proxies）。
+> - 结论：T-F2c 接线时同步改 mihomo-build-config.js 注入块（dns-hijack
+>   收窄 + 三条 DIRECT 规则）；Linux 原生引擎（host-gateway=网桥 IP、
+>   loopback 不可达）记为已知限制。
 
 ## 已裁决汇总（用户拍板，2026-09-01）
 

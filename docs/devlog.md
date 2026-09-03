@@ -1908,3 +1908,22 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   lib/contextMenu.ts（document 级 contextmenu preventDefault，自建菜单
   渲染自己的 DOM 不受影响），App.vue onMounted 接线 + 模块测试。纯前端，
   无容器/sidecar 涉及。门禁：vitest 433 / vue-tsc / vite build。
+
+# F1/F2 (2026-09-03 ~) — 宿主工具 MCP · SSH 工作区（分支 develop）
+
+> PP 批次封存后用户发令开工。规划入口：`docs/plans/2.1.9-dev-plans/
+> f1-f2-design.md`（D-10 设计冻结 + T-F2a PoC 报告已回填）。顺序：F2
+> 先（体量小、风险隔离）→ F1。
+
+- **T-F2a 通道 PoC（2026-09-03，Docker Desktop 29.7.2/WSL2）**：通道
+  矩阵实测七轮。**direct 全通**（Desktop 自带 DNS 与 --add-host
+  host-gateway 两形态 × 127.0.0.1/0.0.0.0 四组 200——Desktop backend
+  代理宿主 loopback，host_mcp 绑 127.0.0.1 即可）；**proxy（TUN）默认
+  双杀不通**：dns-hijack any:53 把 Docker embedded DNS 一起劫走
+  （fake-ip 给 host.docker.internal 发 198.18.x.x 假地址）+ auto-route
+  连直连桥网关 IP 都截进 TUN。对策逐一实测：fake-ip-filter ✗、
+  nameserver-policy 指回 127.0.0.11 ✗、**dns-hijack 收窄到公共 DNS +
+  DOMAIN-SUFFIX,docker.internal,DIRECT + 私网 CIDR DIRECT ✓（200）**。
+  对策落点=AISC 注入的规范 tun/dns 块（我们所有权，不动用户订阅）。
+  报告全文回填 f1-f2-design.md 头部；Linux 原生引擎（host-gateway=
+  网桥 IP、loopback 不可达）记已知限制。
