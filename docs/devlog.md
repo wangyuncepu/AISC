@@ -1862,4 +1862,6 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   渲染；纯前端合并各 workspace models（CLI totals 只聚 providers），
   scope 过滤同 provider 表。验证路径定型：切 Provider → 发一条消息 →
   用量面板刷新 → 按模型行出现 `glm-5.3[1m]`（而非 claude-opus-*）即
-  铁证。门禁：vitest 429 / vue-tsc / vite build。
+  铁证。门禁：vitest 429 / vue-tsc / vite build。追加：切换成功 toast
+  与「切换中」进度卡统一到同一位置（底部居中）——完成时同位置渐变
+  交接（进度卡渐隐、✓ 成功卡渐入），滑入方向随位翻转。

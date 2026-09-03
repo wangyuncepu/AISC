@@ -345,9 +345,11 @@ button.ghost { background: transparent; }
 
 /* --- IDEA-5 (5d): switch feedback --- */
 /* Floating toast: teleported to body (outside the zoomed/scrolling pane). */
-/* PP r3: rounded rect — the 50% radius read as an ugly ellipse. */
+/* PP r3: rounded rect — the 50% radius read as an ugly ellipse.
+ * PP r5 follow-up: SAME spot as the switch-progress card (bottom-center) —
+ * on completion the progress card hands off to the ✓ toast in place. */
 .switch-toast {
-  position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
   z-index: 1000; margin: 0; padding: var(--space-2) var(--space-5);
   background: var(--success-bg); color: var(--success);
   border: var(--border-w) solid var(--success); border-radius: var(--radius-md);
@@ -376,7 +378,7 @@ button.ghost { background: transparent; }
 .swap-leave-to { opacity: 0; transform: translateY(-4px); }
 .toast-enter-active { transition: opacity var(--duration-normal) var(--ease), transform var(--duration-normal) var(--ease); }
 .toast-leave-active { transition: opacity var(--duration-normal) var(--ease); }
-.toast-enter-from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+.toast-enter-from { opacity: 0; transform: translateX(-50%) translateY(8px); }
 .toast-leave-to { opacity: 0; }
 
 /* S3.6: users who ask the OS for less motion get instant state changes. */
