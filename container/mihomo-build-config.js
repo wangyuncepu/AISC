@@ -196,6 +196,13 @@ function stripTopBlock(lines, key) {
 const LOOPBACK_RULES = [
   'IP-CIDR,127.0.0.0/8,DIRECT',
   'DOMAIN-KEYWORD,localhost,DIRECT',
+  // F2 (T-F2a PoC 2026-09-03): under TUN + auto-route the container→host
+  // MCP channel (host.docker.internal) was killed twice — fake-ip hijack of
+  // the Docker embedded DNS and the route-table capture of direct gateway
+  // IPs. These three rules keep the host-gateway path DIRECT.
+  'DOMAIN-SUFFIX,docker.internal,DIRECT',
+  'IP-CIDR,192.168.0.0/16,DIRECT,no-resolve',
+  'IP-CIDR,172.16.0.0/12,DIRECT,no-resolve',
 ];
 function ensureLoopbackRules(text) {
   const lines = text.split('\n');
@@ -226,7 +233,12 @@ function ensureLoopbackRules(text) {
   lines.splice(rulesIndex + 1, 0, ...missing.map(rule => `${indent}- ${rule}`));
   return lines.join('\n');
 }
-const TUN = ['# === AISC forced TUN (auto-patched) ===','tun:','  enable: true','  stack: system','  dns-hijack:','    - any:53','  auto-route: true','  auto-detect-interface: true'].join('\n');
+// F2 (T-F2a PoC): dns-hijack narrowed from any:53 to the PUBLIC resolvers —
+// hijacking any:53 also captured Docker's embedded DNS (127.0.0.11), which
+// is the only resolver that knows host.docker.internal; fake-ip then handed
+// out a bogus 198.18.x.x and the host channel died. Public-DNS-only hijack
+// keeps fake-ip working for hardcoded resolvers while local names resolve.
+const TUN = ['# === AISC forced TUN (auto-patched) ===','tun:','  enable: true','  stack: system','  dns-hijack:','    - 8.8.8.8:53','    - 1.1.1.1:53','  auto-route: true','  auto-detect-interface: true'].join('\n');
 const DNS = ['# === AISC fallback DNS (auto-patched, only if absent) ===','dns:','  enable: true','  listen: 0.0.0.0:1053','  enhanced-mode: fake-ip','  nameserver:','    - 223.5.5.5','    - 119.29.29.29','  fallback:','    - 8.8.8.8','    - 1.1.1.1'].join('\n');
 
 // ==================== main ====================

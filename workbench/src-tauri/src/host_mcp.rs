@@ -88,6 +88,12 @@ impl HostMcpState {
         *self.port.lock().unwrap_or_else(|p| p.into_inner())
     }
 
+    /// T-F2c: the raw token (rides the CLI argv into the container env;
+    /// never logged).
+    pub fn token(&self) -> String {
+        self.token.clone()
+    }
+
     pub fn set_workspace(&self, path: Option<PathBuf>) {
         *self.workspace.lock().unwrap_or_else(|p| p.into_inner()) = path;
     }
@@ -176,7 +182,16 @@ async fn handle_connection(
     let request_line = lines.next().unwrap_or_default().to_string();
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default().to_string();
-    let path = parts.next().unwrap_or_default().to_string();
+    let raw_path = parts.next().unwrap_or_default().to_string();
+    // T-F2c: both auth shapes are accepted — the Authorization header and a
+    // `?token=` query param (MCP client URL injection: claude/codex register
+    // a plain URL; header support differs across client versions). The token
+    // only ever travels into the container (accepted threat model).
+    let (path, query) = raw_path.split_once('?').unwrap_or((raw_path.as_str(), ""));
+    let query_token = query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == "token").then(|| v.to_string())
+    }).unwrap_or_default();
     let mut content_length: usize = 0;
     let mut auth_ok = false;
     for line in lines {
@@ -195,7 +210,7 @@ async fn handle_connection(
         respond(&mut stream, 404, "{\"error\":\"not found\"}").await?;
         return Ok(());
     }
-    if !auth_ok {
+    if !auth_ok && query_token != state.token {
         respond(&mut stream, 401, "{\"error\":\"unauthorized\"}").await?;
         return Ok(());
     }

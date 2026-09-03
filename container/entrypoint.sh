@@ -735,6 +735,19 @@ if command -v aisc-web-gateway >/dev/null 2>&1 && command -v python3 >/dev/null 
 fi
 
 # ==========================================
+# 3.7b F2 host-tools MCP 注册（宿主 Workbench 经 AISC_HOST_MCP_URL 下发）
+#   - claude: /root/app/.mcp.json 项目级 mcpServers.aisc-host（读-合并-写）
+#   - codex:  config.toml [mcp_servers.aisc-host] 行级 splice（幂等重写）
+#   - env 缺失 = 功能关闭：移除旧注册（上一进程的 token 已轮换，留着只会 401）
+#   - 绝不写 settings.json（provider switch 整文件替换）
+#   - 失败只告警，不阻断启动
+# ==========================================
+if command -v python3 >/dev/null 2>&1; then
+    python3 /usr/local/bin/lib/register_host_mcp.py || \
+        echo "⚠️  host-tools MCP 注册失败（容器继续启动）" >&2
+fi
+
+# ==========================================
 # 4. 智能引导：CLI 选择
 # ==========================================
 # 支持直接启动 codex

@@ -939,6 +939,7 @@ def start_runtime(
     registry_root: Optional[Path] = None,
     ready_timeout: float = _READY_DEFAULT_TIMEOUT,
     proxy_config: Optional[str] = None,
+    host_mcp_url: Optional[str] = None,
 ) -> RuntimeStartResult:
     """Start a Workbench runtime per contract §5.2.
 
@@ -1140,6 +1141,10 @@ def start_runtime(
                 "run", "-d",
                 "--name", container_name,
                 *label_args(runtime_labels(runtime_id, owner, ws_key)),
+                # F2 (D-10): the container reaches the host MCP through the
+                # host-gateway alias (Docker Desktop resolves it natively;
+                # native-Linux engines need this mapping — T-F2a PoC).
+                "--add-host=host.docker.internal:host-gateway",
                 "-e", f"CLI_SCOPE={scope}",
                 "-e", "AISC_RUNTIME_MODE=idle",
                 "-e", f"AISC_RUNTIME_ID={runtime_id}",
@@ -1155,6 +1160,10 @@ def start_runtime(
                 # runtime-lifecycle-ux 3a: the entrypoint stamps the toolchain
                 # environment baseline with the content-addressed image id.
                 "-e", f"AISC_IMAGE_ID={image_id_at_start}",
+                # F2 (D-10): host-tools MCP endpoint (full URL incl. token
+                # query). Absent = the feature is off; the entrypoint then
+                # leaves the agents' MCP registrations untouched.
+                *(["-e", f"AISC_HOST_MCP_URL={host_mcp_url}"] if host_mcp_url else []),
                 "-v", f"{canonical_workspace}:/root/app",
             ]
             # svc-2 (web gateway): allocate a loopback host port and publish the

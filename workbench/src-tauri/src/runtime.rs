@@ -949,7 +949,7 @@ pub async fn start_runtime(
     let image = image.unwrap_or_else(|| "super-claude:latest".to_string());
     let network = network.unwrap_or_else(|| "direct".to_string());
     let scope = scope.unwrap_or_else(|| "project".to_string());
-    let argv = vec![
+    let mut argv = vec![
         "runtime".into(),
         "start".into(),
         "--runtime-id".into(),
@@ -967,6 +967,18 @@ pub async fn start_runtime(
         "--format".into(),
         "json".into(),
     ];
+    // F2 (D-10): forward the host-tools MCP endpoint into the container so
+    // the entrypoint can register it with the agents (claude .mcp.json /
+    // codex config.toml). Only when the whitelist is non-empty — an empty
+    // whitelist means the feature is OFF and the container gets nothing.
+    if let Some(state) = app.try_state::<std::sync::Arc<crate::host_mcp::HostMcpState>>() {
+        if let Some(port) = state.port() {
+            if !state.whitelist().is_empty() {
+                argv.push("--host-mcp-url".into());
+                argv.push(format!("http://host.docker.internal:{port}/mcp?token={}", state.token()));
+            }
+        }
+    }
     let env = run_control(&pin, argv, START_TIMEOUT, cancel).await;
     // Clear the in-flight token regardless of outcome.
     remove_op(&start_ops.0, &start_key);

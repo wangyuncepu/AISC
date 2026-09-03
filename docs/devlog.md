@@ -1945,3 +1945,19 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   （+7：只读筛/containment/HTTP 头解析/dispatch/exec 拒绝与实跑双平台
   分支）。**设计要点**：绑定面恒 127.0.0.1（Desktop backend 代理容器
   流量到 loopback——PoC 结论），bind 失败降级"无端点"不阻塞启动。
+- **T-F2c 容器接线 + MCP 注入链 + mihomo 对策（2026-09-03）**：全链
+  闭合——Rust `start_runtime` 在白名单非空时追加 `--host-mcp-url`（URL
+  带 token query；host_mcp 补 `?token=` 等价鉴权通道，claude/codex 统一
+  纯 URL 注册，绕开两客户端 header 支持差异）→ CLI flag → application
+  `start_runtime` → docker argv 追加 `--add-host=host.docker.internal:
+  host-gateway`（Desktop 自带也通；Linux 原生引擎需要）+ `-e
+  AISC_HOST_MCP_URL`（缺省=功能关闭不注入）。容器侧 entrypoint §3.7b：
+  `register_host_mcp.py`（新，+4 测试）——claude `/root/app/.mcp.json`
+  mcpServers.aisc-host 读-合并-写（用户其它 server 存活）+ codex
+  config.toml `[mcp_servers.aisc-host]` 表级幂等 splice（其它表存活）；
+  env 缺失=移除旧注册（上进程 token 已轮转，留着只 401）；绝不写
+  settings.json；失败只告警。mihomo-build-config.js 落地 PoC 对策：
+  dns-hijack `any:53`→公共 DNS（8.8.8.8/1.1.1.1）+ LOOPBACK_RULES 追加
+  DOMAIN-SUFFIX,docker.internal,DIRECT + 私网双 CIDR DIRECT（no-resolve）
+  ——TUN 下容器→宿主通道恢复 200 的实证组合。门禁：pytest 1115+120
+  subtests / cargo 277 / vendor-refresh + 双 staging + aisc build 镜像。

@@ -518,6 +518,9 @@ def _build_parser() -> _AiscArgumentParser:
     rts.add_argument("--proxy-config", type=str, default=None,
                      help="Host path to mihomo config.yaml to mount for --network proxy "
                           "(S0.2: proxy caps/device are set; without this, TUN runs without a config)")
+    rts.add_argument("--host-mcp-url", type=str, default=None,
+                     help="F2 (D-10): full host-tools MCP URL incl. token query; forwarded "
+                          "into the container as AISC_HOST_MCP_URL for agent registration")
 
     # --- runtime list ---
     rtl = rtsub.add_parser("list", help="List runtimes with Docker reconciliation",
@@ -1746,6 +1749,7 @@ def _cmd_runtime(
             scope=args.scope,
             owner=args.owner,
             proxy_config=args.proxy_config,
+            host_mcp_url=getattr(args, "host_mcp_url", None),
         )
         return data, 0, []
     elif sub == "list":
