@@ -2012,14 +2012,39 @@ def op_fetch_models(agent: str, provider_id: str,
     # PP r3 (user report): the form key may not be saved yet — an unsaved
     # key from the request document (stdin channel, never argv) overrides
     # the stored one for this transient lookup.
-    env = row["settings"].get("env")
-    env = env if isinstance(env, dict) else {}
-    base_url = str(env.get("ANTHROPIC_BASE_URL") or "")
     override = str((request or {}).get("api_key") or "")
-    api_key = override or str(env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY") or "")
-    models = _openai_compatible_models(base_url, api_key) if base_url else None
-    if models:
-        return {"available": True, "models": models, "message": ""}
+    if agent == "codex":
+        # PP r7 (user report): codex rows are config-TOML + auth.OPENAI_API_KEY
+        # shaped — the claude-style env probe below always came up EMPTY and
+        # the op fell into the upstream-CLI fallback (opaque failure). Use the
+        # codex field extraction (same as the catalog live fetch): the TOML
+        # base first, then the preset's declared OpenAI-side base (model lists
+        # often live there while the anthropic endpoint serves none).
+        fields = _codex_provider_fields(row["settings"], provider_id)
+        api_key = override or fields["api_key"]
+        bases: list[str] = []
+        for b in (fields["base_url"],):
+            if b and b not in bases:
+                bases.append(b)
+        try:
+            preset = _preset_provider(provider_id)
+            pb = str(preset.get("base_url") or "")
+            if pb and pb not in bases:
+                bases.append(pb)
+        except AdapterError:
+            pass
+        for base_url in bases:
+            models = _openai_compatible_models(base_url, api_key)
+            if models:
+                return {"available": True, "models": models, "message": ""}
+    else:
+        env = row["settings"].get("env")
+        env = env if isinstance(env, dict) else {}
+        base_url = str(env.get("ANTHROPIC_BASE_URL") or "")
+        api_key = override or str(env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY") or "")
+        models = _openai_compatible_models(base_url, api_key) if base_url else None
+        if models:
+            return {"available": True, "models": models, "message": ""}
 
     # FALLBACK: the upstream CLI subcommand (its own candidate chain), with
     # the tightened last-resort text parse.

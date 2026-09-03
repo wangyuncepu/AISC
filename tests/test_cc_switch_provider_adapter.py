@@ -1218,6 +1218,34 @@ class RoleEnvAndFetchModelsTests(AdapterTestCase):
         # The key never leaks into the envelope.
         self.assertNotIn("sk-live-abcdef123456", json.dumps(result))
 
+    def test_fetch_models_codex_uses_toml_base_and_auth_key(self):
+        # PP r7 (user report): codex rows are config-TOML + auth shaped — the
+        # claude-style env probe always came up empty and the op fell into the
+        # opaque upstream-CLI fallback. PRIMARY must extract the codex fields.
+        seed_provider(self.dir, "zhipu", {}, agent="codex", settings={
+            "config": 'model = "glm-5.3"\n\n[model_providers.zhipu]\n'
+                      'name = "zhipu"\n'
+                      'base_url = "https://open.bigmodel.cn/api/anthropic"\n',
+            "auth": {"OPENAI_API_KEY": "sk-codex-row-777"},
+        })
+        self.cli.stub_stdout("Fetching…\nError: HTTP 401\n")  # fallback dead
+
+        def fake_http(url, headers, timeout):
+            if url.endswith("/models"):
+                self.assertIn("Bearer sk-codex-row-777",
+                              headers.get("Authorization", ""))
+                return 200, {"data": [{"id": "glm-5.3"}, {"id": "glm-5.2"}]}
+            return 401, None
+
+        orig_http = A._http_get_json
+        A._http_get_json = fake_http
+        try:
+            result = A.op_fetch_models("codex", "zhipu")
+        finally:
+            A._http_get_json = orig_http
+        self.assertTrue(result["available"])
+        self.assertEqual(result["models"], ["glm-5.3", "glm-5.2"])
+
     def test_fetch_models_uses_unsaved_form_key_override(self):
         # PP r3: the editor's key may not be saved yet — a request-document
         # override (stdin channel, never argv) must drive the upstream call

@@ -1887,3 +1887,15 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   才能看到新列表**（列表内存态不可外部刷新——重开即正确）。门禁：
   adapter 79 / vendor-refresh + 双 staging + aisc build 镜像重建（用户
   容器已 docker cp 热修）。
+- **r7 codex 拉取模型失败（2026-09-03 晚）**：`op_fetch_models` 只有
+  claude 语义（读 settings.env 的 ANTHROPIC_* 键）——codex 行是
+  config-TOML + auth.OPENAI_API_KEY 形状，PRIMARY 取数恒空 → 直接掉进
+  上游 CLI fallback → 用户看到莫名失败。修复：codex 分支用
+  `_codex_provider_fields` 提取 TOML base + auth key（与 catalog live
+  fetch 同源），preset 声明的 OpenAI 侧 base 作第二候选；+1 测试
+  （TOML 形状行 → PRIMARY 命中 /models）。活体热修后实测：zhipu
+  /models 端点不返回列表（上游不暴露/无权限——诚实报错）、deepseek
+  **HTTP 401**（用户 codex 行 key 被拒——拉取链已通，失败在 key 层；
+  r3 的未保存 key 链路恰好支持"粘贴新 key 直接重试拉取"验证）。
+  门禁：adapter 80 / vendor-refresh + 双 staging + aisc build 镜像
+  重建 + 活体 docker cp 热修。
