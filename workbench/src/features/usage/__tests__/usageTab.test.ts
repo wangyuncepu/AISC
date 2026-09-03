@@ -50,6 +50,12 @@ function overview(sub: SubscriptionStatus, withRows = true): UsageOverview {
         requests: 4, success: 4, failed: 0, tokens_total: 105600,
         cost_estimate: 0.0318, currency: "USD" }]
     : [];
+  // PP r5③: per-model rows are the ACTUAL forwarded model ids
+  // (proxy_request_logs.model) — the mapping-verification ground truth.
+  const modelRows = withRows
+    ? [{ app: "claude", model: "glm-5.3[1m]", requests: 3,
+        tokens_in: 80000, tokens_out: 25600, cost_estimate: 0.02 }]
+    : [];
   return {
     subscription: sub,
     range: "7d",
@@ -64,7 +70,7 @@ function overview(sub: SubscriptionStatus, withRows = true): UsageOverview {
         fetched_at: withRows ? "2026-08-19T15:00:00+08:00" : null,
         available: true,
         providers: rows,
-        models: [],
+        models: modelRows,
       },
     ],
     totals: {
@@ -95,6 +101,18 @@ describe("NetworkUsageTab (IDEA-2 2d)", () => {
     expect(tab.text()).toContain("DeepSeek");
     expect(tab.text()).toContain("105.6k");
     expect(tab.find(".sub-form").exists()).toBe(false); // no import form
+    tab.unmount();
+  });
+
+  it("renders the per-model table with the ACTUAL forwarded model ids (PP r5)", async () => {
+    mockIpc.usageOverview.mockResolvedValue(overview(SUB_CONFIGURED));
+    const tab = mount(NetworkUsageTab, { global: { plugins: [i18n] } });
+    await flushPromises();
+
+    // The ground-truth model id from proxy_request_logs, not the logical
+    // tier name the in-chat /model picker shows.
+    expect(tab.text()).toContain("按模型用量");
+    expect(tab.text()).toContain("glm-5.3[1m]");
     tab.unmount();
   });
 

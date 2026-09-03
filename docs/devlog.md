@@ -1852,3 +1852,14 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   请求层（选 Opus 实际发映射后的上游模型），cc-switch 桌面端行为一致、
   我们侧不可改显示名；验证途径=直接问 claude 当前模型（上游模型自报）
   或用量/请求日志看实际转发。门禁：vitest 428 / vue-tsc / vite build。
+- **r5 追加（"问它是谁"被证伪 + 按模型用量表）**：用户实测问 claude
+  "你是谁"答"Opus"——**该方法不可靠**（我此前建议有误）：claude code 每次
+  请求注入身份 system prompt（"You are Claude…"），上游模型遵循 prompt
+  自称；**逻辑反证**：无 Opus 订阅还能正常对话 = 请求绝不可能到官方
+  （会 401）= 路由+映射必然在工作。落地补强：NetworkUsageTab 新增
+  **「按模型用量」表**——adapter `op_usage` 的 model 维度
+  （`proxy_request_logs.model` = 实际转发模型 ID）一直聚合着但前端从未
+  渲染；纯前端合并各 workspace models（CLI totals 只聚 providers），
+  scope 过滤同 provider 表。验证路径定型：切 Provider → 发一条消息 →
+  用量面板刷新 → 按模型行出现 `glm-5.3[1m]`（而非 claude-opus-*）即
+  铁证。门禁：vitest 429 / vue-tsc / vite build。

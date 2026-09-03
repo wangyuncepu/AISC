@@ -12,7 +12,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useUsageStore } from "../../stores/usage";
-import type { UsageWorkspaceEntry } from "../../types";
+import type { UsageModelRow, UsageWorkspaceEntry } from "../../types";
 import SubscriptionForm from "./SubscriptionForm.vue";
 
 const { t } = useI18n();
@@ -86,6 +86,35 @@ const visibleWorkspaces = computed<UsageWorkspaceEntry[]>(() =>
     (w) => usage.scope === "all" || w.workspace_path === usage.scope,
   ),
 );
+
+/** PP r5③: per-model rows — the ACTUAL upstream model ids that flowed
+ * through the proxy (proxy_request_logs.model). The in-chat /model picker
+ * only shows logical tier names (Opus/Sonnet/…), so this table is the
+ * ground truth for "did my mapping take effect". The CLI's totals only
+ * aggregate providers; models arrive per-workspace and are merged here. */
+const modelRows = computed<UsageModelRow[]>(() => {
+  const ov = usage.overview;
+  if (!ov) return [];
+  if (usage.scope !== "all") {
+    const ws = ov.workspaces.find((w) => w.workspace_path === usage.scope);
+    return ws?.models ?? [];
+  }
+  const agg = new Map<string, UsageModelRow>();
+  for (const w of ov.workspaces) {
+    for (const r of w.models) {
+      const key = `${r.app}:${r.model}`;
+      const cur = agg.get(key)
+        ?? { app: r.app, model: r.model, requests: 0,
+             tokens_in: 0, tokens_out: 0, cost_estimate: 0 };
+      cur.requests += r.requests;
+      cur.tokens_in += r.tokens_in;
+      cur.tokens_out += r.tokens_out;
+      cur.cost_estimate = Math.round((cur.cost_estimate + r.cost_estimate) * 1e4) / 1e4;
+      agg.set(key, cur);
+    }
+  }
+  return [...agg.values()].sort((a, b) => b.requests - a.requests);
+});
 
 function successRate(ok: number, total: number): string {
   return total > 0 ? `${Math.round((ok * 100) / total)}%` : "—";
@@ -252,6 +281,34 @@ onMounted(() => void usage.fetchOverview());
         </table>
         <p v-else class="dim">{{ t("usage.empty") }}</p>
 
+        <!-- PP r5③: per-model usage — the actual upstream model ids the
+             proxy forwarded (ground truth for mapping verification). -->
+        <h2>{{ t("usage.models.title") }}</h2>
+        <p class="hint">{{ t("usage.models.hint") }}</p>
+        <table v-if="modelRows.length" class="usage-table">
+          <thead>
+            <tr>
+              <th>{{ t("usage.col.app") }}</th>
+              <th>{{ t("usage.col.model") }}</th>
+              <th class="num">{{ t("usage.col.requests") }}</th>
+              <th class="num">{{ t("usage.col.tokensIn") }}</th>
+              <th class="num">{{ t("usage.col.tokensOut") }}</th>
+              <th class="num">{{ t("usage.col.cost") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in modelRows" :key="`${row.app}:${row.model}`">
+              <td>{{ row.app }}</td>
+              <td class="model-id">{{ row.model }}</td>
+              <td class="num">{{ row.requests }}</td>
+              <td class="num">{{ fmtTokens(row.tokens_in) }}</td>
+              <td class="num">{{ fmtTokens(row.tokens_out) }}</td>
+              <td class="num">{{ fmtCost(row.cost_estimate) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="dim">{{ t("usage.empty") }}</p>
+
         <ul v-if="usage.scope === 'all'" class="ws-states">
           <li v-for="w in visibleWorkspaces" :key="w.workspace_hash">
             {{ w.workspace_path.split(/[\\/]/).filter(Boolean).pop() ?? w.workspace_hash }}
@@ -287,6 +344,7 @@ h2 { font-size: var(--font-lg); margin: var(--space-3) 0 2px; }
 .usage-table th { color: var(--text-muted); font-size: var(--font-xs); text-transform: uppercase; letter-spacing: 0.5px; }
 .usage-table th, .usage-table td { border-bottom: var(--border-w) solid var(--border); padding: var(--space-1) var(--space-2); text-align: left; }
 .usage-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.model-id { font-family: var(--font-mono); font-size: var(--font-sm); }
 .ws-states { margin: 0; padding-left: 18px; font-size: var(--font-sm); color: var(--text-muted); }
 .hint { font-size: var(--font-sm); color: var(--text-muted); margin: 0; max-width: 760px; }
 button.danger { color: var(--error-fg); }
