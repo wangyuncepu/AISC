@@ -1293,7 +1293,7 @@ defineExpose({
   opacity: 0.55;
   background: var(--surface-2);
   border: var(--border-w) solid var(--border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .truncation-banner:hover:not(:disabled) {

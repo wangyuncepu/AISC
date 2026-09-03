@@ -44,6 +44,18 @@ function setup() {
   return s;
 }
 
+/** PP r3: an official-direct placeholder row (no base_url) as cc-switch
+ * keeps one per agent. */
+function resultWithOfficial(): CcSwitchProvidersResult {
+  const r = RESULT(["deepseek", "zhipu"]);
+  r.providers.push({
+    id: "default", name: "default", app_type: "claude",
+    base_url: "", model: "", has_api_key: false, api_key_mask: "",
+    is_current: false,
+  });
+  return r;
+}
+
 beforeEach(() => {
   setActivePinia(createPinia());
   i18n.global.locale.value = "zh-CN";
@@ -156,23 +168,30 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     w.unmount();
   });
 
-  it("rows without a base_url are hidden (direct-official placeholders)", async () => {
+  it("official entries stay visible and pin first (PP r3)", async () => {
     setup();
     const bare = RESULT(["deepseek", "zhipu"]);
     bare.providers[1]!.base_url = "";
     vi.mocked(ipc.ccSwitchProviders).mockResolvedValue(bare);
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    // Only the activatable + current rows render; the bare row is gone.
-    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(1));
+    // The bare row renders as the pinned official card (cc-switch parity).
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
+    const first = w.findAll(".card")[0]!;
+    expect(first.text()).toContain("官方直连");
+    expect(first.text()).toContain("直连官方端点");
+    expect(first.find("button.start").exists()).toBe(true);
+    expect(first.find("button.edit").exists()).toBe(false);
     expect(w.find(".hidden-note").exists()).toBe(true);
     w.unmount();
   });
 
-  it("the current row's 停用 button offers cancel-proxy → official direct", async () => {
+  it("the official card's 启用 offers cancel-proxy → official direct (PP r3)", async () => {
     setup();
-    vi.mocked(ipc.ccSwitchSwitch).mockResolvedValue(RESULT(["zhipu"]));
+    vi.mocked(ipc.ccSwitchProviders).mockResolvedValue(resultWithOfficial());
+    vi.mocked(ipc.ccSwitchSwitch).mockResolvedValue(resultWithOfficial());
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(3));
+    // Card 0 is the pinned official-direct entry.
     await w.findAll(".card")[0]!.find("button.start").trigger("click");
     const { confirm } = await import("@tauri-apps/plugin-dialog");
     await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
@@ -189,11 +208,29 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     setup();
     const { confirm } = await import("@tauri-apps/plugin-dialog");
     vi.mocked(confirm).mockResolvedValueOnce(false);
+    vi.mocked(ipc.ccSwitchProviders).mockResolvedValue(resultWithOfficial());
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
-    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(3));
     await w.findAll(".card")[0]!.find("button.start").trigger("click");
     await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
     expect(ipc.ccSwitchSwitch).not.toHaveBeenCalled();
+    w.unmount();
+  });
+
+  it("list order is pinned to first-seen (the edit dance never reshuffles)", async () => {
+    setup();
+    const w = mount(CcSwitchUiTab, {
+      global: { plugins: [i18n] }, props: { visible: false },
+    });
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
+    // A later snapshot arrives reversed (what a server-side delete→re-add
+    // used to do to the order) — the display keeps first-seen order.
+    vi.mocked(ipc.ccSwitchProviders).mockResolvedValue(RESULT(["zhipu", "deepseek"]));
+    await w.setProps({ visible: true });
+    await vi.waitFor(() => expect(ipc.ccSwitchProviders).toHaveBeenCalledTimes(2));
+    const names = w.findAll(".card .name").map((n) => n.text());
+    expect(names[0]!.startsWith("deepseek")).toBe(true);
+    expect(names[1]!.startsWith("zhipu")).toBe(true);
     w.unmount();
   });
 

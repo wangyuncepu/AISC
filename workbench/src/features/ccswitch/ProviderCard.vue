@@ -1,11 +1,11 @@
 <script setup lang="ts">
 /**
  * ProviderCard (PP, D-12): the desktop-parity card row — icon + name +
- * endpoint + "current" badge. PP r2 (user ruling): activation moves OFF the
- * card body onto a dedicated 启用/停用 button in the hover action group,
- * mirroring the cc-switch desktop (click-to-activate felt accidental). The
- * current card keeps its cancel-proxy affordance as the 停用 button (same
- * confirm flow, IDEA-4 r3 semantics preserved).
+ * endpoint + "current" badge, with the hover action group. PP r2: activation
+ * lives on a dedicated 启用 button (cc-switch style), never the card body.
+ * PP r3 (user rulings): official-direct entries (no base_url) render as a
+ * pinned pseudo-card whose 启用 IS the cancel-proxy path; the current
+ * provider gets NO 停用 button (to stop it, enable another/official).
  */
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
@@ -22,14 +22,18 @@ const emit = defineEmits<{
   (e: "remove"): void;
 }>();
 
+/** Official-direct entry: cc-switch keeps these always visible (placeholder
+ * rows carry no base_url); activating one restores the official config. */
+const official = computed(() => !props.provider.base_url);
 /** Icon resolution: the db icon glyph (with its color) or the first
- * character of the name as a neutral round badge. */
-const glyph = computed(() => props.provider.icon || (props.provider.name || "?").trim().charAt(0).toUpperCase());
+ * character of the display name as a neutral round badge. */
+const displayName = computed(() =>
+  official.value ? t("ccswitch.officialDirect") : (props.provider.name || props.provider.id));
+const glyph = computed(() => props.provider.icon || displayName.value.trim().charAt(0).toUpperCase());
 const glyphColor = computed(() => props.provider.icon_color || "");
-/** 停用 only makes sense when a proxy route is actually serving (a current
- * official-direct placeholder has nothing to cancel). */
-const canCancel = computed(() => props.provider.is_current && Boolean(props.provider.base_url));
-const startable = computed(() => !props.provider.is_current || canCancel.value);
+/** PP r3: the current provider has no 停用 button — switching happens by
+ * enabling another entry (or the official one). */
+const startable = computed(() => !props.provider.is_current);
 </script>
 
 <template>
@@ -38,21 +42,24 @@ const startable = computed(() => !props.provider.is_current || canCancel.value);
           aria-hidden="true">{{ glyph }}</span>
     <span class="meta">
       <span class="name">
-        {{ provider.name || provider.id }}
+        {{ displayName }}
         <span v-if="provider.notes" class="note" :title="provider.notes">✎</span>
       </span>
-      <span class="url" :title="provider.base_url">{{ provider.base_url || t("ccswitch.officialDirect") }}</span>
+      <span v-if="official" class="url">{{ t("ccswitch.officialDesc") }}</span>
+      <span v-else class="url" :title="provider.base_url">{{ provider.base_url }}</span>
     </span>
     <span v-if="provider.is_current" class="badge">{{ t("ccswitch.currentChip") }}</span>
     <span class="actions" @click.stop @keydown.stop>
       <button v-if="startable" class="start" :disabled="busy"
-              :title="provider.is_current ? t('ccswitch.cancelProxyHint') : t('ccswitch.activateHint')"
+              :title="official ? t('ccswitch.cancelProxyHint') : t('ccswitch.activateHint')"
               @click="emit('activate')">
-        <span v-if="!provider.is_current" class="tri" aria-hidden="true">▶</span>
-        {{ provider.is_current ? t("ccswitch.disableBtn") : t("ccswitch.enableBtn") }}
+        <span class="tri" aria-hidden="true">▶</span>
+        {{ t("ccswitch.enableBtn") }}
       </button>
-      <button class="edit" :disabled="busy" :title="t('ccswitch.edit')" @click="emit('edit')">✎</button>
-      <button class="danger" :disabled="busy" :title="t('ccswitch.delete')" @click="emit('remove')">🗑</button>
+      <template v-if="!official">
+        <button class="edit" :disabled="busy" :title="t('ccswitch.edit')" @click="emit('edit')">✎</button>
+        <button class="danger" :disabled="busy" :title="t('ccswitch.delete')" @click="emit('remove')">🗑</button>
+      </template>
     </span>
   </div>
 </template>
@@ -82,10 +89,11 @@ const startable = computed(() => !props.provider.is_current || canCancel.value);
 .note { color: var(--text-faint); margin-left: 4px; }
 .url { font-size: var(--font-xs); color: var(--text-muted); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
+/* PP r3: rounded-rect tag, not a pill (the 50% radius read as an ellipse). */
 .badge {
   flex: none; font-size: var(--font-xs); font-weight: 600;
   color: var(--accent-fg); background: var(--accent);
-  border-radius: var(--radius-full); padding: 1px 8px;
+  border-radius: var(--radius-sm); padding: 1px 8px;
 }
 /* Desktop-parity hover group: actions sit on the card but only surface on
    hover/focus (touch devices get them permanently via media query). The

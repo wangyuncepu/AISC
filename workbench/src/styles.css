@@ -528,7 +528,9 @@ input[type="range"] {
   gap: var(--space-1);
   min-height: 20px;
   padding: 0 var(--space-2);
-  border-radius: var(--radius-full);
+  /* PP r3 global sweep: 50% radius on non-square chips reads as an ellipse;
+   * text badges are rounded rects (true dots keep radius-full). */
+  border-radius: var(--radius-sm);
   background: var(--surface-hover);
   color: var(--text-muted);
   font-size: var(--font-xs);

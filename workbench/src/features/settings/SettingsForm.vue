@@ -297,7 +297,7 @@ async function reopenOnboarding() {
 .settings-form { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .tab-strip { display: flex; align-items: center; gap: 8px; padding: 8px 14px 0; }
 .tab-strip .spacer { flex: 1; }
-.chip { font-size: var(--font-xs); padding: 2px var(--space-2); border-radius: var(--radius-full); }
+.chip { font-size: var(--font-xs); padding: 2px var(--space-2); border-radius: var(--radius-sm); }
 .chip.dirty { background: var(--warn-bg); color: var(--warn-fg); }
 .chip.saved { background: var(--success-bg); color: var(--success); }
 .banner { margin: var(--space-2) var(--space-4) 0; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); font-size: var(--font-sm); }

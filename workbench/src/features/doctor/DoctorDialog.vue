@@ -244,7 +244,7 @@ function onOverlayDown(e: MouseEvent) {
 .check[data-status="pass"] { border-left: 3px solid var(--success); }
 .check[data-status="skip"] { border-left: 3px solid var(--border-strong); }
 .c-row { display: flex; align-items: center; gap: 8px; }
-.c-status { font-size: var(--font-xs); text-transform: uppercase; padding: 1px var(--space-2); border-radius: var(--radius-full); }
+.c-status { font-size: var(--font-xs); text-transform: uppercase; padding: 1px var(--space-2); border-radius: var(--radius-sm); }
 .c-status[data-status="pass"] { background: var(--success-bg); color: var(--success); }
 .c-status[data-status="warn"] { background: var(--warn-bg); color: var(--warn-fg); }
 .c-status[data-status="fail"] { background: var(--error-bg); color: var(--error); }

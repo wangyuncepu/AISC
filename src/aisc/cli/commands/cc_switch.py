@@ -126,12 +126,18 @@ def cmd_cc_switch_delete(args: Any) -> Dict[str, Any]:
 def cmd_cc_switch_fetch_models(args: Any) -> Dict[str, Any]:
     from aisc.application.cc_switch_provider import fetch_models
 
+    # PP r3: an optional stdin document may carry the form's unsaved
+    # api_key — forwarded to the adapter inside the same stdin channel
+    # (never argv, never logged).
+    request = _read_stdin_request(required=False)
+    api_key = str(request.get("api_key") or "")
     return fetch_models(
         runtime_id=args.runtime_id,
         agent=args.agent,
         provider_id=args.provider_id,
         workspace=args.workspace,
         executor=None,
+        request={"api_key": api_key} if api_key else None,
     )
 
 

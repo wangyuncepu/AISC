@@ -703,6 +703,8 @@ pub async fn cc_switch_delete(
 /// Fetch the remote model list for a provider (IDEA-5 5c, mapping dropdown
 /// tier 1). Degrades to `available=false` on upstream failures — the UI
 /// falls back to known models + manual input, never an error state.
+/// PP r3: the form's unsaved api_key (optional) rides the CLI child's
+/// STDIN request document — argv/logs/disk stay clean.
 #[tauri::command]
 pub async fn cc_switch_fetch_models(
     app: AppHandle,
@@ -710,10 +712,14 @@ pub async fn cc_switch_fetch_models(
     runtime_id: String,
     agent: String,
     provider_id: String,
+    api_key: Option<String>,
 ) -> Result<Value, WorkbenchError> {
     cc_switch_validate(&runtime_id, &agent)?;
     let argv = cc_switch_argv("fetch-models", &runtime_id, &agent, &workspace, Some(&provider_id));
-    cc_switch_call_value(&app, argv, None).await
+    let input = api_key
+        .filter(|k| !k.trim().is_empty())
+        .map(|k| serde_json::json!({ "api_key": k }).to_string());
+    cc_switch_call_value(&app, argv, input).await
 }
 
 // --- IDEA-2 (2d): network subscription + usage overview IPC -----------------

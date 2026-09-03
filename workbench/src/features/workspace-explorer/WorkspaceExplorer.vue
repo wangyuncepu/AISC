@@ -1551,7 +1551,7 @@ function onTreeKeydown(e: KeyboardEvent) {
 .explorer-badge {
   font-size: var(--font-xs);
   padding: 0 var(--space-2);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--accent-soft);
 }
 .explorer-label {
@@ -1663,7 +1663,7 @@ function onTreeKeydown(e: KeyboardEvent) {
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 2px var(--space-2);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   border: var(--border-w) solid var(--border-2);
   box-shadow: var(--shadow-menu);

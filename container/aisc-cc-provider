@@ -1931,7 +1931,8 @@ def _openai_compatible_models(
     return None
 
 
-def op_fetch_models(agent: str, provider_id: str) -> dict[str, Any]:
+def op_fetch_models(agent: str, provider_id: str,
+                    request: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     snapshot = read_snapshot(agent)
     row = next((r for r in snapshot if r["id"] == provider_id), None)
     if row is None:
@@ -1940,17 +1941,21 @@ def op_fetch_models(agent: str, provider_id: str) -> dict[str, Any]:
     # PRIMARY: the JSON candidate chain (upstream services/model_fetch.rs
     # semantics) — deterministic `data[].id` parsing, no human-text noise.
     # The key is used transiently in-process and never enters the envelope.
+    # PP r3 (user report): the form key may not be saved yet — an unsaved
+    # key from the request document (stdin channel, never argv) overrides
+    # the stored one for this transient lookup.
     env = row["settings"].get("env")
     env = env if isinstance(env, dict) else {}
     base_url = str(env.get("ANTHROPIC_BASE_URL") or "")
-    api_key = str(env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY") or "")
+    override = str((request or {}).get("api_key") or "")
+    api_key = override or str(env.get("ANTHROPIC_AUTH_TOKEN") or env.get("ANTHROPIC_API_KEY") or "")
     models = _openai_compatible_models(base_url, api_key) if base_url else None
     if models:
         return {"available": True, "models": models, "message": ""}
 
     # FALLBACK: the upstream CLI subcommand (its own candidate chain), with
     # the tightened last-resort text parse.
-    secrets = snapshot_secrets(agent, snapshot)
+    secrets = ([override] if override else []) + snapshot_secrets(agent, snapshot)
     completed = run_cli(
         ["-a", agent, "provider", "fetch-models", provider_id], "", secrets
     )
@@ -2055,8 +2060,26 @@ def main(argv: list[str] | None = None) -> int:
             )))
             return 2
         try:
+            # PP r3: an optional request document on stdin may carry the
+            # form's unsaved api_key (transient lookup override — the secret
+            # channel only, matching add/edit semantics).
+            fetch_request: dict[str, Any] = {}
+            raw = sys.stdin.read()
+            if raw.strip():
+                try:
+                    loaded = json.loads(raw)
+                except json.JSONDecodeError as exc:
+                    print(json.dumps(_envelope(
+                        args.op, False,
+                        error={"code": ERR_BAD_REQUEST,
+                               "message": f"stdin request is not valid JSON: {exc}"},
+                    )))
+                    return 2
+                if isinstance(loaded, dict):
+                    fetch_request = loaded
             print(json.dumps(_envelope(
-                args.op, True, fetch_models=op_fetch_models(args.agent, args.id),
+                args.op, True,
+                fetch_models=op_fetch_models(args.agent, args.id, fetch_request),
             )))
             return 0
         except AdapterError as exc:

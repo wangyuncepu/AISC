@@ -215,12 +215,14 @@ def delete_provider(runtime_id: str, agent: str, provider_id: str,
 
 
 def fetch_models(runtime_id: str, agent: str, provider_id: str,
-                 workspace: Optional[str], executor: Any) -> Dict[str, Any]:
+                 workspace: Optional[str], executor: Any,
+                 request: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Remote model list for the mapping dropdown (IDEA-5 5c).
 
     Never raises on upstream fetch failures — the adapter degrades to
     ``available=False`` with the upstream message so the UI can fall back
-    to the known list + manual input."""
+    to the known list + manual input. ``request`` may carry the form's
+    unsaved ``api_key`` (PP r3) — it reaches the adapter via stdin only."""
     from aisc.application.data_root import workspace_state_dir
     from pathlib import Path
 
@@ -228,7 +230,7 @@ def fetch_models(runtime_id: str, agent: str, provider_id: str,
     _validate(runtime_id, agent, "fetch-models")
     envelope = _exec_adapter(
         runtime_id, workspace_state_dir(ws_path), executor, "fetch-models",
-        agent, provider_id, None,
+        agent, provider_id, request,
     )
     result = envelope.get("fetch_models")
     return result if isinstance(result, dict) else {

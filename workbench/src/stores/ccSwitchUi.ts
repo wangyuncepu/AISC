@@ -21,8 +21,24 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
    * tier-1 source; unavailable results carry the upstream hint). */
   const fetchedModels = reactive<Record<string, FetchModelsResult>>({});
 
+  /** PP r3 (user ruling): the edit dance is delete→re-add server-side, which
+   * used to reorder cards after every save. First-seen order is pinned here
+   * per agent — edits/additions never reshuffle the list. */
+  const orderSeq = new Map<string, number>();
+  function _order(id: string): number {
+    let seq = orderSeq.get(id);
+    if (seq === undefined) {
+      seq = orderSeq.size;
+      orderSeq.set(id, seq);
+    }
+    return seq;
+  }
+
   function _apply(result: { providers: CcSwitchProvider[] }): void {
-    providers.value = result.providers;
+    // Pre-pin every id BEFORE sorting: assigning seqs inside the comparator
+    // makes the result depend on the engine's comparison order.
+    for (const p of result.providers) _order(p.id);
+    providers.value = [...result.providers].sort((a, b) => _order(a.id) - _order(b.id));
   }
 
   async function list(ws: string, rt: string): Promise<boolean> {
@@ -42,6 +58,7 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
   async function switchAgent(a: CcSwitchAgent, ws: string, rt: string): Promise<void> {
     if (agent.value === a) return;
     agent.value = a;
+    orderSeq.clear(); // per-agent namespace: the other agent re-pins afresh
     await list(ws, rt);
   }
 
@@ -88,12 +105,17 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
 
   /** IDEA-5 (5d): tier 1 of the mapping dropdown. Never throws to the
    * caller — failures land in the result (available=false + message) and
-   * the form falls back to known models + manual input. */
-  async function fetchModels(ws: string, rt: string, providerId: string): Promise<boolean> {
+   * the form falls back to known models + manual input. `apiKey` (PP r3):
+   * the form's unsaved key, forwarded so fetch works before the first
+   * save; it rides the stdin channel only and is never stored here. */
+  async function fetchModels(
+    ws: string, rt: string, providerId: string, apiKey?: string,
+  ): Promise<boolean> {
     busy.value = `fetch:${providerId}`;
     error.value = null;
     try {
-      fetchedModels[providerId] = await ipc.ccSwitchFetchModels(ws, rt, agent.value, providerId);
+      fetchedModels[providerId] =
+        await ipc.ccSwitchFetchModels(ws, rt, agent.value, providerId, apiKey);
       void ipc.logUiEvent?.("cc_switch_fetch", "ok");
       return true;
     } catch (e) {

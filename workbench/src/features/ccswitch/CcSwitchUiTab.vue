@@ -96,7 +96,10 @@ function openAdd(): void {
   openAddPage();  // PP (D-12): dedicated page
 }
 
-// --- activate (IDEA-4): click a row to make that provider current ---
+// --- activate (IDEA-4 / PP r3): the dedicated 启用 button makes that
+// provider current; the official-direct card's 启用 IS the cancel-proxy
+// path (pseudo target). The current provider has no deactivate button —
+// to stop it, enable another entry (user ruling).
 const switchedTo = ref("");
 let switchFlashTimer: number | null = null;
 /** IDEA-5 (5d): the newly-current row pulses once (visual feedback trio);
@@ -104,25 +107,20 @@ let switchFlashTimer: number | null = null;
 const flashId = ref("");
 let rowFlashTimer: number | null = null;
 
-function canActivate(p: CcSwitchProvider): boolean {
-  if (mutating.value) return false;
-  // A current PROXY row offers "cancel proxy" (click → confirm → official
-  // direct). Non-current rows need a usable configuration (no base_url =
-  // cc-switch's official/direct placeholders — hidden, see visibleProviders).
-  return p.is_current ? Boolean(p.base_url) : Boolean(p.base_url);
-}
-
 async function activate(p: CcSwitchProvider): Promise<void> {
-  if (!canActivate(p)) return;
+  if (mutating.value || p.is_current) return;
   let target = p.id;
-  if (p.is_current) {
-    // Clicking the active row = the cancel-proxy affordance (IDEA-4 round 3):
-    // confirm, then switch to the direct-official row via the pseudo target.
-    const ok = await confirm(t("ccswitch.cancelProxyConfirm", { name: p.name || p.id }));
-    if (!ok) return;
+  if (!p.base_url) {
+    // Official-direct card: enabling it cancels the active proxy
+    // (IDEA-4 round 3 semantics, relocated from the old current-row click).
+    const current = providers.value.find((x) => x.is_current);
+    if (current) {
+      const ok = await confirm(
+        t("ccswitch.cancelProxyConfirm", { name: current.name || current.id }));
+      if (!ok) return;
+    }
     target = "official";
-  }
-  if (target !== "official" && !p.has_api_key) {
+  } else if (!p.has_api_key) {
     const go = await confirm(t("ccswitch.noKeyConfirm", { name: p.name || p.id }));
     if (!go) return;
   }
@@ -132,7 +130,7 @@ async function activate(p: CcSwitchProvider): Promise<void> {
       target === "official" ? t("ccswitch.officialDirect") : (p.name || p.id);
     if (switchFlashTimer !== null) window.clearTimeout(switchFlashTimer);
     switchFlashTimer = window.setTimeout(() => (switchedTo.value = ""), 3000);
-    flashId.value = target;
+    flashId.value = p.id;
     if (rowFlashTimer !== null) window.clearTimeout(rowFlashTimer);
     rowFlashTimer = window.setTimeout(() => (flashId.value = ""), 1300);
     // Sidebar G-12 cache follows the live switch (both agents are valid).
@@ -150,14 +148,14 @@ async function remove(p: CcSwitchProvider): Promise<void> {
 const hasRuntime = computed(() => Boolean(store.runtimeId && store.workspace));
 
 /**
- * IDEA-4 (manual round 2): rows that cannot be activated (no base_url —
- * cc-switch's built-in `*-official` rows and the imported `default`
- * direct-official snapshot) are HIDDEN instead of shown unclickable; the
- * current row always stays visible.
+ * PP r3 (user ruling): official-direct entries (no base_url) are ALWAYS
+ * visible and pinned first (cc-switch parity — supersedes the S8g-2 hiding
+ * rule); everything else keeps the store's stable first-seen order.
  */
-const visibleProviders = computed(() =>
-  providers.value.filter((p) => p.is_current || Boolean(p.base_url)),
-);
+const displayProviders = computed(() => [
+  ...providers.value.filter((p) => !p.base_url),
+  ...providers.value.filter((p) => Boolean(p.base_url)),
+]);
 
 onMounted(() => {
   if (hasRuntime.value) void refresh();
@@ -241,22 +239,29 @@ onBeforeUnmount(() => {
       </Transition>
     </Teleport>
 
-    <div class="cards" v-if="visibleProviders.length">
-      <!-- PP (D-12): the fully card-ified list (user ruling) — icon + name +
-           endpoint + current badge; hover surfaces the action group; the card
-           body activates (current = cancel-proxy, IDEA-4 r3 semantics). -->
-      <ProviderCard
-        v-for="p in visibleProviders"
-        :key="p.id"
-        :provider="p"
-        :busy="mutating"
-        :class="{ flash: p.id === flashId }"
-        @activate="activate(p)"
-        @edit="openEditPage(p)"
-        @remove="remove(p)"
-      />
-    </div>
-    <p v-else-if="!loading && hasRuntime" class="empty">{{ t("ccswitch.empty") }}</p>
+    <!-- PP r3 (user ruling): the agent toggle crossfades (out-in) instead of
+         snapping; while the new agent's snapshot is in flight the stale list
+         stays visible, dimmed. -->
+    <Transition name="swap" mode="out-in">
+      <div class="cards" v-if="displayProviders.length" :key="agent" :class="{ stale: loading }">
+        <!-- PP (D-12): the fully card-ified list — icon + name + endpoint +
+             current badge; hover surfaces the action group; the 启用 button
+             activates (official card = cancel-proxy, IDEA-4 r3 semantics). -->
+        <ProviderCard
+          v-for="p in displayProviders"
+          :key="p.id"
+          :provider="p"
+          :busy="mutating"
+          :class="{ flash: p.id === flashId }"
+          @activate="activate(p)"
+          @edit="openEditPage(p)"
+          @remove="remove(p)"
+        />
+      </div>
+      <p v-else-if="!loading && hasRuntime" class="empty" :key="`empty-${agent}`">
+        {{ t("ccswitch.empty") }}
+      </p>
+    </Transition>
     <!-- S8g-2 (user ruling 2026-08-29): the hidden-placeholder count note is
          GONE; the footer is now a constant usage hint. -->
     <p class="hidden-note">{{ t("ccswitch.usageHint") }}</p>
@@ -328,13 +333,23 @@ button.ghost { background: transparent; }
 
 /* --- IDEA-5 (5d): switch feedback --- */
 /* Floating toast: teleported to body (outside the zoomed/scrolling pane). */
+/* PP r3: rounded rect — the 50% radius read as an ugly ellipse. */
 .switch-toast {
   position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
   z-index: 1000; margin: 0; padding: var(--space-2) var(--space-5);
   background: var(--success-bg); color: var(--success);
-  border: var(--border-w) solid var(--success); border-radius: var(--radius-full);
+  border: var(--border-w) solid var(--success); border-radius: var(--radius-md);
   font-size: var(--font-md); box-shadow: var(--shadow-menu);
 }
+/* PP r3: agent-toggle crossfade (stale-while-revalidate keeps the old list
+ * visible, dimmed, while the other agent's snapshot is in flight). */
+.cards.stale { opacity: 0.55; transition: opacity var(--duration-fast) var(--ease); }
+.swap-enter-active, .swap-leave-active {
+  transition: opacity var(--duration-fast) var(--ease),
+              transform var(--duration-fast) var(--ease);
+}
+.swap-enter-from { opacity: 0; transform: translateY(4px); }
+.swap-leave-to { opacity: 0; transform: translateY(-4px); }
 .toast-enter-active { transition: opacity var(--duration-normal) var(--ease), transform var(--duration-normal) var(--ease); }
 .toast-leave-active { transition: opacity var(--duration-normal) var(--ease); }
 .toast-enter-from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
@@ -343,6 +358,7 @@ button.ghost { background: transparent; }
 /* S3.6: users who ask the OS for less motion get instant state changes. */
 @media (prefers-reduced-motion: reduce) {
   .cards .flash { animation: none; }
+  .cards.stale, .swap-enter-active, .swap-leave-active { transition: none; }
   .toast-enter-active, .toast-leave-active { transition: none; }
 }
 </style>

@@ -77,7 +77,8 @@ function toggleOneM(key: string): void {
       />
       <button v-if="slot.oneM" class="icon one-m" :class="{ on: hasOneM(slot.key) }"
               :title="t('ccswitch.mapping.oneMTip')"
-              @click="toggleOneM(slot.key)">[1m]</button>
+              :aria-pressed="hasOneM(slot.key)"
+              @click="toggleOneM(slot.key)">1M</button>
     </div>
     <datalist id="pp-map-candidates">
       <option v-for="c in candidates" :key="c" :value="c" />
@@ -96,7 +97,8 @@ function toggleOneM(key: string): void {
         />
         <button v-if="slot.oneM" class="icon one-m" :class="{ on: hasOneM(slot.key) }"
                 :title="t('ccswitch.mapping.oneMTip')"
-                @click="toggleOneM(slot.key)">[1m]</button>
+                :aria-pressed="hasOneM(slot.key)"
+                @click="toggleOneM(slot.key)">1M</button>
       </div>
     </div>
   </div>
@@ -148,8 +150,16 @@ input[type="number"] { max-width: 110px; }
 .cat-head { font-size: var(--font-xs); color: var(--text-faint); }
 button.icon { min-width: 24px; min-height: 24px; padding: 0; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: var(--font-md); }
 button.icon.danger:hover { color: var(--error); }
-button.icon.one-m { font-size: var(--font-xs); border: 1px solid var(--border); border-radius: var(--radius-sm); }
-button.icon.one-m.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+/* PP r3 (user ruling): a proper toggle chip instead of the raw "[1m]" text
+ * squished against the input — solid accent when on, quiet ghost when off. */
+button.icon.one-m {
+  flex: none; min-width: 36px; min-height: var(--control-h-sm); padding: 0 8px;
+  font-size: var(--font-xs); font-weight: 600; letter-spacing: 0.4px;
+  color: var(--text-faint); background: none;
+  border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
+}
+button.icon.one-m:hover { color: var(--text-2); }
+button.icon.one-m.on { color: var(--accent-fg); border-color: var(--accent); background: var(--accent); }
 button.link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: var(--font-sm); align-self: flex-start; }
 </style>
 

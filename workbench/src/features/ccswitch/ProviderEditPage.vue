@@ -67,7 +67,10 @@ const ROLE_SLOTS = [
 ];
 const roleSlots = ROLE_SLOTS.map((s) => ({ key: s.key, label: t(s.labelKey), oneM: s.oneM }));
 
-const ICONS = ["◆", "▲", "●", "■", "★", "⚡", "🤖", "🧠", "🚀", "🐳", " 🔥", "❄"];
+/** PP r3 (user ruling): one uniform monochrome glyph family (geometric
+ * shapes / dingbats, text presentation) — the old mix of color emoji and
+ * shapes rendered inconsistently; icon_color tints whichever is picked. */
+const ICONS = ["◆", "▲", "●", "■", "★", "✦", "✚", "❖", "✱", "✜", "☾", "⬢"];
 const COLORS = ["", "#4a9eff", "#22c55e", "#f59e0b", "#ef4444", "#a855f7", "#14b8a6"];
 
 const modelField = ref(props.provider?.model ?? "");
@@ -76,11 +79,14 @@ const fetched = ref<{ ok: boolean; n: number; message: string } | null>(null);
 const runtime = useRuntimeStore();
 const uiStore = useCcSwitchUiStore();
 /** PP (D-12): the fetch-models button rides the editor's mapping section
- * (same store op the old popover had; read-only, never blocks the form). */
+ * (same store op the old popover had; read-only, never blocks the form).
+ * PP r3 (user report): the form's unsaved key rides along — fetch must
+ * work BEFORE the first save, not only against the stored key. */
 async function fetchNow(): Promise<void> {
   if (!props.provider || !runtime.runtimeId || !runtime.workspace) return;
   fetched.value = null;
-  await uiStore.fetchModels(runtime.workspace, runtime.runtimeId, props.provider.id);
+  await uiStore.fetchModels(runtime.workspace, runtime.runtimeId, props.provider.id,
+    form.apiKey || undefined);
   const r = uiStore.fetchedModels[props.provider.id];
   fetched.value = r
     ? { ok: Boolean(r.available), n: r.models.length,

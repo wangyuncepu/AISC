@@ -1213,6 +1213,36 @@ class RoleEnvAndFetchModelsTests(AdapterTestCase):
         # The key never leaks into the envelope.
         self.assertNotIn("sk-live-abcdef123456", json.dumps(result))
 
+    def test_fetch_models_uses_unsaved_form_key_override(self):
+        # PP r3: the editor's key may not be saved yet — a request-document
+        # override (stdin channel, never argv) must drive the upstream call
+        # instead of the stored key, and never leak into the envelope.
+        seed_provider(self.dir, "prov", {
+            "ANTHROPIC_BASE_URL": "https://api.prov.example/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": "sk-stored-000000",
+        })
+        seen: list[str] = []
+
+        def fake_http(url, headers, timeout):
+            auth = headers.get("Authorization", "")
+            seen.append(auth)
+            if "Bearer sk-form-999999" in auth:
+                return 200, {"data": [{"id": "prov-xl"}]}
+            return 401, None
+
+        orig_http = A._http_get_json
+        A._http_get_json = fake_http
+        try:
+            result = A.op_fetch_models("claude", "prov", {"api_key": "sk-form-999999"})
+        finally:
+            A._http_get_json = orig_http
+        self.assertTrue(result["available"])
+        self.assertEqual(result["models"], ["prov-xl"])
+        self.assertTrue(seen)
+        for auth in seen:
+            self.assertNotIn("sk-stored-000000", auth)
+        self.assertNotIn("sk-form-999999", json.dumps(result))
+
     def test_fetch_models_candidate_chain_includes_bare_models(self):
         # DeepSeek-style: only the BARE /models (no /v1) on the stripped root
         # answers — the last candidate in the upstream chain.
@@ -1267,13 +1297,44 @@ class RoleEnvAndFetchModelsTests(AdapterTestCase):
         seed_provider(self.dir, "deepseek", {"ANTHROPIC_BASE_URL": "https://x"})
         self.cli.stub_stdout("deepseek-chat\ndeepseek-reasoner\n")
         buf = io.StringIO()
-        with redirect_stdout(buf):
+        # PP r3: main reads an optional stdin request document (empty here).
+        with redirect_stdout(buf), mock.patch.object(sys, "stdin", io.StringIO("")):
             code = A.main(["fetch-models", "--agent", "claude", "--id", "deepseek"])
         self.assertEqual(code, 0)
         envelope = json.loads(buf.getvalue().strip().splitlines()[-1])
         self.assertTrue(envelope["ok"])
         self.assertTrue(envelope["fetch_models"]["available"])
         self.assertEqual(envelope["fetch_models"]["models"][0], "deepseek-chat")
+
+    def test_fetch_models_main_reads_stdin_override_key(self):
+        seed_provider(self.dir, "prov", {
+            "ANTHROPIC_BASE_URL": "https://api.prov.example/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": "sk-stored-000000",
+        })
+        seen: list[str] = []
+
+        def fake_http(url, headers, timeout):
+            auth = headers.get("Authorization", "")
+            seen.append(auth)
+            if "Bearer sk-form-999999" in auth:
+                return 200, {"data": [{"id": "prov-xl"}]}
+            return 401, None
+
+        orig_http = A._http_get_json
+        A._http_get_json = fake_http
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf), mock.patch.object(
+                    sys, "stdin",
+                    io.StringIO(json.dumps({"api_key": "sk-form-999999"}))):
+                code = A.main(["fetch-models", "--agent", "claude", "--id", "prov"])
+        finally:
+            A._http_get_json = orig_http
+        self.assertEqual(code, 0)
+        envelope = json.loads(buf.getvalue().strip().splitlines()[-1])
+        self.assertTrue(envelope["fetch_models"]["available"])
+        self.assertTrue(seen and all("sk-stored-000000" not in a for a in seen))
+        self.assertNotIn("sk-form-999999", buf.getvalue())
 
 
 class CodexModelCatalogHookTests(unittest.TestCase):

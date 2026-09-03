@@ -254,8 +254,13 @@ export const ccSwitchDelete = (workspace: string, runtimeId: string, agent: stri
 
 /** IDEA-5 (5c): remote model list for the mapping dropdown. Degrades to
  * `available=false` (with the upstream message) instead of an error. */
-export const ccSwitchFetchModels = (workspace: string, runtimeId: string, agent: string, providerId: string) =>
-  invoke<FetchModelsResult>("cc_switch_fetch_models", { workspace, runtimeId, agent, providerId });
+export const ccSwitchFetchModels = (
+  workspace: string, runtimeId: string, agent: string, providerId: string,
+  apiKey?: string,
+) =>
+  invoke<FetchModelsResult>("cc_switch_fetch_models", {
+    workspace, runtimeId, agent, providerId, apiKey: apiKey || null,
+  });
 
 // --- IDEA-2 (2d): subscription + usage data plane ---
 // The subscription URL / content ride the CLI child's stdin on the Rust side

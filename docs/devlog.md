@@ -1792,3 +1792,27 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   button.edit。i18n：+enableBtn/disableBtn，usageHint 随新交互改写（双语）。
   门禁：vitest 426 / vue-tsc / vite build 全过。纯前端改动——零容器/
   sidecar 涉及，无需镜像重建，npm run dev 即验。
+- **r3 手测反馈（八项，2026-09-03）**：①图标集换统一单色系（几何/杂记号
+  12 枚；旧 emoji+形状混排渲染不一致）；②**拉取模型带未保存 key 全链**——
+  adapter `op_fetch_models` 接受 stdin request 文档的 api_key 覆盖（仅
+  stdin 通道；失败消息 redact 覆盖 key）→ CLI `fetch_models` 可选 request
+  透传 → Rust `cc_switch_fetch_models` 可选 api_key 走 run_control_input →
+  ipc/store/编辑页带 form.apiKey；adapter +2 测试；镜像 + sidecar 双重建；
+  ③[1m] 钮重设计（"1M" 实心 accent 切换芯片 + aria-pressed）；④「使用中」
+  徽章矩形化；⑤**全局椭圆治理**——根因 = `--radius-full: 50%` 在非正方
+  文本胶囊上产生椭圆角；六处改 radius-sm（switch-toast / ui-badge /
+  settings chip / doctor c-status / explorer 徽章+路径 chip / Terminal
+  截断钮），真圆点/头像/进度条保留；⑥官方直连卡**恒显示且置顶**（推翻
+  S8g-2 隐藏裁决，cc-switch 对等）：官方卡「启用」= 取消代理伪目标
+  （confirm 沿用，无 current 时免确认），官方卡无编辑/删除；**当前
+  provider 无「停用」钮**（停用 = 启用别的/官方）；store first-seen
+  稳定序——edit 舞步 delete→re-add 不再重排卡片（**比较器禁副作用**：
+  先全量钉序再 sort，V8 首次比较顺序曾颠倒结果——HTML 转储定位）；
+  ⑦agent 切换 out-in 交叉淡入 + stale 列表暗显（stale-while-revalidate
+  本已存在，缺的只是视觉连续性）；⑧图标生效链实弹验证——新镜像容器内
+  add 带 icon/color → list 回读 `◆`/`#4a9eff` 字节级一致（用户所见
+  "无效果"定位为旧 runtime 容器跑 pre-P1 adapter 静默丢字段）。
+  门禁：pytest 1108+120 subtests / adapter 77 / vitest 427 / vue-tsc /
+  vite build / cargo 270（env docker 探针测试并行跑偶发，单跑即过）/
+  vendor-refresh 1513 + bundle 双 staging PASS（pytest 曾把 __pycache__
+  留进 container/_bundle 被 staging 拒绝——清理后过）。
