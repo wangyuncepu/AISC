@@ -9,7 +9,7 @@
  * parent; the status strip (dirty/saved) renders here because the pane has no
  * header of its own.
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../../stores/settings";
@@ -86,6 +86,7 @@ const GROUP_KEY: Record<string, string> = {
   ui: "settings.group.ui",
   terminal: "settings.group.terminal",
   window: "settings.group.window",
+  hostTools: "settings.group.hostTools",
   disk: "settings.group.disk",
 };
 
@@ -94,6 +95,30 @@ const GROUP_KEY: Record<string, string> = {
 const ui = computed<UiSettings>(() => store.doc?.ui ?? ({} as UiSettings));
 const terminal = computed<TerminalSettings>(() => store.doc?.terminal ?? ({} as TerminalSettings));
 const windowS = computed<WindowSettings>(() => store.doc?.window ?? ({} as WindowSettings));
+/** F2: the host-tools whitelist working copy (mutated in place; rows with an
+ * empty name/program are dropped server-side by the sanitizer). */
+const hostTools = ref<import("../../types").HostToolEntry[]>(
+  (store.doc?.hostTools ?? []).map((e) => ({ readOnlyPreset: "", ...e })));
+/** Reload the working copy whenever the backend doc is re-applied (load,
+ * cancel, reset). */
+watch(
+  () => store.doc,
+  (d) => {
+    hostTools.value = (d?.hostTools ?? []).map((e) => ({ readOnlyPreset: "", ...e }));
+  },
+);
+/** Edit -> doc sync (dirty + save both read the doc; empty rows are
+ * filtered here, the Rust sanitizer is the second gate). */
+watch(hostTools, (rows) => {
+  if (!store.doc) return;
+  store.doc.hostTools = rows
+    .filter((r) => r.name.trim() && r.program.trim())
+    .map((r) => ({
+      name: r.name,
+      program: r.program,
+      ...(r.readOnlyPreset ? { readOnlyPreset: r.readOnlyPreset } : {}),
+    }));
+}, { deep: true });
 
 /** Explorer ignore names as a comma-separated string for the text input. */
 const explorerIgnoreText = computed<string>({
@@ -177,7 +202,7 @@ async function reopenOnboarding() {
     </p>
 
     <div v-if="store.doc" class="body">
-      <template v-for="group in ['ui', 'terminal', 'window', 'disk']" :key="group">
+      <template v-for="group in ['ui', 'terminal', 'window', 'hostTools', 'disk']" :key="group">
         <h3 class="group">{{ t(GROUP_KEY[group]) }}</h3>
 
         <!-- ui section -->
@@ -254,6 +279,27 @@ async function reopenOnboarding() {
           </p>
         </template>
 
+        <!-- F2 (D-10): host-tools whitelist card. Default EMPTY = the feature
+             is off (every container host_exec call is refused). -->
+        <template v-else-if="group === 'hostTools'">
+          <p class="help">{{ t("settings.hostTools.hint") }}</p>
+          <div v-for="(row, i) in hostTools" :key="i" class="field ht-row">
+            <input v-model.trim="row.name" class="ht-name" :placeholder="t('settings.hostTools.namePh')" :disabled="store.readOnly" />
+            <input v-model.trim="row.program" class="ht-program" :placeholder="t('settings.hostTools.programPh')" :disabled="store.readOnly" />
+            <select v-model="row.readOnlyPreset" :disabled="store.readOnly" :title="t('settings.hostTools.presetHint')">
+              <option value="">{{ t("settings.hostTools.presetNone") }}</option>
+              <option value="git-ro">{{ t("settings.hostTools.presetGitRo") }}</option>
+            </select>
+            <button class="ht-del" :disabled="store.readOnly" :title="t('settings.hostTools.remove')" @click="hostTools.splice(i, 1)">×</button>
+          </div>
+          <div class="field">
+            <button :disabled="store.readOnly" @click="hostTools.push({ name: '', program: '', readOnlyPreset: '' })">
+              ＋ {{ t("settings.hostTools.add") }}
+            </button>
+          </div>
+          <p class="note">{{ t("settings.hostTools.note") }}</p>
+        </template>
+
         <!-- O7 (D-11): disk & cache card — df summary + until-filtered prune.
              NOT a settings document field: live ops via the settings store. -->
         <template v-else-if="group === 'disk'">
@@ -328,6 +374,14 @@ input:disabled, select:disabled { opacity: 0.5; }
 .err-text { font-size: var(--font-xs); color: var(--error); width: 100%; }
 .note { font-size: var(--font-xs); color: var(--text-faint); margin-top: 8px; }
 .disk-row .label { color: var(--text-2); }
+/* F2: host-tools whitelist rows */
+.ht-row { flex-wrap: nowrap; }
+.ht-name { max-width: 160px; }
+.ht-program { font-family: var(--font-mono); font-size: var(--font-sm); }
+.ht-row select { max-width: 150px; }
+.ht-del {
+  min-width: 26px; min-height: 26px; padding: 0; flex: none;
+}
 .loading { color: var(--text-muted); font-size: var(--font-md); }
 .foot {
   display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border);

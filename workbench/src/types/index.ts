@@ -938,6 +938,13 @@ export interface ValidationIssue {
   reason: string;
 }
 
+/** F2 (D-10): one host-tools whitelist entry (settings `hostTools`). */
+export interface HostToolEntry {
+  name: string;
+  program: string;
+  readOnlyPreset?: string;
+}
+
 export interface SettingsDocument {
   schemaVersion: number;
   revision: number;
@@ -945,6 +952,8 @@ export interface SettingsDocument {
   ui: UiSettings;
   terminal: TerminalSettings;
   window: WindowSettings;
+  /** F2: empty = host-exec is OFF (every container call refused). */
+  hostTools?: HostToolEntry[];
   issues: ValidationIssue[];
   /** On-disk file was corrupt and isolated; app runs on defaults. */
   corrupted: boolean;
@@ -957,6 +966,7 @@ export interface SettingsPatch {
   ui?: UiSettings;
   terminal?: TerminalSettings;
   window?: WindowSettings;
+  hostTools?: HostToolEntry[];
 }
 
 export interface SaveOutcome {

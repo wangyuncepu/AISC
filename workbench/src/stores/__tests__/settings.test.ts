@@ -100,6 +100,7 @@ describe("save", () => {
       ui: doc.ui,
       terminal: expect.objectContaining({ scrollback: 20000 }),
       window: doc.window,
+      hostTools: [], // F2: the whitelist rides the same patch (empty here)
     });
     expect(s.doc?.revision).toBe(4);
     expect(s.dirty).toBe(false);

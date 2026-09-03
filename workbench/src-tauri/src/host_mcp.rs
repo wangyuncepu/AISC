@@ -622,4 +622,60 @@ mod tests {
         assert_eq!(r["exitCode"], 0, "body: {r}");
         assert!(r["stdout"].as_str().unwrap().contains("host_mcp_ok"));
     }
+
+    /// Socket-level end-to-end: the real serve() loop, a real TCP connection,
+    /// raw HTTP bytes. Pins the auth gate (401) and the query-token path.
+    #[tokio::test]
+    async fn serve_end_to_end_auth_and_tools_list() {
+        let state = std::sync::Arc::new(HostMcpState::new());
+        state.set_whitelist(vec![entry("C:/tools/git.exe", None)]);
+        let server = tokio::spawn(serve(state.clone()));
+        // wait for the port to be bound
+        for _ in 0..50 {
+            if state.port().is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let port = state.port().expect("server bound a port");
+        let token = state.token();
+
+        // No auth -> 401.
+        let resp = raw_http(port, "POST /mcp HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}").await;
+        assert!(resp.starts_with("HTTP/1.1 401"), "resp: {resp}");
+
+        // Query token + tools/list -> 200 and our tool names.
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let req = format!(
+            "POST /mcp?token={token} HTTP/1.1\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(), body
+        );
+        let resp = raw_http(port, &req).await;
+        assert!(resp.starts_with("HTTP/1.1 200"), "resp: {resp}");
+        assert!(resp.contains("host_exec"), "resp: {resp}");
+
+        // Full call chain: host_tools_list returns the whitelist entry.
+        let body = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"host_tools_list","arguments":{}}}"#;
+        let req = format!(
+            "POST /mcp?token={token} HTTP/1.1\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(), body
+        );
+        let resp = raw_http(port, &req).await;
+        assert!(resp.starts_with("HTTP/1.1 200"), "resp: {resp}");
+        assert!(resp.contains("C:/tools/git.exe"), "resp: {resp}");
+
+        server.abort();
+    }
+
+    /// Minimal blocking client: send bytes, read to EOF (Connection: close).
+    async fn raw_http(port: u16, request: &str) -> String {
+        use tokio::io::AsyncReadExt;
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect");
+        s.write_all(request.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        s.read_to_end(&mut buf).await.unwrap_or(0);
+        String::from_utf8_lossy(&buf).to_string()
+    }
 }

@@ -36,7 +36,9 @@ export const useSettingsStore = defineStore("settings", () => {
     return (
       JSON.stringify(doc.value.ui) !== JSON.stringify(lastSaved.value.ui) ||
       JSON.stringify(doc.value.terminal) !== JSON.stringify(lastSaved.value.terminal) ||
-      JSON.stringify(doc.value.window) !== JSON.stringify(lastSaved.value.window)
+      JSON.stringify(doc.value.window) !== JSON.stringify(lastSaved.value.window) ||
+      JSON.stringify(doc.value.hostTools ?? []) !==
+        JSON.stringify(lastSaved.value.hostTools ?? [])
     );
   });
 
@@ -86,6 +88,7 @@ export const useSettingsStore = defineStore("settings", () => {
         ui: doc.value.ui,
         terminal: doc.value.terminal,
         window: doc.value.window,
+        hostTools: doc.value.hostTools ?? [],
       });
       doc.value.revision = outcome.revision;
       doc.value.issues = outcome.issues;

@@ -1961,3 +1961,13 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   DOMAIN-SUFFIX,docker.internal,DIRECT + 私网双 CIDR DIRECT（no-resolve）
   ——TUN 下容器→宿主通道恢复 200 的实证组合。门禁：pytest 1115+120
   subtests / cargo 277 / vendor-refresh + 双 staging + aisc build 镜像。
+- **T-F2d 设置 UI（2026-09-03）**：SettingsForm 新「宿主工具」组——白名单
+  行编辑（显示名/程序完整路径/只读筛下拉：不受限 vs git-ro）+ 增删行；
+  deep watch 双向同步（编辑→doc.hostTools 过滤空行；load/cancel/reset
+  →重建工作副本）；store dirty/save 补 hostTools 比较；i18n 双语（含
+  安全边界 note）。types +HostToolEntry。**+1 socket 级端到端测试**
+  （cargo 278）：真 serve() 循环 + 真 TCP 连接裸 HTTP 字节——钉死
+  401 鉴权门 / token query 通道 / tools/call host_tools_list 完整链
+  （第一版断言 tools/list 响应含白名单路径是错的——schema 里不含
+  运行时数据，改为真调 host_tools_list）。门禁：vitest 433 / vue-tsc /
+  vite build / cargo 278。
