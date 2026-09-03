@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   readText: vi.fn().mockResolvedValue("pasted-content"),
   writeText: vi.fn().mockResolvedValue(undefined),
   keyHandler: null as ((e: KeyboardEvent) => boolean) | null,
+  hasSelection: false,
 }));
 
 vi.mock("../../../lib/ipc", () => ({
@@ -85,7 +86,10 @@ vi.mock("@xterm/xterm", () => ({
     focus() {}
     clear() {}
     getSelection() {
-      return "";
+      return h.hasSelection ? "selected-text" : "";
+    }
+    hasSelection() {
+      return h.hasSelection;
     }
     paste() {}
   },
@@ -178,6 +182,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
   h.keyHandler = null;
+  h.hasSelection = false;
   h.readText.mockResolvedValue("pasted-content");
   (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
 });
@@ -228,6 +233,47 @@ describe("Terminal custom key handler fires on keydown only (S8f)", () => {
     expect(handler(keyEvent("keydown", "a"))).toBe(true);
     expect(handler(keyEvent("keyup", "a"))).toBe(true);
     expect(h.readText).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  // PP r8 (user request): bare Ctrl+C/V take over copy/paste — Windows
+  // Terminal semantics.
+  it("bare Ctrl+C with a selection copies (never reaches the PTY)", async () => {
+    vi.useFakeTimers();
+    h.hasSelection = true;
+    const wrapper = await mountRunningTerminal();
+    await vi.advanceTimersByTimeAsync(0);
+    const handler = h.keyHandler!;
+
+    expect(handler(keyEvent("keydown", "c", { ctrl: true }))).toBe(false);
+    await Promise.resolve();
+    expect(h.writeText).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("bare Ctrl+C WITHOUT a selection still reaches the PTY (SIGINT)", async () => {
+    vi.useFakeTimers();
+    const wrapper = await mountRunningTerminal();
+    await vi.advanceTimersByTimeAsync(0);
+    const handler = h.keyHandler!;
+
+    expect(handler(keyEvent("keydown", "c", { ctrl: true }))).toBe(true);
+    expect(h.writeText).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("bare Ctrl+V always pastes (the literal ^V echo is gone)", async () => {
+    vi.useFakeTimers();
+    const wrapper = await mountRunningTerminal();
+    await vi.advanceTimersByTimeAsync(0);
+    const handler = h.keyHandler!;
+
+    expect(handler(keyEvent("keydown", "v", { ctrl: true }))).toBe(false);
+    await Promise.resolve();
+    expect(h.readText).toHaveBeenCalledTimes(1);
+    // The keyup must not paste twice (S8f class of bug).
+    expect(handler(keyEvent("keyup", "v", { ctrl: true }))).toBe(true);
+    expect(h.readText).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });
 });

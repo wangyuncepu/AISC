@@ -1899,3 +1899,12 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   r3 的未保存 key 链路恰好支持"粘贴新 key 直接重试拉取"验证）。
   门禁：adapter 80 / vendor-refresh + 双 staging + aisc build 镜像
   重建 + 活体 docker cp 热修。
+- **PP 封存 + r8 两项新特性（2026-09-03 晚，用户裁决 cc-switch 优化
+  封存）**：①**裸 Ctrl+C/V 接管复制/粘贴**（Windows Terminal 语义）——
+  Ctrl+C 有选中→复制（不到 PTY）、无选中→仍发 ^C（SIGINT 是中断运行中
+  进程的唯一手段，保留）；Ctrl+V 恒粘贴（原字面 ^V 回显无终端价值）；
+  Ctrl+Shift+C/V 原样保留；+3 键位测试（选中复制/无选中透传/V 不双贴
+  ——S8f keyup 类坑）；②**全局禁用 WebView2 默认右键菜单**——新
+  lib/contextMenu.ts（document 级 contextmenu preventDefault，自建菜单
+  渲染自己的 DOM 不受影响），App.vue onMounted 接线 + 模块测试。纯前端，
+  无容器/sidecar 涉及。门禁：vitest 433 / vue-tsc / vite build。

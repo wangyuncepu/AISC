@@ -817,13 +817,28 @@ function onTermCustomKey(e: KeyboardEvent): boolean {
     return false;
   }
   // Ctrl/Cmd+Shift+C / Ctrl/Cmd+Shift+V: copy/paste (A-G03-2). Never reach
-  // the PTY - plain Ctrl+C/V still work as SIGINT / literal-echo.
+  // the PTY.
   if (mod && e.shiftKey && key === "c") {
     e.preventDefault();
     void doCopy();
     return false;
   }
   if (mod && e.shiftKey && key === "v") {
+    e.preventDefault();
+    void doPaste();
+    return false;
+  }
+  // PP r8 (user request 2026-09-03): bare Ctrl+C/V take over copy/paste
+  // (Windows Terminal semantics). Ctrl+C copies ONLY when a selection
+  // exists — with no selection it must still reach the PTY as SIGINT (the
+  // only way to interrupt a running process). Ctrl+V always pastes; the
+  // old literal ^V echo had no terminal value.
+  if (mod && !e.shiftKey && !e.altKey && key === "c" && term?.hasSelection()) {
+    e.preventDefault();
+    void doCopy();
+    return false;
+  }
+  if (mod && !e.shiftKey && !e.altKey && key === "v") {
     e.preventDefault();
     void doPaste();
     return false;

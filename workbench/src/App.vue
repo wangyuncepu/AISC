@@ -21,6 +21,7 @@ import {
 } from "./lib/ipc";
 import { applyLocale } from "./i18n";
 import { applyTheme, createSystemListener } from "./theme";
+import { blockNativeContextMenu } from "./lib/contextMenu";
 import { layoutTierFor, type LayoutTier } from "./lib/layout";
 import { computeWindowTitle } from "./lib/title";
 import { useRuntimeStore } from "./stores/runtime";
@@ -317,6 +318,9 @@ async function runExitFlow(): Promise<void> {
 }
 
 onMounted(() => {
+  // PP r8 (user request): kill the WebView2 default context menu app-wide —
+  // the only context menus in the Workbench are our own Vue ones.
+  blockNativeContextMenu();
   // v2.1.7 S3: the wizard never gates startup anymore — negotiate ALWAYS
   // runs; a CLI discovery failure surfaces through the global blocked gate
   // instead of stranding the user on a wizard (A-21735).
