@@ -1927,3 +1927,21 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   对策落点=AISC 注入的规范 tun/dns 块（我们所有权，不动用户订阅）。
   报告全文回填 f1-f2-design.md 头部；Linux 原生引擎（host-gateway=
   网桥 IP、loopback 不可达）记已知限制。
+- **T-F2b host_mcp.rs 最小实现（2026-09-03）**：Rust 后端**第一个本地
+  监听服务**落地——`127.0.0.1:0` 动态口 TcpListener + 每进程随机 token
+  （Bearer 校验，防本机其它进程冒用；容器内可见性按"容器即最高权限
+  主体"论证接受）。手写最小 HTTP/1.1（POST /mcp、头体分帧、上限 4MiB）
+  + 无状态 JSON-RPC（initialize 回显 protocolVersion / ping / tools/
+  list / tools/call；notification → 202）。工具面：`host_tools_list`
+  （自描述）+ `host_exec`（白名单精确路径匹配 → git-ro 只读筛（首
+  subcommand ∈ status/log/diff/show/branch）→ cwd 钉死当前工作区
+  （相对子路径 containment：拒 `..`/绝对/UNC）→ CREATE_NO_WINDOW spawn
+  → stdout/stderr 各 256KiB 截断标记 + 60s kill + Semaphore(4) 并发；
+  exec 日志只记 program/exit/耗时，token 永不入日志）。settings 新节
+  `host_tools`（raw JSON 数组 + typed 投影 + sanitize（空名/未知 preset
+  整项丢弃）+ patch 整组替换 + **reset 不清白名单**（非 GUI 装饰））；
+  load/save 命令与 setup 启动三处同步 live whitelist；start_runtime
+  成功后 set_workspace。零新 crate（tokio net 已有）。cargo 277 全绿
+  （+7：只读筛/containment/HTTP 头解析/dispatch/exec 拒绝与实跑双平台
+  分支）。**设计要点**：绑定面恒 127.0.0.1（Desktop backend 代理容器
+  流量到 loopback——PoC 结论），bind 失败降级"无端点"不阻塞启动。

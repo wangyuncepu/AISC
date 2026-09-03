@@ -955,7 +955,7 @@ pub async fn start_runtime(
         "--runtime-id".into(),
         runtime_id,
         "--workspace".into(),
-        workspace,
+        workspace.clone(),
         "--image".into(),
         image,
         "--network".into(),
@@ -973,6 +973,11 @@ pub async fn start_runtime(
     let env = env?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
+    }
+    // F2 (D-10): pin the host-exec cwd base to the workspace that just
+    // started (host_mcp refuses exec while no workspace is active).
+    if let Some(state) = app.try_state::<std::sync::Arc<crate::host_mcp::HostMcpState>>() {
+        state.set_workspace(Some(std::path::PathBuf::from(&workspace)));
     }
     let data = env.data.unwrap_or(Value::Null);
     serde_json::from_value::<RuntimeStartResult>(data)

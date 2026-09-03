@@ -172,6 +172,9 @@ pub struct SettingsDocument {
     pub ui: UiSettings,
     pub terminal: TerminalSettings,
     pub window: WindowSettings,
+    /// F2 (D-10): host-tools MCP whitelist. EMPTY = the host-exec tool set
+    /// is empty and every container call is refused.
+    pub host_tools: Vec<crate::host_mcp::HostToolEntry>,
     pub issues: Vec<ValidationIssue>,
     /// On-disk file was corrupt and isolated; app runs on defaults and
     /// nothing is written until the user confirms reset.
@@ -187,6 +190,8 @@ pub struct SettingsPatch {
     pub ui: Option<UiSettings>,
     pub terminal: Option<TerminalSettings>,
     pub window: Option<WindowSettings>,
+    /// F2: wholesale replacement (an array, not a mergeable section).
+    pub host_tools: Option<Vec<crate::host_mcp::HostToolEntry>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -264,6 +269,7 @@ fn default_document() -> SettingsDocument {
         ui: UiSettings::default(),
         terminal: TerminalSettings::default(),
         window: WindowSettings::default(),
+        host_tools: Vec::new(),
         issues: Vec::new(),
         corrupted: false,
         read_only: false,
@@ -551,6 +557,7 @@ impl Settings {
             .unwrap_or_default(),
             window: serde_json::from_value(self.raw.get("window").cloned().unwrap_or(Value::Null))
                 .unwrap_or_default(),
+            host_tools: sanitize_host_tools(self.raw.get("host_tools")),
             issues: self.issues.clone(),
             corrupted: self.corrupted,
             read_only: self.read_only,
@@ -587,6 +594,14 @@ impl Settings {
         if let Some(s) = &patch.window {
             self.raw["window"] = merge_section(self.raw.get("window"), s);
         }
+        if let Some(entries) = &patch.host_tools {
+            // F2: an array node — wholesale replacement (entries are
+            // sanitized through the same read path).
+            let encoded = serde_json::to_value(entries).unwrap_or(Value::Array(Vec::new()));
+            let cleaned = sanitize_host_tools(Some(&encoded));
+            self.raw["host_tools"] =
+                serde_json::to_value(&cleaned).unwrap_or(Value::Array(Vec::new()));
+        }
         self.validate();
     }
 
@@ -598,6 +613,7 @@ impl Settings {
             ui: Some(UiSettings::default()),
             terminal: Some(TerminalSettings::default()),
             window: Some(WindowSettings::default()),
+            host_tools: None, // F2: the whitelist is NOT GUI décor — reset never clears it
         });
     }
 
@@ -625,6 +641,31 @@ impl Settings {
         storage::atomic_replace(&dir.join(SETTINGS_FILE), &bytes)
             .map_err(|e| SettingsError::Io(e.to_string()))
     }
+}
+
+/// F2: whitelist sanitation on read — every entry needs a non-empty name +
+/// program and a known read-only preset (unknown presets are dropped to
+/// None-but-kept? No: dropped ENTIRELY — an unknown preset would silently
+/// widen what "read-only" gates).
+fn sanitize_host_tools(v: Option<&Value>) -> Vec<crate::host_mcp::HostToolEntry> {
+    let mut out = Vec::new();
+    let Some(arr) = v.and_then(Value::as_array) else {
+        return out;
+    };
+    for item in arr {
+        let Ok(entry) = serde_json::from_value::<crate::host_mcp::HostToolEntry>(item.clone())
+        else {
+            continue;
+        };
+        if entry.name.trim().is_empty() || entry.program.trim().is_empty() {
+            continue;
+        }
+        match entry.read_only_preset.as_deref() {
+            None | Some(crate::host_mcp::GIT_RO_PRESET) => out.push(entry),
+            Some(_) => continue,
+        }
+    }
+    out
 }
 
 /// Merge a typed section into the raw section, keeping unknown subfields.
@@ -847,7 +888,9 @@ pub fn map_settings_error(e: SettingsError) -> WorkbenchError {
 #[tauri::command]
 pub async fn load_settings(app: AppHandle) -> Result<SettingsDocument, WorkbenchError> {
     let dir = crate::session::config_dir(&app)?;
-    load_settings_document(&dir).map_err(map_settings_error)
+    let doc = load_settings_document(&dir).map_err(map_settings_error)?;
+    sync_host_mcp_whitelist(&app, &doc);
+    Ok(doc)
 }
 
 #[tauri::command]
@@ -857,7 +900,21 @@ pub async fn save_settings(
     patch: SettingsPatch,
 ) -> Result<SaveOutcome, WorkbenchError> {
     let dir = crate::session::config_dir(&app)?;
-    save_settings_document(&dir, expected_revision, &patch).map_err(map_settings_error)
+    let outcome = save_settings_document(&dir, expected_revision, &patch).map_err(map_settings_error)?;
+    // F2: keep the live host-tools MCP whitelist in lockstep with settings.
+    if let Ok(doc) = load_settings_document(&dir) {
+        sync_host_mcp_whitelist(&app, &doc);
+    }
+    Ok(outcome)
+}
+
+/// Push the sanitized whitelist into the host MCP executor state (no-op when
+/// the service is unavailable — the tool set just stays as it was).
+fn sync_host_mcp_whitelist(app: &AppHandle, doc: &SettingsDocument) {
+    use tauri::Manager;
+    if let Some(state) = app.try_state::<std::sync::Arc<crate::host_mcp::HostMcpState>>() {
+        state.set_whitelist(doc.host_tools.clone());
+    }
 }
 
 #[tauri::command]

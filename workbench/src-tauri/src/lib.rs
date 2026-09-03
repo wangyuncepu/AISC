@@ -10,6 +10,7 @@ pub mod conversation;
 pub mod data_root;
 pub mod docker_ownership;
 pub mod doctor;
+pub mod host_mcp;
 pub mod lease;
 pub mod env;
 pub mod error;
@@ -112,6 +113,8 @@ pub fn run(cli_arg: Option<String>) {
         .manage(BuildOps::default())
         .manage(OpMutexes::default())
         .manage(LeaseSupervisor::default())
+        // F2 (D-10): host-tools MCP — the backend's first local listener.
+        .manage(std::sync::Arc::new(host_mcp::HostMcpState::new()))
         .invoke_handler(tauri::generate_handler![
             cli_discover,
             cli_pin,
@@ -229,6 +232,21 @@ pub fn run(cli_arg: Option<String>) {
             let app_handle = app.handle().clone();
             if let Err(e) = restore_window_geometry(app_handle) {
                 eprintln!("[geometry] restore failed: {:?}", e);
+            }
+            // F2 (D-10): start the host-tools MCP listener (127.0.0.1 dynamic
+            // port, per-process token). Purely additive: a bind failure only
+            // means "no endpoint" — the app never depends on this service.
+            // The whitelist is pre-seeded from settings so a container that
+            // connects before any settings round-trip still sees the gate.
+            {
+                use tauri::Manager;
+                let state = app.state::<std::sync::Arc<host_mcp::HostMcpState>>().inner().clone();
+                if let Ok(dir) = crate::session::config_dir(app.handle()) {
+                    if let Ok(doc) = settings::load_settings_document(&dir) {
+                        state.set_whitelist(doc.host_tools);
+                    }
+                }
+                tauri::async_runtime::spawn(host_mcp::serve(state));
             }
             // O2 (D-11): sweep orphaned output spools. Spools are deleted with
             // their registry entry (ack/close/evict); only a killed process
