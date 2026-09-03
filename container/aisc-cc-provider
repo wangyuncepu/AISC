@@ -714,6 +714,58 @@ def _db_delete(agent: str, provider_id: str) -> None:
         conn.close()
 
 
+def _db_capture_row(agent: str, provider_id: str) -> Optional[dict[str, Any]]:
+    """Full raw row (every column, pre-mutation) — the edit dance's restore
+    source. Read BEFORE anything deletes; None only if the row is gone."""
+    conn = sqlite3.connect(_db_path(), timeout=15)
+    try:
+        conn.execute("PRAGMA busy_timeout=15000")
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute(
+            "SELECT * FROM providers WHERE id = ? AND app_type = ?",
+            (provider_id, agent),
+        )
+        row = cur.fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def _db_restore_row(captured: dict[str, Any]) -> None:
+    """Verbatim re-insert of a captured row (BEGIN IMMEDIATE, direct SQL).
+
+    The edit dance's GUARANTEED restore: the upstream CLI can be a hard
+    failure for reasons we don't control — live-probed 2026-09-03, a manual
+    image build shipped cc-switch 5.9.0 while the shared data-root db had
+    been migrated by newer builds (db v18 > CLI max 11) and even READS were
+    refused, so the old restore-via-upstream-add deleted the provider
+    outright. We own the db (D8-04/D8-05); is_current is forced off — the
+    switch-away (when the row was current) may legitimately have made
+    another row current, and a double-current is worse than re-enabling."""
+    conn = sqlite3.connect(_db_path(), timeout=15)
+    try:
+        conn.execute("PRAGMA busy_timeout=15000")
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(providers)").fetchall()]
+        row = dict(captured)
+        row["is_current"] = 0
+        common = [c for c in cols if c in row]
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "INSERT INTO providers (" + ",".join(common) + ") "
+            "VALUES (" + ",".join("?" * len(common)) + ")",
+            [row[c] for c in common],
+        )
+        conn.commit()
+    except sqlite3.Error as exc:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        raise AdapterError(ERR_RESTORE_FAILED, f"db restore failed: {exc}") from exc
+    finally:
+        conn.close()
+
+
 def _db_merge_meta(agent: str, provider_id: str, extra: dict[str, Any]) -> None:
     """Merge keys into a provider row's meta column.
 
@@ -1145,23 +1197,20 @@ def op_edit(agent: str, provider_id: str, request: dict[str, Any]) -> list[dict[
     if was_current:
         switch_back_to = provider_id
         _cli_switch(agent, _switch_away_target(agent, snapshot, provider_id), secrets)
+    # PP r4: capture the FULL row before the delete — the guaranteed restore
+    # source if the re-add fails (see _db_restore_row; the old
+    # restore-via-upstream-add lost the row outright when the upstream CLI
+    # was locked out of the db, live incident 2026-09-03).
+    captured = _db_capture_row(agent, provider_id)
     _db_delete(agent, provider_id)
     try:
         _cli_add(agent, provider_id, new_name, new_settings, secrets)
     except AdapterError:
-        # The dance window: deleted but the re-add failed. Best-effort
-        # restore of the exact previous state, then surface the failure.
-        try:
-            _cli_add(agent, provider_id, row["name"], row["settings"], secrets)
-            _db_merge_row_extra(agent, provider_id, extra)
-            if was_current:
-                _cli_switch(agent, provider_id, secrets)
-        except AdapterError as restore_exc:
-            raise AdapterError(
-                ERR_RESTORE_FAILED,
-                f"edit failed AND restore failed; provider {provider_id} is "
-                f"deleted (restore error: {restore_exc.message})",
-            ) from restore_exc
+        # The dance window: deleted but the re-add failed. Restore the exact
+        # previous row DIRECTLY (no upstream dependency), then surface the
+        # failure.
+        if captured is not None:
+            _db_restore_row(captured)
         raise
     # The re-add seeded fresh defaults — the original row's meta (e.g. the
     # router's codex apiFormat selector, user/TUI-written) must survive the

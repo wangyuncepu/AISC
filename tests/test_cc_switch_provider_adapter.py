@@ -335,28 +335,33 @@ class EditDanceTests(AdapterTestCase):
 
     def test_edit_failure_restores_previous_state(self):
         self._seed_two()
-        # Fail ONLY the first add (the re-add); the restore add must succeed.
-        first_add_failed = []
-
-        def fail_first_add(args, stdin_text, secrets):
+        # PP r4: the re-add fails (upstream CLI locked out of a newer db —
+        # live incident 2026-09-03: image shipped 5.9.0 against a db the
+        # desktop had migrated to v18). The captured row must come back
+        # verbatim via DIRECT SQL — no second upstream add, error surfaced.
+        def fail_add(args, stdin_text, secrets):
             call = FakeCall(list(args), stdin_text)
             self.cli.calls.append(call)
-            if "add" in args and not first_add_failed:
-                first_add_failed.append(True)
+            if "add" in args:
                 return subprocess.CompletedProcess(args, 1, stdout="", stderr="boom")
             return subprocess.CompletedProcess(args, 0, stdout="ok", stderr="")
 
-        A.run_cli = fail_first_add
+        A.run_cli = fail_add
         with self.assertRaises(A.AdapterError) as ctx:
             A.op_edit("claude", "zhipu", {"patch": {"model": "x"}})
         self.assertEqual(ctx.exception.code, A.ERR_CLI)
-        # Restore attempted: delete, add(fail), add(restore)
+        # Exactly ONE upstream add (the failed re-add); the restore is the
+        # adapter's own DB write, never a second CLI attempt.
         adds = [c for c in self.cli.calls if "add" in c.args]
-        self.assertEqual(len(adds), 2)
-        restore = json.loads(adds[1].stdin_text)
-        self.assertEqual(restore["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-zhipu-key-2222")
-        self.assertEqual(restore["env"]["ANTHROPIC_BASE_URL"],
+        self.assertEqual(len(adds), 1)
+        # The row is back verbatim (original token/URL) via direct SQL.
+        rows = [r for r in A.read_snapshot("claude") if r["id"] == "zhipu"]
+        self.assertEqual(len(rows), 1)
+        env = rows[0]["settings"]["env"]
+        self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "sk-zhipu-key-2222")
+        self.assertEqual(env["ANTHROPIC_BASE_URL"],
                          "https://open.bigmodel.cn/api/anthropic")
+        self.assertFalse(rows[0]["is_current"])
 
     def test_edit_of_sole_current_provider_fails_closed(self):
         seed_provider(self.dir, "deepseek", CLAUDE_ENV, is_current=True)

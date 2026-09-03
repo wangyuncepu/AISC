@@ -239,11 +239,11 @@ onBeforeUnmount(() => {
       </Transition>
     </Teleport>
 
-    <!-- PP r3 (user ruling): the agent toggle crossfades (out-in) instead of
-         snapping; while the new agent's snapshot is in flight the stale list
-         stays visible, dimmed. -->
+    <!-- PP r3: the agent toggle crossfades (out-in). PP r4: NO stale dim —
+         the dimmed-list flash read as a broken middle state (user ruling);
+         the swap is a soft 200ms fade. -->
     <Transition name="swap" mode="out-in">
-      <div class="cards" v-if="displayProviders.length" :key="agent" :class="{ stale: loading }">
+      <div class="cards" v-if="displayProviders.length" :key="agent">
         <!-- PP (D-12): the fully card-ified list — icon + name + endpoint +
              current badge; hover surfaces the action group; the 启用 button
              activates (official card = cancel-proxy, IDEA-4 r3 semantics). -->
@@ -341,12 +341,11 @@ button.ghost { background: transparent; }
   border: var(--border-w) solid var(--success); border-radius: var(--radius-md);
   font-size: var(--font-md); box-shadow: var(--shadow-menu);
 }
-/* PP r3: agent-toggle crossfade (stale-while-revalidate keeps the old list
- * visible, dimmed, while the other agent's snapshot is in flight). */
-.cards.stale { opacity: 0.55; transition: opacity var(--duration-fast) var(--ease); }
+/* PP r3/r4: agent-toggle crossfade — soft 200ms fade, no stale dim (the
+ * dimmed flash read as a broken middle state). */
 .swap-enter-active, .swap-leave-active {
-  transition: opacity var(--duration-fast) var(--ease),
-              transform var(--duration-fast) var(--ease);
+  transition: opacity var(--duration-normal) var(--ease),
+              transform var(--duration-normal) var(--ease);
 }
 .swap-enter-from { opacity: 0; transform: translateY(4px); }
 .swap-leave-to { opacity: 0; transform: translateY(-4px); }
@@ -358,7 +357,7 @@ button.ghost { background: transparent; }
 /* S3.6: users who ask the OS for less motion get instant state changes. */
 @media (prefers-reduced-motion: reduce) {
   .cards .flash { animation: none; }
-  .cards.stale, .swap-enter-active, .swap-leave-active { transition: none; }
+  .swap-enter-active, .swap-leave-active { transition: none; }
   .toast-enter-active, .toast-leave-active { transition: none; }
 }
 </style>

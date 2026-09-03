@@ -26,7 +26,12 @@ ARG GH_PROXY=
 # injects CC_SWITCH_RESOLVED_VERSION/RELEASE_COMMIT/ASSET_URL/ASSET_SHA256/
 # ASSET_NAME/BUILD_MANIFEST. The fallback below only serves MANUAL
 # `docker build` invocations (no checksum pin — non-reproducible by design).
-ARG CC_SWITCH_VERSION=v5.9.0
+# PP r4 (2026-09-03): keep in lockstep with the resolver channel — a manual
+# `docker build` silently shipped 5.9.0 over 5.10.x once and the 5.9.0 binary
+# cannot even OPEN a db the desktop cc-switch has migrated (daemon dead,
+# provider add/switch/edit all refused). Asset names carry the version tag
+# since ~5.10 — the old pattern 404s.
+ARG CC_SWITCH_VERSION=v5.10.4
 ARG CC_SWITCH_RESOLVED_VERSION=
 ARG CC_SWITCH_RELEASE_COMMIT=
 ARG CC_SWITCH_ASSET_URL=
@@ -441,7 +446,7 @@ RUN set -eux; \
         echo "${CC_SWITCH_ASSET_SHA256}  /tmp/ccs.tar.gz" | sha256sum -c - || { echo "❌ cc-switch sha256 mismatch"; exit 1; }; \
     else \
         echo "⚠️  手动构建回退：无 resolver 校验（aisc build 才有 sha256 pin）"; \
-        base="https://github.com/saladday/cc-switch-cli/releases/download/${CC_SWITCH_VERSION}/cc-switch-cli-linux-${cs_arch}-musl.tar.gz"; \
+        base="https://github.com/SaladDay/cc-switch-cli/releases/download/${CC_SWITCH_VERSION}/cc-switch-cli-${CC_SWITCH_VERSION}-linux-${cs_arch}-musl.tar.gz"; \
         if [ -n "${GH_PROXY:-}" ]; then mirrors="${GH_PROXY}"; \
         elif [ "$USE_CN_MIRROR" = "1" ]; then mirrors="https://ghfast.top/ https://gh-proxy.com/ https://github.moeyy.xyz/ https://ghproxy.net/"; \
         else mirrors=""; fi; \

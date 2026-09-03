@@ -1816,3 +1816,27 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   vite build / cargo 270（env docker 探针测试并行跑偶发，单跑即过）/
   vendor-refresh 1513 + bundle 双 staging PASS（pytest 曾把 __pycache__
   留进 container/_bundle 被 staging 拒绝——清理后过）。
+- **r4 手测反馈（三项）+ cc-switch 静默降级事故根治（2026-09-03 下午）**：
+  **事故链（根因在我）**——当天的手动 `docker build` 走了 Dockerfile 回退
+  分支（ARG v5.9.0 + 旧资产名），把镜像里的 cc-switch 从 resolver 线的
+  **5.10.4 静默降级**到 5.9.0；5.9.0（max db v11）对桌面版 cc-switch 已
+  迁移的 **v18 共享 db**（data-root 挂载）连读都拒，daemon 起不来（O5
+  巡检救不动：start 同样被版本门禁拒）→ 上游 add/switch 全灭。用户编辑
+  deepseek：舞步 delete 成功、上游 re-add 秒拒（trace 铁证 rc=1×35ms）、
+  旧 restore 走同一条断路 → **行被删**（二次保存报 "provider not found"）。
+  ①抢救：8/31 备份（v17 可读）diff 确认仅丢 deepseek-claude，18 列原样
+  回填（映射五槽+EFFORT 全在；token 备份本就无，非舞步丢失）；
+  ②镜像：`aisc build` 产品路径（resolver 注入 URL/SHA256 强校验）重建 =
+  **5.10.4**，活体 db 副本验证：列表打开 + edit 舞步端到端 OK；
+  ③**堵回归类**：Dockerfile 回退分支 ARG 升 v5.10.4 + 资产名对齐
+  `cc-switch-cli-<ver>-linux-<arch>-musl` 新命名（无版本旧名已 404；
+  修正一次 `vv5.10.4` 双 v 手误后实证手动构建也出 5.10.4）；
+  ④adapter 加固：edit 舞步 delete 前 `_db_capture_row` 全行捕获，
+  re-add 失败 `_db_restore_row` 直连 SQL 原样回插（上游 CLI 从此不是
+  恢复路径的单点；is_current 强制 0 防双 current）；测试改写为新契约
+  （失败 → 恰 1 次上游 add + 行原样回来）；⑤前端：编辑页补 store 错误
+  横幅（"保存无反应"的 UI 半边——失败此前只在列表页可见）；agent 切换
+  过渡去 stale 变暗中间态（用户否）+ 放缓至 200ms。门禁：adapter 77 /
+  vitest 427 / vue-tsc / vite build / vendor-refresh 1513 + 双 staging
+  PASS。**用户待办：删除并重建 runtime 容器**（吃 5.10.4 + 加固
+  adapter）；deepseek 需重填 key（该行历史上就没有）。

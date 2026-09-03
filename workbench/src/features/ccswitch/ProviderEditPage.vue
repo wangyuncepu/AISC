@@ -181,6 +181,10 @@ function onSave(): void {
       </button>
     </header>
 
+    <!-- PP r4: op failures used to look like a dead button ("保存无反应")
+         because the store error only rendered on the list view. -->
+    <p v-if="uiStore.error" class="save-error" role="alert">{{ uiStore.error }}</p>
+
     <div class="tiers" role="tablist">
       <button role="tab" :aria-selected="tier === 'simple'"
               :class="{ on: tier === 'simple' }" @click="tier = 'simple'">
@@ -304,6 +308,11 @@ function onSave(): void {
   font-size: var(--font-sm);
 }
 .tiers button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.save-error {
+  margin: 0 14px 8px; padding: var(--space-1) var(--space-2);
+  background: var(--error-bg); color: var(--error-fg);
+  border-radius: var(--radius-sm); font-size: var(--font-sm);
+}
 .body { padding: 4px 14px 16px; display: flex; flex-direction: column; gap: 8px; }
 .body h3 { font-size: var(--font-sm); color: var(--text-faint); margin: 12px 0 0;
   text-transform: uppercase; letter-spacing: 0.5px; }
