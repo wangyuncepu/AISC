@@ -59,6 +59,11 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
     if (agent.value === a) return;
     agent.value = a;
     orderSeq.clear(); // per-agent namespace: the other agent re-pins afresh
+    // PP r5 (user report): drop the stale list IMMEDIATELY — during the
+    // fetch window the old agent's cards (with the 使用中 badge on the
+    // wrong rows) used to linger into the new agent's view, defeating the
+    // crossfade. The view's loading branch covers the gap.
+    providers.value = [];
     await list(ws, rt);
   }
 

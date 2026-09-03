@@ -1840,3 +1840,15 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   vitest 427 / vue-tsc / vite build / vendor-refresh 1513 + 双 staging
   PASS。**用户待办：删除并重建 runtime 容器**（吃 5.10.4 + 加固
   adapter）；deepseek 需重填 key（该行历史上就没有）。
+- **r5 手测反馈（三项，2026-09-03 晚）**：①**agent 切换徽章滞留**——
+  switchAgent 异步窗口保留旧 agent 列表，「使用中」徽章在新 agent 视图
+  停留到数据返回，交叉淡入被数据迟到抵消（用户"动画有什么意义"）；
+  修复：store 切换即清 providers + 列表区新增 loading 分支（out-in 变成
+  旧列表淡出→加载中→新列表淡入的完整换页语义；+1 回归测试钉死 pending
+  窗口零滞留）；②「切换中 Ns」横幅改 Teleport body 底部居中悬浮卡
+  （surface-2+边框+阴影，滑入过渡；原 in-flow 版本在卡片上方把卡片往下
+  挤——用户裁决）；③claude `/model` 仍显示 Opus/Sonnet/Haiku——上游
+  内置选择器显示**逻辑档位名**，ANTHROPIC_DEFAULT_*_MODEL 映射作用于
+  请求层（选 Opus 实际发映射后的上游模型），cc-switch 桌面端行为一致、
+  我们侧不可改显示名；验证途径=直接问 claude 当前模型（上游模型自报）
+  或用量/请求日志看实际转发。门禁：vitest 428 / vue-tsc / vite build。

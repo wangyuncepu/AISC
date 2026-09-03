@@ -222,11 +222,18 @@ onBeforeUnmount(() => {
 
     <p v-if="!hasRuntime" class="banner warn">{{ t("ccswitch.noRuntime") }}</p>
     <p v-if="error" class="banner err" role="alert">{{ error }}</p>
-    <!-- O4 (D-11): live switch progress — honest elapsed counter (the op is
-         a single docker exec; no step events exist to render a stepper). -->
-    <p v-if="busyOp === 'switch'" class="banner" role="status">
-      {{ t("ccswitch.switching", { sec: switchElapsed }) }}
-    </p>
+
+    <!-- PP r5 (user ruling): the switch progress rides a floating
+         bottom-center card, teleported to body — the old in-flow banner sat
+         above the cards and pushed them down. O4 semantics unchanged: an
+         honest elapsed counter (one docker exec, no step events). -->
+    <Teleport to="body">
+      <Transition name="prog">
+        <p v-if="busyOp === 'switch'" class="switch-progress" role="status">
+          {{ t("ccswitch.switching", { sec: switchElapsed }) }}
+        </p>
+      </Transition>
+    </Teleport>
 
     <!-- IDEA-5 (5d): switch feedback — a floating top toast (teleported to
          body so the pane's zoom/scroll never clips it), alongside the row
@@ -241,7 +248,9 @@ onBeforeUnmount(() => {
 
     <!-- PP r3: the agent toggle crossfades (out-in). PP r4: NO stale dim —
          the dimmed-list flash read as a broken middle state (user ruling);
-         the swap is a soft 200ms fade. -->
+         the swap is a soft 200ms fade. PP r5: the loading branch covers the
+         fetch window (the store drops the stale list on agent switch, so
+         the old agent's badges never linger into the new view). -->
     <Transition name="swap" mode="out-in">
       <div class="cards" v-if="displayProviders.length" :key="agent">
         <!-- PP (D-12): the fully card-ified list — icon + name + endpoint +
@@ -258,7 +267,10 @@ onBeforeUnmount(() => {
           @remove="remove(p)"
         />
       </div>
-      <p v-else-if="!loading && hasRuntime" class="empty" :key="`empty-${agent}`">
+      <p v-else-if="loading" class="empty" :key="`loading-${agent}`">
+        {{ t("ccswitch.loading") }}
+      </p>
+      <p v-else-if="hasRuntime" class="empty" :key="`empty-${agent}`">
         {{ t("ccswitch.empty") }}
       </p>
     </Transition>
@@ -341,6 +353,19 @@ button.ghost { background: transparent; }
   border: var(--border-w) solid var(--success); border-radius: var(--radius-md);
   font-size: var(--font-md); box-shadow: var(--shadow-menu);
 }
+/* PP r5 (user ruling): the switch-progress card — floating bottom-center,
+ * out of the document flow so it never pushes the cards down. */
+.switch-progress {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  z-index: 1000; margin: 0; padding: var(--space-2) var(--space-5);
+  background: var(--surface-2); color: var(--text-2);
+  border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-md);
+  font-size: var(--font-md); box-shadow: var(--shadow-menu);
+}
+.prog-enter-active { transition: opacity var(--duration-normal) var(--ease), transform var(--duration-normal) var(--ease); }
+.prog-leave-active { transition: opacity var(--duration-normal) var(--ease); }
+.prog-enter-from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+.prog-leave-to { opacity: 0; }
 /* PP r3/r4: agent-toggle crossfade — soft 200ms fade, no stale dim (the
  * dimmed flash read as a broken middle state). */
 .swap-enter-active, .swap-leave-active {
@@ -359,5 +384,6 @@ button.ghost { background: transparent; }
   .cards .flash { animation: none; }
   .swap-enter-active, .swap-leave-active { transition: none; }
   .toast-enter-active, .toast-leave-active { transition: none; }
+  .prog-enter-active, .prog-leave-active { transition: none; }
 }
 </style>

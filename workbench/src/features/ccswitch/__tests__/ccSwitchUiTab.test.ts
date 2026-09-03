@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { mount } from "@vue/test-utils";
+import { nextTick } from "vue";
 import { i18n } from "../../../i18n";
 import { useRuntimeStore } from "../../../stores/runtime";
 import * as ipc from "../../../lib/ipc";
@@ -150,6 +151,28 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     await w.findAll(".agent-toggle button")[1]!.trigger("click");
     await vi.waitFor(() => expect(ipc.ccSwitchProviders).toHaveBeenCalledTimes(2));
     expect(vi.mocked(ipc.ccSwitchProviders).mock.calls[1]![2]).toBe("codex");
+    w.unmount();
+  });
+
+  it("switching agents drops the stale badge list immediately (PP r5)", async () => {
+    setup();
+    // Hold the codex fetch pending: during the window the OLD agent's cards
+    // (使用中 badge on claude rows) must be GONE — the loading branch covers
+    // the gap instead of the old agent's list lingering in the new view.
+    let release!: (v: CcSwitchProvidersResult) => void;
+    const gate = new Promise<CcSwitchProvidersResult>((r) => (release = r));
+    vi.mocked(ipc.ccSwitchProviders)
+      .mockResolvedValueOnce(RESULT(["deepseek"]))          // mount (claude)
+      .mockImplementationOnce(() => gate);                   // codex, pending
+    const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(1));
+    await w.findAll(".agent-toggle button")[1]!.trigger("click");
+    await nextTick();
+    expect(w.findAll(".card").length).toBe(0);          // no stale claude cards
+    expect(w.find(".badge").exists()).toBe(false);      // no lingering 使用中
+    expect(w.text()).toContain("加载中");
+    release(RESULT(["deepseek"]));
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(1));
     w.unmount();
   });
 
