@@ -291,9 +291,10 @@ function onSave(): void {
 .head h2 { font-size: var(--font-md); margin: 0; }
 .spacer { flex: 1; }
 .tiers { display: flex; gap: 6px; padding: 0 14px 8px; }
+/* PP r2 (user ruling): rounded-rect segments, not pill ellipses. */
 .tiers button {
-  border: var(--border-w) solid var(--border); border-radius: var(--radius-full);
-  background: none; color: var(--text-muted); padding: 3px 14px; cursor: pointer;
+  border: var(--border-w) solid var(--border); border-radius: var(--radius-md);
+  background: none; color: var(--text-muted); padding: 4px 16px; cursor: pointer;
   font-size: var(--font-sm);
 }
 .tiers button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }

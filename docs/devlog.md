@@ -1779,3 +1779,16 @@ opt-batch 收口后按用户指令开工。四段全部落地：
 - 门禁：adapter 75 / pytest 相关 54 / vitest 426 / vue-tsc / vite build
   全过；镜像重建烧入 P1 adapter。手测矩阵：新增（预设/自定义）→ 编辑
   （上游格式/映射/图标/备注）→ 切换 → codex /model 列表生效。
+- **r2 手测反馈（五项，2026-09-03）**：①agent 切换 text pills → cc-switch
+  式品牌图标芯片（Claude 橙色十二芒 / Codex OpenAI 结标，内联 SVG
+  icon-only + aria-label/title）；②编辑页档位与添加路两行胶囊（radius-full
+  椭圆被否）→ 圆角矩形分段钮；③**激活交互反转**——卡体点击取消，改专用
+  「启用」按钮（hover 动作组首位，cc-switch 桌面式 ▶ 蓝钮）；当前卡的
+  取消代理语义保留为「停用」钮（同一 confirm 流，IDEA-4 r3 不丢）；
+  ④激活卡 = accent 边框 + 底色微染（--accent-soft），「使用中」徽章改
+  实心 accent；⑤悬浮边框高亮与激活态同色（accent 一族）。顺带清 P4 漏网
+  死代码（openAdd 不可达块 + addForm/addOpen/addMode 孤儿 ref + 表格时代
+  .row/.cur 样式）。测试迁移：激活 4 处 → button.start、编辑 4 处 →
+  button.edit。i18n：+enableBtn/disableBtn，usageHint 随新交互改写（双语）。
+  门禁：vitest 426 / vue-tsc / vite build 全过。纯前端改动——零容器/
+  sidecar 涉及，无需镜像重建，npm run dev 即验。

@@ -10,7 +10,7 @@
  * logged, or stored in browser storage (04 §Security, adapted to the Tauri
  * IPC channel per D8-13).
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useI18n } from "vue-i18n";
 import { confirm } from "@tauri-apps/plugin-dialog";
@@ -91,28 +91,9 @@ function switchAgent(a: "claude" | "codex"): void {
 }
 
 const PRESETS = ["deepseek", "volcengine-ark", "zhipu", "kimi"] as const;
-const addOpen = ref(false);
-const addMode = ref<"simple" | "custom">("simple");
-const addForm = reactive({
-  provider: "deepseek" as string,
-  id: "",
-  name: "",
-  baseUrl: "",
-  model: "",
-  apiKey: "",
-});
 
 function openAdd(): void {
   openAddPage();  // PP (D-12): dedicated page
-  return;
-  addMode.value = "simple";
-  addForm.provider = "deepseek";
-  addForm.id = "";
-  addForm.name = "";
-  addForm.baseUrl = "";
-  addForm.model = "";
-  addForm.apiKey = "";
-  addOpen.value = true;
 }
 
 // --- activate (IDEA-4): click a row to make that provider current ---
@@ -209,8 +190,28 @@ onBeforeUnmount(() => {
           role="tab"
           :aria-selected="agent === a"
           :class="{ active: agent === a }"
+          :title="t(`tabbar.menu.${a}`)"
+          :aria-label="t(`tabbar.menu.${a}`)"
           @click="switchAgent(a)"
-        >{{ t(`tabbar.menu.${a}`) }}</button>
+        >
+          <!-- PP r2 (user ruling): brand icons instead of text pills,
+               mirroring the cc-switch desktop toggle. -->
+          <svg v-if="a === 'claude'" viewBox="0 0 24 24" width="16" height="16"
+               aria-hidden="true" role="img">
+            <g stroke="#D97757" stroke-width="2.4" stroke-linecap="round">
+              <line x1="12" y1="2.5" x2="12" y2="21.5" />
+              <line x1="7.25" y1="3.77" x2="16.75" y2="20.23" />
+              <line x1="3.77" y1="7.25" x2="20.23" y2="16.75" />
+              <line x1="2.5" y1="12" x2="21.5" y2="12" />
+              <line x1="3.77" y1="16.75" x2="20.23" y2="7.25" />
+              <line x1="7.25" y1="20.23" x2="16.75" y2="3.77" />
+            </g>
+          </svg>
+          <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="currentColor"
+               aria-hidden="true" role="img">
+            <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.8956zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997z" />
+          </svg>
+        </button>
       </div>
       <span class="spacer" />
       <button class="primary" :disabled="!hasRuntime || mutating" @click="openAdd">
@@ -275,6 +276,21 @@ onBeforeUnmount(() => {
 }
 .head { display: flex; align-items: center; gap: 8px; }
 .spacer { flex: 1; }
+/* PP r2 (user ruling): cc-switch-style icon chip toggle (was text pills). */
+.agent-toggle {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 3px; background: var(--surface-2);
+  border: var(--border-w) solid var(--border); border-radius: var(--radius-md);
+}
+.agent-toggle button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 26px; padding: 0;
+  background: none; border: none; border-radius: var(--radius-sm);
+  color: var(--text-faint);
+}
+.agent-toggle button:hover { color: var(--text-2); background: var(--surface-hover); }
+.agent-toggle button.active { background: var(--accent-soft); color: var(--accent); }
+.agent-toggle button svg { display: block; }
 
 .banner { padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); font-size: var(--font-sm); }
 .banner.warn { background: var(--warn-bg); color: var(--warn-fg); }
@@ -310,21 +326,7 @@ button.danger { background: var(--error-bg); color: var(--error-fg); }
 .roles-title { font-size: var(--font-sm); color: var(--text-2); font-weight: 600; }
 button.ghost { background: transparent; }
 
-/* --- IDEA-5 (5d): switch feedback trio --- */
-/* Row pulse: the newly-current row flashes once after the list repaint. */
-.row { transition: background-color var(--duration-normal) var(--ease); }
-.row.flash { animation: row-pulse 1.2s ease-out; }
-@keyframes row-pulse {
-  0% { background: var(--accent-soft); }
-  100% { background: var(--surface-2); }
-}
-/* The「使用中」chip eases in instead of popping. */
-.cur { transition: opacity var(--duration-normal) var(--ease), transform var(--duration-normal) var(--ease); }
-.cur.on { animation: chip-in var(--duration-slow) var(--ease); }
-@keyframes chip-in {
-  from { opacity: 0; transform: scale(0.85); }
-  to { opacity: 1; transform: scale(1); }
-}
+/* --- IDEA-5 (5d): switch feedback --- */
 /* Floating toast: teleported to body (outside the zoomed/scrolling pane). */
 .switch-toast {
   position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
@@ -340,8 +342,7 @@ button.ghost { background: transparent; }
 
 /* S3.6: users who ask the OS for less motion get instant state changes. */
 @media (prefers-reduced-motion: reduce) {
-  .row, .cur { transition: none; }
-  .row.flash, .cur.on { animation: none; }
+  .cards .flash { animation: none; }
   .toast-enter-active, .toast-leave-active { transition: none; }
 }
 </style>

@@ -141,13 +141,13 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     w.unmount();
   });
 
-  it("clicking a non-current row activates it and shows feedback", async () => {
+  it("the 启用 button on a non-current row activates it (PP r2)", async () => {
     setup();
     vi.mocked(ipc.ccSwitchSwitch).mockResolvedValue(RESULT(["deepseek", "zhipu"]));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
-    // Row 1 (zhipu) is not current — clicking it activates.
-    await w.findAll(".card")[1]!.trigger("click");
+    // Row 1 (zhipu) is not current — its dedicated 启用 button activates.
+    await w.findAll(".card")[1]!.find("button.start").trigger("click");
     await vi.waitFor(() => expect(ipc.ccSwitchSwitch).toHaveBeenCalledTimes(1));
     expect(vi.mocked(ipc.ccSwitchSwitch).mock.calls[0]![3]).toBe("zhipu");
     await vi.waitFor(() =>
@@ -168,12 +168,12 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     w.unmount();
   });
 
-  it("clicking the current row offers cancel-proxy → official direct", async () => {
+  it("the current row's 停用 button offers cancel-proxy → official direct", async () => {
     setup();
     vi.mocked(ipc.ccSwitchSwitch).mockResolvedValue(RESULT(["zhipu"]));
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
-    await w.findAll(".card")[0]!.trigger("click");
+    await w.findAll(".card")[0]!.find("button.start").trigger("click");
     const { confirm } = await import("@tauri-apps/plugin-dialog");
     await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(ipc.ccSwitchSwitch).toHaveBeenCalledTimes(1));
@@ -191,7 +191,7 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     vi.mocked(confirm).mockResolvedValueOnce(false);
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
-    await w.findAll(".card")[0]!.trigger("click");
+    await w.findAll(".card")[0]!.find("button.start").trigger("click");
     await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
     expect(ipc.ccSwitchSwitch).not.toHaveBeenCalled();
     w.unmount();
@@ -251,7 +251,7 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     vi.mocked(ipc.ccSwitchEdit).mockResolvedValue(resultWithRoles());
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".card").length).toBe(1));
-    await w.findAll(".card")[0]!.findAll("button")[0]!.trigger("click"); // 编辑
+    await w.findAll(".card")[0]!.find("button.edit").trigger("click"); // 编辑
     await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(true));
 
     // Advanced tier to reach the mapping editor.
@@ -300,7 +300,7 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
     await w.findAll(".agent-toggle button")[1]!.trigger("click"); // codex
     await vi.waitFor(() => expect(ipc.ccSwitchProviders).toHaveBeenCalledTimes(2));
-    await w.findAll(".card")[0]!.findAll("button")[0]!.trigger("click");
+    await w.findAll(".card")[0]!.find("button.edit").trigger("click");
     await vi.waitFor(() => expect(w.find(".edit-page").exists()).toBe(true));
     expect(w.find(".mapping input[list]").exists()).toBe(false); // no role rows on simple tier
     await w.find(".edit-page .head .primary").trigger("click");
@@ -319,7 +319,7 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     });
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".card").length).toBe(1));
-    await w.findAll(".card")[0]!.findAll("button")[0]!.trigger("click");
+    await w.findAll(".card")[0]!.find("button.edit").trigger("click");
     await w.findAll(".tiers button").find((b) => b.text().includes("高级模式"))!.trigger("click");
     await vi.waitFor(() => expect(w.findAll(".mapping input[list]").length).toBe(3));
 
@@ -345,7 +345,7 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     });
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".card").length).toBe(1));
-    await w.findAll(".card")[0]!.findAll("button")[0]!.trigger("click");
+    await w.findAll(".card")[0]!.find("button.edit").trigger("click");
     await w.findAll(".tiers button").find((b) => b.text().includes("高级模式"))!.trigger("click");
     await w.findAll("button").find((b) => b.text().includes("拉取模型列表"))!.trigger("click");
     await vi.waitFor(() => expect(w.find(".hint.warn").exists()).toBe(true));
@@ -360,7 +360,7 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     vi.mocked(ipc.ccSwitchSwitch).mockResolvedValue(switched);
     const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
     await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
-    await w.findAll(".card")[1]!.trigger("click"); // activate deepseek→target id
+    await w.findAll(".card")[1]!.find("button.start").trigger("click"); // activate deepseek→target id
     await vi.waitFor(() => expect(ipc.ccSwitchSwitch).toHaveBeenCalledTimes(1));
     // flashId targets the row id ("deepseek"), present until the 1.3s timer.
     await vi.waitFor(() =>
