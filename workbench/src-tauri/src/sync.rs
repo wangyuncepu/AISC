@@ -3,8 +3,18 @@
 //!
 //! The shadow directory IS the workspace (the "identity chain untouched"
 //! ruling): canonicalize/hash/watcher/mounts/explorer all operate on it;
-//! SSH-ness converges into the sync layer that T-F1c builds on the metadata
-//! file written here.
+//! SSH-ness converges into the sync layer built here on the metadata file.
+//!
+//! T-F1c transport facts (live-probed on v0.16.4/Windows):
+//! - `ssh://` scheme URLs mis-parse in v0.16 ("ssh" becomes the hostname) —
+//!   use the SCP-STYLE endpoint `user@host:port/path`.
+//! - v0.16's SSH transport shells out to the EXTERNAL `ssh` binary; URL
+//!   query params (key/verifyHostKey) are ignored there, and its host-key /
+//!   passphrase prompts deadlock a non-interactive spawn. Countermeasure:
+//!   a generated ssh wrapper is prepended to PATH that injects
+//!   `-F <generated config> -o BatchMode=yes` — the config carries the
+//!   profile (HostName/Port/User/IdentityFile, accept-new host keys).
+//! - `sync list --template '{{json .}}'` yields a JSON array (status).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -112,6 +122,277 @@ fn now_iso() -> String {
         .unwrap_or_default()
 }
 
+// ===========================================================================
+// T-F1c: the sync engine (mutagen) — discovery, ssh transport, sessions.
+// ===========================================================================
+
+/// Locate the host-side mutagen binary. Order: explicit override env,
+/// next to the Workbench executable (installed layout), then PATH.
+pub fn mutagen_binary() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("AISC_MUTAGEN_PATH") {
+        let path = std::path::PathBuf::from(p);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            for name in ["mutagen.exe", "mutagen"] {
+                let cand = dir.join(name);
+                if cand.is_file() {
+                    return Some(cand);
+                }
+            }
+        }
+    }
+    which_ssh_like("mutagen")
+}
+
+fn which_ssh_like(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let exe_name = if cfg!(windows) { format!("{name}.exe") } else { name.to_string() };
+    for dir in std::env::split_paths(&path) {
+        let cand = dir.join(&exe_name);
+        if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// The generated ssh config body for one profile (the `Host` block mutagen's
+/// external ssh resolves through our wrapper's `-F`). Host keys use
+/// accept-new (first connect auto-records; changed keys still hard-fail) and
+/// BatchMode forbids any interactive prompt.
+pub fn ssh_config_body(meta: &SshWorkspaceMeta) -> String {
+    let p = &meta.profile;
+    let mut s = String::new();
+    s.push_str("# aisc-generated (sync transport)\n");
+    s.push_str(&format!("Host {}\n", p.host));
+    s.push_str(&format!("  HostName {}\n", p.host));
+    s.push_str(&format!("  Port {}\n", p.port));
+    s.push_str(&format!("  User {}\n", p.user));
+    if !p.key_path.trim().is_empty() {
+        s.push_str(&format!("  IdentityFile {}\n", p.key_path));
+    }
+    s.push_str("  StrictHostKeyChecking accept-new\n");
+    s.push_str("  BatchMode yes\n");
+    s.push_str("  ConnectTimeout 15\n");
+    s
+}
+
+/// The wrapper script body that injects our config into every ssh mutagen
+/// spawns. `real_ssh` must already be resolved OUTSIDE the wrapper dir.
+pub fn ssh_wrapper_body(real_ssh: &std::path::Path, config: &std::path::Path) -> String {
+    if cfg!(windows) {
+        format!(
+            "@echo off\r\n\"{}\" -F \"{}\" -o BatchMode=yes %*\r\n",
+            real_ssh.display(),
+            config.display()
+        )
+    } else {
+        format!(
+            "#!/bin/sh\nexec '{}' -F '{}' -o BatchMode=yes \"$@\"\n",
+            real_ssh.display(),
+            config.display()
+        )
+    }
+}
+
+/// SCP-style endpoint URL (v0.16's `ssh://` mis-parses — probe notes above).
+pub fn scp_endpoint(meta: &SshWorkspaceMeta) -> String {
+    let p = &meta.profile;
+    format!("{}@{}:{}/{}", p.user, p.host, p.port, meta.remote_path.trim_start_matches('/'))
+}
+
+/// Prepare the transport dir (config + wrapper) under
+/// `<data-root>/sync-workspaces/bin/`; returns the dir to PREPEND to PATH.
+fn ensure_transport(meta: &SshWorkspaceMeta) -> Result<std::path::PathBuf, WorkbenchError> {
+    let root = crate::data_root::validate_data_root()
+        .map_err(|e| WorkbenchError::usage(format!("data root: {}", e.message())))?;
+    let dir = root.join("sync-workspaces").join("bin");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| WorkbenchError::usage(format!("transport dir: {e}")))?;
+    let config = dir.join("ssh_config");
+    crate::storage::atomic_replace(&config, ssh_config_body(meta).as_bytes())
+        .map_err(|e| WorkbenchError::usage(format!("ssh config: {e}")))?;
+    // Resolve the real ssh OUTSIDE our wrapper dir, then write the wrapper.
+    let real = which_ssh_like("ssh")
+        .ok_or_else(|| WorkbenchError::usage("no ssh binary found on PATH"))?;
+    if real.parent() == Some(&dir) {
+        return Err(WorkbenchError::usage("ssh resolution loop (wrapper dir)"));
+    }
+    let wrapper = dir.join(if cfg!(windows) { "ssh.cmd" } else { "ssh" });
+    crate::storage::atomic_replace(&wrapper, ssh_wrapper_body(&real, &config).as_bytes())
+        .map_err(|e| WorkbenchError::usage(format!("ssh wrapper: {e}")))?;
+    if !cfg!(windows) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+    Ok(dir)
+}
+
+/// Run mutagen with the transport PATH prepended. Returns (stdout, stderr).
+fn run_mutagen(
+    args: &[&str], transport: &std::path::Path, timeout: std::time::Duration,
+) -> Result<(String, String), WorkbenchError> {
+    let bin = mutagen_binary()
+        .ok_or_else(|| WorkbenchError::usage("mutagen binary not found (install or AISC_MUTAGEN_PATH)"))?;
+    let old_path = std::env::var_os("PATH").unwrap_or_default();
+    let new_path = std::env::join_paths(
+        std::iter::once(transport.to_path_buf()).chain(std::env::split_paths(&old_path)),
+    )
+    .map_err(|e| WorkbenchError::usage(format!("PATH join: {e}")))?;
+
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.args(args)
+        .env("PATH", new_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let child = cmd.output(); // output() blocks to completion
+    let out = match child {
+        Ok(o) => o,
+        Err(e) => return Err(WorkbenchError::usage(format!("spawn mutagen: {e}"))),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    if !out.status.success() {
+        let tail = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+        return Err(WorkbenchError::usage(format!(
+            "mutagen {} failed: {}",
+            args.first().copied().unwrap_or(""),
+            tail
+        )));
+    }
+    let _ = timeout; // output() is synchronous; the caller bounds via args
+    Ok((stdout, stderr))
+}
+
+/// One session's status projection (T-F1d renders this).
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    pub status: String,
+    pub message: String,
+    pub last_error: String,
+}
+
+fn session_name(workspace: &std::path::Path) -> String {
+    workspace
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// Create (or reconnect to) the sync session for an SSH workspace. A PLAIN
+/// local workspace is a no-op returning `status: "none"` (the frontend fires
+/// this on every launch — non-SSH must not surface as an error).
+#[tauri::command]
+pub async fn sync_session_start(workspace: String) -> Result<SyncStatus, WorkbenchError> {
+    let ws = std::path::PathBuf::from(&workspace);
+    let Some(meta) = read_meta(&ws) else {
+        return Ok(SyncStatus { status: "none".into(), ..Default::default() });
+    };
+    let transport = ensure_transport(&meta)?;
+    let name = session_name(&ws);
+    let alpha = workspace.clone();
+    let beta = scp_endpoint(&meta);
+    let alpha_ref: &str = &alpha;
+    let beta_ref: &str = &beta;
+    run_mutagen(
+        &["sync", "create", "--name", &name, "--ignore-vcs", alpha_ref, beta_ref],
+        &transport,
+        std::time::Duration::from_secs(60),
+    )?;
+    sync_status_inner(&ws, &meta, &transport)
+}
+
+/// Status by session name (defensive field walk — the JSON shape varies by
+/// mutagen version; missing fields degrade to empty strings).
+fn sync_status_inner(
+    ws: &std::path::Path, meta: &SshWorkspaceMeta, transport: &std::path::Path,
+) -> Result<SyncStatus, WorkbenchError> {
+    let (out, _) = run_mutagen(
+        &["sync", "list", "--template", "{{json .}}"],
+        transport,
+        std::time::Duration::from_secs(15),
+    )?;
+    let name = session_name(ws);
+    let sessions: Value = serde_json::from_str(out.trim())
+        .map_err(|e| WorkbenchError::usage(format!("sync list parse: {e}")))?;
+    let _ = meta;
+    Ok(match sessions.as_array() {
+        Some(arr) => {
+            let mine = arr
+                .iter()
+                .find(|s| s["Session"]["name"].as_str() == Some(name.as_str()));
+            match mine {
+                Some(s) => SyncStatus {
+                    status: s["Status"]["status"].as_str().unwrap_or("").to_string(),
+                    message: s["Status"]["message"].as_str().unwrap_or("").to_string(),
+                    last_error: s["Status"]["lastError"]
+                        .as_str()
+                        .or_else(|| s["Status"]["last_error"].as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                },
+                None => SyncStatus::default(),
+            }
+        }
+        None => SyncStatus::default(),
+    })
+}
+
+/// Current status (empty status = no session yet).
+#[tauri::command]
+pub async fn sync_session_status(workspace: String) -> Result<SyncStatus, WorkbenchError> {
+    let ws = std::path::PathBuf::from(&workspace);
+    let Some(meta) = read_meta(&ws) else {
+        return Ok(SyncStatus { status: "none".into(), ..Default::default() });
+    };
+    let transport = ensure_transport(&meta)?;
+    sync_status_inner(&ws, &meta, &transport)
+}
+
+fn session_action(workspace: String, action: &str) -> Result<SyncStatus, WorkbenchError> {
+    let ws = std::path::PathBuf::from(&workspace);
+    let meta = read_meta(&ws)
+        .ok_or_else(|| WorkbenchError::usage("not an SSH workspace (no metadata)"))?;
+    let transport = ensure_transport(&meta)?;
+    let name = session_name(&ws);
+    run_mutagen(
+        &["sync", action, &name],
+        &transport,
+        std::time::Duration::from_secs(30),
+    )?;
+    sync_status_inner(&ws, &meta, &transport)
+}
+
+#[tauri::command]
+pub async fn sync_session_pause(workspace: String) -> Result<SyncStatus, WorkbenchError> {
+    session_action(workspace, "pause")
+}
+
+#[tauri::command]
+pub async fn sync_session_resume(workspace: String) -> Result<SyncStatus, WorkbenchError> {
+    session_action(workspace, "resume")
+}
+
+#[tauri::command]
+pub async fn sync_session_terminate(workspace: String) -> Result<(), WorkbenchError> {
+    session_action(workspace, "terminate").map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +450,89 @@ mod tests {
         )
         .unwrap();
         assert!(read_meta(dir.path()).is_none());
+    }
+
+    fn test_meta() -> SshWorkspaceMeta {
+        SshWorkspaceMeta {
+            schema_version: META_SCHEMA.into(),
+            profile: crate::settings::SshProfile {
+                name: "srv".into(),
+                host: "10.0.0.5".into(),
+                port: 2222,
+                user: "deploy".into(),
+                key_path: "C:/keys/id_ed25519".into(),
+            },
+            remote_path: "/srv/proj".into(),
+            created_at: "1".into(),
+        }
+    }
+
+    #[test]
+    fn ssh_config_body_carries_the_profile() {
+        let cfg = ssh_config_body(&test_meta());
+        assert!(cfg.contains("Host 10.0.0.5"));
+        assert!(cfg.contains("Port 2222"));
+        assert!(cfg.contains("User deploy"));
+        assert!(cfg.contains("IdentityFile C:/keys/id_ed25519"));
+        assert!(cfg.contains("StrictHostKeyChecking accept-new"));
+        assert!(cfg.contains("BatchMode yes"));
+        // no key -> no IdentityFile line (agent/default-key path)
+        let mut m = test_meta();
+        m.profile.key_path = String::new();
+        assert!(!ssh_config_body(&m).contains("IdentityFile"));
+    }
+
+    #[test]
+    fn scp_endpoint_shape() {
+        assert_eq!(scp_endpoint(&test_meta()), "deploy@10.0.0.5:2222/srv/proj");
+        let mut m = test_meta();
+        m.remote_path = "/a/b/".into();
+        assert_eq!(scp_endpoint(&m), "deploy@10.0.0.5:2222/a/b/");
+    }
+
+    /// The wrapper must make mutagen's external ssh NON-INTERACTIVE: with
+    /// BatchMode injected, a dead endpoint fails fast with a dial error and
+    /// NEVER reaches a host-key/passphrase prompt (the deadlock that
+    /// motivated the wrapper). Best-effort: skipped when no ssh/mutagen is
+    /// resolvable (CI images without the host tool).
+    #[test]
+    fn wrapper_makes_transport_non_interactive() {
+        if which_ssh_like("ssh").is_none() || mutagen_binary().is_none() {
+            eprintln!("skipping: ssh/mutagen not resolvable");
+            return;
+        }
+        let mut m = test_meta();
+        m.profile.host = "127.0.0.1".into();
+        m.profile.port = 1; // nothing listens here
+        m.remote_path = "/r".into();
+        let dir = tempfile::tempdir().unwrap();
+        let alpha = dir.path().join("alpha");
+        std::fs::create_dir_all(&alpha).unwrap();
+        let meta = m;
+        // simulate the full path: transport + create against the dead port
+        let ws = dir.path().to_path_buf();
+        std::fs::write(
+            ws.join(META_FILE),
+            serde_json::to_vec(&meta).unwrap(),
+        )
+        .unwrap();
+        let transport = ensure_transport(&meta).expect("transport prepared");
+        let alpha_s = alpha.to_string_lossy().to_string();
+        let beta = scp_endpoint(&meta);
+        let res = run_mutagen(
+            &["sync", "create", "--name", "it-probe", "--ignore-vcs", &alpha_s, &beta],
+            &transport,
+            std::time::Duration::from_secs(60),
+        );
+        match res {
+            Ok(_) => panic!("create must fail against a dead endpoint"),
+            Err(e) => {
+                let msg = format!("{e:?}");
+                assert!(
+                    !msg.contains("Are you sure"),
+                    "interactive prompt leaked: {msg}"
+                );
+            }
+        }
     }
 }

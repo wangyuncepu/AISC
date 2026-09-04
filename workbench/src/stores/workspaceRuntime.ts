@@ -1510,6 +1510,35 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     return true;
   }
 
+  /** F1 (T-F1c): attach the bidirectional sync when this is an SSH
+   * workspace. Best-effort by design — a dead remote NEVER blocks opening
+   * the workspace (the offline-degradation ruling); the state/error land in
+   * `sync` for the T-F1d UI to render. */
+  const sync = ref<{ attached: boolean; status: string; message: string; lastError: string } | null>(null);
+  async function attachSync(): Promise<void> {
+    const ws = workspace.value.trim();
+    if (!ws || sync.value?.attached) return;
+    sync.value = { attached: true, status: "", message: "", lastError: "" };
+    try {
+      const r = await ipc.syncSessionStart(ws);
+      if (sync.value) Object.assign(sync.value, r);
+    } catch (e) {
+      const msg = (e as { technical_detail?: string; message?: string })
+        ?.technical_detail || (e as { message?: string })?.message || String(e);
+      if (sync.value) sync.value.lastError = msg;
+    }
+  }
+  async function refreshSync(): Promise<void> {
+    const ws = workspace.value.trim();
+    if (!ws || !sync.value?.attached) return;
+    try {
+      const r = await ipc.syncSessionStatus(ws);
+      Object.assign(sync.value, r);
+    } catch {
+      /* status polling is best-effort */
+    }
+  }
+
   /** Start/reuse/restart the runtime then open tabs. Shared by the normal
    * Start (one tab) and 恢复布局 (history tabs, 02 §2.3). */
   async function launchRuntime(
@@ -1523,6 +1552,12 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     error.value = null;
     cancelInspect.value = null;
     startTimerTick();
+    // F1: attach the SSH sync (no-op for plain local workspaces — the Rust
+    // side refuses non-SSH paths with an error we swallow here... actually
+    // attachSync guards nothing about SSH-ness; the command errors fast and
+    // lands in sync.lastError, which the UI shows ONLY for SSH metadata
+    // holders. Fire-and-forget: a dead remote never blocks the launch.)
+    void attachSync();
     try {
       const ok = await ensureRuntime();
       if (!ok) {
@@ -1729,6 +1764,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     runtimeId,
     runtimeReady,
     preflight,
+    // F1 (T-F1c): SSH sync attach/state (T-F1d renders)
+    sync,
+    refreshSync,
     reconcile,
     logTerminalResizeError,
     logRendererEvent,

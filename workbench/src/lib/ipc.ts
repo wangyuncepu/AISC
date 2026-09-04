@@ -271,6 +271,24 @@ export const sshWorkspaceCreate = (
     name, profile, remotePath,
   });
 
+/** F1 (T-F1c): the mutagen session lifecycle + status projection. */
+export interface SyncStatus {
+  status: string;
+  message: string;
+  lastError: string;
+}
+
+export const syncSessionStart = (workspace: string) =>
+  invoke<SyncStatus>("sync_session_start", { workspace });
+export const syncSessionStatus = (workspace: string) =>
+  invoke<SyncStatus>("sync_session_status", { workspace });
+export const syncSessionPause = (workspace: string) =>
+  invoke<SyncStatus>("sync_session_pause", { workspace });
+export const syncSessionResume = (workspace: string) =>
+  invoke<SyncStatus>("sync_session_resume", { workspace });
+export const syncSessionTerminate = (workspace: string) =>
+  invoke<void>("sync_session_terminate", { workspace });
+
 // --- IDEA-2 (2d): subscription + usage data plane ---
 // The subscription URL / content ride the CLI child's stdin on the Rust side
 // (credentials never travel via argv, logs or disk).

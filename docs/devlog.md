@@ -2036,3 +2036,25 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   workspaces store（createSshWorkspace + createSshError）。+3 Rust 测试
   （名称规则/远端路径/元数据往返+异 schema 拒绝）。门禁：cargo 282 /
   vitest 433 / vue-tsc / vite build。
+- **T-F1c 同步引擎（2026-09-04，CLI 事实全实测）**：mutagen v0.16.4
+  Windows 实测三事实——①命令**自动拉起 daemon**（无需显式生命周期
+  管理）；②`ssh://` scheme URL 解析坏（"ssh" 成 hostname）→ 用 SCP
+  风格 `user@host:port/path`；③**SSH transport 走外部 ssh 二进制**且
+  URL query 参数（key/verifyHostKey）被忽略、host-key/passphrase
+  prompt 会卡死非交互 spawn → **对策：ssh wrapper 注入**（数据根
+  `sync-workspaces/bin/` 生成 config + wrapper，PATH 前置；config 载
+  HostName/Port/User/IdentityFile + `StrictHostKeyChecking accept-new` +
+  `BatchMode yes` + ConnectTimeout 15——非交互 + 首连自动记录 + 变更
+  key 仍硬失败）。引擎五 command：start/status/pause/resume/terminate
+  （`sync create --name <影子目录名> --ignore-vcs`；status 走
+  `sync list --template '{{json .}}'` 防御性字段投影；**非 SSH 工作区
+  返回 status:"none" 不报错**——前端每次 launch 都 fire）。mutagen
+  发现链：AISC_MUTAGEN_PATH → exe 同目录 → PATH。前端：
+  launchRuntime 开头 best-effort `attachSync()`（断网降级裁决：死远端
+  永不阻塞打开；状态/错误落 store.sync 供 T-F1d 渲染）+ refreshSync。
+  +3 测试（config body/wrapper endpoint 形状/**真机非交互验证**——
+  AISC_MUTAGEN_PATH 指向本地 v0.16.4，对死端口 create 秒败且断言
+  "Are you sure" prompt 零泄漏）。门禁：cargo sync 6 全量 285（复跑；
+  diag_engine 探针偶发再现）/ vitest 433 / vue-tsc / vite build。
+  余项：打包 resources 接线（NSIS/deb/DMG 装进 mutagen 二进制——
+  下轮与 T-F1d 一起）。
