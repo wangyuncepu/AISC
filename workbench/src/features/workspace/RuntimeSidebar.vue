@@ -17,6 +17,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useWorkspacesStore } from "../../stores/workspaces";
 import { useDoctorStore } from "../../stores/doctor";
@@ -98,7 +99,15 @@ const SYNC_LABEL_KEY: Record<string, string> = {
   staging_beta: "sidebar.sync.staging",
 };
 const syncStateLabel = computed(() =>
-  t(SYNC_LABEL_KEY[syncState.value] ?? "sidebar.sync.transitioning"));
+  syncState.value === "disabled"
+    ? t("sidebar.sync.disabled")
+    : t(SYNC_LABEL_KEY[syncState.value] ?? "sidebar.sync.transitioning"));
+
+/** F1: cancel is destructive + permanent — confirm before pulling the pin. */
+async function onCancelSync(): Promise<void> {
+  const ok = await confirm(t("sidebar.syncCancelConfirm"));
+  if (ok) void store.cancelSync();
+}
 
 /** F1: live progress needs polling — the sync section mounts only for SSH
  *  workspaces, so a scoped 15s interval here is the whole story. */
@@ -283,14 +292,21 @@ function copyDone(key: string): boolean {
         {{ store.sync.lastError }}
       </div>
       <div class="actions-row">
-        <button @click="store.refreshSync()">{{ t("sidebar.syncRefresh") }}</button>
-        <button v-if="syncState === 'paused'" :disabled="!syncState" @click="store.resumeSync()">
-          {{ t("sidebar.syncResume") }}
+        <button v-if="syncState === 'disabled'" @click="store.enableSync()">
+          {{ t("sidebar.syncEnable") }}
         </button>
-        <button v-else-if="syncState === 'watching' || syncState === 'halting'" @click="store.pauseSync()">
-          {{ t("sidebar.syncPause") }}
-        </button>
-        <button class="danger" @click="store.terminateSync()">{{ t("sidebar.syncDisconnect") }}</button>
+        <template v-else>
+          <button @click="store.refreshSync()">{{ t("sidebar.syncRefresh") }}</button>
+          <button v-if="syncState === 'paused'" :disabled="!syncState" @click="store.resumeSync()">
+            {{ t("sidebar.syncResume") }}
+          </button>
+          <button v-else-if="syncState === 'watching' || syncState === 'halting'" @click="store.pauseSync()">
+            {{ t("sidebar.syncPause") }}
+          </button>
+          <button class="danger" @click="store.terminateSync()">{{ t("sidebar.syncDisconnect") }}</button>
+          <!-- F1: permanent cancel — deletes synced content, never re-attaches. -->
+          <button class="danger" @click="onCancelSync">{{ t("sidebar.syncCancel") }}</button>
+        </template>
       </div>
     </section>
 

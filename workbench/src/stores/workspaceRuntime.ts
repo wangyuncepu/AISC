@@ -1542,7 +1542,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   /** T-F1d sidebar actions (store-routed per F-A01). */
   async function syncAction(
-    op: "pause" | "resume" | "terminate",
+    op: "pause" | "resume" | "terminate" | "cancel" | "enable",
   ): Promise<void> {
     const ws = workspace.value.trim();
     if (!ws || !sync.value?.attached) return;
@@ -1550,6 +1550,12 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       if (op === "terminate") {
         await ipc.syncSessionTerminate(ws);
         sync.value = null; // detached; re-attaches on next launch
+      } else if (op === "cancel") {
+        const r = await ipc.syncSessionCancel(ws);
+        Object.assign(sync.value, r); // status: disabled — stays visible
+      } else if (op === "enable") {
+        const r = await ipc.syncSessionEnable(ws);
+        Object.assign(sync.value, r);
       } else {
         const r = op === "pause"
           ? await ipc.syncSessionPause(ws)
@@ -1567,6 +1573,8 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   const pauseSync = () => syncAction("pause");
   const resumeSync = () => syncAction("resume");
   const terminateSync = () => syncAction("terminate");
+  const cancelSync = () => syncAction("cancel");
+  const enableSync = () => syncAction("enable");
 
   /** Start/reuse/restart the runtime then open tabs. Shared by the normal
    * Start (one tab) and 恢复布局 (history tabs, 02 §2.3). */
@@ -1799,6 +1807,8 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     pauseSync,
     resumeSync,
     terminateSync,
+    cancelSync,
+    enableSync,
     reconcile,
     logTerminalResizeError,
     logRendererEvent,

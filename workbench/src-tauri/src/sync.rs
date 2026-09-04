@@ -35,6 +35,11 @@ pub struct SshWorkspaceMeta {
     /// Absolute POSIX path on the remote.
     pub remote_path: String,
     pub created_at: String,
+    /// F1 (field report: "本地放不下"): user-cancelled sync. While set,
+    /// launch never re-attaches; the sidebar shows 已取消 + a re-enable
+    /// action. Absent/None = normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_disabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +108,7 @@ pub async fn ssh_workspace_create(
         profile,
         remote_path,
         created_at: now_iso(),
+        sync_disabled: None,
     };
     let bytes = serde_json::to_vec_pretty(&meta)
         .map_err(|e| WorkbenchError::usage(format!("encode metadata: {e}")))?;
@@ -237,6 +243,7 @@ fn ensure_transport_for(profile: &crate::settings::SshProfile) -> Result<std::pa
         profile: profile.clone(),
         remote_path: String::new(),
         created_at: String::new(),
+        sync_disabled: None,
     });
     crate::storage::atomic_replace(&config, body.as_bytes())
         .map_err(|e| WorkbenchError::usage(format!("ssh config: {e}")))?;
@@ -372,14 +379,43 @@ fn run_mutagen(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    let child = cmd.output(); // output() blocks to completion
-    let out = match child {
-        Ok(o) => o,
-        Err(e) => return Err(WorkbenchError::usage(format!("spawn mutagen: {e}"))),
+    // REAL timeout (field report: `sync terminate` against a session stuck
+    // in a multi-GB remote scan blocks indefinitely — cmd.output() has no
+    // deadline). Poll try_wait to the deadline, then kill.
+    let mut child = cmd.spawn()
+        .map_err(|e| WorkbenchError::usage(format!("spawn mutagen: {e}")))?;
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    // Child::kill() is the stable cross-platform API.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(WorkbenchError::usage(format!(
+                        "mutagen {} timed out after {}s",
+                        args.first().copied().unwrap_or(""),
+                        timeout.as_secs()
+                    )));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => return Err(WorkbenchError::usage(format!("wait mutagen: {e}"))),
+        }
     };
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    if !out.status.success() {
+    use std::io::Read;
+    let mut stdout_buf = Vec::new();
+    let mut stderr_buf = Vec::new();
+    if let Some(mut p) = child.stdout.take() {
+        let _ = p.read_to_end(&mut stdout_buf);
+    }
+    if let Some(mut p) = child.stderr.take() {
+        let _ = p.read_to_end(&mut stderr_buf);
+    }
+    let stdout = String::from_utf8_lossy(&stdout_buf).to_string();
+    let stderr = String::from_utf8_lossy(&stderr_buf).to_string();
+    if !status.success() {
         let tail = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
         return Err(WorkbenchError::usage(format!(
             "mutagen {} failed: {}",
@@ -387,7 +423,7 @@ fn run_mutagen(
             tail
         )));
     }
-    let _ = timeout; // output() is synchronous; the caller bounds via args
+    let _ = timeout; // enforced above via the deadline loop
     Ok((stdout, stderr))
 }
 
@@ -414,6 +450,63 @@ fn session_name(workspace: &std::path::Path) -> String {
         .unwrap_or_default()
 }
 
+fn write_meta(ws: &std::path::Path, meta: &SshWorkspaceMeta) -> Result<(), WorkbenchError> {
+    let bytes = serde_json::to_vec_pretty(meta)
+        .map_err(|e| WorkbenchError::usage(format!("encode metadata: {e}")))?;
+    crate::storage::atomic_replace(&ws.join(META_FILE), &bytes)
+        .map_err(|e| WorkbenchError::usage(format!("write metadata: {e}")))
+}
+
+/// F1 (field report: "本地放不下这么多东西"): CANCEL the sync permanently
+/// for this workspace — terminate the session (tolerating a timeout against
+/// a scan-stuck session; the daemon-side definition dies with it, and a
+/// timeout kill leaves the CLI dead but the session still registered, which
+/// the next enable's terminate sweep handles), DELETE the already-synced
+/// content from the shadow dir (metadata file survives), and set the
+/// `sync_disabled` flag so launch NEVER re-attaches until the user
+/// explicitly re-enables.
+#[tauri::command]
+pub async fn sync_session_cancel(workspace: String) -> Result<SyncStatus, WorkbenchError> {
+    let ws = std::path::PathBuf::from(&workspace);
+    let mut meta = read_meta(&ws)
+        .ok_or_else(|| WorkbenchError::usage("not an SSH workspace (no metadata)"))?;
+    let transport = ensure_transport(&meta)?;
+    let name = session_name(&ws);
+    // Best-effort terminate: a scanning session may not confirm in time.
+    let _ = run_mutagen(&["sync", "terminate", &name], &transport, std::time::Duration::from_secs(30));
+
+    // Delete synced CONTENT, keep the metadata file itself.
+    if let Ok(entries) = std::fs::read_dir(&ws) {
+        for e in entries.flatten() {
+            if e.file_name().to_string_lossy() == META_FILE {
+                continue;
+            }
+            let p = e.path();
+            if p.is_dir() {
+                let _ = std::fs::remove_dir_all(&p);
+            } else {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+
+    meta.sync_disabled = Some(true);
+    write_meta(&ws, &meta)?;
+    Ok(SyncStatus { status: "disabled".into(), ..Default::default() })
+}
+
+/// Re-enable a cancelled sync (the explicit user action that un-does
+/// `sync_session_cancel`; launch-time attach NEVER does this implicitly).
+#[tauri::command]
+pub async fn sync_session_enable(workspace: String) -> Result<SyncStatus, WorkbenchError> {
+    let ws = std::path::PathBuf::from(&workspace);
+    let mut meta = read_meta(&ws)
+        .ok_or_else(|| WorkbenchError::usage("not an SSH workspace (no metadata)"))?;
+    meta.sync_disabled = None;
+    write_meta(&ws, &meta)?;
+    sync_session_start_impl(ws, meta).await
+}
+
 /// Create (or reconnect to) the sync session for an SSH workspace. A PLAIN
 /// local workspace is a no-op returning `status: "none"` (the frontend fires
 /// this on every launch — non-SSH must not surface as an error).
@@ -429,6 +522,16 @@ pub async fn sync_session_start(workspace: String) -> Result<SyncStatus, Workben
     let Some(meta) = read_meta(&ws) else {
         return Ok(SyncStatus { status: "none".into(), ..Default::default() });
     };
+    if meta.sync_disabled == Some(true) {
+        return Ok(SyncStatus { status: "disabled".into(), ..Default::default() });
+    }
+    sync_session_start_impl(ws, meta).await
+}
+
+async fn sync_session_start_impl(
+    ws: std::path::PathBuf, meta: SshWorkspaceMeta,
+) -> Result<SyncStatus, WorkbenchError> {
+    let workspace = ws.to_string_lossy().to_string();
     let transport = ensure_transport(&meta)?;
     let name = session_name(&ws);
     // v0.16 list elements ARE the Session objects (field paths verified
@@ -528,6 +631,9 @@ pub async fn sync_session_status(workspace: String) -> Result<SyncStatus, Workbe
     let Some(meta) = read_meta(&ws) else {
         return Ok(SyncStatus { status: "none".into(), ..Default::default() });
     };
+    if meta.sync_disabled == Some(true) {
+        return Ok(SyncStatus { status: "disabled".into(), ..Default::default() });
+    }
     let transport = ensure_transport(&meta)?;
     sync_status_inner(&ws, &meta, &transport)
 }
@@ -600,6 +706,7 @@ mod tests {
             profile: p,
             remote_path: "/srv/proj".into(),
             created_at: "1".into(),
+            sync_disabled: None,
         };
         std::fs::write(
             dir.path().join(META_FILE),
@@ -632,6 +739,7 @@ mod tests {
             },
             remote_path: "/srv/proj".into(),
             created_at: "1".into(),
+            sync_disabled: None,
         }
     }
 

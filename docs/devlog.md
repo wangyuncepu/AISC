@@ -2144,3 +2144,16 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   DEFAULT_IGNORE（与 .aisc/.claude 同列；watcher/文件树/产物投影三面
   一体生效）。门禁：vue-tsc / vitest 433 / vite / cargo sync 7 +
   workspace 48。
+- **T-F1e 取消同步（2026-09-04 深夜，用户：本地放不下）**：应急先手——
+  hugetest 会话 terminate 对 scanning 态无限阻塞（CLI 卡远端取消），
+  根除路径 = Stop-Process daemon → 删持久化会话定义
+  （`<数据根>/mutagen/sessions/sync_*` 二进制序列化但路径明文可 grep）
+  → daemon 重启验证不复活；磁盘实测仅 6KB 无伤。产品化：
+  `sync_session_cancel` command（terminate 尽力 30s + **删除已同步内容**
+  （保 metadata）+ metadata 标记 `sync_disabled`）+ `sync_session_enable`
+  （显式恢复：清标记 + start）；start/status 对 disabled 返回
+  `status:"disabled"`——**launch 永不自动重连**；侧栏「取消同步」
+  （danger + confirm 说明删内容与不恢复）与 disabled 态「恢复同步」钮。
+  `run_mutagen` 补**真超时**（try_wait 轮询至 deadline 后 kill——
+  terminate 卡 scanning 的教训，output() 无期限）。门禁：cargo sync 7 /
+  build / vue-tsc / vitest 433 / vite。

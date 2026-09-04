@@ -179,6 +179,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
     pauseSync: fwdFn("pauseSync"),
     resumeSync: fwdFn("resumeSync"),
     terminateSync: fwdFn("terminateSync"),
+    cancelSync: fwdFn("cancelSync"),
+    enableSync: fwdFn("enableSync"),
     conflicts: fwdRef("conflicts"),
     conflictError: fwdRef("conflictError"),
     freshness: fwdRef("freshness"),

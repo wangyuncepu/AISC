@@ -174,6 +174,8 @@ pub fn run(cli_arg: Option<String>) {
             sync::ssh_browse,
             sync::sync_session_start,
             sync::sync_session_status,
+            sync::sync_session_cancel,
+            sync::sync_session_enable,
             sync::sync_session_pause,
             sync::sync_session_resume,
             sync::sync_session_terminate,

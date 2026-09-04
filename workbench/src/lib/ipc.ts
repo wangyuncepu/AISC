@@ -301,6 +301,12 @@ export const syncSessionResume = (workspace: string) =>
   invoke<SyncStatus>("sync_session_resume", { workspace });
 export const syncSessionTerminate = (workspace: string) =>
   invoke<void>("sync_session_terminate", { workspace });
+/** F1: permanently cancel (terminate + delete synced content + disable
+ * re-attach) and the explicit re-enable. */
+export const syncSessionCancel = (workspace: string) =>
+  invoke<SyncStatus>("sync_session_cancel", { workspace });
+export const syncSessionEnable = (workspace: string) =>
+  invoke<SyncStatus>("sync_session_enable", { workspace });
 
 // --- IDEA-2 (2d): subscription + usage data plane ---
 // The subscription URL / content ride the CLI child's stdin on the Rust side
