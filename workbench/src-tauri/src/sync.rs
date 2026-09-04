@@ -391,13 +391,20 @@ fn run_mutagen(
     Ok((stdout, stderr))
 }
 
-/// One session's status projection (T-F1d renders this).
+/// One session's status projection (T-F1d renders this). `alpha_files` /
+/// `beta_files` / `total_file_size` are the progress counters from the
+/// session JSON (None-shaped until the first scan completes — a multi-GB
+/// remote keeps the tree legitimately empty for a while; these numbers are
+/// what makes that VISIBLE instead of looking broken).
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
     pub status: String,
     pub message: String,
     pub last_error: String,
+    pub alpha_files: Option<u64>,
+    pub beta_files: Option<u64>,
+    pub total_file_size: Option<u64>,
 }
 
 fn session_name(workspace: &std::path::Path) -> String {
@@ -503,6 +510,9 @@ fn sync_status_inner(
                     status: s["status"].as_str().unwrap_or("").to_string(),
                     message: s["lastError"].as_str().unwrap_or("").to_string(),
                     last_error: s["lastError"].as_str().unwrap_or("").to_string(),
+                    alpha_files: s["alpha"]["files"].as_u64(),
+                    beta_files: s["beta"]["files"].as_u64(),
+                    total_file_size: s["beta"]["totalFileSize"].as_u64(),
                 },
                 None => SyncStatus::default(),
             }

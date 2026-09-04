@@ -286,6 +286,9 @@ export interface SyncStatus {
   status: string;
   message: string;
   lastError: string;
+  alphaFiles?: number | null;
+  betaFiles?: number | null;
+  totalFileSize?: number | null;
 }
 
 export const syncSessionStart = (workspace: string) =>

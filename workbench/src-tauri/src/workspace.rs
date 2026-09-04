@@ -32,6 +32,11 @@ const DEFAULT_IGNORE: &[&str] = &[
     ".codex",
     ".cc-switch",
     ".local",
+    // F1 (D-10): AISC-managed sync-workspace files — the metadata we write
+    // and the container's project-level MCP registration (it lands in the
+    // shadow dir via the /root/app mount). Never user content; never shown.
+    ".aisc-ssh-workspace.json",
+    ".mcp.json",
     "node_modules",
     "target",
     "build",

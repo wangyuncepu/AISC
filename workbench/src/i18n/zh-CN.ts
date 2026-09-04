@@ -224,6 +224,7 @@ export const zhCN = {
   "sidebar.sync.paused": "已暂停",
   "sidebar.sync.halted": "已停机（见错误）",
   "sidebar.syncRefresh": "刷新状态",
+  "sidebar.sync.progress": "本地 {local} 项 / 远端 {remote} 项 · {size}",
   "sidebar.syncPause": "暂停",
   "sidebar.syncResume": "恢复",
   "sidebar.syncDisconnect": "断开同步",

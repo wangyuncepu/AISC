@@ -1514,7 +1514,8 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
    * workspace. Best-effort by design — a dead remote NEVER blocks opening
    * the workspace (the offline-degradation ruling); the state/error land in
    * `sync` for the T-F1d UI to render. */
-  const sync = ref<{ attached: boolean; status: string; message: string; lastError: string } | null>(null);
+  const sync = ref<{ attached: boolean; status: string; message: string; lastError: string;
+                     alphaFiles?: number | null; betaFiles?: number | null; totalFileSize?: number | null } | null>(null);
   async function attachSync(): Promise<void> {
     const ws = workspace.value.trim();
     if (!ws || sync.value?.attached) return;

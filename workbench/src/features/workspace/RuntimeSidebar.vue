@@ -14,7 +14,7 @@
  * deleted, only layered (04 §2.2). The 1-second ticker is gone: relative time
  * is recomputed per snapshot and when the details expand.
  */
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useRuntimeStore } from "../../stores/runtime";
@@ -99,6 +99,25 @@ const SYNC_LABEL_KEY: Record<string, string> = {
 };
 const syncStateLabel = computed(() =>
   t(SYNC_LABEL_KEY[syncState.value] ?? "sidebar.sync.transitioning"));
+
+/** F1: live progress needs polling — the sync section mounts only for SSH
+ *  workspaces, so a scoped 15s interval here is the whole story. */
+let syncPoll: number | null = null;
+onMounted(() => {
+  syncPoll = window.setInterval(() => {
+    if (store.sync?.attached && store.sync.status !== "none") void store.refreshSync();
+  }, 15000);
+});
+onBeforeUnmount(() => {
+  if (syncPoll !== null) window.clearInterval(syncPoll);
+});
+
+function fmtSize(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${bytes} B`;
+}
 
 const STATE_LABEL_KEY: Record<RuntimeState, string> = {
   running: "app.running",
@@ -251,6 +270,15 @@ function copyDone(key: string): boolean {
         <span class="state" :data-state="syncState">{{ syncStateLabel }}</span>
       </div>
       <div v-if="store.sync.message" class="muted">{{ store.sync.message }}</div>
+      <!-- F1: scan/transfer progress — a multi-GB remote keeps the tree
+           empty for a long stretch; these counters make that expected. -->
+      <div v-if="store.sync.betaFiles != null" class="muted sync-progress">
+        {{ t("sidebar.sync.progress", {
+          local: store.sync.alphaFiles ?? 0,
+          remote: store.sync.betaFiles ?? 0,
+          size: fmtSize(store.sync.totalFileSize ?? 0),
+        }) }}
+      </div>
       <div v-if="store.sync.lastError" class="value sync-error" role="alert" :title="store.sync.lastError">
         {{ store.sync.lastError }}
       </div>

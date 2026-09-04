@@ -2134,3 +2134,13 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   .mcp.json`（AISC 管理文件永不上推远端）。**真机终验**：干净
   endpoint 重建 session 后远端内容（bili_jellyfin/…）实测流入影子
   目录。门禁：cargo sync 7 / build。
+- **T-F1e 大目录反馈两修（2026-09-04 深夜）**：①几百 GB 工作区打开
+  「树全空」无进度可看——SyncStatus 扩 `alphaFiles/betaFiles/
+  totalFileSize`（session JSON alpha/beta 计数器；首次扫描完成前为
+  null 形），侧栏显示「本地 N 项 / 远端 N 项 · 大小」+ **15s 定向轮询**
+  （同步节挂载区间内 interval，卸载即清）；②两个管理 json 不再进
+  文件树——`.aisc-ssh-workspace.json`（F1 元数据）与 `.mcp.json`（容器
+  经 /root/app 挂载落入的项目级 MCP 注册）入 workspace.rs
+  DEFAULT_IGNORE（与 .aisc/.claude 同列；watcher/文件树/产物投影三面
+  一体生效）。门禁：vue-tsc / vitest 433 / vite / cargo sync 7 +
+  workspace 48。

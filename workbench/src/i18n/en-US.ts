@@ -224,6 +224,7 @@ export const enUS: Record<string, string> = {
   "sidebar.sync.paused": "Paused",
   "sidebar.sync.halted": "Halted (see error)",
   "sidebar.syncRefresh": "Refresh",
+  "sidebar.sync.progress": "{local} local / {remote} remote entries · {size}",
   "sidebar.syncPause": "Pause",
   "sidebar.syncResume": "Resume",
   "sidebar.syncDisconnect": "Disconnect sync",
