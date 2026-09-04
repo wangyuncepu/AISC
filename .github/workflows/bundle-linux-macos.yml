@@ -17,6 +17,7 @@ on:
       - 'workbench/vite.config.*'
       - 'workbench/tsconfig*.json'
       - 'workbench/src-tauri/**'
+      - 'tools/stage-mutagen.sh'
       - '.github/workflows/bundle-linux-macos.yml'
       - '.github/workflows/cli-sidecar.yml'
       - 'src/aisc/**'
