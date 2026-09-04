@@ -295,6 +295,10 @@ export interface SyncStatus {
   alphaFiles?: number | null;
   betaFiles?: number | null;
   totalFileSize?: number | null;
+  /** Disk guard: live free space on the data-root volume. */
+  freeBytes?: number | null;
+  /** Disk guard: this session was auto-paused for low disk (metadata flag). */
+  lowDisk?: boolean;
 }
 
 export const syncSessionStart = (workspace: string) =>

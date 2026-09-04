@@ -103,6 +103,21 @@ const syncStateLabel = computed(() =>
     ? t("sidebar.sync.disabled")
     : t(SYNC_LABEL_KEY[syncState.value] ?? "sidebar.sync.transitioning"));
 
+/** Mirrors LOW_DISK_FLOOR_BYTES in sync.rs (2 GiB) — the resume button
+ *  un-gates only above it (the server refuses below regardless). */
+const LOW_DISK_FLOOR = 2 * 1024 ** 3;
+/** Disk guard: remote content cannot FIT the local volume — the real
+ *  capacity check the fixed 10 GB advisory could never make. */
+const capacityExceeded = computed(() => {
+  const total = store.sync?.totalFileSize;
+  const free = store.sync?.freeBytes;
+  return total != null && free != null && total > free;
+});
+/** Guard-paused AND still below the floor → resume stays disabled. */
+const lowDiskBlocked = computed(
+  () => store.sync?.lowDisk === true && (store.sync?.freeBytes ?? 0) < LOW_DISK_FLOOR,
+);
+
 /** F1 (oversized strategy): pull ONE excluded/remote file into the shadow
  *  workspace on demand — minimal prompt dialog (path in, file lands). */
 const pullOpen = ref(false);
@@ -304,8 +319,20 @@ function copyDone(key: string): boolean {
       </div>
       <!-- Oversized-content guard: once the remote size crosses the line,
            say so and offer the strategies (sub-directory / excludes). -->
-      <div v-if="(store.sync.totalFileSize ?? 0) > 10 * 1024 ** 3" class="value sync-error" role="alert">
+      <div v-if="(store.sync.totalFileSize ?? 0) > 10 * 1024 ** 3 && !capacityExceeded" class="value sync-error" role="alert">
         {{ t("sidebar.sync.oversized", { size: fmtSize(store.sync.totalFileSize ?? 0) }) }}
+      </div>
+      <!-- Disk guard: remote content exceeds local free space — this sync
+           cannot complete; cancel is the honest path. -->
+      <div v-if="capacityExceeded" class="value sync-error" role="alert">
+        {{ t("sidebar.sync.tooBig", {
+          size: fmtSize(store.sync.totalFileSize ?? 0),
+          free: fmtSize(store.sync.freeBytes ?? 0),
+        }) }}
+      </div>
+      <!-- Disk guard: the auto-pause fired — explain why, and what to do. -->
+      <div v-if="store.sync.lowDisk" class="value sync-error" role="alert">
+        {{ t("sidebar.sync.lowDisk", { free: fmtSize(store.sync.freeBytes ?? 0) }) }}
       </div>
       <div v-if="store.sync.lastError" class="value sync-error" role="alert" :title="store.sync.lastError">
         {{ store.sync.lastError }}
@@ -334,7 +361,12 @@ function copyDone(key: string): boolean {
         <template v-else>
           <button @click="store.refreshSync()">{{ t("sidebar.syncRefresh") }}</button>
           <button @click="pullOpen = true">{{ t("sidebar.sync.pullFile") }}</button>
-          <button v-if="syncState === 'paused'" :disabled="!syncState" @click="store.resumeSync()">
+          <button
+            v-if="syncState === 'paused'"
+            :disabled="lowDiskBlocked"
+            :title="lowDiskBlocked ? t('sidebar.sync.lowDiskResumeHint') : undefined"
+            @click="store.resumeSync()"
+          >
             {{ t("sidebar.syncResume") }}
           </button>
           <button v-else-if="syncState === 'watching' || syncState === 'halting'" @click="store.pauseSync()">

@@ -2193,3 +2193,22 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   小文件场景的回答：同步类工具共同弱项，首次全量慢不可避免——
   排除生成物（容器内重装）、初始完成后 watch 增量快。门禁：
   cargo sync 8 / build / vue-tsc / vitest 433 / vite。
+- **T-F1e 磁盘防护三层（2026-09-04 深夜，用户：小文件总量把磁盘
+  爆掉怎么办）**：此前只有静态 >10GB 警示与事后手动取消——没有
+  任何机制对比远端总量与本地可用空间、磁盘将满时也不自动刹车。
+  补齐：①**状态透出容量**——SyncStatus 新 `freeBytes`（fs4
+  `free_space` 探数据根卷，零新依赖——history.rs 已引），侧栏在
+  远端总量 > 本地可用时红字「同步无法完成，建议取消重建」（10GB
+  advisory 让位）；②**低磁盘自动暂停**——`LOW_DISK_FLOOR_BYTES`
+  =2GiB，once-per-process 守护线程（首次 sync 命令时拉起）每 30s
+  探一次，跌破即对所有 live 会话 pause + 元数据盖 `low_disk_paused`
+  标记（list-first 只 pause 传输中的；已标记/已取消跳过——与用户
+  显式恢复不打架，恢复改为空间门槛）；③**恢复/新建门槛**——
+  `sync_session_resume` 对带标记录在 free<floor 时拒绝（UI 同步
+  disable 恢复钮，2GiB 镜像常量）；launch 时带标记且仍低于 floor
+  → 保持 parked（顺带强制 pause）+ 状态带 lowDisk；空间回升 →
+  自动清标记正常重连；**新建会话**在低于 floor 时直接拒绝。已知
+  边界（接受）：守护随 Workbench 进程存亡，app 全关后的后台同步
+  无人守——下次启动 status 立即出容量警示 + floor 门。纯 Rust+前端
+  改动（无 sidecar/镜像涉及）。门禁：cargo 289（+1 low_disk 决策
+  矩阵 + meta 标记 roundtrip 断言）/ vue-tsc / vitest 433 / vite。

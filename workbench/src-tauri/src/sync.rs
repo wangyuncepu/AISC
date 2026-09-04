@@ -45,6 +45,11 @@ pub struct SshWorkspaceMeta {
     /// the metadata is the single source.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignore_patterns: Vec<String>,
+    /// Disk guard (field report: "总容量把磁盘爆掉"): the low-disk guard
+    /// auto-paused this session. While set, resume is gated on free space
+    /// recovering above the floor; launch keeps the session parked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub low_disk_paused: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,6 +128,7 @@ pub async fn ssh_workspace_create(
         created_at: now_iso(),
         sync_disabled: None,
         ignore_patterns,
+        low_disk_paused: None,
     };
     let bytes = serde_json::to_vec_pretty(&meta)
         .map_err(|e| WorkbenchError::usage(format!("encode metadata: {e}")))?;
@@ -247,6 +253,7 @@ pub fn ensure_managed_ssh_config(profile: &crate::settings::SshProfile) -> Resul
             created_at: String::new(),
             sync_disabled: None,
             ignore_patterns: Vec::new(),
+            low_disk_paused: None,
         }),
         "",
         SSH_BLOCK_END,
@@ -562,6 +569,11 @@ fn run_mutagen(
 /// session JSON (None-shaped until the first scan completes — a multi-GB
 /// remote keeps the tree legitimately empty for a while; these numbers are
 /// what makes that VISIBLE instead of looking broken).
+///
+/// Disk guard: `free_bytes` is the live free space of the data-root volume
+/// (the UI compares it against `total_file_size` — the REAL capacity check
+/// the fixed 10 GB advisory could never make); `low_disk` reports the
+/// metadata flag saying the guard auto-paused this session.
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
@@ -571,6 +583,103 @@ pub struct SyncStatus {
     pub alpha_files: Option<u64>,
     pub beta_files: Option<u64>,
     pub total_file_size: Option<u64>,
+    pub free_bytes: Option<u64>,
+    pub low_disk: bool,
+}
+
+// ===========================================================================
+// Disk guard (field report: "小文件太多，总容量把本地磁盘爆掉怎么办").
+// The fixed 10 GB advisory can't know the volume size; cancel-sync only acts
+// after the user notices. Three layers here:
+//   1. status carries free_bytes -> UI warns when remote > free;
+//   2. a once-per-process guard thread pauses EVERY live session when the
+//      data-root volume drops below the floor (a full system drive takes the
+//      whole machine down, not just AISC);
+//   3. resume/new-session creation is refused while below the floor.
+// Known limit (accepted): the guard lives with the Workbench process — a
+// mutagen daemon syncing while NO app instance runs is unguarded; the next
+// launch's status immediately shows the capacity warning and the floor gates.
+// ===========================================================================
+
+/// Hard floor of free space on the data-root volume. Mirrored in
+/// RuntimeSidebar.vue (LOW_DISK_FLOOR) for the resume-button gating.
+pub const LOW_DISK_FLOOR_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Free bytes on the data-root volume (None when the volume can't be probed
+/// — treated as "no opinion", never as zero).
+pub fn data_root_free_bytes() -> Option<u64> {
+    let root = crate::data_root::validate_data_root().ok()?;
+    fs4::free_space(&root).ok()
+}
+
+/// Pure guard decision: must sync be auto-paused at this free-space level?
+pub fn low_disk_should_pause(free_bytes: Option<u64>) -> bool {
+    matches!(free_bytes, Some(f) if f < LOW_DISK_FLOOR_BYTES)
+}
+
+static LOW_DISK_GUARD: std::sync::Once = std::sync::Once::new();
+
+/// Start the global low-disk guard (once per process). Spawned lazily by
+/// the sync commands — no sessions exist before the first one runs.
+fn start_low_disk_guard() {
+    LOW_DISK_GUARD.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("aisc-low-disk-guard".into())
+            .spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+                if low_disk_should_pause(data_root_free_bytes()) {
+                    low_disk_pause_all();
+                }
+            });
+    });
+}
+
+/// Current status string of one session by name (best-effort list probe).
+fn session_status_str(name: &str, transport: &std::path::Path) -> Option<String> {
+    run_mutagen(
+        &["sync", "list", "--template", "{{json .}}"],
+        transport,
+        std::time::Duration::from_secs(15),
+    )
+    .ok()
+    .and_then(|(out, _)| serde_json::from_str::<Value>(out.trim()).ok())
+    .and_then(|v| v.as_array().cloned())
+    .and_then(|arr| arr.into_iter().find(|s| s["name"].as_str() == Some(name)))
+    .and_then(|s| s["status"].as_str().map(str::to_string))
+}
+
+/// Pause every live session we own and stamp `low_disk_paused`. Already
+/// flagged/disabled workspaces are skipped (no re-pause fight — resume is
+/// the user's explicit call, gated on recovered space instead).
+fn low_disk_pause_all() {
+    let Ok(root) = crate::data_root::validate_data_root() else { return };
+    let Ok(entries) = std::fs::read_dir(root.join("sync-workspaces")) else { return };
+    for e in entries.flatten() {
+        let ws = e.path();
+        if !ws.is_dir() {
+            continue;
+        }
+        let Some(mut meta) = read_meta(&ws) else { continue };
+        if meta.sync_disabled == Some(true) || meta.low_disk_paused == Some(true) {
+            continue;
+        }
+        let name = session_name(&ws);
+        let Ok(transport) = ensure_transport(&meta) else { continue };
+        // Pause only a transferring session (pause on paused/halted is
+        // noise); the flag is stamped either way so the UI explains the
+        // state and resume is gated.
+        if let Some(st) = session_status_str(&name, &transport) {
+            if !st.starts_with("paused") && !st.starts_with("halted") {
+                let _ = run_mutagen(
+                    &["sync", "pause", &name],
+                    &transport,
+                    std::time::Duration::from_secs(10),
+                );
+            }
+        }
+        meta.low_disk_paused = Some(true);
+        let _ = write_meta(&ws, &meta);
+    }
 }
 
 fn session_name(workspace: &std::path::Path) -> String {
@@ -687,6 +796,7 @@ pub async fn sync_session_enable(workspace: String) -> Result<SyncStatus, Workbe
     let mut meta = read_meta(&ws)
         .ok_or_else(|| WorkbenchError::usage("not an SSH workspace (no metadata)"))?;
     meta.sync_disabled = None;
+    meta.low_disk_paused = None;
     write_meta(&ws, &meta)?;
     sync_session_start_impl(ws, meta).await
 }
@@ -713,11 +823,36 @@ pub async fn sync_session_start(workspace: String) -> Result<SyncStatus, Workben
 }
 
 async fn sync_session_start_impl(
-    ws: std::path::PathBuf, meta: SshWorkspaceMeta,
+    ws: std::path::PathBuf,
+    mut meta: SshWorkspaceMeta,
 ) -> Result<SyncStatus, WorkbenchError> {
+    start_low_disk_guard();
     let workspace = ws.to_string_lossy().to_string();
     let transport = ensure_transport(&meta)?;
     let name = session_name(&ws);
+
+    // Disk-guard gate at launch. A guard-paused workspace stays parked
+    // while space is still below the floor (and the session is FORCED
+    // paused in case anything resumed it out from under us); once space
+    // recovered, the flag clears and the normal reconnect runs.
+    let below_floor = low_disk_should_pause(data_root_free_bytes());
+    if meta.low_disk_paused == Some(true) {
+        if below_floor {
+            if let Some(st) = session_status_str(&name, &transport) {
+                if !st.starts_with("paused") && !st.starts_with("halted") {
+                    let _ = run_mutagen(
+                        &["sync", "pause", &name],
+                        &transport,
+                        std::time::Duration::from_secs(10),
+                    );
+                }
+            }
+            return sync_status_inner(&ws, &meta, &transport);
+        }
+        meta.low_disk_paused = None;
+        write_meta(&ws, &meta)?;
+    }
+
     // v0.16 list elements ARE the Session objects (field paths verified
     // live): top-level `name` and `beta.path`.
     let existing = run_mutagen(
@@ -752,6 +887,16 @@ async fn sync_session_start_impl(
         let _ = run_mutagen(&["sync", "resume", &name], &transport, std::time::Duration::from_secs(30));
         let _ = run_mutagen(&["sync", "flush", &name], &transport, std::time::Duration::from_secs(90));
     } else {
+        // Fresh session on a below-floor volume: refuse — a full initial
+        // sync here would head straight into a full disk.
+        if below_floor {
+            let free = data_root_free_bytes().unwrap_or(0);
+            return Err(WorkbenchError::usage(format!(
+                "low disk: {free} bytes free on the data-root volume — sync creation refused \
+                 (free up space, or re-create the workspace with exclude rules / a smaller \
+                 sub-directory)"
+            )));
+        }
         let alpha = workspace.clone();
         let beta = scp_endpoint(&meta);
         // Dynamic argv: metadata ignore_patterns (oversized-content
@@ -792,7 +937,8 @@ fn sync_status_inner(
     let name = session_name(ws);
     let sessions: Value = serde_json::from_str(out.trim())
         .map_err(|e| WorkbenchError::usage(format!("sync list parse: {e}")))?;
-    let _ = meta;
+    let low_disk = meta.low_disk_paused == Some(true);
+    let free_bytes = data_root_free_bytes();
     Ok(match sessions.as_array() {
         Some(arr) => {
             let mine = arr
@@ -806,6 +952,8 @@ fn sync_status_inner(
                     alpha_files: s["alpha"]["files"].as_u64(),
                     beta_files: s["beta"]["files"].as_u64(),
                     total_file_size: s["beta"]["totalFileSize"].as_u64(),
+                    free_bytes,
+                    low_disk,
                 },
                 None => SyncStatus::default(),
             }
@@ -817,6 +965,7 @@ fn sync_status_inner(
 /// Current status (empty status = no session yet).
 #[tauri::command]
 pub async fn sync_session_status(workspace: String) -> Result<SyncStatus, WorkbenchError> {
+    start_low_disk_guard();
     let ws = std::path::PathBuf::from(&workspace);
     let Some(meta) = read_meta(&ws) else {
         return Ok(SyncStatus { status: "none".into(), ..Default::default() });
@@ -849,6 +998,24 @@ pub async fn sync_session_pause(workspace: String) -> Result<SyncStatus, Workben
 
 #[tauri::command]
 pub async fn sync_session_resume(workspace: String) -> Result<SyncStatus, WorkbenchError> {
+    // Disk guard: a guard-paused session resumes only once space recovered
+    // above the floor (the UI mirrors this gate on the button; the server
+    // check stands regardless of UI staleness).
+    let ws = std::path::PathBuf::from(&workspace);
+    if let Some(mut meta) = read_meta(&ws) {
+        if meta.low_disk_paused == Some(true) {
+            let free = data_root_free_bytes();
+            if low_disk_should_pause(free) {
+                return Err(WorkbenchError::usage(format!(
+                    "low disk: {} bytes free — resume blocked until space is freed \
+                     (clean up the volume, or cancel the sync)",
+                    free.unwrap_or(0)
+                )));
+            }
+            meta.low_disk_paused = None;
+            write_meta(&ws, &meta)?;
+        }
+    }
     session_action(workspace, "resume")
 }
 
@@ -898,6 +1065,7 @@ mod tests {
             created_at: "1".into(),
             sync_disabled: None,
         ignore_patterns: Vec::new(),
+        low_disk_paused: None,
         };
         std::fs::write(
             dir.path().join(META_FILE),
@@ -906,6 +1074,17 @@ mod tests {
         .unwrap();
         let back = read_meta(dir.path()).expect("reads back");
         assert_eq!(back.remote_path, "/srv/proj");
+        assert_eq!(back.low_disk_paused, None);
+
+        // the guard flag round-trips too (drives resume gating)
+        let mut flagged = back;
+        flagged.low_disk_paused = Some(true);
+        std::fs::write(
+            dir.path().join(META_FILE),
+            serde_json::to_vec(&flagged).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(read_meta(dir.path()).and_then(|m| m.low_disk_paused), Some(true));
 
         // foreign/absent schema -> None (plain local workspace)
         let mut foreign = meta;
@@ -932,6 +1111,7 @@ mod tests {
             created_at: "1".into(),
             sync_disabled: None,
         ignore_patterns: Vec::new(),
+        low_disk_paused: None,
         }
     }
 
@@ -983,6 +1163,22 @@ mod tests {
             vec![(".ZZ", true), ("src", true), ("file.txt", false), ("weird name.md", false)]
         );
         assert!(parse_ls_entries("").is_empty());
+    }
+
+    /// Disk guard decision matrix: no opinion (None) never pauses; the floor
+    /// itself is healthy; anything below pauses.
+    #[test]
+    fn low_disk_decision_matrix() {
+        assert!(!low_disk_should_pause(None));
+        assert!(!low_disk_should_pause(Some(LOW_DISK_FLOOR_BYTES)));
+        assert!(low_disk_should_pause(Some(LOW_DISK_FLOOR_BYTES - 1)));
+        assert!(low_disk_should_pause(Some(0)));
+        // free-space probe is live and positive on a real volume (soft —
+        // the data root may be unprobed in odd test envs).
+        if let Some(f) = data_root_free_bytes() {
+            assert!(f > 0);
+            assert_eq!(low_disk_should_pause(Some(f)), f < LOW_DISK_FLOOR_BYTES);
+        }
     }
 
     /// The wrapper must make mutagen's external ssh NON-INTERACTIVE: with
