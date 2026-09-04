@@ -1995,3 +1995,10 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   正确事实输出）。**F2 手测核心闭环**：MCP 发现 ✓ / 白名单列表 ✓ /
   裸名命中执行 ✓ / 非白名单拒绝（一轮验证）✓。可选余项：git-ro 只读
   筛实机验证（单测已覆盖）、codex 侧注入验证。
+- **T-F1a mutagen 许可核查（2026-09-04）**：v0.17 起双许可（MIT 核心 +
+  SSPL Pro 部分），官方二进制默认含 SSPL——随安装包分发有合规灰区。
+  **裁决 vendor v0.16.x（全 MIT 最后系列）**：本方案用面（sync CRUD +
+  ssh transport + rsync）v0.16 完整可用，v0.17+ 增量仅 Pro 特性。
+  分发链：`downloads/host-bin/`（gitignored）+ CI 下载 sha256 Fail
+  closed（mutagen 是宿主资产不进镜像，与 mihomo 的 git 内置模式不同）。
+  结论回填 f1-f2-design.md §F1-1。F2 批次（7 commit）已推送、CI 监视中。

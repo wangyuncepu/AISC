@@ -90,9 +90,19 @@ hash/watcher/挂载/explorer 全部照旧操作影子目录），SSH-ness 收敛
 
 **新件**：
 
-1. **mutagen vendor**：核心 MIT（可再分发），二进制钉版本入安装包
-   （NSIS resources；同 mihomo 的下载/校验模式）。⚠️ 待验证 v0.17+
-   商业化是否影响 CLI 核心用法。
+1. **mutagen vendor**：**T-F1a 核查结论（2026-09-04）**——v0.17 起双
+   许可（MIT 核心 + SSPL "Pro" 部分），官方发布二进制默认**含 SSPL
+   代码**（个人/开源 CLI 使用免费，但随安装包**分发** SSPL 二进制有
+   合规灰区）；纯 MIT 版需自编译（build script 去掉 `--sspl`，Go 工具
+   链依赖）。**裁决：vendor v0.16.x（全 MIT 时代的最后系列，最新
+   patch）**——我们的用面（sync create/list/pause/resume/terminate +
+   ssh transport + rsync）在 v0.16 完整可用，v0.17+ 增量为 Pro 特性
+   （XXH128/Zstandard），无依赖。分发链零 SSPL 顾虑。v0.18 附带确认：
+   mutagen-compose 已弃更（与本方案无关，我们直接用 mutagen CLI）。
+   二进制钉版本入安装包（NSIS resources / deb / DMG；下载 + sha256
+   校验模式，`downloads/host-bin/` gitignored + CI runner 下载 Fail
+   closed——与 mihomo 的 git 内置模式不同：mutagen 是宿主侧资产，
+   不进容器镜像，无需镜像离线确定性）。
 2. **SSH profiles**（settings 新节）：host/port/user/认证方式（key 路径
    vs 密码）/known_hosts 策略。凭据存储安全：密码不落明文（DPAPI/
    凭据管理器，方案细化时定）；私钥引用路径不复制。
