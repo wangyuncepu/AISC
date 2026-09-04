@@ -2002,3 +2002,14 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   分发链：`downloads/host-bin/`（gitignored）+ CI 下载 sha256 Fail
   closed（mutagen 是宿主资产不进镜像，与 mihomo 的 git 内置模式不同）。
   结论回填 f1-f2-design.md §F1-1。F2 批次（7 commit）已推送、CI 监视中。
+- **T-F1a vendor 落地（2026-09-04）**：`tools/stage-mutagen.sh`——
+  v0.16.4 四平台（windows/linux amd64 + darwin amd64/arm64）下载 +
+  **sha256 pin Fail closed**（四 pin 实测固化）+ GH_PROXY/多镜像链 +
+  缓存命中仍重解包（首版缓存分支跳过提取的 bug）；产物
+  `downloads/host-bin/<plat>/mutagen(.exe)`（gitignore 已加）。
+  实测：`mutagen.exe version` → 0.16.4。**CI Linux containment 失败
+  修复**（`7bdf3f0`）：`is_absolute()` 是宿主 OS 语义，`C:\other` 在
+  Linux 被判"相对"逃过拒绝——resolve_cwd 显式拒双平台绝对形状
+  （POSIX `/`、UNC `\`、Windows 盘符），跨平台一致可测。Workbench
+  lane 重跑绿，**F2 批次四 lane 全绿收官**。余项：NSIS/deb/DMG 打包
+  resources + CI 下载步骤接线（与 T-F1c Rust 侧发现耦合，下一段）。

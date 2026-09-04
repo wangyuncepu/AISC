@@ -82,3 +82,4 @@ workbench/src-tauri/nsis/bundle/
 # mihomo/geodata 预置继续 tracked（小且版本钉死）。
 container/downloads/*.tgz
 container/downloads/yazi-*.zip
+downloads/host-bin/
