@@ -177,11 +177,14 @@ fn is_temp_file(relative: &str) -> bool {
     }
     // Editor/backup artifacts: vim `file~`/`.swp`, emacs `.#file`, atomic writer
     // `.#foo`, `~$foo` (Office lock files).
+    // F1: mutagen's in-endpoint transition temporaries are named
+    // `~mutagen~...` — same class of never-persistent atomic-write residue.
     name.ends_with('~')
         || name.ends_with(".swp")
         || name.ends_with(".swo")
         || name.starts_with(".#")
         || name.starts_with("~$")
+        || name.starts_with("~mutagen~")
 }
 
 /// Classify ONE changed path into a stable change type.
@@ -555,6 +558,10 @@ mod tests {
         // Atomic-write temps the agent renames over the real file.
         assert!(is_watch_ignored("reports/result.md.tmp.1234", &extra));
         assert!(is_watch_ignored("reports/result.md.tmp", &extra));
+        // F1: mutagen transition temporaries never surface as changes.
+        assert!(is_temp_file("~mutagen~8f2a1c.txt"));
+        assert!(is_temp_file("src/~mutagen~deadbeef.rs"));
+        assert!(!is_temp_file("real~file.rs"));
         assert!(is_watch_ignored("src/app.py.temp", &extra));
         // Editor/backup artifacts.
         assert!(is_watch_ignored("src/main.ts~", &extra));

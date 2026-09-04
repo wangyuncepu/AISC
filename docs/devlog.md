@@ -2098,3 +2098,8 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   失败回退原样形态，与 verbatim 化 root 失配绕过比较（既有 fail-open
   边界，测试改为先建目录表达准确语义）。**sidecar 重建 + 双处同步**
   （Python 侧改动）。门禁：pytest 1116+120 / cargo data_root 11。
+- **watcher 补 mutagen 临时模式（2026-09-04）**：影子目录内 mutagen 的
+  原子写过渡文件（`~mutagen~...` 前缀）与既有 temp 类同源——
+  is_temp_file 补前缀匹配（真实文件 `real~file.rs` 不误伤，+断言）。
+  远端同步落盘的**正式文件**照常进变更页（期望行为：远端变化可见）。
+  cargo watcher 12。
