@@ -1984,3 +1984,9 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   工作区报 `unrecognized arguments: --host-mcp-url`——旧 sidecar 不识
   新 CLI flag，重建 PyInstaller + 双处同步后过（sidecar 同步规约再犯，
   本轮 Python CLI 改动未触发重建记忆点）。门禁：cargo 279。
+- **T-F2e 二轮手测（2026-09-04）**：裸名解析生效（git 命中白名单执行）；
+  `host_exec` **端到端确认通**（exit 128 + stderr 真实回传——工作区本就
+  非 git repo，输出是正确事实）。`host_tools_list` 仍 malformed——claude
+  诊断精准："server 返回裸 array，没按 schema 包 result 对象"：分支漏了
+  MCP `tools/call` 的 `{content, isError}` 信封（host_exec 有、list 没有；
+  一修改了序列化层数但没改形状）。补信封，cargo 279。

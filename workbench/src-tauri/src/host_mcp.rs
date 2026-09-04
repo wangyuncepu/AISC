@@ -302,7 +302,13 @@ async fn dispatch(req: &Value, state: &std::sync::Arc<HostMcpState>) -> Option<V
             let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             match name {
-                "host_tools_list" => (host_tools_list(state), false),
+                "host_tools_list" => {
+                    // MCP tools/call results are ALWAYS the {content, isError}
+                    // envelope — a bare array in `result` reads as malformed
+                    // (field report round 2: "server 返回裸 array").
+                    let r = host_tools_list(state);
+                    (json!({ "content": [ { "type": "text", "text": r.to_string() } ], "isError": false }), false)
+                }
                 "host_exec" => {
                     let r = host_exec(state, &args).await;
                     // tool errors are CONTENT (isError) so the agent reads them
