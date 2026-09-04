@@ -271,6 +271,15 @@ export const sshWorkspaceCreate = (
     name, profile, remotePath,
   });
 
+/** F1 (T-F1e): remote directory listing for the path browse dialog. */
+export interface SshDirEntry {
+  name: string;
+  isDir: boolean;
+}
+
+export const sshBrowse = (profile: unknown, path: string) =>
+  invoke<SshDirEntry[]>("ssh_browse", { profile, path });
+
 /** F1 (T-F1c): the mutagen session lifecycle + status projection. */
 export interface SyncStatus {
   status: string;

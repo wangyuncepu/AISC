@@ -2070,3 +2070,18 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   按 triple 选 PLAT，sha256 pin Fail closed）；Workbench CI 测试 job
   补占位 touch。本地 binaries/ 已拷实测 tauri build 过。门禁：
   vue-tsc / vitest 433 / vite / cargo build。
+- **T-F1e 补强：远端路径点击浏览（2026-09-04，用户手测反馈）**：
+  picker 的远端路径旁加「…」浏览钮 → 弹层（面包屑可跳/上级/目录点击
+  进入/「选择此目录」回填）。Rust `ssh_browse` command：经生成的
+  ssh config 显式 `-F` 跑真 ssh `ls -1 -p -- '<path>'`（该 spawn 全由
+  我们控制，无需 wrapper；BatchMode + ConnectTimeout 同防线），
+  `parse_ls_entries` 目录优先稳定排序（跳过 ./.. / total 行 / CR）；
+  ensure_transport 重构出 profile 版本（browse 发生在建工作区之前，
+  无 meta 可用）。store 层 browseRemote/browseError/browseBusy（F-A01）。
+  路径防注入：拒引号/反斜杠，单引号包裹远端执行。+1 解析测试
+  （cargo sync 7）。门禁：vue-tsc / vitest 433 / vite / cargo sync 7。
+  **CI 修复两笔**：`5517d87` stage-mutagen 兼容 macOS bash 3.2（关联
+  数组→case，`set -u` 下 unbound variable 实锤）；`06e2afd` 两条
+  bundle workflow 的 paths 补 `tools/stage-mutagen.sh`（脚本现为构建
+  依赖）——重跑后 **Bundle 33856688963 / NSIS 33856689035 / Workbench
+  rerun 全绿**（Workbench 首败为 pty 老测试时序 flake，本批未触 pty）。

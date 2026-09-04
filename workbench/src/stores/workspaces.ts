@@ -480,6 +480,26 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
   }
   const createSshError = ref<string | null>(null);
 
+  /** F1 (T-F1e): remote dir listing for the browse dialog (store-routed,
+   *  F-A01). Never throws — errors land in browseError. */
+  async function browseRemote(
+    profile: unknown, path: string,
+  ): Promise<import("../lib/ipc").SshDirEntry[]> {
+    browseError.value = null;
+    browseBusy.value = true;
+    try {
+      return await ipc.sshBrowse(profile, path);
+    } catch (e) {
+      browseError.value = (e as { technical_detail?: string; message?: string })
+        ?.technical_detail || (e as { message?: string })?.message || String(e);
+      return [];
+    } finally {
+      browseBusy.value = false;
+    }
+  }
+  const browseError = ref<string | null>(null);
+  const browseBusy = ref(false);
+
   return {
     // constants/state
     runtimes,
@@ -506,6 +526,9 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     workspacePathExists,
     createSshWorkspace,
     createSshError,
+    browseRemote,
+    browseError,
+    browseBusy,
     // activation
     activate,
     openLauncher,

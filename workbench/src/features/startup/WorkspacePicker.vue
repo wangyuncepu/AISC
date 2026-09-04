@@ -52,6 +52,50 @@ async function onCreateSsh(): Promise<void> {
   }
 }
 
+// --- T-F1e: remote path browse dialog (click-to-pick instead of typing) ---
+const browse = ref<{ open: boolean; path: string; entries: { name: string; isDir: boolean }[] } | null>(null);
+
+function openBrowse(): void {
+  const p = profiles.value[sshForm.value.profile];
+  if (!p) return;
+  const start = sshForm.value.remotePath.trim() || "/";
+  browse.value = { open: true, path: start, entries: [] };
+  void loadBrowse(start);
+}
+
+async function loadBrowse(path: string): Promise<void> {
+  const p = profiles.value[sshForm.value.profile];
+  if (!p || !browse.value) return;
+  browse.value.entries = await wsStore.browseRemote(p, path);
+  browse.value.path = path;
+}
+
+function browseInto(name: string): void {
+  if (!browse.value) return;
+  const next = (browse.value.path.replace(/\/+$/, "") + "/" + name).replace(/\/{2,}/g, "/");
+  void loadBrowse(next);
+}
+
+function browseUp(): void {
+  if (!browse.value) return;
+  const parts = browse.value.path.replace(/\/+$/, "").split("/").filter(Boolean);
+  parts.pop();
+  void loadBrowse("/" + parts.join("/"));
+}
+
+function chooseBrowse(): void {
+  if (browse.value) sshForm.value.remotePath = browse.value.path;
+  browse.value = null;
+}
+
+function browseCrumb(index: number): void {
+  if (!browse.value) return;
+  const parts = browse.value.path.replace(/\/+$/, "").split("/").filter(Boolean);
+  void loadBrowse("/" + parts.slice(0, index + 1).join("/"));
+}
+const browseCrumbs = computed(() =>
+  (browse.value?.path ?? "/").replace(/\/+$/, "").split("/").filter(Boolean));
+
 function basename(p: string): string {
   // Both separators — Windows paths are backslashed (round-4 fix).
   const parts = p.replace(/[\\/]+$/, "").split(/[\\/]/);
@@ -210,6 +254,7 @@ async function confirmForget(): Promise<void> {
           <label class="ssh-field">
             <span>{{ t("picker.ssh.remotePath") }}</span>
             <input v-model.trim="sshForm.remotePath" placeholder="/home/user/project" @keyup.enter="onCreateSsh" />
+            <button class="ui-button" :title="t('picker.ssh.browse')" @click="openBrowse">…</button>
           </label>
           <label class="ssh-field">
             <span>{{ t("picker.ssh.name") }}</span>
@@ -276,6 +321,40 @@ async function confirmForget(): Promise<void> {
     </div>
 
     <p v-if="forgetError && !forgetPreview" class="forget-error" role="alert">{{ forgetError }}</p>
+
+    <!-- T-F1e: remote path browse dialog -->
+    <div v-if="browse" class="browse-overlay" @mousedown="browse = null">
+      <div class="browse" role="dialog" aria-modal="true" :aria-label="t('picker.ssh.browse')" @mousedown.stop>
+        <div class="browse-head">
+          <span class="crumbs">
+            <button class="crumb" @click="loadBrowse('/')">/</button>
+            <template v-for="(c, i) in browseCrumbs" :key="i">
+              <button class="crumb" @click="browseCrumb(i)">{{ c }}</button>
+            </template>
+          </span>
+          <button class="ui-button quiet" :disabled="browse.path === '/'" @click="browseUp">↑</button>
+        </div>
+        <div class="browse-list">
+          <p v-if="wsStore.browseBusy" class="ssh-hint">{{ t("picker.ssh.loading") }}</p>
+          <p v-else-if="wsStore.browseError" class="forget-error" role="alert">{{ wsStore.browseError }}</p>
+          <p v-else-if="!browse.entries.length" class="ssh-hint">{{ t("picker.ssh.emptyDir") }}</p>
+          <button
+            v-for="e in browse.entries" :key="e.name"
+            class="browse-item" :class="{ dir: e.isDir }"
+            @click="e.isDir && browseInto(e.name)"
+          >
+            <span class="bi-icon">{{ e.isDir ? "📁" : "📄" }}</span>{{ e.name }}
+          </button>
+        </div>
+        <div class="browse-foot">
+          <span class="ssh-hint">{{ browse.path }}</span>
+          <div class="browse-actions">
+            <button class="ui-button" @click="browse = null">{{ t("picker.ssh.cancel") }}</button>
+            <button class="ui-button primary" @click="chooseBrowse">{{ t("picker.ssh.choose") }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <ForgetConfirmDialog
       v-if="forgetPreview"
@@ -381,4 +460,42 @@ async function confirmForget(): Promise<void> {
 }
 .ssh-actions { display: flex; justify-content: flex-end; }
 .ssh-hint { font-size: var(--font-xs); color: var(--text-faint); margin: 0; }
+/* T-F1e: remote browse dialog */
+.browse-overlay {
+  position: fixed; inset: 0; z-index: 90; background: var(--scrim, rgba(0,0,0,.4));
+  display: flex; align-items: center; justify-content: center;
+}
+.browse {
+  width: 520px; max-width: 92vw; max-height: 70vh;
+  display: flex; flex-direction: column;
+  background: var(--surface); border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-menu);
+}
+.browse-head {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border);
+}
+.crumbs { display: flex; flex-wrap: wrap; gap: 2px; flex: 1; min-width: 0; }
+.crumb {
+  background: none; border: none; cursor: pointer; padding: 2px 4px;
+  color: var(--accent); font-family: var(--font-mono); font-size: var(--font-sm);
+  border-radius: var(--radius-sm);
+}
+.crumb:hover { background: var(--surface-hover); }
+.browse-list { flex: 1; overflow-y: auto; padding: var(--space-2); min-height: 160px; }
+.browse-item {
+  display: flex; align-items: center; gap: var(--space-2); width: 100%;
+  text-align: left; padding: 5px var(--space-2); border: none; cursor: default;
+  background: none; color: var(--text-2); font-size: var(--font-sm);
+  border-radius: var(--radius-sm);
+}
+.browse-item.dir { cursor: pointer; color: var(--text); }
+.browse-item.dir:hover, .browse-item.dir:focus-visible { background: var(--surface-hover); }
+.bi-icon { flex: none; }
+.browse-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3); border-top: 1px solid var(--border);
+}
+.browse-foot .ssh-hint { font-family: var(--font-mono); }
+.browse-actions { display: flex; gap: var(--space-2); }
 </style>

@@ -206,15 +206,26 @@ pub fn scp_endpoint(meta: &SshWorkspaceMeta) -> String {
 }
 
 /// Prepare the transport dir (config + wrapper) under
-/// `<data-root>/sync-workspaces/bin/`; returns the dir to PREPEND to PATH.
+/// `<data-root>/sync-workspaces/bin/`; returns the dir to PREPEND to PATH
+/// (mutagen spawns a bare `ssh` resolved through PATH).
 fn ensure_transport(meta: &SshWorkspaceMeta) -> Result<std::path::PathBuf, WorkbenchError> {
+    ensure_transport_for(&meta.profile)
+}
+
+fn ensure_transport_for(profile: &crate::settings::SshProfile) -> Result<std::path::PathBuf, WorkbenchError> {
     let root = crate::data_root::validate_data_root()
         .map_err(|e| WorkbenchError::usage(format!("data root: {}", e.message())))?;
     let dir = root.join("sync-workspaces").join("bin");
     std::fs::create_dir_all(&dir)
         .map_err(|e| WorkbenchError::usage(format!("transport dir: {e}")))?;
     let config = dir.join("ssh_config");
-    crate::storage::atomic_replace(&config, ssh_config_body(meta).as_bytes())
+    let body = ssh_config_body(&SshWorkspaceMeta {
+        schema_version: String::new(),
+        profile: profile.clone(),
+        remote_path: String::new(),
+        created_at: String::new(),
+    });
+    crate::storage::atomic_replace(&config, body.as_bytes())
         .map_err(|e| WorkbenchError::usage(format!("ssh config: {e}")))?;
     // Resolve the real ssh OUTSIDE our wrapper dir, then write the wrapper.
     let real = which_ssh_like("ssh")
@@ -233,6 +244,81 @@ fn ensure_transport(meta: &SshWorkspaceMeta) -> Result<std::path::PathBuf, Workb
         }
     }
     Ok(dir)
+}
+
+/// One remote directory entry (T-F1e browse picker).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SshDirEntry {
+    pub name: String,
+    pub is_dir: bool,
+}
+
+/// Parse `ls -1 -p` output: trailing `/` marks a directory.
+pub fn parse_ls_entries(stdout: &str) -> Vec<SshDirEntry> {
+    let mut dirs: Vec<SshDirEntry> = Vec::new();
+    let mut files: Vec<SshDirEntry> = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() || line.starts_with("total ") {
+            continue;
+        }
+        let (name, is_dir) = match line.strip_suffix('/') {
+            Some(n) => (n.to_string(), true),
+            None => (line.to_string(), false),
+        };
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+        let e = SshDirEntry { name, is_dir };
+        if is_dir { dirs.push(e); } else { files.push(e); }
+    }
+    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.extend(files);
+    dirs
+}
+
+/// List one remote directory through the generated ssh config (explicit
+/// `-F` — this spawn is fully ours, no wrapper needed). Used by the picker's
+/// 远端路径 browse dialog.
+#[tauri::command]
+pub async fn ssh_browse(
+    profile: Value, path: String,
+) -> Result<Vec<SshDirEntry>, WorkbenchError> {
+    let profile: crate::settings::SshProfile = serde_json::from_value(profile)
+        .map_err(|e| WorkbenchError::usage(format!("invalid ssh profile: {e}")))?;
+    let path = if path.trim().is_empty() { "/".to_string() } else { path };
+    if !valid_remote_path(&path) && path != "/"
+        || path.contains('\'') || path.contains('"') || path.contains('\\') {
+        return Err(WorkbenchError::usage(format!("invalid remote path: {path:?}")));
+    }
+    let transport = ensure_transport_for(&profile)?;
+    let config = transport.join("ssh_config");
+    let ssh = which_ssh_like("ssh")
+        .ok_or_else(|| WorkbenchError::usage("no ssh binary found on PATH"))?;
+
+    let mut cmd = std::process::Command::new(&ssh);
+    cmd.args(["-F", &config.to_string_lossy(), "-o", "BatchMode=yes",
+              "-o", "ConnectTimeout=15", &profile.host,
+              &format!("ls -1 -p -- '{path}'")])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output()
+        .map_err(|e| WorkbenchError::usage(format!("spawn ssh: {e}")))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let tail = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+        return Err(WorkbenchError::usage(format!("ssh ls failed: {tail}")));
+    }
+    Ok(parse_ls_entries(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// Run mutagen with the transport PATH prepended. Returns (stdout, stderr).
@@ -488,6 +574,17 @@ mod tests {
         let mut m = test_meta();
         m.remote_path = "/a/b/".into();
         assert_eq!(scp_endpoint(&m), "deploy@10.0.0.5:2222/a/b/");
+    }
+
+    #[test]
+    fn ls_entries_parse_dirs_first() {
+        let out = "total 8\nfile.txt\nsrc/\n.ZZ/\r\nweird name.md\n";
+        let e = parse_ls_entries(out);
+        assert_eq!(
+            e.iter().map(|x| (x.name.as_str(), x.is_dir)).collect::<Vec<_>>(),
+            vec![(".ZZ", true), ("src", true), ("file.txt", false), ("weird name.md", false)]
+        );
+        assert!(parse_ls_entries("").is_empty());
     }
 
     /// The wrapper must make mutagen's external ssh NON-INTERACTIVE: with
