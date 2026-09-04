@@ -482,12 +482,22 @@ pub fn check_read_only(entry: &HostToolEntry, argv: &[String]) -> Option<String>
 }
 
 /// cwd containment: the base is the active workspace; a relative subpath
-/// must stay inside (no `..`, no absolute, no UNC).
+/// must stay inside. Absolute shapes are rejected EXPLICITLY for BOTH
+/// platforms (`is_absolute()` is host-OS-shaped: `C:\x` passes as "relative"
+/// on Linux and `/x` passes on Windows — harmless joins there, but the
+/// behavior would be OS-dependent and untestable cross-platform).
 pub fn resolve_cwd(base: &Path, relative: &str) -> Result<PathBuf, String> {
     if relative.is_empty() {
         return Ok(base.to_path_buf());
     }
-    if Path::new(relative).is_absolute() {
+    let bytes = relative.as_bytes();
+    let windows_drive = bytes.len() >= 2
+        && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    if Path::new(relative).is_absolute()
+        || bytes.first() == Some(&b'/')      // POSIX absolute on ANY host
+        || bytes.first() == Some(&b'\\')     // UNC / Windows-rooted prefix
+        || windows_drive
+    {
         return Err(format!("cwd_workspace_relative must be relative, got {relative:?}"));
     }
     let mut resolved = base.to_path_buf();
