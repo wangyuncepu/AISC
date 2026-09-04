@@ -1990,3 +1990,8 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   诊断精准："server 返回裸 array，没按 schema 包 result 对象"：分支漏了
   MCP `tools/call` 的 `{content, isError}` 信封（host_exec 有、list 没有；
   一修改了序列化层数但没改形状）。补信封，cargo 279。
+- **T-F2e 三轮（PASS，2026-09-04）**：`host_tools_list` 表格正常渲染
+  白名单；`host_exec` 持续真跑（git status exit 128 = 工作区非 repo 的
+  正确事实输出）。**F2 手测核心闭环**：MCP 发现 ✓ / 白名单列表 ✓ /
+  裸名命中执行 ✓ / 非白名单拒绝（一轮验证）✓。可选余项：git-ro 只读
+  筛实机验证（单测已覆盖）、codex 侧注入验证。
