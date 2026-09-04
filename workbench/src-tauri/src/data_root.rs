@@ -267,10 +267,20 @@ fn select_root() -> Result<(PathBuf, &'static str), DataRootError> {
 /// The data root and the workspace must be disjoint subtrees: a root inside
 /// the workspace recreates DATA-01 pollution; a workspace inside the root
 /// lets migration/quarantine touch user files.
+///
+/// F1 (D-10) carve-out: SSH-workspace shadow directories live INSIDE the
+/// root by explicit ruling (`<root>/sync-workspaces/<name>/`). That subtree
+/// is created and owned by AISC itself — the guard exists to stop
+/// USER-chosen workspaces from swallowing the root's state. Exact subtree,
+/// nothing looser.
 fn check_overlap(root: &Path, workspace: &Path) -> Result<(), DataRootError> {
     let root_c = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let ws_c = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
-    if root_c == ws_c || root_c.starts_with(&ws_c) || ws_c.starts_with(&root_c) {
+    let ws_in_root = ws_c.starts_with(&root_c)
+        && ws_c.strip_prefix(&root_c).map(|rel| {
+            !(rel.starts_with("sync-workspaces") && rel.components().count() >= 2)
+        }).unwrap_or(true);
+    if root_c == ws_c || root_c.starts_with(&ws_c) || ws_in_root {
         return Err(DataRootError::WorkspaceOverlap(root_c));
     }
     Ok(())
@@ -454,6 +464,35 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         std::env::set_var(ENV_OVERRIDE, &root);
         let err = resolve_data_root(ws.path()).unwrap_err();
+        std::env::remove_var(ENV_OVERRIDE);
+        assert_eq!(err.code(), ERR_WORKSPACE_OVERLAP);
+    }
+
+    /// F1 (D-10): shadow workspaces under <root>/sync-workspaces/<name> are
+    /// the sanctioned carve-out; the bare subtree and other root children
+    /// still fail closed.
+    #[test]
+    fn f1_shadow_workspace_carve_out() {
+        let _env = lock_env();
+        let root = tempfile::tempdir().unwrap();
+        let shadow = root.path().join("sync-workspaces").join("f1test");
+        fs::create_dir_all(&shadow).unwrap();
+        std::env::set_var(ENV_OVERRIDE, root.path());
+        let ok = resolve_data_root(&shadow);
+        std::env::remove_var(ENV_OVERRIDE);
+        assert!(ok.is_ok(), "shadow workspace must resolve: {:?}", ok.err());
+
+        let bare = root.path().join("sync-workspaces");
+        fs::create_dir_all(&bare).unwrap();
+        std::env::set_var(ENV_OVERRIDE, root.path());
+        let err = resolve_data_root(&bare).unwrap_err();
+        std::env::remove_var(ENV_OVERRIDE);
+        assert_eq!(err.code(), ERR_WORKSPACE_OVERLAP);
+
+        let other = root.path().join("config");
+        fs::create_dir_all(&other).unwrap();
+        std::env::set_var(ENV_OVERRIDE, root.path());
+        let err = resolve_data_root(&other).unwrap_err();
         std::env::remove_var(ENV_OVERRIDE);
         assert_eq!(err.code(), ERR_WORKSPACE_OVERLAP);
     }

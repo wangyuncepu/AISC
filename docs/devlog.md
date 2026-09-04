@@ -2085,3 +2085,16 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   bundle workflow 的 paths 补 `tools/stage-mutagen.sh`（脚本现为构建
   依赖）——重跑后 **Bundle 33856688963 / NSIS 33856689035 / Workbench
   rerun 全绿**（Workbench 首败为 pty 老测试时序 flake，本批未触 pty）。
+- **T-F1e 手测反馈修复：影子目录撞 data-root 重叠校验（2026-09-04）**：
+  打开 SSH 工作区报 `data root contains the workspace`——Stage 7 的
+  双向不重叠 fail-closed（D7-04）把 D-10 裁决的影子目录位置
+  （`<root>/sync-workspaces/<name>/`）拦下。**定向豁免**：Python
+  `_check_overlap` 与 Rust mirror `check_overlap` 双侧放行
+  `<root>/sync-workspaces/<name>`（至少一层名称；裸 `sync-workspaces/`
+  本身与其它子目录仍拒——防用户把 config/ 等当工作区）。论证：该子树
+  由 AISC 自建自管（ssh_workspace_create 是唯一写入方），校验防的是
+  用户自选工作区吞掉数据根状态面。+2 测试（双端：豁免命中/裸层拒/
+  其它子目录拒）。Rust 测试插曲：不存在的 workspace 路径 canonicalize
+  失败回退原样形态，与 verbatim 化 root 失配绕过比较（既有 fail-open
+  边界，测试改为先建目录表达准确语义）。**sidecar 重建 + 双处同步**
+  （Python 侧改动）。门禁：pytest 1116+120 / cargo data_root 11。

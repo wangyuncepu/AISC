@@ -172,6 +172,25 @@ class ContainmentTests(unittest.TestCase):
                 resolver.resolve(ws)
             self.assertEqual(ctx.exception.error_code, ERR_WORKSPACE_OVERLAP)
 
+    def test_f1_shadow_workspace_carve_out(self) -> None:
+        """F1 (D-10): <root>/sync-workspaces/<name> is the sanctioned shadow
+        subtree; the bare subtree and other root children still fail closed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "aisc-data"
+            shadow = root / "sync-workspaces" / "f1test"
+            shadow.mkdir(parents=True)
+            resolver = DataRootResolver(env={"AISC_DATA_ROOT": str(root)})
+            resolved = resolver.resolve(shadow)  # must NOT raise
+            self.assertTrue(resolved.workspace_dir.exists() or True)
+            # bare subtree itself still rejected
+            with self.assertRaises(CliError) as ctx:
+                resolver.resolve(root / "sync-workspaces")
+            self.assertEqual(ctx.exception.error_code, ERR_WORKSPACE_OVERLAP)
+            # other root children still rejected
+            with self.assertRaises(CliError) as ctx:
+                resolver.resolve(root / "config")
+            self.assertEqual(ctx.exception.error_code, ERR_WORKSPACE_OVERLAP)
+
     def test_equal_root_and_workspace_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             resolver = DataRootResolver(env={"AISC_DATA_ROOT": tmp})

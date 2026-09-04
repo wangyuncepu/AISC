@@ -149,6 +149,14 @@ class DataRootResolver:
 
     # -- containment (fail closed, D7-04) ---------------------------------
 
+    #: F1 (D-10): SSH-workspace shadow directories live INSIDE the data root
+    #: by explicit ruling (`<root>/sync-workspaces/<name>/`). That subtree is
+    #: created and owned by AISC itself — the overlap guard exists to stop
+    #: USER-chosen workspaces from swallowing the root's state, which cannot
+    #: happen on a path we minted. Carve-out is the exact subtree, nothing
+    #: looser.
+    SHADOW_SUBTREE = "sync-workspaces"
+
     def _check_overlap(self, root: Path, workspace: Path) -> None:
         """The data root and the workspace must be disjoint subtrees: a root
         inside the workspace recreates DATA-01 pollution; a workspace inside
@@ -160,6 +168,11 @@ class DataRootResolver:
         try:
             ws_rel = workspace.resolve().relative_to(root.resolve())
         except ValueError:
+            ws_rel = None
+        if ws_rel is not None and len(ws_rel.parts) >= 2 and ws_rel.parts[0] == self.SHADOW_SUBTREE:
+            # F1 shadow workspace: the sanctioned carve-out
+            # (<root>/sync-workspaces/<name>). The bare subtree itself and
+            # anything else under the root still fail closed.
             ws_rel = None
         if root_rel is not None or ws_rel is not None:
             which = "inside the workspace" if root_rel is not None else "contains the workspace"
