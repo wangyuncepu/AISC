@@ -158,6 +158,13 @@ impl WorkbenchError {
         Self::new("WB_ERR_WORKSPACE_IO", "文件操作失败", true, Action::Retry)
     }
 
+    /// Caller-supplied input failed validation (F1 sync workspace names,
+    /// remote paths, profile shapes). Message is dynamic and user-readable.
+    pub fn usage(message: impl Into<String>) -> Self {
+        Self::new("WB_ERR_USAGE", "参数无效", false, Action::None)
+            .with_detail(message.into())
+    }
+
     pub fn settings_error() -> Self {
         Self::new(
             "WB_ERR_SETTINGS",

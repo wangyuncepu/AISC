@@ -262,6 +262,15 @@ export const ccSwitchFetchModels = (
     workspace, runtimeId, agent, providerId, apiKey: apiKey || null,
   });
 
+/** F1 (D-10): create an SSH-workspace shadow dir + metadata; returns the
+ * local workspace path to open as a normal workspace. */
+export const sshWorkspaceCreate = (
+  name: string, profile: unknown, remotePath: string,
+) =>
+  invoke<{ workspacePath: string }>("ssh_workspace_create", {
+    name, profile, remotePath,
+  });
+
 // --- IDEA-2 (2d): subscription + usage data plane ---
 // The subscription URL / content ride the CLI child's stdin on the Rust side
 // (credentials never travel via argv, logs or disk).

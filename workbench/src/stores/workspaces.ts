@@ -464,6 +464,22 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     }
   }
 
+  /** F1 (D-10): create an SSH-workspace shadow dir + metadata. Store-routed
+   *  (F-A01); the caller opens the returned path as a normal workspace. */
+  async function createSshWorkspace(
+    name: string, profile: unknown, remotePath: string,
+  ): Promise<string | null> {
+    try {
+      const r = await ipc.sshWorkspaceCreate(name, profile, remotePath);
+      return r.workspacePath;
+    } catch (e) {
+      createSshError.value = (e as { technical_detail?: string; message?: string })
+        ?.technical_detail || (e as { message?: string })?.message || String(e);
+      return null;
+    }
+  }
+  const createSshError = ref<string | null>(null);
+
   return {
     // constants/state
     runtimes,
@@ -488,6 +504,8 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     forgetWorkspace,
     clearHistoryEntry,
     workspacePathExists,
+    createSshWorkspace,
+    createSshError,
     // activation
     activate,
     openLauncher,

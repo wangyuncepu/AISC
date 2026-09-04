@@ -13,13 +13,44 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useWorkspacesStore } from "../../stores/workspaces";
-import type { ForgetPreview } from "../../types";
+import { useSettingsStore } from "../../stores/settings";
+import type { ForgetPreview, SshProfile } from "../../types";
 import ForgetConfirmDialog from "./ForgetConfirmDialog.vue";
 import InvalidPathDialog from "./InvalidPathDialog.vue";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
 const wsStore = useWorkspacesStore();
+
+// --- F1 (D-10): SSH-workspace entry (collapsed form) ---
+const settings = useSettingsStore();
+const sshOpen = ref(false);
+const sshForm = ref({ profile: 0, remotePath: "", name: "" });
+const sshBusy = ref(false);
+const sshError = computed(() => wsStore.createSshError);
+const profiles = computed<SshProfile[]>(() => settings.doc?.sshProfiles ?? []);
+void settings.load();
+
+async function onCreateSsh(): Promise<void> {
+  if (sshBusy.value) return;
+  const p = profiles.value[sshForm.value.profile];
+  if (!p || !sshForm.value.remotePath.trim() || !sshForm.value.name.trim()) return;
+  sshBusy.value = true;
+  try {
+    const workspacePath = await wsStore.createSshWorkspace(
+      sshForm.value.name.trim(), p, sshForm.value.remotePath.trim());
+    if (workspacePath) {
+      // Open the shadow dir as a NORMAL workspace — the identity chain is
+      // untouched; the sync layer (T-F1c) attaches via the metadata file.
+      store.workspace = workspacePath;
+      sshOpen.value = false;
+      sshForm.value = { profile: 0, remotePath: "", name: "" };
+      await store.runPreflight();
+    }
+  } finally {
+    sshBusy.value = false;
+  }
+}
 
 function basename(p: string): string {
   // Both separators — Windows paths are backslashed (round-4 fix).
@@ -158,6 +189,43 @@ async function confirmForget(): Promise<void> {
       <button class="ui-button primary" :disabled="!store.workspace.trim()" @click="store.runPreflight()">{{ t("picker.next") }}</button>
     </div>
     <p class="hint">{{ t("picker.hint") }}</p>
+
+    <!-- F1 (D-10): SSH workspace entry — shadow dir under the data root,
+         opened as a normal workspace; the sync layer attaches later. -->
+    <div class="ssh ui-section">
+      <button class="ssh-toggle ui-section-title" @click="sshOpen = !sshOpen">
+        {{ sshOpen ? "▾" : "▸" }} {{ t("picker.ssh.title") }}
+      </button>
+      <div v-if="sshOpen" class="ssh-form">
+        <p v-if="!profiles.length" class="ssh-hint">{{ t("picker.ssh.noProfiles") }}</p>
+        <template v-else>
+          <label class="ssh-field">
+            <span>{{ t("picker.ssh.profile") }}</span>
+            <select v-model.number="sshForm.profile">
+              <option v-for="(p, i) in profiles" :key="p.name" :value="i">
+                {{ p.name }} ({{ p.user }}@{{ p.host }}:{{ p.port }})
+              </option>
+            </select>
+          </label>
+          <label class="ssh-field">
+            <span>{{ t("picker.ssh.remotePath") }}</span>
+            <input v-model.trim="sshForm.remotePath" placeholder="/home/user/project" @keyup.enter="onCreateSsh" />
+          </label>
+          <label class="ssh-field">
+            <span>{{ t("picker.ssh.name") }}</span>
+            <input v-model.trim="sshForm.name" :placeholder="t('picker.ssh.namePh')" @keyup.enter="onCreateSsh" />
+          </label>
+          <div class="ssh-actions">
+            <button class="ui-button primary" :disabled="sshBusy || !sshForm.remotePath || !sshForm.name" @click="onCreateSsh">
+              {{ sshBusy ? t("picker.ssh.creating") : t("picker.ssh.create") }}
+            </button>
+          </div>
+          <p class="ssh-hint">{{ t("picker.ssh.hint") }}</p>
+        </template>
+        <p v-if="sshError" class="forget-error" role="alert">{{ sshError }}</p>
+      </div>
+    </div>
+
     <div v-if="store.recentWorkspaces.length" class="recents ui-section">
       <div class="recents-label ui-section-title">{{ t("picker.recents") }}</div>
       <ul>
@@ -297,4 +365,20 @@ async function confirmForget(): Promise<void> {
 .ctx-item.danger { color: var(--error-fg); }
 .ctx-item:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: calc(-1 * var(--focus-ring-offset)); }
 .forget-error { color: var(--error-fg); font-size: var(--font-sm); margin: 0; max-width: 560px; }
+/* F1: SSH workspace form */
+.ssh { width: 560px; max-width: 90vw; }
+.ssh-toggle {
+  background: none; border: none; cursor: pointer; text-align: left;
+  font-size: var(--font-sm); color: var(--text-muted); width: 100%; padding: 0;
+}
+.ssh-form { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-2); }
+.ssh-field { display: flex; align-items: center; gap: var(--space-2); font-size: var(--font-sm); }
+.ssh-field > span { width: 90px; color: var(--text-muted); flex: none; }
+.ssh-field input, .ssh-field select {
+  flex: 1; background: var(--surface-3); color: var(--text);
+  border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
+  min-height: var(--control-h-sm); padding: 0 var(--space-2);
+}
+.ssh-actions { display: flex; justify-content: flex-end; }
+.ssh-hint { font-size: var(--font-xs); color: var(--text-faint); margin: 0; }
 </style>

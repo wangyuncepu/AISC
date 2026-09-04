@@ -2022,3 +2022,17 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   sshProfiles、i18n 双语（含 rsync/known_hosts 提示）。门禁：cargo
   settings 20 / vitest 433 / vue-tsc / vite build。后半（picker「SSH
   工作区」表单 + 影子目录创建）下一段。
+- **T-F1b 后半（2026-09-04）**：新 `sync.rs`（F1 同步层之家）——
+  `ssh_workspace_create` command：名称清洗（首字符字母数字 + 仅
+  alnum/-/_ ≤64——拒 `..`/分隔符/隐藏目录）+ 远端路径校验（绝对
+  POSIX）+ 影子目录 `<数据根>/sync-workspaces/<name>/`（重名拒绝）+
+  **`.aisc-ssh-workspace.json` 元数据**（profile 快照语义：同步层读
+  此文件而非 live settings——profile 后续修改永不静默改接既有工作区；
+  schema 校验读回，异 schema 视为普通本地工作区）；原子写复用
+  storage::atomic_replace；error.rs 补 `usage()` 构造器。前端：
+  WorkspacePicker 折叠「SSH 工作区」表单（profile 下拉/远端路径/名称 →
+  创建 → 以**普通工作区**打开进 preflight——身份链零改动裁决的落地
+  形态）；**层契约首抓**：组件直连 lib/ipc 被测试拦下（F-A01）→ 挪入
+  workspaces store（createSshWorkspace + createSshError）。+3 Rust 测试
+  （名称规则/远端路径/元数据往返+异 schema 拒绝）。门禁：cargo 282 /
+  vitest 433 / vue-tsc / vite build。

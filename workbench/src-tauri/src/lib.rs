@@ -25,6 +25,7 @@ pub mod runtime;
 pub mod session;
 pub mod settings;
 pub mod subscription;
+pub mod sync;
 pub mod artifact;
 pub mod storage;
 pub mod trace;
@@ -169,6 +170,7 @@ pub fn run(cli_arg: Option<String>) {
             load_settings,
             save_settings,
             reset_gui_settings,
+            sync::ssh_workspace_create,
             resolve_locale,
             restore_window_geometry,
             capture_window_geometry,
