@@ -173,6 +173,12 @@ export const useRuntimeStore = defineStore("runtime", () => {
     ccSwitchUiTabOpen: fwdRef("ccSwitchUiTabOpen"),
     runtimeState: fwdRef("runtimeState"),
     runtimeSnapshot: fwdRef("runtimeSnapshot"),
+    // F1 (T-F1c/d): SSH sync state + actions
+    sync: fwdRef("sync"),
+    refreshSync: fwdFn("refreshSync"),
+    pauseSync: fwdFn("pauseSync"),
+    resumeSync: fwdFn("resumeSync"),
+    terminateSync: fwdFn("terminateSync"),
     conflicts: fwdRef("conflicts"),
     conflictError: fwdRef("conflictError"),
     freshness: fwdRef("freshness"),

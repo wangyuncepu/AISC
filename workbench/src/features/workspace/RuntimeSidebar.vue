@@ -75,6 +75,31 @@ const workspaceName = computed(() => {
   return parts[parts.length - 1] || p;
 });
 
+/** F1 (T-F1d): the raw mutagen status string, lowercased for matching. */
+const syncState = computed(() => (store.sync?.status ?? "").toLowerCase());
+const SYNC_LABEL_KEY: Record<string, string> = {
+  "": "sidebar.sync.idle",
+  halted: "sidebar.sync.halted",
+  halted_on_root_deletion: "sidebar.sync.halted",
+  halted_on_root_type_change: "sidebar.sync.halted",
+  waiting_for_rescan: "sidebar.sync.waiting",
+  reconnecting: "sidebar.sync.reconnecting",
+  scanning: "sidebar.sync.scanning",
+  waiting_for_scan: "sidebar.sync.waiting",
+  reconciling: "sidebar.sync.reconciling",
+  queueing_changes: "sidebar.sync.queueing",
+  transitioning: "sidebar.sync.transitioning",
+  watching: "sidebar.sync.watching",
+  paused: "sidebar.sync.paused",
+  staging: "sidebar.sync.staging",
+  transitioning_staging: "sidebar.sync.transitioning",
+  saving: "sidebar.sync.saving",
+  staging_alpha: "sidebar.sync.staging",
+  staging_beta: "sidebar.sync.staging",
+};
+const syncStateLabel = computed(() =>
+  t(SYNC_LABEL_KEY[syncState.value] ?? "sidebar.sync.transitioning"));
+
 const STATE_LABEL_KEY: Record<RuntimeState, string> = {
   running: "app.running",
   stopped: "app.stopped",
@@ -217,6 +242,30 @@ function copyDone(key: string): boolean {
       </div>
     </section>
 
+    <!-- F1 (T-F1d): SSH sync state — only for SSH workspaces (status "none"
+         on plain local ones keeps this hidden). Offline degradation reads
+         here: a dead remote shows halted + lastError, workspace stays usable. -->
+    <section v-if="store.sync && store.sync.status !== 'none'" class="block" :key="`sync|${store.workspace}`">
+      <div class="label">{{ t("sidebar.sync") }}</div>
+      <div class="runtime-row">
+        <span class="state" :data-state="syncState">{{ syncStateLabel }}</span>
+      </div>
+      <div v-if="store.sync.message" class="muted">{{ store.sync.message }}</div>
+      <div v-if="store.sync.lastError" class="value sync-error" role="alert" :title="store.sync.lastError">
+        {{ store.sync.lastError }}
+      </div>
+      <div class="actions-row">
+        <button @click="store.refreshSync()">{{ t("sidebar.syncRefresh") }}</button>
+        <button v-if="syncState === 'paused'" :disabled="!syncState" @click="store.resumeSync()">
+          {{ t("sidebar.syncResume") }}
+        </button>
+        <button v-else-if="syncState === 'watching' || syncState === 'halting'" @click="store.pauseSync()">
+          {{ t("sidebar.syncPause") }}
+        </button>
+        <button class="danger" @click="store.terminateSync()">{{ t("sidebar.syncDisconnect") }}</button>
+      </div>
+    </section>
+
     <!-- runtime-lifecycle-ux 3a (task 11): advisory dependency policy +
          toolchain health — never a startup option, read-only display. -->
     <section v-if="store.runtimeSnapshot?.dependency_policy" class="block">
@@ -322,6 +371,16 @@ function copyDone(key: string): boolean {
 .state[data-state="stopped"] { color: var(--warn); }
 .state[data-state="starting"], .state[data-state="stopping"] { color: var(--warn); }
 .state[data-state="not_found"], .state[data-state="removing"] { color: var(--text-muted); }
+/* F1 sync states: healthy watching/scanning = success; paused/halted = warn. */
+.state[data-state="watching"], .state[data-state="scanning"],
+.state[data-state="reconciling"], .state[data-state="queueing_changes"],
+.state[data-state="staging"], .state[data-state="saving"],
+.state[data-state="staging_alpha"], .state[data-state="staging_beta"] { color: var(--success); }
+.state[data-state="paused"], .state[data-state="reconnecting"],
+.state[data-state="halted"], .state[data-state="halted_on_root_deletion"],
+.state[data-state="halted_on_root_type_change"] { color: var(--warn); }
+.sync-error { color: var(--error-fg); font-size: var(--font-xs);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* stale: last-known styling, never deterministic green (04 §2.1) */
 .state[data-fresh="stale"] { color: var(--warn); }
 .last-known { font-size: 10px; color: var(--warn); }

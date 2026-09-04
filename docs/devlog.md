@@ -2058,3 +2058,15 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   diag_engine 探针偶发再现）/ vitest 433 / vue-tsc / vite build。
   余项：打包 resources 接线（NSIS/deb/DMG 装进 mutagen 二进制——
   下轮与 T-F1d 一起）。
+- **T-F1d 同步状态 UI + 打包接线（2026-09-04）**：侧栏新「SSH 同步」节
+  （仅 SSH 工作区显示——status none 隐藏）：状态徽章（mutagen 全状态
+  集双语映射：watching/scanning/reconciling/staging/paused/halted…，
+  健康态绿/暂停停机黄）+ message/lastError + 刷新/暂停/恢复/断开四钮。
+  facade 五项转发（sync fwdRef + 四 action fwdFn——手写 facade 逐项
+  契约）。**冲突列表未做**（mutagen 冲突保留双副本在 alpha 侧 `~0`
+  前缀路径——T-F1e 手测后按真实形状补投影，记余项）。**打包接线**：
+  tauri.conf externalBin + `binaries/mutagen`（装后落 exe 旁，命中
+  发现链）；三 CI 补 stage 步骤（nsis windows_amd64 / bundle matrix
+  按 triple 选 PLAT，sha256 pin Fail closed）；Workbench CI 测试 job
+  补占位 touch。本地 binaries/ 已拷实测 tauri build 过。门禁：
+  vue-tsc / vitest 433 / vite / cargo build。

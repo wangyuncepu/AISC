@@ -1539,6 +1539,34 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     }
   }
 
+  /** T-F1d sidebar actions (store-routed per F-A01). */
+  async function syncAction(
+    op: "pause" | "resume" | "terminate",
+  ): Promise<void> {
+    const ws = workspace.value.trim();
+    if (!ws || !sync.value?.attached) return;
+    try {
+      if (op === "terminate") {
+        await ipc.syncSessionTerminate(ws);
+        sync.value = null; // detached; re-attaches on next launch
+      } else {
+        const r = op === "pause"
+          ? await ipc.syncSessionPause(ws)
+          : await ipc.syncSessionResume(ws);
+        Object.assign(sync.value, r);
+      }
+    } catch (e) {
+      if (sync.value) {
+        sync.value.lastError =
+          (e as { technical_detail?: string })?.technical_detail
+          || (e as { message?: string })?.message || String(e);
+      }
+    }
+  }
+  const pauseSync = () => syncAction("pause");
+  const resumeSync = () => syncAction("resume");
+  const terminateSync = () => syncAction("terminate");
+
   /** Start/reuse/restart the runtime then open tabs. Shared by the normal
    * Start (one tab) and 恢复布局 (history tabs, 02 §2.3). */
   async function launchRuntime(
@@ -1767,6 +1795,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     // F1 (T-F1c): SSH sync attach/state (T-F1d renders)
     sync,
     refreshSync,
+    pauseSync,
+    resumeSync,
+    terminateSync,
     reconcile,
     logTerminalResizeError,
     logRendererEvent,

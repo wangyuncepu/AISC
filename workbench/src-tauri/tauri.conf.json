@@ -33,7 +33,8 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/aisc"
+      "binaries/aisc",
+      "binaries/mutagen"
     ],
     "resources": {
       "nsis/bundle/aisc-bundle": "aisc-bundle",

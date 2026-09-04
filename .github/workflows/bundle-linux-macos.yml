@@ -66,6 +66,22 @@ jobs:
           mkdir -p workbench/src-tauri/binaries
           cp dist/aisc-${{ matrix.triple }} workbench/src-tauri/binaries/
 
+      # F1 (D-10): mutagen v0.16.4 host sync binary (all-MIT), sha256 pinned
+      # in tools/stage-mutagen.sh. All four platform archives are staged (the
+      # script is cheap); only this runner's flavor is copied to externalBin.
+      - name: Stage mutagen (host sync binary)
+        shell: bash
+        run: |
+          bash tools/stage-mutagen.sh
+          case "${{ matrix.triple }}" in
+            x86_64-unknown-linux-gnu) PLAT=linux_amd64 ;;
+            aarch64-apple-darwin) PLAT=darwin_arm64 ;;
+            x86_64-apple-darwin) PLAT=darwin_amd64 ;;
+            *) echo "unsupported triple ${{ matrix.triple }}"; exit 1 ;;
+          esac
+          cp "downloads/host-bin/${PLAT}/mutagen" "workbench/src-tauri/binaries/mutagen-${{ matrix.triple }}"
+          ls -la workbench/src-tauri/binaries/
+
       - name: Stage AISC CLI bundle (aisc-bundle for root discovery)
         shell: bash
         run: |
