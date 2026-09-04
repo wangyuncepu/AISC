@@ -2157,3 +2157,20 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   `run_mutagen` 补**真超时**（try_wait 轮询至 deadline 后 kill——
   terminate 卡 scanning 的教训，output() 无期限）。门禁：cargo sync 7 /
   build / vue-tsc / vitest 433 / vite。
+- **T-F1e 三修：取消即时化 + 传输 2x + 测试隔离（2026-09-04 深夜）**：
+  ①**取消同步长时间无反馈**——重排为「先标 disabled+清内容（UI 即时
+  翻转）→ 后台线程清扫」（terminate 10s 尽力 → 仍存活则杀 daemon +
+  删本工作区持久化定义，应急路径产品化；其它会话定义存活、daemon
+  惰性重启自动重挂）；②**1GiB 3m40s 太慢**——基准实测定位两层：裸
+  ssh 管道 8.4MB/s（WiFi 内网 ssh 加密物理层）vs **经 ssh.cmd wrapper
+  4.3MB/s——cmd batch 转发把吞吐砍半**。根治：**退役 wrapper**，改
+  「受管 ~/.ssh/config 别名段」（`# BEGIN/END AISC SYNC` 标记块内幂等
+  重写、块外用户内容永不动；`Host aisc-sync-<hash(host|port|user)>`
+  承载 HostName/Port/User/IdentityFile）+ `MUTAGEN_SSH_PATH` 直指真
+  ssh + endpoint 用别名；ssh_browse 同走别名（免 -F）。实测别名直连
+  1GiB = 2m09s（≈裸管道，wrapper 损耗归零，**对用户即 3m40s→约
+  2m10s**；再往上受限于 WiFi+ssh 加密——网线可再提）；③测试曾把
+  测试 profile 写进**真实 ~/.ssh/config**（ensure 系测试未隔离 home）
+  ——补 USERPROFILE/HOME tempdir 隔离 + 手工清理污染块。+1 测试
+  （别名稳定且 profile 作用域）。门禁：cargo sync 8 / build / vue-tsc /
+  vitest 433 / vite。

@@ -174,15 +174,30 @@ fn which_ssh_like(name: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-/// The generated ssh config body for one profile (the `Host` block mutagen's
-/// external ssh resolves through our wrapper's `-F`). Host keys use
-/// accept-new (first connect auto-records; changed keys still hard-fail) and
-/// BatchMode forbids any interactive prompt.
+/// The MANAGED block marker pair in ~/.ssh/config. Everything between the
+/// markers is ours to rewrite; user content outside is never touched.
+const SSH_BLOCK_BEGIN: &str = "# BEGIN AISC SYNC (managed — do not edit inside)";
+const SSH_BLOCK_END: &str = "# END AISC SYNC (managed)";
+
+/// Stable alias for one profile: `aisc-sync-<8 hex of host|port|user>`.
+/// The alias (not the raw host) rides the endpoint, so ~/.ssh/config's
+/// managed block fully controls HostName/Port/User/key for every consumer.
+pub fn ssh_alias(profile: &crate::settings::SshProfile) -> String {
+    let seed = format!("{}|{}|{}", profile.host, profile.port, profile.user);
+    let mut h: u32 = 2166136261;
+    for b in seed.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(16777619);
+    }
+    format!("aisc-sync-{:08x}", h)
+}
+
+/// The managed `Host <alias>` block body for one profile. Host keys use
+/// accept-new (first connect auto-records; changed keys still hard-fail).
 pub fn ssh_config_body(meta: &SshWorkspaceMeta) -> String {
     let p = &meta.profile;
     let mut s = String::new();
-    s.push_str("# aisc-generated (sync transport)\n");
-    s.push_str(&format!("Host {}\n", p.host));
+    s.push_str(&format!("Host {}\n", ssh_alias(p)));
     s.push_str(&format!("  HostName {}\n", p.host));
     s.push_str(&format!("  Port {}\n", p.port));
     s.push_str(&format!("  User {}\n", p.user));
@@ -190,9 +205,52 @@ pub fn ssh_config_body(meta: &SshWorkspaceMeta) -> String {
         s.push_str(&format!("  IdentityFile {}\n", p.key_path));
     }
     s.push_str("  StrictHostKeyChecking accept-new\n");
-    s.push_str("  BatchMode yes\n");
     s.push_str("  ConnectTimeout 15\n");
     s
+}
+
+/// Maintain the managed block in `~/.ssh/config`: create the file if absent,
+/// replace ONLY the marker-bounded block (idempotent), never touch user
+/// content. This replaces the PATH-injected `ssh.cmd` wrapper — a cmd batch
+/// forwarding layer that HALVED transport throughput (1GiB: 2m09s raw vs
+/// 4m11s via wrapper, measured 2026-09-04); consumers now hit the real ssh
+/// binary directly (alias resolves the profile).
+pub fn ensure_managed_ssh_config(profile: &crate::settings::SshProfile) -> Result<(), WorkbenchError> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| WorkbenchError::usage("cannot resolve home dir"))?;
+    let ssh_dir = home.join(".ssh");
+    std::fs::create_dir_all(&ssh_dir)
+        .map_err(|e| WorkbenchError::usage(format!("create ~/.ssh: {e}")))?;
+    let path = ssh_dir.join("config");
+    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    let block = format!(
+        "{}\n{}{}\n{}\n",
+        SSH_BLOCK_BEGIN,
+        ssh_config_body(&SshWorkspaceMeta {
+            schema_version: String::new(),
+            profile: profile.clone(),
+            remote_path: String::new(),
+            created_at: String::new(),
+            sync_disabled: None,
+        }),
+        "",
+        SSH_BLOCK_END,
+    );
+    let next = match (current.find(SSH_BLOCK_BEGIN), current.find(SSH_BLOCK_END)) {
+        (Some(a), Some(b)) if b > a => {
+            format!("{}{}{}", &current[..a], block, &current[b + SSH_BLOCK_END.len()..])
+                .trim_end_matches('\n').to_string() + "\n"
+        }
+        _ => {
+            let prefix = if current.is_empty() { String::new() } else { current.trim_end().to_string() + "\n\n" };
+            format!("{prefix}{block}")
+        }
+    };
+    if next != current {
+        std::fs::write(&path, next.as_bytes())
+            .map_err(|e| WorkbenchError::usage(format!("write ssh config: {e}")))?;
+    }
+    Ok(())
 }
 
 /// The wrapper script body that injects our config into every ssh mutagen
@@ -213,15 +271,13 @@ pub fn ssh_wrapper_body(real_ssh: &std::path::Path, config: &std::path::Path) ->
     }
 }
 
-/// SCP-style endpoint URL. Two probe-verified v0.16 facts shape this:
-/// - `ssh://` scheme URLs mis-parse ("ssh" leaks into the ssh hostname);
-/// - the SCP form has NO port slot — `user@host:22/path` folds the port
-///   INTO the remote path (field report: beta.path came out as
-///   `22/home/tv/scripts`). The port rides the generated ssh_config's
-///   `Port` directive instead.
+/// SCP-style endpoint URL: `<alias>:/path`. The alias (resolved through the
+/// managed ~/.ssh/config block) carries host/port/user/key — the endpoint
+/// never embeds them (probe-verified v0.16 facts: `ssh://` scheme URLs
+/// mis-parse; the SCP form has NO port slot — a `:22` folded into the
+/// remote path and synced a nonexistent root).
 pub fn scp_endpoint(meta: &SshWorkspaceMeta) -> String {
-    let p = &meta.profile;
-    format!("{}@{}:/{}", p.user, p.host, meta.remote_path.trim_start_matches('/'))
+    format!("{}:/{}", ssh_alias(&meta.profile), meta.remote_path.trim_start_matches('/'))
 }
 
 /// Prepare the transport dir (config + wrapper) under
@@ -232,37 +288,15 @@ fn ensure_transport(meta: &SshWorkspaceMeta) -> Result<std::path::PathBuf, Workb
 }
 
 fn ensure_transport_for(profile: &crate::settings::SshProfile) -> Result<std::path::PathBuf, WorkbenchError> {
+    // The managed ~/.ssh/config alias IS the transport now (the ssh.cmd
+    // wrapper is retired — it halved throughput). The returned dir is kept
+    // only for PATH-prepend compatibility with run_mutagen's signature.
+    ensure_managed_ssh_config(profile)?;
     let root = crate::data_root::validate_data_root()
         .map_err(|e| WorkbenchError::usage(format!("data root: {}", e.message())))?;
     let dir = root.join("sync-workspaces").join("bin");
     std::fs::create_dir_all(&dir)
         .map_err(|e| WorkbenchError::usage(format!("transport dir: {e}")))?;
-    let config = dir.join("ssh_config");
-    let body = ssh_config_body(&SshWorkspaceMeta {
-        schema_version: String::new(),
-        profile: profile.clone(),
-        remote_path: String::new(),
-        created_at: String::new(),
-        sync_disabled: None,
-    });
-    crate::storage::atomic_replace(&config, body.as_bytes())
-        .map_err(|e| WorkbenchError::usage(format!("ssh config: {e}")))?;
-    // Resolve the real ssh OUTSIDE our wrapper dir, then write the wrapper.
-    let real = which_ssh_like("ssh")
-        .ok_or_else(|| WorkbenchError::usage("no ssh binary found on PATH"))?;
-    if real.parent() == Some(&dir) {
-        return Err(WorkbenchError::usage("ssh resolution loop (wrapper dir)"));
-    }
-    let wrapper = dir.join(if cfg!(windows) { "ssh.cmd" } else { "ssh" });
-    crate::storage::atomic_replace(&wrapper, ssh_wrapper_body(&real, &config).as_bytes())
-        .map_err(|e| WorkbenchError::usage(format!("ssh wrapper: {e}")))?;
-    if !cfg!(windows) {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755));
-        }
-    }
     Ok(dir)
 }
 
@@ -313,19 +347,18 @@ pub async fn ssh_browse(
         || path.contains('\'') || path.contains('"') || path.contains('\\') {
         return Err(WorkbenchError::usage(format!("invalid remote path: {path:?}")));
     }
-    let transport = ensure_transport_for(&profile)?;
-    let config = transport.join("ssh_config");
+    ensure_transport_for(&profile)?;
     let ssh = which_ssh_like("ssh")
         .ok_or_else(|| WorkbenchError::usage("no ssh binary found on PATH"))?;
+    let alias = ssh_alias(&profile);
 
     let mut cmd = std::process::Command::new(&ssh);
-    cmd.args(["-F", &config.to_string_lossy(), "-o", "BatchMode=yes",
-              "-o", "ConnectTimeout=15", &profile.host,
+    cmd.args(["-o", "BatchMode=yes",
+              "-o", "ConnectTimeout=15", &alias,
               &format!("ls -1 -p -- '{path}'")])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    mutagen_env(&mut cmd); // F1: pin daemon state under the data root (#4)
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -345,12 +378,17 @@ pub async fn ssh_browse(
 /// Run mutagen with the transport PATH prepended and mutagen's OWN state
 /// pinned under the data root (field report #4: without this the daemon
 /// litters `~/.mutagen/` + `~/.mutagen.yml` into the user's home).
+/// MUTAGEN_SSH_PATH points at the REAL ssh binary — the retired ssh.cmd
+/// wrapper halved throughput (see ensure_managed_ssh_config).
 fn mutagen_env(cmd: &mut std::process::Command) {
     if let Ok(root) = crate::data_root::validate_data_root() {
         let data = root.join("mutagen");
         let _ = std::fs::create_dir_all(&data);
         cmd.env("MUTAGEN_DATA_DIRECTORY", &data);
         cmd.env("MUTAGEN_CONFIG_FILE_PATH", data.join("mutagen.yml"));
+    }
+    if let Some(ssh) = which_ssh_like("ssh") {
+        cmd.env("MUTAGEN_SSH_PATH", ssh);
     }
 }
 
@@ -470,12 +508,12 @@ pub async fn sync_session_cancel(workspace: String) -> Result<SyncStatus, Workbe
     let ws = std::path::PathBuf::from(&workspace);
     let mut meta = read_meta(&ws)
         .ok_or_else(|| WorkbenchError::usage("not an SSH workspace (no metadata)"))?;
-    let transport = ensure_transport(&meta)?;
-    let name = session_name(&ws);
-    // Best-effort terminate: a scanning session may not confirm in time.
-    let _ = run_mutagen(&["sync", "terminate", &name], &transport, std::time::Duration::from_secs(30));
 
-    // Delete synced CONTENT, keep the metadata file itself.
+    // 1) IMMEDIATELY disable + wipe content — the UI flips to 已取消 the
+    //    moment this returns (field report: the terminate wait used to keep
+    //    it showing the old state for a long stretch).
+    meta.sync_disabled = Some(true);
+    write_meta(&ws, &meta)?;
     if let Ok(entries) = std::fs::read_dir(&ws) {
         for e in entries.flatten() {
             if e.file_name().to_string_lossy() == META_FILE {
@@ -490,9 +528,63 @@ pub async fn sync_session_cancel(workspace: String) -> Result<SyncStatus, Workbe
         }
     }
 
-    meta.sync_disabled = Some(true);
-    write_meta(&ws, &meta)?;
+    // 2) Session teardown runs detached: terminate (10s budget — a scanning
+    //    session blocks indefinitely), and if it somehow survives, kill the
+    //    daemon + delete this workspace's persisted session definition (the
+    //    emergency-path recipe: daemon restarts lazily and the other
+    //    workspaces' persisted sessions re-attach).
+    let name = session_name(&ws);
+    let shadow = ws.to_string_lossy().to_string();
+    std::thread::spawn(move || {
+        use std::process::Command;
+        let Some(meta) = read_meta(std::path::Path::new(&shadow)) else { return };
+        let Ok(transport) = ensure_transport(&meta) else { return };
+        let still_alive = run_mutagen(&["sync", "terminate", &name], &transport, std::time::Duration::from_secs(10)).is_err()
+            && session_exists(&name, &transport);
+        if still_alive {
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/IM", "mutagen.exe"])
+                    .creation_flags(0x0800_0000)
+                    .status();
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = Command::new("pkill").arg("-f").arg("mutagen").status();
+            }
+            // Delete OUR persisted definition only (others survive + re-attach
+            // on the next daemon start).
+            if let Ok(root) = crate::data_root::validate_data_root() {
+                let dir = root.join("mutagen").join("sessions");
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for e in entries.flatten() {
+                        let p = e.path();
+                        if let Ok(bytes) = std::fs::read(&p) {
+                            if bytes.windows(shadow.len().min(bytes.len()))
+                                .any(|w| w == shadow.as_bytes())
+                            {
+                                let _ = std::fs::remove_file(&p);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     Ok(SyncStatus { status: "disabled".into(), ..Default::default() })
+}
+
+/// Does a session with this name exist right now? (Best-effort list.)
+fn session_exists(name: &str, transport: &std::path::Path) -> bool {
+    run_mutagen(&["sync", "list", "--template", "{{json .}}"], transport, std::time::Duration::from_secs(15))
+        .ok()
+        .and_then(|(out, _)| serde_json::from_str::<Value>(out.trim()).ok())
+        .and_then(|v| v.as_array().cloned())
+        .map(|arr| arr.iter().any(|s| s["name"].as_str() == Some(name)))
+        .unwrap_or(false)
 }
 
 /// Re-enable a cancelled sync (the explicit user action that un-does
@@ -746,12 +838,14 @@ mod tests {
     #[test]
     fn ssh_config_body_carries_the_profile() {
         let cfg = ssh_config_body(&test_meta());
-        assert!(cfg.contains("Host 10.0.0.5"));
+        // The ALIAS heads the block (not the raw host) — ~/.ssh/config's
+        // managed block is the single source of host/port/user/key.
+        assert!(cfg.contains(&format!("Host {}", ssh_alias(&test_meta().profile))));
+        assert!(cfg.contains("HostName 10.0.0.5"));
         assert!(cfg.contains("Port 2222"));
         assert!(cfg.contains("User deploy"));
         assert!(cfg.contains("IdentityFile C:/keys/id_ed25519"));
         assert!(cfg.contains("StrictHostKeyChecking accept-new"));
-        assert!(cfg.contains("BatchMode yes"));
         // no key -> no IdentityFile line (agent/default-key path)
         let mut m = test_meta();
         m.profile.key_path = String::new();
@@ -760,13 +854,24 @@ mod tests {
 
     #[test]
     fn scp_endpoint_shape() {
-        // The port NEVER rides the endpoint (it lives in the ssh_config) —
-        // a `:22` here folded into the remote path and synced a
-        // nonexistent root (field report: beta.path `22/home/tv/scripts`).
-        assert_eq!(scp_endpoint(&test_meta()), "deploy@10.0.0.5:/srv/proj");
+        // The ALIAS rides the endpoint (host/port/user live in the managed
+        // ssh block; the endpoint never embeds them — a `:22` here once
+        // folded into the remote path and synced a nonexistent root).
+        let alias = ssh_alias(&test_meta().profile);
+        assert!(alias.starts_with("aisc-sync-"));
+        assert_eq!(scp_endpoint(&test_meta()), format!("{alias}:/srv/proj"));
         let mut m = test_meta();
         m.remote_path = "/a/b/".into();
-        assert_eq!(scp_endpoint(&m), "deploy@10.0.0.5:/a/b/");
+        assert_eq!(scp_endpoint(&m), format!("{alias}:/a/b/"));
+    }
+
+    #[test]
+    fn alias_is_stable_and_profile_scoped() {
+        let a = ssh_alias(&test_meta().profile);
+        assert_eq!(a, ssh_alias(&test_meta().profile)); // stable
+        let mut other = test_meta().profile;
+        other.port = 23;
+        assert_ne!(a, ssh_alias(&other)); // profile-scoped
     }
 
     #[test]
@@ -791,6 +896,14 @@ mod tests {
             eprintln!("skipping: ssh/mutagen not resolvable");
             return;
         }
+        // ISOLATE the home dir: ensure_managed_ssh_config writes the managed
+        // block into ~/.ssh/config — without this the test pollutes the REAL
+        // user config (found the hard way, 2026-09-04).
+        let home = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        std::env::set_var("USERPROFILE", home.path());
+        #[cfg(not(windows))]
+        std::env::set_var("HOME", home.path());
         let mut m = test_meta();
         m.profile.host = "127.0.0.1".into();
         m.profile.port = 1; // nothing listens here
