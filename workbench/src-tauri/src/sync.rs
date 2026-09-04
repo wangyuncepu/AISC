@@ -323,6 +323,83 @@ pub struct SshDirEntry {
     pub is_dir: bool,
 }
 
+/// F1 (oversized-content strategy): pull ONE remote file into the shadow
+/// workspace on demand. The file lands OUTSIDE the ignore-matched sync flow
+/// — present and usable for the container agent, never auto-deleted. Binary
+/// safe (raw stdout stream → file), CREATE_NO_WINDOW, real timeout.
+#[tauri::command]
+pub async fn ssh_pull_file(
+    workspace: String, remote_path: String,
+) -> Result<String, WorkbenchError> {
+    let ws = std::path::PathBuf::from(&workspace);
+    let meta = read_meta(&ws)
+        .ok_or_else(|| WorkbenchError::usage("not an SSH workspace (no metadata)"))?;
+    if !valid_remote_path(&remote_path)
+        || remote_path.contains('\'') || remote_path.contains('"') || remote_path.contains('\\') {
+        return Err(WorkbenchError::usage(format!("invalid remote path: {remote_path:?}")));
+    }
+    ensure_transport_for(&meta.profile)?;
+    let ssh = which_ssh_like("ssh")
+        .ok_or_else(|| WorkbenchError::usage("no ssh binary found on PATH"))?;
+    // Single-segment basename only — the file lands at the workspace root,
+    // no traversal possible.
+    let name = remote_path.rsplit('/').next().unwrap_or_default().to_string();
+    if name.is_empty() || name.starts_with('.') && name.len() <= 2 {
+        return Err(WorkbenchError::usage("cannot derive a local file name"));
+    }
+    let dest = ws.join(&name);
+
+    let mut cmd = std::process::Command::new(&ssh);
+    cmd.args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+              &ssh_alias(&meta.profile),
+              &format!("cat -- '{remote_path}'")])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd.spawn()
+        .map_err(|e| WorkbenchError::usage(format!("spawn ssh: {e}")))?;
+    use std::io::{Read, Write};
+    let mut file = std::fs::File::create(&dest)
+        .map_err(|e| WorkbenchError::usage(format!("create local file: {e}")))?;
+    let mut buf = [0u8; 64 * 1024];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    if let Some(mut out) = child.stdout.take() {
+        loop {
+            match out.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    file.write_all(&buf[..n])
+                        .map_err(|e| WorkbenchError::usage(format!("write local file: {e}")))?;
+                }
+                Err(e) => return Err(WorkbenchError::usage(format!("stream: {e}"))),
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                return Err(WorkbenchError::usage("pull timed out (300s)"));
+            }
+        }
+    }
+    let status = child.wait()
+        .map_err(|e| WorkbenchError::usage(format!("wait ssh: {e}")))?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&dest);
+        let err = child.stderr.take().map(|mut p| {
+            let mut b = String::new();
+            let _ = p.read_to_string(&mut b);
+            b
+        }).unwrap_or_default();
+        let tail = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+        return Err(WorkbenchError::usage(format!("ssh cat failed: {tail}")));
+    }
+    Ok(dest.to_string_lossy().to_string())
+}
+
 /// Parse `ls -1 -p` output: trailing `/` marks a directory.
 pub fn parse_ls_entries(stdout: &str) -> Vec<SshDirEntry> {
     let mut dirs: Vec<SshDirEntry> = Vec::new();

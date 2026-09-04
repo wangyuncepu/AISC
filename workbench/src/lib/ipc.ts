@@ -282,6 +282,11 @@ export interface SshDirEntry {
 export const sshBrowse = (profile: unknown, path: string) =>
   invoke<SshDirEntry[]>("ssh_browse", { profile, path });
 
+/** F1 (oversized strategy): pull ONE remote file into the shadow workspace
+ * on demand — lands outside the sync flow, usable by the agent immediately. */
+export const sshPullFile = (workspace: string, remotePath: string) =>
+  invoke<string>("ssh_pull_file", { workspace, remotePath });
+
 /** F1 (T-F1c): the mutagen session lifecycle + status projection. */
 export interface SyncStatus {
   status: string;

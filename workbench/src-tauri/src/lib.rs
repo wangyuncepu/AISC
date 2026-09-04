@@ -172,6 +172,7 @@ pub fn run(cli_arg: Option<String>) {
             reset_gui_settings,
             sync::ssh_workspace_create,
             sync::ssh_browse,
+            sync::ssh_pull_file,
             sync::sync_session_start,
             sync::sync_session_status,
             sync::sync_session_cancel,

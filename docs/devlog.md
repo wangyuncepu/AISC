@@ -2184,3 +2184,12 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   media/`）；侧栏**超量警示**——远端总量 >10GB 显示建议（取消后改
   子目录重建或带排除重建）。门禁：cargo sync 8 / build / vue-tsc /
   vitest 433 / vite。
+- **T-F1e 按需拉取单个远端文件（2026-09-04 深夜，用户：被排除的
+  超大文件要用怎么办）**：`ssh_pull_file` command——`ssh cat` 二进制
+  安全流式落盘到影子目录根（basename 单段防穿越；300s 硬超时；
+  CREATE_NO_WINDOW；失败清残file），落在 ignore 匹配范围外 =
+  agent 立即可用且永不被同步删除。侧栏同步节「拉取文件」→ 内联
+  输入远端绝对路径 → 拉取（busy/error 态；store 走 F-A01）。海量
+  小文件场景的回答：同步类工具共同弱项，首次全量慢不可避免——
+  排除生成物（容器内重装）、初始完成后 watch 增量快。门禁：
+  cargo sync 8 / build / vue-tsc / vitest 433 / vite。

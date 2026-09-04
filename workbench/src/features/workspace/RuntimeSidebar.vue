@@ -103,6 +103,20 @@ const syncStateLabel = computed(() =>
     ? t("sidebar.sync.disabled")
     : t(SYNC_LABEL_KEY[syncState.value] ?? "sidebar.sync.transitioning"));
 
+/** F1 (oversized strategy): pull ONE excluded/remote file into the shadow
+ *  workspace on demand — minimal prompt dialog (path in, file lands). */
+const pullOpen = ref(false);
+const pullPath = ref("");
+async function onPull(): Promise<void> {
+  const p = pullPath.value.trim();
+  if (!p || workspaces.pullBusy) return;
+  const local = await workspaces.pullRemoteFile(store.workspace.trim(), p);
+  if (local) {
+    pullOpen.value = false;
+    pullPath.value = "";
+  }
+}
+
 /** F1: cancel is destructive + permanent — confirm before pulling the pin. */
 async function onCancelSync(): Promise<void> {
   const ok = await confirm(t("sidebar.syncCancelConfirm"));
@@ -296,12 +310,30 @@ function copyDone(key: string): boolean {
       <div v-if="store.sync.lastError" class="value sync-error" role="alert" :title="store.sync.lastError">
         {{ store.sync.lastError }}
       </div>
+      <!-- F1: on-demand pull of ONE remote file (oversized-content flow). -->
+      <div v-if="pullOpen" class="pull-row" role="group" :aria-label="t('sidebar.sync.pullFile')">
+        <input
+          v-model.trim="pullPath"
+          class="pull-input"
+          placeholder="/remote/path/to/file.bin"
+          :aria-label="t('sidebar.sync.pullPath')"
+          @keyup.enter="onPull"
+        />
+        <button class="primary" :disabled="workspaces.pullBusy || !pullPath" @click="onPull">
+          {{ workspaces.pullBusy ? t("sidebar.sync.pulling") : t("sidebar.sync.pullGo") }}
+        </button>
+        <button :disabled="workspaces.pullBusy" @click="pullOpen = false; pullPath = ''">×</button>
+      </div>
+      <div v-if="workspaces.pullError" class="value sync-error" role="alert" :title="workspaces.pullError">
+        {{ workspaces.pullError }}
+      </div>
       <div class="actions-row">
         <button v-if="syncState === 'disabled'" @click="store.enableSync()">
           {{ t("sidebar.syncEnable") }}
         </button>
         <template v-else>
           <button @click="store.refreshSync()">{{ t("sidebar.syncRefresh") }}</button>
+          <button @click="pullOpen = true">{{ t("sidebar.sync.pullFile") }}</button>
           <button v-if="syncState === 'paused'" :disabled="!syncState" @click="store.resumeSync()">
             {{ t("sidebar.syncResume") }}
           </button>
@@ -430,6 +462,16 @@ function copyDone(key: string): boolean {
 .state[data-state="halted_on_root_type_change"] { color: var(--warn); }
 .sync-error { color: var(--error-fg); font-size: var(--font-xs);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* F1: on-demand pull row */
+.pull-row { display: flex; gap: var(--space-1); align-items: center; }
+.pull-input {
+  flex: 1; min-width: 0; background: var(--surface-3); color: var(--text);
+  border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
+  min-height: var(--control-h-sm); padding: 0 var(--space-2);
+  font-family: var(--font-mono); font-size: var(--font-xs);
+}
+.pull-row button.primary { background: var(--accent); color: var(--accent-fg); border: none;
+  font-weight: 600; border-radius: var(--radius-sm); padding: 0 var(--space-2); cursor: pointer; }
 /* stale: last-known styling, never deterministic green (04 §2.1) */
 .state[data-fresh="stale"] { color: var(--warn); }
 .last-known { font-size: 10px; color: var(--warn); }

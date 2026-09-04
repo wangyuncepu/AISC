@@ -501,6 +501,25 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
   const browseError = ref<string | null>(null);
   const browseBusy = ref(false);
 
+  /** F1: pull one remote file into the shadow workspace on demand. */
+  async function pullRemoteFile(
+    workspace: string, remotePath: string,
+  ): Promise<string | null> {
+    pullError.value = null;
+    pullBusy.value = true;
+    try {
+      return await ipc.sshPullFile(workspace, remotePath);
+    } catch (e) {
+      pullError.value = (e as { technical_detail?: string; message?: string })
+        ?.technical_detail || (e as { message?: string })?.message || String(e);
+      return null;
+    } finally {
+      pullBusy.value = false;
+    }
+  }
+  const pullError = ref<string | null>(null);
+  const pullBusy = ref(false);
+
   return {
     // constants/state
     runtimes,
@@ -530,6 +549,9 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     browseRemote,
     browseError,
     browseBusy,
+    pullRemoteFile,
+    pullError,
+    pullBusy,
     // activation
     activate,
     openLauncher,
