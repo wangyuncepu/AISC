@@ -2103,3 +2103,18 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   is_temp_file 补前缀匹配（真实文件 `real~file.rs` 不误伤，+断言）。
   远端同步落盘的**正式文件**照常进变更页（期望行为：远端变化可见）。
   cargo watcher 12。
+- **T-F1e 手测反馈四修（2026-09-04 晚）**：①**重开即报已存在**——
+  `ssh_workspace_create` 重名从报错改 `existed: true`（原 metadata 保留
+  不覆盖），前端照常打开，多工作区层 materialize 的 same-path adopt
+  天然完成「直接切换到运行中的实例」；②③**重开/新建内容与远端不同**
+  ——根因：重开时 `sync create` 撞同名 session 失败（错误只落侧栏
+  lastError，同步从未跑）；`sync_session_start` 改**幂等**：先 list 查
+  同名 → 存在则 resume（若 paused）+ **flush 强制同步一轮**，不存在则
+  create + flush（保证初始内容立即拉齐而非等扫描节拍）；④**家目录
+  出现 .mutagen 系文件**——mutagen daemon 状态默认落 `~/.mutagen/` +
+  `~/.mutagen.yml`；实测 `MUTAGEN_DATA_DIRECTORY` /
+  `MUTAGEN_CONFIG_FILE_PATH` 双 env 生效（本地实证 daemon/sessions 落
+  指定目录）→ `mutagen_env()` 注入 `<数据根>/mutagen/`（run_mutagen +
+  ssh_browse 全覆盖）。**注意**：daemon 数据目录切换后，旧 `~/.mutagen`
+  里的既有 session 不再可见（一次性——重开会话即重建；旧目录可手动
+  删除）。门禁：cargo sync 7 / build / vue-tsc / vitest 433 / vite。

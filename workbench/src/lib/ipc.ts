@@ -263,11 +263,12 @@ export const ccSwitchFetchModels = (
   });
 
 /** F1 (D-10): create an SSH-workspace shadow dir + metadata; returns the
- * local workspace path to open as a normal workspace. */
+ * local workspace path to open as a normal workspace. `existed` = re-open
+ * (metadata untouched) — just open it, never a duplicate error. */
 export const sshWorkspaceCreate = (
   name: string, profile: unknown, remotePath: string,
 ) =>
-  invoke<{ workspacePath: string }>("ssh_workspace_create", {
+  invoke<{ workspacePath: string; existed: boolean }>("ssh_workspace_create", {
     name, profile, remotePath,
   });
 

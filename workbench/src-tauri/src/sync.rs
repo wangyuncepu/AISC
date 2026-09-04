@@ -41,6 +41,10 @@ pub struct SshWorkspaceMeta {
 #[serde(rename_all = "camelCase")]
 pub struct SshWorkspaceCreated {
     pub workspace_path: String,
+    /// True when the directory already existed (re-open): the metadata was
+    /// left untouched and the caller should just OPEN the workspace — never
+    /// surface a duplicate error (field report #1, 2026-09-04).
+    pub existed: bool,
 }
 
 /// Workspace names: one leading alnum then alnum/-/_ up to 64 — no path
@@ -83,10 +87,13 @@ pub async fn ssh_workspace_create(
         .map_err(|e| WorkbenchError::usage(format!("data root: {}", e.message())))?;
     let dir = root.join("sync-workspaces").join(&name);
     if dir.exists() {
-        return Err(WorkbenchError::usage(format!(
-            "sync workspace already exists: {}",
-            dir.display()
-        )));
+        // Re-open (field report #1): never an error — the existing metadata
+        // (profile snapshot) stays authoritative; the frontend opens the
+        // path and the multi-workspace layer adopts the running instance.
+        return Ok(SshWorkspaceCreated {
+            workspace_path: dir.to_string_lossy().to_string(),
+            existed: true,
+        });
     }
     std::fs::create_dir_all(&dir)
         .map_err(|e| WorkbenchError::usage(format!("create shadow dir: {e}")))?;
@@ -104,6 +111,7 @@ pub async fn ssh_workspace_create(
 
     Ok(SshWorkspaceCreated {
         workspace_path: dir.to_string_lossy().to_string(),
+        existed: false,
     })
 }
 
@@ -305,6 +313,7 @@ pub async fn ssh_browse(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    mutagen_env(&mut cmd); // F1: pin daemon state under the data root (#4)
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -319,6 +328,18 @@ pub async fn ssh_browse(
         return Err(WorkbenchError::usage(format!("ssh ls failed: {tail}")));
     }
     Ok(parse_ls_entries(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Run mutagen with the transport PATH prepended and mutagen's OWN state
+/// pinned under the data root (field report #4: without this the daemon
+/// litters `~/.mutagen/` + `~/.mutagen.yml` into the user's home).
+fn mutagen_env(cmd: &mut std::process::Command) {
+    if let Ok(root) = crate::data_root::validate_data_root() {
+        let data = root.join("mutagen");
+        let _ = std::fs::create_dir_all(&data);
+        cmd.env("MUTAGEN_DATA_DIRECTORY", &data);
+        cmd.env("MUTAGEN_CONFIG_FILE_PATH", data.join("mutagen.yml"));
+    }
 }
 
 /// Run mutagen with the transport PATH prepended. Returns (stdout, stderr).
@@ -339,6 +360,7 @@ fn run_mutagen(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    mutagen_env(&mut cmd);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -383,6 +405,12 @@ fn session_name(workspace: &std::path::Path) -> String {
 /// Create (or reconnect to) the sync session for an SSH workspace. A PLAIN
 /// local workspace is a no-op returning `status: "none"` (the frontend fires
 /// this on every launch — non-SSH must not surface as an error).
+///
+/// IDEMPOTENT by session name (field reports #2/#3: re-opening showed stale
+/// content because `sync create` fails on an existing name and the error
+/// only landed in the sidebar): an existing session is resumed if paused,
+/// then FLUSHED — a forced synchronization cycle that pulls the initial /
+/// lagging content immediately instead of waiting for the scan cadence.
 #[tauri::command]
 pub async fn sync_session_start(workspace: String) -> Result<SyncStatus, WorkbenchError> {
     let ws = std::path::PathBuf::from(&workspace);
@@ -391,15 +419,34 @@ pub async fn sync_session_start(workspace: String) -> Result<SyncStatus, Workben
     };
     let transport = ensure_transport(&meta)?;
     let name = session_name(&ws);
-    let alpha = workspace.clone();
-    let beta = scp_endpoint(&meta);
-    let alpha_ref: &str = &alpha;
-    let beta_ref: &str = &beta;
-    run_mutagen(
-        &["sync", "create", "--name", &name, "--ignore-vcs", alpha_ref, beta_ref],
+    let exists = run_mutagen(
+        &["sync", "list", "--template", "{{json .}}"],
         &transport,
-        std::time::Duration::from_secs(60),
-    )?;
+        std::time::Duration::from_secs(15),
+    )
+    .ok()
+    .and_then(|(out, _)| serde_json::from_str::<Value>(out.trim()).ok())
+    .and_then(|v| v.as_array().cloned())
+    .map(|arr| arr.iter().any(|s| s["Session"]["name"].as_str() == Some(name.as_str())))
+    .unwrap_or(false);
+
+    if exists {
+        // Reconnect path: resume a paused session, then force one cycle.
+        let _ = run_mutagen(&["sync", "resume", &name], &transport, std::time::Duration::from_secs(30));
+        let _ = run_mutagen(&["sync", "flush", &name], &transport, std::time::Duration::from_secs(90));
+    } else {
+        let alpha = workspace.clone();
+        let beta = scp_endpoint(&meta);
+        run_mutagen(
+            &["sync", "create", "--name", &name, "--ignore-vcs", &alpha, &beta],
+            &transport,
+            std::time::Duration::from_secs(60),
+        )?;
+        // Fresh session: create already performs the initial scan, but flush
+        // guarantees a completed cycle before we report status (report #3:
+        // "new workspace content differs from remote").
+        let _ = run_mutagen(&["sync", "flush", &name], &transport, std::time::Duration::from_secs(90));
+    }
     sync_status_inner(&ws, &meta, &transport)
 }
 
