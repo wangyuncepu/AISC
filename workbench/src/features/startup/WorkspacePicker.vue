@@ -25,7 +25,7 @@ const wsStore = useWorkspacesStore();
 // --- F1 (D-10): SSH-workspace entry (collapsed form) ---
 const settings = useSettingsStore();
 const sshOpen = ref(false);
-const sshForm = ref({ profile: 0, remotePath: "", name: "" });
+const sshForm = ref({ profile: 0, remotePath: "", name: "", ignores: "" });
 const sshBusy = ref(false);
 const sshError = computed(() => wsStore.createSshError);
 const profiles = computed<SshProfile[]>(() => settings.doc?.sshProfiles ?? []);
@@ -38,13 +38,14 @@ async function onCreateSsh(): Promise<void> {
   sshBusy.value = true;
   try {
     const workspacePath = await wsStore.createSshWorkspace(
-      sshForm.value.name.trim(), p, sshForm.value.remotePath.trim());
+      sshForm.value.name.trim(), p, sshForm.value.remotePath.trim(),
+      sshForm.value.ignores.split(",").map((s) => s.trim()).filter(Boolean));
     if (workspacePath) {
       // Open the shadow dir as a NORMAL workspace — the identity chain is
       // untouched; the sync layer (T-F1c) attaches via the metadata file.
       store.workspace = workspacePath;
       sshOpen.value = false;
-      sshForm.value = { profile: 0, remotePath: "", name: "" };
+      sshForm.value = { profile: 0, remotePath: "", name: "", ignores: "" };
       await store.runPreflight();
     }
   } finally {
@@ -259,6 +260,10 @@ async function confirmForget(): Promise<void> {
           <label class="ssh-field">
             <span>{{ t("picker.ssh.name") }}</span>
             <input v-model.trim="sshForm.name" :placeholder="t('picker.ssh.namePh')" @keyup.enter="onCreateSsh" />
+          </label>
+          <label class="ssh-field">
+            <span>{{ t("picker.ssh.ignores") }}</span>
+            <input v-model.trim="sshForm.ignores" :placeholder="t('picker.ssh.ignoresPh')" />
           </label>
           <div class="ssh-actions">
             <button class="ui-button primary" :disabled="sshBusy || !sshForm.remotePath || !sshForm.name" @click="onCreateSsh">

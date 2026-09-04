@@ -267,9 +267,10 @@ export const ccSwitchFetchModels = (
  * (metadata untouched) — just open it, never a duplicate error. */
 export const sshWorkspaceCreate = (
   name: string, profile: unknown, remotePath: string,
+  ignorePatterns?: string[],
 ) =>
   invoke<{ workspacePath: string; existed: boolean }>("ssh_workspace_create", {
-    name, profile, remotePath,
+    name, profile, remotePath, ignorePatterns: ignorePatterns ?? [],
   });
 
 /** F1 (T-F1e): remote directory listing for the path browse dialog. */

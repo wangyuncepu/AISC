@@ -2174,3 +2174,13 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   ——补 USERPROFILE/HOME tempdir 隔离 + 手工清理污染块。+1 测试
   （别名稳定且 profile 作用域）。门禁：cargo sync 8 / build / vue-tsc /
   vitest 433 / vite。
+- **T-F1e 超大内容策略（2026-09-04 深夜，用户：超大文件怎么办）**：
+  VS Code 式按需虚拟 FS 与容器挂载根本冲突（确认不可行），产品正解
+  =**排除规则**：metadata 新 `ignore_patterns`（Vec<String>，SSOT——
+  create 与每次自愈重建都从 meta 取）；`ssh_workspace_create` 收可选
+  patterns（清洗：trim/去空/拒内嵌空白），session create 动态 argv
+  逐个 `--ignore`（与固定 .aisc/.mcp 排除并列）；picker 表单新
+  「排除规则」输入（逗号分隔，placeholder 示例 `*.iso, downloads/,
+  media/`）；侧栏**超量警示**——远端总量 >10GB 显示建议（取消后改
+  子目录重建或带排除重建）。门禁：cargo sync 8 / build / vue-tsc /
+  vitest 433 / vite。

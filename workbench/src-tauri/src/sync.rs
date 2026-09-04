@@ -40,6 +40,11 @@ pub struct SshWorkspaceMeta {
     /// action. Absent/None = normal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_disabled: Option<bool>,
+    /// Exclusion globs for oversized content (field report: multi-hundred-GB
+    /// remotes). Applied at session create AND every self-heal recreate —
+    /// the metadata is the single source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignore_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,6 +83,7 @@ pub async fn ssh_workspace_create(
     name: String,
     profile: Value,
     remote_path: String,
+    ignore_patterns: Option<Vec<String>>,
 ) -> Result<SshWorkspaceCreated, WorkbenchError> {
     if !valid_workspace_name(&name) {
         return Err(WorkbenchError::usage("workspace name must be alphanumeric/-/_ (max 64), got {name:?}"));
@@ -87,6 +93,13 @@ pub async fn ssh_workspace_create(
     }
     let profile: crate::settings::SshProfile = serde_json::from_value(profile)
         .map_err(|e| WorkbenchError::usage(format!("invalid ssh profile: {e}")))?;
+    // Exclusion globs (oversized-content strategy): non-empty, trimmed,
+    // no whitespace/control chars inside each pattern.
+    let ignore_patterns: Vec<String> = ignore_patterns.unwrap_or_default()
+        .into_iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty() && !p.chars().any(|c| c.is_whitespace()))
+        .collect();
 
     let root = crate::data_root::validate_data_root()
         .map_err(|e| WorkbenchError::usage(format!("data root: {}", e.message())))?;
@@ -109,6 +122,7 @@ pub async fn ssh_workspace_create(
         remote_path,
         created_at: now_iso(),
         sync_disabled: None,
+        ignore_patterns,
     };
     let bytes = serde_json::to_vec_pretty(&meta)
         .map_err(|e| WorkbenchError::usage(format!("encode metadata: {e}")))?;
@@ -232,6 +246,7 @@ pub fn ensure_managed_ssh_config(profile: &crate::settings::SshProfile) -> Resul
             remote_path: String::new(),
             created_at: String::new(),
             sync_disabled: None,
+            ignore_patterns: Vec::new(),
         }),
         "",
         SSH_BLOCK_END,
@@ -662,15 +677,21 @@ async fn sync_session_start_impl(
     } else {
         let alpha = workspace.clone();
         let beta = scp_endpoint(&meta);
-        run_mutagen(
-            &["sync", "create", "--name", &name, "--ignore-vcs",
-              // AISC-managed files must never propagate to the remote.
-              "--ignore", ".aisc-ssh-workspace.json",
-              "--ignore", ".mcp.json",
-              &alpha, &beta],
-            &transport,
-            std::time::Duration::from_secs(60),
-        )?;
+        // Dynamic argv: metadata ignore_patterns (oversized-content
+        // strategy) ride alongside the fixed AISC-managed-file excludes.
+        let mut argv: Vec<&str> = vec![
+            "sync", "create", "--name", &name, "--ignore-vcs",
+            // AISC-managed files must never propagate to the remote.
+            "--ignore", ".aisc-ssh-workspace.json",
+            "--ignore", ".mcp.json",
+        ];
+        for pat in &meta.ignore_patterns {
+            argv.push("--ignore");
+            argv.push(pat);
+        }
+        argv.push(&alpha);
+        argv.push(&beta);
+        run_mutagen(&argv, &transport, std::time::Duration::from_secs(60))?;
         // Fresh session: create already performs the initial scan, but flush
         // guarantees a completed cycle before we report status (report #3:
         // "new workspace content differs from remote").
@@ -799,6 +820,7 @@ mod tests {
             remote_path: "/srv/proj".into(),
             created_at: "1".into(),
             sync_disabled: None,
+        ignore_patterns: Vec::new(),
         };
         std::fs::write(
             dir.path().join(META_FILE),
@@ -832,6 +854,7 @@ mod tests {
             remote_path: "/srv/proj".into(),
             created_at: "1".into(),
             sync_disabled: None,
+        ignore_patterns: Vec::new(),
         }
     }
 

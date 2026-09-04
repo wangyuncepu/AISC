@@ -468,9 +468,10 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
    *  (F-A01); the caller opens the returned path as a normal workspace. */
   async function createSshWorkspace(
     name: string, profile: unknown, remotePath: string,
+    ignorePatterns?: string[],
   ): Promise<string | null> {
     try {
-      const r = await ipc.sshWorkspaceCreate(name, profile, remotePath);
+      const r = await ipc.sshWorkspaceCreate(name, profile, remotePath, ignorePatterns);
       return r.workspacePath;
     } catch (e) {
       createSshError.value = (e as { technical_detail?: string; message?: string })

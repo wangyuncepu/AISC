@@ -288,6 +288,11 @@ function copyDone(key: string): boolean {
           size: fmtSize(store.sync.totalFileSize ?? 0),
         }) }}
       </div>
+      <!-- Oversized-content guard: once the remote size crosses the line,
+           say so and offer the strategies (sub-directory / excludes). -->
+      <div v-if="(store.sync.totalFileSize ?? 0) > 10 * 1024 ** 3" class="value sync-error" role="alert">
+        {{ t("sidebar.sync.oversized", { size: fmtSize(store.sync.totalFileSize ?? 0) }) }}
+      </div>
       <div v-if="store.sync.lastError" class="value sync-error" role="alert" :title="store.sync.lastError">
         {{ store.sync.lastError }}
       </div>
