@@ -207,10 +207,15 @@ pub fn ssh_wrapper_body(real_ssh: &std::path::Path, config: &std::path::Path) ->
     }
 }
 
-/// SCP-style endpoint URL (v0.16's `ssh://` mis-parses — probe notes above).
+/// SCP-style endpoint URL. Two probe-verified v0.16 facts shape this:
+/// - `ssh://` scheme URLs mis-parse ("ssh" leaks into the ssh hostname);
+/// - the SCP form has NO port slot — `user@host:22/path` folds the port
+///   INTO the remote path (field report: beta.path came out as
+///   `22/home/tv/scripts`). The port rides the generated ssh_config's
+///   `Port` directive instead.
 pub fn scp_endpoint(meta: &SshWorkspaceMeta) -> String {
     let p = &meta.profile;
-    format!("{}@{}:{}/{}", p.user, p.host, p.port, meta.remote_path.trim_start_matches('/'))
+    format!("{}@{}:/{}", p.user, p.host, meta.remote_path.trim_start_matches('/'))
 }
 
 /// Prepare the transport dir (config + wrapper) under
@@ -419,7 +424,9 @@ pub async fn sync_session_start(workspace: String) -> Result<SyncStatus, Workben
     };
     let transport = ensure_transport(&meta)?;
     let name = session_name(&ws);
-    let exists = run_mutagen(
+    // v0.16 list elements ARE the Session objects (field paths verified
+    // live): top-level `name` and `beta.path`.
+    let existing = run_mutagen(
         &["sync", "list", "--template", "{{json .}}"],
         &transport,
         std::time::Duration::from_secs(15),
@@ -427,10 +434,26 @@ pub async fn sync_session_start(workspace: String) -> Result<SyncStatus, Workben
     .ok()
     .and_then(|(out, _)| serde_json::from_str::<Value>(out.trim()).ok())
     .and_then(|v| v.as_array().cloned())
-    .map(|arr| arr.iter().any(|s| s["Session"]["name"].as_str() == Some(name.as_str())))
-    .unwrap_or(false);
+    .and_then(|arr| {
+        arr.into_iter().find(|s| s["name"].as_str() == Some(name.as_str()))
+    });
 
-    if exists {
+    // Self-heal: a session whose beta path disagrees with the metadata
+    // (e.g. the port-folding bug created `22/home/...` roots that never
+    // existed) is terminated and recreated with the correct endpoint.
+    let mut existing = existing;
+    if let Some(sess) = &existing {
+        let bad_beta = sess["beta"]["path"].as_str()
+            .map(|p| !p.trim_end_matches('/').eq_ignore_ascii_case(
+                meta.remote_path.trim_end_matches('/')))
+            .unwrap_or(true);
+        if bad_beta {
+            let _ = run_mutagen(&["sync", "terminate", &name], &transport, std::time::Duration::from_secs(30));
+            existing = None;
+        }
+    }
+
+    if existing.is_some() {
         // Reconnect path: resume a paused session, then force one cycle.
         let _ = run_mutagen(&["sync", "resume", &name], &transport, std::time::Duration::from_secs(30));
         let _ = run_mutagen(&["sync", "flush", &name], &transport, std::time::Duration::from_secs(90));
@@ -438,7 +461,11 @@ pub async fn sync_session_start(workspace: String) -> Result<SyncStatus, Workben
         let alpha = workspace.clone();
         let beta = scp_endpoint(&meta);
         run_mutagen(
-            &["sync", "create", "--name", &name, "--ignore-vcs", &alpha, &beta],
+            &["sync", "create", "--name", &name, "--ignore-vcs",
+              // AISC-managed files must never propagate to the remote.
+              "--ignore", ".aisc-ssh-workspace.json",
+              "--ignore", ".mcp.json",
+              &alpha, &beta],
             &transport,
             std::time::Duration::from_secs(60),
         )?;
@@ -450,8 +477,10 @@ pub async fn sync_session_start(workspace: String) -> Result<SyncStatus, Workben
     sync_status_inner(&ws, &meta, &transport)
 }
 
-/// Status by session name (defensive field walk — the JSON shape varies by
-/// mutagen version; missing fields degrade to empty strings).
+/// Status by session name. Field paths verified against the REAL v0.16
+/// `sync list --template '{{json .}}'` shape: the array elements ARE the
+/// Session objects — `name`, `status` and `beta.path` are TOP-LEVEL fields
+/// (the earlier `.Session/.Status` nesting silently matched nothing).
 fn sync_status_inner(
     ws: &std::path::Path, meta: &SshWorkspaceMeta, transport: &std::path::Path,
 ) -> Result<SyncStatus, WorkbenchError> {
@@ -468,16 +497,12 @@ fn sync_status_inner(
         Some(arr) => {
             let mine = arr
                 .iter()
-                .find(|s| s["Session"]["name"].as_str() == Some(name.as_str()));
+                .find(|s| s["name"].as_str() == Some(name.as_str()));
             match mine {
                 Some(s) => SyncStatus {
-                    status: s["Status"]["status"].as_str().unwrap_or("").to_string(),
-                    message: s["Status"]["message"].as_str().unwrap_or("").to_string(),
-                    last_error: s["Status"]["lastError"]
-                        .as_str()
-                        .or_else(|| s["Status"]["last_error"].as_str())
-                        .unwrap_or("")
-                        .to_string(),
+                    status: s["status"].as_str().unwrap_or("").to_string(),
+                    message: s["lastError"].as_str().unwrap_or("").to_string(),
+                    last_error: s["lastError"].as_str().unwrap_or("").to_string(),
                 },
                 None => SyncStatus::default(),
             }
@@ -617,10 +642,13 @@ mod tests {
 
     #[test]
     fn scp_endpoint_shape() {
-        assert_eq!(scp_endpoint(&test_meta()), "deploy@10.0.0.5:2222/srv/proj");
+        // The port NEVER rides the endpoint (it lives in the ssh_config) —
+        // a `:22` here folded into the remote path and synced a
+        // nonexistent root (field report: beta.path `22/home/tv/scripts`).
+        assert_eq!(scp_endpoint(&test_meta()), "deploy@10.0.0.5:/srv/proj");
         let mut m = test_meta();
         m.remote_path = "/a/b/".into();
-        assert_eq!(scp_endpoint(&m), "deploy@10.0.0.5:2222/a/b/");
+        assert_eq!(scp_endpoint(&m), "deploy@10.0.0.5:/a/b/");
     }
 
     #[test]

@@ -2118,3 +2118,19 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   ssh_browse 全覆盖）。**注意**：daemon 数据目录切换后，旧 `~/.mutagen`
   里的既有 session 不再可见（一次性——重开会话即重建；旧目录可手动
   删除）。门禁：cargo sync 7 / build / vue-tsc / vitest 433 / vite。
+- **T-F1e 对齐根治（2026-09-04 深夜，真机 JSON 取证）**：用户复测
+  「依旧不对齐」——`sync list --template '{{json .}}'` 实 dump 三病灶：
+  ①**端口折进远端路径**（beta.path=`22/home/tv/scripts`）：SCP 风格
+  `user@host:22/path` 冒号后全是路径，端口从未生效且污染 root →
+  同步了 4 个"成功"周期的**不存在目录**；②解析字段两层全错（v0.16
+  list 元素即 Session，`name`/`status` 是顶层字段——旧 `.Session/.Status`
+  嵌套恒 miss → exists 恒 false → 每次撞 create 重名）；③诊断插曲：
+  bash `read` 吃 Python print 的 `\r\n` 残留 `\r` 粘进 endpoint
+  （beta.path 尾部 `\r`——诊断脚本锅非产品锅，但暴露自愈必要性）。
+  修复：`scp_endpoint` 去 `:port`（端口由 ssh_config `Port` 承载）；
+  解析改顶层字段；**自愈**——exists 会话的 beta.path 与 metadata
+  remotePath 不匹配（含历史坏形状）→ terminate + 以正确 endpoint
+  重建；create 追加 `--ignore .aisc-ssh-workspace.json --ignore
+  .mcp.json`（AISC 管理文件永不上推远端）。**真机终验**：干净
+  endpoint 重建 session 后远端内容（bili_jellyfin/…）实测流入影子
+  目录。门禁：cargo sync 7 / build。
