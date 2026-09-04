@@ -38,7 +38,9 @@ export const useSettingsStore = defineStore("settings", () => {
       JSON.stringify(doc.value.terminal) !== JSON.stringify(lastSaved.value.terminal) ||
       JSON.stringify(doc.value.window) !== JSON.stringify(lastSaved.value.window) ||
       JSON.stringify(doc.value.hostTools ?? []) !==
-        JSON.stringify(lastSaved.value.hostTools ?? [])
+        JSON.stringify(lastSaved.value.hostTools ?? []) ||
+      JSON.stringify(doc.value.sshProfiles ?? []) !==
+        JSON.stringify(lastSaved.value.sshProfiles ?? [])
     );
   });
 
@@ -89,6 +91,7 @@ export const useSettingsStore = defineStore("settings", () => {
         terminal: doc.value.terminal,
         window: doc.value.window,
         hostTools: doc.value.hostTools ?? [],
+        sshProfiles: doc.value.sshProfiles ?? [],
       });
       doc.value.revision = outcome.revision;
       doc.value.issues = outcome.issues;

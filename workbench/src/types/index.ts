@@ -945,6 +945,16 @@ export interface HostToolEntry {
   readOnlyPreset?: string;
 }
 
+/** F1 (D-10): one SSH connection profile. v1: KEY AUTH ONLY — keyPath is a
+ * reference (the file is never copied or stored). */
+export interface SshProfile {
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  keyPath: string;
+}
+
 export interface SettingsDocument {
   schemaVersion: number;
   revision: number;
@@ -954,6 +964,8 @@ export interface SettingsDocument {
   window: WindowSettings;
   /** F2: empty = host-exec is OFF (every container call refused). */
   hostTools?: HostToolEntry[];
+  /** F1: SSH connection profiles for sync workspaces. */
+  sshProfiles?: SshProfile[];
   issues: ValidationIssue[];
   /** On-disk file was corrupt and isolated; app runs on defaults. */
   corrupted: boolean;
@@ -967,6 +979,7 @@ export interface SettingsPatch {
   terminal?: TerminalSettings;
   window?: WindowSettings;
   hostTools?: HostToolEntry[];
+  sshProfiles?: SshProfile[];
 }
 
 export interface SaveOutcome {

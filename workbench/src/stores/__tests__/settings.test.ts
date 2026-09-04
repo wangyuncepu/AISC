@@ -101,6 +101,7 @@ describe("save", () => {
       terminal: expect.objectContaining({ scrollback: 20000 }),
       window: doc.window,
       hostTools: [], // F2: the whitelist rides the same patch (empty here)
+      sshProfiles: [], // F1: same for SSH profiles
     });
     expect(s.doc?.revision).toBe(4);
     expect(s.dirty).toBe(false);

@@ -162,6 +162,26 @@ impl Default for WindowSettings {
     }
 }
 
+/// F1 (D-10): one SSH connection profile (settings `sshProfiles`). v1 ruling:
+/// KEY AUTH ONLY — `key_path` is a REFERENCE (the file is never copied or
+/// read into settings); password/DPAPI storage is a later decision.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SshProfile {
+    pub name: String,
+    pub host: String,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    pub user: String,
+    /// Path to the private key file (reference only).
+    #[serde(default)]
+    pub key_path: String,
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
 /// Document handed to the frontend (camelCase).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -175,6 +195,8 @@ pub struct SettingsDocument {
     /// F2 (D-10): host-tools MCP whitelist. EMPTY = the host-exec tool set
     /// is empty and every container call is refused.
     pub host_tools: Vec<crate::host_mcp::HostToolEntry>,
+    /// F1: SSH connection profiles for sync workspaces.
+    pub ssh_profiles: Vec<SshProfile>,
     pub issues: Vec<ValidationIssue>,
     /// On-disk file was corrupt and isolated; app runs on defaults and
     /// nothing is written until the user confirms reset.
@@ -192,6 +214,8 @@ pub struct SettingsPatch {
     pub window: Option<WindowSettings>,
     /// F2: wholesale replacement (an array, not a mergeable section).
     pub host_tools: Option<Vec<crate::host_mcp::HostToolEntry>>,
+    /// F1: wholesale replacement of the SSH profiles array.
+    pub ssh_profiles: Option<Vec<SshProfile>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,6 +294,7 @@ fn default_document() -> SettingsDocument {
         terminal: TerminalSettings::default(),
         window: WindowSettings::default(),
         host_tools: Vec::new(),
+        ssh_profiles: Vec::new(),
         issues: Vec::new(),
         corrupted: false,
         read_only: false,
@@ -558,6 +583,7 @@ impl Settings {
             window: serde_json::from_value(self.raw.get("window").cloned().unwrap_or(Value::Null))
                 .unwrap_or_default(),
             host_tools: sanitize_host_tools(self.raw.get("host_tools")),
+            ssh_profiles: sanitize_ssh_profiles(self.raw.get("ssh_profiles")),
             issues: self.issues.clone(),
             corrupted: self.corrupted,
             read_only: self.read_only,
@@ -602,6 +628,13 @@ impl Settings {
             self.raw["host_tools"] =
                 serde_json::to_value(&cleaned).unwrap_or(Value::Array(Vec::new()));
         }
+        if let Some(profiles) = &patch.ssh_profiles {
+            // F1: wholesale replacement through the same sanitizer.
+            let encoded = serde_json::to_value(profiles).unwrap_or(Value::Array(Vec::new()));
+            let cleaned = sanitize_ssh_profiles(Some(&encoded));
+            self.raw["ssh_profiles"] =
+                serde_json::to_value(&cleaned).unwrap_or(Value::Array(Vec::new()));
+        }
         self.validate();
     }
 
@@ -614,6 +647,7 @@ impl Settings {
             terminal: Some(TerminalSettings::default()),
             window: Some(WindowSettings::default()),
             host_tools: None, // F2: the whitelist is NOT GUI décor — reset never clears it
+            ssh_profiles: None, // F1: connection configs survive a GUI reset too
         });
     }
 
@@ -664,6 +698,29 @@ fn sanitize_host_tools(v: Option<&Value>) -> Vec<crate::host_mcp::HostToolEntry>
             None | Some(crate::host_mcp::GIT_RO_PRESET) => out.push(entry),
             Some(_) => continue,
         }
+    }
+    out
+}
+
+/// F1: SSH profile sanitation — every entry needs a name/host/user; port is
+/// bounded to the valid TCP range; an empty key_path is allowed (agent-based
+/// auth still works through the system ssh).
+fn sanitize_ssh_profiles(v: Option<&Value>) -> Vec<SshProfile> {
+    let mut out = Vec::new();
+    let Some(arr) = v.and_then(Value::as_array) else {
+        return out;
+    };
+    for item in arr {
+        let Ok(mut p) = serde_json::from_value::<SshProfile>(item.clone()) else {
+            continue;
+        };
+        if p.name.trim().is_empty() || p.host.trim().is_empty() || p.user.trim().is_empty() {
+            continue;
+        }
+        if p.port == 0 {
+            p.port = default_ssh_port();
+        }
+        out.push(p);
     }
     out
 }

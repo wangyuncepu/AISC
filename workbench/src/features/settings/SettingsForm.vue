@@ -87,6 +87,7 @@ const GROUP_KEY: Record<string, string> = {
   terminal: "settings.group.terminal",
   window: "settings.group.window",
   hostTools: "settings.group.hostTools",
+  ssh: "settings.group.ssh",
   disk: "settings.group.disk",
 };
 
@@ -117,6 +118,28 @@ watch(hostTools, (rows) => {
       name: r.name,
       program: r.program,
       ...(r.readOnlyPreset ? { readOnlyPreset: r.readOnlyPreset } : {}),
+    }));
+}, { deep: true });
+
+/** F1: SSH profiles working copy — same load/edit/save flow as hostTools. */
+const sshProfiles = ref<import("../../types").SshProfile[]>(
+  (store.doc?.sshProfiles ?? []).map((p) => ({ ...p, port: p.port || 22 })));
+watch(
+  () => store.doc,
+  (d) => {
+    sshProfiles.value = (d?.sshProfiles ?? []).map((p) => ({ ...p, port: p.port || 22 }));
+  },
+);
+watch(sshProfiles, (rows) => {
+  if (!store.doc) return;
+  store.doc.sshProfiles = rows
+    .filter((r) => r.name.trim() && r.host.trim() && r.user.trim())
+    .map((r) => ({
+      name: r.name,
+      host: r.host,
+      port: Number(r.port) || 22,
+      user: r.user,
+      keyPath: r.keyPath,
     }));
 }, { deep: true });
 
@@ -202,7 +225,7 @@ async function reopenOnboarding() {
     </p>
 
     <div v-if="store.doc" class="body">
-      <template v-for="group in ['ui', 'terminal', 'window', 'hostTools', 'disk']" :key="group">
+      <template v-for="group in ['ui', 'terminal', 'window', 'hostTools', 'ssh', 'disk']" :key="group">
         <h3 class="group">{{ t(GROUP_KEY[group]) }}</h3>
 
         <!-- ui section -->
@@ -300,6 +323,26 @@ async function reopenOnboarding() {
           <p class="note">{{ t("settings.hostTools.note") }}</p>
         </template>
 
+        <!-- F1 (D-10): SSH connection profiles for sync workspaces. v1: key
+             auth only — keyPath is a REFERENCE, never copied or stored. -->
+        <template v-else-if="group === 'ssh'">
+          <p class="help">{{ t("settings.ssh.hint") }}</p>
+          <div v-for="(row, i) in sshProfiles" :key="i" class="field ssh-row">
+            <input v-model.trim="row.name" class="ssh-name" :placeholder="t('settings.ssh.namePh')" :disabled="store.readOnly" />
+            <input v-model.trim="row.host" class="ssh-host" :placeholder="t('settings.ssh.hostPh')" :disabled="store.readOnly" />
+            <input v-model.number="row.port" type="number" min="1" max="65535" class="ssh-port" :disabled="store.readOnly" />
+            <input v-model.trim="row.user" class="ssh-user" :placeholder="t('settings.ssh.userPh')" :disabled="store.readOnly" />
+            <input v-model.trim="row.keyPath" class="ssh-key" :placeholder="t('settings.ssh.keyPh')" :disabled="store.readOnly" />
+            <button class="ht-del" :disabled="store.readOnly" :title="t('settings.ssh.remove')" @click="sshProfiles.splice(i, 1)">×</button>
+          </div>
+          <div class="field">
+            <button :disabled="store.readOnly" @click="sshProfiles.push({ name: '', host: '', port: 22, user: '', keyPath: '' })">
+              ＋ {{ t("settings.ssh.add") }}
+            </button>
+          </div>
+          <p class="note">{{ t("settings.ssh.note") }}</p>
+        </template>
+
         <!-- O7 (D-11): disk & cache card — df summary + until-filtered prune.
              NOT a settings document field: live ops via the settings store. -->
         <template v-else-if="group === 'disk'">
@@ -382,6 +425,13 @@ input:disabled, select:disabled { opacity: 0.5; }
 .ht-del {
   min-width: 26px; min-height: 26px; padding: 0; flex: none;
 }
+/* F1: SSH profile rows */
+.ssh-row { flex-wrap: nowrap; }
+.ssh-name { max-width: 120px; }
+.ssh-host { max-width: 170px; font-family: var(--font-mono); font-size: var(--font-sm); }
+.ssh-port { max-width: 72px; }
+.ssh-user { max-width: 110px; }
+.ssh-key { font-family: var(--font-mono); font-size: var(--font-sm); }
 .loading { color: var(--text-muted); font-size: var(--font-md); }
 .foot {
   display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border);

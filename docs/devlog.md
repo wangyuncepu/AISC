@@ -2013,3 +2013,12 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   （POSIX `/`、UNC `\`、Windows 盘符），跨平台一致可测。Workbench
   lane 重跑绿，**F2 批次四 lane 全绿收官**。余项：NSIS/deb/DMG 打包
   resources + CI 下载步骤接线（与 T-F1c Rust 侧发现耦合，下一段）。
+- **T-F1b 前半（2026-09-04）**：SSH profiles settings 节落地——Rust
+  `SshProfile{name,host,port,user,key_path}`（v1 裁决**仅密钥认证**：
+  key_path 纯引用不复制不读内容；密码/DPAPI 留待后续）+ sanitize
+  （空 name/host/user 丢弃、port=0 回 22）+ patch 整组替换 + **GUI reset
+  不清**（连接配置非装饰）；前端 SettingsForm 新「SSH 连接配置」组
+  （hostTools 同款工作副本双向 watch 模式）、store dirty/save 补
+  sshProfiles、i18n 双语（含 rsync/known_hosts 提示）。门禁：cargo
+  settings 20 / vitest 433 / vue-tsc / vite build。后半（picker「SSH
+  工作区」表单 + 影子目录创建）下一段。
