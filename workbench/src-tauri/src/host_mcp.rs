@@ -324,7 +324,10 @@ async fn dispatch(req: &Value, state: &std::sync::Arc<HostMcpState>) -> Option<V
 }
 
 fn host_tools_list(state: &std::sync::Arc<HostMcpState>) -> Value {
-    Value::String(serde_json::to_string(&state.whitelist()).unwrap_or_default())
+    // A plain JSON array — the tools/call wrapper stringifies ONCE. (The
+    // first field report had this pre-stringified, so the wrapper serialized
+    // it a second time and the client saw a malformed escaped-string blob.)
+    serde_json::to_value(state.whitelist()).unwrap_or(Value::Array(Vec::new()))
 }
 
 /// Whitelist + preset + cwd containment + budgets. Never panics; every
@@ -338,7 +341,21 @@ async fn host_exec(state: &std::sync::Arc<HostMcpState>, args: &Value) -> Value 
         .unwrap_or_default().to_string();
 
     let whitelist = state.whitelist();
-    let entry = whitelist.iter().find(|e| e.program == program);
+    // Agents naturally call bare names ("git"), while the whitelist stores
+    // full paths. Resolution order — all still WHITELIST-BOUND (a bare name
+    // can only ever resolve to an entry the user registered, never beyond):
+    // 1. exact program path, 2. entry name (case-insensitive),
+    // 3. program basename (case-insensitive — Windows spawns are
+    //    case-insensitive anyway; on other OSes the exact hit from (1)
+    //    covers the precise case).
+    let prog_lc = program.to_ascii_lowercase();
+    let entry = whitelist.iter().find(|e| e.program == program)
+        .or_else(|| whitelist.iter().find(|e| e.name.to_ascii_lowercase() == prog_lc))
+        .or_else(|| whitelist.iter().find(|e| {
+            e.program.rsplit(['\\', '/']).next()
+                .map(|b| b.to_ascii_lowercase() == prog_lc)
+                .unwrap_or(false)
+        }));
     let Some(entry) = entry else {
         return json!({
             "isError": true,
@@ -591,6 +608,41 @@ mod tests {
         let r = host_exec(&state, &json!({ "program": "C:/tools/echo.exe" })).await;
         assert!(r["isError"].as_bool().unwrap());
         assert!(r["error"].as_str().unwrap().contains("workspace"));
+    }
+
+    /// T-F2e field report: agents call BARE names ("git") while the
+    /// whitelist stores full paths. Resolution must stay whitelist-bound.
+    #[tokio::test]
+    async fn host_exec_resolves_bare_names_within_the_whitelist() {
+        let state = std::sync::Arc::new(HostMcpState::new());
+        let dir = std::env::temp_dir();
+        state.set_workspace(Some(dir.clone()));
+        state.set_whitelist(vec![HostToolEntry {
+            name: "Echo Tool".into(),
+            #[cfg(windows)]
+            program: "cmd".into(),
+            #[cfg(not(windows))]
+            program: "/bin/echo".into(),
+            read_only_preset: None,
+        }]);
+        // by entry NAME (mixed case)
+        #[cfg(windows)]
+        let (prog, args) = ("echo tool", vec!["/c", "echo", "ok"]);
+        #[cfg(not(windows))]
+        let (prog, args) = ("echo tool", vec!["ok"]);
+        let r = host_exec(&state, &json!({ "program": prog, "args": args })).await;
+        assert_eq!(r["exitCode"], 0, "body: {r}");
+        // by BASENAME (case-insensitive)
+        #[cfg(windows)]
+        let (prog2, args2) = ("CMD", vec!["/c", "echo", "ok2"]);
+        #[cfg(not(windows))]
+        let (prog2, args2) = ("echo", vec!["ok2"]);
+        let r = host_exec(&state, &json!({ "program": prog2, "args": args2 })).await;
+        assert_eq!(r["exitCode"], 0, "body: {r}");
+        // a bare name that matches NOTHING in the whitelist stays refused
+        let r = host_exec(&state, &json!({ "program": "powershell" })).await;
+        assert!(r["isError"].as_bool().unwrap());
+        assert!(r["error"].as_str().unwrap().contains("not whitelisted"));
     }
 
     #[cfg(windows)]

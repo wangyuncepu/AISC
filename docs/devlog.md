@@ -1971,3 +1971,16 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   （第一版断言 tools/list 响应含白名单路径是错的——schema 里不含
   运行时数据，改为真调 host_tools_list）。门禁：vitest 433 / vue-tsc /
   vite build / cargo 278。
+- **T-F2e 首轮手测反馈（2026-09-04，两个精确 bug）**：**链路全通**——
+  claude 发现 `aisc-host` 并成功调用（注册/通道/token/白名单防线全工作，
+  拒绝消息正确返回宿主指引）。修复：①`host_tools_list` malformed =
+  **双重序列化**（函数内先 to_string 成 Value::String，外层 tools/call
+  包装又 to_string 一层 → 客户端收到转义串怪物）→ 改为返回纯数组
+  Value 单层序列化；②agent 天然用裸名 `"git"` 调用而白名单存完整
+  路径 → 精确匹配拒绝（语义正确但可用性差）→ 解析链改为
+  **program 精确 → entry name（大小写不敏感）→ program basename（大小
+  号不敏感）**，仍白名单绑定（裸名只能命中用户登记的条目，永不出界）；
+  +1 测试（name/basename 命中 + 未匹配仍拒）。手测前插曲：用户首开
+  工作区报 `unrecognized arguments: --host-mcp-url`——旧 sidecar 不识
+  新 CLI flag，重建 PyInstaller + 双处同步后过（sidecar 同步规约再犯，
+  本轮 Python CLI 改动未触发重建记忆点）。门禁：cargo 279。
