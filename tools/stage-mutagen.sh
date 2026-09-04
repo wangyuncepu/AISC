@@ -15,13 +15,17 @@ VERSION="v0.16.4"
 BASE="https://github.com/mutagen-io/mutagen/releases/download/${VERSION}"
 DEST="downloads/host-bin"
 
-# sha256 pins (fail closed — a mismatch aborts the stage)
-declare -A SHA=(
-  [windows_amd64]="0dd0782f7eae0b3b6b2d4ce0ebdf742ca2b2e46a77eb15c0ed0f6531074fa1b9"
-  [linux_amd64]="7bb029ff21e5fab0bc2e094af5a93903a14ec0105d6247de441c521e431801e0"
-  [darwin_arm64]="9d11b6e3ab096a7ddf37dfbf79a2e0c17644117938e4d9fcf84dce12b7322d4f"
-  [darwin_amd64]="7bf6b4e41aa6238a560a67634e52085dda9ac3af610526baccf567ccdcd82d9b"
-)
+# sha256 pins (fail closed — a mismatch aborts the stage). A case function,
+# NOT a bash 4 associative array: macOS runners ship bash 3.2 where
+# `declare -A` under `set -u` dies with "unbound variable" (CI field report).
+sha_for() {
+  case "$1" in
+    windows_amd64) echo "0dd0782f7eae0b3b6b2d4ce0ebdf742ca2b2e46a77eb15c0ed0f6531074fa1b9" ;;
+    linux_amd64)   echo "7bb029ff21e5fab0bc2e094af5a93903a14ec0105d6247de441c521e431801e0" ;;
+    darwin_arm64)  echo "9d11b6e3ab096a7ddf37dfbf79a2e0c17644117938e4d9fcf84dce12b7322d4f" ;;
+    darwin_amd64)  echo "7bf6b4e41aa6238a560a67634e52085dda9ac3af610526baccf567ccdcd82d9b" ;;
+  esac
+}
 
 mkdir -p "${DEST}"
 extract() { # always (re)extract: a cached archive must still land its binary
@@ -35,7 +39,8 @@ rc=0
 for plat in windows_amd64 linux_amd64 darwin_arm64 darwin_amd64; do
   asset="mutagen_${plat}_${VERSION}.tar.gz"
   out="${DEST}/${asset}"
-  if [ -f "${out}" ] && echo "${SHA[${plat}]}  ${out}" | sha256sum -c - >/dev/null 2>&1; then
+  sha="$(sha_for "${plat}")"
+  if [ -f "${out}" ] && echo "${sha}  ${out}" | sha256sum -c - >/dev/null 2>&1; then
     echo "📦 已缓存: ${out}"
     extract "${plat}" "${out}"
     continue
@@ -48,7 +53,7 @@ for plat in windows_amd64 linux_amd64 darwin_arm64 darwin_amd64; do
     fi
   done
   [ "$ok" = "1" ] || { echo "❌ 下载失败: ${asset}"; rc=1; continue; }
-  if ! echo "${SHA[${plat}]}  ${out}" | sha256sum -c -; then
+  if ! echo "${sha}  ${out}" | sha256sum -c -; then
     echo "❌ sha256 不匹配: ${asset}"; rm -f "${out}"; rc=1; continue
   fi
   extract "${plat}" "${out}"
