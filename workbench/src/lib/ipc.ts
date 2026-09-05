@@ -303,6 +303,8 @@ export interface SyncStatus {
   freeBytes?: number | null;
   /** Disk guard: this session was auto-paused for low disk (metadata flag). */
   lowDisk?: boolean;
+  /** The workspace's remote root — anchors the pull-file browse dialog. */
+  remotePath?: string;
 }
 
 export const syncSessionStart = (workspace: string) =>

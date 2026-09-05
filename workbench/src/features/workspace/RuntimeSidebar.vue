@@ -126,14 +126,18 @@ const pullOpen = ref(false);
 const pullPath = ref("");
 const pullBrowse = ref<{ path: string; entries: { name: string; isDir: boolean }[] } | null>(null);
 
+/** The workspace's remote root (server-enforced containment anchor): the
+ *  browse dialog opens HERE and can never navigate above it. */
+const pullRoot = computed(() => store.sync?.remotePath?.replace(/\/+$/, "") || "");
+
 async function loadPullBrowse(path: string): Promise<void> {
   const entries = await workspaces.browseRemoteInWorkspace(store.workspace.trim(), path);
   if (pullBrowse.value) pullBrowse.value.entries = entries;
 }
 function openPullBrowse(): void {
-  // Start at the remote root of THIS workspace when the path is empty —
-  // meta lives server-side; "/" is always browsable.
-  const start = pullPath.value.trim() || "/";
+  // Open at the workspace's remote folder (field report 2026-09-05), not
+  // the filesystem root; "/" only as a fallback when the root is unknown.
+  const start = pullPath.value.trim() || pullRoot.value || "/";
   pullBrowse.value = { path: start, entries: [] };
   void loadPullBrowse(start);
 }
@@ -144,20 +148,31 @@ function pullBrowseInto(dir: string): void {
   void loadPullBrowse(next);
 }
 function pullBrowseUp(): void {
-  if (!pullBrowse.value) return;
+  if (!pullBrowse.value || pullBrowse.value.path === pullRoot.value) return;
   const parts = pullBrowse.value.path.replace(/\/+$/, "").split("/").filter(Boolean);
   parts.pop();
-  pullBrowse.value.path = "/" + parts.join("/");
+  const next = "/" + parts.join("/");
+  // never above the workspace root
+  pullBrowse.value.path = pullRoot.value && next.length < pullRoot.value.length ? pullRoot.value : next;
   void loadPullBrowse(pullBrowse.value.path);
 }
-function pullBrowseCrumb(index: number): void {
-  if (!pullBrowse.value) return;
-  const parts = pullBrowse.value.path.replace(/\/+$/, "").split("/").filter(Boolean);
-  pullBrowse.value.path = "/" + parts.slice(0, index + 1).join("/");
-  void loadPullBrowse(pullBrowse.value.path);
-}
-const pullBrowseCrumbs = computed(() =>
-  (pullBrowse.value?.path ?? "/").replace(/\/+$/, "").split("/").filter(Boolean));
+/** Crumbs as {label, path} pairs, root-relative when the workspace root is
+ *  known (the first crumb IS the workspace folder). */
+const pullBrowseCrumbs = computed<{ label: string; path: string }[]>(() => {
+  const root = pullRoot.value;
+  const p = (pullBrowse.value?.path ?? "/").replace(/\/+$/, "");
+  if (!root) {
+    const segs = p.split("/").filter(Boolean);
+    return segs.map((label, i) => ({ label, path: "/" + segs.slice(0, i + 1).join("/") }));
+  }
+  const rootName = root.split("/").filter(Boolean).pop() ?? root;
+  const rel = p === root || p.startsWith(root + "/") ? p.slice(root.length) : "";
+  const segs = rel.split("/").filter(Boolean);
+  return [
+    { label: rootName, path: root },
+    ...segs.map((label, i) => ({ label, path: root + "/" + segs.slice(0, i + 1).join("/") })),
+  ];
+});
 
 function choosePullFile(name: string): void {
   if (!pullBrowse.value) return;
@@ -400,14 +415,18 @@ function copyDone(key: string): boolean {
         </button>
         <button :disabled="workspaces.pullBusy" @click="pullOpen = false; pullPath = ''; pullBrowse = null">×</button>
       </div>
-      <!-- Remote file browse (picker-style: breadcrumb + dirs enter + file pick). -->
+      <!-- Remote file browse (picker-style: breadcrumb + dirs enter + file pick),
+           anchored to the workspace's remote folder — never above it. -->
       <div v-if="pullBrowse" class="pull-browse" role="dialog" :aria-label="t('sidebar.sync.pullBrowse')">
         <div class="browse-head">
-          <button class="crumb" @click="loadPullBrowse('/')">/</button>
-          <template v-for="(c, i) in pullBrowseCrumbs" :key="i">
-            <button class="crumb" @click="pullBrowseCrumb(i)">{{ c }}</button>
+          <template v-for="c in pullBrowseCrumbs" :key="c.path">
+            <button class="crumb" @click="loadPullBrowse(c.path)">{{ c.label }}</button>
           </template>
-          <button class="up" :disabled="pullBrowse.path === '/' || workspaces.browseBusy" @click="pullBrowseUp">↑</button>
+          <button
+            class="up"
+            :disabled="pullBrowse.path === (pullRoot || '/') || workspaces.browseBusy"
+            @click="pullBrowseUp"
+          >↑</button>
           <button class="close" @click="pullBrowse = null">×</button>
         </div>
         <div class="browse-list">

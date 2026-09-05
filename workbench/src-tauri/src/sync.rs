@@ -555,8 +555,44 @@ pub async fn ssh_browse(
     ssh_browse_impl(&profile, path)
 }
 
+/// Clamp a browse path to the workspace's remote root: empty/"/" resolves
+/// to the root itself, and anything outside the root subtree is rejected
+/// (field report 2026-09-05: the pull-file browser must open AT the
+/// workspace folder and never wander elsewhere on the remote).
+pub fn resolve_workspace_browse_path(base: &str, input: &str) -> Result<String, WorkbenchError> {
+    let base = base.trim_end_matches('/');
+    if base.is_empty() {
+        return Err(WorkbenchError::usage("workspace has no remote root"));
+    }
+    // Segment-normalize first: a string-prefix check alone lets
+    // `/home/tv/test/../secret` walk straight out of the root.
+    let norm = if input.trim().is_empty() || input.trim() == "/" {
+        base.to_string()
+    } else {
+        let mut out: Vec<&str> = Vec::new();
+        for seg in input.trim().split('/') {
+            match seg {
+                "" | "." => {}
+                ".." => {
+                    out.pop();
+                }
+                s => out.push(s),
+            }
+        }
+        format!("/{}", out.join("/"))
+    };
+    if norm == base || norm.starts_with(&format!("{base}/")) {
+        Ok(norm)
+    } else {
+        Err(WorkbenchError::usage(format!(
+            "path {norm:?} is outside this workspace's remote root {base:?}"
+        )))
+    }
+}
+
 /// Browse variant for an OPEN SSH workspace: the profile snapshot comes
-/// from the metadata (the sidebar pull-file flow has no live profile form).
+/// from the metadata (the sidebar pull-file flow has no live profile form),
+/// and navigation is CONTAINED to the workspace's remote root.
 #[tauri::command]
 pub async fn ssh_browse_workspace(
     workspace: String, path: String,
@@ -564,6 +600,7 @@ pub async fn ssh_browse_workspace(
     let ws = std::path::PathBuf::from(&workspace);
     let meta = read_meta(&ws)
         .ok_or_else(|| WorkbenchError::usage("not an SSH workspace (no metadata)"))?;
+    let path = resolve_workspace_browse_path(&meta.remote_path, &path)?;
     ssh_browse_impl(&meta.profile, path)
 }
 
@@ -714,6 +751,9 @@ pub struct SyncStatus {
     pub total_file_size: Option<u64>,
     pub free_bytes: Option<u64>,
     pub low_disk: bool,
+    /// The workspace's remote root (from metadata) — anchors the pull-file
+    /// browse dialog (open at the root, never browse outside it).
+    pub remote_path: String,
 }
 
 // ===========================================================================
@@ -946,7 +986,11 @@ pub async fn sync_session_start(workspace: String) -> Result<SyncStatus, Workben
         return Ok(SyncStatus { status: "none".into(), ..Default::default() });
     };
     if meta.sync_disabled == Some(true) {
-        return Ok(SyncStatus { status: "disabled".into(), ..Default::default() });
+        return Ok(SyncStatus {
+            status: "disabled".into(),
+            remote_path: meta.remote_path,
+            ..Default::default()
+        });
     }
     sync_session_start_impl(ws, meta).await
 }
@@ -1068,6 +1112,7 @@ fn sync_status_inner(
         .map_err(|e| WorkbenchError::usage(format!("sync list parse: {e}")))?;
     let low_disk = meta.low_disk_paused == Some(true);
     let free_bytes = data_root_free_bytes();
+    let remote_path = meta.remote_path.clone();
     Ok(match sessions.as_array() {
         Some(arr) => {
             let mine = arr
@@ -1083,11 +1128,12 @@ fn sync_status_inner(
                     total_file_size: s["beta"]["totalFileSize"].as_u64(),
                     free_bytes,
                     low_disk,
+                    remote_path,
                 },
-                None => SyncStatus::default(),
+                None => SyncStatus { remote_path, ..Default::default() },
             }
         }
-        None => SyncStatus::default(),
+        None => SyncStatus { remote_path, ..Default::default() },
     })
 }
 
@@ -1100,7 +1146,11 @@ pub async fn sync_session_status(workspace: String) -> Result<SyncStatus, Workbe
         return Ok(SyncStatus { status: "none".into(), ..Default::default() });
     };
     if meta.sync_disabled == Some(true) {
-        return Ok(SyncStatus { status: "disabled".into(), ..Default::default() });
+        return Ok(SyncStatus {
+            status: "disabled".into(),
+            remote_path: meta.remote_path,
+            ..Default::default()
+        });
     }
     let transport = ensure_transport(&meta)?;
     sync_status_inner(&ws, &meta, &transport)
@@ -1308,6 +1358,24 @@ mod tests {
             assert!(f > 0);
             assert_eq!(low_disk_should_pause(Some(f)), f < LOW_DISK_FLOOR_BYTES);
         }
+    }
+
+    /// Pull-file browse containment: open-at-root, never outside it.
+    #[test]
+    fn workspace_browse_containment() {
+        let base = "/home/tv/test";
+        assert_eq!(resolve_workspace_browse_path(base, "").unwrap(), base);
+        assert_eq!(resolve_workspace_browse_path(base, "/").unwrap(), base);
+        assert_eq!(resolve_workspace_browse_path(base, base).unwrap(), base);
+        assert_eq!(
+            resolve_workspace_browse_path(base, "/home/tv/test/media/").unwrap(),
+            "/home/tv/test/media"
+        );
+        // siblings, parents, traversal tricks: all refused
+        assert!(resolve_workspace_browse_path(base, "/home/tv").is_err());
+        assert!(resolve_workspace_browse_path(base, "/home/tv/other").is_err());
+        assert!(resolve_workspace_browse_path(base, "/home/tv/test/../secret").is_err());
+        assert!(resolve_workspace_browse_path("", "/x").is_err());
     }
 
     /// Agents-bundle co-location (field report 2026-09-05): install_mutagen_pair

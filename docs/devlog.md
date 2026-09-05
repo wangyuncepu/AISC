@@ -2256,3 +2256,13 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   与裸 ssh 管道基准一致，wrapper 退役后零额外损耗）；顺带确认 mutagen
   CLI 模板字段用导出名（`.Name/.Status`——JSON tag 是小写但模板走结构体）。
   测试产物 bench-1g.dat 双侧清理。门禁：cargo 290 ×3 连绿 / sync 10。
+- **T-F1e 拉取浏览钉根（2026-09-05 晚，用户反馈：应直接定位工作区
+  对应文件夹、拒绝访问其它路径）**：`ssh_browse_workspace` 加服务端
+  containment——`resolve_workspace_browse_path` 纯函数（空/"/" 归一到
+  工作区远端根；**段归一化防 `..` 穿越**——纯字符串前缀挡不住
+  `/home/tv/test/../secret`；根外一律拒）；SyncStatus 新 `remotePath`
+  （disabled/watching 各路径均透出）；侧栏浏览弹层开箱即在工作区根、
+  ↑ 在根处禁用、面包屑改为 {label,path} 对且首屑=工作区文件夹名（根
+  之外不渲染）。手测输入框仍可手输任意路径（浏览引导、输入兜底的分层
+  裁决）。+1 containment 矩阵测试（含穿越/兄弟/父目录拒绝）。门禁：
+  cargo 291 / sync 11 / vue-tsc / vitest 433 / vite。
