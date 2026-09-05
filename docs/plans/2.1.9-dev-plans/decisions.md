@@ -291,3 +291,20 @@ F2 先。**实施不排期**——用户裁决优化批次优先于新功能，F
 通道）——纯 UI 缺口。设计全档 →
 [provider-parity-design.md](provider-parity-design.md)（组件结构/契约变更/
 测试矩阵/实施序列 P1-P4）。排期：opt-batch 收口后，或用户点名提前。
+
+## D-13：低配机器 Docker 性能优化批次立项（2026-09-05，PERF）
+
+用户开题 + 两点裁决 + 一条流程规约。规格全档 →
+[perf-batch-spec.md](perf-batch-spec.md)（探针事实基线 + P1-P10 分批方案）。
+
+1. **低配模式启用方式**：自动应用 + 弹窗告知（doctor 检测 ≤8GB 自动置 on
+   + 一次性通知；唯一保留确认的：.wslconfig 写入需 wsl --shutdown——弹
+   确认框，其余自动）
+2. **轮询取舍**：温和拉长（活跃 5s 不动；后台 25→60s、失焦 15→30s）
+3. spawn 消灭三层次排序裁决：①tick 合并 → ②SDK 进命令层 → ③Rust 直连
+   named pipe（①②兼作 ③ 的降级路径，独立可回退）
+4. lease 直写：锁互操作**实验先行**（POSIX flock/fcntl 陷阱不可纸面推断），
+   成立则同锁直写、证伪则无锁+mtime 守卫；TTL=45s 契约不动
+5. **流程规约（长期有效）**：所有突发加入的计划必须落地到本版本 plans
+   目录——本周期 F1/F2 手测期 8 项现场修复已回溯补档
+   （[f1-f2-field-fixes.md](f1-f2-field-fixes.md)）
