@@ -329,11 +329,24 @@ pub fn ssh_config_body(meta: &SshWorkspaceMeta) -> String {
 pub fn ensure_managed_ssh_config(profile: &crate::settings::SshProfile) -> Result<(), WorkbenchError> {
     let home = dirs::home_dir()
         .ok_or_else(|| WorkbenchError::usage("cannot resolve home dir"))?;
-    let ssh_dir = home.join(".ssh");
-    std::fs::create_dir_all(&ssh_dir)
-        .map_err(|e| WorkbenchError::usage(format!("create ~/.ssh: {e}")))?;
-    let path = ssh_dir.join("config");
-    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    let path = home.join(".ssh").join("config");
+    ensure_managed_ssh_config_at(&path, profile)
+}
+
+/// Path-injected core (the test isolation that env vars could NOT deliver:
+/// `dirs::home_dir()` on Windows resolves via SHGetKnownFolderPath and
+/// IGNORES USERPROFILE/HOME — the env-var "isolation" in the transport test
+/// rewrote the REAL ~/.ssh/config managed block with the test profile on
+/// every cargo test run, field report 2026-09-05).
+pub fn ensure_managed_ssh_config_at(
+    path: &std::path::Path,
+    profile: &crate::settings::SshProfile,
+) -> Result<(), WorkbenchError> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| WorkbenchError::usage(format!("create ~/.ssh: {e}")))?;
+    }
+    let current = std::fs::read_to_string(path).unwrap_or_default();
     let block = format!(
         "{}\n{}{}\n{}\n",
         SSH_BLOCK_BEGIN,
@@ -360,7 +373,7 @@ pub fn ensure_managed_ssh_config(profile: &crate::settings::SshProfile) -> Resul
         }
     };
     if next != current {
-        std::fs::write(&path, next.as_bytes())
+        std::fs::write(path, next.as_bytes())
             .map_err(|e| WorkbenchError::usage(format!("write ssh config: {e}")))?;
     }
     Ok(())
@@ -1335,24 +1348,31 @@ mod tests {
     /// NEVER reaches a host-key/passphrase prompt (the deadlock that
     /// motivated the wrapper). Best-effort: skipped when no ssh/mutagen is
     /// resolvable (CI images without the host tool).
+    ///
+    /// ISOLATION (the hard way, twice): the managed-block writer must be
+    /// driven against a tempdir config path. Env-var home overrides DON'T
+    /// work on Windows — dirs::home_dir() resolves via SHGetKnownFolderPath
+    /// and ignores USERPROFILE, so an earlier env-based "isolation" rewrote
+    /// the REAL ~/.ssh/config on every cargo test run (2026-09-05).
     #[test]
     fn wrapper_makes_transport_non_interactive() {
-        if which_ssh_like("ssh").is_none() || mutagen_binary().is_none() {
+        if which_ssh_like("ssh").is_none() || ensure_mutagen_ready().is_none() {
             eprintln!("skipping: ssh/mutagen not resolvable");
             return;
         }
-        // ISOLATE the home dir: ensure_managed_ssh_config writes the managed
-        // block into ~/.ssh/config — without this the test pollutes the REAL
-        // user config (found the hard way, 2026-09-04).
         let home = tempfile::tempdir().unwrap();
-        #[cfg(windows)]
-        std::env::set_var("USERPROFILE", home.path());
-        #[cfg(not(windows))]
-        std::env::set_var("HOME", home.path());
+        let config_path = home.path().join(".ssh").join("config");
         let mut m = test_meta();
         m.profile.host = "127.0.0.1".into();
         m.profile.port = 1; // nothing listens here
         m.remote_path = "/r".into();
+        ensure_managed_ssh_config_at(&config_path, &m.profile).expect("managed block written");
+        // The transport "dir" is PATH-prepend compatibility only (the
+        // wrapper files are retired) — a tempdir stands in, and
+        // ensure_transport is deliberately NOT called: it would rewrite the
+        // REAL ~/.ssh/config managed block with this test profile.
+        let transport = home.path().join("bin");
+        std::fs::create_dir_all(&transport).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let alpha = dir.path().join("alpha");
         std::fs::create_dir_all(&alpha).unwrap();
@@ -1364,7 +1384,6 @@ mod tests {
             serde_json::to_vec(&meta).unwrap(),
         )
         .unwrap();
-        let transport = ensure_transport(&meta).expect("transport prepared");
         let alpha_s = alpha.to_string_lossy().to_string();
         let beta = scp_endpoint(&meta);
         let res = run_mutagen(

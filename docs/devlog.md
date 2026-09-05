@@ -2241,3 +2241,18 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   agent 包落位 10 秒内四会话全部 watching；用户本地 1GiB（testsync/
   test.test）确认推抵远端（#2 闭环）。门禁：cargo 290（+agent 共位
   安装/查找测试）/ vue-tsc / vitest 433 / vite。
+- **T-F1e 追加三修（2026-09-05 下午，用户三问引出的取证）**：①**单测
+  污染真实 ~/.ssh/config 根治**——wrapper 隔离测试用 USERPROFILE/HOME
+  环境变量隔离 home，但 Windows 上 `dirs::home_dir()` 走
+  SHGetKnownFolderPath **不认环境变量**，每次 cargo test 都把真实管理块
+  重写成测试 profile（127.0.0.1:1/deploy）——现场抓到 config 里别名被
+  换、session 端点悬空。修复：`ensure_managed_ssh_config_at(path,
+  profile)` 路径注入式拆分（生产 wrapper 读真实 home，测试传 tempdir
+  config；测试同时绕开 ensure_transport——它才是真实污染调用方）；
+  md5 前后比对验证 config 零触碰。②**bash（msys）环境拉起的 daemon
+  连不上 beta**：msys 转换环境下的 daemon 连 ssh 都不 spawn（0 子进程
+  实锤）；Windows 环境拉起秒恢复。对产品无影响（app 恒从 Windows 环境
+  spawn），诊断脚本教训记档。③**1GiB 推送实测 =123s**（≈8.7MB/s，
+  与裸 ssh 管道基准一致，wrapper 退役后零额外损耗）；顺带确认 mutagen
+  CLI 模板字段用导出名（`.Name/.Status`——JSON tag 是小写但模板走结构体）。
+  测试产物 bench-1g.dat 双侧清理。门禁：cargo 290 ×3 连绿 / sync 10。
