@@ -333,11 +333,46 @@ pub fn ensure_managed_ssh_config(profile: &crate::settings::SshProfile) -> Resul
     ensure_managed_ssh_config_at(&path, profile)
 }
 
+/// One `Host <alias>` section of the managed block.
+fn push_block_section(out: &mut Vec<(String, String)>, alias: Option<String>, lines: &[&str]) {
+    if let Some(a) = alias {
+        let text = lines.join("\n").trim_end().to_string();
+        // upsert: a re-ensure of the same alias replaces its section
+        out.retain(|(x, _)| x != &a);
+        out.push((a, text));
+    }
+}
+
+/// Split managed-block content into `(alias, section)` pairs. Lines before
+/// the first `Host` are dropped (block content is ours — never user data).
+fn parse_block_sections(block: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut cur: Option<String> = None;
+    let mut lines: Vec<&str> = Vec::new();
+    for line in block.lines() {
+        if let Some(rest) = line.strip_prefix("Host ") {
+            push_block_section(&mut out, cur.take(), &lines);
+            cur = Some(rest.trim().to_string());
+            lines = vec![line];
+        } else if cur.is_some() {
+            lines.push(line);
+        }
+    }
+    push_block_section(&mut out, cur, &lines);
+    out
+}
+
 /// Path-injected core (the test isolation that env vars could NOT deliver:
 /// `dirs::home_dir()` on Windows resolves via SHGetKnownFolderPath and
 /// IGNORES USERPROFILE/HOME — the env-var "isolation" in the transport test
 /// rewrote the REAL ~/.ssh/config managed block with the test profile on
 /// every cargo test run, field report 2026-09-05).
+///
+/// MULTI-PROFILE (same-day field report): the block holds one section PER
+/// PROFILE, keyed by alias — ensuring profile B must never delete profile
+/// A's section (the old whole-block rewrite did exactly that: opening a
+/// second profile's workspace silently killed every alias-endpoint session
+/// of the first, and the beta-path-only self-heal couldn't even see it).
 pub fn ensure_managed_ssh_config_at(
     path: &std::path::Path,
     profile: &crate::settings::SshProfile,
@@ -347,31 +382,51 @@ pub fn ensure_managed_ssh_config_at(
             .map_err(|e| WorkbenchError::usage(format!("create ~/.ssh: {e}")))?;
     }
     let current = std::fs::read_to_string(path).unwrap_or_default();
-    let block = format!(
-        "{}\n{}{}\n{}\n",
-        SSH_BLOCK_BEGIN,
-        ssh_config_body(&SshWorkspaceMeta {
-            schema_version: String::new(),
-            profile: profile.clone(),
-            remote_path: String::new(),
-            created_at: String::new(),
-            sync_disabled: None,
-            ignore_patterns: Vec::new(),
-            low_disk_paused: None,
-        }),
-        "",
-        SSH_BLOCK_END,
-    );
-    let next = match (current.find(SSH_BLOCK_BEGIN), current.find(SSH_BLOCK_END)) {
+    let section = ssh_config_body(&SshWorkspaceMeta {
+        schema_version: String::new(),
+        profile: profile.clone(),
+        remote_path: String::new(),
+        created_at: String::new(),
+        sync_disabled: None,
+        ignore_patterns: Vec::new(),
+        low_disk_paused: None,
+    })
+    .trim_end()
+    .to_string();
+
+    // Extract the existing block (if any), upsert our section, rebuild.
+    let mut sections: Vec<(String, String)> = Vec::new();
+    let (before, after) = match (current.find(SSH_BLOCK_BEGIN), current.find(SSH_BLOCK_END)) {
         (Some(a), Some(b)) if b > a => {
-            format!("{}{}{}", &current[..a], block, &current[b + SSH_BLOCK_END.len()..])
-                .trim_end_matches('\n').to_string() + "\n"
+            let inner = &current[a + SSH_BLOCK_BEGIN.len()..b];
+            sections = parse_block_sections(inner);
+            (
+                current[..a].to_string(),
+                current[b + SSH_BLOCK_END.len()..].to_string(),
+            )
         }
-        _ => {
-            let prefix = if current.is_empty() { String::new() } else { current.trim_end().to_string() + "\n\n" };
-            format!("{prefix}{block}")
-        }
+        _ => (
+            if current.is_empty() {
+                String::new()
+            } else {
+                current.trim_end().to_string() + "\n\n"
+            },
+            String::new(),
+        ),
     };
+    let alias = ssh_alias(profile);
+    sections.retain(|(x, _)| x != &alias);
+    sections.push((alias, section));
+    let body = sections
+        .iter()
+        .map(|(_, t)| t.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let block = format!("{}\n{}\n\n{}\n", SSH_BLOCK_BEGIN, body, SSH_BLOCK_END);
+
+    let mut next = format!("{before}{block}{after}");
+    // Preserve the historical trailing-newline normalization.
+    next = next.trim_end_matches('\n').to_string() + "\n";
     if next != current {
         std::fs::write(path, next.as_bytes())
             .map_err(|e| WorkbenchError::usage(format!("write ssh config: {e}")))?;
@@ -1358,6 +1413,55 @@ mod tests {
             assert!(f > 0);
             assert_eq!(low_disk_should_pause(Some(f)), f < LOW_DISK_FLOOR_BYTES);
         }
+    }
+
+    /// Multi-profile managed block: sections coexist keyed by alias —
+    /// ensuring profile B must never touch profile A's section (the old
+    /// whole-block rewrite did, killing A's alias-endpoint sessions).
+    #[test]
+    fn multi_profile_sections_coexist() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config");
+        let mut a = test_meta().profile;
+        let mut b = test_meta().profile;
+        a.key_path = String::new();
+        b.host = "192.168.31.108".into();
+        b.port = 22;
+        b.user = "tv".into();
+        b.key_path = String::new();
+
+        // pre-existing USER content outside the block must survive every ensure
+        std::fs::write(&cfg, "Host myown\n  HostName example.com\n\n").unwrap();
+
+        ensure_managed_ssh_config_at(&cfg, &a).unwrap();
+        ensure_managed_ssh_config_at(&cfg, &b).unwrap();
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        let (alias_a, alias_b) = (ssh_alias(&a), ssh_alias(&b));
+        assert_ne!(alias_a, alias_b);
+        assert!(text.contains("Host myown"), "user content untouched");
+        assert!(text.contains(&format!("Host {alias_a}\n  HostName 10.0.0.5")));
+        assert!(text.contains(&format!("Host {alias_b}\n  HostName 192.168.31.108")));
+
+        // re-ensure A (same identity, different key): ONLY A's section changes
+        let mut a2 = a.clone();
+        a2.key_path = "C:/fresh/key".into();
+        ensure_managed_ssh_config_at(&cfg, &a2).unwrap();
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        assert_eq!(text.matches(&format!("Host {alias_a}")).count(), 1, "no duplicates");
+        assert!(text.contains("IdentityFile C:/fresh/key"));
+        assert!(text.contains(&format!("Host {alias_b}\n  HostName 192.168.31.108")), "B untouched");
+
+        // duplicate sections in a hand-mangled block collapse on ensure
+        let mangled = format!(
+            "{}\nHost {alias_a}\n  Port 1111\n\nHost {alias_a}\n  Port 9999\n\n{}",
+            SSH_BLOCK_BEGIN, SSH_BLOCK_END,
+        );
+        std::fs::write(&cfg, mangled).unwrap();
+        ensure_managed_ssh_config_at(&cfg, &a).unwrap();
+        let text = std::fs::read_to_string(&cfg).unwrap();
+        assert_eq!(text.matches(&format!("Host {alias_a}")).count(), 1);
+        assert!(!text.contains("9999"), "stale dup section gone");
+        assert!(text.contains("Port 2222"), "replaced by the real profile section");
     }
 
     /// Pull-file browse containment: open-at-root, never outside it.
