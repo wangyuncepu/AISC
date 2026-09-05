@@ -498,6 +498,24 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
       browseBusy.value = false;
     }
   }
+
+  /** F1 pull-file flow: browse the remote of an OPEN SSH workspace (profile
+   *  snapshot comes from the workspace metadata server-side). */
+  async function browseRemoteInWorkspace(
+    workspace: string, path: string,
+  ): Promise<import("../lib/ipc").SshDirEntry[]> {
+    browseError.value = null;
+    browseBusy.value = true;
+    try {
+      return await ipc.sshBrowseWorkspace(workspace, path);
+    } catch (e) {
+      browseError.value = (e as { technical_detail?: string; message?: string })
+        ?.technical_detail || (e as { message?: string })?.message || String(e);
+      return [];
+    } finally {
+      browseBusy.value = false;
+    }
+  }
   const browseError = ref<string | null>(null);
   const browseBusy = ref(false);
 
@@ -547,6 +565,7 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     createSshWorkspace,
     createSshError,
     browseRemote,
+    browseRemoteInWorkspace,
     browseError,
     browseBusy,
     pullRemoteFile,

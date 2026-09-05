@@ -97,6 +97,7 @@ jobs:
           mkdir -p workbench/src-tauri/binaries workbench/src-tauri/nsis/bundle
           touch workbench/src-tauri/binaries/aisc-x86_64-unknown-linux-gnu
           touch workbench/src-tauri/binaries/mutagen-x86_64-unknown-linux-gnu
+          touch workbench/src-tauri/binaries/mutagen-agents.tar.gz
           mkdir -p workbench/src-tauri/nsis/bundle/aisc-bundle
 
       - name: Cargo test

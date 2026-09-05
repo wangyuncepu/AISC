@@ -85,6 +85,7 @@ const SYNC_LABEL_KEY: Record<string, string> = {
   halted_on_root_type_change: "sidebar.sync.halted",
   waiting_for_rescan: "sidebar.sync.waiting",
   reconnecting: "sidebar.sync.reconnecting",
+  connecting_beta: "sidebar.sync.reconnecting",
   scanning: "sidebar.sync.scanning",
   waiting_for_scan: "sidebar.sync.waiting",
   reconciling: "sidebar.sync.reconciling",
@@ -119,9 +120,51 @@ const lowDiskBlocked = computed(
 );
 
 /** F1 (oversized strategy): pull ONE excluded/remote file into the shadow
- *  workspace on demand — minimal prompt dialog (path in, file lands). */
+ *  workspace on demand — browseable like the picker's remote-path dialog
+ *  (field report 2026-09-05: typing raw paths is hostile). */
 const pullOpen = ref(false);
 const pullPath = ref("");
+const pullBrowse = ref<{ path: string; entries: { name: string; isDir: boolean }[] } | null>(null);
+
+async function loadPullBrowse(path: string): Promise<void> {
+  const entries = await workspaces.browseRemoteInWorkspace(store.workspace.trim(), path);
+  if (pullBrowse.value) pullBrowse.value.entries = entries;
+}
+function openPullBrowse(): void {
+  // Start at the remote root of THIS workspace when the path is empty —
+  // meta lives server-side; "/" is always browsable.
+  const start = pullPath.value.trim() || "/";
+  pullBrowse.value = { path: start, entries: [] };
+  void loadPullBrowse(start);
+}
+function pullBrowseInto(dir: string): void {
+  if (!pullBrowse.value) return;
+  const next = (pullBrowse.value.path.replace(/\/+$/, "") + "/" + dir).replace(/\/{2,}/g, "/");
+  pullBrowse.value.path = next;
+  void loadPullBrowse(next);
+}
+function pullBrowseUp(): void {
+  if (!pullBrowse.value) return;
+  const parts = pullBrowse.value.path.replace(/\/+$/, "").split("/").filter(Boolean);
+  parts.pop();
+  pullBrowse.value.path = "/" + parts.join("/");
+  void loadPullBrowse(pullBrowse.value.path);
+}
+function pullBrowseCrumb(index: number): void {
+  if (!pullBrowse.value) return;
+  const parts = pullBrowse.value.path.replace(/\/+$/, "").split("/").filter(Boolean);
+  pullBrowse.value.path = "/" + parts.slice(0, index + 1).join("/");
+  void loadPullBrowse(pullBrowse.value.path);
+}
+const pullBrowseCrumbs = computed(() =>
+  (pullBrowse.value?.path ?? "/").replace(/\/+$/, "").split("/").filter(Boolean));
+
+function choosePullFile(name: string): void {
+  if (!pullBrowse.value) return;
+  pullPath.value = (pullBrowse.value.path.replace(/\/+$/, "") + "/" + name).replace(/\/{2,}/g, "/");
+  pullBrowse.value = null;
+}
+
 async function onPull(): Promise<void> {
   const p = pullPath.value.trim();
   if (!p || workspaces.pullBusy) return;
@@ -346,10 +389,43 @@ function copyDone(key: string): boolean {
           :aria-label="t('sidebar.sync.pullPath')"
           @keyup.enter="onPull"
         />
+        <button
+          class="primary browse-btn"
+          :title="t('sidebar.sync.pullBrowse')"
+          :disabled="workspaces.pullBusy || workspaces.browseBusy"
+          @click="openPullBrowse"
+        >…</button>
         <button class="primary" :disabled="workspaces.pullBusy || !pullPath" @click="onPull">
           {{ workspaces.pullBusy ? t("sidebar.sync.pulling") : t("sidebar.sync.pullGo") }}
         </button>
-        <button :disabled="workspaces.pullBusy" @click="pullOpen = false; pullPath = ''">×</button>
+        <button :disabled="workspaces.pullBusy" @click="pullOpen = false; pullPath = ''; pullBrowse = null">×</button>
+      </div>
+      <!-- Remote file browse (picker-style: breadcrumb + dirs enter + file pick). -->
+      <div v-if="pullBrowse" class="pull-browse" role="dialog" :aria-label="t('sidebar.sync.pullBrowse')">
+        <div class="browse-head">
+          <button class="crumb" @click="loadPullBrowse('/')">/</button>
+          <template v-for="(c, i) in pullBrowseCrumbs" :key="i">
+            <button class="crumb" @click="pullBrowseCrumb(i)">{{ c }}</button>
+          </template>
+          <button class="up" :disabled="pullBrowse.path === '/' || workspaces.browseBusy" @click="pullBrowseUp">↑</button>
+          <button class="close" @click="pullBrowse = null">×</button>
+        </div>
+        <div class="browse-list">
+          <p v-if="workspaces.browseBusy" class="muted">{{ t("sidebar.sync.browseLoading") }}</p>
+          <p v-else-if="workspaces.browseError" class="sync-error" role="alert">{{ workspaces.browseError }}</p>
+          <template v-else>
+            <button
+              v-for="e in pullBrowse.entries"
+              :key="e.name"
+              class="entry"
+              :class="{ dir: e.isDir }"
+              @click="e.isDir ? pullBrowseInto(e.name) : choosePullFile(e.name)"
+            >
+              <span class="entry-icon">{{ e.isDir ? "▸" : "·" }}</span>{{ e.name }}
+            </button>
+            <p v-if="!pullBrowse.entries.length" class="muted">{{ t("sidebar.sync.browseEmpty") }}</p>
+          </template>
+        </div>
       </div>
       <div v-if="workspaces.pullError" class="value sync-error" role="alert" :title="workspaces.pullError">
         {{ workspaces.pullError }}
@@ -490,6 +566,7 @@ function copyDone(key: string): boolean {
 .state[data-state="staging"], .state[data-state="saving"],
 .state[data-state="staging_alpha"], .state[data-state="staging_beta"] { color: var(--success); }
 .state[data-state="paused"], .state[data-state="reconnecting"],
+.state[data-state="connecting_beta"],
 .state[data-state="halted"], .state[data-state="halted_on_root_deletion"],
 .state[data-state="halted_on_root_type_change"] { color: var(--warn); }
 .sync-error { color: var(--error-fg); font-size: var(--font-xs);
@@ -504,6 +581,24 @@ function copyDone(key: string): boolean {
 }
 .pull-row button.primary { background: var(--accent); color: var(--accent-fg); border: none;
   font-weight: 600; border-radius: var(--radius-sm); padding: 0 var(--space-2); cursor: pointer; }
+.pull-row button.browse-btn { min-width: 34px; padding: 0; }
+/* Remote file browse (mirrors the picker's browse dialog in miniature). */
+.pull-browse { display: flex; flex-direction: column; gap: var(--space-1);
+  border: var(--border-w) solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface-3); padding: var(--space-2); max-height: 260px; overflow: hidden; }
+.browse-head { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+.browse-head .crumb { background: none; border: none; color: var(--info);
+  font-size: var(--font-xs); min-height: 20px; padding: 0 3px; cursor: pointer; }
+.browse-head .crumb:hover { text-decoration: underline; }
+.browse-head .up, .browse-head .close { background: var(--surface); border: none;
+  min-height: 20px; min-width: 22px; padding: 0; font-size: var(--font-xs); }
+.browse-list { overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.browse-list .entry { display: flex; align-items: center; gap: 6px; justify-content: flex-start;
+  background: none; border: none; min-height: 24px; padding: 0 4px; text-align: left;
+  font-size: var(--font-xs); font-family: var(--font-mono); color: var(--text-2); cursor: pointer; }
+.browse-list .entry:hover { background: var(--surface-hover); color: var(--text); }
+.browse-list .entry.dir { color: var(--info); }
+.entry-icon { width: 12px; flex: none; color: var(--text-faint); }
 /* stale: last-known styling, never deterministic green (04 §2.1) */
 .state[data-fresh="stale"] { color: var(--warn); }
 .last-known { font-size: 10px; color: var(--warn); }

@@ -281,6 +281,10 @@ export interface SshDirEntry {
 
 export const sshBrowse = (profile: unknown, path: string) =>
   invoke<SshDirEntry[]>("ssh_browse", { profile, path });
+/** Browse variant for an OPEN SSH workspace (profile from metadata — the
+ *  sidebar pull-file flow has no live profile form). */
+export const sshBrowseWorkspace = (workspace: string, path: string) =>
+  invoke<SshDirEntry[]>("ssh_browse_workspace", { workspace, path });
 
 /** F1 (oversized strategy): pull ONE remote file into the shadow workspace
  * on demand — lands outside the sync flow, usable by the agent immediately. */

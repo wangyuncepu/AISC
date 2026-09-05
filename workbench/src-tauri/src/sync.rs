@@ -160,6 +160,80 @@ fn now_iso() -> String {
 // T-F1c: the sync engine (mutagen) — discovery, ssh transport, sessions.
 // ===========================================================================
 
+/// Bundle-resource dir (set once at app setup — `tauri::Manager::path()
+/// resource_dir()`). The mutagen agents tarball rides `bundle.resources`,
+/// which on deb/DMG installs lands AWAY from the externalBin binary dir.
+pub static MUTAGEN_RESOURCE_DIR: std::sync::OnceLock<std::path::PathBuf> =
+    std::sync::OnceLock::new();
+
+/// The mutagen AGENT bundle: every beta dial STREAMS the remote agent from
+/// this file, searched ONLY next to the mutagen binary itself. Shipping the
+/// bare binary without it kills every SSH endpoint with "unable to locate
+/// agent bundle" (field report 2026-09-05: all sessions stuck in
+/// connecting-beta — the tauri-staged binary sat alone in target/debug).
+const MUTAGEN_AGENTS_FILE: &str = "mutagen-agents.tar.gz";
+
+/// First existing agents-bundle candidate among the lookup chain.
+fn find_agents_bundle(bin: &std::path::Path) -> Option<std::path::PathBuf> {
+    let bin_dir = bin.parent()?;
+    let mut candidates: Vec<std::path::PathBuf> = vec![bin_dir.join(MUTAGEN_AGENTS_FILE)];
+    // Workbench exe dir (installed layouts put the resource next to the exe).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(d) = exe.parent() {
+            candidates.push(d.join(MUTAGEN_AGENTS_FILE));
+        }
+    }
+    if let Some(res) = MUTAGEN_RESOURCE_DIR.get() {
+        candidates.push(res.join(MUTAGEN_AGENTS_FILE));
+    }
+    // Dev fallback: the repo's staging dir (target/debug → src-tauri/binaries).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(d) = exe.parent() {
+            candidates.push(
+                d.join("..").join("..").join("binaries").join(MUTAGEN_AGENTS_FILE),
+            );
+        }
+    }
+    candidates.into_iter().find(|c| c.is_file())
+}
+
+/// Copy the binary + agents bundle into `dir` and return the installed
+/// binary path (used when the binary's own dir is read-only or the bundle
+/// can't legally sit beside it). Cheap-idempotent: same-length files skip.
+fn install_mutagen_pair(
+    bin: &std::path::Path,
+    agents: &std::path::Path,
+    dir: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    fn copy_if_changed(src: &std::path::Path, dst: &std::path::Path) -> bool {
+        let Ok(meta) = std::fs::metadata(src) else { return false };
+        if let Ok(existing) = std::fs::metadata(dst) {
+            if existing.len() == meta.len() {
+                return true;
+            }
+        }
+        std::fs::copy(src, dst).is_ok()
+    }
+    std::fs::create_dir_all(dir).ok()?;
+    if !copy_if_changed(bin, &dir.join(bin.file_name()?)) {
+        return None;
+    }
+    if !copy_if_changed(agents, &dir.join(MUTAGEN_AGENTS_FILE)) {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let installed = dir.join(bin.file_name()?);
+        if let Ok(meta) = std::fs::metadata(&installed) {
+            let mut perm = meta.permissions();
+            perm.set_mode(perm.mode() | 0o755);
+            let _ = std::fs::set_permissions(&installed, perm);
+        }
+    }
+    Some(dir.join(bin.file_name()?))
+}
+
 /// Locate the host-side mutagen binary. Order: explicit override env,
 /// next to the Workbench executable (installed layout), then PATH.
 pub fn mutagen_binary() -> Option<std::path::PathBuf> {
@@ -180,6 +254,23 @@ pub fn mutagen_binary() -> Option<std::path::PathBuf> {
         }
     }
     which_ssh_like("mutagen")
+}
+
+/// The binary every mutagen invocation actually runs. ALWAYS the data-root
+/// managed copy (`<data-root>/mutagen/bin/`), never the staged source:
+/// (1) the agents bundle is guaranteed next to it (externalBin staging
+///     ships a bare binary — field report 2026-09-05);
+/// (2) the daemon runs FROM this binary for its whole life, and Windows
+///     locks executing images — a daemon on target/debug/mutagen.exe makes
+///     every later `cargo build` die in tauri-build's remove_file with
+///     PermissionDenied;
+/// (3) /usr/bin-style install dirs are read-only; the data root never is.
+/// Falls back to the bare discovered binary only when the install fails.
+pub fn ensure_mutagen_ready() -> Option<std::path::PathBuf> {
+    let bin = mutagen_binary()?;
+    let agents = find_agents_bundle(&bin)?;
+    let dir = crate::data_root::validate_data_root().ok()?.join("mutagen").join("bin");
+    install_mutagen_pair(&bin, &agents, &dir).or(Some(bin))
 }
 
 fn which_ssh_like(name: &str) -> Option<std::path::PathBuf> {
@@ -319,6 +410,12 @@ fn ensure_transport_for(profile: &crate::settings::SshProfile) -> Result<std::pa
     let dir = root.join("sync-workspaces").join("bin");
     std::fs::create_dir_all(&dir)
         .map_err(|e| WorkbenchError::usage(format!("transport dir: {e}")))?;
+    // Sweep retired-wrapper leftovers (ssh.cmd forced -F onto a config that
+    // knows no aliases — a daemon resolving ssh through this PATH-prepended
+    // dir would deadlock every alias endpoint).
+    for legacy in ["ssh.cmd", "ssh.bat", "ssh_config"] {
+        let _ = std::fs::remove_file(dir.join(legacy));
+    }
     Ok(dir)
 }
 
@@ -433,23 +530,42 @@ pub fn parse_ls_entries(stdout: &str) -> Vec<SshDirEntry> {
 }
 
 /// List one remote directory through the generated ssh config (explicit
-/// `-F` — this spawn is fully ours, no wrapper needed). Used by the picker's
-/// 远端路径 browse dialog.
+/// `-F` — this spawn is fully ours, no wrapper needed). Shared by the
+/// picker's 远端路径 browse dialog (profile from the form) and the sidebar
+/// pull-file browser (profile from the workspace metadata).
 #[tauri::command]
 pub async fn ssh_browse(
     profile: Value, path: String,
 ) -> Result<Vec<SshDirEntry>, WorkbenchError> {
     let profile: crate::settings::SshProfile = serde_json::from_value(profile)
         .map_err(|e| WorkbenchError::usage(format!("invalid ssh profile: {e}")))?;
+    ssh_browse_impl(&profile, path)
+}
+
+/// Browse variant for an OPEN SSH workspace: the profile snapshot comes
+/// from the metadata (the sidebar pull-file flow has no live profile form).
+#[tauri::command]
+pub async fn ssh_browse_workspace(
+    workspace: String, path: String,
+) -> Result<Vec<SshDirEntry>, WorkbenchError> {
+    let ws = std::path::PathBuf::from(&workspace);
+    let meta = read_meta(&ws)
+        .ok_or_else(|| WorkbenchError::usage("not an SSH workspace (no metadata)"))?;
+    ssh_browse_impl(&meta.profile, path)
+}
+
+fn ssh_browse_impl(
+    profile: &crate::settings::SshProfile, path: String,
+) -> Result<Vec<SshDirEntry>, WorkbenchError> {
     let path = if path.trim().is_empty() { "/".to_string() } else { path };
     if !valid_remote_path(&path) && path != "/"
         || path.contains('\'') || path.contains('"') || path.contains('\\') {
         return Err(WorkbenchError::usage(format!("invalid remote path: {path:?}")));
     }
-    ensure_transport_for(&profile)?;
+    ensure_transport_for(profile)?;
     let ssh = which_ssh_like("ssh")
         .ok_or_else(|| WorkbenchError::usage("no ssh binary found on PATH"))?;
-    let alias = ssh_alias(&profile);
+    let alias = ssh_alias(profile);
 
     let mut cmd = std::process::Command::new(&ssh);
     cmd.args(["-o", "BatchMode=yes",
@@ -495,7 +611,7 @@ fn mutagen_env(cmd: &mut std::process::Command) {
 fn run_mutagen(
     args: &[&str], transport: &std::path::Path, timeout: std::time::Duration,
 ) -> Result<(String, String), WorkbenchError> {
-    let bin = mutagen_binary()
+    let bin = ensure_mutagen_ready()
         .ok_or_else(|| WorkbenchError::usage("mutagen binary not found (install or AISC_MUTAGEN_PATH)"))?;
     let old_path = std::env::var_os("PATH").unwrap_or_default();
     let new_path = std::env::join_paths(
@@ -1179,6 +1295,39 @@ mod tests {
             assert!(f > 0);
             assert_eq!(low_disk_should_pause(Some(f)), f < LOW_DISK_FLOOR_BYTES);
         }
+    }
+
+    /// Agents-bundle co-location (field report 2026-09-05): install_mutagen_pair
+    /// lands BOTH files in the managed dir, is idempotent, and find_agents_bundle
+    /// prefers the sibling.
+    #[test]
+    fn agents_bundle_install_and_lookup() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let bin = src.path().join("mutagen.exe");
+        let agents = src.path().join(MUTAGEN_AGENTS_FILE);
+        std::fs::write(&bin, b"fake-binary").unwrap();
+        std::fs::write(&agents, vec![0u8; 4096]).unwrap();
+
+        // lookup: sibling hits first
+        assert_eq!(find_agents_bundle(&bin).unwrap(), agents);
+
+        // install: both files land, idempotent second run
+        let installed = install_mutagen_pair(&bin, &agents, dst.path()).unwrap();
+        assert_eq!(installed, dst.path().join("mutagen.exe"));
+        assert!(dst.path().join(MUTAGEN_AGENTS_FILE).is_file());
+        assert_eq!(
+            install_mutagen_pair(&bin, &agents, dst.path()).unwrap(),
+            installed
+        );
+
+        // a changed bundle (length differs) is re-copied
+        std::fs::write(&agents, vec![0u8; 8192]).unwrap();
+        assert!(install_mutagen_pair(&bin, &agents, dst.path()).is_some());
+        assert_eq!(
+            std::fs::metadata(dst.path().join(MUTAGEN_AGENTS_FILE)).unwrap().len(),
+            8192
+        );
     }
 
     /// The wrapper must make mutagen's external ssh NON-INTERACTIVE: with

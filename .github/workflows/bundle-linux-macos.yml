@@ -81,6 +81,7 @@ jobs:
             *) echo "unsupported triple ${{ matrix.triple }}"; exit 1 ;;
           esac
           cp "downloads/host-bin/${PLAT}/mutagen" "workbench/src-tauri/binaries/mutagen-${{ matrix.triple }}"
+          cp "downloads/host-bin/${PLAT}/mutagen-agents.tar.gz" "workbench/src-tauri/binaries/mutagen-agents.tar.gz"
           ls -la workbench/src-tauri/binaries/
 
       - name: Stage AISC CLI bundle (aisc-bundle for root discovery)

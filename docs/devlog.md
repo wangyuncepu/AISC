@@ -2212,3 +2212,32 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   无人守——下次启动 status 立即出容量警示 + floor 门。纯 Rust+前端
   改动（无 sidecar/镜像涉及）。门禁：cargo 289（+1 low_disk 决策
   矩阵 + meta 标记 roundtrip 断言）/ vue-tsc / vitest 433 / vite。
+- **T-F1e 手测四反馈诊断修复（2026-09-05）**：①拉取文件改**浏览式**
+  ——侧栏拉取行加「…」→ 远端浏览弹层（面包屑/上级/目录进入/文件
+  点选回填）；新 `ssh_browse_workspace` command（profile 取自
+  workspace 元数据——侧栏无 live profile 表单），browse impl 与
+  picker 的 `ssh_browse` 共抽。②③④（本地 1GiB 不同步 / 取消→恢复
+  长时间异常后自愈 / 排除规则工作区启动后异常后自愈）**同一根因**：
+  真机取证链——daemon 四会话全部 `connecting-beta` 超 30s、唯一 ssh
+  子进程是裸端点孤儿、远端干净空闲（uptime 揭示盒子 10:44 重启过但
+  无僵死）→ 隔离实验直接复现：**`unable to locate agent bundle`**。
+  mutagen 每次 beta 拨号要从二进制旁的 `mutagen-agents.tar.gz`（78MB）
+  流式安装远端 agent——vendor 链（stage 脚本其实完整解包含它 → CI cp
+  与本地 binaries/ 只拷裸二进制）把它丢了；昨天能用是 dev shell 残留
+  `AISC_MUTAGEN_PATH` 指向完整解包目录，今天新 shell 走 exe 目录发现
+  链即全军覆没。**修复**：`ensure_mutagen_ready()`——每次 mutagen 调用
+  实际运行 `<数据根>/mutagen/bin/` 托管副本（二进制+agent 包共位安装，
+  幂等；还根治两连生 bug：Windows 锁运行中镜像致 daemon 跑
+  target/debug 时 **cargo build 必炸**（tauri-build remove_file
+  PermissionDenied 实锤）；/usr/bin 只读安装位）。agent 包发现链：二进制
+  旁 → workbench exe 目录 → bundle resources 目录（setup OnceLock 注入
+  resource_dir）→ 仓库 binaries/（dev）。分发链补齐：tauri.conf
+  resources 加 `binaries/mutagen-agents.tar.gz`（安装布局与 externalBin
+  同目录）、NSIS/bundle 两 workflow staging 补 cp、Workbench CI 占位
+  touch 跟进。**遗留清扫**：ensure_transport 顺带删除退役 wrapper 残留
+  （bin/ssh.cmd+ssh_config——stale config 无别名条目，PATH 前置目录里的
+  它是别名端点死锁地雷）。侧栏 `connecting-beta` 状态补映射（此前落
+  「应用变更」误导——用户看到的过渡态之一）→「重连中」。**真机验证**：
+  agent 包落位 10 秒内四会话全部 watching；用户本地 1GiB（testsync/
+  test.test）确认推抵远端（#2 闭环）。门禁：cargo 290（+agent 共位
+  安装/查找测试）/ vue-tsc / vitest 433 / vite。

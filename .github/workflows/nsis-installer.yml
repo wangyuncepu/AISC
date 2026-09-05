@@ -73,6 +73,7 @@ jobs:
         run: |
           bash tools/stage-mutagen.sh
           cp downloads/host-bin/windows_amd64/mutagen.exe workbench/src-tauri/binaries/mutagen-x86_64-pc-windows-msvc.exe
+          cp downloads/host-bin/windows_amd64/mutagen-agents.tar.gz workbench/src-tauri/binaries/mutagen-agents.tar.gz
           ls -la workbench/src-tauri/binaries/
 
       - name: Stage AISC CLI bundle (aisc-bundle for root discovery)
