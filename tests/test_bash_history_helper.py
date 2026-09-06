@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import os
 import sqlite3
 import tempfile
@@ -103,6 +104,42 @@ class BashHistoryHelperTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             code = H.main(["helper", "append"])
         self.assertEqual(code, 0)  # silent no-op
+
+    def _flush(self, spool: str, ws_hash: str = "abc123",
+               session_id: str = "sess-1") -> None:
+        with mock.patch.dict(os.environ, {
+            "AISC_HIST_DB": self.db,
+            "AISC_HIST_WS_HASH": ws_hash,
+            "AISC_HIST_SESSION_ID": session_id,
+        }), mock.patch("sys.stdin", io.StringIO(spool)):
+            H.main(["helper", "flush"])
+
+    def test_flush_batch_inserts_escaped_tsv(self):
+        # PERF P3a (D-13): one transaction for the whole spool; the shell
+        # escapes \\ then \t/\n/\r — round-trip must restore verbatim.
+        self._flush("0\t/root/app\techo hello\n"
+                    "2\t/root/app\tprintf 'a\\tb\\nc\\\\d'\n"
+                    "1\t/tmp/ws\tgit\\ status\n")
+        rows = self._rows()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["cmd"], "echo hello")
+        self.assertEqual(rows[0]["exit_code"], 0)
+        self.assertEqual(rows[0]["workspace_hash"], "abc123")
+        self.assertEqual(rows[1]["cmd"], "printf 'a\tb\nc\\d'")
+        self.assertEqual(rows[1]["exit_code"], 2)
+        self.assertEqual(rows[2]["cwd"], "/tmp/ws")
+
+    def test_flush_skips_malformed_lines(self):
+        self._flush("not-a-record\n7\t/root\techo ok\n\nbogus\tline\n")
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["cmd"], "echo ok")
+
+    def test_flush_empty_spool_is_noop(self):
+        with mock.patch.dict(os.environ, {"AISC_HIST_DB": self.db}):
+            H.main(["helper", "init"])
+        self._flush("")
+        self.assertEqual(len(self._rows()), 0)
 
 
 if __name__ == "__main__":

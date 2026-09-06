@@ -343,9 +343,11 @@ done
 SETTINGS_FILE="$CLAUDE_CONFIG_DIR/settings.json"
 
 if [ -f "$SETTINGS_FILE" ]; then
-    MODEL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_MODEL||'')}catch(e){}" 2>/dev/null)
-    BASE_URL=$(node -e "try{process.stdout.write(require('$SETTINGS_FILE').env?.ANTHROPIC_BASE_URL||'')}catch(e){}" 2>/dev/null)
-    AUTH=$(node -e "try{const e=require('$SETTINGS_FILE').env;process.stdout.write(e.ANTHROPIC_API_KEY||e.ANTHROPIC_AUTH_TOKEN?'yes':'no')}catch(e){process.stdout.write('no')}" 2>/dev/null)
+    # PERF P3b (D-13): was THREE `node -e` spawns reading the same file —
+    # one invocation prints all three lines; parse order preserves the old
+    # catch-behaviors (model/base empty, auth 'no' on parse failure).
+    _env_summary="$(node -e "try{const e=require('$SETTINGS_FILE').env||{};console.log((e.ANTHROPIC_MODEL||'')+'\n'+(e.ANTHROPIC_BASE_URL||'')+'\n'+((e.ANTHROPIC_API_KEY||e.ANTHROPIC_AUTH_TOKEN)?'yes':'no'))}catch(e){console.log('\n\nno')}" 2>/dev/null)"
+    { read -r MODEL; read -r BASE_URL; read -r AUTH; } <<< "$_env_summary"
 
     # 将 settings.json 的 env 块真正注入当前 shell，供 claude 进程继承。
     # 空值必须 unset，避免 ANTHROPIC_API_KEY="" 覆盖 ANTHROPIC_AUTH_TOKEN。
@@ -532,12 +534,22 @@ if command -v cc-switch >/dev/null 2>&1; then
         # 重启（含陈旧 pidfile 清理）并重跑一次 reconcile（幂等收敛：路由跟随
         # current provider，不动用户选择），全过程写 /tmp/cc-switch-patrol.log。
         # AISC_CC_SWITCH_PATROL=off 可关闭。
+        # PERF P3c (D-13): 4/5 轮用 pgrep 进程活性快检（毫秒级；进程名
+        # cc-switch-real 实证于 throwaway 容器探测——无 pidfile 可用），
+        # 每 5 轮仍真询 daemon status 捕捉 alive-but-hung。O5 恢复语义不变，
+        # 最坏发现延迟 60s→~5min（低配机上 60/h→~12/h 的 CLI spawn 减半换）。
         if [ "${AISC_CC_SWITCH_PATROL:-on}" != "off" ]; then
             (
                 CC_SWITCH_PATROL_LOG="/tmp/cc-switch-patrol.log"
                 _patrol_stamp() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+                _patrol_n=0
                 while true; do
                     sleep 60
+                    _patrol_n=$((_patrol_n + 1))
+                    if [ $((_patrol_n % 5)) -ne 0 ] \
+                       && pgrep -x cc-switch-real >/dev/null 2>&1; then
+                        continue
+                    fi
                     _patrol_status="$(cc-switch daemon status 2>&1 || true)"
                     case "$_patrol_status" in
                         "cc-switch daemon"*) continue ;;

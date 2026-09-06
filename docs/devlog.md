@@ -1962,6 +1962,29 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   ——纸面上「flock/fcntl 互不相通」的经典陷阱在本组合不存在，实验证实。
   pytest 侧 `test_lock_interop.py` 负控制（Python 锁自排斥）。cargo 295
   （+2）/ pytest 1125（+1）。
+- **P3 容器内 spawn 削减三件套（2026-09-06）**：低配机上「每条 shell 命令
+  一个 python3 + 一个 sed」「每次 agent 启动一个 node 解析同一个
+  settings.json」「每 60s 一个完整 cc-switch CLI 只为查健康」的三重持续税。
+  ①**3a shell 历史批量写**——bash/zsh 钩子改 shell 内 TSV spool（纯参数
+  展开转义 \\→\t→\n→\r，零 spawn；bashrc 顺手杀掉隐藏的每命令一次
+  `history 1 | sed`，read 内建取行），20 条/60s/EXIT 时一次 `flush`（stdin
+  TSV → 单事务 executemany；started_at=批量粒度——历史 UX 不需要逐条时间
+  毙的取舍；坏行跳过不炸批）；`append` 子命令保留兼容。spawn 率每命令
+  2→每 ~20 命令 1。②**3b env-inject mtime 缓存**——缓存命中判据用 bash
+  内建 `[ cache -nt settings ]`（**零外部进程**；cc-switch 切换必重写
+  settings→mtime 前进→缓存失效，方向安全：同秒双写最坏多跑一次 node）；
+  entrypoint node -e ×3 合一（单次输出三行 + read 内建拆行——初版用了
+  3×sed 取行，自纠）。③**3c 巡检 pgrep 快检**——throwaway 容器实证：
+  daemon 进程名=`cc-switch-real`（comm 列）、**无 pidfile**（四个常见位
+  置全查无——pidfile 方案出局），4/5 轮 `pgrep -x cc-switch-real`（毫秒
+  级）+ 每 5 轮真 `daemon status` 捕捉 alive-but-hung；O5 恢复语义不变，
+  发现延迟 60s→最坏 ~5min。spawn 率 60/h→~12/h。vendor-refresh 1514；
+  镜像重建 + **容器内三件套实证**（3a：`script -qec` 真 PTY 会话→spool→
+  EXIT flush→sqlite 往返 + 字面转义存活——初版验证脚本两坑：`bash -ic`
+  的 -c 串不进 history（钩子正确跳过）+ bash 双引号吃反斜杠层（断言
+  误报，python 改 heredoc）；3b：首调 71ms→缓存命中即时、settings 重写
+  即失效（var 跟随变化）；3c：pgrep 双向探测）。测试：history flush +3
+  （转义往返/坏行/空批）；zshrc SSOT 钉子不受动（只动 §6 历史块）。
 
 # F1/F2 (2026-09-03 ~) — 宿主工具 MCP · SSH 工作区（分支 develop）
 

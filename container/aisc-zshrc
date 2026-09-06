@@ -39,12 +39,29 @@ compinit -d "${AISC_BASH_HISTORY_DIR:-/tmp}/.zcompdump"
 [ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ] && \
     source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 
-# 6. SQLite history append via the shared Python helper (parity with the
-#    bashrc hook; parameterized API — no shell SQL; fail-open). preexec
-#    captures the command line, precmd captures its exit status.
+# 6. SQLite history via the shared Python helper — PERF P3a (D-13) batch
+#    spool (parity with the bashrc hook; zero spawns per command, ONE
+#    python3 flush at 20 records / 60s / shell exit; pure parameter
+#    expansion escaping; fail-open). preexec captures the command line
+#    (zsh hands it over directly — no history parsing), precmd the status.
 if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
     typeset -g _aisc_prev_cmd=""
     typeset -g _aisc_last_cmd=""
+    typeset -g _aisc_hist_spool=""
+    typeset -g _aisc_hist_count=0
+    typeset -g _aisc_hist_flushed=$SECONDS
+    _aisc_hist_flush() {
+        [ "$_aisc_hist_count" -eq 0 ] && return 0
+        printf '%s\n' "$_aisc_hist_spool" | \
+        AISC_HIST_DB="$AISC_BASH_HISTORY_DB" \
+        AISC_HIST_WS_HASH="$AISC_WORKSPACE_HASH" \
+        AISC_HIST_SESSION_ID="$AISC_TERMINAL_SESSION_ID" \
+        python3 /usr/local/bin/lib/aisc_bash_history.py flush 2>/dev/null
+        _aisc_hist_spool=""
+        _aisc_hist_count=0
+        _aisc_hist_flushed=$SECONDS
+        return 0
+    }
     _aisc_preexec() { _aisc_last_cmd="$1"; }
     _aisc_precmd_log() {
         local st=$?
@@ -53,17 +70,23 @@ if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
             return 0    # dup guard: prompt redraws / second precmd pass
         fi
         _aisc_prev_cmd="$_aisc_last_cmd"
-        AISC_HIST_DB="$AISC_BASH_HISTORY_DB" \
-        AISC_HIST_WS_HASH="$AISC_WORKSPACE_HASH" \
-        AISC_HIST_SESSION_ID="$AISC_TERMINAL_SESSION_ID" \
-        AISC_HIST_CMD="$_aisc_last_cmd" AISC_HIST_CWD="$PWD" \
-        AISC_HIST_EXIT="$st" \
-        python3 /usr/local/bin/lib/aisc_bash_history.py append 2>/dev/null
+        local esc="${_aisc_last_cmd//\\/\\\\}"
+        esc="${esc//$'\t'/\\t}"; esc="${esc//$'\n'/\\n}"; esc="${esc//$'\r'/\\r}"
+        local cwd_e="${PWD//\\/\\\\}"
+        cwd_e="${cwd_e//$'\t'/\\t}"; cwd_e="${cwd_e//$'\n'/\\n}"; cwd_e="${cwd_e//$'\r'/\\r}"
+        _aisc_hist_spool="${_aisc_hist_spool:+$_aisc_hist_spool$'\n'}$st"$'\t'"$cwd_e"$'\t'"$esc"
+        _aisc_hist_count=$((_aisc_hist_count + 1))
+        if [ "$_aisc_hist_count" -ge 20 ] || [ "$((SECONDS - _aisc_hist_flushed))" -ge 60 ]; then
+            _aisc_hist_flush
+        fi
         return 0
     }
     autoload -Uz add-zsh-hook
     add-zsh-hook preexec _aisc_preexec
     add-zsh-hook precmd _aisc_precmd_log
+    # exit flush via zshexit hook (keeps user EXIT traps intact);
+    # fallback trap for zsh versions without the hook
+    add-zsh-hook zshexit _aisc_hist_flush 2>/dev/null || trap '_aisc_hist_flush' EXIT
 fi
 
 # 7. Interactive tutorial `help` (2.1.9: parity with the bash path — bash

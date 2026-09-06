@@ -37,26 +37,49 @@ if [ -n "$AISC_BASH_HISTORY_FILE" ]; then
     esac
 fi
 
-# 5. SQLite append via Python helper (参数化 API——shell 不拼 SQL,
-#    免疫引号/换行/Unicode; fail-open)
+# 5. SQLite history via Python helper — PERF P3a (D-13) batch spool:
+#    records buffer in-shell (zero spawns per command) and flush through ONE
+#    python3 invocation at 20 records / 60s / shell exit. Escaping is pure
+#    parameter expansion (backslash first, then tab/newline/CR); the old
+#    per-command `append` + `history 1 | sed` cost one python AND one sed
+#    spawn per command. Fail-open throughout.
 if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then
     _aisc_prev_cmd=""
-    _aisc_log_history() {
-        local _aisc_exit=$?   # FIRST line: capture BEFORE anything
-        local cmd
-        cmd="$(history 1 | sed 's/^ *[0-9]* *//')"
-        if [ -z "$cmd" ] || [ "$cmd" = "$_aisc_prev_cmd" ]; then
-            return "$_aisc_exit"     # dedupe/empty still preserves code
-        fi
-        _aisc_prev_cmd="$cmd"
+    _aisc_hist_spool=""
+    _aisc_hist_count=0
+    _aisc_hist_flushed=$SECONDS
+    _aisc_hist_flush() {
+        [ "$_aisc_hist_count" -eq 0 ] && return 0
+        printf '%s\n' "$_aisc_hist_spool" | \
         AISC_HIST_DB="$AISC_BASH_HISTORY_DB" \
         AISC_HIST_WS_HASH="$AISC_WORKSPACE_HASH" \
         AISC_HIST_SESSION_ID="$AISC_TERMINAL_SESSION_ID" \
-        AISC_HIST_CMD="$cmd" AISC_HIST_CWD="$PWD" \
-        AISC_HIST_EXIT="$_aisc_exit" \
-        python3 /usr/local/bin/lib/aisc_bash_history.py append 2>/dev/null
+        python3 /usr/local/bin/lib/aisc_bash_history.py flush 2>/dev/null
+        _aisc_hist_spool=""
+        _aisc_hist_count=0
+        _aisc_hist_flushed=$SECONDS
+        return 0
+    }
+    _aisc_log_history() {
+        local _aisc_exit=$?   # FIRST line: capture BEFORE anything
+        local hist_line cmd
+        hist_line="$(history 1)"          # builtin subshell only — no sed
+        read -r _aisc_num cmd <<< "$hist_line"   # strip "  N  " prefix
+        if [ -n "$cmd" ] && [ "$cmd" != "$_aisc_prev_cmd" ]; then
+            _aisc_prev_cmd="$cmd"
+            local esc="${cmd//\\/\\\\}"
+            esc="${esc//$'\t'/\\t}"; esc="${esc//$'\n'/\\n}"; esc="${esc//$'\r'/\\r}"
+            local cwd_e="${PWD//\\/\\\\}"
+            cwd_e="${cwd_e//$'\t'/\\t}"; cwd_e="${cwd_e//$'\n'/\\n}"; cwd_e="${cwd_e//$'\r'/\\r}"
+            _aisc_hist_spool="${_aisc_hist_spool:+$_aisc_hist_spool$'\n'}$_aisc_exit"$'\t'"$cwd_e"$'\t'"$esc"
+            _aisc_hist_count=$((_aisc_hist_count + 1))
+            if [ "$_aisc_hist_count" -ge 20 ] || [ "$((SECONDS - _aisc_hist_flushed))" -ge 60 ]; then
+                _aisc_hist_flush
+            fi
+        fi
         return "$_aisc_exit"         # LAST: restore original code
     }
+    trap '_aisc_hist_flush' EXIT
     # Idempotent append: only add if not already present.
     # (case-in patterns treat ';' as separator — use string match instead.)
     # Note: string-form PROMPT_COMMAND only. Bash array form degrades gracefully.

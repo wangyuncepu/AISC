@@ -5,10 +5,16 @@ v2.1.8 T2: invoked by /usr/local/share/aisc/bashrc via PROMPT_COMMAND.
 Subcommands:
   init    — idempotent schema creation (CREATE IF NOT EXISTS + WAL + indexes)
   append  — insert one command record (env-driven; implicit init)
+  flush   — PERF P3a (D-13): batch-insert a TSV spool from stdin in ONE
+            transaction (the shell buffers records and flushes at 20 lines /
+            60s / exit — one python3 spawn per ~20 commands instead of per
+            command; `append` kept for compatibility)
   retain  — keep only the most recent N rows (entrypoint calls once at boot)
 
 All I/O via environment variables (AISC_HIST_DB etc.) — the bashrc
 function passes them inline so no command-line argument can leak into SQL.
+The flush TSV rides stdin: `exit_code<TAB>cwd<TAB>cmd` per line, with
+backslash/tab/newline/CR escaped by the shell (pure parameter expansion).
 """
 from __future__ import annotations
 
@@ -44,6 +50,16 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _unescape(s: str) -> str:
+    """Reverse the shell-side escape (backslash LAST — it was applied first)."""
+    return (
+        s.replace("\\t", "\t")
+        .replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\\\", "\\")
+    )
+
+
 def cmd_init(db_path: str) -> int:
     conn = _connect(db_path)
     conn.close()
@@ -74,6 +90,51 @@ def cmd_append(db_path: str) -> int:
     return 0
 
 
+def cmd_flush(db_path: str) -> int:
+    """Batch-insert the stdin TSV spool in one transaction.
+
+    started_at = flush time (batch granularity — history UX doesn't need
+    per-command timestamps; documented trade). Malformed lines are skipped,
+    never fatal to the batch (fail-open, same contract as `append`)."""
+    env = os.environ
+    data = sys.stdin.read()
+    rows = []
+    now = datetime.now(timezone.utc).isoformat()
+    for line in data.split("\n"):
+        if not line:
+            continue
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        try:
+            exit_code = int(parts[0])
+        except ValueError:
+            continue
+        rows.append((
+            env.get("AISC_HIST_WS_HASH", ""),
+            env.get("AISC_HIST_SESSION_ID", ""),
+            _unescape(parts[2]),   # cmd
+            _unescape(parts[1]),   # cwd
+            now,
+            exit_code,
+            "terminal",
+        ))
+    if not rows:
+        return 0
+    conn = _connect(db_path)
+    try:
+        conn.executemany(
+            "INSERT INTO history"
+            " (workspace_hash, terminal_session_id, cmd, cwd, started_at, exit_code, source)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return 0
+
+
 def cmd_retain(db_path: str) -> int:
     conn = _connect(db_path)
     try:
@@ -90,7 +151,7 @@ def cmd_retain(db_path: str) -> int:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        print("usage: aisc_bash_history.py init|append|retain", file=sys.stderr)
+        print("usage: aisc_bash_history.py init|append|flush|retain", file=sys.stderr)
         return 2
     db_path = os.environ.get("AISC_HIST_DB", "")
     if not db_path:
@@ -100,6 +161,8 @@ def main(argv: list[str]) -> int:
         return cmd_init(db_path)
     if op == "append":
         return cmd_append(db_path)
+    if op == "flush":
+        return cmd_flush(db_path)
     if op == "retain":
         return cmd_retain(db_path)
     print(f"unknown op: {op}", file=sys.stderr)
