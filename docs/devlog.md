@@ -2035,9 +2035,24 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   -v 前、image 恒末位故 fake 的 argv[-1] 不破）。+1 注入测试（Recording
   executor 断言 --memory 3g/--cpus 1.5 入 run argv）。sidecar 重建双同步。
   门禁：cargo 301 / pytest 1162（+1）/ 生命周期 43。
-  **P8 剩余（记 backlog）**：低配自动探测（Rust 侧 RAM ≤8.5GB 检测需新
-  windows-sys 依赖或复用 doctor ctypes）+ 一次性弹窗告知 + `.wslconfig`
-  保键原子合并（确认框 wsl --shutdown）+ SettingsForm 低配 UI + i18n。
+- **P8 低配模式收口（2026-09-06）**：①**自动探测**——新 `low_spec.rs`
+  `total_physical_ram()`（Windows GlobalMemoryStatusEx via windows-sys
+  0.59——依赖树已有零新增编译；POSIX sysconf）；setup 后台线程
+  `maybe_auto_enable`：RAM ≤8.5GB（doctor 同阈值）且未决策过 → 写
+  performance.lowSpec=true + **决策标记落 config 目录 `low-spec-decided`
+  而非 settings**（用户显式关闭后永不自动重开——一次性语义）+ emit
+  `low-spec-enabled`；App.vue 系统通知（plugin-notification 降级语义，
+  advisory 永不阻塞）。②**.wslconfig 保键合并**——`block_aware_merge`
+  （[wsl2] 节解析；auto 只补缺失 memory/processors、force 才覆写；节在
+  文件中部时键落节内；无节则追加）；`wslconfig_merge` command 只写文件，
+  **确认框文案明示 wsl --shutdown 会停所有 WSL 实例与容器**（destructive
+  保留人工环节的裁决落地）。③**SettingsForm 新 performance 组**——
+  lowSpec 开关 + memory/cpus 输入（RAM 带宽 advisory 行：探测结果
+  「{gb} GB 低配已自动开启/正常」）+ .wslconfig 按钮（confirm→merge→
+  结果反馈行）；settings store dirty/save 补 performance 比较；TS 类型
+  +ipc（lowSpecStatus/wslconfigMerge）+i18n 双语 14 键。+2 测试（RAM
+  探测合理域/wslconfig 合并矩阵——用户键保活、缺键补、节中位、force
+  覆写）。门禁：cargo 303 ×3 / vue-tsc / vitest 433 / vite。
 - **P3 容器内 spawn 削减三件套（2026-09-06）**：低配机上「每条 shell 命令
   一个 python3 + 一个 sed」「每次 agent 启动一个 node 解析同一个
   settings.json」「每 60s 一个完整 cc-switch CLI 只为查健康」的三重持续税。

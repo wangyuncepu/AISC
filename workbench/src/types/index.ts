@@ -966,6 +966,8 @@ export interface SettingsDocument {
   hostTools?: HostToolEntry[];
   /** F1: SSH connection profiles for sync workspaces. */
   sshProfiles?: SshProfile[];
+  /** PERF P8 (D-13): low-spec mode + container resource limits. */
+  performance?: PerformanceSettings;
   issues: ValidationIssue[];
   /** On-disk file was corrupt and isolated; app runs on defaults. */
   corrupted: boolean;
@@ -980,6 +982,14 @@ export interface SettingsPatch {
   window?: WindowSettings;
   hostTools?: HostToolEntry[];
   sshProfiles?: SshProfile[];
+  performance?: PerformanceSettings;
+}
+
+/** PERF P8 (D-13): low-spec mode + per-container resource budget. */
+export interface PerformanceSettings {
+  lowSpec: boolean;
+  containerMemory: string;
+  containerCpus: number;
 }
 
 export interface SaveOutcome {

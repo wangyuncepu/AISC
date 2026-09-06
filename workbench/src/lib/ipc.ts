@@ -144,6 +144,22 @@ export const saveSettings = (expectedRevision: number, patch: SettingsPatch) =>
 export const resetGuiSettings = (expectedRevision: number) =>
   invoke<SaveOutcome>("reset_gui_settings", { expectedRevision });
 
+// --- PERF P8 (D-13): low-spec mode ---
+
+export interface LowSpecStatus {
+  totalRam: number | null;
+  lowSpec: boolean;
+  justEnabled: boolean;
+}
+
+export const lowSpecStatus = () =>
+  invoke<LowSpecStatus>("low_spec_status");
+
+/** Key-preserving `.wslconfig` merge (auto adds missing keys; force writes).
+ *  Only writes the file — the caller owns the wsl --shutdown confirmation. */
+export const wslconfigMerge = (memory: string, processors: number, force: boolean) =>
+  invoke<boolean>("wslconfig_merge", { memory, processors, force });
+
 /** Resolve the final locale (explicit > installer > system > zh-CN). */
 export const resolveLocale = (language: string | null = null) =>
   invoke<string>("resolve_locale", { language });

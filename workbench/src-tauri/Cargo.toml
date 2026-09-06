@@ -42,8 +42,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 # winreg is Windows-only (locale.rs reads the HKCU locale); it must not compile
 # on Linux/macOS where the CI rust job builds the workbench lib.
+# windows-sys: P8 low-spec RAM detection (GlobalMemoryStatusEx) — same
+# Windows-only rule.
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 tempfile = "3"

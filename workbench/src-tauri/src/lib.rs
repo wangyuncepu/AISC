@@ -26,6 +26,7 @@ pub mod session;
 pub mod settings;
 pub mod subscription;
 pub mod docker_api;
+pub mod low_spec;
 pub mod sync;
 pub mod artifact;
 pub mod storage;
@@ -52,6 +53,7 @@ pub fn ensure_sidecar_utf8() {
 }
 
 use artifact::{artifact_inspect, artifact_list, artifact_refresh};
+use tauri::Emitter;
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use watcher::{workspace_rescan, workspace_watch_start, workspace_watch_stop, WatcherState};
 use workspace::{
@@ -142,6 +144,8 @@ pub fn run(cli_arg: Option<String>) {
             runtime_inspect,
             runtime_status,
             runtime::runtime_poll_light,
+            low_spec::low_spec_status,
+            low_spec::wslconfig_merge,
             runtime_reconcile,
             runtime_restart,
             cancel_runtime_start,
@@ -268,6 +272,20 @@ pub fn run(cli_arg: Option<String>) {
                 if let Ok(res) = app.path().resource_dir() {
                     let _ = sync::MUTAGEN_RESOURCE_DIR.set(res);
                 }
+            }
+            // PERF P8 (D-13): low-spec auto-enable — off the hot path; the
+            // one-time `just_enabled` drives a frontend toast.
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let status = low_spec::maybe_auto_enable(&app_handle);
+                    if status.just_enabled {
+                        let _ = app_handle.emit(
+                            "low-spec-enabled",
+                            serde_json::json!({ "totalRam": status.total_ram }),
+                        );
+                    }
+                });
             }
             // O2 (D-11): sweep orphaned output spools. Spools are deleted with
             // their registry entry (ack/close/evict); only a killed process

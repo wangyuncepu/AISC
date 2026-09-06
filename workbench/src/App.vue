@@ -350,6 +350,25 @@ onMounted(() => {
   void listen("exit-requested", () => {
     void runExitFlow();
   });
+  // PERF P8 (D-13): the one-time low-spec auto-enable notification — the
+  // Rust setup thread emits after persisting performance.lowSpec=true.
+  // System notification (same degrade-silently semantics as build toasts);
+  // the Settings > performance page carries the durable explanation.
+  void listen("low-spec-enabled", async () => {
+    try {
+      const { isPermissionGranted, requestPermission, sendNotification } =
+        await import("@tauri-apps/plugin-notification");
+      let granted = await isPermissionGranted();
+      if (!granted) granted = (await requestPermission()) === "granted";
+      if (!granted) return;
+      sendNotification({
+        title: t("notification.title"),
+        body: t("toast.lowSpecEnabled"),
+      });
+    } catch {
+      /* advisory only — never blocks startup */
+    }
+  });
 });
 
 // S2.3.a/b: poll runtimes while ANY workspace is open (真并行: the loop

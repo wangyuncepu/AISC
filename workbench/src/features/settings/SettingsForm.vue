@@ -163,10 +163,66 @@ const issuesByField = computed(() => {
 const saving = computed(() => store.saveState === "saving");
 const savedFlash = ref(false);
 
+/** PERF P8 (D-13): performance working copy (load/edit/save like sshProfiles;
+ *  defaults mirror the Rust sanitizer). */
+const perf = computed(() => store.doc?.performance);
+const perfLowSpec = computed({
+  get: () => perf.value?.lowSpec ?? false,
+  set: (v: boolean) => {
+    if (!store.doc) return;
+    store.doc.performance = {
+      lowSpec: v,
+      containerMemory: perf.value?.containerMemory ?? "3g",
+      containerCpus: perf.value?.containerCpus ?? 1.5,
+    };
+  },
+});
+const perfMemory = computed({
+  get: () => perf.value?.containerMemory ?? "3g",
+  set: (v: string) => {
+    if (store.doc?.performance) store.doc.performance.containerMemory = v;
+  },
+});
+const perfCpus = computed({
+  get: () => perf.value?.containerCpus ?? 1.5,
+  set: (v: number) => {
+    if (store.doc?.performance) store.doc.performance.containerCpus = v;
+  },
+});
+const lowSpecRamText = ref("");
+const wslMsg = ref("");
+async function onWslconfig() {
+  const { confirm } = await import("@tauri-apps/plugin-dialog");
+  const ok = await confirm(t("settings.perf.wslConfirm"));
+  if (!ok) return;
+  const { wslconfigMerge } = await import("../../lib/ipc");
+  const changed = await wslconfigMerge(
+    perfMemory.value || "3g",
+    4,
+    false, // auto mode: only ADD missing keys, never overwrite user values
+  );
+  wslMsg.value = changed
+    ? t("settings.perf.wslWritten")
+    : t("settings.perf.wslNoop");
+}
+
 onMounted(async () => {
   if (!store.loaded) await store.load();
   // O7 (D-11): fill the disk & cache card (read-only df summary).
   void store.loadCacheUsage();
+  // P8: show the machine's RAM band (advisory only).
+  try {
+    const { lowSpecStatus } = await import("../../lib/ipc");
+    const st = await lowSpecStatus();
+    if (st.totalRam) {
+      const gb = (st.totalRam / 1024 ** 3).toFixed(1);
+      lowSpecRamText.value = st.lowSpec
+        ? t("settings.perf.ramLow", { gb })
+        : t("settings.perf.ramOk", { gb });
+    }
+  } catch {
+    /* advisory only */
+  }
 });
 
 async function onSave() {
@@ -225,7 +281,7 @@ async function reopenOnboarding() {
     </p>
 
     <div v-if="store.doc" class="body">
-      <template v-for="group in ['ui', 'terminal', 'window', 'hostTools', 'ssh', 'disk']" :key="group">
+      <template v-for="group in ['ui', 'terminal', 'window', 'hostTools', 'ssh', 'performance', 'disk']" :key="group">
         <h3 class="group">{{ t(GROUP_KEY[group]) }}</h3>
 
         <!-- ui section -->
@@ -341,6 +397,49 @@ async function reopenOnboarding() {
             </button>
           </div>
           <p class="note">{{ t("settings.ssh.note") }}</p>
+        </template>
+
+        <!-- PERF P8 (D-13): performance / low-spec mode. lowSpec gates the
+             container --memory/--cpus budget (new containers only); the
+             .wslconfig merge keeps user keys and only runs on confirmation. -->
+        <template v-else-if="group === 'performance'">
+          <p class="help">{{ t("settings.perf.hint") }}</p>
+          <p v-if="lowSpecRamText" class="note">{{ lowSpecRamText }}</p>
+          <div class="field">
+            <label class="check-row">
+              <input
+                v-model="perfLowSpec"
+                type="checkbox"
+                :disabled="store.readOnly"
+              />
+              <span>{{ t("settings.perf.lowSpec") }}</span>
+            </label>
+          </div>
+          <template v-if="perfLowSpec">
+            <div class="field">
+              <label class="label">{{ t("settings.perf.memory") }}</label>
+              <input v-model.trim="perfMemory" class="ssh-key" :disabled="store.readOnly" />
+            </div>
+            <div class="field">
+              <label class="label">{{ t("settings.perf.cpus") }}</label>
+              <input
+                v-model.number="perfCpus"
+                type="number"
+                min="0.5"
+                max="8"
+                step="0.5"
+                :disabled="store.readOnly"
+              />
+            </div>
+            <div class="field">
+              <button :disabled="store.readOnly" @click="onWslconfig">
+                {{ t("settings.perf.wslBtn") }}
+              </button>
+            </div>
+            <p class="note">{{ t("settings.perf.wslNote") }}</p>
+            <p v-if="wslMsg" class="note">{{ wslMsg }}</p>
+          </template>
+          <p class="note">{{ t("settings.perf.note") }}</p>
         </template>
 
         <!-- O7 (D-11): disk & cache card — df summary + until-filtered prune.
