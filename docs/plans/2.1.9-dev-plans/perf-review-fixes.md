@@ -94,5 +94,9 @@ D-13 审查确认 Python/Rust/Vitest/vue-tsc 回归基线均为绿色，但发�
 | Rust 全量 | lib `305 passed`；integration tests 全绿（cli_fixtures 7、cli_runner 7、lock_interop 2、pty_supervisor 7、web_services 4） |
 | Vitest | 56 个文件、434 个测试通过 |
 | vue-tsc | `node node_modules\vue-tsc\bin\vue-tsc.js --noEmit` 通过 |
-| vendor verify | `1514 verified, 0 missing, 0 checksum mismatch, 0 malformed` |
+| vendor verify | `1514 verified, 0 missing, 0 checksum mismatch, 0 malformed`（⚠ 后证为 CRLF 假绿，见下） |
+
+## 热修（2026-09-06 晚，`fe28d75`）
+
+b49ed0f 的 container/ 四文件（aisc-bashrc / aisc-zshrc / aisc_bash_history.py / cc_switch_preset_providers.py）编辑时被写成 CRLF：vendor-refresh 对有改动文件按工作区字节取哈希 → CRLF 哈希进 checksums，CI（eol=lf 检出）Bundle/NSIS verify 炸 4 mismatch；本地 verify 对 CRLF 验 CRLF 假绿；bundle 三副本同步的也是 CRLF 版。修复：工作区字节级归一 LF（哈希与 CI 期望逐一相符）+ 重刷 vendor + bundle 重同步。git blob 侧因 .gitattributes 归一化本就正确。教训：Windows 上 vendor-refresh 须 `PATH="/tmp/py3shim:$PATH"`（WindowsApps python3 stub rc=49 杀 step 3）；编辑 container/ 文本文件后必查 CRLF。
 | bundle 同步 | `aisc-bashrc`、`aisc-zshrc`、`entrypoint.sh`、`lib/aisc_bash_history.py`、`lib/cc_switch_preset_providers.py` 在 container / NSIS bundle / debug bundle 三处 SHA256 一致 |

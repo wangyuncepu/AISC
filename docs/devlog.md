@@ -2131,6 +2131,19 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   container/ 五文件 bundle 三处 SHA256 亲验一致 + vendor-refresh
   1514 全过。门禁：pytest 1146（+7）/ cargo 305+integration 全绿 /
   vitest 434 / vue-tsc。
+- **审查修复批热修：vendor checksums 行尾事故（2026-09-06 晚，`fe28d75`）**：
+  b49ed0f 的 container/ 四文件（bashrc/zshrc/history/preset）编辑时被
+  写成 **CRLF**——vendor-refresh 对「有改动文件按工作区字节取哈希」
+  → CRLF 哈希刷进 checksums；CI（eol=lf 检出）Bundle/NSIS 两 lane
+  verify 炸 4 mismatch，本地 verify 对 CRLF 验 CRLF **假绿**；且 bundle
+  三副本同步的也是 CRLF 版（镜像内 shell 带 `\r` 实伤 bash）。git blob
+  侧因 .gitattributes 归一化本就正确。修复：四文件字节级归一 LF（哈希
+  与 CI 期望逐一相符）+ 重刷 vendor（1514，仅 4 行）+ bundle 重同步三
+  方一致。**两条教训**：①Windows 上跑 vendor-refresh 必须
+  `PATH="/tmp/py3shim:$PATH" bash tools/vendor-refresh.sh`——
+  WindowsApps 的 python3 stub（rc=49）会静默杀 step 3（无 `||` 兜底 +
+  `set -e`）；②core.autocrlf=true 环境下编辑 container/ 文本文件后必
+  查 CRLF（checkout-index -f 拉不回 LF，直接字节级归一最稳）。
 
 # F1/F2 (2026-09-03 ~) — 宿主工具 MCP · SSH 工作区（分支 develop）
 
