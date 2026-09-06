@@ -670,9 +670,11 @@ mod tests {
             let gated = t1.elapsed();
             assert_eq!(idx.artifacts.len(), n as usize);
             assert_eq!(skipped.revision, idx.revision);
-            // Warm-run ceilings: full import stays under 1s even at 1000;
-            // the fingerprint gate is two orders cheaper.
-            assert!(full.as_millis() < 1000, "full import too slow at {n}: {full:?}");
+            // Warm-run ceilings: generous (3s) so a loaded shared CI runner
+            // never flakes it — a real O(n²) regression at n=1000 lands in
+            // minutes, far past this line. The order-based invariant below
+            // is the tight guard.
+            assert!(full.as_millis() < 3000, "full import too slow at {n}: {full:?}");
             assert!(gated < full, "fingerprint gate must be cheaper at {n}");
             eprintln!("bench n={n} full={full:?} gated={gated:?}");
         }

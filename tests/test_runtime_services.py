@@ -54,6 +54,10 @@ class RuntimeStatusMergeTests(unittest.TestCase):
         self.assertEqual(ex2.ps_calls, base_ps)
 
     def test_slow_services_deadlines_to_null_snapshot_intact(self):
+        # Arm a REAL gateway listener + manifest so the services half always
+        # reaches list_container_services (the exec call we make slow) —
+        # without it, an unreachable gateway short-circuits before the exec
+        # and the deadline is never exercised (CI field report 2026-09-06).
         class SlowExec(ServicesFakeExecutor):
             def run_captured(self, argv, *, timeout=None):
                 if argv and argv[0] == "exec":
@@ -61,10 +65,21 @@ class RuntimeStatusMergeTests(unittest.TestCase):
                 return super().run_captured(argv, timeout=timeout)
 
         ws, ex = self._running(executor=SlowExec())
-        t0 = time.monotonic()
-        data = runtime_status(RID, executor=ex, registry_root=ws / ".aisc",
-                              services_deadline_s=0.3)
-        elapsed = time.monotonic() - t0
+        ex.manifest[3000] = {"schema_version": "aisc.web-service/v1", "port": 3000,
+                             "protocol": "http", "name": "slow", "state": "registered"}
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(4)
+        port = listener.getsockname()[1]
+        try:
+            for c in ex.containers.values():
+                c["host_port"] = port
+            t0 = time.monotonic()
+            data = runtime_status(RID, executor=ex, registry_root=ws / ".aisc",
+                                  services_deadline_s=0.3)
+            elapsed = time.monotonic() - t0
+        finally:
+            listener.close()
         self.assertLess(elapsed, 2.0, "deadline must bound the services half")
         self.assertEqual(data["snapshot"]["state"], "running")
         self.assertIsNone(data["services"])

@@ -1932,6 +1932,27 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   门禁：pytest 1119（+3：合并形状/去重实证（services 半零新增 ps/inspect）/
   慢 services deadline 归 null 且限时返回）/ cargo 293（+argv）/ vitest 433 /
   vue-tsc / vite。
+- **P1 CI 修复（2026-09-06）**：Workbench lane 两失败——①rust job
+  `artifact::tests::import_benchmark_ceiling`（存量时基测试，注释自称
+  「宽上限防慢 CI flake」但 1s 不够）：上限 1s→3s（n=1000 真 O(n²) 回归在
+  分钟级，3s 仍拦得住；紧 guard 是 gated<full 不等式不受影响）；②cli job
+  我的 deadline 测试竞态——gateway 非 ready 时 services 半在 list 前短路，
+  慢 exec 根本不触发：测试补真实 gateway listener + manifest 强制走 exec
+  路径（沿用 _gateway_listener fixture 范式）。
+- **P2 会话税：EOF 驱动退出 + resize 降频（2026-09-06）**：每会话整个
+  生命周期原为 watch_resize 每 0.1s 读 resize 文件 + 主线程每 0.2s
+  exec_inspect HTTP 轮询 = **每会话每秒 5 Docker API + 10 文件读**（空闲
+  CPU 持续唤醒，低配机多会话卡顿的直接来源）。修复：drain 线程在流结束
+  时置 EOF Event，主循环改** EOF 驱动**——正常退出恰好 1 次 inspect 结算
+  退出码；「EOF 但仍 Running」边角（后台进程占住 exec pty）1s 慢轮询；
+  流永不 EOF（hang）5s 保底重查（严格优于旧的无条件 0.2s 轮询）；**退出
+  判据仍是 exec_inspect.Running==false，语义零变化**。watch_resize 0.1→
+  0.25s（200-300ms resize 感知阈值内，拖拽分屏不迟滞）。三档 env 可调
+  （AISC_RESIZE_POLL/EXEC_FLOOR/EXEC_SETTLE，clamp 防呆）+
+  `AISC_EXEC_POLL=legacy` 保留旧路径一版本。#61 瞬态容错抽为 inspect_info
+  共用。+6 测试（EOF 单次结算恰 1 inspect/EOF-but-Running 慢轮询/socketpair
+  挂死流保底/三档 clamp；`test_open_interactive_full_lifecycle` 存量断言
+  兼容）。sidecar 重建双同步。门禁：pytest 1124 / cargo 293。
 
 # F1/F2 (2026-09-03 ~) — 宿主工具 MCP · SSH 工作区（分支 develop）
 
