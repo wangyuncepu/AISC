@@ -831,6 +831,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     if (runtimeState.value !== "running") return "skipped" as const;
     if (!runtimeId.value || !workspace.value.trim()) return "skipped" as const;
     if (providerInFlight.value === agent) return "skipped" as const;
+    const t0 = performance.now();
     providerInFlight.value = agent;
     providerError.value = null;
     let outcome: "ok" | "unsettled" | "error" = "error";
@@ -847,6 +848,15 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       providerError.value = e as WorkbenchError;
     } finally {
       providerInFlight.value = null;
+      // Manual-test diagnosability (2026-09-06): the provider probe is the
+      // claude-page gate and its live timing was invisible in aisc.log
+      // (cli_exit only logs at process exit — hung probes vanish). One line
+      // per PROBE with outcome + duration lands on the shared timeline.
+      void ipc.logUiEvent?.(
+        `provider_probe ${agent} ${outcome}`,
+        outcome === "ok" ? "ok" : "error",
+        `${Math.round(performance.now() - t0)}ms`,
+      ).catch(() => undefined);
     }
     return outcome;
   }
