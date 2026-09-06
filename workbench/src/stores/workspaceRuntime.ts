@@ -782,6 +782,47 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     }
   }
 
+  /** PERF P6a: the steady-state poll — zero-spawn raw-engine observation.
+   * The light snapshot omits gateway/toolchain fields; merge the previous
+   * full observation's values so a light tick never BLANKS them (the
+   * periodic full refresh re-settles). Transport failure falls back to the
+   * P1 CLI path. Returns true when the light path served the tick. */
+  async function refreshRuntimeLight(): Promise<boolean> {
+    if (!runtimeId.value || !workspace.value.trim()) return false;
+    if (inspectInFlight.value) return false;
+    inspectInFlight.value = true;
+    const seq = ++requestSeq.value;
+    try {
+      const snap = await ipc.runtimePollLight(workspace.value.trim(), runtimeId.value);
+      const prev = runtimeSnapshot.value;
+      const merged: RuntimeSnapshot = { ...snap };
+      if (merged.web_access === undefined && prev?.web_access !== undefined) {
+        merged.web_access = prev.web_access;
+      }
+      if (merged.dependency_policy === undefined && prev?.dependency_policy !== undefined) {
+        merged.dependency_policy = prev.dependency_policy;
+      }
+      if (merged.toolchain === undefined && prev?.toolchain !== undefined) {
+        merged.toolchain = prev.toolchain;
+      }
+      applyRuntimeSnapshot(merged, seq);
+      return true;
+    } catch {
+      // Light path unavailable (transport trouble): fall through to the full
+      // CLI observation below (worst case = today's behavior).
+      try {
+        const merged = await ipc.runtimeStatus(workspace.value.trim(), runtimeId.value);
+        applyRuntimeSnapshot(merged.snapshot, seq);
+        if (merged.services) applyWebServices(merged.services);
+      } catch {
+        markStale();
+      }
+      return false;
+    } finally {
+      inspectInFlight.value = false;
+    }
+  }
+
   // --- S2.3.b: provider status (per-agent, claude/codex only; 04 §四.2/§五) ---
 
   /** Query + cache the provider status for one agent. Only when the runtime is
@@ -1894,6 +1935,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     applyRuntimeSnapshot,
     markStale,
     refreshRuntime,
+    refreshRuntimeLight,
     userRefreshInFlight,
     loadProviderStatus,
     clearProviderStatuses,

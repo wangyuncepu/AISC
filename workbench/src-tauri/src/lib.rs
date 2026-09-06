@@ -25,6 +25,7 @@ pub mod runtime;
 pub mod session;
 pub mod settings;
 pub mod subscription;
+pub mod docker_api;
 pub mod sync;
 pub mod artifact;
 pub mod storage;
@@ -140,6 +141,7 @@ pub fn run(cli_arg: Option<String>) {
             runtime_preflight,
             runtime_inspect,
             runtime_status,
+            runtime::runtime_poll_light,
             runtime_reconcile,
             runtime_restart,
             cancel_runtime_start,

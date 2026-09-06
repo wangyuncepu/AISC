@@ -191,6 +191,12 @@ export interface RuntimeStatusResult {
 export const runtimeStatus = (workspace: string, runtimeId: string) =>
   invoke<RuntimeStatusResult>("runtime_status", { workspace, runtimeId });
 
+/** PERF P6a: zero-spawn steady-state poll (raw engine pipe + registry file).
+ *  Same RuntimeSnapshot shape minus web_access (the store's light apply
+ *  preserves the last full observation's gateway fields). */
+export const runtimePollLight = (workspace: string, runtimeId: string) =>
+  invoke<RuntimeSnapshot>("runtime_poll_light", { workspace, runtimeId });
+
 export const runtimeRestart = (workspace: string, runtimeId: string) =>
   invoke<RuntimeSnapshot>("runtime_restart", { workspace, runtimeId });
 

@@ -51,6 +51,11 @@ export function useRuntimePolling() {
     return backoff.rung;
   }
 
+  /** PERF P6a: light (zero-spawn) tick counter — every 6th tick runs the
+   * full CLI observation to re-settle gateway/toolchain fields the light
+   * path omits (~30s at the rung-0 5s cadence). */
+  let ticksSinceFull = 0;
+
   function intervalMs(): number {
     if (document.hidden) return 0; // paused while minimized/hidden
     const focused = document.hasFocus();
@@ -61,7 +66,15 @@ export function useRuntimePolling() {
   async function tick(): Promise<void> {
     const t0 = performance.now();
     try {
-      await store.refreshRuntime(); // the ACTIVE instance (facade forward)
+      // P6a: light first; a light failure already fell back to the full
+      // path inside the store (refreshRuntimeLight returns false then).
+      if (ticksSinceFull < 5) {
+        ticksSinceFull += 1;
+        await store.refreshRuntimeLight();
+      } else {
+        ticksSinceFull = 0;
+        await store.refreshRuntime(); // full observation every 6th tick
+      }
     } finally {
       // Measure even on failure: a TIMEOUT is the strongest slow signal.
       backoff = nextBackoffState(backoff, performance.now() - t0);

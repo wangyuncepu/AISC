@@ -237,6 +237,7 @@ export const useRuntimeStore = defineStore("runtime", () => {
     applyRuntimeSnapshot: fwdFn("applyRuntimeSnapshot"),
     markStale: fwdFn("markStale"),
     refreshRuntime: fwdFn("refreshRuntime"),
+    refreshRuntimeLight: fwdFn("refreshRuntimeLight"),
     loadProviderStatus: fwdFn("loadProviderStatus"),
     clearProviderStatuses: fwdFn("clearProviderStatuses"),
     refreshWebServices: fwdFn("refreshWebServices"),

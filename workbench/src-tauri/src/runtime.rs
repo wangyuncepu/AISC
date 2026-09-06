@@ -970,6 +970,19 @@ pub async fn runtime_status(
     }
 }
 
+/// PERF P6a (D-13): the steady-state poll — Docker Engine over the raw
+/// named pipe / unix socket + a registry file read. ZERO spawns per tick.
+/// `Err` (transport trouble) makes the caller fall back to the P1 CLI path;
+/// an engine-down observation is a VALID `Ok(unknown+stale)` snapshot,
+/// exactly what the CLI path reports.
+#[tauri::command]
+pub async fn runtime_poll_light(
+    runtime_id: String,
+    workspace: String,
+) -> Result<Value, WorkbenchError> {
+    crate::docker_api::poll_light(std::path::Path::new(&workspace), &runtime_id).await
+}
+
 #[tauri::command]
 pub async fn start_runtime(
     app: AppHandle,

@@ -2009,6 +2009,22 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   fake 无此属性→静默回退真 docker→断言撞上真实容器名（aisc-wb-35f66104），
   顺势改 attrs-only。真机冒烟：SDK 路径实跑 ps 渲染正确。sidecar 重建
   双同步。门禁：pytest 1136。
+- **P6a 热轮询 Rust 直连 named pipe（2026-09-06，空闲卡根治项）**：稳态
+  tick 从「1 次 aisc.exe（P1 后）+ 体内 docker.exe 链」→ **0 spawn**。新
+  `docker_api.rs`：极简引擎 HTTP 客户端（复用 env.rs 管道传输先例，扩展
+  `GET /containers/json?all=1&filters={label:...}`，Connection:close 靠
+  EOF 终止体）；纯函数三件——URL 百分号编码/HTTP 状态-体分离/容器 JSON
+  解析（**原始端点实证**：State=字符串 "exited"、Names=["/name"]、Id=
+  完整 sha256，与 docker-py `containers.list` 的富化 inspect 形状不同——
+  用 api._get 原始端点钉死）+ `light_snapshot` 组装（registry 文件直读 +
+  一次 API 组 RuntimeSnapshot 兼容 payload；web_access 故意缺席——store
+  合并上一份完整观测的 gateway/toolchain 字段，绝不抹白）。Rust command
+  `runtime_poll_light`（引擎不可达是合法 unknown+stale 观测；传输错误才
+  回退）。前端：`refreshRuntimeLight` 先试 light，失败回退 P1 CLI 路径；
+  useRuntimePolling 每 6 次 light tick 跑一次完整观测（~30s 补齐 gateway）。
+  **零副作用**：Python 侧零改动（无 sidecar 重建）。+5 纯函数测试（URL
+  编码/HTTP 解析/容器 JSON/registry 查找/snapshot 形状矩阵）；原始端点
+  形状已实证。门禁：cargo 301 / vue-tsc / vitest 433 / vite。
 - **P3 容器内 spawn 削减三件套（2026-09-06）**：低配机上「每条 shell 命令
   一个 python3 + 一个 sed」「每次 agent 启动一个 node 解析同一个
   settings.json」「每 60s 一个完整 cc-switch CLI 只为查健康」的三重持续税。
