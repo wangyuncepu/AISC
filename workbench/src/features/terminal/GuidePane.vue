@@ -13,7 +13,7 @@
  *   "未配置", never reads any secret.
  * No open_session is called for guide tabs (A-G12-1).
  */
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 import { AGENTS } from "../../stores/tabLayout";
@@ -25,6 +25,8 @@ const store = useRuntimeStore();
 const props = defineProps<{ tabId: string; paneId: string }>();
 
 const tab = computed(() => store.tabs.find((x) => x.tabId === props.tabId));
+/** This pane's live record (sessionState drives the auto-open watch). */
+const pane = computed(() => tab.value?.panes?.[props.paneId] ?? null);
 const agent = computed(() => {
   const t2 = tab.value;
   if (!t2) return undefined;
@@ -60,6 +62,17 @@ async function retry() {
     store.openTab(props.tabId);
   }
 }
+
+/** Manual-test fix (2026-09-06): the guide copy PROMISES「配置 Provider 后会
+ * 自动打开会话」— honor it when the poller flips this pane's agent to
+ * configured while the pane still sits in guide (the cold-boot transient
+ * not_configured case; without this the user had to click 启动会话 by hand
+ * after the wait). Same action as retry()'s success path. */
+watch([auth, pane], ([a, p]) => {
+  if (a !== "configured" || !p || p.sessionState !== "guide") return;
+  store.setActivePane(props.tabId, props.paneId);
+  store.openTab(props.tabId);
+});
 
 function openProviderTab() {
   store.openCcSwitchUiTab();

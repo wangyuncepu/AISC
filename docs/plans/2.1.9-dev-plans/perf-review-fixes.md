@@ -111,7 +111,7 @@ PERF 手测第一轮四条反馈的处置（同晚完成）：
 
 | # | 反馈 | 处置 |
 |---|---|---|
-| 5 | 启动工作区后开 claude 页：长时间「无法检测到 provider」才显示「已配置」 | **P7 梯子把失败也当慢信号**：启动期首探 >1.5s 必爬梯 → 重试被推到 30/60s 档。修复：loadProviderStatus 回传成败；失败→梯子归零（15s 基础档快重试），成功才按耗时爬梯；runtime 重启重置梯子。+3 回归测试（间隔断言） |
+| 5 | 启动工作区后开 claude 页：长时间「无法检测到 provider」才显示「已配置」 | 两轮修复。v1：P7 梯子把传输失败也当慢信号→失败重试被推到 30/60s 档（loadProviderStatus 回传成败，失败归零 15s 档；runtime 重启重置梯子）。v2（复测仍慢后实锤）：冷启动后立刻开 claude 页，首探撞上 cc-switch daemon 启动期瞬态 `not_configured`——「成功的慢响应」照样爬梯。tri-state 回传（答了但 auth 未就绪=unsettled 也归零）；GuidePane watch：auth 翻 configured 且 pane 仍 guide 时自动开会话（兑现「配置后自动打开」承诺）。本地冷启动复现：3s 已配置 |
 
 ## 热修（2026-09-06 晚，`fe28d75`）
 

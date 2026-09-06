@@ -2131,17 +2131,25 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   container/ 五文件 bundle 三处 SHA256 亲验一致 + vendor-refresh
   1514 全过。门禁：pytest 1146（+7）/ cargo 305+integration 全绿 /
   vitest 434 / vue-tsc。
-- **PERF 手测二轮反馈：provider 检测恢复慢（2026-09-06 深夜）**：启动工作
-  区后开 claude 页先显示「无法确认 Provider 状态」，很长时间才「已配置」。
-  **根因 = P7 梯子把失败也当慢信号**：启动窗口期首个探测必然 >1.5s
-  （aisc spawn ~750ms + 容器内 cc-switch 冷启），失败后重试被推到
-  30s/60s 档 → 恢复最坏 1-2 分钟。修复三处：①`loadProviderStatus` 吞
-  错误返回 void——改为回传成功与否；②轮询器 **失败=世界未就绪 → 梯子
-  归零**（15s 基础档快重试），成功才按耗时喂梯（P7 稳态防抖语义保
-  留）；③runtime 重启（新容器）重置梯子。+3 回归测试（间隔断言而非
-  绝对窗口——±10% 抖动下绝对窗口天然 flaky；jsdom 默认 hidden=
-  prerender 需 stub 可见性；watch 双同步赋值净零变化不触发）。门禁：
-  vitest 439（+3）/ vue-tsc 0。
+- **PERF 手测二轮反馈：provider 检测恢复慢（2026-09-06 深夜，v1+v2 两轮）**：
+  启动工作区后开 claude 页先显示引导页，很长时间才「已配置」。**v1 根因
+  = P7 梯子把传输失败也当慢信号**：启动窗口期首探必然 >1.5s（aisc
+  spawn ~750ms + 容器内 cc-switch 冷启），失败后重试被推到 30s/60s 档。
+  **v2 补洞（用户复测仍慢后实锤）**：冷启动后 ~2s 立刻开 claude 页时，
+  首探撞上容器内 cc-switch daemon 启动期瞬态 `not_configured`——这是
+  「成功的慢响应」，v1 只把传输错误当未就绪，业务级 not_configured 照
+  样爬梯 → 30/60s 重试 → 38s+ 才恢复（用户日志实证：就绪 15:39:20、
+  首个完成探测 15:40:00）。**取证方法升级**：cli_exit 只在进程退出时
+  记录——挂起中的调用在日志里隐形，时间线重建必须留这个盲区；本次
+  另有一个 418s 的悬挂 session（被后续 reconcile 杀容器连带终结）干
+  扰判断。修复：①`loadProviderStatus` 回传 tri-state（ok/unsettled/
+  error/skipped）——探测**答了但 auth 未就绪**也算 unsettled；②轮询
+  器仅 configured 喂梯，其余一律归零 15s 基础档；③GuidePane 挂 watch：
+  auth 翻转为 configured 且 pane 仍处 guide 时**自动开会话**（兑现引
+  导文案「配置 Provider 后会自动打开会话」——v1 修复后用户还要手点
+  「启动会话」，秒开体验没真正回来）。+3 回归测试更新（间隔断言）。
+  **本地冷启动全程复现验证：unknown 1-2s → 3s 已配置**。门禁：vitest
+  439 / vue-tsc 0。
 - **PERF 手测首轮四反馈（2026-09-06 深夜，#1/#2/#4 已修，#3 取证无回归）**：
   **#1 设置页卡死+视图不切换（P0，根因实锤）**——P8 给设置页加了
   `performance` 分节但漏了 `GROUP_KEY` 条目与 i18n 键：`t(undefined)`

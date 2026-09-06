@@ -1,17 +1,17 @@
-/**
+﻿/**
  * PERF P7 fix regression (manual-test 2026-09-06): the provider ladder used
- * to escalate on FAILED probes too — right after a workspace start the first
+ * to escalate on FAILED probes too 鈥?right after a workspace start the first
  * probe (aisc spawn ~750ms + cold in-container cc-switch) takes >1.5s, so
- * the retry cadence jumped 15→30→60s and the agent page sat on
- * 「无法确认 Provider 状态」for a minute+ before showing 已配置.
+ * the retry cadence jumped 15鈫?0鈫?0s and the agent page sat on
+ * 銆屾棤娉曠‘璁?Provider 鐘舵€併€峟or a minute+ before showing 宸查厤缃?
  *
  * Contract after the fix:
- *  - a FAILED probe retries at the BASE cadence (15s ±10%), never a rung;
+ *  - a FAILED probe retries at the BASE cadence (15s 卤10%), never a rung;
  *  - a slow-but-SUCCESSFUL probe still escalates (the churn protection);
  *  - a runtime restart resets the ladder (fresh container, fresh timings).
  *
  * Assertions are on the INTERVALS between consecutive calls (the cadence
- * semantics), not absolute wall-clock windows — the ±10% jitter makes
+ * semantics), not absolute wall-clock windows 鈥?the 卤10% jitter makes
  * absolute windows flaky by construction.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,15 +32,16 @@ import { useProviderPolling } from "../useProviderPolling";
 
 /** Fake-clock timestamps of each probe call (Date is faked with the timers). */
 const callTimes: number[] = [];
-/** Outcome the next probe returns. */
-let nextOutcome: boolean | { delayMs: number } = true;
+/** Outcome the next probe returns: "ok" | "unsettled" | "error" or a slow
+ * success `{ delayMs }` (returns "ok" after the delay). */
+let nextOutcome: "ok" | "unsettled" | "error" | { delayMs: number } = "ok";
 
-function recordCall(): Promise<boolean> {
+function recordCall(): Promise<"ok" | "unsettled" | "error"> {
   callTimes.push(Date.now());
   const outcome = nextOutcome;
   if (typeof outcome === "object") {
     return new Promise((resolve) => {
-      setTimeout(() => resolve(true), outcome.delayMs);
+      setTimeout(() => resolve("ok"), outcome.delayMs);
     });
   }
   return Promise.resolve(outcome);
@@ -61,7 +62,7 @@ function intervals(): number[] {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  // jsdom defaults to hidden=prerender / hasFocus=false — the poller treats
+  // jsdom defaults to hidden=prerender / hasFocus=false 鈥?the poller treats
   // that as "paused" and never schedules. Make the page visible+focused.
   Object.defineProperty(document, "hidden", { value: false, configurable: true });
   Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
@@ -70,7 +71,7 @@ beforeEach(() => {
   fakeStore.activeTabId = "t1";
   fakeStore.runtimeState = "running";
   callTimes.length = 0;
-  nextOutcome = true;
+  nextOutcome = "ok";
   fakeStore.loadProviderStatus.mockReset().mockImplementation(recordCall);
 });
 
@@ -79,14 +80,14 @@ afterEach(() => {
 });
 
 describe("useProviderPolling ladder semantics (manual-test fix)", () => {
-  it("a failed probe retries at the base cadence — never a ladder rung", async () => {
-    nextOutcome = false; // every probe fails (container still warming)
+  it("a failed or not-yet-configured probe retries at the base cadence 鈥?never a ladder rung", async () => {
+    nextOutcome = "unsettled"; // probe ANSWERS, auth not_configured/unknown (cold-boot transient)
     const p = useProviderPolling();
     p.start();
     await advanceUntil(4);
     p.stop();
 
-    // All retries at the BASE 15s ±10% — the old code fed failures to the
+    // All retries at the BASE 15s 卤10% 鈥?the old code fed failures to the
     // ladder and stretched the cadence to 30/60s.
     for (const dt of intervals()) {
       expect(dt).toBeGreaterThanOrEqual(13_500);
@@ -102,21 +103,21 @@ describe("useProviderPolling ladder semantics (manual-test fix)", () => {
     p.stop();
 
     // Interval between call STARTS = probe duration (2s) + rung-1 cadence
-    // (30s ±10%) → 29s..35s.
+    // (30s 卤10%) 鈫?29s..35s.
     const dt = intervals()[0]!;
     expect(dt).toBeGreaterThanOrEqual(28_000);
     expect(dt).toBeLessThanOrEqual(36_000);
   });
 
   it("a runtime restart resets the ladder to the base cadence", async () => {
-    nextOutcome = { delayMs: 2_000 }; // slow success → rung 1
+    nextOutcome = { delayMs: 2_000 }; // slow success 鈫?rung 1
     const p = useProviderPolling();
     p.start();
     await advanceUntil(2);
     await vi.advanceTimersByTimeAsync(3_000); // let probe 2 COMPLETE before the flip
 
     // Warm container now: post-restart probes are fast and succeed.
-    nextOutcome = true;
+    nextOutcome = "ok";
     fakeStore.runtimeState = "stopped";
     await vi.advanceTimersByTimeAsync(0); // let the watcher observe the change
     fakeStore.runtimeState = "running"; // reset + immediate tick (probe 3)
@@ -124,7 +125,7 @@ describe("useProviderPolling ladder semantics (manual-test fix)", () => {
     p.stop();
 
     // intervals: [0] pre-restart rung-1 gap; [1] restart-tick gap (immediate,
-    // unasserted); [2] the post-restart scheduled gap — base cadence again.
+    // unasserted); [2] the post-restart scheduled gap 鈥?base cadence again.
     const [before, , after] = intervals();
     expect(before!).toBeGreaterThanOrEqual(28_000);
     expect(after!).toBeGreaterThanOrEqual(13_500);
