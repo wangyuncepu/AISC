@@ -4,8 +4,9 @@
 
 # v2.1.9-dev (2026-08-20 ~) — 四挂账清偿 · nairong 根因链 · 构建韧性 · 优化批次（分支 develop）
 
-> 规划入口：`docs/plans/2.1.9-dev-plans/`（README 阶段表 + decisions.md D-1..D-11 +
-> opt-batch-spec.md + f1-f2-design.md）。VERSION 冻结前保持 2.1.8.dev0。
+> 规划入口：`docs/plans/2.1.9-dev-plans/`（README 阶段表 + decisions.md D-1..D-13 +
+> opt-batch-spec.md + f1-f2-design.md + provider-parity-design.md + f1-f2-field-fixes.md +
+> **perf-batch-spec.md**）。VERSION 冻结前保持 2.1.8.dev0。
 
 - **T1-T6（四挂账统一清偿）**：#53 隔离测试钉第二 tempdir；#50 ble.sh 移除（vendor +
   门控 + D-1 修订）；#3 归因全量修复（R1 容器登记桥 / R2 env 兜底 / R3 呈现层按 D-6
@@ -1908,6 +1909,29 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   lib/contextMenu.ts（document 级 contextmenu preventDefault，自建菜单
   渲染自己的 DOM 不受影响），App.vue onMounted 接线 + 模块测试。纯前端，
   无容器/sidecar 涉及。门禁：vitest 433 / vue-tsc / vite build。
+
+# PERF (2026-09-05 ~) — 低配机器 Docker 性能优化（分支 develop）
+
+> 规划入口：`docs/plans/2.1.9-dev-plans/perf-batch-spec.md`（D-13；探针事实
+> 基线 + P1-P10）。用户画像：8GB+弱CPU/慢盘复合低配机，全场景卡顿。
+
+- **P1 tick 合并 `runtime status` 单命令（2026-09-06）**：
+  5s 轮询 tick 从 2 次 aisc.exe（inspect + 无条件跟随的 services）合并为
+  **1 次**——每次 spawn 有 ~750ms 纯 sidecar 开销（onefile 解包+Python
+  启动，实测 p50≈741-777ms），tick 内 spawn 直接减半。实现：CLI 新子命令
+  `runtime status`（契约 §5.4b）返回 `{snapshot, services}`——snapshot 与
+  inspect 同构（权威）；services 为 **best-effort 嵌套字段**（服务端内部
+  3s deadline，超时/失败→null，不拖垮 snapshot 也不把 services 的慢污染
+  退避梯子的慢信号）；`_MemoExecutor` 逐调用去重两半对同一 runtime 的
+  重复只读 Docker 调用（ps/inspect 各只发一次）。Rust 新 `runtime_status`
+  command（raw JSON 透传 + snapshot 字段存在性校验）；前端 refreshRuntime
+  单次调用拆分应用（一次观测一个 seq 一个 observed_at——stale/fresh 语义
+  反而更严格），applyWebServices 抽出共享（值门不动）；控制路径（stop 对
+  账/ensureRuntime 发现）仍走完整 inspect 保真。11 个测试文件 ipc mock 批量
+  补 `runtimeStatus` 键 + layerContract FORBIDDEN 集补键。sidecar 重建双同步。
+  门禁：pytest 1119（+3：合并形状/去重实证（services 半零新增 ps/inspect）/
+  慢 services deadline 归 null 且限时返回）/ cargo 293（+argv）/ vitest 433 /
+  vue-tsc / vite。
 
 # F1/F2 (2026-09-03 ~) — 宿主工具 MCP · SSH 工作区（分支 develop）
 

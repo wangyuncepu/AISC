@@ -27,6 +27,7 @@ const mockIpc = vi.hoisted(() => ({
   ackSessionExit: vi.fn().mockResolvedValue("acknowledged"),
   stopRuntime: vi.fn().mockResolvedValue({ state: "stopped" }),
   runtimeInspect: vi.fn().mockResolvedValue({ state: "stopped" }),
+  runtimeStatus: vi.fn().mockResolvedValue({ snapshot: { state: "stopped" }, services: null }),
 }));
 
 vi.mock("../../lib/ipc", () => mockIpc);

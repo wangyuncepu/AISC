@@ -181,6 +181,16 @@ export const runtimePreflight = (
 export const runtimeInspect = (workspace: string, runtimeId: string) =>
   invoke<RuntimeSnapshot>("runtime_inspect", { workspace, runtimeId });
 
+/** PERF P1: the poll tick's ONE invocation — snapshot + best-effort services
+ *  (services is null when the server-side 3s deadline elapsed). */
+export interface RuntimeStatusResult {
+  snapshot: RuntimeSnapshot;
+  services?: RuntimeServicesResult | null;
+}
+
+export const runtimeStatus = (workspace: string, runtimeId: string) =>
+  invoke<RuntimeStatusResult>("runtime_status", { workspace, runtimeId });
+
 export const runtimeRestart = (workspace: string, runtimeId: string) =>
   invoke<RuntimeSnapshot>("runtime_restart", { workspace, runtimeId });
 

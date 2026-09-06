@@ -1536,6 +1536,77 @@ def inspect_runtime(
     )
 
 
+class _MemoExecutor:
+    """PERF P1: per-invocation result memo for the merged status path.
+
+    The snapshot and services halves resolve the SAME runtime independently
+    (label-filtered ps + container inspect each); identical read calls within
+    one invocation return the cached result. Only wraps read-shaped use —
+    the status path issues no mutations."""
+
+    def __init__(self, inner: Any):
+        self._inner = inner
+        self._cache: dict = {}
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._inner, name)
+        if not callable(attr):
+            return attr
+
+        def wrapper(*args, **kwargs):
+            key = (name, repr(args), tuple(sorted(kwargs.items())))
+            if key not in self._cache:
+                self._cache[key] = attr(*args, **kwargs)
+            return self._cache[key]
+
+        return wrapper
+
+
+def runtime_status(
+    runtime_id: str,
+    executor: Any,
+    registry_root: Path,
+    services_deadline_s: float = 3.0,
+) -> dict:
+    """PERF P1: ``aisc runtime status`` — inspect + services in ONE CLI
+    invocation (each spawn costs ~750ms of pure process overhead; the 5s
+    poll tick used to pay it twice).
+
+    The snapshot is authoritative; ``services`` is a best-effort NESTED
+    field computed under a deadline — timeout/failure yields ``None`` and
+    never drags the snapshot down (keeps the poll's stale/fresh semantics
+    clean AND keeps a slow services half from polluting the backoff
+    ladder's slow signal with foreign latency)."""
+    import threading
+
+    memo = _MemoExecutor(executor)
+    snapshot = inspect_runtime(
+        runtime_id=runtime_id, executor=memo, registry_root=registry_root
+    ).to_dict()
+
+    services: Any = None
+    box: dict = {}
+
+    def _collect():
+        try:
+            from aisc.application.web_gateway import runtime_services
+
+            box["r"] = runtime_services(
+                runtime_id=runtime_id,
+                executor=memo,
+                registry_root=registry_root,
+            ).to_dict()
+        except Exception:
+            box["error"] = True  # best-effort: swallowed, services stays None
+
+    t = threading.Thread(target=_collect, daemon=True)
+    t.start()
+    t.join(services_deadline_s)
+    if "r" in box:
+        services = box["r"]
+    return {"snapshot": snapshot, "services": services}
+
+
 def _resolve_container_for_lifecycle(
     runtime_id: str,
     executor: Any,

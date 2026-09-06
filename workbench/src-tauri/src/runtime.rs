@@ -272,6 +272,20 @@ fn runtime_inspect_argv(runtime_id: &str, workspace: &str) -> Vec<String> {
     ]
 }
 
+/// PERF P1: the poll tick's ONE invocation — merged snapshot + services.
+fn runtime_status_argv(runtime_id: &str, workspace: &str) -> Vec<String> {
+    vec![
+        "runtime".into(),
+        "status".into(),
+        "--runtime-id".into(),
+        runtime_id.into(),
+        "--workspace".into(),
+        workspace.into(),
+        "--format".into(),
+        "json".into(),
+    ]
+}
+
 fn runtime_stop_argv(runtime_id: &str, workspace: &str) -> Vec<String> {
     vec![
         "runtime".into(),
@@ -930,6 +944,30 @@ pub async fn runtime_inspect(
     let data = env.data.unwrap_or(Value::Null);
     serde_json::from_value::<RuntimeSnapshot>(data)
         .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("inspect parse: {e}")))
+}
+
+/// PERF P1: the poll tick's single invocation — `{snapshot, services|null}`
+/// passed through as raw JSON (the store splits it client-side; services is
+/// best-effort server-side under a 3s deadline).
+#[tauri::command]
+pub async fn runtime_status(
+    app: AppHandle,
+    runtime_id: String,
+    workspace: String,
+) -> Result<Value, WorkbenchError> {
+    let pin = resolve_cli(&app).await?;
+    let argv = runtime_status_argv(&runtime_id, &workspace);
+    let env = run_control(&pin, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
+    if let Some(e) = envelope_error(&env) {
+        return Err(e);
+    }
+    let data = env.data.unwrap_or(Value::Null);
+    if data.get("snapshot").is_some() {
+        Ok(data)
+    } else {
+        Err(WorkbenchError::cli_protocol()
+            .with_detail("runtime status: missing snapshot field".to_string()))
+    }
 }
 
 #[tauri::command]
@@ -1954,6 +1992,20 @@ mod tests {
         let argv = runtime_services_argv("rid", "/ws");
         assert_eq!(argv[0], "runtime");
         assert_eq!(argv[1], "services");
+        assert!(argv.contains(&"--runtime-id".into()));
+        assert!(argv.contains(&"rid".into()));
+        assert!(argv.contains(&"--workspace".into()));
+        assert!(argv.contains(&"/ws".into()));
+        assert!(argv.contains(&"--format".into()));
+        assert!(argv.contains(&"json".into()));
+    }
+
+    /// PERF P1: the poll tick's single merged invocation.
+    #[test]
+    fn runtime_status_argv_shape() {
+        let argv = runtime_status_argv("rid", "/ws");
+        assert_eq!(argv[0], "runtime");
+        assert_eq!(argv[1], "status");
         assert!(argv.contains(&"--runtime-id".into()));
         assert!(argv.contains(&"rid".into()));
         assert!(argv.contains(&"--workspace".into()));

@@ -40,6 +40,7 @@ vi.mock("../../../lib/ipc", () => ({
   getProviderStatus: vi.fn().mockResolvedValue({}),
   stopRuntime: vi.fn().mockResolvedValue({ state: "stopped" }),
   runtimeInspect: vi.fn().mockResolvedValue({ state: "stopped" }),
+  runtimeStatus: vi.fn().mockResolvedValue({ snapshot: { state: "stopped" }, services: null }),
 }));
 
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({

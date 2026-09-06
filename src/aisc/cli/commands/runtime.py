@@ -184,6 +184,24 @@ def cmd_runtime_inspect(
     return snapshot.to_dict()
 
 
+def cmd_runtime_status(
+    runtime_id: str,
+    workspace: Optional[str] = None,
+    executor: Optional[DockerExecutor] = None,
+) -> Dict[str, Any]:
+    """Execute ``aisc runtime status`` (PERF P1, contract §5.4b): inspect +
+    services merged in ONE invocation — the 5s poll tick used to pay the
+    ~750ms sidecar spawn twice. ``snapshot`` is authoritative; ``services``
+    is best-effort under a 3s deadline (timeout/failure -> None)."""
+    from aisc.application.runtime import runtime_status
+
+    exec_ = executor or RealDockerExecutor()
+    _ws, reg_root = _resolve_workspace_and_registry(workspace)
+    return runtime_status(
+        runtime_id=runtime_id, executor=exec_, registry_root=reg_root
+    )
+
+
 def cmd_runtime_stop(
     runtime_id: str,
     workspace: Optional[str] = None,

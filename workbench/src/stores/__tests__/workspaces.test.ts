@@ -26,6 +26,7 @@ const mockIpc = vi.hoisted(() => ({
   ackSessionExit: vi.fn().mockResolvedValue("acknowledged"),
   stopRuntime: vi.fn().mockResolvedValue({ state: "stopped" }),
   runtimeInspect: vi.fn().mockResolvedValue({ state: "stopped" }),
+  runtimeStatus: vi.fn().mockResolvedValue({ snapshot: { state: "stopped" }, services: null }),
   // runtime-lifecycle-ux Stage 3: the ephemeral teardown + lease surface.
   removeRuntime: vi.fn().mockResolvedValue({ state: "not_found" }),
   leaseClaim: vi.fn().mockResolvedValue({ outcome: "claimed", lease_id: "l-1", workspace_key: "k" }),

@@ -33,6 +33,7 @@ vi.mock("../../lib/ipc", () => ({
   loadHistory: vi.fn().mockResolvedValue({ schema_version: 1, revision: 0, workspaces: [] }),
   saveHistory: vi.fn().mockResolvedValue(1),
   runtimeInspect: vi.fn(),
+  runtimeStatus: vi.fn(),
   negotiateCapabilities: vi.fn(),
   listRuntimes: vi.fn().mockResolvedValue({ runtimes: [] }),
   getProviderStatus: vi.fn().mockResolvedValue({}),

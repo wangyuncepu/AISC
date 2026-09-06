@@ -56,6 +56,7 @@ vi.mock("../../../lib/ipc", () => ({
   negotiateCapabilities: vi.fn(),
   listRuntimes: vi.fn().mockResolvedValue({ runtimes: [] }),
   runtimeInspect: vi.fn(),
+  runtimeStatus: vi.fn(),
   stopRuntime: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({

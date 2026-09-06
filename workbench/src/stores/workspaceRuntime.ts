@@ -767,17 +767,19 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     inspectInFlight.value = true;
     const seq = ++requestSeq.value;
     try {
-      const snap = await ipc.runtimeInspect(workspace.value.trim(), runtimeId.value);
-      applyRuntimeSnapshot(snap, seq);
+      // PERF P1: one invocation carries both halves — the 5s poll tick used
+      // to pay the ~750ms sidecar spawn twice (inspect + a fire-and-forget
+      // services refresh). One observation = one seq = one observed_at; a
+      // null services (server-side 3s deadline) keeps the last good payload.
+      const merged = await ipc.runtimeStatus(workspace.value.trim(), runtimeId.value);
+      applyRuntimeSnapshot(merged.snapshot, seq);
+      if (merged.services) applyWebServices(merged.services);
     } catch {
       markStale();
     } finally {
       inspectInFlight.value = false;
       if (userInitiated) userRefreshInFlight.value = false;
     }
-    // svc-4: keep the Services panel in step with the snapshot (best-effort,
-    // never blocks the inspect path). Stopped/cleared runtimes clear below.
-    void refreshWebServices();
   }
 
   // --- S2.3.b: provider status (per-agent, claude/codex only; 04 §四.2/§五) ---
@@ -817,20 +819,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     webServicesInFlight.value = true;
     try {
       const result = await ipc.runtimeServices(workspace.value.trim(), runtimeId.value);
-      // S5/#28: same value-gate as applyRuntimeSnapshot (observed_at
-      // stripped) — the services poll also rides the 5s tick and must not
-      // hand consumers a fresh object identity when nothing changed.
-      const stripTs = (r: RuntimeServicesResult) => {
-        const { observed_at: _t, ...rest } = r;
-        return JSON.stringify(rest);
-      };
-      if (
-        webServices.value === null ||
-        stripTs(webServices.value) !== stripTs(result)
-      ) {
-        webServices.value = result;
-      }
-      webServicesError.value = null;
+      applyWebServices(result);
     } catch (e) {
       // Old CLI (no runtime services capability) or transport failure — keep
       // the last good payload; the panel gates on the capability anyway.
@@ -838,6 +827,23 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     } finally {
       webServicesInFlight.value = false;
     }
+  }
+
+  /** Shared application path (P1): the merged status call and the standalone
+   * services call land here. S5/#28 value-gate — observed_at stripped, so an
+   * unchanged payload keeps its object identity (no re-render churn). */
+  function applyWebServices(result: RuntimeServicesResult) {
+    const stripTs = (r: RuntimeServicesResult) => {
+      const { observed_at: _t, ...rest } = r;
+      return JSON.stringify(rest);
+    };
+    if (
+      webServices.value === null ||
+      stripTs(webServices.value) !== stripTs(result)
+    ) {
+      webServices.value = result;
+    }
+    webServicesError.value = null;
   }
 
   /** Open one registered service's canonical URL. Ids only — the backend

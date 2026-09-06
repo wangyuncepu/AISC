@@ -42,6 +42,7 @@ vi.mock("../../../lib/ipc", () => ({
   getProviderStatus: vi.fn().mockResolvedValue({}),
   stopRuntime: vi.fn().mockResolvedValue({ state: "stopped" }),
   runtimeInspect: vi.fn().mockResolvedValue({ state: "stopped" }),
+  runtimeStatus: vi.fn().mockResolvedValue({ snapshot: { state: "stopped" }, services: null }),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn().mockResolvedValue(true), open: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ Channel: class {} }));

@@ -539,6 +539,15 @@ def _build_parser() -> _AiscArgumentParser:
     rti.add_argument("--workspace", type=str, default=None,
                      help="Workspace path (default: current directory)")
 
+    # --- runtime status (PERF P1: merged inspect+services, one invocation) ---
+    rtstt = rtsub.add_parser("status", help="Snapshot + services in one call (poll path)",
+                             allow_abbrev=False)
+    _add_global_args(rtstt, is_subparser=True)
+    rtstt.add_argument("--runtime-id", type=str, required=True,
+                       help="Runtime ID (UUID v4)")
+    rtstt.add_argument("--workspace", type=str, default=None,
+                       help="Workspace path (default: current directory)")
+
     # --- runtime stop ---
     rtst = rtsub.add_parser("stop", help="Stop a runtime (keep container + metadata)",
                             allow_abbrev=False)
@@ -1715,6 +1724,7 @@ def _cmd_runtime(
         cmd_runtime_start,
         cmd_runtime_list,
         cmd_runtime_inspect,
+        cmd_runtime_status,
         cmd_runtime_stop,
         cmd_runtime_restart,
         cmd_runtime_remove,
@@ -1760,6 +1770,12 @@ def _cmd_runtime(
         return data, 0, []
     elif sub == "inspect":
         data = cmd_runtime_inspect(
+            runtime_id=args.runtime_id,
+            workspace=args.workspace,
+        )
+        return data, 0, []
+    elif sub == "status":
+        data = cmd_runtime_status(
             runtime_id=args.runtime_id,
             workspace=args.workspace,
         )

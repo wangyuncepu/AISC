@@ -238,6 +238,19 @@ aisc runtime inspect --runtime-id UUID --format json
 - `stopped`：容器存在但未运行。
 - `unknown`：Docker daemon 或权限不可用，无法确认实际状态。
 
+### 5.4b `aisc runtime status`（PERF P1，D-13）
+
+```text
+aisc runtime status --runtime-id UUID --format json
+```
+
+轮询专用合并观测：**一次调用返回 `{snapshot, services}`**——snapshot 与
+§5.4 `inspect` 完全同构（权威）；services 与 `runtime services`（svc-2）
+同构但为 **best-effort 嵌套字段**：服务端内部限时（默认 3s deadline），
+超时或失败时为 `null`（绝不拖垮 snapshot，也不把 services 的慢污染轮询
+退避的慢信号）。同调用内对相同 Docker 只读请求（ps/inspect）结果复用。
+旧 `inspect` 与 `runtime services` 命令语义不变（控制路径继续使用）。
+
 ### 5.5 `aisc runtime stop|restart|remove`
 
 ```text

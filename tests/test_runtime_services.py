@@ -16,8 +16,58 @@ import tempfile as _tempfile
 _os.environ.setdefault("AISC_DATA_ROOT", _tempfile.mkdtemp(prefix="aisc-test-data-"))
 import json
 import socket
+import time
 import unittest
 from pathlib import Path
+
+
+class RuntimeStatusMergeTests(unittest.TestCase):
+    """PERF P1 (D-13): ``aisc runtime status`` — inspect + services merged
+    into ONE CLI invocation. Each spawn costs ~750ms of pure sidecar
+    overhead; the 5s poll tick used to pay it twice."""
+
+    def _running(self, executor=None):
+        ws = _make_workspace()
+        ex = executor if executor is not None else ServicesFakeExecutor()
+        start_runtime(RID, str(ws), "super-claude:latest", "direct", "project",
+                      "workbench", executor=ex, registry_root=ws / ".aisc",
+                      ready_timeout=2.0)
+        return ws, ex
+
+    def test_merged_shape_carries_both_halves(self):
+        ws, ex = self._running()
+        data = runtime_status(RID, executor=ex, registry_root=ws / ".aisc")
+        self.assertEqual(data["snapshot"]["state"], "running")
+        self.assertEqual(
+            data["services"]["schema_version"], "aisc.runtime-services/v1")
+
+    def test_services_half_adds_zero_extra_inspects_or_ps(self):
+        # Baseline: the snapshot half alone.
+        ws, ex = self._running()
+        inspect_runtime(RID, executor=ex, registry_root=ws / ".aisc")
+        base_inspect, base_ps = ex.inspect_calls, ex.ps_calls
+        # Merged: the memoized executor dedupes the services half's
+        # identical reads — no additional inspect/ps docker calls.
+        ws2, ex2 = self._running()
+        runtime_status(RID, executor=ex2, registry_root=ws2 / ".aisc")
+        self.assertEqual(ex2.inspect_calls, base_inspect)
+        self.assertEqual(ex2.ps_calls, base_ps)
+
+    def test_slow_services_deadlines_to_null_snapshot_intact(self):
+        class SlowExec(ServicesFakeExecutor):
+            def run_captured(self, argv, *, timeout=None):
+                if argv and argv[0] == "exec":
+                    time.sleep(3.0)
+                return super().run_captured(argv, timeout=timeout)
+
+        ws, ex = self._running(executor=SlowExec())
+        t0 = time.monotonic()
+        data = runtime_status(RID, executor=ex, registry_root=ws / ".aisc",
+                              services_deadline_s=0.3)
+        elapsed = time.monotonic() - t0
+        self.assertLess(elapsed, 2.0, "deadline must bound the services half")
+        self.assertEqual(data["snapshot"]["state"], "running")
+        self.assertIsNone(data["services"])
 
 from aisc.adapters.container_registry import (
     list_containers_readonly,
@@ -26,6 +76,7 @@ from aisc.adapters.container_registry import (
 from aisc.application.runtime import (
     compute_config_fingerprint,
     inspect_runtime,
+    runtime_status,
     start_runtime,
 )
 from aisc.application.web_gateway import (
@@ -73,6 +124,7 @@ class ServicesFakeExecutor:
         self.bind_conflicts = bind_conflicts  # first N run attempts fail
         self.run_calls: list[list[str]] = []
         self.exec_calls: list[list[str]] = []
+        self.ps_calls = 0
         self.inspect_calls = 0
         self.manifest: dict[int, dict] = {}
         self.containers: dict[str, dict] = {}
@@ -171,6 +223,7 @@ class ServicesFakeExecutor:
                     "runtime_id": c["runtime_id"]}), stderr="", exit_code=0)
             return ProcessResult(stdout="", stderr="unknown tool", exit_code=1)
         if cmd == "ps":
+            self.ps_calls += 1
             rid = self._label_val(argv, "io.aisc.runtime-id")
             lines = []
             for name, c in self.containers.items():

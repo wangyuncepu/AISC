@@ -18,6 +18,7 @@ const FORBIDDEN_IN_COMPONENTS = new Set([
   "removeRuntime",
   "runtimePreflight",
   "runtimeInspect",
+  "runtimeStatus",
   "runtimeRestart",
   "listRuntimes",
   "startDocker",

@@ -44,6 +44,7 @@ vi.mock("../../../lib/ipc", () => ({
   negotiateCapabilities: vi.fn(),
   listRuntimes: vi.fn().mockResolvedValue({ runtimes: [] }),
   runtimeInspect: vi.fn(),
+  runtimeStatus: vi.fn(),
   stopRuntime: vi.fn(),
   runtimeServices: vi.fn(),
   openRuntimeServiceUrl: vi.fn().mockResolvedValue("http://p3000.localhost:47831/"),
