@@ -248,6 +248,19 @@ class TestStartRuntime(unittest.TestCase):
         self.assertIn("--cpus", argv)
         self.assertIn("1.5", argv)
 
+    def test_start_rejects_invalid_memory_limit(self):
+        ws = _make_workspace()
+        ex = RuntimeFakeExecutor()
+        for bad in ["", "g", "3gg", "3bg", "3kgm", "3x"]:
+            with self.subTest(bad=bad):
+                with self.assertRaises(CliError) as cm:
+                    start_runtime(
+                        RID_A, str(ws), "super-claude:latest", "direct",
+                        "project", "workbench", executor=ex,
+                        registry_root=ws / ".aisc", max_memory=bad,
+                    )
+                self.assertEqual(cm.exception.exit_code, RuntimeExitCode.USAGE_ERROR)
+
     def test_start_idempotent_reuse(self):
         ws = _make_workspace()
         ex = RuntimeFakeExecutor()

@@ -8,7 +8,10 @@ Subcommands:
   flush   — PERF P3a (D-13): batch-insert a TSV spool from stdin in ONE
             transaction (the shell buffers records and flushes at 20 lines /
             60s / exit — one python3 spawn per ~20 commands instead of per
-            command; `append` kept for compatibility)
+            command; `append` kept for compatibility). This batching trades
+            an accepted loss window for spawn reduction: SIGKILL, container
+            force-stop, or host crash may lose records still buffered in the
+            shell. Normal exit and SIGTERM flush via the shell EXIT trap.
   retain  — keep only the most recent N rows (entrypoint calls once at boot)
 
 All I/O via environment variables (AISC_HIST_DB etc.) — the bashrc

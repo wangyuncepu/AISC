@@ -17,6 +17,11 @@ from aisc.domain.models import (
 )
 
 
+# Docker --memory accepts digits with an optional single byte-suffix. Keep the
+# data layer aligned with the Rust settings sanitizer (PERF P8 review fix).
+_MEMORY_LIMIT_RE = re.compile(r'^[0-9]+(?:[bkmg])?$')
+
+
 # ---------------------------------------------------------------------------
 # UUID v4 validation
 # ---------------------------------------------------------------------------
@@ -974,6 +979,15 @@ def start_runtime(
             message=f"Invalid network (must be direct|proxy): {network}",
             exit_code=RuntimeExitCode.USAGE_ERROR,
             error_code=RuntimeErrorCode.NETWORK_INVALID,
+        )
+    if max_memory is not None and not _MEMORY_LIMIT_RE.fullmatch(max_memory):
+        raise CliError(
+            message=(
+                "Invalid max memory (must be digits with an optional "
+                "b/k/m/g suffix): " + str(max_memory)
+            ),
+            exit_code=RuntimeExitCode.USAGE_ERROR,
+            error_code="AISC_ERR_USAGE",
         )
 
     ws_path = Path(workspace).resolve()

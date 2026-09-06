@@ -244,26 +244,24 @@ pub async fn poll_light(
             std::fs::read_to_string(p).ok()
         });
 
-    let body = match engine_get(&url).await {
-        Ok(b) => b,
-        Err(_) => {
-            // Engine unreachable: parity with inspect_runtime's unknown.
-            return Ok(serde_json::json!({
-                "runtime_id": runtime_id,
-                "state": "unknown",
-                "config": {"workspace": "", "image": "", "network": "direct", "scope": "project"},
-                "owner": "",
-                "config_fingerprint": "",
-                "container_name": "",
-                "container_id": "",
-                "registry_state": "unknown",
-                "observed_at": now_iso_utc(),
-                "stale": true,
-            }));
-        }
-    };
+    poll_light_from_body(
+        runtime_id,
+        registry_json.as_deref(),
+        engine_get(&url).await,
+    )
+}
+
+fn poll_light_from_body(
+    runtime_id: &str,
+    registry_json: Option<&str>,
+    body: Result<String, String>,
+) -> Result<Value, WorkbenchError> {
+    let body = body.map_err(|e| {
+        WorkbenchError::cli_protocol()
+            .with_detail(format!("docker engine light poll: {e}"))
+    })?;
     let docker = parse_containers_json(&body);
-    Ok(light_snapshot(runtime_id, registry_json.as_deref(), docker))
+    Ok(light_snapshot(runtime_id, registry_json, docker))
 }
 
 #[cfg(test)]
@@ -276,6 +274,18 @@ mod tests {
         assert!(url.starts_with("/containers/json?all=1&filters="));
         assert!(url.contains("%7B%22label%22"));
         assert!(!url.contains('{') && !url.contains('"'));
+    }
+
+    #[test]
+    fn poll_light_transport_failure_is_error_not_unknown_snapshot() {
+        let err = poll_light_from_body(
+            "r1",
+            None,
+            Err::<String, String>("pipe open".to_string()),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "WB_ERR_CLI_PROTOCOL");
+        assert!(err.technical_detail.unwrap().contains("pipe open"));
     }
 
     #[test]

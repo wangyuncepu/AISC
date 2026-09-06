@@ -28,6 +28,7 @@ const mockIpc = vi.hoisted(() => ({
   stopRuntime: vi.fn().mockResolvedValue({ state: "stopped" }),
   runtimeInspect: vi.fn().mockResolvedValue({ state: "stopped" }),
   runtimeStatus: vi.fn().mockResolvedValue({ snapshot: { state: "stopped" }, services: null }),
+  runtimePollLight: vi.fn().mockResolvedValue({ state: "stopped" }),
 }));
 
 vi.mock("../../lib/ipc", () => mockIpc);
@@ -121,6 +122,18 @@ describe("facade state forwarding (3a)", () => {
     expect(s.networkUsageTabOpen).toBe(true);
     s.closeNetworkUsageTab();
     expect(s.networkUsageTabOpen).toBe(false);
+  });
+});
+
+describe("light-poll fallback (PERF P6a review fix)", () => {
+  it("falls back to the merged CLI status when the light transport rejects", async () => {
+    const s = useRuntimeStore();
+    s.workspace = "C:/tmp/w";
+    s.runtimeId = "rid";
+    mockIpc.runtimePollLight.mockRejectedValueOnce(new Error("pipe open"));
+    await expect(s.refreshRuntimeLight()).resolves.toBe(false);
+    expect(mockIpc.runtimeStatus).toHaveBeenCalledTimes(1);
+    expect(s.runtimeState).toBe("stopped");
   });
 });
 

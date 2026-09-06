@@ -38,7 +38,7 @@
 | PP | **Provider 页对标 cc-switch 桌面端**（r1-r8 八轮手测收敛）。[provider-parity-design.md](provider-parity-design.md)（D-12） | ✅ r8 后封存深化 |
 | FF | **手测期现场修复回溯归档**（8 项直接执行的设计记录补档，含 agent 包根治/测试污染/多 profile 等） | ✅ [f1-f2-field-fixes.md](f1-f2-field-fixes.md) |
 
-## 性能批次（PERF，规格 → [perf-batch-spec.md](perf-batch-spec.md)，D-13）——✅ P1-P9 全部收官（2026-09-06）
+## 性能批次（PERF，规格 → [perf-batch-spec.md](perf-batch-spec.md)，D-13）——✅ P1-P9 全部收官；审查修复 → [perf-review-fixes.md](perf-review-fixes.md)
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|

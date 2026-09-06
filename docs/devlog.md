@@ -2102,6 +2102,35 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   误报，python 改 heredoc）；3b：首调 71ms→缓存命中即时、settings 重写
   即失效（var 跟随变化）；3c：pgrep 双向探测）。测试：history flush +3
   （转义往返/坏行/空批）；zshrc SSOT 钉子不受动（只动 §6 历史块）。
+- **PERF 审查修复批（2026-09-06，D-13 审查清单 ①-⑦ 回流，计划 →
+  perf-review-fixes.md）**：用户审查后修复 7 项（2 Blocker/2 High/
+  2 Medium/1 Low）。**R1 P6a 降级语义（Blocker）**——`poll_light` 原
+  把 transport/HTTP 失败折叠成 `Ok(unknown+stale)`，前端只在 reject
+  时才回退 CLI → named pipe 不可用时永远不降级；改为统一 `Err`
+  （WB_ERR_CLI_PROTOCOL），`refreshRuntimeLight` catch 回退 P1 CLI 完整
+  路径（前端测试 pin 拒绝→fallback 调用一次 runtimeStatus）。**R2 P4
+  exec demux（Blocker）**——SDK `exec_start` 未开 demux，stderr 混进
+  stdout 且恒空；改 `demux=True` 分离双流 + mapped exec 仅在
+  timeout/input 双 None 时走 SDK（任一参数回退 CLI，不静默丢语义）。
+  **R3 P4 ps 模板（High）**——渲染前先验模板只含已知 token（剥掉已
+  知 token 后残留 `{{` → 回退 CLI；覆盖 `{{.CreatedAt}}` 与带空格形
+  态）；`Names` 按 CLI 语义 join 全部名并剥前导 `/`；`State` 兼容
+  list（字符串）/inspect（dict）双形状；**`containers.list(sparse=True)`**
+  ——默认 list 对每行容器追加一次 inspect（又一轮隐藏往返）；renderer
+  读 list payload 顶层 Labels/Image 并防御 inspect 形状。**R4 零 CLI
+  泄漏断言（High）**——ps/exec/inspect/preflight 四条 mapped 成功路径
+  mock 内层 CLI 断言零调用（fake 缺属性静默穿透的防线）。**R5 P8
+  memory 双端校验（Medium）**——Rust 原校验放过多后缀（`3gg`/`3bg`）；
+  收紧为纯数字或数字+单 b/k/m/g 后缀（`next_back` 取尾字符后再切，
+  避开多字节 panic 面）；Python `start_runtime` 数据层同格式校验非
+  法值 USAGE_ERROR 拒绝。**R6 P9 `--agent all` 契约（Medium）**——
+  明示 sequential best-effort 非原子：后败不回滚前成、聚合 rc1、下次
+  启动幂等重试（注释三处 + partial-failure 测试 pin）。**R7 P3 丢失
+  窗口文档化（Low）**——bash/zsh rc + helper 注释明示 SIGKILL/强停/
+  宿主崩溃可能丢 shell 内 buffered 记录（accepted loss window）。
+  container/ 五文件 bundle 三处 SHA256 亲验一致 + vendor-refresh
+  1514 全过。门禁：pytest 1146（+7）/ cargo 305+integration 全绿 /
+  vitest 434 / vue-tsc。
 
 # F1/F2 (2026-09-03 ~) — 宿主工具 MCP · SSH 工作区（分支 develop）
 

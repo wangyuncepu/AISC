@@ -767,9 +767,15 @@ fn validate_performance(raw: &Value) -> (PerformanceSettings, Vec<ValidationIssu
             // safe (never shell-injected — it rides a subprocess argv slot).
             let ok = !m.is_empty()
                 && m.len() <= 16
-                && m.chars().enumerate().all(|(i, c)| {
-                    c.is_ascii_digit()
-                        || (i > 0 && matches!(c, 'b' | 'k' | 'm' | 'g'))
+                && (m.chars().all(|c| c.is_ascii_digit()) || {
+                    match m.chars().next_back() {
+                        Some(suffix) if matches!(suffix, 'b' | 'k' | 'm' | 'g') => {
+                            let digits = &m[..m.len() - 1];
+                            !digits.is_empty()
+                                && digits.chars().all(|c| c.is_ascii_digit())
+                        }
+                        _ => false,
+                    }
                 });
             if ok {
                 out.container_memory = m.to_string();
@@ -1491,6 +1497,28 @@ mod tests {
         let d = Settings::load(dir.path()).unwrap().document();
         assert_eq!(d.terminal.font_size, 18);
         assert_eq!(d.aisc_cli_path.as_deref(), Some("/y/aisc"));
+    }
+
+    #[test]
+    fn performance_memory_accepts_only_one_optional_suffix() {
+        for valid in ["3", "3b", "3k", "3m", "3g"] {
+            let raw = serde_json::json!({ "performance": { "container_memory": valid } });
+            let (perf, issues) = validate_performance(&raw);
+            assert_eq!(perf.container_memory, valid);
+            assert!(issues.is_empty(), "expected valid: {valid}");
+        }
+
+        for invalid in ["", "g", "3gg", "3bg", "3kgm", "3x", "3\u{e9}"] {
+            let raw = serde_json::json!({ "performance": { "container_memory": invalid } });
+            let (perf, issues) = validate_performance(&raw);
+            assert_eq!(perf.container_memory, "3g", "expected fallback: {invalid}");
+            assert!(
+                issues
+                    .iter()
+                    .any(|i| i.field == "performance.container_memory"),
+                "expected issue: {invalid}"
+            );
+        }
     }
 
     #[test]

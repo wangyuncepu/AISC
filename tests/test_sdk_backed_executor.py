@@ -45,17 +45,20 @@ class _FakeContainer:
         self.name = name
         self.labels = labels
         self.attrs = {
-            "State": {"Running": running},
+            "State": "running" if running else "exited",
             "Names": [f"/{name}"],
-            "Config": {"Image": image},
+            "Image": image,
+            "Labels": labels,
         }
 
 
 class _FakeContainers:
     def __init__(self, rows):
         self._rows = rows
+        self.list_kwargs = None
 
-    def list(self, all=False, filters=None):  # noqa: A002 — docker-py API
+    def list(self, all=False, filters=None, sparse=False):  # noqa: A002 — docker-py API
+        self.list_kwargs = {"all": all, "filters": filters, "sparse": sparse}
         rows = self._rows
         if filters and "label" in filters:
             wanted = filters["label"]
@@ -68,10 +71,18 @@ class _FakeContainers:
 
 
 class _FakeApi:
-    def __init__(self, containers, exec_stdout=b'{"ok": 1}', exec_code=0):
+    def __init__(
+        self,
+        containers,
+        exec_stdout=b'{"ok": 1}',
+        exec_stderr=b"",
+        exec_code=0,
+    ):
         self._containers = containers
         self._exec_stdout = exec_stdout
+        self._exec_stderr = exec_stderr
         self._exec_code = exec_code
+        self.exec_start_kwargs = None
 
     def inspect_container(self, name):
         for c in self._containers._rows:
@@ -89,9 +100,8 @@ class _FakeApi:
         return {"Id": "exec-1"}
 
     def exec_start(self, exec_id, **kwargs):
-        import io
-
-        return io.BytesIO(self._exec_stdout)
+        self.exec_start_kwargs = kwargs
+        return self._exec_stdout, self._exec_stderr
 
     def exec_inspect(self, exec_id):
         return {"ExitCode": self._exec_code, "Running": False}
@@ -171,15 +181,77 @@ class SdkBackedExecutorTests(unittest.TestCase):
         self.assertIn("No such object", r404.stderr)
         self.assertEqual(_get_container_state("ghost", ex), "not_found")
 
-    def test_exec_capture_maps_stdout_and_exit_code(self):
-        ex = _executor(ROWS, exec_stdout=b'[{"port": 3000}]', exec_code=0)
+    def test_exec_capture_demuxes_stdout_stderr_and_exit_code(self):
+        ex = _executor(
+            ROWS,
+            exec_stdout=b'[{"port": 3000}]',
+            exec_stderr=b"warning: deprecated",
+            exec_code=0,
+        )
         r = ex.run_captured(["exec", "aisc-wb-1", "aisc-web-list", "--json"])
         self.assertEqual(r.exit_code, 0)
         self.assertEqual(json.loads(r.stdout)[0]["port"], 3000)
+        self.assertEqual(r.stderr, "warning: deprecated")
+        self.assertTrue(ex._sdk().api.exec_start_kwargs["demux"])
         ex2 = _executor(ROWS, exec_stdout=b"", exec_code=7)
         self.assertEqual(
             ex2.run_captured(["exec", "aisc-wb-1", "tool"]).exit_code, 7
         )
+
+    def test_ps_unknown_template_token_falls_back_to_cli(self):
+        ex = _executor(ROWS)
+        with mock.patch.object(ex._cli, "run_captured") as cli_call:
+            cli_call.return_value = "cli-result"
+            self.assertEqual(
+                ex.run_captured(["ps", "-a", "--format", "{{.ID}}\t{{.CreatedAt}}"]),
+                "cli-result",
+            )
+            cli_call.assert_called_once()
+
+    def test_ps_spaced_unknown_template_token_falls_back_to_cli(self):
+        ex = _executor(ROWS)
+        with mock.patch.object(ex._cli, "run_captured") as cli_call:
+            cli_call.return_value = "cli-result"
+            self.assertEqual(
+                ex.run_captured(["ps", "--format", "{{ .CreatedAt }}"]),
+                "cli-result",
+            )
+            cli_call.assert_called_once()
+
+    def test_ps_names_join_all_container_names_like_cli(self):
+        row = _FakeContainer(
+            cid="c" * 64, name="primary", image="i", running=True, labels={}
+        )
+        row.attrs["Names"] = ["/primary", "/alias"]
+        ex = _executor([row])
+        r = ex.run_captured(["ps", "--format", "{{.Names}}"])
+        self.assertEqual(r.stdout, "primary,alias")
+
+    def test_hot_path_arguments_fall_back_to_cli(self):
+        ex = _executor(ROWS)
+        with mock.patch.object(ex._cli, "run_captured") as cli_call:
+            cli_call.return_value = "cli-result"
+            self.assertEqual(
+                ex.run_captured(["exec", "c", "cmd"], timeout=3), "cli-result"
+            )
+            self.assertEqual(
+                ex.run_captured(["exec", "c", "cmd"], input_text="x"), "cli-result"
+            )
+            self.assertEqual(cli_call.call_count, 2)
+
+    def test_mapped_hot_paths_do_not_touch_cli(self):
+        ex = _executor(ROWS, exec_stdout=b"ok")
+        with mock.patch.object(ex._cli, "run_captured") as run:
+            self.assertIn("aisc-wb-1", ex.run_captured(["ps", "-a", "--format", FMT3]).stdout)
+            self.assertIs(ex._sdk().containers.list_kwargs["sparse"], True)
+            self.assertEqual(ex.run_captured(["exec", "aisc-wb-1", "cmd"]).stdout, "ok")
+            run.assert_not_called()
+        with mock.patch.object(ex._cli, "inspect_container") as inspect:
+            self.assertEqual(ex.run_captured(["inspect", "aisc-wb-1"]).exit_code, 0)
+            inspect.assert_not_called()
+        with mock.patch.object(ex._cli, "preflight") as preflight:
+            self.assertTrue(ex.preflight().available)
+            preflight.assert_not_called()
 
     def test_unknown_shapes_fall_back_to_cli(self):
         ex = _executor(ROWS)

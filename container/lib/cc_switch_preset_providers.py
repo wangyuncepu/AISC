@@ -1105,6 +1105,10 @@ def main(argv: list[str] | None = None) -> int:
     # (the entrypoint used to pay the interpreter+import chain twice).
     # Aggregated status: the most informative single word wins; the sub
     # calls' stdout is captured (never leaks into the aggregate line).
+    # Contract: this is sequential best-effort, NOT atomic. Each agent is
+    # committed independently; if a later agent fails, earlier agents stay
+    # applied and the aggregate returns 1. The next container start retries
+    # the idempotent refresh rather than rolling back user-visible state.
     if args.agent == "all":
         import contextlib
         import io

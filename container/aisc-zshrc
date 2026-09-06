@@ -42,6 +42,8 @@ compinit -d "${AISC_BASH_HISTORY_DIR:-/tmp}/.zcompdump"
 # 6. SQLite history via the shared Python helper — PERF P3a (D-13) batch
 #    spool (parity with the bashrc hook; zero spawns per command, ONE
 #    python3 flush at 20 records / 60s / shell exit; pure parameter
+#    escaping). SIGKILL/force-stop/host crash can lose the in-shell buffer —
+#    an accepted loss window for the spawn reduction (normal exit flushes).
 #    expansion escaping; fail-open). preexec captures the command line
 #    (zsh hands it over directly — no history parsing), precmd the status.
 if [ -n "$AISC_BASH_HISTORY_DB" ] && [ -n "$AISC_WORKSPACE_HASH" ]; then

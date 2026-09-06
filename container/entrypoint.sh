@@ -473,6 +473,8 @@ if command -v cc-switch >/dev/null 2>&1; then
         # 预配置常见 AI 供应商 provider（不包含 API Key）
         # PERF P9 (D-13): --agent all = ONE python3 spawn for both agents
         # (was two full interpreter+import chains back to back).
+        # Aggregate is sequential best-effort: a later failure leaves earlier
+        # agents applied; the next startup retries the idempotent refresh.
         CC_SWITCH_PRESET_LOG="/tmp/cc-switch-preset-providers.log"
         if CC_SWITCH_PRESET_RESULT="$(
             python3 /usr/local/bin/lib/cc_switch_preset_providers.py \

@@ -39,6 +39,8 @@ fi
 
 # 5. SQLite history via Python helper — PERF P3a (D-13) batch spool:
 #    records buffer in-shell (zero spawns per command) and flush through ONE
+#    python spawn at 20 records / 60s / exit. SIGKILL, force-stop, or host
+#    crash can lose the in-shell buffer — this is an accepted loss window.
 #    python3 invocation at 20 records / 60s / shell exit. Escaping is pure
 #    parameter expansion (backslash first, then tab/newline/CR); the old
 #    per-command `append` + `history 1 | sed` cost one python AND one sed

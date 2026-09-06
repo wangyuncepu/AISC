@@ -15,6 +15,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PATH = ROOT / "container" / "lib" / "deepseek-official-facts.json"
@@ -90,6 +91,29 @@ class FixtureDrivenPresetTests(unittest.TestCase):
                              "--mode", "off"])
             self.assertEqual(rc, 0)
             self.assertEqual(out.getvalue().strip(), "off")
+
+    def test_agent_all_is_sequential_best_effort_on_partial_failure(self):
+        """The aggregate is not atomic: rc 1 after a later-agent failure."""
+        import io
+        import contextlib
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp) / "cc"
+            config_dir.mkdir()
+            log = Path(tmp) / "preset.log"
+            with mock.patch.object(
+                H,
+                "add_preset_providers",
+                side_effect=[(1, 0, 0), RuntimeError("codex failed")],
+            ) as add_providers:
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    rc = H.main([
+                        "--agent", "all", "--config-dir", str(config_dir),
+                        "--log", str(log), "--mode", "always",
+                    ])
+            self.assertEqual(rc, 1)
+            self.assertEqual(out.getvalue().strip(), "failed")
+            self.assertEqual(add_providers.call_count, 2)
 
     def test_1m_suffix_rules_match_the_fixture(self):
         env = H._settings_config("claude", deepseek())["env"]

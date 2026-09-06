@@ -54,18 +54,37 @@ def _render_ps_line(template: str, c: Any) -> Optional[str]:
         label_key = m.group(2)
         try:
             if label_key is not None:
-                out.append(str(c.labels.get(label_key, "")))
+                labels = c.attrs.get("Labels")
+                if labels is None:
+                    labels = c.attrs.get("Config", {}).get("Labels", {})
+                out.append(str(labels.get(label_key, "")))
             elif m.group(1) == "Status":
-                out.append("Up" if bool(c.attrs.get("State", {}).get("Running")) else "Exited")
+                # containers.list() is backed by /containers/json, where State
+                # is a string ("running"/"paused"/"exited"), unlike inspect.
+                state = c.attrs.get("State", "")
+                running = (
+                    bool(state.get("Running"))
+                    if isinstance(state, dict)
+                    else str(state).lower() in {"running", "paused"}
+                )
+                out.append("Up" if running else "Exited")
             elif m.group(1) == "ID":
                 out.append(str(c.id)[:12])
             elif m.group(1) == "Names":
                 names = list(c.attrs.get("Names") or [])
-                out.append((names[0] if names else c.name).lstrip("/"))
+                if names:
+                    rendered = ",".join(name.lstrip("/") for name in names)
+                else:
+                    rendered = str(c.name).lstrip("/")
+                out.append(rendered)
             elif m.group(1) == "Image":
-                # attrs-only: `c.image` costs one extra API roundtrip per
-                # container on the real SDK — Config.Image rides list already.
-                out.append(str(c.attrs.get("Config", {}).get("Image", "")))
+                # Avoid `c.image`: it triggers an extra image inspect. Sparse
+                # list payloads expose Image directly; inspect payloads expose
+                # Config.Image, so support both shapes without extra calls.
+                image = c.attrs.get("Config", {}).get("Image")
+                if image is None:
+                    image = c.attrs.get("Image", "")
+                out.append(str(image))
             else:
                 return None  # unreachable; keeps the checker honest
         except Exception:  # noqa: BLE001 — unexpected shape: bail to CLI
@@ -133,10 +152,20 @@ class SdkBackedDockerExecutor:
     ) -> ProcessResult:
         try:
             if docker_argv and docker_argv[0] == "ps":
+                # ps is read-only and does not consume stdin; SDK execution can
+                # preserve this shape even when the caller sets a CLI timeout.
                 mapped = self._run_ps(docker_argv)
                 if mapped is not None:
                     return mapped
-            elif docker_argv and docker_argv[0] == "exec":
+            elif (
+                docker_argv
+                and docker_argv[0] == "exec"
+                # exec is the only hot shape where the CLI timeout/input
+                # semantics differ materially from the mapped SDK call. Never
+                # silently drop either argument.
+                and timeout is None
+                and input_text is None
+            ):
                 mapped = self._run_exec(docker_argv)
                 if mapped is not None:
                     return mapped
@@ -171,7 +200,16 @@ class SdkBackedDockerExecutor:
             i += 1
         if template is None:
             return None
-        containers = self._sdk().containers.list(all=all_flag, filters=filters or None)
+        # Docker's format language is larger than the field set mapped here.
+        # Reject any unknown field token before fetching so a new caller shape
+        # falls back to CLI instead of rendering the template literally.
+        if "{{" in _PS_TOKEN.sub("", template):
+            return None
+        # sparse=True keeps this as one /containers/json request. The default
+        # list() call performs an additional container inspect per row.
+        containers = self._sdk().containers.list(
+            all=all_flag, filters=filters or None, sparse=True
+        )
         lines = []
         for c in containers:
             line = _render_ps_line(template, c)
@@ -189,17 +227,31 @@ class SdkBackedDockerExecutor:
         container_name, cmd = argv[1], argv[2:]
         api = self._sdk().api
         exec_id = api.exec_create(container_name, cmd, stdout=True, stderr=True)
-        sock = api.exec_start(exec_id, socket=False, tty=False)
-        if hasattr(sock, "read"):
-            raw = sock.read() or b""
-            if isinstance(raw, str):
-                raw = raw.encode("utf-8", "replace")
-        else:
-            raw = b""
+        # demux=True is required for CLI parity: without it docker-py merges the
+        # multiplexed stdout/stderr stream and JSON consumers can silently see
+        # warnings/error frames mixed into stdout.
+        result = api.exec_start(exec_id, socket=False, tty=False, demux=True)
+        if not (isinstance(result, tuple) and len(result) == 2):
+            return None
+        raw_stdout, raw_stderr = result
+
+        def _decode(value: Any) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, bytes):
+                return value.decode("utf-8", "replace")
+            if isinstance(value, str):
+                return value
+            return None  # type: ignore[return-value]
+
+        stdout = _decode(raw_stdout)
+        stderr = _decode(raw_stderr)
+        if stdout is None or stderr is None:
+            return None
         info = api.exec_inspect(exec_id)
         return ProcessResult(
-            stdout=raw.decode("utf-8", "replace"),
-            stderr="",
+            stdout=stdout,
+            stderr=stderr,
             exit_code=int(info.get("ExitCode", 0) or 0),
         )
 
