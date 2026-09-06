@@ -4,13 +4,23 @@
  * hidden; only when the runtime is running. Switching to a claude/codex tab
  * refreshes immediately; bash/cc-switch or a non-running runtime pauses.
  *
+ * PERF P7 (D-13): the focused cadence now rides the O6 adaptive ladder
+ * (PROVIDER_LADDER_MS 15→30→60s, provider-op duration as the slow signal) —
+ * each poll spawns a full aisc.exe, so slow engines degrade instead of
+ * churning. Blurred stays 60s; fast machines never leave rung 0.
+ *
  * Started/stopped by App.vue alongside useRuntimePolling (ready only).
  */
 import { watch } from "vue";
 import { useRuntimeStore } from "../stores/runtime";
 import type { LaunchAgent } from "../types";
+import {
+  focusIntervalMs,
+  initialBackoffState,
+  nextBackoffState,
+  PROVIDER_LADDER_MS,
+} from "./pollBackoff";
 
-const FOCUS_INTERVAL_MS = 15000;
 const BLUR_INTERVAL_MS = 60000;
 const JITTER = 0.1; // ±10%
 
@@ -27,6 +37,8 @@ export function useProviderPolling() {
   const store = useRuntimeStore();
   let timer: number | null = null;
   let running = false;
+  /** P7: adaptive ladder state (provider cadence table). */
+  let backoff = initialBackoffState();
 
   function activeAgent(): LaunchAgent | null {
     const tab = store.tabs.find((t) => t.tabId === store.activeTabId);
@@ -39,12 +51,22 @@ export function useProviderPolling() {
 
   function intervalMs(): number {
     if (document.hidden) return 0;
-    return jittered(document.hasFocus() ? FOCUS_INTERVAL_MS : BLUR_INTERVAL_MS);
+    const base = document.hasFocus()
+      ? focusIntervalMs(backoff, PROVIDER_LADDER_MS)
+      : BLUR_INTERVAL_MS;
+    return jittered(base);
   }
 
   async function tick(): Promise<void> {
-    if (shouldQuery()) {
-      await store.loadProviderStatus(activeAgent() as "claude" | "codex");
+    const t0 = performance.now();
+    try {
+      if (shouldQuery()) {
+        await store.loadProviderStatus(activeAgent() as "claude" | "codex");
+      }
+    } finally {
+      // Measure even on failure: a timeout is the strongest slow signal (the
+      // provider chain = docker info + inspect + exec inside one aisc.exe).
+      backoff = nextBackoffState(backoff, performance.now() - t0, PROVIDER_LADDER_MS);
     }
     if (running) scheduleNext();
   }

@@ -197,11 +197,19 @@ async function onCancelSync(): Promise<void> {
 }
 
 /** F1: live progress needs polling — the sync section mounts only for SSH
- *  workspaces, so a scoped 15s interval here is the whole story. */
+ *  workspaces, so a scoped 15s interval here is the whole story. P7: gated
+ *  on visibility (each poll spawns a mutagen CLI; a hidden window doesn't
+ *  need live sync status — the next visible poll catches up). */
 let syncPoll: number | null = null;
 onMounted(() => {
   syncPoll = window.setInterval(() => {
-    if (store.sync?.attached && store.sync.status !== "none") void store.refreshSync();
+    if (
+      !document.hidden &&
+      store.sync?.attached &&
+      store.sync.status !== "none"
+    ) {
+      void store.refreshSync();
+    }
   }, 15000);
 });
 onBeforeUnmount(() => {

@@ -10,6 +10,9 @@
  */
 
 export const FOCUS_LADDER_MS = [5000, 10000, 20000] as const;
+/** PERF P7 (D-13): the provider chain gets its own gentler ladder
+ * (15→30→60s) — same escalation semantics, different base cadence. */
+export const PROVIDER_LADDER_MS = [15000, 30000, 60000] as const;
 export const SLOW_OP_MS = 1500;
 export const FAST_OP_MS = 1000;
 export const FAST_STREAK_TO_RECOVER = 3;
@@ -23,13 +26,18 @@ export function initialBackoffState(): BackoffState {
   return { rung: 0, fastStreak: 0 };
 }
 
-/** Feed one measured refresh duration; returns the next state. */
-export function nextBackoffState(state: BackoffState, dtMs: number): BackoffState {
+/** Feed one measured refresh duration; returns the next state.
+ * `ladder` selects the cadence table (runtime vs provider — P7). */
+export function nextBackoffState(
+  state: BackoffState,
+  dtMs: number,
+  ladder: readonly number[] = FOCUS_LADDER_MS,
+): BackoffState {
   if (dtMs > SLOW_OP_MS) {
     // A slow op (or a timeout — callers feed failures too) escalates once
     // and resets any recovery streak.
     return {
-      rung: Math.min(state.rung + 1, FOCUS_LADDER_MS.length - 1),
+      rung: Math.min(state.rung + 1, ladder.length - 1),
       fastStreak: 0,
     };
   }
@@ -45,6 +53,6 @@ export function nextBackoffState(state: BackoffState, dtMs: number): BackoffStat
 }
 
 /** The focused-cadence interval for a state (blurred/hidden are caller's). */
-export function focusIntervalMs(state: BackoffState): number {
-  return FOCUS_LADDER_MS[state.rung]!;
+export function focusIntervalMs(state: BackoffState, ladder: readonly number[] = FOCUS_LADDER_MS): number {
+  return ladder[state.rung]!;
 }

@@ -1980,6 +1980,16 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   教训**：初版 lease 测试 set AISC_DATA_ROOT 与 data_root 套件各自的
   env 锁互不互斥 → 并行互踩（全量跑才现形）——重构为 synthetic_root
   显式注入（beat_direct_in），测试零 env 操作。cargo 296。
+- **P7 退避覆盖扩展 + 背景降级（2026-09-06，纯前端）**：①provider 轮询
+  接入 O6 自适应梯子——pollBackoff 参数化 ladder（新增
+  PROVIDER_LADDER_MS 15→30→60s，runtime 梯子与默认行为零变化），
+  provider op 耗时作慢信号（该链 = 一次 aisc.exe 内 docker info+inspect+
+  exec）；②runtime 轮询失焦 15→30s、背景工作区 25→60s（P1 合并后每
+  tick 已是一次 spawn，但低配机上多工作区叠加仍是负担；切回工作区
+  立即 inspect 兜底）；③syncPoll 补 hidden gate（隐藏窗口不刷同步状态，
+  mutagen CLI 白spawn）；④environment 5s 自轮核实「就绪即停」现状无需
+  动；⑤lease cadence 不动（TTL 跨实例契约，成本已由 P5b 归零）。
+  门禁：vue-tsc / vitest 433 / vite。
 - **P3 容器内 spawn 削减三件套（2026-09-06）**：低配机上「每条 shell 命令
   一个 python3 + 一个 sed」「每次 agent 启动一个 node 解析同一个
   settings.json」「每 60s 一个完整 cc-switch CLI 只为查健康」的三重持续税。

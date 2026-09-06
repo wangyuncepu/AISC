@@ -2,11 +2,13 @@
  * useRuntimePolling (S2.3.a; IDEA-3 3c: multi-workspace). Visibility-aware
  * runtime inspect loop over ALL open workspaces:
  *
- * - the ACTIVE workspace keeps the S2.3 cadence — 5s focused, 15s blurred,
+ * - the ACTIVE workspace keeps the S2.3 cadence — 5s focused, 30s blurred
+ *   (P7: was 15s — a blurred window still spawns full aisc.exe per tick),
  *   paused while hidden; ±10% jitter; deduped per-instance via
  *   `inspectInFlight`; resume marks stale and inspects immediately;
- * - BACKGROUND workspaces (真并行) downshift to ~25s so their status dots /
- *   external-stop detection stay fresh at a fraction of the cost.
+ * - BACKGROUND workspaces (真并行) downshift to ~60s (P7: was 25s) — their
+ *   status dots / external-stop detection only need eventual consistency;
+ *   switching back to a workspace refreshes it immediately.
  *
  * Started/stopped by App.vue watching "any workspace open".
  *
@@ -25,8 +27,8 @@ import {
   nextBackoffState,
 } from "./pollBackoff";
 
-const BLUR_INTERVAL_MS = 15000;
-const BACKGROUND_INTERVAL_MS = 25000;
+const BLUR_INTERVAL_MS = 30000;
+const BACKGROUND_INTERVAL_MS = 60000;
 const JITTER = 0.1; // ±10%
 
 function jittered(base: number): number {
