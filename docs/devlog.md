@@ -1953,6 +1953,15 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   共用。+6 测试（EOF 单次结算恰 1 inspect/EOF-but-Running 慢轮询/socketpair
   挂死流保底/三档 clamp；`test_open_interactive_full_lifecycle` 存量断言
   兼容）。sidecar 重建双同步。门禁：pytest 1124 / cargo 293。
+- **P5a 锁互操作实验（2026-09-06）——双向成立，P5b 走主方案**：新
+  `src-tauri/tests/lock_interop.rs`（cargo 圈 spawn python）双向钉死——
+  Rust fs4 持锁时 Python `msvcrt.locking(LK_NBLCK,1)`/`fcntl.flock` 必须
+  阻塞，Python 持锁时 fs4 `try_lock_exclusive` 必须失败，释放后双向可得。
+  事实链（源码核验）：fs4 Windows = LockFileEx **[0,u64::MAX)** 与 Python
+  字节 [0,1) 重叠；fs4 POSIX = **BSD flock（与 fcntl.flock 同系统调用）**
+  ——纸面上「flock/fcntl 互不相通」的经典陷阱在本组合不存在，实验证实。
+  pytest 侧 `test_lock_interop.py` 负控制（Python 锁自排斥）。cargo 295
+  （+2）/ pytest 1125（+1）。
 
 # F1/F2 (2026-09-03 ~) — 宿主工具 MCP · SSH 工作区（分支 develop）
 
