@@ -2131,6 +2131,17 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   container/ 五文件 bundle 三处 SHA256 亲验一致 + vendor-refresh
   1514 全过。门禁：pytest 1146（+7）/ cargo 305+integration 全绿 /
   vitest 434 / vue-tsc。
+- **PERF 手测二轮反馈：provider 检测恢复慢（2026-09-06 深夜）**：启动工作
+  区后开 claude 页先显示「无法确认 Provider 状态」，很长时间才「已配置」。
+  **根因 = P7 梯子把失败也当慢信号**：启动窗口期首个探测必然 >1.5s
+  （aisc spawn ~750ms + 容器内 cc-switch 冷启），失败后重试被推到
+  30s/60s 档 → 恢复最坏 1-2 分钟。修复三处：①`loadProviderStatus` 吞
+  错误返回 void——改为回传成功与否；②轮询器 **失败=世界未就绪 → 梯子
+  归零**（15s 基础档快重试），成功才按耗时喂梯（P7 稳态防抖语义保
+  留）；③runtime 重启（新容器）重置梯子。+3 回归测试（间隔断言而非
+  绝对窗口——±10% 抖动下绝对窗口天然 flaky；jsdom 默认 hidden=
+  prerender 需 stub 可见性；watch 双同步赋值净零变化不触发）。门禁：
+  vitest 439（+3）/ vue-tsc 0。
 - **PERF 手测首轮四反馈（2026-09-06 深夜，#1/#2/#4 已修，#3 取证无回归）**：
   **#1 设置页卡死+视图不切换（P0，根因实锤）**——P8 给设置页加了
   `performance` 分节但漏了 `GROUP_KEY` 条目与 i18n 键：`t(undefined)`

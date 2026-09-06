@@ -59,14 +59,24 @@ export function useProviderPolling() {
 
   async function tick(): Promise<void> {
     const t0 = performance.now();
-    try {
-      if (shouldQuery()) {
-        await store.loadProviderStatus(activeAgent() as "claude" | "codex");
+    let ran = false;
+    let ok = false;
+    if (shouldQuery()) {
+      ran = true;
+      // Manual-test fix (2026-09-06): the store now reports the outcome.
+      ok = await store.loadProviderStatus(activeAgent() as "claude" | "codex");
+    }
+    if (ran) {
+      if (ok) {
+        // Success: the duration feeds the churn ladder (slow-but-successful
+        // ops escalate — the P7 steady-state protection).
+        backoff = nextBackoffState(backoff, performance.now() - t0, PROVIDER_LADDER_MS);
+      } else {
+        // Failure: the world is not settled yet (container warming, daemon
+        // starting) — retry at the BASE cadence. Escalating on failure is
+        // what stretched "provider 检测不到 → 已配置" to 30-60s+.
+        backoff = initialBackoffState();
       }
-    } finally {
-      // Measure even on failure: a timeout is the strongest slow signal (the
-      // provider chain = docker info + inspect + exec inside one aisc.exe).
-      backoff = nextBackoffState(backoff, performance.now() - t0, PROVIDER_LADDER_MS);
     }
     if (running) scheduleNext();
   }
@@ -120,10 +130,13 @@ export function useProviderPolling() {
   }
 
   // Re-evaluate on active-tab / runtime-state change: refresh immediately when
-  // switching to a claude/codex tab, pause otherwise.
+  // switching to a claude/codex tab, pause otherwise. A fresh runtime means a
+  // fresh container — the ladder (built from the previous world's op timings)
+  // resets so the first probes run at the base cadence.
   watch([() => store.activeTabId, () => store.runtimeState], () => {
     if (!running) return;
     if (shouldQuery()) {
+      backoff = initialBackoffState();
       void tick();
     } else if (timer !== null) {
       window.clearTimeout(timer);

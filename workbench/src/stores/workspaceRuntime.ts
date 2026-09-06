@@ -828,19 +828,27 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   /** Query + cache the provider status for one agent. Only when the runtime is
    * running (04 §五). Per-agent cache, never cross-applied. */
   async function loadProviderStatus(agent: "claude" | "codex") {
-    if (runtimeState.value !== "running") return;
-    if (!runtimeId.value || !workspace.value.trim()) return;
-    if (providerInFlight.value === agent) return;
+    if (runtimeState.value !== "running") return false;
+    if (!runtimeId.value || !workspace.value.trim()) return false;
+    if (providerInFlight.value === agent) return false;
     providerInFlight.value = agent;
     providerError.value = null;
+    let ok = false;
     try {
       const status = await ipc.getProviderStatus(workspace.value.trim(), runtimeId.value, agent);
       providerStatuses.value = { ...providerStatuses.value, [agent]: status };
+      ok = true;
     } catch (e) {
       providerError.value = e as WorkbenchError;
     } finally {
       providerInFlight.value = null;
     }
+    // PERF P7 fix (manual-test 2026-09-06): the OUTCOME rides back to the
+    // poller — a failed probe (container still warming, daemon settling)
+    // must retry at the BASE cadence, not a ladder-escalated one. Returning
+    // void hid the failure and the ladder stretched startup recovery to
+    // 30-60s ("很长时间后才显示已配置").
+    return ok;
   }
 
   function clearProviderStatuses() {
