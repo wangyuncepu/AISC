@@ -1910,6 +1910,21 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   渲染自己的 DOM 不受影响），App.vue onMounted 接线 + 模块测试。纯前端，
   无容器/sidecar 涉及。门禁：vitest 433 / vue-tsc / vite build。
 
+# 发布 (2026-09-07) — v2.1.9-dev Preview
+
+- **`f59cb98` 冻结 + `v2.1.9-dev` tag → GitHub Release「AISC v2.1.9-dev
+  Preview」发布**（prerelease 已发布非草稿）。四件套：VERSION
+  2.1.9.dev0 / tauri.conf 2.1.9-dev / envelope fixture / notes
+  `docs/releases/v2.1.9.dev0.md`（F1 SSH 工作区 · F2 宿主 MCP · PERF
+  低配机专项 · PP Provider 页 · O 批优化 · 已知限制）。plans 归档
+  `docs/archive/2.1.9-dev-plans/`。资产：NSIS setup（125MB，
+  `5698425984cd038b…c2e542`，点号命名沿 v2.1.8 惯例）+ sha256，取自
+  f59cb98 的 NSIS lane 产物。发布前 CI 五 lane 全绿（cli-sidecar /
+  Workbench ×2 / Bundle / NSIS），pytest 1146 / 版本一致性 6。
+  **2.1.9 周期收官**：挂账清偿 T1-T8 + opt O1-O9 + PP + F1/F2 + PERF
+  P1-P9 + 审查修复 7 项 + 手测三轮修复（设置页卡死根治 / P7 梯子
+  语义 / P6a light not_found 覆写根治 + provider 门三重保障）。
+
 # PERF (2026-09-05 ~) — 低配机器 Docker 性能优化（分支 develop）
 
 > 规划入口：`docs/plans/2.1.9-dev-plans/perf-batch-spec.md`（D-13；探针事实
