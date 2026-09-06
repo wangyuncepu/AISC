@@ -1,4 +1,4 @@
-import { ref } from "vue";
+﻿import { ref } from "vue";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -148,6 +148,8 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   // S2.2.b: runtime observation (op-driven; polling lands in S2.3). 03 §四.
   const runtimeState = ref<RuntimeState>("unknown");
+  /** Post-launch not_found grace (ms epoch); see applyRuntimeSnapshot. */
+  let launchedGuardUntil = 0;
   const runtimeSnapshot = ref<RuntimeSnapshot | null>(null);
   const conflicts = ref<RuntimeSnapshot[]>([]);
   const conflictError = ref<WorkbenchError | null>(null);
@@ -719,6 +721,17 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
   function applyRuntimeSnapshot(snap: RuntimeSnapshot, seq: number) {
     if (seq < lastAppliedSeq.value) return; // stale response
+    // Manual-test fix (2026-09-07): during the first seconds after a launch,
+    // an observation claiming not_found is a misread (engine label-index
+    // race on the just-created container, engine_restart side effects) —
+    // honoring it flips runtimeState off "running" and gates the provider
+    // probe off the claude page for a full poll cycle. A runtime younger
+    // than the grace window keeps its launched state; a not_found that
+    // PERSISTS past the window (or any full refresh's verdict) settles it.
+    if (snap.state === "not_found" && launchedGuardUntil > Date.now()) {
+      lastAppliedSeq.value = seq;
+      return;
+    }
     // v2.1.7 S5/#28: an observation with IDENTICAL content must not re-enter
     // reactivity. The 5s poll assigned a fresh object identity every tick,
     // invalidating every consumer that touches the snapshot — on low-GPU
@@ -828,9 +841,18 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
   /** Query + cache the provider status for one agent. Only when the runtime is
    * running (04 §五). Per-agent cache, never cross-applied. */
   async function loadProviderStatus(agent: "claude" | "codex") {
-    if (runtimeState.value !== "running") return "skipped" as const;
-    if (!runtimeId.value || !workspace.value.trim()) return "skipped" as const;
-    if (providerInFlight.value === agent) return "skipped" as const;
+    if (runtimeState.value !== "running") {
+      void ipc.logUiEvent?.(`provider_probe ${agent} skip:state=${runtimeState.value}`, "error").catch(() => undefined);
+      return "skipped" as const;
+    }
+    if (!runtimeId.value || !workspace.value.trim()) {
+      void ipc.logUiEvent?.(`provider_probe ${agent} skip:noid`, "error").catch(() => undefined);
+      return "skipped" as const;
+    }
+    if (providerInFlight.value === agent) {
+      void ipc.logUiEvent?.(`provider_probe ${agent} skip:inflight`, "error").catch(() => undefined);
+      return "skipped" as const;
+    }
     const t0 = performance.now();
     providerInFlight.value = agent;
     providerError.value = null;
@@ -1265,18 +1287,35 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
    * guide before any session is opened). */
   async function maybeOpenPaneCreated(tab: Tab, paneId: string, agent: LaunchAgent) {
     if (agent === "claude" || agent === "codex") {
-      await loadProviderStatus(agent);
+      const outcome = await loadProviderStatus(agent);
       const st = providerStatuses.value[agent];
       const p = tab.panes[paneId];
       if (!p || p.sessionState === "starting" || p.sessionState === "running") return;
-      if (!st || ["not_configured", "login_required", "unknown"].includes(st.auth_status)) {
+      if (outcome !== "ok" || !st || ["not_configured", "login_required", "unknown"].includes(st.auth_status)) {
         p.sessionState = "guide";
         p.sessionId = null;
         syncProjection(tab);
+        if (outcome !== "ok") void ensureProviderSettled(agent);
         return;
       }
     }
     void openPane(tab, paneId);
+  }
+
+  /** Manual-test fix (2026-09-07): the claude page's configured-gate must
+   * NOT depend on the background poller's ladder cadence. A fresh tab's
+   * first probe can be skipped (guards) or hit the cold-boot transient, and
+   * the next poller tick was up to 30s away ("长时间未配置"). This dedicated
+   * bounded retry loop (3s × 8) decouples the gate: providerStatuses flips
+   * to configured → GuidePane's auto-open watch starts the session. */
+  async function ensureProviderSettled(agent: "claude" | "codex"): Promise<boolean> {
+    for (let i = 0; i < 8; i++) {
+      if (runtimeState.value !== "running") return false;
+      const r = await loadProviderStatus(agent);
+      if (r === "ok") return true;
+      await new Promise((res) => setTimeout(res, 3_000));
+    }
+    return false;
   }
 
   /** Set the tab's active pane and sync the projection (A-G17-5). */
@@ -1397,12 +1436,13 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     resumeConversationId?: string | null,
   ) {
     if (agent === "claude" || agent === "codex") {
-      await loadProviderStatus(agent);
+      const outcome = await loadProviderStatus(agent);
       const st = providerStatuses.value[agent];
       const tab = findTab(tabId);
       if (!tab || activePane(tab).sessionState !== "idle") return;
-      if (!st || ["not_configured", "login_required", "unknown"].includes(st.auth_status)) {
+      if (outcome !== "ok" || !st || ["not_configured", "login_required", "unknown"].includes(st.auth_status)) {
         setActivePaneState(tab, { sessionState: "guide" });
+        if (outcome !== "ok") void ensureProviderSettled(agent);
         return;
       }
     }
@@ -1557,6 +1597,9 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
       // Generation boundary: supersede any in-flight poll observations.
       lastAppliedSeq.value = ++requestSeq.value;
       revision.value += 1;
+      // Post-launch grace: see applyRuntimeSnapshot — a not_found read in
+      // the first 15s is an engine/registry race, not a real observation.
+      launchedGuardUntil = Date.now() + 15_000;
     } else if (report.recommended_action === "reuse" && report.matching_runtime_id) {
       runtimeId.value = report.matching_runtime_id;
       status.value = "starting";
@@ -1967,3 +2010,4 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
 
 /** One workspace instance's full runtime surface (state refs + actions). */
 export type WorkspaceRuntime = ReturnType<typeof createWorkspaceRuntime>;
+

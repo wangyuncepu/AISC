@@ -261,6 +261,22 @@ fn poll_light_from_body(
             .with_detail(format!("docker engine light poll: {e}"))
     })?;
     let docker = parse_containers_json(&body);
+    // Manual-test fix (2026-09-07): right after a start, the engine's
+    // label-filtered containers/json can briefly miss the just-created
+    // container; if the registry read also came up empty the light snapshot
+    // used to report `not_found` — clobbering the freshly-launched
+    // "running" state and gating the provider probe off for up to a full
+    // poll cycle ("claude 页长时间未配置"). "Both sources empty" is NOT an
+    // observation the light path can own: hand it to the full CLI path,
+    // which reads the authoritative registry and settles the truth.
+    if docker.is_none()
+        && registry_json
+            .and_then(|j| registry_entry_for(j, runtime_id))
+            .is_none()
+    {
+        return Err(WorkbenchError::cli_protocol()
+            .with_detail("light poll: runtime not observable (no docker hit, no registry entry); falling back to full path"));
+    }
     Ok(light_snapshot(runtime_id, registry_json, docker))
 }
 
@@ -286,6 +302,33 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "WB_ERR_CLI_PROTOCOL");
         assert!(err.technical_detail.unwrap().contains("pipe open"));
+    }
+
+    #[test]
+    fn poll_light_no_docker_hit_and_no_registry_entry_falls_back() {
+        // Manual-test fix (2026-09-07): a freshly-launched runtime can be
+        // missed by BOTH the label-filtered containers/json (engine race)
+        // and the registry read — reporting not_found clobbered the just-
+        // launched running state and gated the provider probe for a full
+        // poll cycle. "Both empty" must hand off to the full CLI path.
+        let err = poll_light_from_body(
+            "r1",
+            Some(r#"{"default":"x","containers":{}}"#),
+            Ok::<String, String>("HTTP/1.1 200 OK\r\n\r\n[]".to_string()),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "WB_ERR_CLI_PROTOCOL");
+        assert!(err.technical_detail.unwrap().contains("not observable"));
+
+        // Sanity: with a registry entry present the same empty docker list
+        // is a valid observation (stopped), not a fallback.
+        let snap = poll_light_from_body(
+            "r1",
+            Some(r#"{"containers":{"c1":{"runtime_id":"r1","container_id":"abc123def456"}}}"#),
+            Ok::<String, String>("HTTP/1.1 200 OK\r\n\r\n[]".to_string()),
+        )
+        .unwrap();
+        assert_eq!(snap["state"], "stopped");
     }
 
     #[test]

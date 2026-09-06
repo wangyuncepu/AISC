@@ -2150,6 +2150,21 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   「启动会话」，秒开体验没真正回来）。+3 回归测试更新（间隔断言）。
   **本地冷启动全程复现验证：unknown 1-2s → 3s 已配置**。门禁：vitest
   439 / vue-tsc 0。
+- **P6a light 快照 not_found 覆写根治 + provider 门三重保障（2026-09-07
+  凌晨，遥测实锤闭环）**：skip 原因遥测一行定案——启动完成后 **light tick
+  对新容器双未命中（引擎标签索引竞态 + 注册表读取空）→ 自报 not_found
+  → 覆写刚设好的 running**（`:46 launch ok → :49 skip:state=not_found
+  → +27s 全量纠正+探测 ok`，全量来之前 provider 门全程关闭=用户的三轮
+  30-43s 等待）。修复三层：①**light 路径"双未命中"不再自作主张**——返
+  回 Err 走全量（"空+空"不是 light 能 own 的观测；+1 Rust 回归测试，含
+  注册表命中时 stopped 仍合法的反例）；②**启动后 15s not_found 宽限**——
+  applyRuntimeSnapshot 拒绝宽限期内的 not_found 覆写（对任何写入者的
+  兜底）；③**ensureProviderSettled 专用短间隔重试**（3s×8）——claude 页
+  的 configured 门与轮询器梯子彻底解耦，成功即经 GuidePane auto-open
+  watch 自动开会话。**真机端到端验证：claude 点击 → 1s configured →
+  会话自动打开（xterm×2）——「秒开」恢复**。skip 遥测转正保留
+  （state/noid/inflight 三种 skip 原因）。门禁：vitest 439 / vue-tsc 0 /
+  cargo docker_api 7。
 - **v2 后用户复测仍慢→第三轮排查（2026-09-07 凌晨，未闭环，等带遥测
   复测）**：用户复测日志再现同一指纹——43s 内零 provider 记录、全量
   runtime 刷新后 1s 内探测即出。逐层实测排除：容器内 provider-inspect
