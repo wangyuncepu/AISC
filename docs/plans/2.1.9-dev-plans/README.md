@@ -38,7 +38,7 @@
 | PP | **Provider 页对标 cc-switch 桌面端**（r1-r8 八轮手测收敛）。[provider-parity-design.md](provider-parity-design.md)（D-12） | ✅ r8 后封存深化 |
 | FF | **手测期现场修复回溯归档**（8 项直接执行的设计记录补档，含 agent 包根治/测试污染/多 profile 等） | ✅ [f1-f2-field-fixes.md](f1-f2-field-fixes.md) |
 
-## 性能批次（PERF，规格已冻结 → [perf-batch-spec.md](perf-batch-spec.md)，D-13）
+## 性能批次（PERF，规格 → [perf-batch-spec.md](perf-batch-spec.md)，D-13）——✅ P1-P9 全部收官（2026-09-06）
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -48,9 +48,9 @@
 | P5 | lease 心跳 Rust 直写（O6b 清偿，-240 spawn/h/workspace；锁互操作实验先行） | ✅ `9d7fecf`（P5a 双向互斥成立）+`05f86b8`（P5b 直写） |
 | P4 | SDK 执行器进命令层（docker.exe 子进程链归零） | ✅ `3058e1a`（真机冒烟） |
 | P7 | 退避覆盖扩展 + 背景降级（后台 60s/失焦 30s/provider 挂梯子） | ✅ `1a1926d` |
-| P6a | 热轮询 Rust 直连 named pipe（稳态 tick 0 spawn，空闲卡根治） | ⬜ |
-| P8 | 低配模式（自动应用+弹窗告知；容器限额 + .wslconfig 保键合并） | ⬜ |
-| P9 | 冷启动残余（daemon 就绪等待去 spawn 化 + entrypoint 脚本合并） | ⬜ |
+| P6a | 热轮询 Rust 直连 named pipe（稳态 tick 0 spawn，空闲卡根治） | ✅ `ba4263d`（原始端点实证） |
+| P8 | 低配模式（自动应用+弹窗告知；容器限额 + .wslconfig 保键合并） | ✅ `506eb43`（限额基础）+`cce3351`（自动探测/wslconfig/UI） |
+| P9 | 冷启动残余（daemon 就绪等待去 spawn 化 + entrypoint 脚本合并） | ✅ `9e795e3`（容器实测 1775ms；PERF 收官） |
 
 ## 遗留 backlog（本周期明牌，未排期）
 
