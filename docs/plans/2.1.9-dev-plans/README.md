@@ -42,12 +42,12 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| P1 | tick 合并：`runtime status` 单命令（spawn -50%/tick） | ⬜ |
-| P2 | 会话税：EOF 驱动退出 + resize 降频（API 5/s→~0） | ⬜ |
-| P3 | 容器内 spawn 削减三件套（历史批量写/env-inject 缓存/巡检 kill-0） | ⬜ |
-| P5 | lease 心跳 Rust 直写（O6b 清偿，-240 spawn/h/workspace；锁互操作实验先行） | ⬜ |
-| P4 | SDK 执行器进命令层（docker.exe 子进程链归零） | ⬜ |
-| P7 | 退避覆盖扩展 + 背景降级（后台 60s/失焦 30s/provider 挂梯子） | ⬜ |
+| P1 | tick 合并：`runtime status` 单命令（spawn -50%/tick） | ✅ `ffc6564`+`9e698a5` |
+| P2 | 会话税：EOF 驱动退出 + resize 降频（API 5/s→~0） | ✅ `841f207` |
+| P3 | 容器内 spawn 削减三件套（历史批量写/env-inject 缓存/巡检 kill-0） | ✅ `2b1af85`（容器内实证） |
+| P5 | lease 心跳 Rust 直写（O6b 清偿，-240 spawn/h/workspace；锁互操作实验先行） | ✅ `9d7fecf`（P5a 双向互斥成立）+`05f86b8`（P5b 直写） |
+| P4 | SDK 执行器进命令层（docker.exe 子进程链归零） | ✅ `3058e1a`（真机冒烟） |
+| P7 | 退避覆盖扩展 + 背景降级（后台 60s/失焦 30s/provider 挂梯子） | ✅ `1a1926d` |
 | P6a | 热轮询 Rust 直连 named pipe（稳态 tick 0 spawn，空闲卡根治） | ⬜ |
 | P8 | 低配模式（自动应用+弹窗告知；容器限额 + .wslconfig 保键合并） | ⬜ |
 | P9 | 冷启动残余（daemon 就绪等待去 spawn 化 + entrypoint 脚本合并） | ⬜ |
