@@ -371,17 +371,44 @@ CC_SWITCH_SKILLS_LOG="/tmp/cc-switch-skills-init.log"
 if command -v cc-switch >/dev/null 2>&1; then
     CC_SWITCH_DAEMON_READY=0
     if cc-switch daemon start --detach >"$CC_SWITCH_DAEMON_LOG" 2>&1; then
-        # Windows bind mount 上首次初始化 SQLite 可能较慢，最多等待 10 秒。
-        for _attempt in $(seq 1 40); do
-            _daemon_status="$(cc-switch daemon status 2>&1 || true)"
-            case "$_daemon_status" in
-                "cc-switch daemon"*)
-                    CC_SWITCH_DAEMON_READY=1
-                    break
-                    ;;
-            esac
-            sleep 0.25
+        # PERF P9 (D-13): was 40 × (cc-switch CLI spawn + 0.25s sleep) =
+        # up to 10s of pure spawn churn on slow disks. Fast path: poll the
+        # daemon PROCESS with kill -0 (zero spawns), exponential backoff
+        # 0.25/0.5/1/2s; every 4th sample still asks the daemon itself —
+        # alive-but-hung is only detectable via the real status (and the
+        # final readiness call below always confirms via real status).
+        _daemon_n=0
+        _daemon_delay=0.25
+        for _attempt in $(seq 1 12); do
+            _daemon_n=$((_daemon_n + 1))
+            if [ $((_daemon_n % 4)) -eq 0 ]; then
+                _daemon_status="$(cc-switch daemon status 2>&1 || true)"
+                case "$_daemon_status" in
+                    "cc-switch daemon"*) CC_SWITCH_DAEMON_READY=1; break ;;
+                esac
+            elif pgrep -x cc-switch-real >/dev/null 2>&1; then
+                # process alive: let it settle one backoff step, then ask
+                # for real at the 4th sample (loop continues).
+                :
+            else
+                # process gone: no point polling a dead binary
+                sleep 0.25
+                continue
+            fi
+            sleep "$_daemon_delay"
+            _daemon_delay=$(awk "BEGIN{d=$_daemon_delay*2; if(d>2)d=2; print d}")
         done
+        # Final confirm ALWAYS via the real daemon status (kill -0 cannot
+        # prove readiness — hung-but-alive must not pass the gate).
+        if [ "$CC_SWITCH_DAEMON_READY" != "1" ]; then
+            for _attempt in 1 2 3; do
+                _daemon_status="$(cc-switch daemon status 2>&1 || true)"
+                case "$_daemon_status" in
+                    "cc-switch daemon"*) CC_SWITCH_DAEMON_READY=1; break ;;
+                esac
+                sleep 0.5
+            done
+        fi
     fi
 
     if [ "$CC_SWITCH_DAEMON_READY" = "1" ]; then
@@ -444,58 +471,32 @@ if command -v cc-switch >/dev/null 2>&1; then
         fi
 
         # 预配置常见 AI 供应商 provider（不包含 API Key）
-        # Claude agent
+        # PERF P9 (D-13): --agent all = ONE python3 spawn for both agents
+        # (was two full interpreter+import chains back to back).
         CC_SWITCH_PRESET_LOG="/tmp/cc-switch-preset-providers.log"
         if CC_SWITCH_PRESET_RESULT="$(
             python3 /usr/local/bin/lib/cc_switch_preset_providers.py \
                 --config-dir "$CC_SWITCH_CONFIG_DIR" \
-                --agent claude \
+                --agent all \
                 --log "$CC_SWITCH_PRESET_LOG" \
                 --mode "${AISC_PRESET_PROVIDERS:-auto}"
         )"; then
             case "$CC_SWITCH_PRESET_RESULT" in
                 added)
-                    echo "✅ cc-switch 已为 Claude 预配置 DeepSeek、火山引擎、智谱、Kimi"
+                    echo "✅ cc-switch 已为 Claude/Codex 预配置 DeepSeek、火山引擎、智谱、Kimi"
                     ;;
                 refreshed)
-                    echo "✅ cc-switch 已为 Claude 刷新预置 provider（已保留你的 API Key 与当前选择）"
+                    echo "✅ cc-switch 已为 Claude/Codex 刷新预置 provider（已保留你的 API Key 与当前选择）"
                     ;;
                 current)
-                    echo "ℹ️  cc-switch Claude 预设 provider 已是最新，跳过。"
+                    echo "ℹ️  cc-switch Claude/Codex 预设 provider 已是最新，跳过。"
                     ;;
                 off)
                     echo "ℹ️  AISC_PRESET_PROVIDERS=off，已跳过 provider 预配置。"
                     ;;
             esac
         else
-            echo "⚠️  cc-switch Claude provider 预配置失败；日志: $CC_SWITCH_PRESET_LOG" >&2
-        fi
-
-        # Codex agent
-        CC_SWITCH_PRESET_CODEX_LOG="/tmp/cc-switch-preset-providers-codex.log"
-        if CC_SWITCH_PRESET_CODEX_RESULT="$(
-            python3 /usr/local/bin/lib/cc_switch_preset_providers.py \
-                --config-dir "$CC_SWITCH_CONFIG_DIR" \
-                --agent codex \
-                --log "$CC_SWITCH_PRESET_CODEX_LOG" \
-                --mode "${AISC_PRESET_PROVIDERS:-auto}"
-        )"; then
-            case "$CC_SWITCH_PRESET_CODEX_RESULT" in
-                added)
-                    echo "✅ cc-switch 已为 Codex 预配置 DeepSeek、火山引擎、智谱、Kimi"
-                    ;;
-                refreshed)
-                    echo "✅ cc-switch 已为 Codex 刷新预置 provider（已保留你的 API Key 与当前选择）"
-                    ;;
-                current)
-                    echo "ℹ️  cc-switch Codex 预设 provider 已是最新，跳过。"
-                    ;;
-                off)
-                    # 已在 Claude agent 部分输出
-                    ;;
-            esac
-        else
-            echo "⚠️  cc-switch Codex provider 预配置失败；日志: $CC_SWITCH_PRESET_CODEX_LOG" >&2
+            echo "⚠️  cc-switch provider 预配置失败；日志: $CC_SWITCH_PRESET_LOG" >&2
         fi
 
         # 复测第 2 轮（2026-08-21）：provider 页的选择拥有两个 agent 的

@@ -2053,6 +2053,24 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   +ipc（lowSpecStatus/wslconfigMerge）+i18n 双语 14 键。+2 测试（RAM
   探测合理域/wslconfig 合并矩阵——用户键保活、缺键补、节中位、force
   覆写）。门禁：cargo 303 ×3 / vue-tsc / vitest 433 / vite。
+- **P9 冷启动残余（2026-09-06，PERF 收官）**：①**daemon 就绪等待去
+  spawn 化**——原 40 ×（cc-switch CLI spawn + 0.25s）最坏 10s 纯 spawn
+  链；改 pgrep -x cc-switch-real 快检（零 spawn）+ 指数退避
+  0.25/0.5/1/2s + 每 4 采样真询 status + **终判恒走真 status**（kill -0
+  证不了就绪，hung-but-alive 不得过闸）——容器实测就绪 1775ms（原最坏
+  10s、健康常态也要 4+ 次 spawn）。②**preset providers 双合一**——
+  claude/codex 两次 python3 spawn → `--agent all` 单次（子调用 stdout
+  捕获、聚合语义 added>refreshed>current、off 短路、任一失败 rc1）。
+  **镜像链事故（自纠）**：首建镜像后容器验证仍报旧脚本——bundle 链
+  （repo container/ → nsis/bundle → target/debug/aisc-bundle → image）
+  的 build-cli.ps1 同步只随 sidecar 重建跑，本次只改 container/ 未动
+  Python sidecar → nsis bundle 停在旧版 → `aisc build` 从 bundle 取到
+  旧脚本。修复：手动同步两处 bundle + vendor-refresh + 重建镜像，容器
+  实证 `first=added / second=current` 全通（教训与 2026-08-29 事故同源：
+  **改 container/ 后必须同步 bundle**，与是否动 sidecar 无关）。vendor-
+  refresh 1509；门禁：pytest 1138（+1 agent-all 三态）+ 容器内 P9a/P9b
+  双验证。**PERF P1-P9 至此全部收官**（P6b /events 流式与 P10 onedir
+  记 backlog）。
 - **P3 容器内 spawn 削减三件套（2026-09-06）**：低配机上「每条 shell 命令
   一个 python3 + 一个 sed」「每次 agent 启动一个 node 解析同一个
   settings.json」「每 60s 一个完整 cc-switch CLI 只为查健康」的三重持续税。

@@ -44,6 +44,53 @@ class FixtureDrivenPresetTests(unittest.TestCase):
         expected = {k: v for k, v in official.items() if k not in H.USER_ONLY_ENV_KEYS}
         self.assertEqual(env, expected)
 
+    def test_agent_all_aggregates_both_agents_in_one_spawn(self):
+        """PERF P9 (D-13): `--agent all` runs both agents and aggregates the
+        status (added > refreshed > current; any failure -> exit 1)."""
+        import io
+        import contextlib
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp) / "cc"
+            config_dir.mkdir()
+            # Minimal providers table (same shape the runtime tests seed) —
+            # the preset path writes the db directly (daemon-independent).
+            db = sqlite3.connect(config_dir / "cc-switch.db")
+            db.execute(
+                "CREATE TABLE providers (id TEXT, app_type TEXT, name TEXT, "
+                "settings_config TEXT, website_url TEXT, category TEXT, "
+                "created_at INTEGER, sort_index INTEGER, notes TEXT, icon TEXT, "
+                "icon_color TEXT, meta TEXT, is_current INTEGER, "
+                "in_failover_queue INTEGER)"
+            )
+            db.commit()
+            db.close()
+            log = Path(tmp) / "preset.log"
+            # Fresh db: both agents need presets -> "added".
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                rc = H.main(["--agent", "all",
+                             "--config-dir", str(config_dir),
+                             "--log", str(log),
+                             "--mode", "always"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out.getvalue().strip(), "added")
+            # Second run on the now-current config: "current".
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                rc = H.main(["--agent", "all",
+                             "--config-dir", str(config_dir),
+                             "--log", str(log),
+                             "--mode", "auto"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out.getvalue().strip(), "current")
+            # off mode short-circuits to "off" without touching anything.
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                rc = H.main(["--agent", "all",
+                             "--config-dir", str(config_dir),
+                             "--log", str(log),
+                             "--mode", "off"])
+            self.assertEqual(rc, 0)
+            self.assertEqual(out.getvalue().strip(), "off")
+
     def test_1m_suffix_rules_match_the_fixture(self):
         env = H._settings_config("claude", deepseek())["env"]
         suffix = FIXTURE["one_million_context_suffix"]

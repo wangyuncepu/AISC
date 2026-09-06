@@ -1073,7 +1073,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Preconfigure cc-switch providers without API keys"
     )
     parser.add_argument("--config-dir", type=Path, required=True)
-    parser.add_argument("--agent", choices=SUPPORTED_AGENTS, default="claude")
+    parser.add_argument("--agent", choices=SUPPORTED_AGENTS + ("all",), default="claude")
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--mode", default="auto")
     parser.add_argument(
@@ -1100,6 +1100,34 @@ def main(argv: list[str] | None = None) -> int:
             for action in actions:
                 print(f"  - {action}", file=log)
             return 0
+
+    # PERF P9 (D-13): `--agent all` runs both agents in ONE python3 spawn
+    # (the entrypoint used to pay the interpreter+import chain twice).
+    # Aggregated status: the most informative single word wins; the sub
+    # calls' stdout is captured (never leaks into the aggregate line).
+    if args.agent == "all":
+        import contextlib
+        import io
+
+        statuses: list[str] = []
+        for agent in SUPPORTED_AGENTS:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                sub = main(["--agent", agent,
+                            "--config-dir", str(args.config_dir),
+                            "--log", str(args.log),
+                            "--mode", args.mode])
+            if sub != 0:
+                print("failed")
+                return 1
+            statuses.append(buf.getvalue().strip())
+        if "off" in statuses:
+            print("off")
+        else:
+            # added > refreshed > current (per the single-agent vocabulary).
+            print("added" if "added" in statuses else
+                  ("refreshed" if "refreshed" in statuses else "current"))
+        return 0
 
     revision = preset_revision(args.agent)
 
