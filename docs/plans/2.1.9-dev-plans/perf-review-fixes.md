@@ -96,6 +96,17 @@ D-13 审查确认 Python/Rust/Vitest/vue-tsc 回归基线均为绿色，但发�
 | vue-tsc | `node node_modules\vue-tsc\bin\vue-tsc.js --noEmit` 通过 |
 | vendor verify | `1514 verified, 0 missing, 0 checksum mismatch, 0 malformed`（⚠ 后证为 CRLF 假绿，见下） |
 
+## 手测首轮反馈（2026-09-06 深夜）
+
+PERF 手测第一轮四条反馈的处置（同晚完成）：
+
+| # | 反馈 | 处置 |
+|---|---|---|
+| 1 | 设置页卡死：点击无响应，tab 选中但内容仍是工作区，伴蓝色矩形残影 | **P8 漏 `GROUP_KEY.performance` + i18n 键** → `t(undefined)` 渲染抛错 → Vue patch 中途断裂 → UI 永久卡死。修复：补键 + GROUPS 类型化（编译期拦截）+ 标题兜底 + main.ts 全局 errorHandler 落 aisc.log + 2 回归测试。CDP 真窗口验证通过 |
+| 2 | Provider 高级模式删「其它信息」（备注/网站/图标/颜色） | 模板+常量+死 CSS+双语 6 键删除；保留 save 透传（编辑不丢已有值） |
+| 3 | 打开工作区变慢 | 取证无代码回归：冷启动 5s 与批次口径一致、op p50 在 dev 噪声内；体感大概率被 #1 冻结放大 + 首开一次性成本。修复后复测，仍慢再插桩 |
+| 4 | tauri-plugin-notification 2.3.3 vs 2.4.0 版本不匹配警告 | cargo 离线无 2.4.0，npm `--save-exact 2.3.3` 反向对齐 |
+
 ## 热修（2026-09-06 晚，`fe28d75`）
 
 b49ed0f 的 container/ 四文件（aisc-bashrc / aisc-zshrc / aisc_bash_history.py / cc_switch_preset_providers.py）编辑时被写成 CRLF：vendor-refresh 对有改动文件按工作区字节取哈希 → CRLF 哈希进 checksums，CI（eol=lf 检出）Bundle/NSIS verify 炸 4 mismatch；本地 verify 对 CRLF 验 CRLF 假绿；bundle 三副本同步的也是 CRLF 版。修复：工作区字节级归一 LF（哈希与 CI 期望逐一相符）+ 重刷 vendor + bundle 重同步。git blob 侧因 .gitattributes 归一化本就正确。教训：Windows 上 vendor-refresh 须 `PATH="/tmp/py3shim:$PATH"`（WindowsApps python3 stub rc=49 杀 step 3）；编辑 container/ 文本文件后必查 CRLF。

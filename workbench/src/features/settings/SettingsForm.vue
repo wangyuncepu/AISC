@@ -82,12 +82,21 @@ const EFFECT_KEY: Record<EffectKind, string> = {
   restart: "settings.effect.restart",
 };
 
-const GROUP_KEY: Record<string, string> = {
+// Manual-test fix #1 (2026-09-06): P8 added 'performance' to the section
+// list but not to GROUP_KEY — t(undefined) threw SyntaxError mid-render,
+// breaking the App patch (settings chip switched, content stuck on the
+// workspace, UI dead until restart). The Record<Group,...> typing below
+// makes a future missing entry a COMPILE error, and the heading falls back
+// to the raw group id instead of undefined.
+const GROUPS = ["ui", "terminal", "window", "hostTools", "ssh", "performance", "disk"] as const;
+type SettingsGroup = (typeof GROUPS)[number];
+const GROUP_KEY: Record<SettingsGroup, string> = {
   ui: "settings.group.ui",
   terminal: "settings.group.terminal",
   window: "settings.group.window",
   hostTools: "settings.group.hostTools",
   ssh: "settings.group.ssh",
+  performance: "settings.group.performance",
   disk: "settings.group.disk",
 };
 
@@ -281,8 +290,8 @@ async function reopenOnboarding() {
     </p>
 
     <div v-if="store.doc" class="body">
-      <template v-for="group in ['ui', 'terminal', 'window', 'hostTools', 'ssh', 'performance', 'disk']" :key="group">
-        <h3 class="group">{{ t(GROUP_KEY[group]) }}</h3>
+      <template v-for="group in GROUPS" :key="group">
+        <h3 class="group">{{ t(GROUP_KEY[group] ?? group) }}</h3>
 
         <!-- ui section -->
         <template v-if="group === 'ui'">

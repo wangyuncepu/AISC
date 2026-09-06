@@ -2131,6 +2131,35 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   container/ 五文件 bundle 三处 SHA256 亲验一致 + vendor-refresh
   1514 全过。门禁：pytest 1146（+7）/ cargo 305+integration 全绿 /
   vitest 434 / vue-tsc。
+- **PERF 手测首轮四反馈（2026-09-06 深夜，#1/#2/#4 已修，#3 取证无回归）**：
+  **#1 设置页卡死+视图不切换（P0，根因实锤）**——P8 给设置页加了
+  `performance` 分节但漏了 `GROUP_KEY` 条目与 i18n 键：`t(undefined)`
+  在渲染函数里抛 SyntaxError → **Vue patch 中途断裂**（设置 chip 已
+  切换、WorkspaceView 未卸载、SettingsForm 未挂载）→ 后续每次更新
+  重抛 `emitsOptions null` → **整个 UI 永久卡死**（用户看到的蓝色
+  矩形 = 半卸载 xterm canvas）。**取证链**：本地起 dev + CDP 远程调试
+  端口（`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port`）
+  + SendKeys/合成点击驱动真窗口 + `Runtime.exceptionThrown` 长连接监听
+  抓到完整栈（`SettingsForm.vue renderList → t(undefined) →
+  parseTranslateArgs`）。修复三层：①GROUP_KEY 补 performance 键（zh
+  「性能」/en "Performance"）+ `GROUPS` 元组类型化（`Record<Group,string>`
+  让漏条目变编译错）+ 标题兜底 `?? group`；②main.ts 挂
+  `app.config.errorHandler` → logUiEvent 进 aisc.log（下次渲染错误
+  日志可查，不用再开 CDP）；③+2 回归测试（真 i18n 挂载断言七组标题
+  逐一对译 + lowSpec 开时 memory/cpus 输入渲染）。**修复已在真窗口
+  CDP 验证**：设置面板完整渲染含性能组。**#2 Provider 高级模式删
+  「其它信息」**（备注/网站/图标/图标颜色）：模板区块+ICONS/COLORS
+  常量+死 CSS+双语 6 键全删；**保留 form state 与 save 透传**——编辑
+  已有 provider 不丢已存 extras，仅新增走空默认。**#4 tauri-plugin-
+  notification 版本不匹配警告**：npm `^2.3.3` 被 lock 浮到 2.4.0 vs
+  Rust crate 2.3.3；cargo 缓存无 2.4.0（离线不可升），反向钉 npm
+  `--save-exact 2.3.3` 对齐。**#3 打开工作区变慢（取证，无代码回归）**：
+  冷启动 container_created→ready 5s（与 PERF 批次口径一致——P9 的
+  1775ms 是容器内 daemon 就绪，非全链门槛）；runtime op p50 213→456ms
+  在 dev 噪声内；用户体感大概率被 #1 的 UI 冻结放大 + 今晚首开三重
+  一次性成本（vite "config changed" 重优化 + 新镜像新容器 + 新 sidecar
+  AV 扫描）。修复后请复测计时，仍慢再专项插桩。门禁：vitest 436
+  （+2）/ vue-tsc 0 /（纯前端批次，Python/Rust 无改动）。
 - **审查修复批热修：vendor checksums 行尾事故（2026-09-06 晚，`fe28d75`）**：
   b49ed0f 的 container/ 四文件（bashrc/zshrc/history/preset）编辑时被
   写成 **CRLF**——vendor-refresh 对「有改动文件按工作区字节取哈希」

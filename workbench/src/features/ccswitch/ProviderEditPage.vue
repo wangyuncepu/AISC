@@ -6,8 +6,8 @@
  *
  *   简易: name + base URL + API key (preset dropdown autofills on add)
  *   高级: + upstream format (BOTH agents; claude=anthropic / codex=
- *         openai_responses defaults), the mapping editor, notes/website,
- *         and the icon picker
+ *         openai_responses defaults) and the mapping editor (the former
+ *         notes/website/icon「其它信息」block is retired — 2026-09-06)
  *
  * Save goes through the ccSwitchUi store (layer contract); the secret rides
  * the request only. Back with unsaved edits asks for confirmation.
@@ -66,12 +66,6 @@ const ROLE_SLOTS = [
   { key: "CLAUDE_CODE_SUBAGENT_MODEL", labelKey: "ccswitch.role.subagent", oneM: false },
 ];
 const roleSlots = ROLE_SLOTS.map((s) => ({ key: s.key, label: t(s.labelKey), oneM: s.oneM }));
-
-/** PP r3 (user ruling): one uniform monochrome glyph family (geometric
- * shapes / dingbats, text presentation) — the old mix of color emoji and
- * shapes rendered inconsistently; icon_color tints whichever is picked. */
-const ICONS = ["◆", "▲", "●", "■", "★", "✦", "✚", "❖", "✱", "✜", "☾", "⬢"];
-const COLORS = ["", "#4a9eff", "#22c55e", "#f59e0b", "#ef4444", "#a855f7", "#14b8a6"];
 
 const modelField = ref(props.provider?.model ?? "");
 /** Last fetch outcome shown inline (ok=n models / warn=message). */
@@ -266,30 +260,12 @@ function onSave(): void {
           :candidates="candidates"
         />
 
-        <h3>{{ t("ccswitch.edit.extras") }}</h3>
-        <label class="field"><span>{{ t("ccswitch.edit.notes") }}</span>
-          <input v-model="form.notes" @input="touch" /></label>
-        <label class="field"><span>{{ t("ccswitch.edit.website") }}</span>
-          <input v-model="form.website" placeholder="https://" @input="touch" /></label>
-        <div class="field icon-field">
-          <span>{{ t("ccswitch.edit.icon") }}</span>
-          <div class="icon-row">
-            <button v-for="ic in ICONS" :key="ic" class="icon"
-                    :class="{ on: form.icon === ic }"
-                    :style="ic && form.iconColor ? { color: form.iconColor } : {}"
-                    @click="form.icon = form.icon === ic ? '' : ic; touch()">{{ ic }}</button>
-          </div>
-        </div>
-        <div class="field icon-field">
-          <span>{{ t("ccswitch.edit.iconColor") }}</span>
-          <div class="icon-row">
-            <button v-for="c in COLORS" :key="c || 'none'" class="icon swatch"
-                    :class="{ on: form.iconColor === c }"
-                    :style="c ? { background: c } : {}"
-                    :title="c || t('ccswitch.edit.noColor')"
-                    @click="form.iconColor = c; touch()" />
-          </div>
-        </div>
+        <!-- Manual-test #2 (2026-09-06): the「其它信息」section (notes /
+             website / icon / icon color) is retired from the form per user
+             request. The form fields + save passthrough stay — editing an
+             existing provider that already has extras keeps its values
+             instead of silently wiping them; new providers save empty
+             extras and the provider card falls back to its default badge. -->
       </template>
     </div>
   </div>
@@ -331,7 +307,4 @@ button.primary { background: var(--accent); border: none; color: var(--accent-fg
 button.primary:disabled { opacity: 0.5; cursor: default; }
 button.icon { background: none; border: none; color: var(--text-muted); font-size: var(--font-md); padding: 2px 6px; }
 button.icon.on { background: var(--accent-soft); border-radius: var(--radius-sm); color: var(--accent); }
-.icon-row { display: flex; gap: 4px; flex-wrap: wrap; }
-.swatch { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border-strong); }
-.swatch.on { outline: 2px solid var(--accent); }
 </style>
