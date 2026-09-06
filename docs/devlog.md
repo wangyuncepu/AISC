@@ -1962,6 +1962,24 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   ——纸面上「flock/fcntl 互不相通」的经典陷阱在本组合不存在，实验证实。
   pytest 侧 `test_lock_interop.py` 负控制（Python 锁自排斥）。cargo 295
   （+2）/ pytest 1125（+1）。
+- **P5b lease 心跳 Rust 直写（2026-09-06，O6b 清偿）**：心跳本是纯文件
+  刷新（锁→读→验 id→更新 lease_last_seen_at），却每 15s 付一次完整
+  aisc.exe spawn（~750ms）= **每工作区 240 spawn/h 纯开销**。P5a 已证
+  fs4 与 Python 锁双向互斥 → Rust 直写主方案：`beat_direct` 对齐
+  WorkspaceLeaseStore.heartbeat 全语义——fs4 同锁（3s 有界获取，拿不到
+  **跳拍**由 45s TTL 吸收，不走 CLI 回退避免同锁双重阻塞）；记录缺/异
+  schema fail-closed → Absent（**CLI 回退**重走 Python 重占链）；id 不匹
+  配 → Conflict（发同一 workspace-lease-conflict 事件 + 停拍，收敛
+  handle_lease_conflict 共享）；匹配 → 仅 lease_last_seen_at 前进
+  （RFC3339+00:00 手搓 civil_from_days 时间戳，与 Python isoformat 对齐）
+  经 storage::atomic_replace 落盘。claim/release 留 Python（低频控制
+  操作）。`AISC_LEASE_HEARTBEAT=cli` 一键回退。锁/文件路径布局与
+  Python lock_path_for(workspace) 逐段对齐（断言钉死）。测试：+3
+  （决策矩阵含锁路径 parity / 日期算法锚点 / **Python 解析 parity**
+  ——Rust 产物经 lease_from_dict + age_seconds 判 fresh）。**测试架构
+  教训**：初版 lease 测试 set AISC_DATA_ROOT 与 data_root 套件各自的
+  env 锁互不互斥 → 并行互踩（全量跑才现形）——重构为 synthetic_root
+  显式注入（beat_direct_in），测试零 env 操作。cargo 296。
 - **P3 容器内 spawn 削减三件套（2026-09-06）**：低配机上「每条 shell 命令
   一个 python3 + 一个 sed」「每次 agent 启动一个 node 解析同一个
   settings.json」「每 60s 一个完整 cc-switch CLI 只为查健康」的三重持续税。
