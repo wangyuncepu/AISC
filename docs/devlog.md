@@ -1990,6 +1990,25 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   mutagen CLI 白spawn）；④environment 5s 自轮核实「就绪即停」现状无需
   动；⑤lease cadence 不动（TTL 跨实例契约，成本已由 P5b 归零）。
   门禁：vue-tsc / vitest 433 / vite。
+- **P4 SDK 执行器进命令层（2026-09-06）**：runtime/provider/services 命令层
+  硬编码 RealDockerExecutor——aisc.exe 体内每次 Docker 调用都是 docker.exe
+  子进程链（弱机每跳冷启 100-300ms × 每 tick 5-6 跳）。新
+  `SdkBackedDockerExecutor`（adapters/docker_sdk_backed.py）：**热读面走
+  SDK named pipe 进程内 HTTP**（preflight ping；inspect_container 直查 +
+  NotFound 映射 CLI「No such object」stderr 语义；run_captured 三热形态映射
+  ——ps（label 过滤 + mini 渲染器支持 ID/Names/Image/Status/Label 模板，
+  **attrs-only 取值防每容器额外 API 往返**）、exec（create/start/inspect，
+  防误伤只查 argv[1] 的 flag）、inspect 单名）；**其余一切原样委托内层
+  RealDockerExecutor**（run/build/start/stop/streaming/interactive——低频
+  控制面保持久经考验的 CLI 行为）；任何映射路径异常→CLI 回退（最坏=现状）。
+  命令层 13 处 `executor or RealDockerExecutor()` → `default_executor()`
+  工厂（AISC_DOCKER_EXECUTOR=cli 一键回退；测试注入 executor 不变）。
+  +8 等价性测试（ps 按 runtime-id 解析/Up-Exited 映射/七列模板含 Label/
+  inspect 形状与 not_found/exec 捕获与退出码/未知形状回退/委托与
+  preflight/env 逃生舱）——**fake 泄漏实证**：渲染器初版用 c.image.tags，
+  fake 无此属性→静默回退真 docker→断言撞上真实容器名（aisc-wb-35f66104），
+  顺势改 attrs-only。真机冒烟：SDK 路径实跑 ps 渲染正确。sidecar 重建
+  双同步。门禁：pytest 1136。
 - **P3 容器内 spawn 削减三件套（2026-09-06）**：低配机上「每条 shell 命令
   一个 python3 + 一个 sed」「每次 agent 启动一个 node 解析同一个
   settings.json」「每 60s 一个完整 cc-switch CLI 只为查健康」的三重持续税。

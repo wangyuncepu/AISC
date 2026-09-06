@@ -9,7 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from aisc.adapters.docker_ import DockerExecutor, RealDockerExecutor
+from aisc.adapters.docker_ import DockerExecutor
+from aisc.adapters.docker_sdk_backed import default_executor
 from aisc.application.provider import current_provider
 
 
@@ -27,7 +28,7 @@ def cmd_provider_current(
     executor: Optional[DockerExecutor] = None,
 ) -> Dict[str, Any]:
     """Execute ``aisc provider current`` per contract §七."""
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     _ws, reg_root = _resolve_workspace_and_registry(workspace)
     status = current_provider(
         runtime_id=runtime_id,

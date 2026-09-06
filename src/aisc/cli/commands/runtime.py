@@ -9,7 +9,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from aisc.adapters.docker_ import DockerExecutor, RealDockerExecutor
+from aisc.adapters.docker_ import DockerExecutor
+from aisc.adapters.docker_sdk_backed import default_executor
 from aisc.domain.models import CliError, RuntimeErrorCode, RuntimeSnapshot, RuntimeExitCode
 from aisc.application.runtime import (
     iso_now,
@@ -76,9 +77,8 @@ def cmd_runtime_preflight(
     # Resolve workspace
     ws_path = Path(workspace).resolve() if workspace else Path.cwd()
 
-    # Use RealDockerExecutor for preflight checks
-    from aisc.adapters.docker_ import RealDockerExecutor
-    exec_ = executor or RealDockerExecutor()
+    # PERF P4 (D-13): SDK-backed default executor (AISC_DOCKER_EXECUTOR=cli rollback)
+    exec_ = executor or default_executor()
 
     # Execute preflight (Stage 7: registry root = data-root state dir)
     from aisc.application.data_root import workspace_state_dir
@@ -143,7 +143,7 @@ def cmd_runtime_start(
     executor: Optional[DockerExecutor] = None,
 ) -> Dict[str, Any]:
     """Execute ``aisc runtime start`` per contract §5.2."""
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     ws, reg_root = _resolve_workspace_and_registry(workspace)
     result = start_runtime(
         runtime_id=runtime_id,
@@ -166,7 +166,7 @@ def cmd_runtime_list(
     executor: Optional[DockerExecutor] = None,
 ) -> Dict[str, Any]:
     """Execute ``aisc runtime list`` per contract §5.3."""
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     ws, reg_root = _resolve_workspace_and_registry(workspace)
     snapshots = list_runtimes(executor=exec_, registry_root=reg_root, owner=owner, workspace=ws)
     return {"runtimes": [s.to_dict() for s in snapshots], "observed_at": iso_now()}
@@ -178,7 +178,7 @@ def cmd_runtime_inspect(
     executor: Optional[DockerExecutor] = None,
 ) -> Dict[str, Any]:
     """Execute ``aisc runtime inspect`` per contract §5.4."""
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     _ws, reg_root = _resolve_workspace_and_registry(workspace)
     snapshot = inspect_runtime(runtime_id=runtime_id, executor=exec_, registry_root=reg_root)
     return snapshot.to_dict()
@@ -195,7 +195,7 @@ def cmd_runtime_status(
     is best-effort under a 3s deadline (timeout/failure -> None)."""
     from aisc.application.runtime import runtime_status
 
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     _ws, reg_root = _resolve_workspace_and_registry(workspace)
     return runtime_status(
         runtime_id=runtime_id, executor=exec_, registry_root=reg_root
@@ -218,7 +218,7 @@ def cmd_runtime_stop(
             exit_code=2,
             error_code="AISC_ERR_USAGE",
         )
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     _ws, reg_root = _resolve_workspace_and_registry(workspace)
     snapshot = stop_runtime(
         runtime_id=runtime_id, executor=exec_, registry_root=reg_root,
@@ -233,7 +233,7 @@ def cmd_runtime_restart(
     executor: Optional[DockerExecutor] = None,
 ) -> Dict[str, Any]:
     """Execute ``aisc runtime restart`` per contract §5.5."""
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     _ws, reg_root = _resolve_workspace_and_registry(workspace)
     snapshot = restart_runtime(runtime_id=runtime_id, executor=exec_, registry_root=reg_root)
     return snapshot.to_dict()
@@ -246,7 +246,7 @@ def cmd_runtime_remove(
     executor: Optional[DockerExecutor] = None,
 ) -> Dict[str, Any]:
     """Execute ``aisc runtime remove`` per contract §5.5."""
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     _ws, reg_root = _resolve_workspace_and_registry(workspace)
     snapshot = remove_runtime(
         runtime_id=runtime_id, executor=exec_, registry_root=reg_root, force=force
@@ -266,7 +266,7 @@ def cmd_runtime_services(
     """Execute ``aisc runtime services`` — gateway info + registered services."""
     from aisc.application.web_gateway import runtime_services
 
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     _ws, reg_root = _resolve_workspace_and_registry(workspace)
     return runtime_services(
         runtime_id=runtime_id, executor=exec_, registry_root=reg_root
@@ -284,7 +284,7 @@ def cmd_runtime_services_expose(
     the in-container helper — both write the same manifest)."""
     from aisc.application.web_gateway import expose_runtime_service
 
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     _ws, reg_root = _resolve_workspace_and_registry(workspace)
     return expose_runtime_service(
         runtime_id=runtime_id, port_text=port, name=name,
@@ -301,7 +301,7 @@ def cmd_runtime_services_unexpose(
     """Execute ``aisc runtime services unexpose``."""
     from aisc.application.web_gateway import unexpose_runtime_service
 
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     _ws, reg_root = _resolve_workspace_and_registry(workspace)
     return unexpose_runtime_service(
         runtime_id=runtime_id, port_text=port,
@@ -323,7 +323,7 @@ def cmd_runtime_reconcile(
     """
     from aisc.application.workspace_reconcile import reconcile_workspace
 
-    exec_ = executor or RealDockerExecutor()
+    exec_ = executor or default_executor()
     ws, reg_root = _resolve_workspace_and_registry(workspace)
     payload = reconcile_workspace(ws, instance_id, exec_, registry_root=reg_root)
     if workspace_key and payload.get("workspace_key") != workspace_key:
