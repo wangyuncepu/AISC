@@ -4,12 +4,12 @@
     "command": "version",
     "exit_code": 0,
     "timestamp": "2026-08-14T00:00:00Z",
-    "version": "2.1.8.dev0",
+    "version": "2.1.9.dev0",
     "run_id": "00000000-0000-4000-8000-000000000001"
   },
   "data": {
-    "cli_version": "2.1.8.dev0",
-    "bundle_version": "2.1.8.dev0",
+    "cli_version": "2.1.9.dev0",
+    "bundle_version": "2.1.9.dev0",
     "contract_version": null,
     "image_version": null,
     "claude_version": "latest",
