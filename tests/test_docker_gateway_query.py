@@ -6,6 +6,7 @@ verified without a live daemon, and the results are asserted to carry the
 same semantic fields as the CLI backend (A-DG03-1).
 """
 
+import os
 import unittest
 from unittest import mock
 
@@ -631,6 +632,117 @@ class RealExecutorTransportTests(unittest.TestCase):
         # Constructing bare must not touch docker.from_env.
         with mock.patch("docker.from_env", side_effect=AssertionError("eager call")):
             gw.SdkGateway()
+
+
+class ExecPollIntervalTests(unittest.TestCase):
+    """PERF P2 (D-13): cadence knobs clamp correctly."""
+
+    def test_resize_poll_interval_clamps(self):
+        from aisc.adapters.docker_gateway import _resize_poll_interval
+        with mock.patch.dict(os.environ, {"AISC_RESIZE_POLL": "0.001"}):
+            self.assertEqual(_resize_poll_interval(), 0.05)
+        with mock.patch.dict(os.environ, {"AISC_RESIZE_POLL": "99"}):
+            self.assertEqual(_resize_poll_interval(), 1.0)
+        with mock.patch.dict(os.environ, {"AISC_RESIZE_POLL": "bogus"}):
+            self.assertEqual(_resize_poll_interval(), 0.25)
+
+    def test_exec_intervals_clamp(self):
+        from aisc.adapters.docker_gateway import (
+            _exec_floor_interval,
+            _exec_settle_interval,
+        )
+        with mock.patch.dict(os.environ, {"AISC_EXEC_FLOOR": "0.001"}):
+            self.assertEqual(_exec_floor_interval(), 0.05)
+        with mock.patch.dict(os.environ, {"AISC_EXEC_SETTLE": "99"}):
+            self.assertEqual(_exec_settle_interval(), 10.0)
+
+
+class EofDrivenExitTests(unittest.TestCase):
+    """PERF P2 (D-13): the exec socket closing IS the exit signal — the old
+    0.2s exec_inspect poll kept every session at ~5 Docker API calls/sec
+    for its whole lifetime."""
+
+    def _gw(self, api):
+        return SdkGateway(client=FakeClient(api=api))
+
+    def _run(self, api):
+        import tempfile
+        import sys as _sys
+        with tempfile.TemporaryFile() as stdin:
+            with mock.patch.object(_sys, "stdin", stdin):
+                return self._gw(api).open_interactive("aisc-wb-1", ["bash"])
+
+    def _inspects(self, api):
+        return sum(1 for c in api.calls if c[0] == "exec_inspect")
+
+    def test_normal_exit_settles_with_exactly_one_inspect(self):
+        api = _FakeApi(inspect_once=True, exit_code=7)
+        r = self._run(api)
+        self.assertEqual(r.exit_code, 7)
+        self.assertTrue(r.waited)
+        self.assertEqual(self._inspects(api), 1,
+                         "EOF-driven exit must not poll past the settle")
+
+    def test_eof_but_running_settles_via_slow_poll(self):
+        # Socket EOFs immediately, but the exec reports Running twice —
+        # background children holding the pty. The 1s settle loop walks it.
+        class RunningTwiceApi(_FakeApi):
+            def __init__(self):
+                super().__init__()
+                self.n = 0
+
+            def exec_inspect(self, exec_id):
+                self.calls.append(("exec_inspect", exec_id))
+                self.n += 1
+                if self.n >= 3:
+                    return {"Running": False, "ExitCode": 5}
+                return {"Running": True, "ExitCode": 0}
+
+        with mock.patch.dict(os.environ, {"AISC_EXEC_SETTLE": "0.05"}):
+            r = self._run(RunningTwiceApi())
+        self.assertEqual(r.exit_code, 5)
+        self.assertTrue(r.waited)
+
+    def test_floor_catches_stream_that_never_eofs(self):
+        # A socketpair peer held open = no EOF ever; the floor re-inspect
+        # must notice the dead exec and settle anyway.
+        import socket as _socket
+        peer_holder = {}
+
+        class _PeerSock:
+            def __init__(self, sock):
+                self._sock = sock
+
+            def recv(self, size):
+                return self._sock.recv(size)
+
+        a, b = _socket.socketpair()
+        peer_holder["b"] = b
+
+        class HungStreamApi(_FakeApi):
+            def __init__(self):
+                super().__init__()
+                self.n = 0
+
+            def exec_start(self, exec_id, **kwargs):
+                self.calls.append(("exec_start", exec_id))
+                return _PeerSock(a)
+
+            def exec_inspect(self, exec_id):
+                self.calls.append(("exec_inspect", exec_id))
+                self.n += 1
+                if self.n >= 2:
+                    peer_holder["b"].close()  # unblock drain for the joins
+                    return {"Running": False, "ExitCode": 3}
+                return {"Running": True, "ExitCode": 0}
+
+        try:
+            with mock.patch.dict(os.environ, {"AISC_EXEC_FLOOR": "0.1"}):
+                r = self._run(HungStreamApi())
+        finally:
+            peer_holder["b"].close()
+        self.assertEqual(r.exit_code, 3)
+        self.assertTrue(r.waited)
 
 
 if __name__ == "__main__":

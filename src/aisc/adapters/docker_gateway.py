@@ -57,6 +57,31 @@ from aisc.domain.models import (
 )
 
 
+def _poll_env(name: str, default: float, lo: float, hi: float) -> float:
+    """PERF P2 (D-13) tunable poll cadence — env override clamped to a sane
+    range (also keeps tests fast without sleeping production intervals)."""
+    try:
+        v = float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return min(hi, max(lo, v))
+
+
+def _resize_poll_interval() -> float:
+    """Resize-file poll cadence: default 0.25s (was 0.1s)."""
+    return _poll_env("AISC_RESIZE_POLL", 0.25, 0.05, 1.0)
+
+
+def _exec_floor_interval() -> float:
+    """While-stream-open re-inspect floor: default 5s."""
+    return _poll_env("AISC_EXEC_FLOOR", 5.0, 0.05, 60.0)
+
+
+def _exec_settle_interval() -> float:
+    """EOF-but-Running corner settle poll: default 1s."""
+    return _poll_env("AISC_EXEC_SETTLE", 1.0, 0.05, 10.0)
+
+
 # ---------------------------------------------------------------------------
 # Backend identity (adapter-internal; never leaks to application code)
 # ---------------------------------------------------------------------------
@@ -585,6 +610,10 @@ class SdkGateway:
 
         stop = threading.Event()
         errors: List[Exception] = []
+        # PERF P2 (D-13): the exec socket closing IS the exit signal — drain
+        # reports it; the main loop stops polling exec_inspect every 0.2s
+        # (that kept every session at ~5 Docker API calls/sec for life).
+        eof = threading.Event()
 
         # Initial resize from the resize file (set by the pty supervisor before
         # spawn; AISC_RESIZE_FILE = "<cols> <rows>\n").
@@ -650,6 +679,7 @@ class SdkGateway:
                 while True:
                     chunk = read_sock(65536)
                     if not chunk:
+                        eof.set()
                         break
                     os.write(sys.stdout.fileno(), chunk)
             except Exception as exc:  # noqa: BLE001
@@ -674,6 +704,10 @@ class SdkGateway:
                 return
             # Local copy + module-level step helper: immune to the closure
             # trap that previously dropped every post-initial resize (B-05).
+            # PERF P2: 0.25s cadence (was 0.1s) — inside the 200-300ms resize
+            # perception threshold, pane dragging stays smooth; ~10 file
+            # reads/sec per session was idle-CPU tax on weak machines.
+            interval = _resize_poll_interval()
             last = last_size
             while not stop.is_set():
                 last = _poll_resize_step(
@@ -683,7 +717,7 @@ class SdkGateway:
                         exec_id, height=size[1], width=size[0]
                     ),
                 )
-                stop.wait(0.1)
+                stop.wait(interval)
 
         t_drain = threading.Thread(target=drain, daemon=True)
         t_fwd = threading.Thread(target=forward, daemon=True)
@@ -697,22 +731,56 @@ class SdkGateway:
         # 2.1.9 hotfix (#61): tolerate transient inspect failures (npipe
         # hiccups) before giving up — mirrors RealDockerExecutor.
         inspect_failures = 0
-        try:
+
+        def inspect_info() -> dict:
+            """exec_inspect with the #61 transient-failure tolerance."""
+            nonlocal inspect_failures
             while True:
                 try:
                     info = client.api.exec_inspect(exec_id)
                     inspect_failures = 0
-                except (docker.errors.APIError, requests.RequestException, OSError) as exc:
+                    return info
+                except (docker.errors.APIError, requests.RequestException, OSError):
                     inspect_failures += 1
                     if inspect_failures >= 3:
                         raise
                     time.sleep(0.5)
-                    continue
-                if not info.get("Running"):
-                    exit_code = int(info.get("ExitCode", 0))
-                    waited = True
-                    break
-                time.sleep(0.2)
+
+        try:
+            if os.environ.get("AISC_EXEC_POLL") == "legacy":
+                # PERF P2 escape hatch (kept one version): the original
+                # 0.2s exec_inspect poll loop.
+                while True:
+                    info = inspect_info()
+                    if not info.get("Running"):
+                        break
+                    time.sleep(0.2)
+            else:
+                # PERF P2 (D-13): EOF-driven exit. Wait for the stream to
+                # end; a floor re-inspect (default 5s) covers a stream that
+                # never EOFs (hung exec) — strictly better than the old
+                # unconditional 0.2s poll. The observation that settles the
+                # exit code is reused (normal exit = exactly ONE inspect);
+                # the 1s loop only walks the rare EOF-but-Running corner
+                # (background children holding the pty open). The exit
+                # criterion stays exec_inspect.Running==false — zero
+                # semantic change.
+                floor = _exec_floor_interval()
+                settle = _exec_settle_interval()
+                info = None
+                while info is None:
+                    if not eof.is_set():
+                        info = inspect_info()
+                        if info.get("Running"):
+                            info = None
+                            eof.wait(timeout=floor)
+                    else:
+                        info = inspect_info()
+                        if info.get("Running"):
+                            info = None
+                            time.sleep(settle)
+            exit_code = int(info.get("ExitCode", 0))
+            waited = True
         except (docker.errors.APIError, requests.RequestException, OSError) as exc:
             errors.append(exc)
         finally:
