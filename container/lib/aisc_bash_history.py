@@ -51,13 +51,41 @@ def _connect(db_path: str) -> sqlite3.Connection:
 
 
 def _unescape(s: str) -> str:
-    """Reverse the shell-side escape (backslash LAST — it was applied first)."""
-    return (
-        s.replace("\\t", "\t")
-        .replace("\\n", "\n")
-        .replace("\\r", "\r")
-        .replace("\\\\", "\\")
-    )
+    """Reverse the shell-side escape in ONE left-to-right pass.
+
+    Sequential `replace` calls are WRONG here: a wire `x\\\\t` (literal
+    backslash + escaped-tab… no — a LITERAL backslash-then-t in the original
+    command escapes to `x\\\\t` on the wire, and a tab-escape replace would
+    fire on the tail `\\\\t` first, corrupting it to backslash+TAB). Only a
+    single scan that consumes escape PAIRS is correct."""
+    out: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == "\\" and i + 1 < n:
+            nxt = s[i + 1]
+            if nxt == "t":
+                out.append("\t")
+                i += 2
+                continue
+            if nxt == "n":
+                out.append("\n")
+                i += 2
+                continue
+            if nxt == "r":
+                out.append("\r")
+                i += 2
+                continue
+            if nxt == "\\":
+                out.append("\\")
+                i += 2
+                continue
+            # Unknown escape: keep the backslash literally (writer bug or
+            # foreign producer — never corrupt, never crash).
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def cmd_init(db_path: str) -> int:

@@ -2071,6 +2071,14 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   refresh 1509；门禁：pytest 1138（+1 agent-all 三态）+ 容器内 P9a/P9b
   双验证。**PERF P1-P9 至此全部收官**（P6b /events 流式与 P10 onedir
   记 backlog）。
+- **P3a 审查修复：TSV 解码单遍化（2026-09-06，审查清单编制期间自查
+  发现）**：`_unescape` 原为顺序 replace（`\\t`→TAB … `\\\\`→`\`）——
+  **真 bug**：原始命令里的字面 `\t` 序列（如 `printf 'x\ty'`、
+  `grep 'a\tb'`、`C:\temp`）经 shell 转义后成 `x\\ty`，顺序替换先在尾
+  部命中 `\\t` 把它错解成反斜杠+TAB——历史记录的字面转义序列被损坏。
+  修复：单遍左→右扫描、成对消费转义对（未知转义保留字面反斜杠，绝不
+  崩不腐）。+1 回归测试（raw-string 线字节逐对断言 + printf 字面 \t
+  端到端）。bundle 同步 + vendor-refresh + 镜像重建。pytest 1139。
 - **P3 容器内 spawn 削减三件套（2026-09-06）**：低配机上「每条 shell 命令
   一个 python3 + 一个 sed」「每次 agent 启动一个 node 解析同一个
   settings.json」「每 60s 一个完整 cc-switch CLI 只为查健康」的三重持续税。

@@ -135,6 +135,29 @@ class BashHistoryHelperTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["cmd"], "echo ok")
 
+    def test_unescape_single_pass_literal_backslash_sequences(self):
+        # PERF P3a review finding (2026-09-06): an ORIGINAL command like
+        # `printf 'x\ty'` (LITERAL backslash-t) escapes to wire `x\\ty`
+        # (backslash doubled). The old sequential-replace unescape fired the
+        # tab-escape on the tail and corrupted it to `x\<TAB>y`. Only a
+        # single left-to-right pass that consumes escape PAIRS is correct.
+        # Raw strings below = exact wire bytes; want uses raw = literal text.
+        cases = [
+            (r"x\\ty", r"x\ty"),   # literal backslash + t survives verbatim
+            (r"x\\ny", r"x\ny"),   # literal backslash + n survives
+            (r"a\tb", "a\tb"),     # wire \t -> REAL tab
+            (r"a\nb", "a\nb"),     # wire \n -> REAL newline
+            (r"a\rb", "a\rb"),     # wire \r -> REAL CR
+            (r"a\\b", "a\\b"),     # wire \\ -> one backslash (a\b, 3 chars)
+            (r"tab\then\real", "tab" + "\t" + "hen" + "\r" + "eal"),  # \r consumed
+        ]
+        for wire, want in cases:
+            self.assertEqual(H._unescape(wire), want, f"wire={wire!r}")
+        # The corruption case end-to-end: a printf command with literal \t.
+        self._flush('0\t/w\tprintf \'x\\\\ty\'\n')
+        rows = self._rows()
+        self.assertEqual(rows[-1]["cmd"], "printf 'x\\ty'")
+
     def test_flush_empty_spool_is_noop(self):
         with mock.patch.dict(os.environ, {"AISC_HIST_DB": self.db}):
             H.main(["helper", "init"])
