@@ -2025,6 +2025,19 @@ opt-batch 收口后按用户指令开工。四段全部落地：
   **零副作用**：Python 侧零改动（无 sidecar 重建）。+5 纯函数测试（URL
   编码/HTTP 解析/容器 JSON/registry 查找/snapshot 形状矩阵）；原始端点
   形状已实证。门禁：cargo 301 / vue-tsc / vitest 433 / vite。
+- **P8 低配模式·容器限额基础（2026-09-06，第四波起）**：settings 新
+  `performance` 节（`lowSpec`/`containerMemory` 默认 3g/`containerCpus`
+  默认 1.5——sanitize：memory 只收数字+单后缀 b/k/m/g ≤16 字符防 argv
+  注入、cpus clamp 0.5..8.0；patch 深合并 + GUI reset 不清（机器事实非
+  装饰）；SettingsDocument/Patch/default 全接线）。`lowSpec` 开时 Rust
+  runtime_start 拼 `--max-memory/--max-cpus` → CLI flag → start_runtime
+  → docker run `--memory/--cpus`（**只影响新容器**；argv 注入位置在
+  -v 前、image 恒末位故 fake 的 argv[-1] 不破）。+1 注入测试（Recording
+  executor 断言 --memory 3g/--cpus 1.5 入 run argv）。sidecar 重建双同步。
+  门禁：cargo 301 / pytest 1162（+1）/ 生命周期 43。
+  **P8 剩余（记 backlog）**：低配自动探测（Rust 侧 RAM ≤8.5GB 检测需新
+  windows-sys 依赖或复用 doctor ctypes）+ 一次性弹窗告知 + `.wslconfig`
+  保键原子合并（确认框 wsl --shutdown）+ SettingsForm 低配 UI + i18n。
 - **P3 容器内 spawn 削减三件套（2026-09-06）**：低配机上「每条 shell 命令
   一个 python3 + 一个 sed」「每次 agent 启动一个 node 解析同一个
   settings.json」「每 60s 一个完整 cc-switch CLI 只为查健康」的三重持续税。

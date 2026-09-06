@@ -940,6 +940,8 @@ def start_runtime(
     ready_timeout: float = _READY_DEFAULT_TIMEOUT,
     proxy_config: Optional[str] = None,
     host_mcp_url: Optional[str] = None,
+    max_memory: Optional[str] = None,
+    max_cpus: Optional[float] = None,
 ) -> RuntimeStartResult:
     """Start a Workbench runtime per contract §5.2.
 
@@ -1164,6 +1166,11 @@ def start_runtime(
                 # query). Absent = the feature is off; the entrypoint then
                 # leaves the agents' MCP registrations untouched.
                 *(["-e", f"AISC_HOST_MCP_URL={host_mcp_url}"] if host_mcp_url else []),
+                # PERF P8 (D-13): low-spec resource limits — the container's
+                # own budget, distinct from the WSL2 VM's. Only new containers;
+                # a rebuild (remove + start) is how existing ones pick it up.
+                *(["--memory", max_memory] if max_memory else []),
+                *(["--cpus", str(max_cpus)] if max_cpus is not None else []),
                 "-v", f"{canonical_workspace}:/root/app",
             ]
             # svc-2 (web gateway): allocate a loopback host port and publish the

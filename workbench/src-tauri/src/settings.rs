@@ -162,6 +162,38 @@ impl Default for WindowSettings {
     }
 }
 
+/// PERF P8 (D-13): low-spec mode + per-container resource limits. `low_spec`
+/// auto-applies on ≤8.5GB hosts (doctor parity); the container budget rides
+/// docker run `--memory`/`--cpus` (only NEW containers — existing ones need
+/// a rebuild, surfaced to the user).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformanceSettings {
+    #[serde(default)]
+    pub low_spec: bool,
+    #[serde(default = "default_container_memory")]
+    pub container_memory: String,
+    #[serde(default = "default_container_cpus")]
+    pub container_cpus: f64,
+}
+
+fn default_container_memory() -> String {
+    "3g".into()
+}
+fn default_container_cpus() -> f64 {
+    1.5
+}
+
+impl Default for PerformanceSettings {
+    fn default() -> Self {
+        Self {
+            low_spec: false,
+            container_memory: default_container_memory(),
+            container_cpus: default_container_cpus(),
+        }
+    }
+}
+
 /// F1 (D-10): one SSH connection profile (settings `sshProfiles`). v1 ruling:
 /// KEY AUTH ONLY — `key_path` is a REFERENCE (the file is never copied or
 /// read into settings); password/DPAPI storage is a later decision.
@@ -197,6 +229,8 @@ pub struct SettingsDocument {
     pub host_tools: Vec<crate::host_mcp::HostToolEntry>,
     /// F1: SSH connection profiles for sync workspaces.
     pub ssh_profiles: Vec<SshProfile>,
+    /// PERF P8 (D-13): low-spec mode + container resource limits.
+    pub performance: PerformanceSettings,
     pub issues: Vec<ValidationIssue>,
     /// On-disk file was corrupt and isolated; app runs on defaults and
     /// nothing is written until the user confirms reset.
@@ -216,6 +250,8 @@ pub struct SettingsPatch {
     pub host_tools: Option<Vec<crate::host_mcp::HostToolEntry>>,
     /// F1: wholesale replacement of the SSH profiles array.
     pub ssh_profiles: Option<Vec<SshProfile>>,
+    /// PERF P8 (D-13).
+    pub performance: Option<PerformanceSettings>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -295,6 +331,7 @@ fn default_document() -> SettingsDocument {
         window: WindowSettings::default(),
         host_tools: Vec::new(),
         ssh_profiles: Vec::new(),
+        performance: PerformanceSettings::default(),
         issues: Vec::new(),
         corrupted: false,
         read_only: false,
@@ -563,6 +600,9 @@ impl Settings {
         self.raw["ui"] = merge_section(self.raw.get("ui"), &ui);
         self.raw["terminal"] = merge_section(self.raw.get("terminal"), &terminal);
         self.raw["window"] = merge_section(self.raw.get("window"), &window);
+        let (performance, i) = validate_performance(&self.raw);
+        issues.extend(i);
+        self.raw["performance"] = merge_section(self.raw.get("performance"), &performance);
         self.issues = issues;
     }
 
@@ -584,6 +624,10 @@ impl Settings {
                 .unwrap_or_default(),
             host_tools: sanitize_host_tools(self.raw.get("host_tools")),
             ssh_profiles: sanitize_ssh_profiles(self.raw.get("ssh_profiles")),
+            performance: serde_json::from_value(
+                self.raw.get("performance").cloned().unwrap_or(Value::Null),
+            )
+            .unwrap_or_default(),
             issues: self.issues.clone(),
             corrupted: self.corrupted,
             read_only: self.read_only,
@@ -635,6 +679,9 @@ impl Settings {
             self.raw["ssh_profiles"] =
                 serde_json::to_value(&cleaned).unwrap_or(Value::Array(Vec::new()));
         }
+        if let Some(s) = &patch.performance {
+            self.raw["performance"] = merge_section(self.raw.get("performance"), s);
+        }
         self.validate();
     }
 
@@ -648,6 +695,7 @@ impl Settings {
             window: Some(WindowSettings::default()),
             host_tools: None, // F2: the whitelist is NOT GUI décor — reset never clears it
             ssh_profiles: None, // F1: connection configs survive a GUI reset too
+            performance: None, // P8: low-spec is a machine fact, not GUI décor
         });
     }
 
@@ -705,6 +753,45 @@ fn sanitize_host_tools(v: Option<&Value>) -> Vec<crate::host_mcp::HostToolEntry>
 /// F1: SSH profile sanitation — every entry needs a name/host/user; port is
 /// bounded to the valid TCP range; an empty key_path is allowed (agent-based
 /// auth still works through the system ssh).
+fn validate_performance(raw: &Value) -> (PerformanceSettings, Vec<ValidationIssue>) {
+    let mut out = PerformanceSettings::default();
+    let mut issues = Vec::new();
+    let sec = raw.get("performance");
+    if let Some(sec) = sec {
+        if let Some(b) = sec.get("low_spec").and_then(|v| v.as_bool()) {
+            out.low_spec = b;
+        }
+        if let Some(m) = sec.get("container_memory").and_then(|v| v.as_str()) {
+            // A docker --memory value: digits + an optional unit suffix
+            // (b/k/m/g). Reject anything else to keep the docker run argv
+            // safe (never shell-injected — it rides a subprocess argv slot).
+            let ok = !m.is_empty()
+                && m.len() <= 16
+                && m.chars().enumerate().all(|(i, c)| {
+                    c.is_ascii_digit()
+                        || (i > 0 && matches!(c, 'b' | 'k' | 'm' | 'g'))
+                });
+            if ok {
+                out.container_memory = m.to_string();
+            } else {
+                issues.push(issue("performance.container_memory", "非法值，回退 3g"));
+            }
+        } else if sec.get("container_memory").is_some() {
+            issues.push(issue("performance.container_memory", "非法类型，回退 3g"));
+        }
+        if let Some(c) = sec.get("container_cpus").and_then(|v| v.as_f64()) {
+            if (0.5..=8.0).contains(&c) {
+                out.container_cpus = c;
+            } else {
+                issues.push(issue("performance.container_cpus", "超出 0.5..8.0，回退 1.5"));
+            }
+        } else if sec.get("container_cpus").is_some() {
+            issues.push(issue("performance.container_cpus", "非法类型，回退 1.5"));
+        }
+    }
+    (out, issues)
+}
+
 fn sanitize_ssh_profiles(v: Option<&Value>) -> Vec<SshProfile> {
     let mut out = Vec::new();
     let Some(arr) = v.and_then(Value::as_array) else {

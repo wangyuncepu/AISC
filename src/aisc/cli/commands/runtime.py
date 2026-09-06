@@ -140,6 +140,8 @@ def cmd_runtime_start(
     owner: str = "workbench",
     proxy_config: Optional[str] = None,
     host_mcp_url: Optional[str] = None,
+    max_memory: Optional[str] = None,
+    max_cpus: Optional[float] = None,
     executor: Optional[DockerExecutor] = None,
 ) -> Dict[str, Any]:
     """Execute ``aisc runtime start`` per contract §5.2."""
@@ -156,6 +158,8 @@ def cmd_runtime_start(
         registry_root=reg_root,
         proxy_config=proxy_config,
         host_mcp_url=host_mcp_url,
+        max_memory=max_memory,
+        max_cpus=max_cpus,
     )
     return result.to_dict()
 

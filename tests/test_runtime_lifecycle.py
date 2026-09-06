@@ -225,6 +225,29 @@ class TestStartRuntime(unittest.TestCase):
         self.assertEqual(meta["container_id"], result.container_id)
         self.assertTrue(meta["workspace_key"])
 
+    def test_start_injects_low_spec_resource_limits(self):
+        # PERF P8 (D-13): max_memory/max_cpus ride the docker run argv as
+        # --memory/--cpus (only when provided; absent = no injection).
+        ws = _make_workspace()
+        seen: dict = {}
+
+        class Recording(RuntimeFakeExecutor):
+            def run_captured(self, argv, *, timeout=None):
+                if argv and argv[0] == "run":
+                    seen["argv"] = list(argv)
+                return super().run_captured(argv, timeout=timeout)
+
+        ex = Recording()
+        start_runtime(RID_A, str(ws), "super-claude:latest", "direct",
+                      "project", "workbench", executor=ex,
+                      registry_root=ws / ".aisc", ready_timeout=2.0,
+                      max_memory="3g", max_cpus=1.5)
+        argv = seen["argv"]
+        self.assertIn("--memory", argv)
+        self.assertIn("3g", argv)
+        self.assertIn("--cpus", argv)
+        self.assertIn("1.5", argv)
+
     def test_start_idempotent_reuse(self):
         ws = _make_workspace()
         ex = RuntimeFakeExecutor()

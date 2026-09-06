@@ -1030,6 +1030,18 @@ pub async fn start_runtime(
             }
         }
     }
+    // PERF P8 (D-13): low-spec mode injects the container resource budget.
+    let perf = crate::session::config_dir(&app)
+        .ok()
+        .and_then(|dir| crate::settings::load_settings_document(&dir).ok())
+        .map(|d| d.performance)
+        .unwrap_or_default();
+    if perf.low_spec {
+        argv.push("--max-memory".into());
+        argv.push(perf.container_memory);
+        argv.push("--max-cpus".into());
+        argv.push(format!("{}", perf.container_cpus));
+    }
     let env = run_control(&pin, argv, START_TIMEOUT, cancel).await;
     // Clear the in-flight token regardless of outcome.
     remove_op(&start_ops.0, &start_key);

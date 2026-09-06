@@ -521,6 +521,10 @@ def _build_parser() -> _AiscArgumentParser:
     rts.add_argument("--host-mcp-url", type=str, default=None,
                      help="F2 (D-10): full host-tools MCP URL incl. token query; forwarded "
                           "into the container as AISC_HOST_MCP_URL for agent registration")
+    rts.add_argument("--max-memory", type=str, default=None,
+                     help="PERF P8 (D-13): container memory limit (docker --memory, e.g. 3g)")
+    rts.add_argument("--max-cpus", type=float, default=None,
+                     help="PERF P8 (D-13): container CPU limit (docker --cpus, e.g. 1.5)")
 
     # --- runtime list ---
     rtl = rtsub.add_parser("list", help="List runtimes with Docker reconciliation",
@@ -1760,6 +1764,8 @@ def _cmd_runtime(
             owner=args.owner,
             proxy_config=args.proxy_config,
             host_mcp_url=getattr(args, "host_mcp_url", None),
+            max_memory=getattr(args, "max_memory", None),
+            max_cpus=getattr(args, "max_cpus", None),
         )
         return data, 0, []
     elif sub == "list":
