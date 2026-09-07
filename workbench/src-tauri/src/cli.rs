@@ -527,8 +527,99 @@ fn same_path(a: &str, b: &Path) -> bool {
 /// - `meta.exit_code` must equal the process exit code (05 §八).
 /// Timed entry point for every CLI operation: records duration + outcome in
 /// the bounded op-trace ring (REL-01) then returns the envelope.
+// -- 2.1.10 R1: where the CLI runs ----------------------------------------------
+//
+// Every existing call site passes a local executable `&Path`; the enum keeps
+// that shape (Local) while adding the remote story (Remote = `ssh` wraps the
+// same argv, `aisc` resolved from the target machine's PATH). Behavior for
+// all Local paths is bit-for-bit the existing spawn.
+
+/// One remote machine reached over SSH (D-7: key auth only — the same v1
+/// ruling the stripped F1 profiles used; `BatchMode=yes` refuses interactive
+/// prompts instead of hanging the GUI forever).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SshTarget {
+    /// ssh alias or `user@host` — passed through so ~/.ssh/config entries
+    /// (ProxyJump, ControlMaster, port overrides) apply verbatim.
+    pub host: String,
+    pub port: Option<u16>,
+    pub key_path: Option<String>,
+    /// Extra `ssh` options, appended verbatim (each `-o value` pair pre-split
+    /// by the caller); wins over the built-in defaults.
+    pub extra_args: Vec<String>,
+}
+
+impl SshTarget {
+    /// ssh client argv before the host token: `-p`, `-i`, non-interactive
+    /// guards, then caller extras (last-wins by ssh's own option order).
+    pub fn client_args(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(p) = self.port {
+            out.push("-p".into());
+            out.push(p.to_string());
+        }
+        if let Some(k) = &self.key_path {
+            out.push("-i".into());
+            out.push(k.clone());
+        }
+        out.push("-o".into());
+        out.push("BatchMode=yes".into());
+        out.push("-o".into());
+        out.push("ConnectTimeout=15".into());
+        out.extend(self.extra_args.iter().cloned());
+        out
+    }
+
+    /// Full remote argv prefix: `ssh ...opts... <host>` — the CLI argv rides
+    /// after it (`aisc` comes from the target's PATH; R4's machine profiles
+    /// will allow an explicit remote path).
+    pub fn spawn_argv(&self, cli_args: &[String]) -> Vec<String> {
+        let mut out = vec!["ssh".to_string()];
+        out.extend(self.client_args());
+        out.push(self.host.clone());
+        out.push("aisc".into());
+        out.extend_from_slice(cli_args);
+        out
+    }
+}
+
+/// Where an op executes: a pinned local sidecar or a remote machine.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CliTarget {
+    Local(PathBuf),
+    Remote(SshTarget),
+}
+
+impl CliTarget {
+    /// The (program, args) pair to spawn — everything downstream (env
+    /// injection, pipes, timeouts) is transport-agnostic.
+    pub(crate) fn spawn_pieces(&self, cli_args: &[String]) -> (std::ffi::OsString, Vec<String>) {
+        match self {
+            CliTarget::Local(exe) => (exe.clone().into(), cli_args.to_vec()),
+            CliTarget::Remote(t) => {
+                let argv = t.spawn_argv(cli_args);
+                let mut it = argv.into_iter();
+                let program = it.next().expect("non-empty ssh argv");
+                (program.into(), it.collect())
+            }
+        }
+    }
+}
+
 pub async fn run_control(
     executable: &Path,
+    argv: Vec<String>,
+    timeout: Duration,
+    cancel: CancellationToken,
+) -> Result<Envelope, WorkbenchError> {
+    run_control_target(&CliTarget::Local(executable.to_path_buf()), argv, timeout, cancel).await
+}
+
+/// `run_control_target`: the transport-aware form (2.1.10 R1) — Local is the
+/// legacy behavior bit-for-bit; Remote wraps the same CLI argv in an ssh
+/// spawn. Shared phase/run_id/trace/log plumbing for both.
+pub async fn run_control_target(
+    target: &CliTarget,
     argv: Vec<String>,
     timeout: Duration,
     cancel: CancellationToken,
@@ -543,7 +634,7 @@ pub async fn run_control(
     let result = crate::trace::timed(
         "cli",
         &phase,
-        run_control_inner(executable, argv, None, timeout, cancel, &run_id),
+        run_control_inner(target, argv, None, timeout, cancel, &run_id),
     )
     .await;
     log_cli_op(&phase, &run_id, started_op, &result);
@@ -560,13 +651,25 @@ pub async fn run_control_input(
     timeout: Duration,
     cancel: CancellationToken,
 ) -> Result<Envelope, WorkbenchError> {
+    run_control_input_target(&CliTarget::Local(executable.to_path_buf()), argv, input, timeout, cancel)
+        .await
+}
+
+/// Transport-aware form of `run_control_input`.
+pub async fn run_control_input_target(
+    target: &CliTarget,
+    argv: Vec<String>,
+    input: String,
+    timeout: Duration,
+    cancel: CancellationToken,
+) -> Result<Envelope, WorkbenchError> {
     let phase = argv.first().map(|s| s.as_str()).unwrap_or("cli").to_owned();
     let run_id = uuid::Uuid::new_v4().to_string();
     let started_op = std::time::Instant::now();
     let result = crate::trace::timed(
         "cli",
         &phase,
-        run_control_inner(executable, argv, Some(input), timeout, cancel, &run_id),
+        run_control_inner(target, argv, Some(input), timeout, cancel, &run_id),
     )
     .await;
     log_cli_op(&phase, &run_id, started_op, &result);
@@ -598,24 +701,28 @@ fn log_cli_op(
 }
 
 async fn run_control_inner(
-    executable: &Path,
+    target: &CliTarget,
     argv: Vec<String>,
     input: Option<String>,
     timeout: Duration,
     cancel: CancellationToken,
     run_id: &str,
 ) -> Result<Envelope, WorkbenchError> {
-    let mut cmd = Command::new(executable);
-    cmd.args(&argv);
+    let (program, spawn_args) = target.spawn_pieces(&argv);
+    let mut cmd = Command::new(&program);
+    cmd.args(&spawn_args);
     cmd.env("AISC_RUN_ID", run_id);
     // KI-6: the GUI process may carry a launch-time PATH snapshot without
     // Docker's bin (per-user installs register it in the USER PATH only
     // after install). Prepend the resolved docker bin dir so every docker
-    // subprocess the aisc CLI spawns keeps resolving.
+    // subprocess the aisc CLI spawns keeps resolving. (Remote targets spawn
+    // ssh locally; their docker resolution is the remote machine's PATH.)
     #[cfg(windows)]
-    if let Some(dir) = crate::env::docker_bin_dir() {
-        let path = std::env::var("PATH").unwrap_or_default();
-        cmd.env("PATH", format!("{};{}", dir.display(), path));
+    if matches!(target, CliTarget::Local(_)) {
+        if let Some(dir) = crate::env::docker_bin_dir() {
+            let path = std::env::var("PATH").unwrap_or_default();
+            cmd.env("PATH", format!("{};{}", dir.display(), path));
+        }
     }
     if input.is_some() {
         cmd.stdin(Stdio::piped());
@@ -630,7 +737,11 @@ async fn run_control_inner(
     {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(WorkbenchError::cli_not_found().with_detail(executable.display().to_string()));
+            let what = match target {
+                CliTarget::Local(p) => p.display().to_string(),
+                CliTarget::Remote(_) => program.to_string_lossy().to_string(),
+            };
+            return Err(WorkbenchError::cli_not_found().with_detail(what));
         }
         Err(e) => {
             return Err(WorkbenchError::cli_protocol().with_detail(format!("spawn failed: {e}")));
@@ -1113,6 +1224,67 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::tempdir;
+
+    // -- 2.1.10 R1: CliTarget / SshTarget argv shapes ------------------------
+
+    #[test]
+    fn ssh_target_spawn_argv_shape() {
+        let t = SshTarget {
+            host: "nas-alias".into(),
+            port: Some(2202),
+            key_path: Some("/home/dev/.ssh/id_ed25519".into()),
+            extra_args: vec!["-o".into(), "ServerAliveInterval=30".into()],
+        };
+        let argv = t.spawn_argv(&["ps".into(), "--format".into(), "json".into()]);
+        assert_eq!(
+            argv,
+            vec![
+                "ssh",
+                "-p", "2202",
+                "-i", "/home/dev/.ssh/id_ed25519",
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=15",
+                "-o", "ServerAliveInterval=30",
+                "nas-alias",
+                "aisc",
+                "ps", "--format", "json",
+            ]
+        );
+    }
+
+    #[test]
+    fn ssh_target_minimal_is_guarded_but_plain() {
+        let t = SshTarget { host: "user@host".into(), port: None, key_path: None, extra_args: vec![] };
+        assert_eq!(
+            t.client_args(),
+            vec!["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
+        );
+        // BatchMode=yes first-class: interactive password prompts must fail
+        // fast, never hang the GUI (D-7 key-auth-only ruling).
+        assert!(t.client_args().windows(2).any(|w| w == ["-o", "BatchMode=yes"]));
+    }
+
+    #[test]
+    fn cli_target_local_spawn_pieces_unchanged() {
+        let exe = PathBuf::from("/pin/aisc");
+        let (program, args) = CliTarget::Local(exe.clone()).spawn_pieces(&["version".into(), "--format".into(), "json".into()]);
+        assert_eq!(program, std::ffi::OsString::from("/pin/aisc"));
+        assert_eq!(args, vec!["version", "--format", "json"]);
+    }
+
+    #[test]
+    fn cli_target_remote_spawn_pieces_lead_with_ssh() {
+        let (program, args) = CliTarget::Remote(SshTarget {
+            host: "box".into(), port: None, key_path: None, extra_args: vec![],
+        })
+        .spawn_pieces(&["doctor".into()]);
+        assert_eq!(program, std::ffi::OsString::from("ssh"));
+        assert_eq!(args.last().unwrap(), "doctor");
+        // host + aisc both present, host before aisc
+        let h = args.iter().position(|a| a == "box").unwrap();
+        let a = args.iter().position(|a| a == "aisc").unwrap();
+        assert!(h < a, "host must precede the remote aisc token");
+    }
 
     fn caps(runtime: Option<&str>, session: Option<&str>, provider: Option<&str>, build: Option<&str>, services: Option<&str>) -> Capabilities {
         Capabilities {

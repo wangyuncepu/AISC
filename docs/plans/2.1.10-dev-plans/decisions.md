@@ -42,3 +42,12 @@ agent/改动全部发生在远端；「用本地软件打开」= 显式下载副
 远程化（R1-R4）成为唯一的 SSH 故事；R0 文档 §5 的「F1 互补并存」补记作废。
 封存载体 = git 历史 + tag `v2.1.9-dev` + 归档设计文档；用户数据处置逐项
 经用户确认，代码剥离不触碰任何用户数据。
+
+## D-7 serve stdio 模式无 token，SSH 即认证（2026-09-07）
+
+`aisc serve --stdio` 只与 ssh 会话的 stdin/stdout 通话、无监听面——SSH
+认证即传输认证（VS Code Remote-SSH 同款），R1 不引入 token。**若日后加
+TCP 直连模式**（局域网无 SSH 场景，调研节「局域网通信」相关）必须重新
+裁决并引入 F2 式 per-process token + 回环绑定，不得复用 stdio 语义。
+附带确立**双通道模型**：低频控制面走 per-op ssh、流式/高频面（R2 PTY、
+R3 FS/事件）走 serve 长驻（见 r1-serve-transport.md §1）。

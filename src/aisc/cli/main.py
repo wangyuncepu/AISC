@@ -106,6 +106,19 @@ def _build_parser() -> _AiscArgumentParser:
     dp = sub.add_parser("doctor", help="Run environment diagnostics", allow_abbrev=False)
     _add_global_args(dp, is_subparser=True)
 
+    # --- serve (2.1.10 R1): long-lived remote channel on stdio ---
+    svp = sub.add_parser(
+        "serve",
+        help="Serve remote callers: newline-delimited JSON frames on stdio",
+        allow_abbrev=False,
+    )
+    svp.add_argument(
+        "--stdio",
+        action="store_true",
+        help="speak the frame protocol on stdin/stdout (the only transport in this version)",
+    )
+    _add_global_args(svp, is_subparser=True)
+
     # --- build ---
     bp = sub.add_parser("build", help="Build Docker image", allow_abbrev=False)
     _add_global_args(bp, is_subparser=True)
@@ -2375,6 +2388,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     version_info: Optional[VersionInfo] = None
 
     try:
+        # 2.1.10 R1: serve owns its stdout completely (frame protocol) and
+        # never participates in the envelope/text dispatch below. A missing
+        # --stdio raises CliError here, which the shared handler reports.
+        if args.command == "serve":
+            from aisc.cli.commands.serve import cmd_serve
+            sys.exit(cmd_serve(args))
+
         if args.command == "version":
             version_info = _cmd_version(args)
             data = version_info.to_dict()
