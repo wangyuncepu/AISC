@@ -83,3 +83,9 @@ workbench/src-tauri/nsis/bundle/
 container/downloads/*.tgz
 container/downloads/yazi-*.zip
 downloads/host-bin/
+
+# 本机调试/发布暂存残留（反复产生，永不入库；发布资产权威源在 GitHub Releases）
+error_log/
+release-staging/
+.pnpm-store/
+.containers.lock

@@ -5,7 +5,7 @@
 * [X] 没有挂VPN的时候node:20-slim无法安装
 * [X] 挂VPN之后可以安装，配置提示`.claude/`缺少报错，不再继续进行
 
-1. [ ] ssh配置，windows端配置，检查是否打开ssh，如果没打开运行配置脚本
+1. [x] ssh配置，windows端配置，检查是否打开ssh，如果没打开运行配置脚本
 
 * [X] skill增加一个[github.com/multica-ai/andrej-karpathy-skills/blob/main/CLAUDE.md](https://github.com/multica-ai/andrej-karpathy-skills/blob/main/CLAUDE.md)（尽可能模拟/使用**Claude Code Plugin**安装）
 * [X] 模型配置统一交由 cc-switch 管理
@@ -66,12 +66,12 @@
 - [x] 修复安装版 Workbench「打开目录 → 构建镜像」失败（2026-08-08）：NSIS 安装器随附 aisc-bundle（CI staging + 静默安装冒烟）+ build --events 流式捕获跨平台化（_drain_threads + _kill_child）+ vendor/checksums.txt 刷新，见 devlog S4.1.b 修复
 - [x] 安装向导增加语言选择（英/简中），全中文安装（2026-08-08）：languages + displayLanguageSelector + LangString DEP_* 本地化，见 devlog S4.1.b
 - [x] 安装器依赖检测修复 + winget 隐藏终端（2026-08-09）：Docker 查真实路径/卸载键、Python 枚举 PythonCore 版本键（32/64 视图）、ExecWait→nsExec::ExecToLog（进度进安装日志）+ 非 0 退出重检测，见 devlog S4.1.b
-- [ ] 临时模式下，cc-switch不可用
+- [x] 临时模式下，cc-switch不可用
 - [ ] aisc run命令解耦，引导混乱，用户感到费解
 - [ ] agent加上Pi/opencode
 - [ ] aisc cli的更新命令优化
 - [x] 预配置的deepseek配置项错误，修复
-- [ ] 预配置的codesome配置项错误，修复
+- [x] 预配置的codesome配置项错误，修复
 - [x] runtime内，cc-switch显示异常（表现为终端显示不及时，能正常使用TUI，但是选择的位置不到对应区域时，对应区域显示的是乱七八糟的TUI结构，应该是旧的。且在windows下，TUI不会随窗口变化自适应）
 - [x] 界面字体太小，增加设置页，可以设置软件各类属性 — 2026-08-10 Step 3/7 完成：typed settings + 设置对话框 + UI 字号缩放（自适应窗口）+ 终端字号/行高/回滚/渲染器
 - [x] 通过winget安装docker desktop并启动，从引导界面勾选打开workbench，打开的workbench，无法内启动摘要界面无法正常检测，且点击启动docker也无效。而关闭该workbench，重新打开，就可以成功识别docker。— A+C 已实现（自动重试 preflight + CLI 绝对路径兜底）；复测发现 2 新问题已修（空目录误报冲突：resolve_conflict 仅限真冲突；构建失败：docker-credential-desktop PATH 兜底），2026-08-09 待最终复测
@@ -80,20 +80,50 @@
 - [x] codex 打开即进默认配置（login_required 直接开会话，终端内登录）——用户决定保留数据驱动行为（A-G08-2 只拦 not_configured）；若日后想更保守（login_required 也先进 guide 配置页），改 `runtime.ts` maybeOpenCreated 条件为 `["not_configured", "login_required"].includes(...)`（代码内已有 TODO 注释 + 2026-08-10 决策记录）
 - [x] **未来路线探讨：容器内 GUI 版 cc-switch**。当前 cc-switch-cli 是 TUI 应用，经终端管道渲染到 xterm.js（Step 9 管道方案已解决编码/对齐/性能/刷新问题，体验基本可用）。但 TUI 仍有固有局限：图标/emoji 需终端字体支持、布局受终端网格约束、无鼠标交互（部分 TUI 框架支持但受限）。若在容器内增加 GUI 版 cc-switch（如 Web 前端 + 后端 API），Workbench 可通过 webview 直接打开 GUI 版，绕过终端层。优势：完整 Unicode/emoji、自由布局、鼠标交互、更接近原生应用体验。需评估：cc-switch 是否有或可加 Web UI 模式、容器内端口暴露方式、Workbench webview 集成路径。保留 cc-switch-cli 作为终端备选。
 - [x] 工作区，aisc配置文件集中在一个文件夹下，不要像现在这样太零散是否可行？
-- [ ] 退出前询问用户是否想要保留runtime，若选择不想则直接删除该runtime及对应的container
-- [ ] 分屏键盘导航无效（Step 16 遗留）：`Ctrl+Shift+W` 关 pane 可用，但 `Ctrl+Shift+hjkl` / `Ctrl+方向键` 移动 pane 焦点在实机 WebView2 无反应。已修到：window capture handler 生效、scope `.xterm`→`.pane`（覆盖 guide/dormant）、导航成功后 focusTabTerminal 移交键盘焦点（f409b3f），实测光标仍不动。结论：监听器/guard/`navigatePane`/焦点移交代码均已验证正常（`Ctrl+Shift+W` 同一路径可用），最可能是 WebView2 在浏览器加速器层拦截 Ctrl+Shift+字母 / Ctrl+方向键组合（`AreBrowserAcceleratorKeysEnabled` 默认开启；Tauri 2 未暴露禁用该行为的公共钩子，COM 方案已尝试并放弃）。留待之后解决，见 devlog。
-- [ ] Step 16（G-17 分屏）暂时通过、小问题之后再改（2026-08-10）：用户验收"暂时算通过"。已修的：恢复布局黑屏/闪烁/布局错误、stop 丢布局、tab 标题陈旧、空状态居中、bash 卡"启动中"。遗留待改的小问题未逐一枚举，用户之后再反馈；键盘导航（上一条）为已知遗留。
+- [x] 退出前询问用户是否想要保留runtime，若选择不想则直接删除该runtime及对应的container
+- [x] 分屏键盘导航无效（Step 16 遗留）：`Ctrl+Shift+W` 关 pane 可用，但 `Ctrl+Shift+hjkl` / `Ctrl+方向键` 移动 pane 焦点在实机 WebView2 无反应。已修到：window capture handler 生效、scope `.xterm`→`.pane`（覆盖 guide/dormant）、导航成功后 focusTabTerminal 移交键盘焦点（f409b3f），实测光标仍不动。结论：监听器/guard/`navigatePane`/焦点移交代码均已验证正常（`Ctrl+Shift+W` 同一路径可用），最可能是 WebView2 在浏览器加速器层拦截 Ctrl+Shift+字母 / Ctrl+方向键组合（`AreBrowserAcceleratorKeysEnabled` 默认开启；Tauri 2 未暴露禁用该行为的公共钩子，COM 方案已尝试并放弃）。留待之后解决，见 devlog。
+- [x] Step 16（G-17 分屏）暂时通过、小问题之后再改（2026-08-10）：用户验收"暂时算通过"。已修的：恢复布局黑屏/闪烁/布局错误、stop 丢布局、tab 标题陈旧、空状态居中、bash 卡"启动中"。遗留待改的小问题未逐一枚举，用户之后再反馈；键盘导航（上一条）为已知遗留。
 
 
 # 用户体验
 - [x] 资源管理器；单击，系统默认方式打开；双击，插入到对话。
 - [x] 生成文件快速打开
+- [x] 简易模式，不显示工作区冲突，发现冲突直接帮用户处理
+  - [x] “工作区已有runtime”当前只能删e，除旧的runtim有什么存在的意义？  
+- [x] 生成大量文件时，产物页爆炸（疯狂转圈）
+- [x] 第一次启动工作区，bash下的文字教学
+- [x] 产物区/文件区文件改动属性优化
+- [x] 对话历史记录整理页
+  - [ ] bug:长对话无法恢复
+- [ ] docker缓存自动清理
+- [x] zsh下help命令
+- [x] 提升dockerfile构建的稳定性
+- [x] provider页切换provider响应超时
+  - [ ] codesome适配
+  - [ ] 显示异常
+- [x] 分屏的×点不了
+- [x] cc-switch挂掉
+- [ ] 设备性能受限情况下，如何保证稳定运行
+- [ ] 历史页的claude、codex图标辨识度不高且形状很怪，进行调整
+- [x] 屏蔽ctrl+c，让ctrl+c，ctrl+v由复制、粘贴覆盖
+- [x] 全局禁用非我们提供的右键表单
+- [ ] 资源管理器、bash tab行大小可拖动
 
 
 # 手测异常/问题
 - [x] 欢迎使用 AISC Workbench的初次运行环境失败，没有找到aisc cli（多次出现，从之前的版本里就有出现，但是当时没有重视）
 - [x] 初次进入选择工作区页面时，显示没有aisc cli能力，点击重新检测后恢复正常（同上，多次出现，之前没有重视）
-- [ ] aisc卸载、升级，要同步删除、重建docker的镜像、数据文件等配套资源，如果能同步更新container就更好了。
+- [x] aisc卸载、升级，要同步删除、重建docker的镜像、数据文件等配套资源，如果能同步更新container就更好了。
+- [x] aisc卸载时，清空相关images，升级时，重构images
+
+
+# 调研
+- [x] 容器调用宿主工具*(MCP->白名单（）)
+- [ ] 远程调用
+  - [ ] 增强cli的能力，局域网通信
+  - [ ] 使用场景主要是“Slurm 工作负载管理器”和“PBS作业管理”；
+- [ ] 拖动图片给agent
+- [ ] 
 
 
 
@@ -106,7 +136,19 @@
     - 字号缩放：ui.font_scale 用 CSS zoom 实现（App 的 uiZoom + 终端区 1/scale 反向补偿）
 
 
-- 界面截图，使用流程
-- 安装开始->开启正常工作
-- 功能区域
-- 
+
+- [x] 首页'bash'类字样
+- [x] provider 表头
+  - [ ] 编辑拆两个
+  - [ ] api-key获取提示
+- [x] bash引导头
+  - [x] agent引导头
+  - [x] 命令补全提示
+  - [ ] agent对话框补全/提示（插件）
+- [x] 生命周期、
+- [X] 资源管理器功能
+  - [x] 图标
+  - [x] 功能对标windows资源管理器
+  - [x] 拖动引用
+- [x] 设置页组织优化
+- [x] 初次引导砍掉
