@@ -593,7 +593,7 @@ pub enum CliTarget {
 impl CliTarget {
     /// The (program, args) pair to spawn — everything downstream (env
     /// injection, pipes, timeouts) is transport-agnostic.
-    fn spawn_pieces(&self, cli_args: &[String]) -> (std::ffi::OsString, Vec<String>) {
+    pub(crate) fn spawn_pieces(&self, cli_args: &[String]) -> (std::ffi::OsString, Vec<String>) {
         match self {
             CliTarget::Local(exe) => (exe.clone().into(), cli_args.to_vec()),
             CliTarget::Remote(t) => {

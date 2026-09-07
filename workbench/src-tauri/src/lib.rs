@@ -27,6 +27,7 @@ pub mod settings;
 pub mod subscription;
 pub mod docker_api;
 pub mod low_spec;
+pub mod serve;
 pub mod artifact;
 pub mod storage;
 pub mod trace;
