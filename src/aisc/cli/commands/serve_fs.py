@@ -220,7 +220,7 @@ class WatchRegistry:
         self._lock = threading.Lock()
         self._observer: Any = None
         self._roots: Dict[str, Any] = {}
-        self._pending: Dict[str, Dict[str, str]] = {}  # root -> {relpath: kind}
+        self._pending: Dict[str, Dict[str, Tuple[str, str]]] = {}  # root -> {abspath: (change, kind)}
         self._flush_timer: Optional[threading.Timer] = None
 
     def _emit(self, frame: Dict[str, Any]) -> None:
@@ -257,6 +257,20 @@ class WatchRegistry:
 
             reg = self
 
+            # watchdog event_type -> the Workbench change vocabulary
+            # (notify's classification). moved: from-half reports deleted,
+            # to-half reports created — the same semantics as the local
+            # watcher's rename handling (Stage 11).
+            def _change_type(event: Any) -> str:
+                et = getattr(event, "event_type", "")
+                return {
+                    "created": "created",
+                    "deleted": "deleted",
+                    "modified": "modified",
+                    "moved": "created",
+                    "closed": "modified",
+                }.get(et, "modified")
+
             class Handler(FileSystemEventHandler):
                 def on_any_event(self, event: Any) -> None:
                     path = getattr(event, "dest_path", None) or event.src_path
@@ -266,7 +280,7 @@ class WatchRegistry:
                     if _ignored(name):
                         return
                     kind = "dir" if event.is_directory else "file"
-                    reg._record(root, str(path), kind)
+                    reg._record(root, str(path), kind, _change_type(event))
 
             watch = self._observer.schedule(Handler(), root, recursive=True)
             self._roots[root] = watch
@@ -281,9 +295,14 @@ class WatchRegistry:
                 self._observer.stop()
                 self._observer = None
 
-    def _record(self, root: str, abs_path: str, kind: str) -> None:
+    def _record(self, root: str, abs_path: str, kind: str, change: str) -> None:
         with self._lock:
-            self._pending.setdefault(root, {})[abs_path] = kind
+            # last-write-wins on the change type; created is sticky so a
+            # create+write burst surfaces as "created" (batcher parity)
+            prev = self._pending.get(root, {}).get(abs_path)
+            if prev == ("created", kind):
+                change = "created"
+            self._pending.setdefault(root, {})[abs_path] = (change, kind)
             if self._flush_timer is None:
                 self._flush_timer = threading.Timer(0.1, self._flush)
                 self._flush_timer.daemon = True
@@ -300,7 +319,10 @@ class WatchRegistry:
                 "event": "fs.change",
                 "data": {
                     "root": root,
-                    "paths": [{"path": p, "kind": k} for p, k in sorted(paths.items())],
+                    "paths": [
+                        {"path": p, "change": c, "kind": k}
+                        for p, (c, k) in sorted(paths.items())
+                    ],
                 },
             })
 

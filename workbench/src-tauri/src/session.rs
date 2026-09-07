@@ -307,6 +307,44 @@ fn canonical_workspace(raw: &str) -> Result<String, WorkbenchError> {
     Ok(canon.to_string_lossy().into_owned())
 }
 
+/// R3 (D-5): the REMOTE-aware workspace gate. On a remote target the path
+/// names a directory on the REMOTE machine — local canonicalize would
+/// mis-resolve or reject it, so the existence check rides fs.list on the
+/// pooled serve connection and the path string is normalized trivially
+/// (trailing slash trim). Local targets keep the exact legacy behavior.
+pub async fn canonical_workspace_for(
+    app: &AppHandle,
+    raw: &str,
+) -> Result<String, WorkbenchError> {
+    let target = crate::target::resolve_target(app).await?;
+    match target {
+        crate::cli::CliTarget::Local(_) => canonical_workspace(raw),
+        crate::cli::CliTarget::Remote(t) => {
+            let root = raw.trim_end_matches('/').to_string();
+            if !root.starts_with('/') {
+                return Err(WorkbenchError::map_aisc("AISC_ERR_WORKSPACE_INVALID")
+                    .with_detail(format!("remote workspace must be an absolute path: {raw}")));
+            }
+            let pool = app.state::<crate::serve::ServePool>();
+            crate::serve::fs_op(
+                &pool,
+                &t,
+                "fs.list",
+                &serde_json::json!({ "root": root, "path": "" }),
+            )
+            .await
+            .map_err(|e| {
+                WorkbenchError::map_aisc("AISC_ERR_WORKSPACE_INVALID")
+                    .with_detail(format!(
+                        "remote workspace {raw}: {}",
+                        e.technical_detail.unwrap_or_default()
+                    ))
+            })?;
+            Ok(root)
+        }
+    }
+}
+
 fn session_failed(detail: impl Into<String>) -> WorkbenchError {
     WorkbenchError::map_aisc("AISC_ERR_SESSION_FAILED").with_detail(detail)
 }
@@ -377,7 +415,7 @@ pub async fn open_session(
     // Canonicalize before any spawn: the frontend raw string never becomes
     // Session identity (05 §4.1). Missing/unreadable workspace -> stable
     // workspace error, no child is started.
-    let ws = canonical_workspace(&workspace)?;
+    let ws = canonical_workspace_for(&app, &workspace).await?;
 
     let reg = registry(&app);
     if !reg.accepting() {
