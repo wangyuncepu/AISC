@@ -597,10 +597,25 @@ impl CliTarget {
         match self {
             CliTarget::Local(exe) => (exe.clone().into(), cli_args.to_vec()),
             CliTarget::Remote(t) => {
-                let argv = t.spawn_argv(cli_args);
-                let mut it = argv.into_iter();
-                let program = it.next().expect("non-empty ssh argv");
-                (program.into(), it.collect())
+                // Windows: resolve ssh DETERMINISTICALLY — the GUI process
+                // PATH (npm/cargo chains) may front Git's msys ssh, which has
+                // known pipe quirks. The system OpenSSH is the contract.
+                #[cfg(windows)]
+                let program: std::ffi::OsString = {
+                    const SYS_SSH: &str = r"C:\Windows\System32\OpenSSH\ssh.exe";
+                    if std::path::Path::new(SYS_SSH).is_file() {
+                        SYS_SSH.into()
+                    } else {
+                        "ssh".into()
+                    }
+                };
+                #[cfg(not(windows))]
+                let program: std::ffi::OsString = "ssh".into();
+                let mut args = t.client_args();
+                args.push(t.host.clone());
+                args.push("aisc".into());
+                args.extend_from_slice(cli_args);
+                (program, args)
             }
         }
     }

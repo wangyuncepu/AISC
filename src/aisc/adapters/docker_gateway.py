@@ -309,7 +309,8 @@ class InteractiveStreamHandle:
     def kill(self) -> None:
         """Detach: close the socket (pump hits EOF and settles) — the exec
         process itself keeps running in the container, the same semantics as
-        killing the pipe-mode sidecar process."""
+        killing the pipe-mode sidecar process. ``wait_exit`` observes the
+        detach and returns instead of polling a Running exec forever."""
         self._stopped.set()
         try:
             self._sock.close()
@@ -354,6 +355,12 @@ class InteractiveStreamHandle:
         settle = _exec_settle_interval()
         info: Optional[dict] = None
         while info is None:
+            if self._stopped.is_set():
+                # Client-detached (kill): the exec keeps running in the
+                # container; report the detach as an unknown exit instead of
+                # settling forever on a Running inspect.
+                self._exit_code = -1
+                return self._exit_code
             if not self._eof.is_set():
                 info = inspect_info()
                 if info.get("Running"):
