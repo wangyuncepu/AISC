@@ -25,7 +25,7 @@ Slurm/PBS 场景调研并入 R0、实施明确划出 2.1.10（D-2 裁决）。
 | S0 | **F1 SSH 工作区剥离与封存**（D-6：错误尝试，周期首任务） | **完成**（2026-09-07，门禁全绿；用户数据处置 §3 待逐项确认） | [f1-strip-plan.md](f1-strip-plan.md) |
 | R1 | 传输抽象 + `aisc serve --stdio` PoC（version/doctor/ps 远程打通） | **代码完成待手测**（R1a/b/c 落地，本地三门全绿；A5 真 SSH 手测待用户） | [r1-serve-transport.md](r1-serve-transport.md) |
 | R2 | runtime 生命周期 + 终端 PTY 远程流（含 resize 带内化） | **完成（手测自动化三层 PASS：真 SSH 集成 + 真容器 e2e + UI 面 CDP 全链）**，待合并 | [r2-remote-sessions.md](r2-remote-sessions.md) |
-| R3 | 文件面远程化：远端 FS API（D-5 裁决——远端权威/本地仅显示） | 未开始 | — |
+| R3 | 文件面远程化：远端 FS API（D-5 远端权威/本地仅显示） | **完成（三层自动化 PASS：单测 12/真 SSH 0.79s/UI CDP 全链含 watcher）**，待合并 | [r3-remote-fs.md](r3-remote-fs.md) |
 | R4 | svc 网关端口转发 + 机器管理页（选择与哪台机器通信的 UI） | 未开始 | — |
 | FIX 批 | 历史页图标 / CLI 命令优化 / 面板拖动折叠 | 未开始（与 R 系列并行性待裁决） | — |
 

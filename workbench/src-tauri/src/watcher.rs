@@ -463,7 +463,109 @@ pub async fn workspace_rescan(app: AppHandle, workspace: String) -> Result<(), W
 
 /// Managed watcher lifetime so start/stop are idempotent across sessions.
 #[derive(Default)]
-pub struct WatcherState(pub std::sync::Mutex<Option<WorkspaceWatcher>>);
+pub struct WatcherState(pub std::sync::Mutex<Option<WatcherKind>>);
+
+/// R3 (D-9): the watcher is dual-path — local notify (unchanged, B-05 stable
+/// surface) or the remote fs.change stream; both feed the SAME debounce loop
+/// and emit the same frontend events.
+pub enum WatcherKind {
+    Local(WorkspaceWatcher),
+    Remote(RemoteWatcher),
+}
+
+impl WatcherKind {
+    pub fn dispose(&self) {
+        match self {
+            WatcherKind::Local(w) => w.dispose(),
+            WatcherKind::Remote(w) => w.dispose(),
+        }
+    }
+}
+
+/// Remote watcher: fs.watch over the pooled serve session; every fs.change
+/// batch is projected into the local raw-channel vocabulary and rides the
+/// SAME debounce_loop the notify path uses — batching, ignore semantics,
+/// sticky-created and overflow handling are shared, not duplicated.
+pub struct RemoteWatcher {
+    stop: Arc<Mutex<bool>>,
+    _pump: tokio::task::JoinHandle<()>,
+}
+
+impl RemoteWatcher {
+    pub fn start(
+        app: AppHandle,
+        workspace: String,
+        extra_ignore: Vec<String>,
+    ) -> Result<Self, WorkbenchError> {
+        let target = match app.state::<crate::target::ActiveTarget>().current() {
+            Some(m) => m.to_ssh_target(),
+            None => {
+                return Err(WorkbenchError::cli_protocol()
+                    .with_detail("remote watcher started without a remote target"))
+            }
+        };
+        let (tx, rx) = mpsc::sync_channel::<(String, String, String)>(RAW_CHANNEL_CAP);
+        let stop = Arc::new(Mutex::new(false));
+        let stop_loop = Arc::clone(&stop);
+        let ws_emit = workspace.clone();
+        let app_emit = app.clone();
+        std::thread::spawn(move || debounce_loop(app_emit, ws_emit, rx, stop_loop));
+
+        // Pump: fs.watch op + subscribe BEFORE the op (no lost early events),
+        // then project every fs.change batch into the raw vocabulary.
+        let pump_app = app.clone();
+        let pump_ws = workspace.clone();
+        let pump_stop = Arc::clone(&stop);
+        let pump = tokio::spawn(async move {
+            let pool = pump_app.state::<crate::serve::ServePool>();
+            let session = match crate::serve::pooled_session(&pool, &target).await {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let mut events = session.subscribe_event("fs.change");
+            let root = pump_ws.trim_end_matches('/').to_string();
+            if crate::serve::fs_op(&pool, &target, "fs.watch",
+                                   &serde_json::json!({ "root": root })).await.is_err() {
+                return; // unsupported on the remote — frontend falls back to polling
+            }
+            while let Some(data) = events.recv().await {
+                if *pump_stop.lock().unwrap() {
+                    break;
+                }
+                let Some(paths) = data.get("paths").and_then(|v| v.as_array()) else {
+                    continue;
+                };
+                for p in paths {
+                    let abs = p.get("path").and_then(|v| v.as_str()).unwrap_or_default();
+                    let change = p.get("change").and_then(|v| v.as_str()).unwrap_or("modified");
+                    let kind = p.get("kind").and_then(|v| v.as_str()).unwrap_or("file");
+                    let Some(rel) = abs.strip_prefix(&format!("{root}/")) else {
+                        continue;
+                    };
+                    let rel = rel.to_string();
+                    let name = rel.rsplit('/').next().unwrap_or_default().to_string();
+                    // Same filter as the local notify callback — ignore-set
+                    // names never surface as changes.
+                    if is_watch_ignored(&rel, &extra_ignore) {
+                        continue;
+                    }
+                    if tx.send((rel, change.to_string(), kind.to_string())).is_err() {
+                        return; // debounce loop gone
+                    }
+                }
+            }
+            // Session dropped us: unwatch best-effort.
+            let _ = crate::serve::fs_op(&pool, &target, "fs.unwatch",
+                                        &serde_json::json!({ "root": root })).await;
+        });
+
+        Ok(RemoteWatcher { stop, _pump: pump })
+    }
+
+    pub fn dispose(&self) {
+        *self.stop.lock().unwrap() = true;
+    }
+}
 
 /// Start watching a workspace (replaces any prior watcher).
 #[tauri::command]
@@ -480,8 +582,13 @@ pub async fn workspace_watch_start(
         },
         Err(_) => Vec::new(),
     };
-    // Start first (moves a clone); the original app is used for state below.
-    let watcher = WorkspaceWatcher::start(app.clone(), Path::new(&workspace), extra_ignore)?;
+    // R3 (D-9): dual path — remote targets watch via fs.change over the
+    // pooled serve session; local keeps the notify watcher bit-for-bit.
+    let watcher = if app.state::<crate::target::ActiveTarget>().current().is_some() {
+        WatcherKind::Remote(RemoteWatcher::start(app.clone(), workspace.clone(), extra_ignore)?)
+    } else {
+        WatcherKind::Local(WorkspaceWatcher::start(app.clone(), Path::new(&workspace), extra_ignore)?)
+    };
     let state = app.state::<WatcherState>();
     let mut guard = state.0.lock().unwrap();
     if let Some(old) = guard.take() {

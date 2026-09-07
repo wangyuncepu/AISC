@@ -67,6 +67,24 @@
   诊断脚本自身 readline 无超时死等；带 select 超时的复测全绿：PS1 渲染
   流回 + `echo` 命令回显**与执行输出**（双 MARKER 实证）+ kill 干净收尾。
   门禁：cargo 295 / vitest 439 / vue-tsc / pytest 1201 全绿。
+- **R3 远端 FS 面（D-9，2026-09-08，分支 r3-remote-fs）**：D-5 远端权威模型
+  落地。**R3a**（`9633d97`）serve fs.* op 族（v1.2）：root 相对路径语义 +
+  服务端 containment（绝对路径/.. 越界拒绝）+ ignore 与本地等价 +
+  分页对齐 LIST_PAGE + write 原子替换 + watchdog watcher（100ms 防抖批量 →
+  预留 event 帧 fs.change，change 类型与本地 notify 分类对齐；优雅退出
+  150ms 宽限 flush）。坑：observer.schedule 须传 handler 实例（传类 =
+  dispatch 未绑定，事件全丢）。**R3b-e**（`76c07f1`）Rust：ServePool（每
+  target 池化 serve 连接）+ fs_op + 事件订阅扇出；workspace 读写面/open
+  （下载临时副本+系统 opener——「本地软件打开」D-9 语义）/watcher（
+  RemoteWatcher 复用同一 debounce_loop——批处理/忽略/sticky-created 共享
+  非复制）/canonical_workspace_for（Remote 门=fs.list 探活，R2 演示时
+  本地绕行的根除）全分流，本地路径 bit 级不变。
+  **三层自动化全 PASS**：Python 12 用例；Rust 真 SSH fs 集成 0.79s（中文
+  往返/containment/根删除拒绝）；**CDP UI 面**（真实 Windows Workbench：
+  远程树 23 条目 ignore 等价/懒展开/VERSION 预览/create_file/**watcher
+  全链**——ssh 触发远端真文件变化 → 前端 workspace://changed 事件）。
+  门禁：cargo 295 / vitest 439 / pytest 1213。重跑手册
+  scripts/README-r2-tests.md（含 R3 节）。
 - **R2 手测自动化（2026-09-07 深夜，用户授权全代测）**：三层替代人工——
   ①**Rust 真 SSH 集成**（`tests/serve_ssh.rs`，AISC_TEST_SSH/RUNTIME_ID 门控）：
   0.62s 全环 PASS（PS1/命令执行输出/G1 resize/kill-exit）；排查两坑：readline

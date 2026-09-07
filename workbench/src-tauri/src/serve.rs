@@ -178,6 +178,7 @@ pub struct ServeSession {
     banner: ReadyBanner,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<ServeOutcome>>>>,
     pty_routes: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<PtyStreamFrame>>>>,
+    event_routes: Arc<Mutex<HashMap<String, Vec<mpsc::UnboundedSender<serde_json::Value>>>>>,
     seq: AtomicU64,
     _reader: tokio::task::JoinHandle<()>,
 }
@@ -234,6 +235,9 @@ impl ServeSession {
             Arc::new(Mutex::new(HashMap::new()));
         let pty_routes: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<PtyStreamFrame>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let event_routes: Arc<
+            Mutex<HashMap<String, Vec<mpsc::UnboundedSender<serde_json::Value>>>>,
+        > = Arc::new(Mutex::new(HashMap::new()));
 
         // Handshake BEFORE the resident reader owns the stream.
         let mut reader = BufReader::new(stdout);
@@ -242,6 +246,7 @@ impl ServeSession {
         // Resident reader: fan every frame out until EOF.
         let reader_pending = Arc::clone(&pending);
         let reader_routes = Arc::clone(&pty_routes);
+        let reader_events = Arc::clone(&event_routes);
         let reader_task = tokio::spawn(async move {
             loop {
                 let frame = match read_frame(&mut reader).await {
@@ -293,8 +298,19 @@ impl ServeSession {
                             });
                         }
                     }
-                    ServeFrame::Log { .. } | ServeFrame::Event { .. } | ServeFrame::Ready { .. } => {
-                        // diagnostics / R3+ reserved / mid-session re-banner: noise
+                    ServeFrame::Event { event, data } => {
+                        // R3 (D-9): fs.change and friends fan out to every
+                        // subscriber of that event name.
+                        if let Ok(map) = reader_events.lock() {
+                            if let Some(subs) = map.get(&event) {
+                                for tx in subs {
+                                    let _ = tx.send(data.clone());
+                                }
+                            }
+                        }
+                    }
+                    ServeFrame::Log { .. } | ServeFrame::Ready { .. } => {
+                        // diagnostics / mid-session re-banner: noise
                     }
                 }
             }
@@ -315,6 +331,7 @@ impl ServeSession {
             banner,
             pending,
             pty_routes,
+            event_routes,
             seq: AtomicU64::new(0),
             _reader: reader_task,
         })
@@ -422,6 +439,17 @@ impl ServeSession {
         write_frame(&mut *stdin, &ClientFrame::PtyKill { sid }).await
     }
 
+    /// Subscribe to one serve event name (e.g. "fs.change"); the receiver
+    /// yields the frame's `data` object. Dropping the receiver removes it on
+    /// the next delivery attempt (send failure prunes).
+    pub fn subscribe_event(&self, name: &str) -> mpsc::UnboundedReceiver<serde_json::Value> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Ok(mut map) = self.event_routes.lock() {
+            map.entry(name.to_string()).or_default().push(tx);
+        }
+        rx
+    }
+
     /// Graceful stop: stdin EOF tells serve to exit; bounded wait, then kill.
     /// `&self` (not `self`): the session is shared by the PTY planes, so
     /// shutdown runs whenever the last owner decides the session is over.
@@ -438,6 +466,69 @@ impl ServeSession {
             let _ = child.wait().await;
         }
     }
+}
+
+// -- 2.1.10 R3: the pooled serve connection for a remote target ----------------
+//
+// fs.* ops are high-frequency; per-op connections would re-handshake the ssh
+// session constantly. One ServeSession per SshTarget, shared by every fs call
+// (PTY sessions keep their own connections — they have their own lifetime).
+
+pub struct ServePool(pub tokio::sync::Mutex<HashMap<String, Arc<ServeSession>>>);
+
+impl ServePool {
+    pub fn new() -> Self {
+        ServePool(tokio::sync::Mutex::new(HashMap::new()))
+    }
+}
+
+impl Default for ServePool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Fetch (or establish) the pooled serve session for one ssh target. A broken
+/// cached session (ssh died) is replaced transparently on the next call: the
+/// request that hits the dead connection errors, the entry is evicted.
+pub async fn pooled_session(
+    pool: &ServePool,
+    t: &SshTarget,
+) -> Result<Arc<ServeSession>, WorkbenchError> {
+    let key = format!("{}:{}:{:?}", t.host, t.port.unwrap_or(22), t.key_path);
+    {
+        let guard = pool.0.lock().await;
+        if let Some(s) = guard.get(&key) {
+            return Ok(Arc::clone(s));
+        }
+    }
+    let session = Arc::new(ServeSession::spawn_ssh(t).await?);
+    pool.0.lock().await.insert(key, Arc::clone(&session));
+    Ok(session)
+}
+
+/// fs.* request helper for the pooled connection: returns the envelope's
+/// `data` object (the op payload) on success.
+pub async fn fs_op(
+    pool: &ServePool,
+    t: &SshTarget,
+    op: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, WorkbenchError> {
+    let session = pooled_session(pool, t).await?;
+    let cancel = CancellationToken::new();
+    let env = session
+        .request(op, args, Duration::from_secs(30), &cancel)
+        .await?;
+    if env.meta.exit_code != 0 {
+        let detail = env
+            .errors
+            .first()
+            .map(|e| format!("{} ({})", e.message, e.code))
+            .unwrap_or_else(|| format!("{op} failed"));
+        return Err(WorkbenchError::cli_protocol().with_detail(detail));
+    }
+    Ok(env.data.unwrap_or(serde_json::Value::Null))
 }
 
 // -- tiny base64 (URL-safe-free, standard alphabet) ---------------------------

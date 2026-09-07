@@ -23,7 +23,7 @@ classifiers = [
 
 # G-02 (2026-08-10): docker SDK powers interactive sessions so the exec pty
 # can be resized via exec_resize (docker CLI exec ptys are frozen at spawn).
-dependencies = ["docker>=7.1"]
+dependencies = ["docker>=7.1", "watchdog>=4"]
 
 [project.urls]
 Homepage = "https://github.com/wangyuncepu/AISC"

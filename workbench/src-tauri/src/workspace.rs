@@ -1250,6 +1250,15 @@ pub async fn workspace_list(
     cursor: Option<usize>,
     include_ignored: Option<bool>,
 ) -> Result<WorkspaceListResult, WorkbenchError> {
+    // R3 (D-5/D-9): remote-authoritative browsing — a remote target lists
+    // the REMOTE machine's tree over the pooled serve connection; the local
+    // fs is never consulted (or copied). Artifact badges stay a local-index
+    // projection and therefore don't ride the remote path yet (remote
+    // artifact registry is a follow-up).
+    if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target(&app).await? {
+        return list_remote(&app, &t, &workspace, &relative_dir, cursor.unwrap_or(0)).await;
+    }
+
     // User-configured explorer ignores (`ui.explorer_ignore`) complement the
     // built-in dependency/build list; read from the persisted settings.
     let extra_ignore = explorer_extra_ignore(&app);
@@ -1286,19 +1295,165 @@ pub async fn workspace_list(
     Ok(result)
 }
 
+/// Remote leg of `workspace_list`: fs.list over the pooled serve session,
+/// mapped into the same Explorer node shape (relative_path chaining matches
+/// the local lazy-tree protocol).
+async fn list_remote(
+    app: &AppHandle,
+    t: &crate::cli::SshTarget,
+    workspace: &str,
+    relative_dir: &str,
+    offset: usize,
+) -> Result<WorkspaceListResult, WorkbenchError> {
+    let pool = app.state::<crate::serve::ServePool>();
+    let data = crate::serve::fs_op(
+        &pool,
+        t,
+        "fs.list",
+        &serde_json::json!({
+            "root": workspace,
+            "path": relative_dir,
+            "offset": offset,
+        }),
+    )
+    .await?;
+    let entries = data
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| WorkbenchError::cli_protocol().with_detail("fs.list: no entries"))?;
+    let mut nodes = Vec::with_capacity(entries.len());
+    for e in entries {
+        let name = e.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let kind = e.get("kind").and_then(|v| v.as_str()).unwrap_or("file").to_string();
+        let rel = if relative_dir.is_empty() {
+            name.clone()
+        } else {
+            format!("{relative_dir}/{name}")
+        };
+        nodes.push(WorkspaceNode {
+            relative_path: rel,
+            name,
+            expandable: kind == "dir",
+            kind,
+            artifact_badges: Vec::new(),
+            change_state: String::new(),
+        });
+    }
+    let next_cursor = data
+        .get("nextOffset")
+        .and_then(|v| v.as_u64())
+        .map(|v| v.to_string());
+    Ok(WorkspaceListResult {
+        schema_version: 1,
+        nodes,
+        next_cursor,
+        truncated: false,
+    })
+}
+
 #[tauri::command]
 pub async fn workspace_open(
+    app: AppHandle,
     workspace: String,
     relative_path: String,
 ) -> Result<(), WorkbenchError> {
+    // R3 (D-9): "open with the local app" on a remote target = download ONE
+    // temporary copy, then the system opener. The copy is a view, never a
+    // sync — edits there do NOT flow back (the honest semantics VS Code's
+    // Download gesture has too).
+    if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target(&app).await? {
+        let pool = app.state::<crate::serve::ServePool>();
+        let data = crate::serve::fs_op(
+            &pool,
+            &t,
+            "fs.read",
+            &serde_json::json!({
+                "root": workspace,
+                "path": relative_path,
+                "maxBytes": 100 * 1024 * 1024,
+            }),
+        )
+        .await?;
+        if data.get("truncated").and_then(|v| v.as_bool()).unwrap_or(true) {
+            return Err(WorkbenchError::input_too_large()
+                .with_detail("remote open supports files up to 100 MiB"));
+        }
+        use base64::Engine;
+        let buf = base64::engine::general_purpose::STANDARD
+            .decode(data.get("base64").and_then(|v| v.as_str()).unwrap_or_default())
+            .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("fs.read decode: {e}")))?;
+        let name = relative_path.rsplit('/').next().unwrap_or("file");
+        let dir = std::env::temp_dir().join("aisc-remote-view");
+        let _ = fs::create_dir_all(&dir);
+        let local = dir.join(format!(
+            "{}-{}",
+            std::process::id(),
+            name
+        ));
+        fs::write(&local, &buf)
+            .map_err(|e| WorkbenchError::workspace_invalid().with_detail(format!("temp write: {e}")))?;
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "start", "", &local.to_string_lossy()])
+                .creation_flags(0x08000000)
+                .status();
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&local)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+        return Ok(());
+    }
     open_path(Path::new(&workspace), &relative_path)
 }
 
 #[tauri::command]
 pub async fn workspace_preview(
+    app: AppHandle,
     workspace: String,
     relative_path: String,
 ) -> Result<WorkspacePreviewResult, WorkbenchError> {
+    // R3 (D-5/D-9): preview reads the REMOTE file over fs.read; nothing is
+    // stored locally (the budget matches the local PREVIEW_BUDGET).
+    if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target(&app).await? {
+        let pool = app.state::<crate::serve::ServePool>();
+        let data = crate::serve::fs_op(
+            &pool,
+            &t,
+            "fs.read",
+            &serde_json::json!({ "root": workspace, "path": relative_path }),
+        )
+        .await?;
+        let size = data.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+        let truncated = data.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false);
+        let b64 = data.get("base64").and_then(|v| v.as_str()).unwrap_or_default();
+        use base64::Engine;
+        let buf = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("fs.read decode: {e}")))?;
+        let media_type = media_type_for(Path::new(&relative_path));
+        let (text, out_b64) = if media_type.starts_with("text/")
+            || matches!(media_type, "application/json" | "application/octet-stream")
+        {
+            (Some(String::from_utf8_lossy(&buf).into_owned()), None)
+        } else {
+            (None, Some(b64.to_string()))
+        };
+        return Ok(WorkspacePreviewResult {
+            relative_path,
+            media_type: media_type.to_string(),
+            size,
+            text,
+            base64: out_b64,
+            truncated,
+        });
+    }
     preview_path(Path::new(&workspace), &relative_path)
 }
 
@@ -1323,30 +1478,113 @@ pub async fn workspace_copy_path(
 // containment and basename validation happen again here regardless of what
 // the UI already checked (06 §2).
 
+
+async fn is_remote(app: &AppHandle) -> bool {
+    app.state::<crate::target::ActiveTarget>().current().is_some()
+}
+
+/// R3 (D-9): one helper for the remote leg of every Explorer mutation —
+/// fs.* op over the pooled serve session, result normalized into the same
+/// WorkspaceMutationResult shape. `entry_relative`/`entry_kind` describe the
+/// outcome (the serve ops return terse payloads).
+async fn remote_mutation(
+    app: &AppHandle,
+    workspace: &str,
+    op: &str,
+    args: &serde_json::Value,
+    operation: &str,
+    entry_relative: String,
+    entry_kind: &str,
+) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    let target = match crate::target::resolve_target(app).await? {
+        crate::cli::CliTarget::Remote(t) => t,
+        crate::cli::CliTarget::Local(_) => unreachable!("remote_mutation on local target"),
+    };
+    let pool = app.state::<crate::serve::ServePool>();
+    crate::serve::fs_op(&pool, &target, op, args).await?;
+    Ok(WorkspaceMutationResult {
+        schema_version: 1,
+        operation: operation.to_string(),
+        relative_path: entry_relative,
+        kind: entry_kind.to_string(),
+    })
+}
+
 #[tauri::command]
 pub async fn workspace_create_file(
+    app: AppHandle,
     workspace: String,
     relative_dir: String,
     name: String,
 ) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    let relative = if relative_dir.is_empty() { name.clone() } else { format!("{relative_dir}/{name}") };
+    if is_remote(&app).await {
+        return remote_mutation(
+            &app, &workspace, "fs.write",
+            &serde_json::json!({ "root": workspace, "path": relative, "base64": "" }),
+            "create_file", relative, "file",
+        )
+        .await;
+    }
     create_entry(Path::new(&workspace), &relative_dir, &name, false)
 }
 
 #[tauri::command]
 pub async fn workspace_create_dir(
+    app: AppHandle,
     workspace: String,
     relative_dir: String,
     name: String,
 ) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    let relative = if relative_dir.is_empty() { name.clone() } else { format!("{relative_dir}/{name}") };
+    if is_remote(&app).await {
+        return remote_mutation(
+            &app, &workspace, "fs.mkdir",
+            &serde_json::json!({ "root": workspace, "path": relative }),
+            "create_dir", relative, "dir",
+        )
+        .await;
+    }
     create_entry(Path::new(&workspace), &relative_dir, &name, true)
 }
 
 #[tauri::command]
 pub async fn workspace_copy_entry(
+    app: AppHandle,
     workspace: String,
     source_relative_path: String,
     destination_relative_dir: String,
 ) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    let file_name = source_relative_path.rsplit('/').next().unwrap_or("copy").to_string();
+    let new_relative = if destination_relative_dir.is_empty() {
+        file_name.clone()
+    } else {
+        format!("{}/{}", destination_relative_dir, file_name)
+    };
+    if is_remote(&app).await {
+        // Remote copy = fs.read + fs.write over the pooled session (files
+        // only for now; a bounded remote dir copy rides a later fs.copy op).
+        let target = match crate::target::resolve_target(&app).await? {
+            crate::cli::CliTarget::Remote(t) => t,
+            crate::cli::CliTarget::Local(_) => unreachable!(),
+        };
+        let pool = app.state::<crate::serve::ServePool>();
+        let data = crate::serve::fs_op(
+            &pool, &target, "fs.read",
+            &serde_json::json!({ "root": workspace, "path": source_relative_path,
+                                 "maxBytes": 64 * 1024 * 1024 }),
+        ).await?;
+        if data.get("truncated").and_then(|v| v.as_bool()).unwrap_or(true) {
+            return Err(WorkbenchError::input_too_large()
+                .with_detail("remote copy supports files up to 64 MiB"));
+        }
+        let b64 = data.get("base64").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        return remote_mutation(
+            &app, &workspace, "fs.write",
+            &serde_json::json!({ "root": workspace, "path": new_relative, "base64": b64 }),
+            "copy", new_relative, "file",
+        ).await;
+    }
     copy_entry(
         Path::new(&workspace),
         &source_relative_path,
@@ -1356,10 +1594,24 @@ pub async fn workspace_copy_entry(
 
 #[tauri::command]
 pub async fn workspace_rename(
+    app: AppHandle,
     workspace: String,
     relative_path: String,
     new_name: String,
 ) -> Result<WorkspaceMutationResult, WorkbenchError> {
+    let (parent, _old) = match relative_path.rsplit_once('/') {
+        Some((p, n)) => (p.to_string(), n.to_string()),
+        None => (String::new(), relative_path.clone()),
+    };
+    let new_relative = if parent.is_empty() { new_name.clone() } else { format!("{parent}/{new_name}") };
+    if is_remote(&app).await {
+        return remote_mutation(
+            &app, &workspace, "fs.rename",
+            &serde_json::json!({ "root": workspace, "from": relative_path, "to": new_relative }),
+            "rename", new_relative, "file",
+        )
+        .await;
+    }
     rename_entry(Path::new(&workspace), &relative_path, &new_name)
 }
 
