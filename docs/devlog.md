@@ -2,6 +2,34 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+# v2.1.10-dev (2026-09-07 ~) — F1 剥离封存 · CLI 远程化（分支 develop）
+
+> 规划入口：`docs/plans/2.1.10-dev-plans/`（README 阶段表 + decisions.md D-1..D-6 +
+> r0-vscode-remote-and-hpc.md + f1-strip-plan.md）。周期主题：VS Code Remote 式
+> CLI 远程化（D-4 全特性本周期交付；D-5 文件面=远端 FS API 远端权威模型）。
+> VERSION 冻结前保持 2.1.9.dev0。
+
+- **R0 调研（D-1..D-5）**：VS Code 三路线对照（Remote-SSH stdio 拆分式为模仿
+  对象——server 按需 bootstrap + commit 配对 + ssh 进程 stdio 隧道零额外端口）；
+  Slurm/PBS HPC 实况三模式（Yale/Anthropic/Harvard/Aalto 等中心实践：agent 跑
+  计算分配、tunnel sbatch 托管、集群无 Docker）；AISC 耦合面代码盘点——关键
+  发现：**数据面已是子进程 stdio 流**（`open_session`→`spawn_pipe_session(pin, argv)`，
+  命令面 8 模块 ~38 spawn 点全 envelope stdio），远程化=把 pin 换成
+  `ssh <alias> aisc ...`，协议零改动。差距 G1-G7（resize 文件通道/P4 直连失效/
+  文件面/网关端口/serve 模式/机器页/远端 bootstrap）。结论：可行且比 VS Code
+  当年轻（无扩展生态负担，caps 即配对机制）。
+- **S0 F1 SSH 工作区剥离封存（D-6）**：用户裁决 mutagen 同步方案为错误尝试，
+  周期首任务剥离。Rust 删 `sync.rs` 1577 行（10 个 IPC command）+ lib/settings/
+  workspace/watcher 接触点 + tauri.conf externalBin/resources 两键；TS 删 ipc F1
+  块/类型/stores 动作/Picker SSH 表单/RuntimeSidebar 同步面板/SettingsForm ssh
+  节 + i18n 双语 ~58 键；构建链删 3 条 workflow 的 mutagen staging +
+  `tools/stage-mutagen.sh` + .gitignore host-bin；Python 侧唯一触点 =
+  data_root overlap guard 的 `sync-workspaces` 豁免（死代码削弱防线，摘除，
+  测试改写为 fail-closed 断言）。封存载体 = tag `v2.1.9-dev` + 归档设计文档
+  （2.1.9-dev-plans/decisions.md 已盖印）。门禁：cargo 286+33 绿 / vitest 439
+  绿 / vue-tsc build 绿 / pytest 1188 绿（Docker 集成除外——环境性，干净树
+  同样跳过）。用户数据处置清单见 f1-strip-plan.md §3，待逐项确认。
+
 # v2.1.9-dev (2026-08-20 ~) — 四挂账清偿 · nairong 根因链 · 构建韧性 · 优化批次（分支 develop）
 
 > 规划入口：`docs/plans/2.1.9-dev-plans/`（README 阶段表 + decisions.md D-1..D-13 +

@@ -22,7 +22,7 @@ Slurm/PBS 场景调研并入 R0、实施明确划出 2.1.10（D-2 裁决）。
 | 阶段 | 内容 | 状态 | 文档 |
 | --- | --- | --- | --- |
 | R0 | 调研：VS Code 远程工作逻辑与实现方案 × Slurm/PBS 场景 × AISC 可行性对照 | **完成**（D-4/D-5 裁决已收口） | [r0-vscode-remote-and-hpc.md](r0-vscode-remote-and-hpc.md) |
-| S0 | **F1 SSH 工作区剥离与封存**（D-6：错误尝试，周期首任务） | 计划落盘，待批准执行 | [f1-strip-plan.md](f1-strip-plan.md) |
+| S0 | **F1 SSH 工作区剥离与封存**（D-6：错误尝试，周期首任务） | **完成**（2026-09-07，门禁全绿；用户数据处置 §3 待逐项确认） | [f1-strip-plan.md](f1-strip-plan.md) |
 | R1 | 传输抽象 + `aisc serve --stdio` PoC（version/doctor/ps 远程打通） | 未开始 | 待开工细化 |
 | R2 | runtime 生命周期 + 终端 PTY 远程流（含 resize 带内化） | 未开始 | — |
 | R3 | 文件面远程化：远端 FS API（D-5 裁决——远端权威/本地仅显示） | 未开始 | — |
