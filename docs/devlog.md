@@ -56,8 +56,12 @@
   优雅 + 3s 宽限。线级函数流泛型 duplex 可测（6 单测）+ AISC_TEST_CLI 真进程
   腿（venv aisc 三 op 往返 4s 跨语言实证）。坑：duplex 对端互通——client 读
   自己写的帧永久阻塞（首轮测试卡死源）。
-  本地门：cargo 297 / vitest 439 / pytest 1197 全绿。远程能力验收（真 SSH
-  链路一例）待手测（r1-serve-transport.md A5）。
+  本地门：cargo 297 / vitest 439 / pytest 1197 全绿。**A5 手测 PASS（双条）**：
+  ①本地直连（用户执行，version+ps 双帧干净往返）；②真 SSH 链路——WSL 内
+  一次性 sshd :2222（22 被 Windows 侧占用反射进 WSL，bind 失败，换口绕开）+
+  BatchMode 公钥认证，serve 帧协议跨机端到端（ready+version/doctor envelope）。
+  坑入库：WSL 内 ss 无监听者但 bind 22 报 already-in-use = Windows 端口占用
+  投射（phantom 端口坑近亲）。
 
 # v2.1.9-dev (2026-08-20 ~) — 四挂账清偿 · nairong 根因链 · 构建韧性 · 优化批次（分支 develop）
 
