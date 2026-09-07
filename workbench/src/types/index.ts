@@ -981,7 +981,14 @@ export interface SettingsPatch {
   terminal?: TerminalSettings;
   window?: WindowSettings;
   hostTools?: HostToolEntry[];
+  remoteMachines?: RemoteMachine[];
   performance?: PerformanceSettings;
+}
+
+/** 2.1.10 R4b: which machine the Workbench drives right now. */
+export interface TargetInfo {
+  machine: RemoteMachine | null;
+  kind: "local" | "remote";
 }
 
 /** PERF P8 (D-13): low-spec mode + per-container resource budget. */

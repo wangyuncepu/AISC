@@ -87,6 +87,9 @@ pub async fn target_set(
 ) -> Result<TargetInfo, WorkbenchError> {
     let machine = machine_by_name(&app, &name)?;
     let state = app.state::<ActiveTarget>();
+    // Tunnels bound to the PREVIOUS machine must not shadow the new one on
+    // the same ports — tear them all down on every switch.
+    crate::tunnel::close_all_tunnels(app.state::<crate::tunnel::TunnelRegistry>().inner());
     *state
         .0
         .lock()
@@ -104,6 +107,7 @@ pub async fn target_set(
 
 #[tauri::command]
 pub async fn target_clear(app: tauri::AppHandle) -> Result<TargetInfo, WorkbenchError> {
+    crate::tunnel::close_all_tunnels(app.state::<crate::tunnel::TunnelRegistry>().inner());
     let state = app.state::<ActiveTarget>();
     *state
         .0

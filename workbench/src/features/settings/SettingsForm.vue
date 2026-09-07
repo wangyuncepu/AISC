@@ -88,13 +88,14 @@ const EFFECT_KEY: Record<EffectKind, string> = {
 // workspace, UI dead until restart). The Record<Group,...> typing below
 // makes a future missing entry a COMPILE error, and the heading falls back
 // to the raw group id instead of undefined.
-const GROUPS = ["ui", "terminal", "window", "hostTools", "performance", "disk"] as const;
+const GROUPS = ["ui", "terminal", "window", "hostTools", "machines", "performance", "disk"] as const;
 type SettingsGroup = (typeof GROUPS)[number];
 const GROUP_KEY: Record<SettingsGroup, string> = {
   ui: "settings.group.ui",
   terminal: "settings.group.terminal",
   window: "settings.group.window",
   hostTools: "settings.group.hostTools",
+  machines: "settings.group.machines",
   performance: "settings.group.performance",
   disk: "settings.group.disk",
 };
@@ -126,6 +127,28 @@ watch(hostTools, (rows) => {
       name: r.name,
       program: r.program,
       ...(r.readOnlyPreset ? { readOnlyPreset: r.readOnlyPreset } : {}),
+    }));
+}, { deep: true });
+
+/** R4b: remote machine profiles working copy — same flow as hostTools. */
+const machines = ref<import("../../types").RemoteMachine[]>(
+  (store.doc?.remoteMachines ?? []).map((m) => ({ ...m })));
+watch(
+  () => store.doc,
+  (d) => {
+    machines.value = (d?.remoteMachines ?? []).map((m) => ({ ...m }));
+  },
+);
+watch(machines, (rows) => {
+  if (!store.doc) return;
+  store.doc.remoteMachines = rows
+    .filter((r) => r.name.trim() && r.host.trim())
+    .map((r) => ({
+      name: r.name,
+      host: r.host,
+      user: r.user || undefined,
+      port: r.port || undefined,
+      keyPath: r.keyPath || undefined,
     }));
 }, { deep: true });
 
@@ -365,6 +388,25 @@ async function reopenOnboarding() {
           <p class="note">{{ t("settings.hostTools.note") }}</p>
         </template>
 
+        <!-- R4b: remote machines — the targets the Workbench can drive. -->
+        <template v-else-if="group === 'machines'">
+          <p class="help">{{ t("settings.machines.hint") }}</p>
+          <div v-for="(row, i) in machines" :key="i" class="field machine-row">
+            <input v-model.trim="row.name" class="m-name" :placeholder="t('settings.machines.namePh')" :disabled="store.readOnly" />
+            <input v-model.trim="row.host" class="m-host" :placeholder="t('settings.machines.hostPh')" :disabled="store.readOnly" />
+            <input v-model.trim="row.user" class="m-user" :placeholder="t('settings.machines.userPh')" :disabled="store.readOnly" />
+            <input v-model.number="row.port" type="number" min="1" max="65535" class="m-port" :disabled="store.readOnly" />
+            <input v-model.trim="row.keyPath" class="m-key mono-input" :placeholder="t('settings.machines.keyPh')" :disabled="store.readOnly" />
+            <button class="ht-del" :disabled="store.readOnly" :title="t('settings.machines.remove')" @click="machines.splice(i, 1)">×</button>
+          </div>
+          <div class="field">
+            <button :disabled="store.readOnly" @click="machines.push({ name: '', host: '' })">
+              ＋ {{ t("settings.machines.add") }}
+            </button>
+          </div>
+          <p class="note">{{ t("settings.machines.note") }}</p>
+        </template>
+
         <!-- PERF P8 (D-13): performance / low-spec mode. lowSpec gates the
              container --memory/--cpus budget (new containers only); the
              .wslconfig merge keeps user keys and only runs on confirmation. -->
@@ -492,6 +534,12 @@ input:disabled, select:disabled { opacity: 0.5; }
 }
 /* F1: SSH profile rows */
 .mono-input { font-family: var(--font-mono); font-size: var(--font-sm); }
+.machine-row { flex-wrap: nowrap; }
+.m-name { max-width: 110px; }
+.m-host { max-width: 160px; font-family: var(--font-mono); font-size: var(--font-sm); }
+.m-user { max-width: 90px; }
+.m-port { max-width: 72px; }
+.m-key { flex: 1; min-width: 0; }
 .loading { color: var(--text-muted); font-size: var(--font-md); }
 .foot {
   display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border);

@@ -294,6 +294,14 @@ export const ccSwitchFetchModels = (
     workspace, runtimeId, agent, providerId, apiKey: apiKey || null,
   });
 
+// --- 2.1.10 R4b: which machine the Workbench drives ---
+export const targetGet = () =>
+  invoke<import("../types").TargetInfo>("target_get");
+export const targetSet = (name: string) =>
+  invoke<import("../types").TargetInfo>("target_set", { name });
+export const targetClear = () =>
+  invoke<import("../types").TargetInfo>("target_clear");
+
 // --- IDEA-2 (2d): subscription + usage data plane ---
 // The subscription URL / content ride the CLI child's stdin on the Rust side
 // (credentials never travel via argv, logs or disk).

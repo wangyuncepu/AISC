@@ -13,6 +13,7 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useWorkspacesStore } from "../../stores/workspaces";
+import { useSettingsStore } from "../../stores/settings";
 import type { ForgetPreview } from "../../types";
 import ForgetConfirmDialog from "./ForgetConfirmDialog.vue";
 import InvalidPathDialog from "./InvalidPathDialog.vue";
@@ -20,6 +21,13 @@ import InvalidPathDialog from "./InvalidPathDialog.vue";
 const { t } = useI18n();
 const store = useRuntimeStore();
 const wsStore = useWorkspacesStore();
+
+// --- R4b: which machine this Workbench drives (store-routed, F-A01) ---
+const settings = useSettingsStore();
+void settings.load();
+const target = computed(() => settings.target);
+const targetError = computed(() => settings.targetError);
+const switchTarget = (name: string | null) => settings.switchTarget(name);
 
 function basename(p: string): string {
   // Both separators — Windows paths are backslashed (round-4 fix).
@@ -157,6 +165,25 @@ async function confirmForget(): Promise<void> {
       <button class="ui-button" @click="store.pickWorkspace()">{{ t("picker.browse") }}</button>
       <button class="ui-button primary" :disabled="!store.workspace.trim()" @click="store.runPreflight()">{{ t("picker.next") }}</button>
     </div>
+    <!-- R4b: machine switcher — local machine or a settings.remoteMachines
+         entry. Switching tears every tunnel down (backend) and re-roots all
+         ops on the new machine. -->
+    <div class="target-row">
+      <span class="target-label">{{ t("picker.target.label") }}</span>
+      <select
+        class="target-select"
+        :value="target?.machine?.name ?? ''"
+        @change="switchTarget(($event.target as HTMLSelectElement).value || null)"
+      >
+        <option value="">{{ t("picker.target.local") }}</option>
+        <option v-for="m in settings.doc?.remoteMachines ?? []" :key="m.name" :value="m.name">
+          {{ m.name }} ({{ m.user ? `${m.user}@` : "" }}{{ m.host }}{{ m.port ? `:${m.port}` : "" }})
+        </option>
+      </select>
+      <span v-if="target?.kind === 'remote'" class="target-badge">{{ t("picker.target.remoteOn", { name: target.machine?.name }) }}</span>
+    </div>
+    <p v-if="targetError" class="forget-error" role="alert">{{ targetError }}</p>
+
     <p class="hint">{{ t("picker.hint") }}</p>
 
     <div v-if="store.recentWorkspaces.length" class="recents ui-section">
@@ -239,6 +266,17 @@ async function confirmForget(): Promise<void> {
 }
 .picker h2 { margin: 0; font-size: var(--font-xl); font-weight: 600; color: var(--text); }
 .picker .row { display: flex; gap: var(--space-2); width: 560px; max-width: 90vw; }
+.target-row { display: flex; align-items: center; gap: var(--space-2); font-size: var(--font-sm); }
+.target-label { color: var(--text-muted); }
+.target-select {
+  background: var(--surface-3); color: var(--text);
+  border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
+  min-height: var(--control-h-sm); padding: 0 var(--space-2);
+}
+.target-badge {
+  color: var(--info); font-size: var(--font-xs);
+  border: 1px solid currentColor; border-radius: var(--radius-sm); padding: 0 6px;
+}
 .picker .hint { font-size: var(--font-sm); color: var(--text-muted); margin: 0; }
 /* 10d: recents reuse the .ui-section inset-grouped card; rows come from
  * .ui-section-row (padding/hover/dividers), so only content styles stay. */

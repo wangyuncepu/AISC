@@ -228,6 +228,8 @@ pub struct SettingsPatch {
     pub window: Option<WindowSettings>,
     /// F2: wholesale replacement (an array, not a mergeable section).
     pub host_tools: Option<Vec<crate::host_mcp::HostToolEntry>>,
+    /// 2.1.10 R4b: wholesale replacement of the remote machine profiles.
+    pub remote_machines: Option<Vec<crate::target::RemoteMachine>>,
     /// PERF P8 (D-13).
     pub performance: Option<PerformanceSettings>,
 }
@@ -650,6 +652,13 @@ impl Settings {
             self.raw["host_tools"] =
                 serde_json::to_value(&cleaned).unwrap_or(Value::Array(Vec::new()));
         }
+        if let Some(machines) = &patch.remote_machines {
+            // R4b: array node — wholesale replacement through the sanitizer.
+            let encoded = serde_json::to_value(machines).unwrap_or(Value::Array(Vec::new()));
+            let cleaned = sanitize_remote_machines(Some(&encoded));
+            self.raw["remote_machines"] =
+                serde_json::to_value(&cleaned).unwrap_or(Value::Array(Vec::new()));
+        }
         if let Some(s) = &patch.performance {
             self.raw["performance"] = merge_section(self.raw.get("performance"), s);
         }
@@ -665,6 +674,7 @@ impl Settings {
             terminal: Some(TerminalSettings::default()),
             window: Some(WindowSettings::default()),
             host_tools: None, // F2: the whitelist is NOT GUI décor — reset never clears it
+            remote_machines: None, // R4b: machine profiles survive a GUI reset
             performance: None, // P8: low-spec is a machine fact, not GUI décor
         });
     }
