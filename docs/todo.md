@@ -134,9 +134,6 @@
     - 设计令牌 = CSS 自定义属性（Stage 6 UX-01 落的）：间距/字号/圆角/阴影/层级/时长统一为 --surface、--text-2、--radius-md、--space-2 这类变量，组件只消费变量不写死值
     - 主题：src/theme.ts 按 settings 的 ui.theme 在根元素打 data-theme（system/dark/light），变量在全局样式表里按主题重定义
     - 字号缩放：ui.font_scale 用 CSS zoom 实现（App 的 uiZoom + 终端区 1/scale 反向补偿）
-
-
-
 - [x] 首页'bash'类字样
 - [x] provider 表头
   - [ ] 编辑拆两个
@@ -152,3 +149,12 @@
   - [x] 拖动引用
 - [x] 设置页组织优化
 - [x] 初次引导砍掉
+
+
+# v2.1.10-target
+- new feature
+  - [ ] aisc-cli能力：类似vscode codeserver，一台机器上的cli可以和其它机器上的workbench沟通，workbench可以选择和哪台机器上的cli进行通信？先调研vscode ssh remote的实现方式
+- fix
+  - [ ] 历史页的claude、codex图标区别度提升
+  - [ ] aisc-cli命令优化
+  - [ ] 资源管理器、bash tab行等非终端区域的拖动，且提供类似vscode的可隐藏折叠设计

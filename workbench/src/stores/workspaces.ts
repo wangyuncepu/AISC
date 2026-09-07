@@ -463,81 +463,6 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
       return true;
     }
   }
-
-  /** F1 (D-10): create an SSH-workspace shadow dir + metadata. Store-routed
-   *  (F-A01); the caller opens the returned path as a normal workspace. */
-  async function createSshWorkspace(
-    name: string, profile: unknown, remotePath: string,
-    ignorePatterns?: string[],
-  ): Promise<string | null> {
-    try {
-      const r = await ipc.sshWorkspaceCreate(name, profile, remotePath, ignorePatterns);
-      return r.workspacePath;
-    } catch (e) {
-      createSshError.value = (e as { technical_detail?: string; message?: string })
-        ?.technical_detail || (e as { message?: string })?.message || String(e);
-      return null;
-    }
-  }
-  const createSshError = ref<string | null>(null);
-
-  /** F1 (T-F1e): remote dir listing for the browse dialog (store-routed,
-   *  F-A01). Never throws — errors land in browseError. */
-  async function browseRemote(
-    profile: unknown, path: string,
-  ): Promise<import("../lib/ipc").SshDirEntry[]> {
-    browseError.value = null;
-    browseBusy.value = true;
-    try {
-      return await ipc.sshBrowse(profile, path);
-    } catch (e) {
-      browseError.value = (e as { technical_detail?: string; message?: string })
-        ?.technical_detail || (e as { message?: string })?.message || String(e);
-      return [];
-    } finally {
-      browseBusy.value = false;
-    }
-  }
-
-  /** F1 pull-file flow: browse the remote of an OPEN SSH workspace (profile
-   *  snapshot comes from the workspace metadata server-side). */
-  async function browseRemoteInWorkspace(
-    workspace: string, path: string,
-  ): Promise<import("../lib/ipc").SshDirEntry[]> {
-    browseError.value = null;
-    browseBusy.value = true;
-    try {
-      return await ipc.sshBrowseWorkspace(workspace, path);
-    } catch (e) {
-      browseError.value = (e as { technical_detail?: string; message?: string })
-        ?.technical_detail || (e as { message?: string })?.message || String(e);
-      return [];
-    } finally {
-      browseBusy.value = false;
-    }
-  }
-  const browseError = ref<string | null>(null);
-  const browseBusy = ref(false);
-
-  /** F1: pull one remote file into the shadow workspace on demand. */
-  async function pullRemoteFile(
-    workspace: string, remotePath: string,
-  ): Promise<string | null> {
-    pullError.value = null;
-    pullBusy.value = true;
-    try {
-      return await ipc.sshPullFile(workspace, remotePath);
-    } catch (e) {
-      pullError.value = (e as { technical_detail?: string; message?: string })
-        ?.technical_detail || (e as { message?: string })?.message || String(e);
-      return null;
-    } finally {
-      pullBusy.value = false;
-    }
-  }
-  const pullError = ref<string | null>(null);
-  const pullBusy = ref(false);
-
   return {
     // constants/state
     runtimes,
@@ -562,15 +487,6 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     forgetWorkspace,
     clearHistoryEntry,
     workspacePathExists,
-    createSshWorkspace,
-    createSshError,
-    browseRemote,
-    browseRemoteInWorkspace,
-    browseError,
-    browseBusy,
-    pullRemoteFile,
-    pullError,
-    pullBusy,
     // activation
     activate,
     openLauncher,

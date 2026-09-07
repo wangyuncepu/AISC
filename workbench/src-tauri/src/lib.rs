@@ -27,7 +27,6 @@ pub mod settings;
 pub mod subscription;
 pub mod docker_api;
 pub mod low_spec;
-pub mod sync;
 pub mod artifact;
 pub mod storage;
 pub mod trace;
@@ -177,17 +176,6 @@ pub fn run(cli_arg: Option<String>) {
             load_settings,
             save_settings,
             reset_gui_settings,
-            sync::ssh_workspace_create,
-            sync::ssh_browse,
-            sync::ssh_browse_workspace,
-            sync::ssh_pull_file,
-            sync::sync_session_start,
-            sync::sync_session_status,
-            sync::sync_session_cancel,
-            sync::sync_session_enable,
-            sync::sync_session_pause,
-            sync::sync_session_resume,
-            sync::sync_session_terminate,
             resolve_locale,
             restore_window_geometry,
             capture_window_geometry,
@@ -266,12 +254,6 @@ pub fn run(cli_arg: Option<String>) {
                     }
                 }
                 tauri::async_runtime::spawn(host_mcp::serve(state));
-                // F1: record the bundle resource dir — the mutagen agents
-                // tarball rides bundle.resources, which on deb/DMG installs
-                // lands away from the externalBin binary dir.
-                if let Ok(res) = app.path().resource_dir() {
-                    let _ = sync::MUTAGEN_RESOURCE_DIR.set(res);
-                }
             }
             // PERF P8 (D-13): low-spec auto-enable — off the hot path; the
             // one-time `just_enabled` drives a frontend toast.
