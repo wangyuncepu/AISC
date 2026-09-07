@@ -24,7 +24,6 @@ on:
       - 'workbench/vite.config.*'
       - 'workbench/tsconfig*.json'
       - 'workbench/src-tauri/**'
-      - 'tools/stage-mutagen.sh'
       - '.github/workflows/nsis-installer.yml'
       - '.github/workflows/cli-sidecar.yml'
       - 'src/aisc/**'
@@ -65,16 +64,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path workbench/src-tauri/binaries | Out-Null
           Copy-Item dist/aisc-x86_64-pc-windows-msvc.exe workbench/src-tauri/binaries/aisc-x86_64-pc-windows-msvc.exe
           Get-ChildItem workbench/src-tauri/binaries
-
-      # F1 (D-10): mutagen v0.16.4 (last all-MIT series) as a host-side
-      # externalBin — sha256 pinned in tools/stage-mutagen.sh (fail closed).
-      - name: Stage mutagen (host sync binary)
-        shell: bash
-        run: |
-          bash tools/stage-mutagen.sh
-          cp downloads/host-bin/windows_amd64/mutagen.exe workbench/src-tauri/binaries/mutagen-x86_64-pc-windows-msvc.exe
-          cp downloads/host-bin/windows_amd64/mutagen-agents.tar.gz workbench/src-tauri/binaries/mutagen-agents.tar.gz
-          ls -la workbench/src-tauri/binaries/
 
       - name: Stage AISC CLI bundle (aisc-bundle for root discovery)
         shell: pwsh
