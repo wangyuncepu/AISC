@@ -11,7 +11,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import * as ipc from "../lib/ipc";
 import { applyLocale } from "../i18n";
-import type { SaveOutcome, SettingsDocument, SettingsPatch } from "../types";
+import type { SaveOutcome, SettingsDocument, SettingsPatch, TargetInfo } from "../types";
 
 export type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -24,6 +24,17 @@ export const useSettingsStore = defineStore("settings", () => {
   /** Last known disk state (after load/save/reset). `dirty` compares against it. */
   const lastSaved = ref<SettingsDocument | null>(null);
   const saveState = ref<SaveState>("idle");
+  // --- 2.1.10 R4b: the drive target (F-A01: components reach this only
+  // through this store, never lib/ipc directly). Refreshed once at store
+  // creation; switching rides target_set/target_clear.
+  const targetRef = ref<TargetInfo | null>(null);
+  const targetError = ref<string | null>(null);
+  void (async () => {
+    try {
+      targetRef.value = await ipc.targetGet();
+    } catch { /* surfaced on demand via switchTarget */ }
+  })();
+
   const error = ref<string | null>(null);
 
   const loaded = computed(() => doc.value !== null);
@@ -39,6 +50,8 @@ export const useSettingsStore = defineStore("settings", () => {
       JSON.stringify(doc.value.window) !== JSON.stringify(lastSaved.value.window) ||
       JSON.stringify(doc.value.hostTools ?? []) !==
         JSON.stringify(lastSaved.value.hostTools ?? []) ||
+      JSON.stringify(doc.value.remoteMachines ?? []) !==
+        JSON.stringify(lastSaved.value.remoteMachines ?? []) ||
       JSON.stringify(doc.value.performance) !== JSON.stringify(lastSaved.value.performance)
     );
   });
@@ -90,6 +103,7 @@ export const useSettingsStore = defineStore("settings", () => {
         terminal: doc.value.terminal,
         window: doc.value.window,
         hostTools: doc.value.hostTools ?? [],
+        remoteMachines: doc.value.remoteMachines ?? [],
         ...(doc.value.performance ? { performance: doc.value.performance } : {}),
       });
       doc.value.revision = outcome.revision;
@@ -166,6 +180,27 @@ export const useSettingsStore = defineStore("settings", () => {
 
   return {
     doc,
+    // --- R4b: the drive target ---
+    target: computed((): TargetInfo | null => targetRef.value),
+    targetError,
+    async refreshTarget(): Promise<void> {
+      try {
+        targetRef.value = await ipc.targetGet();
+        targetError.value = null;
+      } catch (e) {
+        targetError.value = (e as { message?: string })?.message || String(e);
+      }
+    },
+    async switchTarget(name: string | null): Promise<void> {
+      try {
+        targetRef.value = name ? await ipc.targetSet(name) : await ipc.targetClear();
+        targetError.value = null;
+      } catch (e) {
+        targetError.value = (e as { message?: string; technical_detail?: string })
+          ?.technical_detail || (e as { message?: string })?.message || String(e);
+      }
+    },
+
     lastSaved,
     saveState,
     error,
