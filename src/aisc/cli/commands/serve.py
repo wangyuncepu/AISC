@@ -93,6 +93,11 @@ class ServeRuntime:
         self._write_lock = threading.Lock()
         self._ptys: Dict[str, PtyEntry] = {}
         self._pty_lock = threading.Lock()
+        # R3 (D-9): lazy-created watchdog registry; fs.watch fails cleanly
+        # where watchdog is unavailable.
+        from aisc.cli.commands.serve_fs import WatchRegistry
+
+        self.fs_watches = WatchRegistry(self._emit)
 
     def _emit(self, frame: Dict[str, Any]) -> None:
         line = _frame(frame) + "\n"
@@ -241,6 +246,11 @@ OPS: Dict[str, Callable[..., Tuple[Any, int, List[Dict[str, Any]]]]] = {
     "session.open": _op_session_open,
 }
 
+# R3 (D-9): the remote-authoritative file plane rides the same serve session.
+from aisc.cli.commands.serve_fs import OPS as _FS_OPS  # noqa: E402
+
+OPS.update(_FS_OPS)
+
 #: Ops that may not run while another op is executing — R1 is strictly
 #: serial; the ``id`` field already exists so a concurrent executor can be
 #: introduced later without a protocol change.
@@ -388,6 +398,7 @@ def _serve_loop(stdin: Any, stdout: Any) -> int:
         runtime._emit(response)
 
     runtime.kill_all()
+    runtime.fs_watches.shutdown()
     return 0
 
 
