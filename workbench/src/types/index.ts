@@ -945,6 +945,16 @@ export interface HostToolEntry {
   readOnlyPreset?: string;
 }
 
+/** 2.1.10 R2c: one remote machine profile (settings remoteMachines). */
+export interface RemoteMachine {
+  name: string;
+  host: string;
+  user?: string;
+  port?: number;
+  /** Private key path on THIS machine (reference only). */
+  keyPath?: string;
+}
+
 export interface SettingsDocument {
   schemaVersion: number;
   revision: number;
@@ -954,6 +964,8 @@ export interface SettingsDocument {
   window: WindowSettings;
   /** F2: empty = host-exec is OFF (every container call refused). */
   hostTools?: HostToolEntry[];
+  /** 2.1.10 R2c: remote machine profiles (read-only until R4's UI). */
+  remoteMachines?: RemoteMachine[];
   /** PERF P8 (D-13): low-spec mode + container resource limits. */
   performance?: PerformanceSettings;
   issues: ValidationIssue[];

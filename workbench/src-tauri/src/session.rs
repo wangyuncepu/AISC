@@ -410,9 +410,7 @@ pub async fn open_session(
         gen
     };
 
-    let pin = resolve_cli(&app).await?;
-    let argv =
-        session_open_argv(&runtime_id, &session_id, &agent, &ws, resume_conversation_id.as_deref());
+    let target = crate::target::resolve_target(&app).await?;
 
     // O2 (D-11): full output spool at <data-root>/sessions/<sid>.spool.
     // A missing/invalid data root means NO spool — memory-only degradation,
@@ -421,7 +419,32 @@ pub async fn open_session(
         .map(|d| d.join(format!("{session_id}.spool")));
 
     let (event_tx, event_rx) = mpsc::channel::<PtyEvent>(EVENT_CHANNEL_CAP);
-    let spawned = spawn_pipe_session(&pin, argv, DEFAULT_COLS, DEFAULT_ROWS, event_tx, spool_path);
+
+    // R2 (D-8): the session plane is dual-path — local keeps the B-05-proven
+    // pipe spawn bit-for-bit; a remote target rides the serve PTY frames
+    // (writes/resize in-band, G1's answer).
+    let spawned = match &target {
+        crate::cli::CliTarget::Local(pin) => {
+            let argv = session_open_argv(&runtime_id, &session_id, &agent, &ws,
+                                         resume_conversation_id.as_deref());
+            spawn_pipe_session(pin, argv, DEFAULT_COLS, DEFAULT_ROWS, event_tx, spool_path)
+        }
+        crate::cli::CliTarget::Remote(_) => {
+            crate::pty::spawn_serve_pty_session(
+                &target,
+                &runtime_id,
+                &session_id,
+                &agent,
+                &ws,
+                resume_conversation_id.as_deref(),
+                DEFAULT_COLS,
+                DEFAULT_ROWS,
+                event_tx,
+                spool_path,
+            )
+            .await
+        }
+    };
     let (session, signal) = match spawned {
         Ok(pair) => pair,
         Err(e) => {

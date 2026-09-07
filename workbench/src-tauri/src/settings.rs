@@ -207,6 +207,8 @@ pub struct SettingsDocument {
     /// F2 (D-10): host-tools MCP whitelist. EMPTY = the host-exec tool set
     /// is empty and every container call is refused.
     pub host_tools: Vec<crate::host_mcp::HostToolEntry>,
+    /// 2.1.10 R2c: remote machine profiles (hand-edited until R4's UI).
+    pub remote_machines: Vec<crate::target::RemoteMachine>,
     /// PERF P8 (D-13): low-spec mode + container resource limits.
     pub performance: PerformanceSettings,
     pub issues: Vec<ValidationIssue>,
@@ -306,6 +308,7 @@ fn default_document() -> SettingsDocument {
         terminal: TerminalSettings::default(),
         window: WindowSettings::default(),
         host_tools: Vec::new(),
+        remote_machines: Vec::new(),
         performance: PerformanceSettings::default(),
         issues: Vec::new(),
         corrupted: false,
@@ -598,6 +601,7 @@ impl Settings {
             window: serde_json::from_value(self.raw.get("window").cloned().unwrap_or(Value::Null))
                 .unwrap_or_default(),
             host_tools: sanitize_host_tools(self.raw.get("host_tools")),
+            remote_machines: sanitize_remote_machines(self.raw.get("remote_machines")),
             performance: serde_json::from_value(
                 self.raw.get("performance").cloned().unwrap_or(Value::Null),
             )
@@ -759,6 +763,25 @@ fn validate_performance(raw: &Value) -> (PerformanceSettings, Vec<ValidationIssu
         }
     }
     (out, issues)
+}
+
+/// 2.1.10 R2c: machine-profile sanitation — every entry needs a name/host;
+/// the rest is optional (ssh defaults apply client-side).
+fn sanitize_remote_machines(v: Option<&Value>) -> Vec<crate::target::RemoteMachine> {
+    let mut out = Vec::new();
+    let Some(arr) = v.and_then(Value::as_array) else {
+        return out;
+    };
+    for item in arr {
+        let Ok(m) = serde_json::from_value::<crate::target::RemoteMachine>(item.clone()) else {
+            continue;
+        };
+        if m.name.trim().is_empty() || m.host.trim().is_empty() {
+            continue;
+        }
+        out.push(m);
+    }
+    out
 }
 
 /// Merge a typed section into the raw section, keeping unknown subfields.

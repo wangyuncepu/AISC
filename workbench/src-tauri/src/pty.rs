@@ -227,6 +227,10 @@ pub struct PtySession {
     writer_tx: mpsc::Sender<Vec<u8>>,
     master: Option<Arc<Mutex<Box<dyn MasterPty + Send>>>>,
     resize_file: Option<PathBuf>,
+    /// R2 (D-8): serve-mode resize — a sync closure that fires the async
+    /// `pty.resize` frame (fire-and-forget: a lost frame is corrected by
+    /// the next resize; the terminal always settles).
+    resize_fn: Option<Arc<dyn Fn(u16, u16) + Send + Sync>>,
     kill_fn: Arc<dyn Fn() + Send + Sync>,
     cancel: CancellationToken,
     /// O2 (D-11): the session's output spool (always present; `disabled`
@@ -393,6 +397,7 @@ pub fn spawn_pty_session(
         writer_tx,
         master: Some(master),
         resize_file: None,
+        resize_fn: None,
         kill_fn,
         cancel,
         spool,
@@ -623,6 +628,185 @@ pub fn spawn_pipe_session(
         writer_tx,
         master: None,
         resize_file: Some(resize_file),
+        resize_fn: None,
+        kill_fn,
+        cancel,
+        spool,
+    };
+    Ok((session, signal))
+}
+
+/// R2 (D-8): open one PTY through a serve session (a `Local` target spawns
+/// the serve process directly — same code path, no ssh; `Remote` wraps it).
+/// Produces the SAME `PtySession` shape as the pipe mode, so the session
+/// registry, spool and close semantics are unchanged; only the planes
+/// differ: writes become `pty.input` frames, resize becomes `pty.resize`
+/// (G1: in-band, no local file), kill becomes `pty.kill`, output arrives as
+/// `pty.output` frames pumped into the standard `PtyEvent` stream.
+///
+/// One serve session per PTY for now (simple and correct); multiplexing
+/// several PTYs over one connection is a later optimization the protocol
+/// already supports (sid routing).
+pub async fn spawn_serve_pty_session(
+    target: &crate::cli::CliTarget,
+    runtime_id: &str,
+    session_id: &str,
+    agent: &str,
+    workspace: &str,
+    resume_conversation_id: Option<&str>,
+    cols: u16,
+    rows: u16,
+    event_tx: mpsc::Sender<PtyEvent>,
+    spool_path: Option<PathBuf>,
+) -> Result<(PtySession, ExitSignal), WorkbenchError> {
+    use crate::serve::{PtyStreamFrame, ServeSession};
+
+    let session = Arc::new(
+        ServeSession::start_for(target)
+            .await
+            .map_err(|e| e)?,
+    );
+
+    // Subscribe BEFORE session.open so no early output frame can race past.
+    let mut frames = session.subscribe_pty(session_id);
+
+    let cancel = CancellationToken::new();
+    let signal = ExitSignal::new();
+    let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(WRITE_CHANNEL_CAP);
+    let spool: Arc<Mutex<SpoolWriter>> = Arc::new(Mutex::new(match &spool_path {
+        Some(p) => SpoolWriter::create(p),
+        None => SpoolWriter::disabled(),
+    }));
+
+    // The open op itself: exec establishment only — stream frames follow.
+    let open_cancel = CancellationToken::new();
+    let mut open_args = serde_json::json!({
+        "runtime_id": runtime_id,
+        "session_id": session_id,
+        "agent": agent,
+        "workspace": workspace,
+        "cols": cols,
+        "rows": rows,
+    });
+    if let Some(r) = resume_conversation_id {
+        open_args["resume_conversation_id"] = serde_json::json!(r);
+    }
+    let envelope = session
+        .request(
+            "session.open",
+            &open_args,
+            Duration::from_secs(30),
+            &open_cancel,
+        )
+        .await?;
+    if envelope.meta.exit_code != 0 {
+        let detail = envelope
+            .errors
+            .first()
+            .map(|e| format!("{} ({})", e.message, e.code))
+            .unwrap_or_else(|| "session.open failed".into());
+        return Err(WorkbenchError::cli_protocol().with_detail(detail));
+    }
+
+    // writer task: mpsc → pty.input frames.
+    {
+        let session = Arc::clone(&session);
+        let sid = session_id.to_string();
+        tokio::spawn(async move {
+            while let Some(bytes) = writer_rx.recv().await {
+                if session.pty_input(&sid, &bytes).await.is_err() {
+                    break;
+                }
+            }
+            // writer dropped: leave the serve session's stdin alone — the
+            // PTY's lifecycle ends via pty.exit / kill / shutdown.
+        });
+    }
+
+    // reader task: pty frames → spool + PtyEvent (same shape as pipe mode).
+    {
+        let spool_r = Arc::clone(&spool);
+        let event_tx_w = event_tx.clone();
+        let signal_w = signal.clone();
+        let session_w = Arc::clone(&session);
+        tokio::task::spawn_blocking(move || {
+            let mut seq = 0u64;
+            while let Some(frame) = frames.blocking_recv() {
+                match frame {
+                    PtyStreamFrame::Output { data, .. } => {
+                        seq += 1;
+                        let offset = spool_r
+                            .lock()
+                            .map(|mut w| w.append(&data))
+                            .unwrap_or(0);
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                        let _ = event_tx_w.blocking_send(PtyEvent::Output {
+                            seq,
+                            bytes: b64,
+                            offset,
+                        });
+                    }
+                    PtyStreamFrame::Exit { exit_code, error, .. } => {
+                        let _ = event_tx_w.blocking_send(PtyEvent::Exit {
+                            reason: if error.is_some() {
+                                REASON_TRANSPORT_ERROR.to_string()
+                            } else {
+                                REASON_PROCESS_EXIT.to_string()
+                            },
+                            exit_code,
+                        });
+                        break;
+                    }
+                }
+            }
+            let now = now_ms();
+            signal_w.set(SessionExit {
+                exit_code: None,
+                reason: REASON_TRANSPORT_ERROR.into(),
+                finished_at_ms: now,
+            });
+            // The serve session dies with its only PTY.
+            tokio::spawn(async move {
+                session_w.shutdown().await;
+            });
+        });
+    }
+
+    // resize plane: fire-and-forget pty.resize frames (sync slot → spawn).
+    let resize_fn: Arc<dyn Fn(u16, u16) + Send + Sync> = {
+        let session = Arc::clone(&session);
+        let sid = session_id.to_string();
+        Arc::new(move |cols, rows| {
+            let session = Arc::clone(&session);
+            let sid = sid.clone();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = session.pty_resize(&sid, cols, rows).await;
+                });
+            }
+        })
+    };
+
+    // kill plane: pty.kill frame (the stream exit follows).
+    let kill_fn: Arc<dyn Fn() + Send + Sync> = {
+        let session = Arc::clone(&session);
+        let sid = session_id.to_string();
+        Arc::new(move || {
+            let session = Arc::clone(&session);
+            let sid = sid.clone();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = session.pty_kill(&sid).await;
+                });
+            }
+        })
+    };
+
+    let session = PtySession {
+        writer_tx,
+        master: None,
+        resize_file: None,
+        resize_fn: Some(resize_fn),
         kill_fn,
         cancel,
         spool,
@@ -649,6 +833,12 @@ impl PtySession {
         if let Some(path) = &self.resize_file {
             std::fs::write(path, format!("{} {}\n", cols, rows))
                 .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("resize file: {e}")))?;
+            return Ok(());
+        }
+        // Serve mode (R2, D-8): fire the pty.resize frame — G1's in-band
+        // answer; no local file the remote side could never read.
+        if let Some(f) = &self.resize_fn {
+            f(cols, rows);
             return Ok(());
         }
         // PTY mode: resize the ConPTY directly.

@@ -33,7 +33,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, List, Optional, Protocol, runtime_checkable
 
 from aisc.adapters.docker_ import _poll_resize_step
 from aisc.domain.gateway import (
@@ -202,6 +202,205 @@ def _default_client():
         if _os.name == "nt":
             return docker.DockerClient(base_url="npipe:////./pipe/docker_engine")
         return docker.DockerClient(base_url="unix:///var/run/docker.sock")
+
+
+# ---------------------------------------------------------------------------
+# 2.1.10 R2 (D-8): live exec TTY as a stream handle — serve PTY transport
+# ---------------------------------------------------------------------------
+
+
+def _sock_recv(sock: Any, size: int) -> bytes:
+    """Raw read from a docker-py exec socket (recv | read | os.read)."""
+    if hasattr(sock, "recv"):
+        return sock.recv(size)
+    if hasattr(sock, "read"):
+        return sock.read(size)
+    return os.read(sock.fileno(), size)
+
+
+def _sock_send_all(sock: Any, data: bytes) -> None:
+    """Send every byte (sendall | _sock.sendall | write | os.write)."""
+    if hasattr(sock, "sendall"):
+        sock.sendall(data)
+        return
+    raw = getattr(sock, "_sock", None)
+    if raw is not None and hasattr(raw, "sendall"):
+        raw.sendall(data)
+        return
+    view = memoryview(data)
+    while view:
+        if hasattr(sock, "write") and getattr(sock, "writable", lambda: False)():
+            sent = sock.write(view)
+        else:
+            sent = os.write(sock.fileno(), view)
+        if sent is None:
+            raise OSError("socket write would block")
+        if sent <= 0:
+            raise OSError("socket write failed")
+        view = view[sent:]
+
+
+def _sock_shutdown_write(sock: Any) -> None:
+    """Half-close the write side on stdin EOF (shutdown | _sock.shutdown)."""
+    raw = getattr(sock, "_sock", None)
+    targets = [raw, sock] if raw is not None else [sock]
+    for target in targets:
+        if hasattr(target, "shutdown"):
+            try:
+                target.shutdown(socket.SHUT_WR)
+                return
+            except OSError:
+                pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
+class InteractiveStreamHandle:
+    """One live docker exec TTY: raw byte bidirectional plane + resize.
+
+    Produced by ``_open_sdk_pty_stream`` (SDK only — the CLI backend cannot
+    resize an exec pty, which is why G-02 exists). The pump thread invokes
+    ``on_output`` from its own thread; everything else is called from the
+    owning thread. Exit detection is the P2 EOF-driven scheme verbatim.
+    """
+
+    def __init__(self, api: Any, exec_id: str, sock: Any,
+                 on_output: Optional[Callable[[bytes], None]]) -> None:
+        import threading as _threading
+
+        self._api = api
+        self._exec_id = exec_id
+        self._sock = sock
+        self._on_output = on_output or (lambda chunk: None)
+        self._eof = _threading.Event()
+        self._stopped = _threading.Event()
+        self._error: Optional[Exception] = None
+        self._exit_code: Optional[int] = None
+        self._pump = _threading.Thread(target=self._pump_loop, daemon=True)
+        self._pump.start()
+
+    # -- byte plane ----------------------------------------------------------
+
+    def _pump_loop(self) -> None:
+        try:
+            while not self._stopped.is_set():
+                chunk = _sock_recv(self._sock, 65536)
+                if not chunk:
+                    break
+                self._on_output(chunk)
+        except Exception as exc:  # noqa: BLE001 — surfaced via .error
+            self._error = exc
+        finally:
+            self._eof.set()
+
+    def write(self, data: bytes) -> None:
+        """stdin → socket. Raises OSError-family on a dead stream."""
+        _sock_send_all(self._sock, data)
+
+    def resize(self, size: tuple) -> None:
+        """(cols, rows) → exec_resize."""
+        self._api.exec_resize(self._exec_id, height=size[1], width=size[0])
+
+    def close_stdin(self) -> None:
+        _sock_shutdown_write(self._sock)
+
+    def kill(self) -> None:
+        """Detach: close the socket (pump hits EOF and settles) — the exec
+        process itself keeps running in the container, the same semantics as
+        killing the pipe-mode sidecar process. ``wait_exit`` observes the
+        detach and returns instead of polling a Running exec forever."""
+        self._stopped.set()
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+    # -- exit ---------------------------------------------------------------
+
+    @property
+    def error(self) -> Optional[Exception]:
+        return self._error
+
+    @property
+    def exit_code(self) -> Optional[int]:
+        return self._exit_code
+
+    def wait_exit(self) -> int:
+        """Block until the exec settles; returns its exit code. The P2
+        EOF-driven scheme verbatim: EOF → ONE inspect; no EOF → floor
+        re-inspect; EOF-but-Running → settle loop. Unbounded, like the
+        open_interactive contract (call from a dedicated thread)."""
+        import docker
+        import requests
+
+        failures = 0
+
+        def inspect_info() -> dict:
+            """exec_inspect with the #61 transient-failure tolerance."""
+            nonlocal failures
+            while True:
+                try:
+                    info = self._api.exec_inspect(self._exec_id)
+                    failures = 0
+                    return info
+                except (docker.errors.APIError, requests.RequestException, OSError):
+                    failures += 1
+                    if failures >= 3:
+                        raise
+                    time.sleep(0.5)
+
+        floor = _exec_floor_interval()
+        settle = _exec_settle_interval()
+        info: Optional[dict] = None
+        while info is None:
+            if self._stopped.is_set():
+                # Client-detached (kill): the exec keeps running in the
+                # container; report the detach as an unknown exit instead of
+                # settling forever on a Running inspect.
+                self._exit_code = -1
+                return self._exit_code
+            if not self._eof.is_set():
+                info = inspect_info()
+                if info.get("Running"):
+                    info = None
+                    self._eof.wait(timeout=floor)
+            else:
+                info = inspect_info()
+                if info.get("Running"):
+                    info = None
+                    time.sleep(settle)
+        self._exit_code = int(info.get("ExitCode", 0))
+        return self._exit_code
+
+    def join_pump(self, timeout: float = 5.0) -> None:
+        self._pump.join(timeout=timeout)
+
+
+def _open_sdk_pty_stream(
+    client: Any,
+    container: str,
+    argv: List[str],
+    env: Optional[Dict[str, str]],
+    on_output: Optional[Callable[[bytes], None]],
+    initial_size: Optional[tuple],
+) -> InteractiveStreamHandle:
+    """exec_create → exec_start(socket) → InteractiveStreamHandle. Raises
+    the same DockerException family open_interactive's create/start legs
+    map (the caller decides the error shape)."""
+    exec_kwargs: Dict[str, Any] = {"tty": True, "stdin": True}
+    if env:
+        exec_kwargs["environment"] = dict(env)
+    exec_id = client.api.exec_create(container, list(argv), **exec_kwargs)["Id"]
+    sock = client.api.exec_start(exec_id, socket=True, tty=True)
+    handle = InteractiveStreamHandle(client.api, exec_id, sock, on_output)
+    if initial_size:
+        try:
+            handle.resize(initial_size)
+        except Exception:  # noqa: BLE001 — best-effort initial size, as ever
+            pass
+    return handle
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +741,29 @@ class SdkGateway:
 
     # -- interactive (SDK-first; D4-03 owns create/start/resize/stream/reap) --
 
+    def open_pty_stream(
+        self,
+        container: str,
+        argv: List[str],
+        env: Optional[Dict[str, str]] = None,
+        on_output: Optional[Callable[[bytes], None]] = None,
+        initial_size: Optional[tuple] = None,
+    ) -> "InteractiveStreamHandle":
+        """2.1.10 R2 (D-8): a LIVE exec TTY as a stream handle — the serve
+        PTY transport. Same lifecycle as ``open_interactive`` (create →
+        socket → resize via API) but the byte plane is a callback instead of
+        fd 0/1, resize is a method call instead of the resize file, and the
+        caller decides when to stop. ``open_interactive`` is now assembled
+        from this handle (zero behavior change there).
+
+        ``on_output`` is invoked from the pump thread; it must be cheap and
+        thread-safe. ``initial_size`` (cols, rows) replaces the resize file's
+        spawn-time read.
+        """
+        return _open_sdk_pty_stream(
+            self._client(), container, argv, env, on_output, initial_size
+        )
+
     def open_interactive(
         self,
         container: str,
@@ -610,80 +832,34 @@ class SdkGateway:
 
         stop = threading.Event()
         errors: List[Exception] = []
-        # PERF P2 (D-13): the exec socket closing IS the exit signal — drain
-        # reports it; the main loop stops polling exec_inspect every 0.2s
-        # (that kept every session at ~5 Docker API calls/sec for life).
-        eof = threading.Event()
 
         # Initial resize from the resize file (set by the pty supervisor before
         # spawn; AISC_RESIZE_FILE = "<cols> <rows>\n").
         resize_file = os.environ.get("AISC_RESIZE_FILE")
-        last_size: Optional[tuple] = None
+        initial_size: Optional[tuple] = None
         if resize_file:
             try:
                 content = open(resize_file).read().strip().split()
                 if len(content) == 2:
-                    last_size = (int(content[0]), int(content[1]))
-                    client.api.exec_resize(exec_id, height=last_size[1], width=last_size[0])
+                    initial_size = (int(content[0]), int(content[1]))
             except Exception:  # noqa: BLE001
                 pass
 
-        def read_sock(size: int) -> bytes:
-            """Raw read from the docker-py exec socket (recv | read | os.read)."""
-            if hasattr(sock, "recv"):
-                return sock.recv(size)
-            if hasattr(sock, "read"):
-                return sock.read(size)
-            return os.read(sock.fileno(), size)
+        # 2.1.10 R2 (D-8): the live stream is ONE handle now — the raw byte
+        # plane, the EOF-driven exit scheme (PERF P2) and the #61 inspect
+        # tolerance all live in InteractiveStreamHandle; this method only
+        # adapts fd 0/1 and the resize file around it. (The AISC_EXEC_POLL=
+        # legacy escape hatch retired here — P2 said "kept one version" and
+        # two have passed.)
+        def on_output(chunk: bytes) -> None:
+            os.write(sys.stdout.fileno(), chunk)
 
-        def send_all(data: bytes) -> None:
-            """Send every byte (sendall | _sock.sendall | write | os.write)."""
-            if hasattr(sock, "sendall"):
-                sock.sendall(data)
-                return
-            raw = getattr(sock, "_sock", None)
-            if raw is not None and hasattr(raw, "sendall"):
-                raw.sendall(data)
-                return
-            view = memoryview(data)
-            while view:
-                if hasattr(sock, "write") and getattr(sock, "writable", lambda: False)():
-                    sent = sock.write(view)
-                else:
-                    sent = os.write(sock.fileno(), view)
-                if sent is None:
-                    raise OSError("socket write would block")
-                if sent <= 0:
-                    raise OSError("socket write failed")
-                view = view[sent:]
-
-        def shutdown_write() -> None:
-            """Half-close the write side on stdin EOF (shutdown | _sock.shutdown)."""
-            raw = getattr(sock, "_sock", None)
-            targets = [raw, sock] if raw is not None else [sock]
-            for target in targets:
-                if hasattr(target, "shutdown"):
-                    try:
-                        target.shutdown(socket.SHUT_WR)
-                        return
-                    except OSError:
-                        pass
+        handle = InteractiveStreamHandle(client.api, exec_id, sock, on_output)
+        if initial_size:
             try:
-                sock.close()
-            except OSError:
+                handle.resize(initial_size)
+            except Exception:  # noqa: BLE001 — best-effort initial size, as ever
                 pass
-
-        def drain() -> None:
-            """Socket → stdout (raw bytes)."""
-            try:
-                while True:
-                    chunk = read_sock(65536)
-                    if not chunk:
-                        eof.set()
-                        break
-                    os.write(sys.stdout.fileno(), chunk)
-            except Exception as exc:  # noqa: BLE001
-                errors.append(exc)
 
         def forward() -> None:
             """stdin → socket; on EOF close the write side."""
@@ -692,11 +868,11 @@ class SdkGateway:
                     chunk = os.read(sys.stdin.fileno(), 4096)
                     if not chunk:
                         break
-                    send_all(chunk)
+                    handle.write(chunk)
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
             finally:
-                shutdown_write()
+                handle.close_stdin()
 
         def watch_resize() -> None:
             """Poll the resize file; forward changes to exec_resize."""
@@ -708,87 +884,35 @@ class SdkGateway:
             # perception threshold, pane dragging stays smooth; ~10 file
             # reads/sec per session was idle-CPU tax on weak machines.
             interval = _resize_poll_interval()
-            last = last_size
+            last = initial_size
             while not stop.is_set():
                 last = _poll_resize_step(
                     resize_file,
                     last,
-                    lambda size: client.api.exec_resize(
-                        exec_id, height=size[1], width=size[0]
-                    ),
+                    handle.resize,
                 )
                 stop.wait(interval)
 
-        t_drain = threading.Thread(target=drain, daemon=True)
         t_fwd = threading.Thread(target=forward, daemon=True)
         t_resize = threading.Thread(target=watch_resize, daemon=True)
-        t_drain.start()
         t_fwd.start()
         t_resize.start()
 
         exit_code = -1
         waited = False
-        # 2.1.9 hotfix (#61): tolerate transient inspect failures (npipe
-        # hiccups) before giving up — mirrors RealDockerExecutor.
-        inspect_failures = 0
-
-        def inspect_info() -> dict:
-            """exec_inspect with the #61 transient-failure tolerance."""
-            nonlocal inspect_failures
-            while True:
-                try:
-                    info = client.api.exec_inspect(exec_id)
-                    inspect_failures = 0
-                    return info
-                except (docker.errors.APIError, requests.RequestException, OSError):
-                    inspect_failures += 1
-                    if inspect_failures >= 3:
-                        raise
-                    time.sleep(0.5)
-
         try:
-            if os.environ.get("AISC_EXEC_POLL") == "legacy":
-                # PERF P2 escape hatch (kept one version): the original
-                # 0.2s exec_inspect poll loop.
-                while True:
-                    info = inspect_info()
-                    if not info.get("Running"):
-                        break
-                    time.sleep(0.2)
-            else:
-                # PERF P2 (D-13): EOF-driven exit. Wait for the stream to
-                # end; a floor re-inspect (default 5s) covers a stream that
-                # never EOFs (hung exec) — strictly better than the old
-                # unconditional 0.2s poll. The observation that settles the
-                # exit code is reused (normal exit = exactly ONE inspect);
-                # the 1s loop only walks the rare EOF-but-Running corner
-                # (background children holding the pty open). The exit
-                # criterion stays exec_inspect.Running==false — zero
-                # semantic change.
-                floor = _exec_floor_interval()
-                settle = _exec_settle_interval()
-                info = None
-                while info is None:
-                    if not eof.is_set():
-                        info = inspect_info()
-                        if info.get("Running"):
-                            info = None
-                            eof.wait(timeout=floor)
-                    else:
-                        info = inspect_info()
-                        if info.get("Running"):
-                            info = None
-                            time.sleep(settle)
-            exit_code = int(info.get("ExitCode", 0))
+            exit_code = handle.wait_exit()
             waited = True
         except (docker.errors.APIError, requests.RequestException, OSError) as exc:
             errors.append(exc)
         finally:
             stop.set()
-            t_drain.join(timeout=5)
+            handle.join_pump(timeout=5)
             t_fwd.join(timeout=5)
             t_resize.join(timeout=5)
 
+        if handle.error is not None:
+            errors.append(handle.error)
         if errors:
             return InteractiveResult(
                 operation=_new_operation(
@@ -1069,6 +1193,23 @@ class AutoGateway:
 
     def open_interactive(self, container: str, argv: List[str]) -> InteractiveResult:
         return self._resolve().open_interactive(container, argv)
+
+    def open_pty_stream(self, container, argv, env=None, on_output=None,
+                        initial_size=None) -> InteractiveStreamHandle:
+        """2.1.10 R2: PTY streams are SDK-only (exec_resize needs the API —
+        the reason G-02 exists). Resolve straight to the SDK backend; a
+        missing SDK is a hard error for this transport, never a CLI
+        fallback."""
+        try:
+            import docker  # noqa: F401
+        except ImportError as exc:
+            raise NotImplementedError(
+                "pty streams require the Docker SDK backend"
+            ) from exc
+        backend = self._resolve()
+        return backend.open_pty_stream(container, argv, env=env,
+                                       on_output=on_output,
+                                       initial_size=initial_size)
 
     def build_image(
         self,

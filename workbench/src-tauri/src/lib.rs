@@ -28,6 +28,7 @@ pub mod subscription;
 pub mod docker_api;
 pub mod low_spec;
 pub mod serve;
+pub mod target;
 pub mod artifact;
 pub mod storage;
 pub mod trace;
@@ -119,6 +120,7 @@ pub fn run(cli_arg: Option<String>) {
         .manage(LeaseSupervisor::default())
         // F2 (D-10): host-tools MCP — the backend's first local listener.
         .manage(std::sync::Arc::new(host_mcp::HostMcpState::new()))
+        .manage(target::ActiveTarget::default())
         .invoke_handler(tauri::generate_handler![
             cli_discover,
             cli_pin,
@@ -178,6 +180,9 @@ pub fn run(cli_arg: Option<String>) {
             save_settings,
             reset_gui_settings,
             resolve_locale,
+            target::target_get,
+            target::target_set,
+            target::target_clear,
             restore_window_geometry,
             capture_window_geometry,
             run_doctor,

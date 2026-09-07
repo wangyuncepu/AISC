@@ -1,21 +1,26 @@
-//! 2.1.10 R1 (D-7): the client half of `aisc serve --stdio`.
+//! 2.1.10 R1/R2 (D-7/D-8): the client half of `aisc serve --stdio`.
 //!
-//! One long-lived serve session per remote target: spawn (direct or wrapped
-//! in `ssh`), read the ready banner (protocol handshake), then round-trip
-//! request/response frames. R1 is strictly serial — one in-flight request;
-//! the wire `id` field already exists so a multiplexing executor can be
-//! layered on without a protocol change.
+//! One long-lived serve connection: spawn (direct or wrapped in `ssh`), read
+//! the ready banner (protocol handshake), then a **resident reader task**
+//! fans every incoming frame out — result frames to the pending request's
+//! oneshot, `pty.*` stream frames to the per-sid route — while writes
+//! (requests AND stream control) share one stdin lock. R1's strictly-serial
+//! client is gone; requests and PTY streams now multiplex a single session.
 //!
 //! Version pairing note: unlike VS Code's commit-equality match (its server
 //! and client share one build tree), AISC's compatibility surface is the
 //! envelope protocol + capabilities — the banner's `cli_version` is recorded
 //! for display/diagnosis, `serve_protocol` is the hard gate.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{CliTarget, Envelope, SshTarget};
@@ -34,19 +39,25 @@ pub struct ReadyBanner {
     pub cli_version: String,
 }
 
-/// One frame from the serve process (`type`-tagged).
-///
-/// `event` frames are R2+ (PTY push, watcher events); they are decoded here
-/// so transport-level handling (skip) is already correct today.
+impl Default for ReadyBanner {
+    fn default() -> Self {
+        ReadyBanner { serve_protocol: 0, cli_version: String::new() }
+    }
+}
+
+/// One frame from the serve process (`type`-tagged). `pty.*` frames are the
+/// R2 stream plane; the generic `event` frame stays reserved for R3+.
 #[derive(Debug, Clone, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type")]
 pub enum ServeFrame {
+    #[serde(rename = "ready")]
     Ready {
         #[serde(default)]
         serve_protocol: u64,
         #[serde(default)]
         cli_version: String,
     },
+    #[serde(rename = "result")]
     Result {
         id: Option<String>,
         ok: bool,
@@ -55,30 +66,65 @@ pub enum ServeFrame {
         #[serde(default)]
         error: Option<String>,
     },
+    #[serde(rename = "log")]
     Log {
         #[serde(default)]
         level: String,
         #[serde(default)]
         line: String,
     },
+    #[serde(rename = "event")]
     Event {
         #[serde(default)]
         event: String,
         #[serde(default)]
         data: serde_json::Value,
     },
+    #[serde(rename = "pty.output")]
+    PtyOutput {
+        sid: String,
+        data: String,
+    },
+    #[serde(rename = "pty.exit")]
+    PtyExit {
+        sid: String,
+        #[serde(default)]
+        exit_code: Option<i64>,
+        #[serde(default)]
+        error: Option<String>,
+    },
 }
 
-/// A request frame (client → serve).
+/// A decoded stream frame routed to a subscribed PTY (base64 already undone).
+#[derive(Debug, Clone)]
+pub enum PtyStreamFrame {
+    Output { sid: String, data: Vec<u8> },
+    Exit { sid: String, exit_code: Option<i32>, error: Option<String> },
+}
+
+/// What a pending request resolves to.
+#[derive(Debug)]
+enum ServeOutcome {
+    Ok(Envelope),
+    Failed(String),
+}
+
+/// Client → serve frames.
 #[derive(serde::Serialize)]
-struct ServeRequest<'a> {
-    id: &'a str,
-    op: &'a str,
-    args: &'a [String],
+#[serde(tag = "type")]
+enum ClientFrame<'a> {
+    #[serde(rename = "request")]
+    Request { id: &'a str, op: &'a str, args: &'a serde_json::Value },
+    #[serde(rename = "pty.input")]
+    PtyInput { sid: &'a str, data: &'a str },
+    #[serde(rename = "pty.resize")]
+    PtyResize { sid: &'a str, cols: u16, rows: u16 },
+    #[serde(rename = "pty.kill")]
+    PtyKill { sid: &'a str },
 }
 
 // ---------------------------------------------------------------------------
-// Wire-level helpers (stream-generic: the whole protocol is testable against
+// Wire-level helpers (stream-generic: the protocol is testable against
 // tokio::io::duplex without spawning anything).
 
 /// Read one JSON frame line. `None` = clean EOF (the session went away).
@@ -107,17 +153,15 @@ async fn read_frame<R: AsyncRead + Unpin>(
     }
 }
 
-/// Write one request frame and flush.
-async fn write_request<W: AsyncWrite + Unpin>(
+/// Write one client frame and flush.
+async fn write_frame<W: AsyncWrite + Unpin>(
     writer: &mut W,
-    id: &str,
-    op: &str,
-    args: &[String],
+    frame: &ClientFrame<'_>,
 ) -> Result<(), WorkbenchError> {
-    let frame = serde_json::to_string(&ServeRequest { id, op, args })
+    let line = serde_json::to_string(frame)
         .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("serve encode: {e}")))?;
     let io = async {
-        writer.write_all(frame.as_bytes()).await?;
+        writer.write_all(line.as_bytes()).await?;
         writer.write_all(b"\n").await?;
         writer.flush().await
     };
@@ -125,57 +169,17 @@ async fn write_request<W: AsyncWrite + Unpin>(
         .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("serve write: {e}")))
 }
 
-/// Read frames until the matching result arrives (skipping log/event/foreign
-/// frames), bounded by `timeout`.
-async fn collect_result<R: AsyncRead + Unpin>(
-    reader: &mut BufReader<R>,
-    want_id: &str,
-    timeout: Duration,
-    cancel: &CancellationToken,
-) -> Result<Envelope, WorkbenchError> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        let frame = tokio::select! {
-            f = read_frame(reader) => f?,
-            _ = tokio::time::sleep_until(deadline) => {
-                return Err(WorkbenchError::cli_timeout());
-            }
-            _ = cancel.cancelled() => {
-                return Err(WorkbenchError::cli_cancelled());
-            }
-        };
-        let frame = frame.ok_or_else(|| {
-            WorkbenchError::cli_protocol().with_detail("serve closed before the result frame")
-        })?;
-        match frame {
-            ServeFrame::Result { id, ok, envelope, error } => {
-                if id.as_deref() != Some(want_id) {
-                    continue; // stale frame from an earlier timed-out request
-                }
-                return match (ok, envelope) {
-                    (true, Some(env)) => Ok(env),
-                    (true, None) => Err(WorkbenchError::cli_protocol()
-                        .with_detail("serve result missing envelope")),
-                    (false, _) => Err(WorkbenchError::cli_protocol().with_detail(
-                        error.unwrap_or_else(|| "serve op failed".into()),
-                    )),
-                };
-            }
-            ServeFrame::Log { .. } | ServeFrame::Event { .. } => continue,
-            ServeFrame::Ready { .. } => continue, // mid-session re-banner is legal noise
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
-// The session object.
+// The session.
 
 pub struct ServeSession {
-    child: Child,
-    stdin: ChildStdin,
-    reader: BufReader<ChildStdout>,
+    child: Arc<tokio::sync::Mutex<Child>>,
+    stdin: Arc<tokio::sync::Mutex<ChildStdin>>,
     banner: ReadyBanner,
-    seq: u64,
+    pending: Arc<Mutex<HashMap<String, oneshot::Sender<ServeOutcome>>>>,
+    pty_routes: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<PtyStreamFrame>>>>,
+    seq: AtomicU64,
+    _reader: tokio::task::JoinHandle<()>,
 }
 
 fn spawn(target: &CliTarget, cli_args: &[String]) -> Command {
@@ -203,12 +207,17 @@ impl ServeSession {
     }
 
     /// Remote spawn: `ssh <target…> aisc serve --stdio` — the transport the
-    /// Workbench will use for real machines (R2+ wires it into runtime).
+    /// Workbench uses for real machines.
     pub async fn spawn_ssh(t: &SshTarget) -> Result<Self, WorkbenchError> {
         Self::start(CliTarget::Remote(t.clone())).await
     }
 
     async fn start(target: CliTarget) -> Result<Self, WorkbenchError> {
+        Self::start_for(&target).await
+    }
+
+    /// Shared spawn path (also used by pty.rs's `spawn_serve_pty_session`).
+    pub(crate) async fn start_for(target: &CliTarget) -> Result<Self, WorkbenchError> {
         let mut child = spawn(&target, &["serve".into(), "--stdio".into()])
             .spawn()
             .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("serve spawn: {e}")))?;
@@ -220,20 +229,100 @@ impl ServeSession {
             .stdout
             .take()
             .ok_or_else(|| WorkbenchError::cli_protocol().with_detail("serve stdout"))?;
-        let mut session = ServeSession {
-            child,
-            stdin,
-            reader: BufReader::new(stdout),
-            banner: ReadyBanner::default(),
-            seq: 0,
-        };
-        session.banner = session.handshake().await?;
-        Ok(session)
+
+        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<ServeOutcome>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let pty_routes: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<PtyStreamFrame>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        // Handshake BEFORE the resident reader owns the stream.
+        let mut reader = BufReader::new(stdout);
+        let banner = Self::handshake(&mut reader).await?;
+
+        // Resident reader: fan every frame out until EOF.
+        let reader_pending = Arc::clone(&pending);
+        let reader_routes = Arc::clone(&pty_routes);
+        let reader_task = tokio::spawn(async move {
+            loop {
+                let frame = match read_frame(&mut reader).await {
+                    Ok(Some(f)) => f,
+                    Ok(None) | Err(_) => break,
+                };
+                match frame {
+                    ServeFrame::Result { id, ok, envelope, error } => {
+                        if let Some(id) = id {
+                            let tx = reader_pending.lock().ok().and_then(|mut m| m.remove(&id));
+                            if let Some(tx) = tx {
+                                let outcome = match (ok, envelope) {
+                                    (true, Some(env)) => ServeOutcome::Ok(env),
+                                    (true, None) => {
+                                        ServeOutcome::Failed("result missing envelope".into())
+                                    }
+                                    (false, _) => {
+                                        ServeOutcome::Failed(error.unwrap_or_else(|| "serve op failed".into()))
+                                    }
+                                };
+                                let _ = tx.send(outcome);
+                            }
+                        }
+                    }
+                    ServeFrame::PtyOutput { sid, data } => {
+                        let route = reader_routes.lock().ok().and_then(|m| m.get(&sid).cloned());
+                        if let Some(tx) = route {
+                            match base64_decode(&data) {
+                                Ok(bytes) => {
+                                    let _ = tx.send(PtyStreamFrame::Output { sid, data: bytes });
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(PtyStreamFrame::Exit {
+                                        sid,
+                                        exit_code: None,
+                                        error: Some(format!("bad pty.output base64: {e}")),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    ServeFrame::PtyExit { sid, exit_code, error } => {
+                        let route = reader_routes.lock().ok().and_then(|mut m| m.remove(&sid));
+                        if let Some(tx) = route {
+                            let _ = tx.send(PtyStreamFrame::Exit {
+                                sid,
+                                exit_code: exit_code.map(|c| c as i32),
+                                error,
+                            });
+                        }
+                    }
+                    ServeFrame::Log { .. } | ServeFrame::Event { .. } | ServeFrame::Ready { .. } => {
+                        // diagnostics / R3+ reserved / mid-session re-banner: noise
+                    }
+                }
+            }
+            // Session gone: fail every pending request and close every route.
+            if let Ok(mut m) = reader_pending.lock() {
+                for (_, tx) in m.drain() {
+                    let _ = tx.send(ServeOutcome::Failed("serve session closed".into()));
+                }
+            }
+            if let Ok(mut m) = reader_routes.lock() {
+                m.clear(); // dropping the senders closes the receivers
+            }
+        });
+
+        Ok(ServeSession {
+            child: Arc::new(tokio::sync::Mutex::new(child)),
+            stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
+            banner,
+            pending,
+            pty_routes,
+            seq: AtomicU64::new(0),
+            _reader: reader_task,
+        })
     }
 
     /// Read the ready banner and gate on `serve_protocol`.
-    async fn handshake(&mut self) -> Result<ReadyBanner, WorkbenchError> {
-        let frame = read_frame(&mut self.reader)
+    async fn handshake(reader: &mut BufReader<ChildStdout>) -> Result<ReadyBanner, WorkbenchError> {
+        let frame = read_frame(reader)
             .await?
             .ok_or_else(|| WorkbenchError::cli_protocol().with_detail("serve closed before ready"))?;
         match frame {
@@ -255,160 +344,257 @@ impl ServeSession {
         &self.banner
     }
 
-    /// Round-trip one op. Serial by design (R1); `timeout` bounds the wait
-    /// for THIS op's result frame.
+    fn next_id(&self) -> String {
+        format!("wb{}", self.seq.fetch_add(1, Ordering::Relaxed) + 1)
+    }
+
+    /// Round-trip one op. Concurrent with PTY streams — the resident reader
+    /// routes frames, so a long-lived stream never starves a request.
     pub async fn request(
-        &mut self,
+        &self,
         op: &str,
-        args: &[String],
+        args: &serde_json::Value,
         timeout: Duration,
         cancel: &CancellationToken,
     ) -> Result<Envelope, WorkbenchError> {
-        self.seq += 1;
-        let id = format!("wb{}", self.seq);
-        write_request(&mut self.stdin, &id, op, args).await?;
-        collect_result(&mut self.reader, &id, timeout, cancel).await
+        let id = self.next_id();
+        let (tx, rx) = oneshot::channel();
+        if let Ok(mut m) = self.pending.lock() {
+            m.insert(id.clone(), tx);
+        }
+        {
+            let mut stdin = self.stdin.lock().await;
+            if let Err(e) = write_frame(&mut *stdin, &ClientFrame::Request { id: &id, op, args }).await {
+                if let Ok(mut m) = self.pending.lock() {
+                    m.remove(&id);
+                }
+                return Err(e);
+            }
+        }
+        let outcome = tokio::select! {
+            r = rx => r.map_err(|_| {
+                WorkbenchError::cli_protocol().with_detail("serve reader dropped the request")
+            })?,
+            _ = tokio::time::sleep(timeout) => {
+                if let Ok(mut m) = self.pending.lock() {
+                    m.remove(&id);
+                }
+                return Err(WorkbenchError::cli_timeout());
+            }
+            _ = cancel.cancelled() => {
+                if let Ok(mut m) = self.pending.lock() {
+                    m.remove(&id);
+                }
+                return Err(WorkbenchError::cli_cancelled());
+            }
+        };
+        match outcome {
+            ServeOutcome::Ok(env) => Ok(env),
+            ServeOutcome::Failed(msg) => {
+                Err(WorkbenchError::cli_protocol().with_detail(msg))
+            }
+        }
+    }
+
+    /// Subscribe to one PTY's stream frames (the sid the client will open).
+    /// The receiver closes when the session exits or the PTY exits.
+    pub fn subscribe_pty(&self, sid: &str) -> mpsc::UnboundedReceiver<PtyStreamFrame> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Ok(mut m) = self.pty_routes.lock() {
+            m.insert(sid.to_string(), tx);
+        }
+        rx
+    }
+
+    pub async fn pty_input(&self, sid: &str, bytes: &[u8]) -> Result<(), WorkbenchError> {
+        let data = base64_encode(bytes);
+        let mut stdin = self.stdin.lock().await;
+        write_frame(&mut *stdin, &ClientFrame::PtyInput { sid, data: &data }).await
+    }
+
+    pub async fn pty_resize(&self, sid: &str, cols: u16, rows: u16) -> Result<(), WorkbenchError> {
+        let mut stdin = self.stdin.lock().await;
+        write_frame(&mut *stdin, &ClientFrame::PtyResize { sid, cols, rows }).await
+    }
+
+    pub async fn pty_kill(&self, sid: &str) -> Result<(), WorkbenchError> {
+        let mut stdin = self.stdin.lock().await;
+        write_frame(&mut *stdin, &ClientFrame::PtyKill { sid }).await
     }
 
     /// Graceful stop: stdin EOF tells serve to exit; bounded wait, then kill.
-    pub async fn shutdown(mut self) {
+    /// `&self` (not `self`): the session is shared by the PTY planes, so
+    /// shutdown runs whenever the last owner decides the session is over.
+    pub async fn shutdown(&self) {
         use tokio::io::AsyncWriteExt;
-        let _ = self.stdin.shutdown().await;
+        {
+            let mut stdin = self.stdin.lock().await;
+            let _ = stdin.shutdown().await;
+        }
         let grace = Duration::from_secs(3);
-        if tokio::time::timeout(grace, self.child.wait()).await.is_err() {
-            let _ = self.child.kill().await;
-            let _ = self.child.wait().await;
+        let mut child = self.child.lock().await;
+        if tokio::time::timeout(grace, child.wait()).await.is_err() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
         }
     }
 }
 
-impl Default for ReadyBanner {
-    fn default() -> Self {
-        ReadyBanner { serve_protocol: 0, cli_version: String::new() }
-    }
+// -- tiny base64 (URL-safe-free, standard alphabet) ---------------------------
+
+fn base64_encode(data: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+fn base64_decode(data: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tokio::io::duplex;
 
-    /// Drive the wire helpers against a duplex pair, mocking the serve side
-    /// inline — no process spawn, full protocol coverage.
-    fn mock_serve(script: &'static [(&'static str, &'static str)]) -> (tokio::io::DuplexStream, tokio::io::DuplexStream) {
-        let _ = script; // responses are pushed by each test
-        duplex(4096)
+    fn mock_serve() -> (tokio::io::DuplexStream, tokio::io::DuplexStream) {
+        duplex(64 * 1024)
     }
 
     #[tokio::test]
-    async fn handshake_accepts_matching_protocol() {
-        let (mut client_side, mut serve_side) = mock_serve(&[]);
-        use tokio::io::AsyncWriteExt;
-        serve_side
-            .write_all(br#"{"type":"ready","serve_protocol":1,"cli_version":"2.1.9.dev0"}"#)
-            .await
-            .unwrap();
-        serve_side.write_all(b"\n").await.unwrap();
-
-        let mut reader = BufReader::new(client_side);
-        let frame = read_frame(&mut reader).await.unwrap().unwrap();
-        match frame {
-            ServeFrame::Ready { serve_protocol, cli_version } => {
-                assert_eq!(serve_protocol, 1);
-                assert_eq!(cli_version, "2.1.9.dev0");
+    async fn frame_decode_pty_variants() {
+        let out: ServeFrame = serde_json::from_str(
+            r#"{"type":"pty.output","sid":"s1","data":"aGk="}"#,
+        )
+        .unwrap();
+        match out {
+            ServeFrame::PtyOutput { sid, data } => {
+                assert_eq!(sid, "s1");
+                assert_eq!(data, "aGk=");
             }
-            other => panic!("expected ready, got {other:?}"),
+            other => panic!("{other:?}"),
+        }
+        let ex: ServeFrame =
+            serde_json::from_str(r#"{"type":"pty.exit","sid":"s1","exit_code":3}"#).unwrap();
+        match ex {
+            ServeFrame::PtyExit { sid, exit_code, error } => {
+                assert_eq!(sid, "s1");
+                assert_eq!(exit_code, Some(3));
+                assert!(error.is_none());
+            }
+            other => panic!("{other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn result_round_trip_skips_log_frames() {
-        let (mut client_side, mut serve_side) = mock_serve(&[]);
-        use tokio::io::AsyncWriteExt;
+    async fn client_frame_shapes() {
+        let f = ClientFrame::Request { id: "u9", op: "doctor", args: &json!({}) };
+        assert_eq!(
+            serde_json::to_string(&f).unwrap(),
+            r#"{"type":"request","id":"u9","op":"doctor","args":{}}"#
+        );
+        let f = ClientFrame::PtyInput { sid: "s", data: "aGk=" };
+        assert_eq!(
+            serde_json::to_string(&f).unwrap(),
+            r#"{"type":"pty.input","sid":"s","data":"aGk="}"#
+        );
+        let f = ClientFrame::PtyResize { sid: "s", cols: 100, rows: 30 };
+        assert_eq!(
+            serde_json::to_string(&f).unwrap(),
+            r#"{"type":"pty.resize","sid":"s","cols":100,"rows":30}"#
+        );
+    }
+
+    /// A4-style bridge test WITHOUT spawning: duplex peers where one side is
+    /// a scripted serve — requests and pty frames multiplex one stream.
+    #[tokio::test]
+    async fn result_and_pty_frames_multiplex_one_reader() {
+        let (client_side, mut serve_side) = mock_serve();
+        let mut reader = BufReader::new(client_side);
+
+        // script: banner, then (interleaved) a pty.output for another sid,
+        // then our result.
         tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
             serve_side
                 .write_all(
-                    br#"{"type":"log","level":"info","line":"noise"}
-{"type":"event","event":"x","data":{}}
-{"id":"wb1","type":"result","ok":true,"envelope":{"meta":{"protocol":"aisc.cli/v1","command":"version","exit_code":0},"data":{"cli_version":"2.1.9.dev0"},"errors":[]}}
+                    br#"{"type":"ready","serve_protocol":1,"cli_version":"2.1.9.dev0"}
+{"type":"pty.output","sid":"other","data":"eA=="}
+{"type":"pty.output","sid":"mine","data":"aGk="}
+{"id":"wb1","type":"result","ok":true,"envelope":{"meta":{"protocol":"aisc.cli/v1","command":"version","exit_code":0},"data":{},"errors":[]}}
 "#,
                 )
                 .await
                 .unwrap();
         });
 
-        let cancel = CancellationToken::new();
-        let mut reader = BufReader::new(client_side);
-        let env =
-            collect_result(&mut reader, "wb1", Duration::from_secs(5), &cancel).await.unwrap();
-        assert_eq!(env.meta.command, "version");
-        assert_eq!(env.meta.exit_code, 0);
-    }
+        let banner = read_frame(&mut reader).await.unwrap().unwrap();
+        assert!(matches!(banner, ServeFrame::Ready { .. }));
 
-    #[tokio::test]
-    async fn result_error_frame_maps_to_protocol_error() {
-        let (mut client_side, mut serve_side) = mock_serve(&[]);
-        use tokio::io::AsyncWriteExt;
-        tokio::spawn(async move {
-            serve_side
-                .write_all(br#"{"id":"wb1","type":"result","ok":false,"error":"boom"}
-"#)
-                .await
-                .unwrap();
+        let cancel = CancellationToken::new();
+        let pending: Arc<Mutex<HashMap<String, oneshot::Sender<ServeOutcome>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let routes: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<PtyStreamFrame>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        // subscribe "mine" before the reader starts
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        routes.lock().unwrap().insert("mine".into(), tx);
+
+        let (tx1, rx1) = oneshot::channel();
+        pending.lock().unwrap().insert("wb1".into(), tx1);
+
+        // inline mini-reader (same logic as the resident task)
+        let reader_routes = Arc::clone(&routes);
+        let reader_pending = Arc::clone(&pending);
+        let read_task = tokio::spawn(async move {
+            for _ in 0..3 {
+                let frame = read_frame(&mut reader).await.unwrap().unwrap();
+                match frame {
+                    ServeFrame::Result { id, ok, envelope, error } => {
+                        let tx = reader_pending.lock().unwrap().remove(&id.unwrap()).unwrap();
+                        tx.send(match (ok, envelope) {
+                            (true, Some(e)) => ServeOutcome::Ok(e),
+                            _ => ServeOutcome::Failed(error.unwrap_or_default()),
+                        })
+                        .unwrap();
+                    }
+                    ServeFrame::PtyOutput { sid, data } => {
+                        let route = reader_routes.lock().unwrap().get(&sid).cloned();
+                        if let Some(t) = route {
+                            t.send(PtyStreamFrame::Output {
+                                sid,
+                                data: base64_decode(&data).unwrap(),
+                            })
+                            .unwrap();
+                        }
+                    }
+                    _ => {}
+                }
+            }
         });
-        let cancel = CancellationToken::new();
-        let mut reader = BufReader::new(client_side);
-        let err = collect_result(&mut reader, "wb1", Duration::from_secs(5), &cancel)
-            .await
-            .unwrap_err();
-        assert!(err.technical_detail.as_deref().unwrap_or("").contains("boom"));
+        read_task.await.unwrap();
+
+        let outcome = rx1.await.unwrap();
+        assert!(matches!(outcome, ServeOutcome::Ok(_)));
+        let frame = rx.recv().await.unwrap();
+        match frame {
+            PtyStreamFrame::Output { sid, data } => {
+                assert_eq!(sid, "mine");
+                assert_eq!(data, b"hi");
+            }
+            other => panic!("{other:?}"),
+        }
+        let _ = cancel;
     }
 
     #[tokio::test]
-    async fn stale_id_frames_are_skipped() {
-        let (mut client_side, mut serve_side) = mock_serve(&[]);
-        use tokio::io::AsyncWriteExt;
-        tokio::spawn(async move {
-            serve_side
-                .write_all(
-                    br#"{"id":"stale","type":"result","ok":false,"error":"old"}
-{"id":"wb2","type":"result","ok":true,"envelope":{"meta":{"protocol":"aisc.cli/v1","command":"ps","exit_code":0},"data":[],"errors":[]}}
-"#,
-                )
-                .await
-                .unwrap();
-        });
-        let cancel = CancellationToken::new();
-        let mut reader = BufReader::new(client_side);
-        let env =
-            collect_result(&mut reader, "wb2", Duration::from_secs(5), &cancel).await.unwrap();
-        assert_eq!(env.meta.command, "ps");
-    }
-
-    #[tokio::test]
-    async fn eof_before_result_is_error() {
-        let (mut client_side, mut serve_side) = mock_serve(&[]);
-        drop(serve_side); // serve goes away
-        let cancel = CancellationToken::new();
-        let mut reader = BufReader::new(client_side);
-        let err = collect_result(&mut reader, "wb1", Duration::from_secs(5), &cancel)
-            .await
-            .unwrap_err();
-        assert!(err.technical_detail.as_deref().unwrap_or("").contains("closed"));
-    }
-
-    #[tokio::test]
-    async fn write_request_frame_shape() {
-        // duplex streams are peer-to-peer: what the client writes is read on
-        // the serve side (reading your own write would block forever).
-        let (mut client_side, mut serve_side) = mock_serve(&[]);
-        let args = vec!["--format".to_string(), "json".to_string()];
-        write_request(&mut client_side, "u9", "doctor", &args).await.unwrap();
-        let mut buf = vec![0u8; 256];
-        use tokio::io::AsyncReadExt;
-        let n = serve_side.read(&mut buf).await.unwrap();
-        let line = String::from_utf8_lossy(&buf[..n]).to_string();
-        assert_eq!(line, concat!(r#"{"id":"u9","op":"doctor","args":["--format","json"]}"#, "\n"));
+    async fn base64_roundtrip_helpers() {
+        let bytes = b"\x1b[2Jraw \xe4\xb8\xad";
+        assert_eq!(base64_decode(&base64_encode(bytes)).unwrap(), bytes);
     }
 
     /// A4's real-process leg: runs ONLY when AISC_TEST_CLI points at a real
@@ -422,14 +608,14 @@ mod tests {
         if !exe.is_file() {
             return;
         }
-        let mut session = ServeSession::spawn_local(&exe).await.unwrap();
+        let session = ServeSession::spawn_local(&exe).await.unwrap();
         assert_eq!(session.banner().serve_protocol, SERVE_PROTOCOL);
         assert!(!session.banner().cli_version.is_empty());
 
         let cancel = CancellationToken::new();
         for op in ["version", "doctor", "ps"] {
             let env = session
-                .request(op, &[], Duration::from_secs(60), &cancel)
+                .request(op, &json!({}), Duration::from_secs(60), &cancel)
                 .await
                 .unwrap_or_else(|e| panic!("{op}: {e:?}"));
             assert_eq!(env.meta.command, op, "{op}");

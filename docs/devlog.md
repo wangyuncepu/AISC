@@ -37,6 +37,51 @@
 - **S0 合并 `a8f73eb`（`--no-ff`，四 lane CI 绿）**：NSIS 11m26s / Bundle
   7m35s / cli-sidecar 2m2s / Workbench CI 1m50s 全绿；本地分支已删，
   远程 `origin/s0-f1-strip` 待用户示意删除（权限分类器拦 push --delete）。
+- **R2 会话面（D-8，2026-09-07 夜，分支 r2-remote-sessions）**：
+  **R2a**（`d9fc99c`）docker_gateway 流化——socket 原语提模块级 +
+  `InteractiveStreamHandle`（字节面/resize/kill/EOF 驱动 wait_exit 含 #61
+  容忍）+ open_interactive 重组装（194 既有测试锚定零回归；AISC_EXEC_POLL
+  legacy 逃生门按 P2 计划退役）；application/session 提取
+  `build_session_exec`；serve 协议 v1.1——`session.open` op + pty.* 帧族
+  （base64）+ ServeRuntime 帧写锁 + PTY 注册表。**R2b**（`5945c5a`）Rust
+  ServeSession 全双工重构（常驻读任务分发 result→oneshot、pty.*→sid 路由，
+  单连接多路复用；shutdown &self）+ `spawn_serve_pty_session` 产出与 pipe
+  模式同形 PtySession——**G1 根治：resize 走 pty.resize 帧无本地文件**
+  （P6b 第二通道顺带清偿）。**R2c-lite**（`153475c`）target.rs（RemoteMachine
+  配置 + ActiveTarget 状态 + target_get/set/clear IPC）+ session.rs 双路径
+  分流（Local pipe 模式 bit 级不变）+ serve session.open 双 executor 修复
+  （解析走 RealDockerExecutor、PTY 流走 SDK gateway——gateway 无
+  run_captured 曾致 NOT_FOUND）。
+  **e2e 实证（WSL 真容器）**：ready→session.open→pty.input 回显→resize
+  （bash 重绘 100 列实证）→pty.output 帧→exit 帧，五环全通；「命令执行
+  输出」一环时序待手测轮排查（见阶段表）。门禁：cargo 295 / vitest 439 /
+  vue-tsc / pytest 1201 全绿。**续批**：runtime 16 点 target 路由 + lease
+  直写降级 + docker_api G2 禁用。
+- **R2 续批（2026-09-07 深夜）**：①**全仓 target 路由**——runtime/lease/
+  cache/conversation/doctor/subscription 六模块 41 个调用点批量迁移
+  `resolve_target` + `run_control_target/_input_target`，`run_build_stream`
+  增 target 版（Local spawn bit 级不变）；②**G2 降级**——`runtime_poll_light`
+  在 Remote target 时显式 Err（前端回退 CLI 轮询，即 P6a 审查 R1 语义）；
+  lease P5b 直写心跳在 Remote 时禁用（远端 lease 文件不在本机数据根，
+  恒走 CLI beat）；③**e2e 完整闭环 PASS**——此前「命令输出缺失」证伪为
+  诊断脚本自身 readline 无超时死等；带 select 超时的复测全绿：PS1 渲染
+  流回 + `echo` 命令回显**与执行输出**（双 MARKER 实证）+ kill 干净收尾。
+  门禁：cargo 295 / vitest 439 / vue-tsc / pytest 1201 全绿。
+- **R2 手测自动化（2026-09-07 深夜，用户授权全代测）**：三层替代人工——
+  ①**Rust 真 SSH 集成**（`tests/serve_ssh.rs`，AISC_TEST_SSH/RUNTIME_ID 门控）：
+  0.62s 全环 PASS（PS1/命令执行输出/G1 resize/kill-exit）；排查两坑：readline
+  逐字着色打散回显（断言改连续 marker 行）、kill 后 waiter 在 EOF-but-Running
+  settle 死循环（`InteractiveStreamHandle.wait_exit` 观察 kill 快退——kill 语义
+  =断流、exec 容器内继续）。②**真容器 e2e**：serve PTY 命令执行输出双 MARKER
+  实证。③**UI 面 CDP 自动化**（`scripts/r2-ui-cdp-test.py`，WebView2
+  remote-debugging-port 9223 + vite `/@id/` 动态 import invoke/Channel）：
+  **真实 Windows Workbench 进程内** target_set(wsl) → open_session(Remote:
+  Windows→ssh→WSL serve→Docker) state=running → PtyEvent 流经 Channel 到前端
+  → write_session 命令执行输出确认 → resize_session → close/exit 事件 →
+  target_clear，**FULL PASS**。途中根治一产品 bug：**Windows GUI 进程 PATH
+  可能解析到 Git msys ssh**——`CliTarget::Remote` 在 Windows 固定用
+  `C:\Windows\System32\OpenSSH\ssh.exe` 绝对路径。xterm 像素渲染未自动化
+  （组件逻辑 vitest 覆盖）。重跑手册 `scripts/README-r2-tests.md`。
 - **R1 serve 通道 + 传输抽象（D-7，2026-09-07）**：双通道模型落地——低频
   控制面 per-op ssh / 流式面 serve 长驻。三件：
   **R1a** `aisc serve --stdio`（Python，`7112e18`）：帧协议 v1（ready 横幅

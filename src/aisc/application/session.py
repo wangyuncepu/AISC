@@ -21,7 +21,7 @@ import math
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from aisc.application.runtime import resolve_running_container, validate_uuid_v4
 from aisc.domain.models import (
@@ -69,25 +69,22 @@ _resolve_running_container = resolve_running_container
 # Session open (interactive)
 # ---------------------------------------------------------------------------
 
-def open_session(
+def build_session_exec(
     runtime_id: str,
     session_id: str,
     agent: str,
     executor: Any,
     registry_root: Any,
     resume_conversation_id: Optional[str] = None,
-) -> Any:
-    """Open an interactive agent session via ``docker exec -it``.
+) -> Tuple[str, List[str], Optional[Dict[str, str]]]:
+    """Resolve + validate + construct the exec for one interactive session.
 
-    Per contract §6.1:
-    - Validates runtime_id, session_id (UUID v4) and agent (controlled enum).
-    - Checks runtime exists and is running.
-    - Constructs a controlled argv (no shell=True) to execute the
-      in-container ``aisc-session-wrapper``.
-    - Runs with inherited stdio (interactive TTY); the agent's exit code
-      becomes the process exit code.
+    2.1.10 R2 (D-8): the shared middle of session-open — the pipe-mode
+    ``open_session`` and the serve PTY op both call this, then attach their
+    own transports (inherited-fd SDK session vs stream handle).
 
-    Returns a ``ProcessResult`` from ``executor.run_streaming``.
+    Returns ``(container_name, docker_argv, env)``; raises ``CliError`` on
+    validation/resolution failures (identical codes to the one-shot CLI).
     """
     if not validate_uuid_v4(runtime_id):
         raise CliError(
@@ -112,12 +109,6 @@ def open_session(
 
     container_name = _resolve_running_container(runtime_id, executor, registry_root)
 
-    # Controlled in-container argv: <wrapper> open <session_id> <runtime_id> <agent>
-    # The wrapper reads /run/aisc/runtime-context.json to rebuild scope env,
-    # starts the agent in its own process group, records session metadata,
-    # and propagates the agent's exit code. The session runs through the
-    # Docker SDK (open_interactive) so the exec pty can be resized via
-    # exec_resize (G-02: docker CLI exec ptys are frozen at spawn size).
     docker_argv = [
         _SESSION_WRAPPER_PATH,
         "open",
@@ -126,11 +117,6 @@ def open_session(
         "--agent", agent,
     ]
 
-    # v2.1.8 T4 (design §1f/§2): forward the Workbench's resume request to
-    # the wrapper, which converts it to the provider-native form (claude
-    # --resume <id> / codex resume <id>). Defense in depth: the Workbench
-    # preflight already validated id + file; reject malformed requests here
-    # too so a Rust regression can never spawn a garbage resume.
     if resume_conversation_id is not None:
         from aisc.application.conversation import (
             ERROR_INVALID_AGENT as _CONV_INVALID_AGENT,
@@ -162,6 +148,37 @@ def open_session(
 
         env = help_function_env()
 
+    return container_name, docker_argv, env
+
+
+def open_session(
+    runtime_id: str,
+    session_id: str,
+    agent: str,
+    executor: Any,
+    registry_root: Any,
+    resume_conversation_id: Optional[str] = None,
+) -> Any:
+    """Open an interactive agent session via ``docker exec -it``.
+
+    Per contract §6.1:
+    - Validates runtime_id, session_id (UUID v4) and agent (controlled enum).
+    - Checks runtime exists and is running.
+    - Constructs a controlled argv (no shell=True) to execute the
+      in-container ``aisc-session-wrapper``.
+    - Runs with inherited stdio (interactive TTY); the agent's exit code
+      becomes the process exit code.
+
+    Returns a ``ProcessResult`` from ``executor.run_streaming``.
+    """
+    container_name, docker_argv, env = build_session_exec(
+        runtime_id=runtime_id,
+        session_id=session_id,
+        agent=agent,
+        executor=executor,
+        registry_root=registry_root,
+        resume_conversation_id=resume_conversation_id,
+    )
     return executor.open_interactive(container_name, docker_argv, env=env)
 
 
