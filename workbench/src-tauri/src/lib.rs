@@ -29,6 +29,7 @@ pub mod docker_api;
 pub mod low_spec;
 pub mod serve;
 pub mod target;
+pub mod tunnel;
 pub mod artifact;
 pub mod storage;
 pub mod trace;
@@ -122,6 +123,7 @@ pub fn run(cli_arg: Option<String>) {
         .manage(std::sync::Arc::new(host_mcp::HostMcpState::new()))
         .manage(target::ActiveTarget::default())
         .manage(serve::ServePool::new())
+        .manage(tunnel::TunnelRegistry::default())
         .invoke_handler(tauri::generate_handler![
             cli_discover,
             cli_pin,

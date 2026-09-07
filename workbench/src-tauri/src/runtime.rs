@@ -461,6 +461,12 @@ pub async fn open_runtime_service_url(
         return Err(WorkbenchError::map_aisc("AISC_ERR_RUNTIME_NOT_FOUND")
             .with_detail(format!("service port {port} is not registered")));
     };
+    // R4a: a remote gateway binds the REMOTE loopback — open a same-port
+    // ssh -L forward first so the unchanged canonical URL works locally.
+    if let crate::cli::CliTarget::Remote(t) = &target {
+        let registry = app.state::<crate::tunnel::TunnelRegistry>();
+        crate::tunnel::ensure_gateway_tunnel(registry.inner(), t, payload.gateway.host_port).await?;
+    }
     if !url_matches_canonical(&service.url, port, payload.gateway.host_port) {
         return Err(WorkbenchError::cli_protocol().with_detail(
             "service URL does not match the canonical builder".to_string(),
