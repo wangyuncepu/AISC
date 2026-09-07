@@ -29,6 +29,11 @@
   （2.1.9-dev-plans/decisions.md 已盖印）。门禁：cargo 286+33 绿 / vitest 439
   绿 / vue-tsc build 绿 / pytest 1188 绿（Docker 集成除外——环境性，干净树
   同样跳过）。用户数据处置清单见 f1-strip-plan.md §3，待逐项确认。
+- **S0 手测 PASS + 数据清理（2026-09-07）**：Windows 侧 dev 手测确认无 F1
+  残留 UI/报错；用户逐项授权后清理 4 项残留——数据根 `sync-workspaces/`
+  （2.1 GB，7 个影子工作区）与 `mutagen/`（87 MB 托管二进制）删除、
+  `~/.ssh/config` 受管段（BEGIN/END AISC 标注段）删除（备份留存）、
+  settings.json `ssh_profiles` 键移除。S0 收口。
 
 # v2.1.9-dev (2026-08-20 ~) — 四挂账清偿 · nairong 根因链 · 构建韧性 · 优化批次（分支 develop）
 

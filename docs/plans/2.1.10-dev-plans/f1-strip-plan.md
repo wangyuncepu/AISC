@@ -63,6 +63,12 @@
 
 代码剥离本身不触碰以上任何数据。
 
+**处置结果（2026-09-07，用户逐项授权 + 手测 PASS）**：①`sync-workspaces/`
+2.1 GB（7 个影子工作区）已删；②`mutagen/` 87 MB 已删；③ssh config 受管段
+已删（备份 /tmp/ssh-config-backup-20260907.txt，段外零触碰）；④settings.json
+`ssh_profiles` 键已移除。影子工作区内的 `.aisc-ssh-workspace.json` 元数据
+随目录一并消失，无独立残留。
+
 ## 4. 执行序与验证
 
 S0a Rust → S0b TS/UI → S0c 构建链 → S0d 文档（README F1 节删除 +
