@@ -88,14 +88,13 @@ const EFFECT_KEY: Record<EffectKind, string> = {
 // workspace, UI dead until restart). The Record<Group,...> typing below
 // makes a future missing entry a COMPILE error, and the heading falls back
 // to the raw group id instead of undefined.
-const GROUPS = ["ui", "terminal", "window", "hostTools", "ssh", "performance", "disk"] as const;
+const GROUPS = ["ui", "terminal", "window", "hostTools", "performance", "disk"] as const;
 type SettingsGroup = (typeof GROUPS)[number];
 const GROUP_KEY: Record<SettingsGroup, string> = {
   ui: "settings.group.ui",
   terminal: "settings.group.terminal",
   window: "settings.group.window",
   hostTools: "settings.group.hostTools",
-  ssh: "settings.group.ssh",
   performance: "settings.group.performance",
   disk: "settings.group.disk",
 };
@@ -130,28 +129,6 @@ watch(hostTools, (rows) => {
     }));
 }, { deep: true });
 
-/** F1: SSH profiles working copy — same load/edit/save flow as hostTools. */
-const sshProfiles = ref<import("../../types").SshProfile[]>(
-  (store.doc?.sshProfiles ?? []).map((p) => ({ ...p, port: p.port || 22 })));
-watch(
-  () => store.doc,
-  (d) => {
-    sshProfiles.value = (d?.sshProfiles ?? []).map((p) => ({ ...p, port: p.port || 22 }));
-  },
-);
-watch(sshProfiles, (rows) => {
-  if (!store.doc) return;
-  store.doc.sshProfiles = rows
-    .filter((r) => r.name.trim() && r.host.trim() && r.user.trim())
-    .map((r) => ({
-      name: r.name,
-      host: r.host,
-      port: Number(r.port) || 22,
-      user: r.user,
-      keyPath: r.keyPath,
-    }));
-}, { deep: true });
-
 /** Explorer ignore names as a comma-separated string for the text input. */
 const explorerIgnoreText = computed<string>({
   get: () => (ui.value.explorer_ignore ?? []).join(", "),
@@ -172,7 +149,7 @@ const issuesByField = computed(() => {
 const saving = computed(() => store.saveState === "saving");
 const savedFlash = ref(false);
 
-/** PERF P8 (D-13): performance working copy (load/edit/save like sshProfiles;
+/** PERF P8 (D-13): performance working copy (load/edit/save like hostTools;
  *  defaults mirror the Rust sanitizer). */
 const perf = computed(() => store.doc?.performance);
 const perfLowSpec = computed({
@@ -388,26 +365,6 @@ async function reopenOnboarding() {
           <p class="note">{{ t("settings.hostTools.note") }}</p>
         </template>
 
-        <!-- F1 (D-10): SSH connection profiles for sync workspaces. v1: key
-             auth only — keyPath is a REFERENCE, never copied or stored. -->
-        <template v-else-if="group === 'ssh'">
-          <p class="help">{{ t("settings.ssh.hint") }}</p>
-          <div v-for="(row, i) in sshProfiles" :key="i" class="field ssh-row">
-            <input v-model.trim="row.name" class="ssh-name" :placeholder="t('settings.ssh.namePh')" :disabled="store.readOnly" />
-            <input v-model.trim="row.host" class="ssh-host" :placeholder="t('settings.ssh.hostPh')" :disabled="store.readOnly" />
-            <input v-model.number="row.port" type="number" min="1" max="65535" class="ssh-port" :disabled="store.readOnly" />
-            <input v-model.trim="row.user" class="ssh-user" :placeholder="t('settings.ssh.userPh')" :disabled="store.readOnly" />
-            <input v-model.trim="row.keyPath" class="ssh-key" :placeholder="t('settings.ssh.keyPh')" :disabled="store.readOnly" />
-            <button class="ht-del" :disabled="store.readOnly" :title="t('settings.ssh.remove')" @click="sshProfiles.splice(i, 1)">×</button>
-          </div>
-          <div class="field">
-            <button :disabled="store.readOnly" @click="sshProfiles.push({ name: '', host: '', port: 22, user: '', keyPath: '' })">
-              ＋ {{ t("settings.ssh.add") }}
-            </button>
-          </div>
-          <p class="note">{{ t("settings.ssh.note") }}</p>
-        </template>
-
         <!-- PERF P8 (D-13): performance / low-spec mode. lowSpec gates the
              container --memory/--cpus budget (new containers only); the
              .wslconfig merge keeps user keys and only runs on confirmation. -->
@@ -427,7 +384,7 @@ async function reopenOnboarding() {
           <template v-if="perfLowSpec">
             <div class="field">
               <label class="label">{{ t("settings.perf.memory") }}</label>
-              <input v-model.trim="perfMemory" class="ssh-key" :disabled="store.readOnly" />
+              <input v-model.trim="perfMemory" class="mono-input" :disabled="store.readOnly" />
             </div>
             <div class="field">
               <label class="label">{{ t("settings.perf.cpus") }}</label>
@@ -534,12 +491,7 @@ input:disabled, select:disabled { opacity: 0.5; }
   min-width: 26px; min-height: 26px; padding: 0; flex: none;
 }
 /* F1: SSH profile rows */
-.ssh-row { flex-wrap: nowrap; }
-.ssh-name { max-width: 120px; }
-.ssh-host { max-width: 170px; font-family: var(--font-mono); font-size: var(--font-sm); }
-.ssh-port { max-width: 72px; }
-.ssh-user { max-width: 110px; }
-.ssh-key { font-family: var(--font-mono); font-size: var(--font-sm); }
+.mono-input { font-family: var(--font-mono); font-size: var(--font-sm); }
 .loading { color: var(--text-muted); font-size: var(--font-md); }
 .foot {
   display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border);

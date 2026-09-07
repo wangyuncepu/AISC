@@ -294,68 +294,6 @@ export const ccSwitchFetchModels = (
     workspace, runtimeId, agent, providerId, apiKey: apiKey || null,
   });
 
-/** F1 (D-10): create an SSH-workspace shadow dir + metadata; returns the
- * local workspace path to open as a normal workspace. `existed` = re-open
- * (metadata untouched) — just open it, never a duplicate error. */
-export const sshWorkspaceCreate = (
-  name: string, profile: unknown, remotePath: string,
-  ignorePatterns?: string[],
-) =>
-  invoke<{ workspacePath: string; existed: boolean }>("ssh_workspace_create", {
-    name, profile, remotePath, ignorePatterns: ignorePatterns ?? [],
-  });
-
-/** F1 (T-F1e): remote directory listing for the path browse dialog. */
-export interface SshDirEntry {
-  name: string;
-  isDir: boolean;
-}
-
-export const sshBrowse = (profile: unknown, path: string) =>
-  invoke<SshDirEntry[]>("ssh_browse", { profile, path });
-/** Browse variant for an OPEN SSH workspace (profile from metadata — the
- *  sidebar pull-file flow has no live profile form). */
-export const sshBrowseWorkspace = (workspace: string, path: string) =>
-  invoke<SshDirEntry[]>("ssh_browse_workspace", { workspace, path });
-
-/** F1 (oversized strategy): pull ONE remote file into the shadow workspace
- * on demand — lands outside the sync flow, usable by the agent immediately. */
-export const sshPullFile = (workspace: string, remotePath: string) =>
-  invoke<string>("ssh_pull_file", { workspace, remotePath });
-
-/** F1 (T-F1c): the mutagen session lifecycle + status projection. */
-export interface SyncStatus {
-  status: string;
-  message: string;
-  lastError: string;
-  alphaFiles?: number | null;
-  betaFiles?: number | null;
-  totalFileSize?: number | null;
-  /** Disk guard: live free space on the data-root volume. */
-  freeBytes?: number | null;
-  /** Disk guard: this session was auto-paused for low disk (metadata flag). */
-  lowDisk?: boolean;
-  /** The workspace's remote root — anchors the pull-file browse dialog. */
-  remotePath?: string;
-}
-
-export const syncSessionStart = (workspace: string) =>
-  invoke<SyncStatus>("sync_session_start", { workspace });
-export const syncSessionStatus = (workspace: string) =>
-  invoke<SyncStatus>("sync_session_status", { workspace });
-export const syncSessionPause = (workspace: string) =>
-  invoke<SyncStatus>("sync_session_pause", { workspace });
-export const syncSessionResume = (workspace: string) =>
-  invoke<SyncStatus>("sync_session_resume", { workspace });
-export const syncSessionTerminate = (workspace: string) =>
-  invoke<void>("sync_session_terminate", { workspace });
-/** F1: permanently cancel (terminate + delete synced content + disable
- * re-attach) and the explicit re-enable. */
-export const syncSessionCancel = (workspace: string) =>
-  invoke<SyncStatus>("sync_session_cancel", { workspace });
-export const syncSessionEnable = (workspace: string) =>
-  invoke<SyncStatus>("sync_session_enable", { workspace });
-
 // --- IDEA-2 (2d): subscription + usage data plane ---
 // The subscription URL / content ride the CLI child's stdin on the Rust side
 // (credentials never travel via argv, logs or disk).

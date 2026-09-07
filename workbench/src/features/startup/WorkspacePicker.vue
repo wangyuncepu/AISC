@@ -13,89 +13,13 @@ import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useWorkspacesStore } from "../../stores/workspaces";
-import { useSettingsStore } from "../../stores/settings";
-import type { ForgetPreview, SshProfile } from "../../types";
+import type { ForgetPreview } from "../../types";
 import ForgetConfirmDialog from "./ForgetConfirmDialog.vue";
 import InvalidPathDialog from "./InvalidPathDialog.vue";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
 const wsStore = useWorkspacesStore();
-
-// --- F1 (D-10): SSH-workspace entry (collapsed form) ---
-const settings = useSettingsStore();
-const sshOpen = ref(false);
-const sshForm = ref({ profile: 0, remotePath: "", name: "", ignores: "" });
-const sshBusy = ref(false);
-const sshError = computed(() => wsStore.createSshError);
-const profiles = computed<SshProfile[]>(() => settings.doc?.sshProfiles ?? []);
-void settings.load();
-
-async function onCreateSsh(): Promise<void> {
-  if (sshBusy.value) return;
-  const p = profiles.value[sshForm.value.profile];
-  if (!p || !sshForm.value.remotePath.trim() || !sshForm.value.name.trim()) return;
-  sshBusy.value = true;
-  try {
-    const workspacePath = await wsStore.createSshWorkspace(
-      sshForm.value.name.trim(), p, sshForm.value.remotePath.trim(),
-      sshForm.value.ignores.split(",").map((s) => s.trim()).filter(Boolean));
-    if (workspacePath) {
-      // Open the shadow dir as a NORMAL workspace — the identity chain is
-      // untouched; the sync layer (T-F1c) attaches via the metadata file.
-      store.workspace = workspacePath;
-      sshOpen.value = false;
-      sshForm.value = { profile: 0, remotePath: "", name: "", ignores: "" };
-      await store.runPreflight();
-    }
-  } finally {
-    sshBusy.value = false;
-  }
-}
-
-// --- T-F1e: remote path browse dialog (click-to-pick instead of typing) ---
-const browse = ref<{ open: boolean; path: string; entries: { name: string; isDir: boolean }[] } | null>(null);
-
-function openBrowse(): void {
-  const p = profiles.value[sshForm.value.profile];
-  if (!p) return;
-  const start = sshForm.value.remotePath.trim() || "/";
-  browse.value = { open: true, path: start, entries: [] };
-  void loadBrowse(start);
-}
-
-async function loadBrowse(path: string): Promise<void> {
-  const p = profiles.value[sshForm.value.profile];
-  if (!p || !browse.value) return;
-  browse.value.entries = await wsStore.browseRemote(p, path);
-  browse.value.path = path;
-}
-
-function browseInto(name: string): void {
-  if (!browse.value) return;
-  const next = (browse.value.path.replace(/\/+$/, "") + "/" + name).replace(/\/{2,}/g, "/");
-  void loadBrowse(next);
-}
-
-function browseUp(): void {
-  if (!browse.value) return;
-  const parts = browse.value.path.replace(/\/+$/, "").split("/").filter(Boolean);
-  parts.pop();
-  void loadBrowse("/" + parts.join("/"));
-}
-
-function chooseBrowse(): void {
-  if (browse.value) sshForm.value.remotePath = browse.value.path;
-  browse.value = null;
-}
-
-function browseCrumb(index: number): void {
-  if (!browse.value) return;
-  const parts = browse.value.path.replace(/\/+$/, "").split("/").filter(Boolean);
-  void loadBrowse("/" + parts.slice(0, index + 1).join("/"));
-}
-const browseCrumbs = computed(() =>
-  (browse.value?.path ?? "/").replace(/\/+$/, "").split("/").filter(Boolean));
 
 function basename(p: string): string {
   // Both separators — Windows paths are backslashed (round-4 fix).
@@ -235,47 +159,6 @@ async function confirmForget(): Promise<void> {
     </div>
     <p class="hint">{{ t("picker.hint") }}</p>
 
-    <!-- F1 (D-10): SSH workspace entry — shadow dir under the data root,
-         opened as a normal workspace; the sync layer attaches later. -->
-    <div class="ssh ui-section">
-      <button class="ssh-toggle ui-section-title" @click="sshOpen = !sshOpen">
-        {{ sshOpen ? "▾" : "▸" }} {{ t("picker.ssh.title") }}
-      </button>
-      <div v-if="sshOpen" class="ssh-form">
-        <p v-if="!profiles.length" class="ssh-hint">{{ t("picker.ssh.noProfiles") }}</p>
-        <template v-else>
-          <label class="ssh-field">
-            <span>{{ t("picker.ssh.profile") }}</span>
-            <select v-model.number="sshForm.profile">
-              <option v-for="(p, i) in profiles" :key="p.name" :value="i">
-                {{ p.name }} ({{ p.user }}@{{ p.host }}:{{ p.port }})
-              </option>
-            </select>
-          </label>
-          <label class="ssh-field">
-            <span>{{ t("picker.ssh.remotePath") }}</span>
-            <input v-model.trim="sshForm.remotePath" placeholder="/home/user/project" @keyup.enter="onCreateSsh" />
-            <button class="ui-button" :title="t('picker.ssh.browse')" @click="openBrowse">…</button>
-          </label>
-          <label class="ssh-field">
-            <span>{{ t("picker.ssh.name") }}</span>
-            <input v-model.trim="sshForm.name" :placeholder="t('picker.ssh.namePh')" @keyup.enter="onCreateSsh" />
-          </label>
-          <label class="ssh-field">
-            <span>{{ t("picker.ssh.ignores") }}</span>
-            <input v-model.trim="sshForm.ignores" :placeholder="t('picker.ssh.ignoresPh')" />
-          </label>
-          <div class="ssh-actions">
-            <button class="ui-button primary" :disabled="sshBusy || !sshForm.remotePath || !sshForm.name" @click="onCreateSsh">
-              {{ sshBusy ? t("picker.ssh.creating") : t("picker.ssh.create") }}
-            </button>
-          </div>
-          <p class="ssh-hint">{{ t("picker.ssh.hint") }}</p>
-        </template>
-        <p v-if="sshError" class="forget-error" role="alert">{{ sshError }}</p>
-      </div>
-    </div>
-
     <div v-if="store.recentWorkspaces.length" class="recents ui-section">
       <div class="recents-label ui-section-title">{{ t("picker.recents") }}</div>
       <ul>
@@ -326,40 +209,6 @@ async function confirmForget(): Promise<void> {
     </div>
 
     <p v-if="forgetError && !forgetPreview" class="forget-error" role="alert">{{ forgetError }}</p>
-
-    <!-- T-F1e: remote path browse dialog -->
-    <div v-if="browse" class="browse-overlay" @mousedown="browse = null">
-      <div class="browse" role="dialog" aria-modal="true" :aria-label="t('picker.ssh.browse')" @mousedown.stop>
-        <div class="browse-head">
-          <span class="crumbs">
-            <button class="crumb" @click="loadBrowse('/')">/</button>
-            <template v-for="(c, i) in browseCrumbs" :key="i">
-              <button class="crumb" @click="browseCrumb(i)">{{ c }}</button>
-            </template>
-          </span>
-          <button class="ui-button quiet" :disabled="browse.path === '/'" @click="browseUp">↑</button>
-        </div>
-        <div class="browse-list">
-          <p v-if="wsStore.browseBusy" class="ssh-hint">{{ t("picker.ssh.loading") }}</p>
-          <p v-else-if="wsStore.browseError" class="forget-error" role="alert">{{ wsStore.browseError }}</p>
-          <p v-else-if="!browse.entries.length" class="ssh-hint">{{ t("picker.ssh.emptyDir") }}</p>
-          <button
-            v-for="e in browse.entries" :key="e.name"
-            class="browse-item" :class="{ dir: e.isDir }"
-            @click="e.isDir && browseInto(e.name)"
-          >
-            <span class="bi-icon">{{ e.isDir ? "📁" : "📄" }}</span>{{ e.name }}
-          </button>
-        </div>
-        <div class="browse-foot">
-          <span class="ssh-hint">{{ browse.path }}</span>
-          <div class="browse-actions">
-            <button class="ui-button" @click="browse = null">{{ t("picker.ssh.cancel") }}</button>
-            <button class="ui-button primary" @click="chooseBrowse">{{ t("picker.ssh.choose") }}</button>
-          </div>
-        </div>
-      </div>
-    </div>
 
     <ForgetConfirmDialog
       v-if="forgetPreview"
@@ -449,58 +298,4 @@ async function confirmForget(): Promise<void> {
 .ctx-item.danger { color: var(--error-fg); }
 .ctx-item:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: calc(-1 * var(--focus-ring-offset)); }
 .forget-error { color: var(--error-fg); font-size: var(--font-sm); margin: 0; max-width: 560px; }
-/* F1: SSH workspace form */
-.ssh { width: 560px; max-width: 90vw; }
-.ssh-toggle {
-  background: none; border: none; cursor: pointer; text-align: left;
-  font-size: var(--font-sm); color: var(--text-muted); width: 100%; padding: 0;
-}
-.ssh-form { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-2); }
-.ssh-field { display: flex; align-items: center; gap: var(--space-2); font-size: var(--font-sm); }
-.ssh-field > span { width: 90px; color: var(--text-muted); flex: none; }
-.ssh-field input, .ssh-field select {
-  flex: 1; background: var(--surface-3); color: var(--text);
-  border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
-  min-height: var(--control-h-sm); padding: 0 var(--space-2);
-}
-.ssh-actions { display: flex; justify-content: flex-end; }
-.ssh-hint { font-size: var(--font-xs); color: var(--text-faint); margin: 0; }
-/* T-F1e: remote browse dialog */
-.browse-overlay {
-  position: fixed; inset: 0; z-index: 90; background: var(--scrim, rgba(0,0,0,.4));
-  display: flex; align-items: center; justify-content: center;
-}
-.browse {
-  width: 520px; max-width: 92vw; max-height: 70vh;
-  display: flex; flex-direction: column;
-  background: var(--surface); border: var(--border-w) solid var(--border-strong);
-  border-radius: var(--radius-md); box-shadow: var(--shadow-menu);
-}
-.browse-head {
-  display: flex; align-items: center; gap: var(--space-2);
-  padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border);
-}
-.crumbs { display: flex; flex-wrap: wrap; gap: 2px; flex: 1; min-width: 0; }
-.crumb {
-  background: none; border: none; cursor: pointer; padding: 2px 4px;
-  color: var(--accent); font-family: var(--font-mono); font-size: var(--font-sm);
-  border-radius: var(--radius-sm);
-}
-.crumb:hover { background: var(--surface-hover); }
-.browse-list { flex: 1; overflow-y: auto; padding: var(--space-2); min-height: 160px; }
-.browse-item {
-  display: flex; align-items: center; gap: var(--space-2); width: 100%;
-  text-align: left; padding: 5px var(--space-2); border: none; cursor: default;
-  background: none; color: var(--text-2); font-size: var(--font-sm);
-  border-radius: var(--radius-sm);
-}
-.browse-item.dir { cursor: pointer; color: var(--text); }
-.browse-item.dir:hover, .browse-item.dir:focus-visible { background: var(--surface-hover); }
-.bi-icon { flex: none; }
-.browse-foot {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
-  padding: var(--space-2) var(--space-3); border-top: 1px solid var(--border);
-}
-.browse-foot .ssh-hint { font-family: var(--font-mono); }
-.browse-actions { display: flex; gap: var(--space-2); }
 </style>

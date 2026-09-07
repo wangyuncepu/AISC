@@ -45,7 +45,6 @@ const doc: SettingsDocument = {
   },
   window: { remember_geometry: true, close_behavior: "quit", geometry: null },
   hostTools: [],
-  sshProfiles: [],
   performance: { lowSpec: false, containerMemory: "3g", containerCpus: 1.5 },
   issues: [],
   corrupted: false,
@@ -70,7 +69,6 @@ describe("SettingsForm section headings (manual-test #1)", () => {
       i18n.global.t("settings.group.terminal"),
       i18n.global.t("settings.group.window"),
       i18n.global.t("settings.group.hostTools"),
-      i18n.global.t("settings.group.ssh"),
       i18n.global.t("settings.group.performance"),
       i18n.global.t("settings.group.disk"),
     ]);
