@@ -195,6 +195,7 @@ def _op_session_open(args: argparse.Namespace, payload: Dict[str, Any],
                      runtime: ServeRuntime) -> Tuple[Any, int, List[Dict[str, Any]]]:
     """R2 (D-8): open one exec TTY as a stream; result frame reports the
     exec establishment, then pty.output/exit stream frames follow."""
+    from aisc.adapters.docker_ import RealDockerExecutor
     from aisc.adapters.docker_gateway import create_docker_gateway
     from aisc.application.session import build_session_exec
     from aisc.cli.commands.session import _resolve_workspace_and_registry
@@ -205,6 +206,10 @@ def _op_session_open(args: argparse.Namespace, payload: Dict[str, Any],
     workspace = payload.get("workspace")
     resume = payload.get("resume_conversation_id")
 
+    # Resolution/validation speaks the DockerExecutor interface (run_captured
+    # etc. — RealDockerExecutor, docker CLI); the PTY stream is SDK-only
+    # (exec_resize, G-02). Two objects, two contracts.
+    executor = RealDockerExecutor()
     gateway = create_docker_gateway("auto")
     registry_root = _resolve_workspace_and_registry(
         workspace if isinstance(workspace, str) and workspace else None
@@ -214,7 +219,7 @@ def _op_session_open(args: argparse.Namespace, payload: Dict[str, Any],
         runtime_id=runtime_id,
         session_id=session_id,
         agent=agent,
-        executor=gateway,
+        executor=executor,
         registry_root=registry_root,
         resume_conversation_id=resume if isinstance(resume, str) else None,
     )

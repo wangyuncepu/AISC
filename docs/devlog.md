@@ -37,6 +37,26 @@
 - **S0 合并 `a8f73eb`（`--no-ff`，四 lane CI 绿）**：NSIS 11m26s / Bundle
   7m35s / cli-sidecar 2m2s / Workbench CI 1m50s 全绿；本地分支已删，
   远程 `origin/s0-f1-strip` 待用户示意删除（权限分类器拦 push --delete）。
+- **R2 会话面（D-8，2026-09-07 夜，分支 r2-remote-sessions）**：
+  **R2a**（`d9fc99c`）docker_gateway 流化——socket 原语提模块级 +
+  `InteractiveStreamHandle`（字节面/resize/kill/EOF 驱动 wait_exit 含 #61
+  容忍）+ open_interactive 重组装（194 既有测试锚定零回归；AISC_EXEC_POLL
+  legacy 逃生门按 P2 计划退役）；application/session 提取
+  `build_session_exec`；serve 协议 v1.1——`session.open` op + pty.* 帧族
+  （base64）+ ServeRuntime 帧写锁 + PTY 注册表。**R2b**（`5945c5a`）Rust
+  ServeSession 全双工重构（常驻读任务分发 result→oneshot、pty.*→sid 路由，
+  单连接多路复用；shutdown &self）+ `spawn_serve_pty_session` 产出与 pipe
+  模式同形 PtySession——**G1 根治：resize 走 pty.resize 帧无本地文件**
+  （P6b 第二通道顺带清偿）。**R2c-lite**（`153475c`）target.rs（RemoteMachine
+  配置 + ActiveTarget 状态 + target_get/set/clear IPC）+ session.rs 双路径
+  分流（Local pipe 模式 bit 级不变）+ serve session.open 双 executor 修复
+  （解析走 RealDockerExecutor、PTY 流走 SDK gateway——gateway 无
+  run_captured 曾致 NOT_FOUND）。
+  **e2e 实证（WSL 真容器）**：ready→session.open→pty.input 回显→resize
+  （bash 重绘 100 列实证）→pty.output 帧→exit 帧，五环全通；「命令执行
+  输出」一环时序待手测轮排查（见阶段表）。门禁：cargo 295 / vitest 439 /
+  vue-tsc / pytest 1201 全绿。**续批**：runtime 16 点 target 路由 + lease
+  直写降级 + docker_api G2 禁用。
 - **R1 serve 通道 + 传输抽象（D-7，2026-09-07）**：双通道模型落地——低频
   控制面 per-op ssh / 流式面 serve 长驻。三件：
   **R1a** `aisc serve --stdio`（Python，`7112e18`）：帧协议 v1（ready 横幅
