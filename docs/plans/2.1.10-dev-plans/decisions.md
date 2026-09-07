@@ -51,3 +51,22 @@ TCP 直连模式**（局域网无 SSH 场景，调研节「局域网通信」相
 裁决并引入 F2 式 per-process token + 回环绑定，不得复用 stdio 语义。
 附带确立**双通道模型**：低频控制面走 per-op ssh、流式/高频面（R2 PTY、
 R3 FS/事件）走 serve 长驻（见 r1-serve-transport.md §1）。
+
+## D-8 终端面双路径（2026-09-07，R2）
+
+本地保持 `spawn_pipe_session` 直连不动（B-05 十三轮手测打磨的稳定面 +
+P2/P3 性能载体）；远程走 serve PTY 流帧。双路径在 Rust 侧汇合于
+PtyEvent 通道抽象，`session.rs` 按 ActiveTarget 分流；resize 在 serve
+路径天然带内（G1 根治，本地 resize 文件机制保持不变）。代价声明：serve
+路径字节流经 JSON 帧（base64 ~33% 膨胀），局域网可接受（VS Code 同款
+取舍）。详见 r2-remote-sessions.md §1。
+
+
+## D-9 FS 面走 serve 长驻 + watchdog 引入 + 远端权威语义（2026-09-07）
+
+R3 落地 D-5 模型的三条执行裁决：①fs.* op 复用 ServeSession 多路复用、
+watch 事件用预留 event 帧（D-8 双通道归位）；②Python 侧引入 `watchdog`
+依赖做远端 watcher（无 watchdog 环境优雅降级 unsupported，Explorer 回退
+list 轮询）；③所有 fs path 以远端为根、服务端 containment 拒绝越界
+（防穿越沿 F1 browse 钉根教训），本地软件打开=显式下载副本、拖入=上传，
+本地永无工作区副本。详见 r3-remote-fs.md。
