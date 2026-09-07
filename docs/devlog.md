@@ -57,6 +57,16 @@
   输出」一环时序待手测轮排查（见阶段表）。门禁：cargo 295 / vitest 439 /
   vue-tsc / pytest 1201 全绿。**续批**：runtime 16 点 target 路由 + lease
   直写降级 + docker_api G2 禁用。
+- **R2 续批（2026-09-07 深夜）**：①**全仓 target 路由**——runtime/lease/
+  cache/conversation/doctor/subscription 六模块 41 个调用点批量迁移
+  `resolve_target` + `run_control_target/_input_target`，`run_build_stream`
+  增 target 版（Local spawn bit 级不变）；②**G2 降级**——`runtime_poll_light`
+  在 Remote target 时显式 Err（前端回退 CLI 轮询，即 P6a 审查 R1 语义）；
+  lease P5b 直写心跳在 Remote 时禁用（远端 lease 文件不在本机数据根，
+  恒走 CLI beat）；③**e2e 完整闭环 PASS**——此前「命令输出缺失」证伪为
+  诊断脚本自身 readline 无超时死等；带 select 超时的复测全绿：PS1 渲染
+  流回 + `echo` 命令回显**与执行输出**（双 MARKER 实证）+ kill 干净收尾。
+  门禁：cargo 295 / vitest 439 / vue-tsc / pytest 1201 全绿。
 - **R1 serve 通道 + 传输抽象（D-7，2026-09-07）**：双通道模型落地——低频
   控制面 per-op ssh / 流式面 serve 长驻。三件：
   **R1a** `aisc serve --stdio`（Python，`7112e18`）：帧协议 v1（ready 横幅

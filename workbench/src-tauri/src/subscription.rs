@@ -27,9 +27,8 @@ use std::time::Duration;
 use base64::Engine;
 use serde_json::Value;
 
-use crate::cli::run_control_input;
+use crate::cli::run_control_input_target;
 use crate::error::WorkbenchError;
-use crate::session::resolve_cli;
 
 /// The clash-family UA the whole subscription plane already uses — providers
 /// gate payload format on it.
@@ -182,7 +181,7 @@ pub(crate) async fn store_downloaded(
     url: &str,
     dl: DownloadedSubscription,
 ) -> Result<Value, WorkbenchError> {
-    let pin = resolve_cli(app).await?;
+    let target = crate::target::resolve_target(app).await?;
     let payload = serde_json::json!({
         "url": url,
         "content_b64": base64::engine::general_purpose::STANDARD.encode(&dl.body),
@@ -195,8 +194,8 @@ pub(crate) async fn store_downloaded(
         "--format".into(),
         "json".into(),
     ];
-    let env = run_control_input(
-        &pin,
+    let env = run_control_input_target(
+        &target,
         argv,
         payload.to_string(),
         Duration::from_secs(30),

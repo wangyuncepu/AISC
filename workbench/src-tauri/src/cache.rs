@@ -10,9 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::AppHandle;
 
-use crate::cli::run_control;
+use crate::cli::run_control_target;
 use crate::error::WorkbenchError;
-use crate::session::resolve_cli;
 use tokio_util::sync::CancellationToken;
 
 const CACHE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -111,9 +110,9 @@ fn envelope_data(
 /// Read-only `docker system df` summary for the settings card.
 #[tauri::command]
 pub async fn cache_usage(app: AppHandle) -> Result<CacheUsage, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
-    let env = run_control(
-        &pin,
+    let target = crate::target::resolve_target(&app).await?;
+    let env = run_control_target(
+        &target,
         cache_usage_argv(),
         CACHE_TIMEOUT,
         CancellationToken::new(),
@@ -136,9 +135,9 @@ pub async fn cache_cleanup(
     app: AppHandle,
     min_age_hours: u32,
 ) -> Result<CacheCleanupResult, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
-    let env = run_control(
-        &pin,
+    let target = crate::target::resolve_target(&app).await?;
+    let env = run_control_target(
+        &target,
         cache_cleanup_argv(min_age_hours),
         CACHE_TIMEOUT,
         CancellationToken::new(),

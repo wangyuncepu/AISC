@@ -24,9 +24,8 @@ use serde_json::Value;
 use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::cli::{run_control, Envelope};
+use crate::cli::{run_control_target, Envelope};
 use crate::error::{redact, WorkbenchError};
-use crate::session::resolve_cli;
 
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -116,8 +115,8 @@ pub fn doctor_report_from_envelope(env: Envelope) -> Result<DoctorReport, Workbe
 
 #[tauri::command]
 pub async fn run_doctor(app: AppHandle) -> Result<DoctorReport, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
-    let env = run_control(&pin, doctor_argv(), DOCTOR_TIMEOUT, CancellationToken::new()).await?;
+    let target = crate::target::resolve_target(&app).await?;
+    let env = run_control_target(&target, doctor_argv(), DOCTOR_TIMEOUT, CancellationToken::new()).await?;
     doctor_report_from_envelope(env)
 }
 

@@ -22,9 +22,8 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::cli::{run_build_stream, run_control, BuildEvent};
+use crate::cli::{run_build_stream_target, run_control_target, BuildEvent};
 use crate::error::WorkbenchError;
-use crate::session::resolve_cli;
 
 const START_TIMEOUT: Duration = Duration::from_secs(120);
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -440,9 +439,9 @@ pub async fn open_runtime_service_url(
     if !(1024..=65535).contains(&port) {
         return Err(WorkbenchError::map_aisc("AISC_ERR_USAGE"));
     }
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let argv = runtime_services_argv(&runtime_id, &workspace);
-    let env = run_control(&pin, argv, SERVICES_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, SERVICES_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -510,9 +509,9 @@ pub async fn runtime_services(
     if uuid_ok(&runtime_id).is_none() {
         return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_RUNTIME_ID"));
     }
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let argv = runtime_services_argv(&runtime_id, &workspace);
-    let env = run_control(&pin, argv, SERVICES_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, SERVICES_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -582,12 +581,12 @@ async fn cc_switch_call_value(
     argv: Vec<String>,
     input: Option<String>,
 ) -> Result<Value, WorkbenchError> {
-    let pin = crate::session::resolve_cli(app).await?;
+    let target = crate::target::resolve_target(app).await?;
     let env = match input {
         Some(text) => {
-            crate::cli::run_control_input(&pin, argv, text, PROVIDER_TIMEOUT, CancellationToken::new()).await?
+            crate::cli::run_control_input_target(&target, argv, text, PROVIDER_TIMEOUT, CancellationToken::new()).await?
         }
-        None => run_control(&pin, argv, PROVIDER_TIMEOUT, CancellationToken::new()).await?,
+        None => run_control_target(&target, argv, PROVIDER_TIMEOUT, CancellationToken::new()).await?,
     };
     if let Some(err) = env.errors.first() {
         // Stage 8e: the adapter's stable AISC_ERR_CC_SWITCH_PROVIDER_* codes
@@ -784,12 +783,12 @@ async fn aisc_data_call(
     input: Option<String>,
     timeout: Duration,
 ) -> Result<Value, WorkbenchError> {
-    let pin = crate::session::resolve_cli(app).await?;
+    let target = crate::target::resolve_target(app).await?;
     let env = match input {
         Some(text) => {
-            crate::cli::run_control_input(&pin, argv, text, timeout, CancellationToken::new()).await?
+            crate::cli::run_control_input_target(&target, argv, text, timeout, CancellationToken::new()).await?
         }
-        None => run_control(&pin, argv, timeout, CancellationToken::new()).await?,
+        None => run_control_target(&target, argv, timeout, CancellationToken::new()).await?,
     };
     if let Some(err) = env.errors.first() {
         let mut wb = WorkbenchError::map_aisc(&err.code);
@@ -897,7 +896,7 @@ pub async fn runtime_preflight(
     network: Option<String>,
     scope: Option<String>,
 ) -> Result<PreflightReport, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let mut argv = vec![
         "runtime".into(),
         "preflight".into(),
@@ -920,7 +919,7 @@ pub async fn runtime_preflight(
         argv.push("--scope".into());
         argv.push(v);
     }
-    let env = run_control(&pin, argv, PREFLIGHT_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, PREFLIGHT_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -935,9 +934,9 @@ pub async fn runtime_inspect(
     runtime_id: String,
     workspace: String,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let argv = runtime_inspect_argv(&runtime_id, &workspace);
-    let env = run_control(&pin, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -955,9 +954,9 @@ pub async fn runtime_status(
     runtime_id: String,
     workspace: String,
 ) -> Result<Value, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let argv = runtime_status_argv(&runtime_id, &workspace);
-    let env = run_control(&pin, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -977,9 +976,17 @@ pub async fn runtime_status(
 /// exactly what the CLI path reports.
 #[tauri::command]
 pub async fn runtime_poll_light(
+    app: tauri::AppHandle,
     runtime_id: String,
     workspace: String,
 ) -> Result<Value, WorkbenchError> {
+    // G2 (2.1.10 R2c): the direct named-pipe/unix-socket connection reads
+    // THIS machine's Docker — wrong machine under a remote target. Err makes
+    // the frontend fall back to the CLI poll (the P6a-review R1 semantics).
+    if app.state::<crate::target::ActiveTarget>().current().is_some() {
+        return Err(WorkbenchError::cli_protocol()
+            .with_detail("poll_light unavailable on a remote target — use the CLI poll"));
+    }
     crate::docker_api::poll_light(std::path::Path::new(&workspace), &runtime_id).await
 }
 
@@ -992,7 +999,7 @@ pub async fn start_runtime(
     network: Option<String>,
     scope: Option<String>,
 ) -> Result<RuntimeStartResult, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let start_ops = app.state::<StartOps>().inner().clone();
     let cancel = CancellationToken::new();
     let start_key = runtime_id.clone();
@@ -1042,7 +1049,7 @@ pub async fn start_runtime(
         argv.push("--max-cpus".into());
         argv.push(format!("{}", perf.container_cpus));
     }
-    let env = run_control(&pin, argv, START_TIMEOUT, cancel).await;
+    let env = run_control_target(&target, argv, START_TIMEOUT, cancel).await;
     // Clear the in-flight token regardless of outcome.
     remove_op(&start_ops.0, &start_key);
     let env = env?;
@@ -1072,10 +1079,10 @@ pub async fn runtime_restart(
     runtime_id: String,
     workspace: String,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_restart_argv(&runtime_id, &workspace);
-    let env = run_control(&pin, argv, RESTART_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, RESTART_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -1090,10 +1097,10 @@ pub async fn stop_runtime(
     runtime_id: String,
     workspace: String,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_stop_argv(&runtime_id, &workspace);
-    let env = run_control(&pin, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -1108,9 +1115,9 @@ pub async fn list_runtimes(
     workspace: String,
     owner: Option<String>,
 ) -> Result<RuntimeListResult, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let argv = runtime_list_argv(&workspace, owner.as_deref());
-    let env = run_control(&pin, argv, LIST_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, LIST_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -1126,10 +1133,10 @@ pub async fn remove_runtime(
     workspace: String,
     force: bool,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_remove_argv(&runtime_id, &workspace, force);
-    let env = run_control(&pin, argv, REMOVE_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, REMOVE_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -1147,7 +1154,7 @@ pub async fn runtime_reconcile(
     workspace: String,
     instance_id: Option<String>,
 ) -> Result<ReconcilePayload, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let iid = match instance_id {
         Some(i) => i,
         None => app
@@ -1156,7 +1163,7 @@ pub async fn runtime_reconcile(
             .to_string(),
     };
     let argv = runtime_reconcile_argv(&workspace, &iid);
-    let env = run_control(&pin, argv, RECONCILE_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, RECONCILE_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -1183,9 +1190,9 @@ pub async fn get_provider_status(
     if agent != "claude" && agent != "codex" {
         return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_AGENT"));
     }
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let argv = provider_current_argv(&runtime_id, &agent, &workspace);
-    let env = run_control(&pin, argv, PROVIDER_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, PROVIDER_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -1202,7 +1209,7 @@ pub async fn build_image(
     tag: String,
     on_event: Channel<BuildEvent>,
 ) -> Result<(), WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let build_ops = app.state::<BuildOps>().inner().clone();
     let cancel = CancellationToken::new();
     let build_key = tag.clone();
@@ -1219,7 +1226,7 @@ pub async fn build_image(
     });
 
     let argv = vec!["build".into(), "--tag".into(), tag, "--events".into()];
-    let result = run_build_stream(&pin, argv, BUILD_TIMEOUT, cancel, tx).await;
+    let result = run_build_stream_target(&target, argv, BUILD_TIMEOUT, cancel, tx).await;
 
     remove_op(&build_ops.0, &build_key);
     result

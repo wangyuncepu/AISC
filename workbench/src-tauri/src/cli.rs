@@ -881,8 +881,25 @@ pub async fn run_build_stream(
     cancel: CancellationToken,
     event_tx: mpsc::Sender<BuildEvent>,
 ) -> Result<(), WorkbenchError> {
-    let mut cmd = Command::new(executable);
-    cmd.args(&argv);
+    run_build_stream_target(&CliTarget::Local(executable.to_path_buf()), argv, timeout, cancel, event_tx).await
+}
+
+/// Transport-aware form (2.1.10 R2c): Local = the legacy spawn bit-for-bit;
+/// Remote wraps the same argv in ssh.
+pub async fn run_build_stream_target(
+    target: &CliTarget,
+    argv: Vec<String>,
+    timeout: Duration,
+    cancel: CancellationToken,
+    event_tx: mpsc::Sender<BuildEvent>,
+) -> Result<(), WorkbenchError> {
+    let (program, spawn_args) = target.spawn_pieces(&argv);
+    let what = match target {
+        CliTarget::Local(p) => p.display().to_string(),
+        CliTarget::Remote(_) => program.to_string_lossy().to_string(),
+    };
+    let mut cmd = Command::new(&program);
+    cmd.args(&spawn_args);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -892,7 +909,7 @@ pub async fn run_build_stream(
     {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(WorkbenchError::cli_not_found().with_detail(executable.display().to_string()));
+            return Err(WorkbenchError::cli_not_found().with_detail(what));
         }
         Err(e) => {
             return Err(WorkbenchError::cli_protocol().with_detail(format!("spawn failed: {e}")));

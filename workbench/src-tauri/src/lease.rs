@@ -26,10 +26,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio_util::sync::CancellationToken;
 
-use crate::cli::{run_control, Envelope};
+use crate::cli::{run_control_target, Envelope};
 use crate::error::WorkbenchError;
 use crate::runtime::{envelope_error, lease_argv, LEASE_TIMEOUT};
-use crate::session::resolve_cli;
 
 // ===========================================================================
 // PERF P5b (D-13): direct heartbeat write — O6b 兑现.
@@ -262,11 +261,11 @@ pub async fn lease_claim(
     app: AppHandle,
     workspace: String,
 ) -> Result<LeaseClaimResult, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let supervisor = app.state::<LeaseSupervisor>();
     let instance_id = supervisor.instance_id();
     let argv = lease_argv("claim", &workspace, Some(&instance_id), None);
-    let env = run_control(&pin, argv, LEASE_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, LEASE_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }
@@ -305,7 +304,14 @@ pub async fn lease_claim(
             // escape hatch AISC_LEASE_HEARTBEAT=cli keeps the old path.
             let direct_allowed = std::env::var("AISC_LEASE_HEARTBEAT")
                 .map(|v| v != "cli")
-                .unwrap_or(true);
+                .unwrap_or(true)
+                // G2 (2.1.10 R2c): the direct write targets THIS machine's
+                // data root — a remote target's lease files live on the
+                // remote machine, so remote mode always beats via the CLI.
+                && beat_app
+                    .state::<crate::target::ActiveTarget>()
+                    .current()
+                    .is_none();
             if direct_allowed {
                 let ws = beat_workspace.clone();
                 let inst = beat_instance.clone();
@@ -326,12 +332,12 @@ pub async fn lease_claim(
                     DirectBeat::Absent | DirectBeat::Unavailable => {}
                 }
             }
-            let Ok(pin) = resolve_cli(&beat_app).await else { continue };
+            let Ok(target) = crate::target::resolve_target(&beat_app).await else { continue };
             let argv = lease_argv(
                 "heartbeat", &beat_workspace,
                 Some(&beat_instance), Some(&beat_lease),
             );
-            let Ok(env) = run_control(&pin, argv, LEASE_TIMEOUT, CancellationToken::new()).await
+            let Ok(env) = run_control_target(&target, argv, LEASE_TIMEOUT, CancellationToken::new()).await
             else { continue };
             if let Some(err) = envelope_error(&env) {
                 if err.code == "AISC_ERR_RUNTIME_LEASE_CONFLICT"
@@ -381,12 +387,12 @@ pub async fn lease_release(
     };
     let Some(beat) = beat else { return Ok(false) };
     beat.cancel.cancel();
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let argv = lease_argv(
         "release", &workspace,
         Some(&supervisor.instance_id()), Some(&beat.lease_id),
     );
-    let env = run_control(&pin, argv, LEASE_TIMEOUT, CancellationToken::new()).await?;
+    let env = run_control_target(&target, argv, LEASE_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
     }

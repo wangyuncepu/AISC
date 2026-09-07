@@ -16,10 +16,9 @@ use std::time::Duration;
 use tauri::AppHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::cli::{run_control, Envelope};
+use crate::cli::{run_control_target, Envelope};
 use crate::error::WorkbenchError;
 use crate::runtime::envelope_error;
-use crate::session::resolve_cli;
 
 /// Captured discovery commands are file scans — fast, but a cold first
 /// call may also pin/locate the sidecar; a bounded 30s keeps the UI
@@ -180,9 +179,9 @@ pub async fn conversation_list(
     app: AppHandle,
     workspace: String,
 ) -> Result<ConversationListResult, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let argv = conversation_list_argv(&workspace);
-    let env: Envelope = run_control(&pin, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
+    let env: Envelope = run_control_target(&target, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
         .await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
@@ -199,9 +198,9 @@ pub async fn conversation_preflight(
     conversation_id: String,
     agent: String,
 ) -> Result<ConversationPreflightResult, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let argv = conversation_preflight_argv(&workspace, &conversation_id, &agent);
-    let env: Envelope = run_control(&pin, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
+    let env: Envelope = run_control_target(&target, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
         .await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
@@ -223,9 +222,9 @@ pub async fn conversation_delete(
     conversation_id: String,
     agent: String,
 ) -> Result<ConversationDeleteResult, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let argv = conversation_delete_argv(&workspace, &conversation_id, &agent);
-    let env: Envelope = run_control(&pin, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
+    let env: Envelope = run_control_target(&target, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
         .await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
@@ -248,9 +247,9 @@ pub async fn conversation_rename(
     agent: String,
     title: String,
 ) -> Result<ConversationRenameResult, WorkbenchError> {
-    let pin = resolve_cli(&app).await?;
+    let target = crate::target::resolve_target(&app).await?;
     let argv = conversation_rename_argv(&workspace, &conversation_id, &agent, &title);
-    let env: Envelope = run_control(&pin, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
+    let env: Envelope = run_control_target(&target, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
         .await?;
     if let Some(e) = envelope_error(&env) {
         return Err(e);
