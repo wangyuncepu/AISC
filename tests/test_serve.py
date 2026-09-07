@@ -127,16 +127,21 @@ class ServeSubprocessTests(unittest.TestCase):
 class ServeInProcessTests(unittest.TestCase):
     """Direct calls into the serve module — no subprocess."""
 
+    def _runtime(self) -> "object":
+        from aisc.cli.commands import serve as srv
+
+        return srv.ServeRuntime(io.StringIO())
+
     def test_cli_error_maps_to_envelope_errors(self) -> None:
         from aisc.cli.commands import serve as srv
         from aisc.domain.models import CliError
 
-        def boom(_args):
+        def boom(_args, _payload, _runtime):
             raise CliError(message="nope", exit_code=7,
                            error_code="AISC_ERR_TEST", hint="do better")
 
         with mock.patch.dict(srv.OPS, {"boom": boom}):
-            frame = srv._run_op("boom", [])
+            frame = srv._run_op("boom", {}, self._runtime())
         self.assertTrue(frame["ok"])  # controlled failure is still a result
         env = frame["envelope"]
         self.assertEqual(env["meta"]["exit_code"], 7)
@@ -146,11 +151,11 @@ class ServeInProcessTests(unittest.TestCase):
     def test_unexpected_exception_is_error_frame_not_crash(self) -> None:
         from aisc.cli.commands import serve as srv
 
-        def boom(_args):
+        def boom(_args, _payload, _runtime):
             raise RuntimeError("kaboom")
 
         with mock.patch.dict(srv.OPS, {"boom": boom}):
-            frame = srv._run_op("boom", [])
+            frame = srv._run_op("boom", {}, self._runtime())
         self.assertFalse(frame["ok"])
         self.assertIn("kaboom", frame["error"])
 
@@ -178,9 +183,122 @@ class ServeInProcessTests(unittest.TestCase):
         )
         with mock.patch("aisc.cli.main._cmd_doctor",
                         return_value=({"host": {"checks": []}}, fake_report)):
-            frame = srv._run_op("doctor", [])
+            frame = srv._run_op("doctor", {}, self._runtime())
         self.assertTrue(frame["ok"])
         self.assertEqual(frame["envelope"]["meta"]["exit_code"], 3)
+
+
+class ServePtyTests(unittest.TestCase):
+    """R2 (D-8): the PTY stream plane — a fake handle drives the registry,
+    the loop dispatch and the frame shapes (no Docker involved)."""
+
+    def _runtime(self):
+        from aisc.cli.commands import serve as srv
+
+        return srv.ServeRuntime(io.StringIO())
+
+    def _fake_handle(self):
+        import threading
+
+        class FakeHandle:
+            def __init__(self):
+                self.written = []
+                self.resizes = []
+                self.killed = False
+                self._exit = threading.Event()
+
+            def write(self, data):
+                self.written.append(data)
+
+            def resize(self, size):
+                self.resizes.append(size)
+
+            def close_stdin(self):
+                pass
+
+            def kill(self):
+                self.killed = True
+                self._exit.set()
+
+            def wait_exit(self):
+                self._exit.wait(timeout=5)
+                return 0
+
+        return FakeHandle()
+
+    def test_registry_input_resize_kill_roundtrip(self) -> None:
+        import base64
+
+        rt = self._runtime()
+        handle = self._fake_handle()
+        rt.register_pty("sid-1", handle)
+
+        payload = base64.b64encode(b"hello\n").decode()
+        self.assertIsNone(rt.pty_input("sid-1", payload))
+        self.assertEqual(handle.written, [b"hello\n"])
+
+        self.assertIsNone(rt.pty_resize("sid-1", 120, 40))
+        self.assertEqual(handle.resizes, [(120, 40)])
+
+        self.assertIsNotNone(rt.pty_input("nope", payload), "unknown sid is a log, not a crash")
+
+        rt.pty_kill("sid-1")
+        self.assertTrue(handle.killed)
+        self.assertIsNone(rt.pty("sid-1"))
+
+    def test_output_frame_shape(self) -> None:
+        import base64
+
+        rt = self._runtime()
+        rt._on_output("sid-9")(b"\x1b[2Jraw bytes \xe4\xb8\xad")
+        frame = json.loads(rt._stdout.getvalue().splitlines()[0])
+        self.assertEqual(frame["type"], "pty.output")
+        self.assertEqual(frame["sid"], "sid-9")
+        self.assertEqual(base64.b64decode(frame["data"]), b"\x1b[2Jraw bytes \xe4\xb8\xad")
+
+    def test_exit_frame_on_waiter_settle(self) -> None:
+        rt = self._runtime()
+        handle = self._fake_handle()
+        rt.register_pty("sid-2", handle)
+        entry = rt.pty("sid-2")
+        self.assertIsNotNone(entry)
+        handle._exit.set()  # waiter settles
+        entry.waiter.join(timeout=5)
+        frames = [json.loads(l) for l in rt._stdout.getvalue().splitlines()]
+        exits = [f for f in frames if f.get("type") == "pty.exit"]
+        self.assertEqual(len(exits), 1)
+        self.assertEqual(exits[0]["sid"], "sid-2")
+        self.assertEqual(exits[0]["exit_code"], 0)
+
+    def test_loop_dispatches_pty_frames_without_result(self) -> None:
+        import base64
+
+        from aisc.cli.commands import serve as srv
+
+        handle = self._fake_handle()
+        stdin = io.StringIO(
+            json.dumps({"type": "pty.input", "sid": "s",
+                        "data": base64.b64encode(b"x").decode()}) + "\n"
+            + json.dumps({"type": "pty.resize", "sid": "s", "cols": 100, "rows": 30}) + "\n"
+            + json.dumps({"type": "pty.kill", "sid": "s"}) + "\n"
+        )
+        stdout = io.StringIO()
+        with mock.patch.object(srv.ServeRuntime, "register_pty") as reg:
+            reg.side_effect = lambda sid, h: None
+            # wire the fake handle into the registry the loop uses
+            orig = srv.ServeRuntime.pty
+
+            def fake_pty(self, sid):
+                return srv.PtyEntry(sid, handle, self) if sid == "s" else orig(self, sid)
+
+            with mock.patch.object(srv.ServeRuntime, "pty", fake_pty):
+                srv._serve_loop(stdin, stdout)
+        self.assertEqual(handle.written, [b"x"])
+        self.assertEqual(handle.resizes, [(100, 30)])
+        self.assertTrue(handle.killed)
+        lines = [json.loads(l) for l in stdout.getvalue().splitlines()]
+        # ready banner only — control frames produce NO result frames
+        self.assertEqual([f["type"] for f in lines], ["ready"])
 
 
 if __name__ == "__main__":
