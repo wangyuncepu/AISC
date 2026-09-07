@@ -1251,7 +1251,14 @@ function onTreeKeydown(e: KeyboardEvent) {
           <span v-if="c.message_count !== null" class="explorer-label">
             {{ t("explorer.conversations.msgCount", { n: c.message_count }) }}
           </span>
-          <span class="explorer-badge">{{ c.agent }}</span>
+          <!-- FIX-1 (2.1.10): agent glyphs with distinct color families —
+               the old plain-text badge read as noise at a glance. -->
+          <span
+            class="explorer-badge agent-glyph"
+            :class="c.agent === 'claude' ? 'agent-claude' : 'agent-codex'"
+            :title="c.agent"
+            aria-hidden="true"
+          >{{ c.agent === "claude" ? "✳" : "◈" }}</span>
           <div
             v-if="explorer.resumeErrors[c.conversation_id]"
             class="conversation-resume-error"
@@ -1554,6 +1561,10 @@ function onTreeKeydown(e: KeyboardEvent) {
   border-radius: var(--radius-sm);
   background: var(--accent-soft);
 }
+/* FIX-1: distinct color + glyph per agent (claude: warm ✳ / codex: cool ◈). */
+.agent-glyph { font-weight: 700; border-radius: var(--radius-sm); padding: 0 4px; }
+.agent-claude { color: var(--warn, #e8862d); background: color-mix(in srgb, var(--warn, #e8862d) 12%, transparent); }
+.agent-codex { color: var(--info, #4c9ce8); background: color-mix(in srgb, var(--info, #4c9ce8) 12%, transparent); }
 .explorer-label {
   font-size: var(--font-xs);
   color: var(--text-muted);

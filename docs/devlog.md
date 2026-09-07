@@ -85,6 +85,21 @@
   全链**——ssh 触发远端真文件变化 → 前端 workspace://changed 事件）。
   门禁：cargo 295 / vitest 439 / pytest 1213。重跑手册
   scripts/README-r2-tests.md（含 R3 节）。
+- **R4 远程收官 + FIX-1（2026-09-08，分支 r4-machine-ui）**：**R4a**
+  （`ccc1ccd`）svc 网关端口转发——ensure_gateway_tunnel 按需建
+  `ssh -L 127.0.0.1:P:127.0.0.1:P -N` 同端口隧道（canonical URL 零改动），
+  TCP 探活后交 opener；(target,port) 注册表复用；target 切换/清空全量
+  拆除（旧机隧道不得遮蔽新机同端口）；真 SSH e2e PASS（建立/探通/幂等
+  复用/拆除；自演环境端口空间重合两断言按语义调整）。**R4b**（`90bd18a`）
+  机器管理页——SettingsForm「远程机器」组（remoteMachines 增删改 + Rust
+  patch 链）+ WorkspacePicker 驱动切换条（本机/machines 下拉 + 远程徽章）；
+  F-A01 契约：target 状态/动作全走 settings store（layerContract 测试抓
+  住组件直连 ipc 后迁回 store——契约测试又一次立功）；CDP UI 自动化
+  FULL PASS（切换条渲染/切 remote/远程树 23 条目/回 local）。
+  **FIX-1**：历史对话 agent 图标辨识度——纯文字 badge 改 ✳/◈ 双色
+  字形（claude 暖金/codex 冷蓝 + 底色块）。**FIX-3（面板拖动折叠）留
+  下一轮**（resize 敏感区，需用户在场手测迭代）；**FIX-2（CLI 命令优化）
+  待与用户深入讨论**。
 - **R2 手测自动化（2026-09-07 深夜，用户授权全代测）**：三层替代人工——
   ①**Rust 真 SSH 集成**（`tests/serve_ssh.rs`，AISC_TEST_SSH/RUNTIME_ID 门控）：
   0.62s 全环 PASS（PS1/命令执行输出/G1 resize/kill-exit）；排查两坑：readline
