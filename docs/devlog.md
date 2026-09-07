@@ -67,6 +67,21 @@
   诊断脚本自身 readline 无超时死等；带 select 超时的复测全绿：PS1 渲染
   流回 + `echo` 命令回显**与执行输出**（双 MARKER 实证）+ kill 干净收尾。
   门禁：cargo 295 / vitest 439 / vue-tsc / pytest 1201 全绿。
+- **R2 手测自动化（2026-09-07 深夜，用户授权全代测）**：三层替代人工——
+  ①**Rust 真 SSH 集成**（`tests/serve_ssh.rs`，AISC_TEST_SSH/RUNTIME_ID 门控）：
+  0.62s 全环 PASS（PS1/命令执行输出/G1 resize/kill-exit）；排查两坑：readline
+  逐字着色打散回显（断言改连续 marker 行）、kill 后 waiter 在 EOF-but-Running
+  settle 死循环（`InteractiveStreamHandle.wait_exit` 观察 kill 快退——kill 语义
+  =断流、exec 容器内继续）。②**真容器 e2e**：serve PTY 命令执行输出双 MARKER
+  实证。③**UI 面 CDP 自动化**（`scripts/r2-ui-cdp-test.py`，WebView2
+  remote-debugging-port 9223 + vite `/@id/` 动态 import invoke/Channel）：
+  **真实 Windows Workbench 进程内** target_set(wsl) → open_session(Remote:
+  Windows→ssh→WSL serve→Docker) state=running → PtyEvent 流经 Channel 到前端
+  → write_session 命令执行输出确认 → resize_session → close/exit 事件 →
+  target_clear，**FULL PASS**。途中根治一产品 bug：**Windows GUI 进程 PATH
+  可能解析到 Git msys ssh**——`CliTarget::Remote` 在 Windows 固定用
+  `C:\Windows\System32\OpenSSH\ssh.exe` 绝对路径。xterm 像素渲染未自动化
+  （组件逻辑 vitest 覆盖）。重跑手册 `scripts/README-r2-tests.md`。
 - **R1 serve 通道 + 传输抽象（D-7，2026-09-07）**：双通道模型落地——低频
   控制面 per-op ssh / 流式面 serve 长驻。三件：
   **R1a** `aisc serve --stdio`（Python，`7112e18`）：帧协议 v1（ready 横幅
