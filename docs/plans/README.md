@@ -1,13 +1,16 @@
 # Active Planning
 
-Active/in-progress implementation plans live here. Completed plans are archived under `docs/archive/completed/`.
+Active/in-progress implementation plans live here. Completed plans are archived
+under `docs/archive/`: version-cycle plan sets as `docs/archive/<version>-dev-plans/`
+(e.g. `2.1.9-dev-plans/`), topical plans under their own directories
+(e.g. `container-service-access/`, `aisc-next-followup/b05-terminal-stability/`).
 
 ## Current active plan
 
-- [`aisc-next-followup/`](aisc-next-followup/README.md) — Windows data root, latest stable cc-switch, container Provider UI, C# Workbench POC and Stage 10 Workbench UI visual polish follow-up plan.
-- [`runtime-lifecycle-ux/`](runtime-lifecycle-ux/README.md) — Workbench Runtime lifecycle simplification, automatic stale-runtime cleanup, reduced conflict handling and lazy layout restoration.
-- [`docker-resource-lifecycle/`](docker-resource-lifecycle/README.md) — install/upgrade/uninstall Docker resource lifecycle: ownership labels, centralized maintenance service, installer integration across NSIS/Inno/portable/PKG.
+- None — the v2.1.9-dev cycle closed on 2026-09-07 (released as `v2.1.9-dev`,
+  plans archived at [`2.1.9-dev-plans/`](../archive/2.1.9-dev-plans/)).
+  The 2.1.10 pool has not been opened yet; carry-over backlog lives in
+  `docs/todo.md` and `docs/archive/2.1.9-dev-plans/decisions.md`.
 
-The completed `aisc-next` plan (Stages 0–6, final commit `f5a74e5`) is archived at [`docs/archive/completed/aisc-next/`](../archive/completed/aisc-next/README.md).
-
-Each active plan must define scope, risks, contracts, implementation order, automated/manual acceptance, decisions and rollback behavior. Completed plan directories are moved as a unit to `docs/archive/completed/`.
+Each active plan must define scope, risks, contracts, implementation order,
+automated/manual acceptance, decisions and rollback behavior.
