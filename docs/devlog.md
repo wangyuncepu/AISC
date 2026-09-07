@@ -34,6 +34,30 @@
   （2.1 GB，7 个影子工作区）与 `mutagen/`（87 MB 托管二进制）删除、
   `~/.ssh/config` 受管段（BEGIN/END AISC 标注段）删除（备份留存）、
   settings.json `ssh_profiles` 键移除。S0 收口。
+- **S0 合并 `a8f73eb`（`--no-ff`，四 lane CI 绿）**：NSIS 11m26s / Bundle
+  7m35s / cli-sidecar 2m2s / Workbench CI 1m50s 全绿；本地分支已删，
+  远程 `origin/s0-f1-strip` 待用户示意删除（权限分类器拦 push --delete）。
+- **R1 serve 通道 + 传输抽象（D-7，2026-09-07）**：双通道模型落地——低频
+  控制面 per-op ssh / 流式面 serve 长驻。三件：
+  **R1a** `aisc serve --stdio`（Python，`7112e18`）：帧协议 v1（ready 横幅
+  serve_protocol+cli_version 配对握手 → 请求/响应单帧承载 envelope →
+  log/event 帧类型预留）；op 直调 application 层（version/doctor/ps，doctor
+  exit_code 保真）；坏帧/未知 op 回错误帧进程不死；EOF/SIGINT/SIGTERM 优雅
+  退出；stdio 无 token（D-7：SSH 即认证，TCP 模式须重新裁决）。9 用例。
+  **R1b** `CliTarget` 抽象（`02a663f`）：`run_control_target/_input_target`
+  新入口；`run_control_inner` 参数化（Local 原样 / Remote=ssh
+  -p/-i/BatchMode=yes/ConnectTimeout=15 host aisc argv）；旧签名 wrapper
+  保留，41 调用点零改动零行为变化；KI-6 PATH 注入仅 Local；4 个 argv 形状
+  单测。
+  **R1c** Rust serve 客户端（`540a6b2`）：`ServeSession`（spawn_local/
+  spawn_ssh 复用 spawn_pieces）；握手硬门 serve_protocol==1、cli_version
+  记录展示（AISC 兼容面=envelope 协议+caps，与 VS Code commit 等值配对
+  设计源不同）；id 关联 + 陈旧帧跳过 + log/event 透明略过；shutdown EOF
+  优雅 + 3s 宽限。线级函数流泛型 duplex 可测（6 单测）+ AISC_TEST_CLI 真进程
+  腿（venv aisc 三 op 往返 4s 跨语言实证）。坑：duplex 对端互通——client 读
+  自己写的帧永久阻塞（首轮测试卡死源）。
+  本地门：cargo 297 / vitest 439 / pytest 1197 全绿。远程能力验收（真 SSH
+  链路一例）待手测（r1-serve-transport.md A5）。
 
 # v2.1.9-dev (2026-08-20 ~) — 四挂账清偿 · nairong 根因链 · 构建韧性 · 优化批次（分支 develop）
 
