@@ -33,13 +33,11 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/aisc",
-      "binaries/mutagen"
+      "binaries/aisc"
     ],
     "resources": {
       "nsis/bundle/aisc-bundle": "aisc-bundle",
-      "nsis/wg-transcode.ps1": "wg-transcode.ps1",
-      "binaries/mutagen-agents.tar.gz": "mutagen-agents.tar.gz"
+      "nsis/wg-transcode.ps1": "wg-transcode.ps1"
     },
     "windows": {
       "nsis": {
