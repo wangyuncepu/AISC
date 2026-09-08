@@ -95,7 +95,13 @@ def allocate_gateway_host_port(exclude: Optional[Set[int]] = None,
             sock.close()
     raise GatewayPortError(
         "No free host port in "
-        f"{WEB_GATEWAY_HOST_PORT_MIN}..{WEB_GATEWAY_HOST_PORT_MAX} for the web gateway"
+        f"{WEB_GATEWAY_HOST_PORT_MIN}..{WEB_GATEWAY_HOST_PORT_MAX} for the web gateway. "
+        "On WSL2 hosts this is almost always the invisible HNS port grab: "
+        "run `wsl --shutdown` (or `net stop winnat`) once, then re-add the "
+        "admin exclusion `netsh int ipv4 add excludedportrange protocol=tcp "
+        f"startport={WEB_GATEWAY_HOST_PORT_MIN} numberofports=1000` and restart "
+        "Docker — the reserved range keeps HNS from re-grabbing while normal "
+        "binds and docker publishes keep working."
     )
 
 
