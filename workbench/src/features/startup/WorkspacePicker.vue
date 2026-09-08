@@ -59,8 +59,12 @@ async function onRecentClick(path: string): Promise<void> {
   const pathRemote = isRemotePath(path);
   const nowRemote = target.value?.kind === "remote";
   if (pathRemote !== nowRemote) {
-    // machine mismatch: switch so the probe runs on the right machine
-    await switchTarget(pathRemote ? target.value?.machine?.name ?? "wsl" : null);
+    // machine mismatch: switch so the probe runs on the right machine.
+    // A remote path needs A machine — prefer the current one, else the
+    // first configured profile (never a hardcoded name).
+    const name = target.value?.machine?.name
+      ?? settings.doc?.remoteMachines?.[0]?.name ?? null;
+    await switchTarget(pathRemote ? name : null);
   }
   const exists = await wsStore.workspacePathExists(path);
   if (!exists) {
