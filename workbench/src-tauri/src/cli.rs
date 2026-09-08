@@ -572,15 +572,48 @@ impl SshTarget {
 
     /// Full remote argv prefix: `ssh ...opts... <host>` — the CLI argv rides
     /// after it (`aisc` comes from the target's PATH; R4's machine profiles
-    /// will allow an explicit remote path).
+    /// will allow an explicit remote path). Caller-supplied tokens are
+    /// shell-quoted: ssh joins everything after the host into one command
+    /// string the target's login shell re-parses (R4 hand-test #7 — `?` in
+    /// the F2 host-mcp URL made zsh die with "no matches found").
     pub fn spawn_argv(&self, cli_args: &[String]) -> Vec<String> {
         let mut out = vec!["ssh".to_string()];
         out.extend(self.client_args());
         out.push(self.host.clone());
         out.push("aisc".into());
-        out.extend_from_slice(cli_args);
+        out.extend(cli_args.iter().map(|a| shell_quote(a)));
         out
     }
+}
+
+/// Quote one argv token for the remote login shell (POSIX sh family).
+///
+/// Tokens made only of shell-inert characters pass through raw so existing
+/// argv shapes (and their pinned tests) stay byte-stable; anything else —
+/// `?`, `*`, spaces, quotes, `~`, … — rides single-quoted, with embedded
+/// quotes closed-reopened (`'\''`). zsh hard-fails unmatched patterns where
+/// bash would glob or split; quoting covers both. (fish is out of scope —
+/// non-interactive ssh commands assume the POSIX family.)
+pub(crate) fn shell_quote(arg: &str) -> String {
+    const INERT: &str = "-_.:/@=+,%";
+    if !arg.is_empty()
+        && arg
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || INERT.as_bytes().contains(&b))
+    {
+        return arg.to_string();
+    }
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('\'');
+    for c in arg.chars() {
+        if c == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 /// Where an op executes: a pinned local sidecar or a remote machine.
@@ -611,10 +644,11 @@ impl CliTarget {
                 };
                 #[cfg(not(windows))]
                 let program: std::ffi::OsString = "ssh".into();
-                let mut args = t.client_args();
-                args.push(t.host.clone());
-                args.push("aisc".into());
-                args.extend_from_slice(cli_args);
+                // Single construction site: spawn_argv owns the remote
+                // command shape (incl. shell quoting); drop its leading
+                // "ssh" — `program` above is the executable we spawn.
+                let mut args = t.spawn_argv(cli_args);
+                args.remove(0);
                 (program, args)
             }
         }
@@ -1297,6 +1331,50 @@ mod tests {
     }
 
     #[test]
+    fn ssh_target_metachar_args_are_shell_quoted() {
+        // R4 hand-test #7: ssh re-parses the post-host tokens through the
+        // target's login shell — `?token=…` died as a zsh glob ("no matches
+        // found"), and a spaced path would split. Inert tokens stay raw so
+        // the pinned shapes above are byte-stable.
+        let t = SshTarget { host: "nas".into(), port: None, key_path: None, extra_args: vec![] };
+        let argv = t.spawn_argv(&[
+            "run".into(),
+            "--host-mcp-url".into(),
+            "http://host.docker.internal:12773/mcp?token=abc".into(),
+            "--workspace".into(),
+            "/home/tv/my project".into(),
+            String::new(),
+        ]);
+        assert_eq!(
+            argv,
+            vec![
+                "ssh",
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=15",
+                "nas",
+                "aisc",
+                "run",
+                "--host-mcp-url",
+                "'http://host.docker.internal:12773/mcp?token=abc'",
+                "--workspace",
+                "'/home/tv/my project'",
+                "''",
+            ]
+        );
+    }
+
+    #[test]
+    fn shell_quote_unit_matrix() {
+        assert_eq!(shell_quote("ps"), "ps");
+        assert_eq!(shell_quote("/home/tv/x:1,2-3@4=5+6%7"), "/home/tv/x:1,2-3@4=5+6%7");
+        assert_eq!(shell_quote(""), "''");
+        assert_eq!(shell_quote("a b"), "'a b'");
+        assert_eq!(shell_quote("~x"), "'~x'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(shell_quote("*"), "'*'");
+    }
+
+    #[test]
     fn cli_target_local_spawn_pieces_unchanged() {
         let exe = PathBuf::from("/pin/aisc");
         let (program, args) = CliTarget::Local(exe.clone()).spawn_pieces(&["version".into(), "--format".into(), "json".into()]);
@@ -1310,7 +1388,19 @@ mod tests {
             host: "box".into(), port: None, key_path: None, extra_args: vec![],
         })
         .spawn_pieces(&["doctor".into()]);
-        assert_eq!(program, std::ffi::OsString::from("ssh"));
+        // Mirror the production resolution: Windows pins the system OpenSSH
+        // when present (the GUI PATH may front Git's msys ssh), everything
+        // else spawns plain `ssh`. Was a pre-existing Windows-only red after
+        // the pin landed (Linux gates stayed green) — same-batch fix.
+        #[cfg(windows)]
+        let program_ok = {
+            const SYS_SSH: &str = r"C:\Windows\System32\OpenSSH\ssh.exe";
+            std::path::Path::new(SYS_SSH).is_file() && program == std::ffi::OsString::from(SYS_SSH)
+                || !std::path::Path::new(SYS_SSH).is_file() && program == std::ffi::OsString::from("ssh")
+        };
+        #[cfg(not(windows))]
+        let program_ok = program == std::ffi::OsString::from("ssh");
+        assert!(program_ok, "unexpected ssh program: {program:?}");
         assert_eq!(args.last().unwrap(), "doctor");
         // host + aisc both present, host before aisc
         let h = args.iter().position(|a| a == "box").unwrap();
