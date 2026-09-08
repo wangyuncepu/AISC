@@ -377,7 +377,17 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
   }
 
   async function doSave(retries: number): Promise<void> {
-    const ids = [...dirtyIds].filter((id) => byId(id)?.workspace.value.trim());
+    const ids = [...dirtyIds].filter((id) => {
+      const inst = byId(id);
+      if (!inst?.workspace.value.trim()) return false;
+      // R4 (field #9): the launcher slot is the birth canal, not a
+      // workspace. A launch that dies in preflight/summary/start must
+      // leave NO history trace (recent showed failed typo paths). Only
+      // instances that materialized into tabs persist; a promoted
+      // instance keeps its id, so its pending dirtiness flushes the
+      // moment it is born.
+      return id !== launcher.value.id;
+    });
     if (ids.length === 0) return;
     const records = ids.flatMap((id) => byId(id)!.buildPatch(history.value).workspaces);
     try {

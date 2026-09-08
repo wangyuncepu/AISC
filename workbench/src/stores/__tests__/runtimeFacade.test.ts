@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { watch } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { useRuntimeStore, CC_SWITCH_UI_TAB_ID } from "../runtime";
+import { useWorkspacesStore } from "../workspaces";
 import { normalizePath } from "../tabLayout";
 import type { Tab } from "../../types";
 
@@ -165,9 +166,14 @@ describe("facade shell-owned surface (3a)", () => {
 
   it("runs the merged save cycle: instance markDirty -> facade debounce -> one saveHistory", async () => {
     vi.useFakeTimers();
+    // R4 (field #9): only BORN workspaces persist — birth the workspace
+    // through the real path first so the facade targets a materialized
+    // instance (the launcher slot must never reach saveHistory).
+    const ws = useWorkspacesStore();
+    ws.launcher.workspace.value = "C:/tmp/w";
+    ws.launcher.runtimeId.value = "rid";
+    await ws.launcher.initTabs([]);
     const s = useRuntimeStore();
-    s.workspace = "C:/tmp/w";
-    s.runtimeId = "rid";
     s.runtimeState = "running";
     // createTab is an INSTANCE action whose scheduleSave lands on the facade.
     s.createTab("bash");
