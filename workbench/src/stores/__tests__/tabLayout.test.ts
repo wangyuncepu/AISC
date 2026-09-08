@@ -71,6 +71,20 @@ describe("normalizePath / sameWorkspace (G-07 restore matching)", () => {
     expect(sameWorkspace("/home/u/ws", "/home/u/ws/")).toBe(true);
     expect(sameWorkspace("/A", "/a")).toBe(false);
   });
+
+  it("win: POSIX-absolute paths are REMOTE workspaces, kept verbatim (R4 field #3)", () => {
+    vi.stubGlobal("navigator", {
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    });
+    // slash form survives — flipping to `\home\…` corrupted history keys
+    // into local-missing recents (badge + auto-switch both lost).
+    expect(normalizePath("/home/tv/aisc-handtest/")).toBe("/home/tv/aisc-handtest");
+    expect(normalizePath("/home/tv/aisc-handtest")).toBe("/home/tv/aisc-handtest");
+    // remote compares stay case-SENSITIVE (Linux fs), local still folds.
+    expect(sameWorkspace("/home/tv/ws", "/home/tv/ws/")).toBe(true);
+    expect(sameWorkspace("/home/tv/ws", "/home/TV/ws")).toBe(false);
+    expect(sameWorkspace("/home/tv/ws", "C:\\home\\tv\\ws")).toBe(false);
+  });
 });
 
 describe("resolveActiveTabId (02 §2.3)", () => {

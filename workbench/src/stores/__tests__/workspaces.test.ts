@@ -215,6 +215,30 @@ describe("merged history save (3c)", () => {
     expect(patch.workspaces).toHaveLength(2);
     vi.useRealTimers();
   });
+
+  it("a launch that dies before materialization leaves NO history record (R4 field #9)", async () => {
+    vi.useFakeTimers();
+    const ws = useWorkspacesStore();
+    // Preflight never passes — the launcher still carries the typed path and
+    // arms dirtiness (a tab action during the failed flow). No flush may
+    // persist an unborn workspace (recent showed typo paths otherwise).
+    ws.launcher.workspace.value = "C:\\typo-path";
+    ws.launcher.tabs.value = [bareTab("t-launcher")];
+    ws.launcher.activateTab("t-launcher");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(mockIpc.saveHistory).not.toHaveBeenCalled();
+
+    // The SAME instance materializes later (id survives promotion): its
+    // pending dirtiness flushes with the born record.
+    await launchWorkspace(ws, "C:\\typo-path");
+    mockIpc.saveHistory.mockClear();
+    ws.runtimes[0].activateTab("t-launcher");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(mockIpc.saveHistory).toHaveBeenCalledTimes(1);
+    const [, patch] = mockIpc.saveHistory.mock.calls[0] as [number, HistoryPatch];
+    expect(patch.workspaces.map((w) => w.path)).toEqual(["C:\\typo-path"]);
+    vi.useRealTimers();
+  });
 });
 
 describe("aggregated exit gate (3c)", () => {

@@ -33,9 +33,16 @@ function isWin(): boolean {
 export function normalizePath(p: string): string {
   const win = isWin();
   let s = p.trim();
-  if (win) s = s.replace(/\//g, "\\");
-  const sep = win ? "\\" : "/";
-  while (s.length > (win ? 3 : 1) && s.endsWith(sep)) s = s.slice(0, -1);
+  // R4 (field #3): a POSIX-absolute path on a Windows host names a REMOTE
+  // workspace (the same ruling workspace_path_exists applies) — keep it
+  // verbatim. Flipping separators here corrupted history keys into
+  // `\home\…`, which then read as local-missing ("已移动或删除") and lost
+  // the 远程 badge + the cross-machine auto-switch.
+  const remoteForm = win && s.startsWith("/");
+  if (win && !remoteForm) s = s.replace(/\//g, "\\");
+  const sep = remoteForm || !win ? "/" : "\\";
+  const floor = sep === "/" ? 1 : 3;
+  while (s.length > floor && s.endsWith(sep)) s = s.slice(0, -1);
   return s;
 }
 
@@ -44,10 +51,13 @@ export function normalizePath(p: string): string {
  * lookup keys history on the stored record path but the user may type or pick
  * the workspace in any slash/case form - compare normalized forms
  * (case-insensitively on Windows, where the filesystem is case-insensitive).
+ * Remote (POSIX-form) paths name case-SENSITIVE filesystems — those compare
+ * verbatim, never case-folded.
  */
 export function sameWorkspace(a: string, b: string): boolean {
   const na = normalizePath(a);
   const nb = normalizePath(b);
+  if (na.startsWith("/") && nb.startsWith("/")) return na === nb;
   return isWin() ? na.toLowerCase() === nb.toLowerCase() : na === nb;
 }
 

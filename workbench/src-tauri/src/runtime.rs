@@ -1035,11 +1035,18 @@ pub async fn start_runtime(
     // the entrypoint can register it with the agents (claude .mcp.json /
     // codex config.toml). Only when the whitelist is non-empty — an empty
     // whitelist means the feature is OFF and the container gets nothing.
-    if let Some(state) = app.try_state::<std::sync::Arc<crate::host_mcp::HostMcpState>>() {
-        if let Some(port) = state.port() {
-            if !state.whitelist().is_empty() {
-                argv.push("--host-mcp-url".into());
-                argv.push(format!("http://host.docker.internal:{port}/mcp?token={}", state.token()));
+    // R4 hand-test #7: LOCAL targets only — the URL names THIS machine's
+    // loopback (`host.docker.internal` resolves to the remote host inside
+    // a remote container), so injecting it there is unreachable noise; the
+    // remote container runs without host MCP, same as whitelist-off. A
+    // remote host-tools story is the F2 host_exec backlog item.
+    if !matches!(target, crate::cli::CliTarget::Remote(_)) {
+        if let Some(state) = app.try_state::<std::sync::Arc<crate::host_mcp::HostMcpState>>() {
+            if let Some(port) = state.port() {
+                if !state.whitelist().is_empty() {
+                    argv.push("--host-mcp-url".into());
+                    argv.push(format!("http://host.docker.internal:{port}/mcp?token={}", state.token()));
+                }
             }
         }
     }
