@@ -46,6 +46,7 @@ export const zhCN = {
   "picker.browse": "选择",
   "picker.next": "下一步",
   "picker.hint": "Workbench 不会自动创建目录或 runtime；选择后执行只读预检。",
+  "picker.target.remoteTag": "远程",
   "picker.browseRemoteDisabled": "远程模式下请直接输入远端机器的绝对路径（如 /home/user/proj）",
   "picker.target.label": "驱动机器",
   "picker.target.local": "本机",
