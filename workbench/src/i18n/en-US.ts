@@ -46,6 +46,7 @@ export const enUS: Record<string, string> = {
   "picker.browse": "Browse",
   "picker.next": "Next",
   "picker.hint": "Workbench does not create directories or runtimes; preflight is read-only.",
+  "picker.browseRemoteDisabled": "Remote mode: type the remote machine's absolute path (e.g. /home/user/proj)",
   "picker.target.label": "Drive",
   "picker.target.local": "This machine",
   "picker.target.remoteOn": "Remote: {name}",
