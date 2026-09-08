@@ -695,9 +695,40 @@ pub async fn workspace_history_remove(
 }
 
 /// Cheap existence probe for the picker's click-guard (⑧).
+/// R4 (field #1/#5): target-aware — a remote target probes the REMOTE
+/// machine's fs over the pooled serve connection; a WINDOWS-STYLE path
+/// under a remote target (or a POSIX path locally) is a machine mismatch,
+/// reported as "not found" so the picker offers the record-only clear
+/// instead of the old protocol-error maze.
 #[tauri::command]
-pub fn workspace_path_exists(path: String) -> bool {
-    fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
+pub async fn workspace_path_exists(app: AppHandle, path: String) -> bool {
+    let remote = match crate::target::resolve_target(&app).await {
+        Ok(crate::cli::CliTarget::Remote(t)) => Some(t),
+        _ => None,
+    };
+    match remote {
+        None => {
+            // Local: POSIX absolute paths don't belong to this Windows host.
+            if cfg!(windows) && path.starts_with('/') {
+                return false;
+            }
+            fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
+        }
+        Some(t) => {
+            if !path.starts_with('/') {
+                return false; // a local-machine path under a remote target
+            }
+            let pool = app.state::<crate::serve::ServePool>();
+            crate::serve::fs_op(
+                &pool,
+                &t,
+                "fs.list",
+                &serde_json::json!({ "root": path.trim_end_matches('/'), "path": "" }),
+            )
+            .await
+            .is_ok()
+        }
+    }
 }
 
 /// Reveal a DATA-ROOT file (the build log the CLI named in build.start) in

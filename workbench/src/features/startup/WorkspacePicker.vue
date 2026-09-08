@@ -48,8 +48,20 @@ const hiddenCount = computed(
 );
 
 // --- (⑧) click guard: verify the path exists before launching preflight ---
+// R4 (field #1/#5): a recent entry belongs to the machine its path names —
+// a POSIX path is a REMOTE workspace. Clicking it under the wrong target
+// auto-switches the drive target first (tunnels re-root), then probes.
 const invalidPath = ref<string | null>(null);
+function isRemotePath(path: string): boolean {
+  return path.startsWith("/");
+}
 async function onRecentClick(path: string): Promise<void> {
+  const pathRemote = isRemotePath(path);
+  const nowRemote = target.value?.kind === "remote";
+  if (pathRemote !== nowRemote) {
+    // machine mismatch: switch so the probe runs on the right machine
+    await switchTarget(pathRemote ? target.value?.machine?.name ?? "wsl" : null);
+  }
   const exists = await wsStore.workspacePathExists(path);
   if (!exists) {
     invalidPath.value = path;
@@ -205,6 +217,7 @@ async function confirmForget(): Promise<void> {
               @contextmenu.prevent="openMenu(w.path, $event.clientX, $event.clientY)"
             >
               <span class="r-name">{{ basename(w.path) }}</span>
+              <span v-if="isRemotePath(w.path)" class="r-machine" :title="w.path">{{ t("picker.target.remoteTag") }}</span>
               <span class="r-path">{{ w.path }}</span>
             </button>
             <button
@@ -305,6 +318,10 @@ async function confirmForget(): Promise<void> {
 .r-name {
   color: var(--text-2); font-weight: 500;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.r-machine {
+  color: var(--info); font-size: var(--font-xs); border: 1px solid currentColor;
+  border-radius: var(--radius-sm); padding: 0 4px; flex: none;
 }
 .r-path {
   flex: 1; min-width: 0; /* flex ellipsis needs min-width: 0 */
