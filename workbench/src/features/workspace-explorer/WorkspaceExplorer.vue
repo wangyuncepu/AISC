@@ -1258,7 +1258,7 @@ function onTreeKeydown(e: KeyboardEvent) {
             :class="c.agent === 'claude' ? 'agent-claude' : 'agent-codex'"
             :title="c.agent"
             aria-hidden="true"
-          >{{ c.agent === "claude" ? "✳" : "◈" }}</span>
+          >{{ c.agent === "claude" ? "✳" : "◈" }} {{ c.agent }}</span>
           <div
             v-if="explorer.resumeErrors[c.conversation_id]"
             class="conversation-resume-error"
