@@ -95,6 +95,11 @@ def sanitize_title(text: str) -> str:
     chars (newlines become spaces) → collapse whitespace → truncate to 80
     Unicode scalar values. Empty results degrade to ``UNREADABLE_TITLE``.
     """
+    # 2.1.10 (field report #5): a non-string payload (nested content object
+    # from a foreign session schema) must degrade, never render as
+    # [object Object] upstream.
+    if not isinstance(text, str):
+        return UNREADABLE_TITLE
     out = _ANSI_RE.sub("", text)
     for pat in _REDACT_PATTERNS:
         out = pat.sub("[REDACTED]", out)
@@ -183,7 +188,15 @@ def _scan_file(path: Path, agent: str, head_only: bool) -> _FileScan:
     fully parsed (design §1a max_file_size)."""
     state = _FileScan()
     extract = _EXTRACTORS[agent]
-    with path.open("r", encoding="utf-8", errors="replace") as fh:
+    # 2.1.10 (field report #4): one unreadable session file (permissions,
+    # owner mismatch on a data-root restored from elsewhere) must not kill
+    # the whole conversation list — skip it like a malformed file.
+    try:
+        fh = path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        state.malformed_seen = True
+        return state
+    with fh:
         for line in fh:
             line = line.strip()
             if not line:

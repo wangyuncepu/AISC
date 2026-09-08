@@ -162,7 +162,14 @@ async function confirmForget(): Promise<void> {
         :placeholder="t('picker.placeholder')"
         @keyup.enter="store.runPreflight()"
       />
-      <button class="ui-button" @click="store.pickWorkspace()">{{ t("picker.browse") }}</button>
+      <!-- FIX (field #1): the native dialog can only browse THIS machine —
+           under a remote target it would silently pick a local path. -->
+      <button
+        class="ui-button"
+        :disabled="target?.kind === 'remote'"
+        :title="target?.kind === 'remote' ? t('picker.browseRemoteDisabled') : undefined"
+        @click="store.pickWorkspace()"
+      >{{ t("picker.browse") }}</button>
       <button class="ui-button primary" :disabled="!store.workspace.trim()" @click="store.runPreflight()">{{ t("picker.next") }}</button>
     </div>
     <!-- R4b: machine switcher — local machine or a settings.remoteMachines
