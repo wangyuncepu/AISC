@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AISC 2.1.10 架构 — Workbench × CLI 远程化</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1f2430; --muted: #6b7280;
+    --line: #d8dde5; --accent: #2f6fed; --accent-soft: #e8f0fe;
+    --remote: #c2620a; --remote-soft: #fdf0e3;
+    --serve: #0f7a5c; --serve-soft: #e3f4ee;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c; --card: #1d2129; --ink: #e8eaf0; --muted: #9aa3b2;
+      --line: #333a46; --accent: #6ea8ff; --accent-soft: #1c2c4a;
+      --remote: #f0a04b; --remote-soft: #3a2a17;
+      --serve: #52c79c; --serve-soft: #14312a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.65 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 40px 28px 72px; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin-bottom: 36px; }
+  h2 { font-size: 18px; margin: 44px 0 4px; display: flex; align-items: center; gap: 10px; }
+  h2 .num {
+    background: var(--ink); color: var(--card); border-radius: 999px;
+    width: 26px; height: 26px; display: inline-flex; align-items: center;
+    justify-content: center; font-size: 14px; flex: none;
+  }
+  .lead { color: var(--muted); margin: 0 0 18px; font-size: 14px; }
+
+  .stage {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: stretch;
+  }
+  @media (max-width: 900px) { .stage { grid-template-columns: 1fr; } }
+  .machine {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px 20px; position: relative;
+  }
+  .machine.remote { border-color: color-mix(in srgb, var(--remote) 45%, var(--line)); }
+  .machine h3 { margin: 0 0 2px; font-size: 16px; }
+  .machine .where { color: var(--muted); font-size: 12.5px; margin-bottom: 12px; }
+  .tag {
+    display: inline-block; font-size: 11.5px; padding: 1px 8px; border-radius: 999px;
+    border: 1px solid currentColor; margin-left: 8px; vertical-align: 2px;
+  }
+  .tag.b { color: var(--accent); } .tag.r { color: var(--remote); } .tag.s { color: var(--serve); }
+
+  .box {
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+    margin: 8px 0; background: var(--bg);
+  }
+  .box b { font-size: 13.5px; }
+  .box p { margin: 3px 0 0; font-size: 12.5px; color: var(--muted); }
+  .box.hl-local { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); background: var(--accent-soft); }
+  .box.hl-remote { border-color: color-mix(in srgb, var(--remote) 40%, var(--line)); background: var(--remote-soft); }
+  .box.hl-serve { border-color: color-mix(in srgb, var(--serve) 40%, var(--line)); background: var(--serve-soft); }
+
+  .link {
+    text-align: center; color: var(--muted); font-size: 12.5px; padding: 8px 2px;
+  }
+  .link .chan {
+    font-family: var(--mono); font-size: 11.5px; padding: 2px 10px; border-radius: 6px;
+    display: inline-block; margin: 2px 4px;
+  }
+  .c-ssh { background: var(--remote-soft); color: var(--remote); border: 1px solid color-mix(in srgb, var(--remote) 35%, transparent); }
+  .c-serve { background: var(--serve-soft); color: var(--serve); border: 1px solid color-mix(in srgb, var(--serve) 35%, transparent); }
+  .c-local { background: var(--accent-soft); color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; background: var(--card); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  th { background: var(--bg); font-size: 12.5px; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  td .chan { font-family: var(--mono); font-size: 11.5px; }
+
+  .frame { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 20px; margin-top: 10px; }
+  pre {
+    font-family: var(--mono); font-size: 12px; line-height: 1.7; margin: 0;
+    white-space: pre-wrap; color: var(--ink);
+  }
+  pre .c { color: var(--muted); }
+  pre .k { color: var(--serve); font-weight: 600; }
+  pre .o { color: var(--accent); }
+  .foot { margin-top: 48px; color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>AISC 架构总览 <span style="font-size:14px;color:var(--muted);font-weight:400">v2.1.10 · Workbench × aisc CLI · 远程化</span></h1>
+  <p class="sub">一台 <b>Workbench</b>（桌面端）驱动任意机器上的 <b>aisc CLI</b>；Agent 工作区始终活在目标机器上，本地零副本。</p>
+
+  <!-- ═══════════ 模式一：本机 ═══════════ -->
+  <h2><span class="num">1</span>本机模式（经典路径，行为不变）</h2>
+  <p class="lead">一切都在同一台 Windows 上：UI 进程直接 spawn 内置 sidecar，终端走进程管道，文件走本地磁盘。</p>
+  <div class="stage">
+    <div class="machine">
+      <h3>Workbench（Tauri）<span class="tag b">本机进程</span></h3>
+      <div class="where">Vue 3 UI（xterm 终端 / Explorer / 变更面板）</div>
+      <div class="box">
+        <b>Rust 核心</b>
+        <p>会话注册表 · PTY 监督 · notify 文件监听 · artifact 索引 · 诊断</p>
+      </div>
+      <div class="box hl-local">
+        <b>aisc CLI（sidecar，随 Workbench 内置）</b>
+        <p>每次操作 spawn 一次 · JSON envelope 协议 · Docker SDK 直连</p>
+      </div>
+    </div>
+    <div class="machine">
+      <h3>Docker Engine<span class="tag b">本机</span></h3>
+      <div class="where">Runtime 容器（super-claude 镜像）</div>
+      <div class="box">
+        <b>claude / codex / bash</b>
+        <p>会话包装器 · cc-switch 管理 Provider 与凭据（容器内）</p>
+      </div>
+      <div class="box">
+        <b>Web 服务网关</b>
+        <p>容器口 45871 → 宿主 <span style="font-family:var(--mono)">127.0.0.1:47000-47999</span>，浏览器直接开</p>
+      </div>
+    </div>
+  </div>
+  <div class="link">↑ 通道：<span class="chan c-local">进程 stdio（envelope）</span> <span class="chan c-local">docker exec PTY 管道</span> <span class="chan c-local">本地文件系统 / inotify</span></div>
+
+  <!-- ═══════════ 模式二：远程 ═══════════ -->
+  <h2 style="margin-top:56px"><span class="num">2</span>远程模式（2.1.10 新增 —— 远端权威，本地仅显示）</h2>
+  <p class="lead">驱动机器下拉选中远端后：<b>工作区、文件、终端、Agent 全部活在远端</b>；本地不保存任何第二份（VS Code Remote 同款模型，SSH 即认证）。</p>
+  <div class="stage">
+    <div class="machine">
+      <h3>本机 · Workbench<span class="tag b">视图与控制</span></h3>
+      <div class="where">Windows / macOS</div>
+      <div class="box">
+        <b>ActiveTarget（驱动机器状态）</b>
+        <p>顶栏切换条：本机 ⇄ 远程机器列表（settings.remoteMachines）</p>
+      </div>
+      <div class="box">
+        <b>双通道传输层（CliTarget）</b>
+        <p>控制面：per-op <span style="font-family:var(--mono)">ssh &lt;机器&gt; aisc …</span> 一次性命令</p>
+        <p>数据面：<b>ServePool 池化长连接</b>（文件树 / PTY 流 / 监听事件复用一条）</p>
+      </div>
+      <div class="box">
+        <b>端口隧道（TunnelRegistry）</b>
+        <p>打开远端 Web 服务时自动 <span style="font-family:var(--mono)">ssh -L</span> 同端口转发，URL 不变</p>
+      </div>
+    </div>
+    <div class="machine remote">
+      <h3>远端机器 · aisc CLI<span class="tag r">真工作区所在</span></h3>
+      <div class="where">Linux（局域网服务器 / 集群登录节点 / 另一台工作站）</div>
+      <div class="box hl-serve">
+        <b>aisc serve --stdio（长驻帧协议）</b>
+        <p>就绪握手 → 请求/响应（envelope）→ PTY 流 / 文件 / 变更事件推送</p>
+      </div>
+      <div class="box">
+        <b>文件面（fs.*）</b>
+        <p>目录树 / 预览 / 建改删 + watchdog 监听推送 —— 路径钉根防越界</p>
+      </div>
+      <div class="box">
+        <b>该机 Docker Engine</b>
+        <p>Runtime 容器与 Provider 凭据全在这台机器上</p>
+      </div>
+    </div>
+  </div>
+  <div class="link">↑ 通道：<span class="chan c-ssh">ssh（一次性 op）</span> <span class="chan c-serve">serve 长连接（PTY / fs / events）</span> <span class="chan c-ssh">ssh -L（Web 端口隧道）</span></div>
+
+  <!-- ═══════════ serve 协议 ═══════════ -->
+  <h2 style="margin-top:56px"><span class="num">3</span>serve 帧协议（一条 SSH 会话上的多路复用）</h2>
+  <p class="lead">所有帧都是单行 JSON（UTF-8），经 ssh 的 stdin/stdout 往返 —— 不开任何网络端口，SSH 认证即全部认证。</p>
+  <div class="frame">
+<pre><span class="c"># 启动握手：版本配对（serve_protocol 硬门，cli_version 供展示）</span>
+<span class="k">←</span> {"type":"ready","serve_protocol":1,"cli_version":"2.1.10.dev0"}
+
+<span class="c"># 请求 / 响应：单帧承载完整 envelope（version / doctor / ps / fs.* / …）</span>
+<span class="k">→</span> {"id":"wb1","op":"fs.list","args":{"root":"/home/user/proj","path":"src"}}
+<span class="k">←</span> {"id":"wb1","type":"result","ok":true,"envelope":{…}}
+
+<span class="c"># 终端流（每个会话一个 sid；输入/尺寸全带内）</span>
+<span class="k">→</span> {"type":"pty.input","sid":"…","data":"<span class="o">base64</span>"}     <span class="k">→</span> {"type":"pty.resize","sid":"…","cols":100,"rows":30}
+<span class="k">←</span> {"type":"pty.output","sid":"…","data":"<span class="o">base64</span>"}    <span class="k">←</span> {"type":"pty.exit","sid":"…","exit_code":0}
+
+<span class="c"># 事件推送（远端文件变更 → 本地变更面板实时联动）</span>
+<span class="k">←</span> {"type":"event","event":"fs.change","data":{"root":"…","paths":[{"path":"…","change":"created"}]}}</pre>
+  </div>
+
+  <!-- ═══════════ 对照表 ═══════════ -->
+  <h2 style="margin-top:56px"><span class="num">4</span>两条路径对照</h2>
+  <table>
+    <tr><th>能力面</th><th>本机模式</th><th>远程模式</th></tr>
+    <tr><td><b>终端 PTY</b></td><td>sidecar 进程管道（D-8 双路径：稳定面不动）</td><td><span class="chan c-serve">serve · pty.* 帧</span>（resize 带内，G1 根治）</td></tr>
+    <tr><td><b>文件 / Explorer</b></td><td>本地 fs + notify 监听</td><td><span class="chan c-serve">serve · fs.*</span> + watchdog 事件（远端权威，D-5/D-9）</td></tr>
+    <tr><td><b>runtime 生命周期</b></td><td>本地 sidecar op</td><td><span class="chan c-ssh">per-op ssh</span>（池化改造进行中）</td></tr>
+    <tr><td><b>Web 服务</b></td><td>127.0.0.1:47xxx 直连</td><td><span class="chan c-ssh">ssh -L 同端口隧道</span>（URL 不变）</td></tr>
+    <tr><td><b>“本地软件打开”</b></td><td>直接打开</td><td>下载临时副本后打开（只读视图，非同步）</td></tr>
+    <tr><td><b>凭据（Provider/Key）</b></td><td>本机容器（cc-switch）</td><td>远端容器 —— 本地永不保存远端凭据</td></tr>
+  </table>
+
+  <div class="foot">
+    AISC · 2.1.10 远程化 · 裁决记录见 <span style="font-family:var(--mono)">docs/plans/2.1.10-dev-plans/decisions.md</span>（D-5 远端权威 / D-7 SSH 即认证 / D-8 双路径 / D-9 FS 走 serve）
+  </div>
+</div>
+</body>
+</html>
