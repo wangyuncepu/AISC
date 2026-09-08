@@ -100,6 +100,41 @@
   字形（claude 暖金/codex 冷蓝 + 底色块）。**FIX-3（面板拖动折叠）留
   下一轮**（resize 敏感区，需用户在场手测迭代）；**FIX-2（CLI 命令优化）
   待与用户深入讨论**。
+- **R4 手测三轮收官（2026-09-08/09，批次 field-fixes-r4-1/2/3/4 全合入）**：
+  R4 面全验收 + 远程链**真机首验**（nas = Debian 13/zsh 真远程机，非 WSL
+  自演）。修复账：一轮 #1/#4/#5（`27adac6` 会话列表容错/远程浏览禁用/
+  title 防护）；二轮 #1/#5（`31b50f1` recent 机器感知 + path_exists 按
+  target 探活 + 跨机自动切换）；#3（`0cc241d` GatewayPortError WSL2/HNS
+  指引）；r4-3（`c54579b` 图标带名 + 切换去硬编码）；**r4-4 本批三修**：
+  **#7 ssh 远端参数 shell 转义**——ssh 把 host 后 token 拼成一条命令串由
+  远端登录 shell 二次解析，host-mcp URL 的 `?` 在 zsh 当通配符直接
+  "no matches found"（bash 无匹配原样透传——WSL 门禁全绿、nas 一击即中；
+  zsh 是第一只真测试机）。shell_quote 惰性字符集裸传保持 argv 形状字节
+  稳定、其余 POSIX 单引号包裹；spawn_pieces 收敛到 spawn_argv 单一构造点
+  （双实现正是漂移温床）；同批：Remote target 跳过 --host-mcp-url 注入
+  （URL 指本机回环，远端容器内 host.docker.internal 解析到远端主机——
+  不可达噪音，远端容器按 whitelist-off 语义运行）+ 修 develop 既有
+  Windows 红测（SYS_SSH 绝对路径钉死后断言没跟，Linux 门禁绿掩盖——
+  cfg 盲区再现）。**#8 normalizePath 保留远端 POSIX 形态**——G-07 本地
+  规约在 Windows 无差别翻斜杠，远端工作区入 history 即 `\home\…`：徽章/
+  自动切换双失效 + 本机探活误报「已移动或删除」；sameWorkspace 远端比对
+  改大小写敏感（远端是 Linux fs）。**#9 未出生工作区不留 history**——
+  launcher 槽本身是 workspace 实例（出生通道），失败路径照进 recent；
+  doSave 过滤当前 launcher id，晋升实例保留 id 出生后补记。环境侧工程：
+  nas 装 CLI（本地 wheel + scp + `~/.zshenv`——zsh 非交互 ssh 不读
+  .zshrc）+ `docker save|ssh docker load` 运 super-claude 镜像。
+  **D3 HNS 数据点**：47000-47999 整段被 Windows HNS 动态保留（netsh
+  excludedportrange 实证；容器 HostConfig.PortBindings 在而
+  NetworkSettings.Ports 空 = 静默死），wsl --shutdown + 重启 Docker
+  Desktop + 关闭重开工作区后恢复——**分配时 bind-probe 防不住**（用户态
+  bind 可过、Docker 的 HNS 绑定静默死）。PASS 面：A1/A3/B3/B4/C3/C4/
+  D1/D2/D3/F1；A2/A4/E1-E3 未测（可选）。backlog：预检失败页缺「清除
+  记录」入口 / HNS 活映射校验（启动后验 NetworkSettings，死绑定→#3 指引
+  或换口重建）/ 远端 bootstrap G7（pip 装的 CLI 无 bundle，`aisc build`
+  裸远端不可用，镜像靠 save|load 运输）/ command-not-found 报错直说远端
+  未装 CLI / recent 不记机器归属（多机时跨机点击切错机风险）。
+  手测清单 `docs/plans/2.1.10-dev-plans/r4-manual-test-round3.md`。
+  门禁：cargo（lib 305 + 集成 30）/ vitest 441 / vue-tsc 全绿。
 - **R2 手测自动化（2026-09-07 深夜，用户授权全代测）**：三层替代人工——
   ①**Rust 真 SSH 集成**（`tests/serve_ssh.rs`，AISC_TEST_SSH/RUNTIME_ID 门控）：
   0.62s 全环 PASS（PS1/命令执行输出/G1 resize/kill-exit）；排查两坑：readline
