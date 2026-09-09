@@ -1821,7 +1821,8 @@ def _cmd_ps(
         explicit_root=getattr(args, "aisc_root", None),
     )
     data = [{"name": r.name, "label": r.label, "status": r.status,
-             "running": r.running, "image": r.image, "workspace": r.workspace}
+             "running": r.running, "image": r.image, "workspace": r.workspace,
+             "active": r.active}
             for r in rows]
     return data, 0, []
 
@@ -2730,6 +2731,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 name=r.get("name", ""), label=r.get("label", ""),
                 status=r.get("status", ""), running=r.get("running", False),
                 image=r.get("image", ""), workspace=r.get("workspace", ""),
+                active=r.get("active", False),
             ) for r in (data if isinstance(data, list) else [])]
             print_ps_text(ps_rows)
         elif args.command in ("shell", "switch"):

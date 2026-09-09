@@ -9,7 +9,8 @@ never touched — the GUI owns their lifecycle).
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from aisc.adapters.container_registry import (
     gc as registry_gc,
@@ -20,11 +21,19 @@ from aisc.adapters.docker_ import DockerExecutor, RealDockerExecutor
 from aisc.application.data_root import DataRootResolver
 
 
-def _registry_entries(executor: Optional[DockerExecutor] = None) -> List[Any]:
+def registry_entries(
+    executor: Optional[DockerExecutor] = None,
+    data_root: Optional[str] = None,
+) -> List[Any]:
     """Every ``(name, meta)`` across all workspace registries (CLI and
     Workbench-owned alike — the caller filters). Lazy-GCs each registry so
-    stale records from deleted containers do not surface."""
-    shared = DataRootResolver().resolve_shared_root() / "workspaces"
+    stale records from deleted containers do not surface.
+
+    *data_root* (a dir containing ``workspaces/``) overrides the resolved
+    shared root — injection seam for tests and ``aisc ps``.
+    """
+    base = Path(data_root) if data_root else DataRootResolver().resolve_shared_root()
+    shared = base / "workspaces"
     out: List[Any] = []
     if not shared.is_dir():
         return out
@@ -38,19 +47,23 @@ def _registry_entries(executor: Optional[DockerExecutor] = None) -> List[Any]:
     return out
 
 
-def _docker_states(executor: DockerExecutor) -> Dict[str, str]:
-    """name → docker status string (one ``docker ps -a`` round trip)."""
+def docker_states(executor: DockerExecutor) -> Tuple[Dict[str, str], bool]:
+    """name → docker status string (one ``docker ps -a`` round trip).
+
+    Second element: whether docker answered at all. When False the map is
+    empty and callers must NOT read absence as "container gone".
+    """
     proc = executor.run_captured([
         "ps", "-a", "--format", "{{.Names}}\t{{.Status}}",
     ])
     states: Dict[str, str] = {}
     if proc.exit_code != 0:
-        return states
+        return states, False
     for line in (proc.stdout or "").splitlines():
         name, _, status = line.partition("\t")
         if name:
             states[name] = status
-    return states
+    return states, True
 
 
 def cmd_workspaces(
@@ -61,10 +74,10 @@ def cmd_workspaces(
     from aisc.cli.commands.runs import list_runs
 
     alias_by_path = {r.get("path", ""): r.get("alias", "") for r in list_runs()}
-    states = _docker_states(exec_)
+    states, _docker_ok = docker_states(exec_)
 
     rows: List[Dict[str, Any]] = []
-    for cname, meta in _registry_entries(exec_):
+    for cname, meta in registry_entries(exec_):
         meta = meta or {}
         if meta.get("owner") == "workbench":
             continue

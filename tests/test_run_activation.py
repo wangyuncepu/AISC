@@ -269,6 +269,84 @@ class WorkspacesViewTests(unittest.TestCase):
         self.assertNotIn(["stop", "box-dead"], argvs)
 
 
+class PsMachineViewTests(unittest.TestCase):
+    """`aisc ps` machine-wide scan (manual test r1 #1): the old cwd-anchored
+    single registry never saw F2-C activations — ps now scans every
+    workspace registry (the same data face as `aisc workspaces`)."""
+
+    def _setup_registries(self, tmp):
+        import json as _json
+        reg = Path(tmp) / "workspaces" / "h1" / "runtime"
+        reg.mkdir(parents=True)
+        (reg / "containers.json").write_text(_json.dumps({
+            "default": "box-live",
+            "containers": {
+                "box-live": {"image": "i", "workspace": "/w/live",
+                             "network": "direct", "label": ""},
+                "box-ghost": {"image": "i", "workspace": "/w/ghost",
+                              "network": "direct", "label": ""},
+                "box-wb": {"image": "i", "workspace": "/w/wb",
+                           "network": "direct", "label": "", "owner": "workbench"},
+            },
+        }), encoding="utf-8")
+
+    def test_scans_all_registries_with_active_star_and_gone(self):
+        from aisc.cli.commands.container import cmd_ps
+
+        tmp = tempfile.mkdtemp()
+        self._setup_registries(tmp)
+        ex = MagicMock()
+        ex.run_captured.return_value = ProcessResult(
+            exit_code=0,
+            stdout="box-live\tUp 3 hours\nbox-wb\tExited (0) 5 minutes ago\n",
+            stderr="", command_not_found=False, timed_out=False)
+        with patch("aisc.application.data_root.DataRootResolver.resolve_shared_root",
+                   return_value=Path(tmp)), \
+             patch("aisc.cli.commands.runs.get_active", return_value="/w/live"):
+            rows = cmd_ps(executor=ex)
+        by_name = {r.name: r for r in rows}
+        # ps is container-centric: workbench-owned rows are listed too
+        self.assertEqual(set(by_name), {"box-live", "box-ghost", "box-wb"})
+        self.assertTrue(by_name["box-live"].active)
+        self.assertTrue(by_name["box-live"].running)
+        # registered but docker never heard of it → gone (orphan hygiene)
+        self.assertEqual(by_name["box-ghost"].status, "gone")
+        self.assertFalse(by_name["box-ghost"].running)
+        self.assertFalse(by_name["box-wb"].active)
+        self.assertEqual(rows[0].name, "box-live")  # active sorts first
+
+    def test_docker_down_shows_unknown_not_gone(self):
+        from aisc.cli.commands.container import cmd_ps
+
+        tmp = tempfile.mkdtemp()
+        self._setup_registries(tmp)
+        ex = MagicMock()
+        ex.run_captured.return_value = ProcessResult(
+            exit_code=1, stdout="", stderr="daemon down",
+            command_not_found=False, timed_out=False)
+        with patch("aisc.application.data_root.DataRootResolver.resolve_shared_root",
+                   return_value=Path(tmp)):
+            rows = cmd_ps(executor=ex)
+        self.assertTrue(rows)
+        # docker unreachable → nothing is guessed as gone
+        self.assertTrue(all(r.status == "?" for r in rows))
+
+    def test_explicit_root_is_a_data_root_seam(self):
+        from aisc.cli.commands.container import cmd_ps
+
+        tmp = tempfile.mkdtemp()
+        self._setup_registries(tmp)
+        ex = MagicMock()
+        ex.run_captured.return_value = ProcessResult(
+            exit_code=0, stdout="box-live\tUp 2 minutes\n",
+            stderr="", command_not_found=False, timed_out=False)
+        rows = cmd_ps(explicit_root=tmp, executor=ex)  # no resolver patch needed
+        by_name = {r.name: r for r in rows}
+        self.assertEqual(set(by_name), {"box-live", "box-ghost", "box-wb"})
+        self.assertTrue(by_name["box-live"].running)
+        self.assertEqual(by_name["box-ghost"].status, "gone")
+
+
 class AgentWorkspaceResolveTests(unittest.TestCase):
     """`aisc claude --workspace <path>` resolution — the registry is a
     ``name → meta`` map (not a list), which the first F2-C cut got wrong."""

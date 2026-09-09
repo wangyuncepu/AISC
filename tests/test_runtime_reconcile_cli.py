@@ -120,13 +120,19 @@ class ReconcileDispatchTests(unittest.TestCase):
 
     def test_dispatch_reconcile_returns_envelope(self):
         from aisc.cli.main import _cmd_runtime
+        from aisc.cli.commands import runtime as runtime_cmd
         from tests.test_workspace_reconcile import ReconcileFakeExecutor
 
         args = _build_parser().parse_args(
             ["runtime", "reconcile", "--workspace", self.ws,
              "--instance-id", INST_A]
         )
-        with mock.patch.dict(os.environ, self._env, clear=False):
+        # the dispatch leg has no executor parameter — pin the module default
+        # so the test means what its docstring claims (fake executor) instead
+        # of silently depending on a live docker daemon
+        with mock.patch.dict(os.environ, self._env, clear=False), \
+             mock.patch.object(runtime_cmd, "default_executor",
+                               return_value=ReconcileFakeExecutor()):
             data, exit_code, errors = _cmd_runtime(args, "json")
         self.assertEqual(exit_code, 0)
         self.assertEqual(errors, [])
