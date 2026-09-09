@@ -523,7 +523,11 @@ async function confirmForget(): Promise<void> {
   display: flex; align-items: center; justify-content: center;
 }
 .browse {
-  width: 640px; max-width: 92vw; max-height: 72vh;
+  width: 640px; max-width: 92vw;
+  /* Field r2 #1: a FIXED body height — the listing scrolls inside; without
+     it the flex child's min-height:auto grows past the dialog (hidden-dir
+     listings overflowed the screen). */
+  height: min(600px, 72vh);
   display: flex; flex-direction: column;
   background: var(--surface); border: var(--border-w) solid var(--border-strong);
   border-radius: var(--radius-md); box-shadow: var(--shadow-menu);
@@ -546,7 +550,7 @@ async function confirmForget(): Promise<void> {
   border-radius: var(--radius-sm);
 }
 .crumb:hover { background: var(--surface-hover); }
-.browse-list { flex: 1; overflow-y: auto; padding: var(--space-2); min-height: 200px; }
+.browse-list { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-2); }
 .browse-item {
   display: flex; align-items: center; gap: var(--space-2); width: 100%;
   text-align: left; padding: 7px var(--space-2);
