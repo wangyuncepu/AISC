@@ -86,12 +86,7 @@ def cmd_workspaces(
 
     alias_by_path = {r.get("path", ""): r.get("alias", "") for r in list_runs()}
     states, _docker_ok = docker_states(exec_)
-    entries, _defaults = registry_entries(exec_)
-    from aisc.cli.commands.runs import get_active as _get_active
-    try:
-        active_ws = _get_active() or ""
-    except Exception:
-        active_ws = ""
+    entries, defaults = registry_entries(exec_)
 
     rows: List[Dict[str, Any]] = []
     for cname, meta in entries:
@@ -110,8 +105,9 @@ def cmd_workspaces(
             "image": str(meta.get("image", "")),
             "status": status,
             "running": status.startswith("Up"),
-            # r2 #E: which workspace a bare `aisc claude` lands in
-            "active": bool(active_ws) and ws == active_ws,
+            # r2 #E: which row a bare `aisc claude` actually lands in —
+            # the registry default pointer, not "any row of that workspace"
+            "active": name in defaults,
         })
     rows.sort(key=lambda r: (not r["running"], r["workspace"]))
     return rows

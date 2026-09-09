@@ -133,19 +133,7 @@ def cmd_status(
     permission failures raise CliError.
     """
     exec_ = executor or RealDockerExecutor()
-    root = explicit_root
-    if not name_override and not label_override and not explicit_root:
-        # F2-C default leg: the ACTIVE workspace's registry (never cwd).
-        from aisc.cli.commands import runs as cli_runs
-
-        active = cli_runs.get_active()
-        if active:
-            from aisc.application.data_root import workspace_state_dir
-
-            try:
-                root = str(workspace_state_dir(Path(active)))
-            except Exception:
-                root = None
+    root = _active_registry_root(explicit_root) if not (name_override or label_override) else explicit_root
     name = discover_container(name_override=name_override,
                               explicit_root=root,
                               label_override=label_override,
@@ -226,20 +214,7 @@ def cmd_stop(
     detached keep-alives — removed by default, else every stop litters.
     """
     exec_ = executor or RealDockerExecutor()
-    root = explicit_root
-    if not name_override and not label_override and not explicit_root:
-        # F2-C default leg: the ACTIVE workspace's registry (never cwd —
-        # the cwd anchor trips the data-root overlap gate from $HOME).
-        from aisc.cli.commands import runs as cli_runs
-
-        active = cli_runs.get_active()
-        if active:
-            from aisc.application.data_root import workspace_state_dir
-
-            try:
-                root = str(workspace_state_dir(Path(active)))
-            except Exception:
-                root = None
+    root = _active_registry_root(explicit_root) if not (name_override or label_override) else explicit_root
     name = discover_container(name_override=name_override,
                               explicit_root=root,
                               label_override=label_override,
@@ -364,8 +339,9 @@ def cmd_restart(
     Requires the container to exist.
     """
     exec_ = executor or RealDockerExecutor()
+    root = _active_registry_root(explicit_root) if not (name_override or label_override) else explicit_root
     name = discover_container(name_override=name_override,
-                              explicit_root=explicit_root,
+                              explicit_root=root,
                               label_override=label_override,
                               executor=exec_)
 
@@ -397,6 +373,29 @@ def print_restart_text(data: Dict[str, Any]) -> None:
 # Shell command
 # ---------------------------------------------------------------------------
 
+def _active_registry_root(explicit_root: Optional[str]) -> Optional[str]:
+    """F2-C default leg: the ACTIVE workspace's registry root (never cwd —
+    the cwd anchor trips the data-root guard from $HOME and reads the
+    wrong registry). Shared by the no-override paths of stop/shell/
+    status/restart/switch."""
+    if explicit_root:
+        return explicit_root
+    from aisc.cli.commands import runs as cli_runs
+
+    try:
+        active = cli_runs.get_active()
+    except Exception:
+        active = None
+    if active:
+        from aisc.application.data_root import workspace_state_dir
+
+        try:
+            return str(workspace_state_dir(Path(active)))
+        except Exception:
+            return None
+    return None
+
+
 def cmd_shell(
     name_override: Optional[str] = None,
     explicit_root: Optional[str] = None,
@@ -412,13 +411,14 @@ def cmd_shell(
     Returns ProcessResult so caller can inspect exit_code / errors.
     """
     exec_ = executor or RealDockerExecutor()
+    root = _active_registry_root(explicit_root) if not (name_override or label_override) else explicit_root
     name = discover_container(name_override=name_override,
-                              explicit_root=explicit_root,
+                              explicit_root=root,
                               label_override=label_override,
                               executor=exec_)
 
     # Verify container exists and is running
-    status = cmd_status(name_override=name, explicit_root=explicit_root,
+    status = cmd_status(name_override=name, explicit_root=root,
                          executor=executor)
 
     if not status.exists:
@@ -577,13 +577,14 @@ def cmd_switch(
                 exit_code=2, error_code="AISC_ERR_USAGE",
             )
 
+    root = _active_registry_root(explicit_root) if not (name_override or label_override) else explicit_root
     name = discover_container(name_override=name_override,
-                              explicit_root=explicit_root,
+                              explicit_root=root,
                               label_override=label_override,
                               executor=exec_)
 
     # Verify container exists and is running
-    status = cmd_status(name_override=name, explicit_root=explicit_root,
+    status = cmd_status(name_override=name, explicit_root=root,
                          executor=executor)
 
     if not status.exists:
@@ -634,13 +635,14 @@ def cmd_provider_set_key(
             exit_code=2, error_code="AISC_ERR_USAGE",
         )
 
+    root = _active_registry_root(explicit_root) if not (name_override or label_override) else explicit_root
     name = discover_container(name_override=name_override,
-                              explicit_root=explicit_root,
+                              explicit_root=root,
                               label_override=label_override,
                               executor=exec_)
 
     # Verify container exists and is running
-    status = cmd_status(name_override=name, explicit_root=explicit_root,
+    status = cmd_status(name_override=name, explicit_root=root,
                          executor=executor)
 
     if not status.exists:
