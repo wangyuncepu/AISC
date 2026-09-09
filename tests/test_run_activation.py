@@ -175,14 +175,14 @@ class ActivationArgvTests(unittest.TestCase):
 
 
 class ReactivationReplaceTests(unittest.TestCase):
-    """r1 #2: a default (label-less) re-activation REPLACES same-workspace
-    CLI containers — never --label slots, never owner=workbench (the GUI's
-    lease-guarded singletons), never other workspaces."""
+    """r1 #2 (revised): same-workspace activation is IDEMPOTENT. A LIVE
+    older container is reused (told, not churned); a DEAD one is swept
+    before the new start. Never --label slots, never owner=workbench (the
+    GUI's lease-guarded singletons), never other workspaces."""
 
-    def test_reactivation_replaces_the_same_workspace_default_slot(self):
+    def _fixtures(self, ps_stdout):
         import json as _json
         from aisc.adapters.docker_ import ImageInspectResult, ImageInspectStatus
-        from aisc.cli.commands.run import plan_run, run_container
 
         ws = tempfile.mkdtemp()
         reg = Path(tempfile.mkdtemp()) / "runtime"
@@ -213,8 +213,42 @@ class ReactivationReplaceTests(unittest.TestCase):
         ex.preflight.return_value = _PF()
         ex.inspect_image.return_value = ImageInspectResult(
             status=ImageInspectStatus.EXISTS)
-        ex.run_captured.side_effect = lambda argv, timeout=None: ok("newid\n")
 
+        def routed(argv, timeout=None):
+            if argv[:1] == ["ps"]:
+                return ok(ps_stdout)
+            if argv[0] == "run":
+                return ok("newid\n")
+            return ok()
+        ex.run_captured.side_effect = routed
+        return ws, reg, ex
+
+    def test_live_same_workspace_container_is_reused_not_churned(self):
+        from aisc.cli.commands.run import plan_run, run_container
+
+        ws, reg, ex = self._fixtures(
+            "old-main\tUp 3 hours\nold-lab\tUp 1 hour\n"
+            "old-wb\tUp 2 hours\nother-ws\tExited (0)\n")
+        plan = plan_run(image="super-claude:latest", workspace=ws,
+                        interactive=False, keep_alive=True)
+        with patch("aisc.application.data_root.workspace_state_dir",
+                   return_value=reg):
+            result = run_container(plan, executor=ex)
+
+        self.assertEqual(result.reused, "old-main")
+        self.assertFalse(result.executed)
+        self.assertIn("reused", result.to_dict())
+        argvs = [c[0][0] for c in ex.run_captured.call_args_list]
+        self.assertNotIn(["stop", "old-main"], argvs)
+        self.assertNotIn(["rm", "-f", "old-main"], argvs)
+        self.assertTrue(all(a[0] != "run" for a in argvs))  # nothing started
+
+    def test_dead_same_workspace_container_is_swept_before_start(self):
+        import json as _json
+        from aisc.cli.commands.run import plan_run, run_container
+
+        ws, reg, ex = self._fixtures(
+            "old-main\tExited (0) 5 minutes ago\nother-ws\tUp 1 hour\n")
         plan = plan_run(image="super-claude:latest", workspace=ws,
                         interactive=False, keep_alive=True)
         with patch("aisc.application.data_root.workspace_state_dir",
@@ -222,7 +256,8 @@ class ReactivationReplaceTests(unittest.TestCase):
             result = run_container(plan, executor=ex)
 
         self.assertEqual(result.replaced, ["old-main"])
-        self.assertIn("replaced", result.to_dict())
+        self.assertIsNone(result.reused)
+        self.assertTrue(result.executed)
         argvs = [c[0][0] for c in ex.run_captured.call_args_list]
         self.assertIn(["stop", "old-main"], argvs)
         self.assertIn(["rm", "-f", "old-main"], argvs)

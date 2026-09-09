@@ -1353,6 +1353,12 @@ def _cmd_run(
     ]
 
     if effective_format == "text" and emitter is None:
+        if out.get("reused"):
+            print(f"ℹ 工作区已在运行中: {plan.workspace}")
+            print(f"  容器 {out['reused']}（Up） · 复用现有容器，未新建")
+            print("  进入方式: aisc claude | aisc codex | aisc switch | aisc shell")
+            print("  如需重建: 先 aisc stop 再重新 aisc run")
+            return out, 0, []
         print(f"💯 工作区已激活: {plan.workspace}")
         print(f"  容器 {plan.name}（detached） · 镜像 {plan.image} · 网络 {plan.network}")
         if out.get("replaced"):

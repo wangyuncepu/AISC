@@ -167,9 +167,12 @@ class RunResult:
     # svc-5: service-access metadata — the gateway publish that rode this
     # run's docker argv. Empty when no port was allocated.
     web_gateway: Dict[str, Any] = field(default_factory=dict)
-    # r1 #2: older same-workspace containers this activation replaced
+    # r1 #2: older same-workspace containers this activation swept
     # (stopped+removed+unregistered before the new one started).
     replaced: List[str] = field(default_factory=list)
+    # r1 #2 (revised): a LIVE same-workspace container was REUSED — nothing
+    # was started; the summary tells the user it is already open.
+    reused: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         out = {
@@ -184,6 +187,8 @@ class RunResult:
             out["web_gateway"] = dict(self.web_gateway)
         if self.replaced:
             out["replaced"] = list(self.replaced)
+        if self.reused:
+            out["reused"] = self.reused
         return out
 
 
@@ -341,41 +346,63 @@ def run_container(
         )
     # EXISTS → proceed
 
-    # --- r1 #2: same-workspace re-activation REPLACES, it does not stack ---
-    # A default (label-less) activation owns the workspace's single CLI slot:
-    # older CLI-owned containers bound to the SAME workspace are stopped,
-    # removed and unregistered first (their gateway ports ride along). GUI
-    # runtimes (owner=workbench, lease-guarded singletons) and explicit
-    # --label multi-container slots are never touched. Best-effort per
-    # container — a failed teardown never blocks the new activation.
-    if not plan.label:
+    # --- r1 #2 (revised): same-workspace activation is IDEMPOTENT ---
+    # A default (label-less) activation owns the workspace's single CLI
+    # slot. A LIVE older container is REUSED — the user chose to run a
+    # workspace that is already open, so tell them (and how to reach or
+    # rebuild it) instead of churning containers under them. Only DEAD
+    # ones (Exited/gone — nobody is using them) are swept (stop+rm+
+    # unregister) before the new start. GUI runtimes (owner=workbench,
+    # lease-guarded) and --label multi-container slots are never touched.
+    # If docker does not answer the liveness probe, judge nothing: fall
+    # through to the normal start path rather than risk tearing down a
+    # live container we could not see.
+    if not plan.dry_run and not plan.label:
         from aisc.adapters.container_registry import list_containers as _lc
         from aisc.adapters.container_registry import unregister
         from aisc.application.data_root import workspace_state_dir
         try:
             _reg = workspace_state_dir(Path(plan.workspace))
             _target = Path(plan.workspace)
-            for _nm, _meta in _lc(_reg).items():
-                _meta = _meta if isinstance(_meta, dict) else {}
-                if _meta.get("owner") == "workbench":
-                    continue
-                if _meta.get("label"):
-                    continue
-                try:
-                    if Path(str(_meta.get("workspace", ""))).resolve() != _target:
+            _ps = exec_.run_captured(
+                ["ps", "-a", "--format", "{{.Names}}\t{{.Status}}"],
+                timeout=10.0)
+            if _ps.exit_code == 0:
+                _states: Dict[str, str] = {}
+                for _line in (_ps.stdout or "").splitlines():
+                    _nm2, _, _st = _line.partition("\t")
+                    if _nm2:
+                        _states[_nm2] = _st
+                for _nm, _meta in _lc(_reg).items():
+                    _meta = _meta if isinstance(_meta, dict) else {}
+                    if _meta.get("owner") == "workbench":
                         continue
-                except OSError:
-                    continue
-                _stop = exec_.run_captured(["stop", _nm], timeout=30.0)
-                _rm = exec_.run_captured(["rm", "-f", _nm], timeout=30.0)
-                if _rm.exit_code == 0 or "no such" in (_rm.stderr or "").lower():
+                    if _meta.get("label"):
+                        continue
                     try:
-                        unregister(_reg, _nm)
-                    except Exception:
-                        pass
-                    result.replaced.append(str(_nm))
+                        if Path(str(_meta.get("workspace", ""))).resolve() != _target:
+                            continue
+                    except OSError:
+                        continue
+                    if _states.get(str(_nm), "").startswith("Up"):
+                        if result.reused is None:
+                            result.reused = str(_nm)
+                        continue
+                    # dead or unknown-to-docker → sweep the corpse
+                    exec_.run_captured(["stop", _nm], timeout=30.0)
+                    _rm = exec_.run_captured(["rm", "-f", _nm], timeout=30.0)
+                    if _rm.exit_code == 0 or "no such" in (_rm.stderr or "").lower():
+                        try:
+                            unregister(_reg, _nm)
+                        except Exception:
+                            pass
+                        result.replaced.append(str(_nm))
         except Exception:
             pass
+
+    if result.reused is not None:
+        result.executed = False
+        return result
 
     # --- register container in the multi-container index ---
     # F2-C: the registry root is the WORKSPACE's state dir (workspaces/<h>/
