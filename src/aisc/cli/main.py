@@ -2306,6 +2306,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         pass  # non-TextIOWrapper (PyInstaller wrapper) - protocol sites are ASCII anyway
     parser = _build_parser()
 
+    # Help localization (manual test ask 2026-09-09): follow the OS locale —
+    # Chinese environments get Chinese help via output-layer translation
+    # (see aisc.cli.help_i18n); every other locale keeps the English source.
+    from aisc.cli.help_i18n import maybe_install as _maybe_i18n
+    _maybe_i18n()
+
     # Shell completion (manual test ask 2026-09-09): argcomplete follows the
     # argparse tree automatically — subcommands, flags, choices all covered,
     # zero per-command maintenance. No-op outside a completion environment
