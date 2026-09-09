@@ -1151,7 +1151,7 @@ def validate_run_resources(workspace: Path) -> None:
     Raises FileNotFoundError, PermissionError, or NotADirectoryError.
     """
     if not workspace.exists():
-        raise FileNotFoundError(f"Workspace does not exist: {workspace}")
+        raise FileNotFoundError(f"工作区目录不存在: {workspace}")
     if not workspace.is_dir():
         raise NotADirectoryError(f"Workspace is not a directory: {workspace}")
     if not os.access(str(workspace), os.R_OK):

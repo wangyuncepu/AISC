@@ -155,6 +155,13 @@ def plan_run(
 # Run result (structured outcome)
 # ---------------------------------------------------------------------------
 
+def _name_series(container_name: str) -> str:
+    """Container names are ``<alias>-<hash8>``; the alias may itself contain
+    dashes, the hash never does — strip the last segment to get the series
+    (rename detection keys off it, r2 #C)."""
+    return container_name.rsplit("-", 1)[0]
+
+
 @dataclass
 class RunResult:
     """Result of a run execution — all fields populated even on failure."""
@@ -320,9 +327,9 @@ def run_container(
     inspect = exec_.inspect_image(plan.image)
     if inspect.status == ImageInspectStatus.MISSING:
         raise CliError(
-            message=f"Image '{plan.image}' not found. Please build it first:\n"
+            message=f"镜像 '{plan.image}' 不存在。请先构建：\n"
                     f"  aisc build --tag {plan.image}\n"
-                    f"Or specify an existing image with --image <name>.",
+                    f"或用 --image <名称> 指定已有镜像。",
             exit_code=5, error_code="AISC_ERR_IMAGE_NOT_FOUND",
             data=result.to_dict(),
         )
@@ -346,17 +353,21 @@ def run_container(
         )
     # EXISTS → proceed
 
-    # --- r1 #2 (revised): same-workspace activation is IDEMPOTENT ---
+    # --- r1 #2 (revised) + r2 #C: same-workspace activation is IDEMPOTENT;
+    # a DIFFERENT --name is a rename intent and rebuilds ---
     # A default (label-less) activation owns the workspace's single CLI
-    # slot. A LIVE older container is REUSED — the user chose to run a
-    # workspace that is already open, so tell them (and how to reach or
-    # rebuild it) instead of churning containers under them. Only DEAD
-    # ones (Exited/gone — nobody is using them) are swept (stop+rm+
-    # unregister) before the new start. GUI runtimes (owner=workbench,
-    # lease-guarded) and --label multi-container slots are never touched.
-    # If docker does not answer the liveness probe, judge nothing: fall
-    # through to the normal start path rather than risk tearing down a
-    # live container we could not see.
+    # slot. A LIVE older container of the SAME name series is REUSED — the
+    # user chose to run a workspace that is already open, so tell them
+    # (and how to reach or rebuild it) instead of churning containers under
+    # them. A live container of a DIFFERENT series (explicit --name that
+    # disagrees with the existing one) is a rename: rebuild under the new
+    # name (alias and container name must stay one story). Only DEAD ones
+    # (Exited/gone — nobody is using them) are swept (stop+rm+unregister)
+    # before the new start. GUI runtimes (owner=workbench, lease-guarded)
+    # and --label multi-container slots are never touched. If docker does
+    # not answer the liveness probe, judge nothing: fall through to the
+    # normal start path rather than risk tearing down a live container we
+    # could not see.
     if not plan.dry_run and not plan.label:
         from aisc.adapters.container_registry import list_containers as _lc
         from aisc.adapters.container_registry import unregister
@@ -384,11 +395,13 @@ def run_container(
                             continue
                     except OSError:
                         continue
-                    if _states.get(str(_nm), "").startswith("Up"):
+                    if (_states.get(str(_nm), "").startswith("Up")
+                            and _name_series(str(_nm)) == _name_series(plan.name)):
                         if result.reused is None:
                             result.reused = str(_nm)
                         continue
-                    # dead or unknown-to-docker → sweep the corpse
+                    # dead, unknown-to-docker, or a different name series
+                    # (rename intent) → sweep and rebuild
                     exec_.run_captured(["stop", _nm], timeout=30.0)
                     _rm = exec_.run_captured(["rm", "-f", _nm], timeout=30.0)
                     if _rm.exit_code == 0 or "no such" in (_rm.stderr or "").lower():
@@ -418,7 +431,10 @@ def run_container(
             "workspace": plan.workspace,
             "network": plan.network,
             "label": plan.label,
-        })
+        }, set_default=not plan.label)
+        # r2 #A: a --label slot is a BYPASS activation — it must not steal
+        # the workspace's default pointer (the bare `aisc claude` entry);
+        # only the default (label-less) activation owns that pointer.
     except (ValueError, OSError) as exc:
         raise CliError(
             message=f"Failed to write container registry: {exc}",

@@ -24,19 +24,24 @@ from aisc.application.data_root import DataRootResolver
 def registry_entries(
     executor: Optional[DockerExecutor] = None,
     data_root: Optional[str] = None,
-) -> List[Any]:
+) -> Tuple[List[Any], set]:
     """Every ``(name, meta)`` across all workspace registries (CLI and
-    Workbench-owned alike — the caller filters). Lazy-GCs each registry so
-    stale records from deleted containers do not surface.
+    Workbench-owned alike — the caller filters), plus the set of registry
+    DEFAULT pointers (the bare ``aisc claude`` target of each workspace —
+    r2 #B: stars must mark the pointer, not "same workspace").
 
-    *data_root* (a dir containing ``workspaces/``) overrides the resolved
-    shared root — injection seam for tests and ``aisc ps``.
+    Lazy-GCs each registry so stale records from deleted containers do not
+    surface. *data_root* (a dir containing ``workspaces/``) overrides the
+    resolved shared root — injection seam for tests and ``aisc ps``.
     """
+    from aisc.adapters.container_registry import get_default
+
     base = Path(data_root) if data_root else DataRootResolver().resolve_shared_root()
     shared = base / "workspaces"
     out: List[Any] = []
+    defaults: set = set()
     if not shared.is_dir():
-        return out
+        return out, defaults
     for reg_dir in sorted(shared.glob("*/runtime")):
         if (reg_dir / "containers.json").is_file():
             try:
@@ -44,7 +49,13 @@ def registry_entries(
             except Exception:
                 pass
             out.extend(list_containers(reg_dir).items())
-    return out
+            try:
+                d = get_default(reg_dir)
+            except Exception:
+                d = ""
+            if d:
+                defaults.add(d)
+    return out, defaults
 
 
 def docker_states(executor: DockerExecutor) -> Tuple[Dict[str, str], bool]:
@@ -75,9 +86,15 @@ def cmd_workspaces(
 
     alias_by_path = {r.get("path", ""): r.get("alias", "") for r in list_runs()}
     states, _docker_ok = docker_states(exec_)
+    entries, _defaults = registry_entries(exec_)
+    from aisc.cli.commands.runs import get_active as _get_active
+    try:
+        active_ws = _get_active() or ""
+    except Exception:
+        active_ws = ""
 
     rows: List[Dict[str, Any]] = []
-    for cname, meta in registry_entries(exec_):
+    for cname, meta in entries:
         meta = meta or {}
         if meta.get("owner") == "workbench":
             continue
@@ -93,6 +110,8 @@ def cmd_workspaces(
             "image": str(meta.get("image", "")),
             "status": status,
             "running": status.startswith("Up"),
+            # r2 #E: which workspace a bare `aisc claude` lands in
+            "active": bool(active_ws) and ws == active_ws,
         })
     rows.sort(key=lambda r: (not r["running"], r["workspace"]))
     return rows
@@ -129,13 +148,13 @@ def cmd_workspaces_stop(
 
 
 def print_workspaces_text(rows: List[Dict[str, Any]]) -> None:
-    """Human table: alias, status, workspace."""
+    """Human table: alias, status, workspace (ACTIVE workspace starred)."""
     if not rows:
         print("当前没有 CLI 激活的工作区 — aisc run <路径> 开始")
         return
-    width = max(len(r.get("alias", "") or "-") for r in rows) + 1
+    width = max(len(r.get("alias", "") or "-") for r in rows) + 2
     for r in rows:
-        alias = r.get("alias", "") or "-"
+        alias = (r.get("alias", "") or "-") + (" *" if r.get("active") else "")
         status = r.get("status", "") or "(容器不存在)"
         print(f"  {alias:<{width}} {status:<22} {r['workspace']}")
     print("批量停止运行中的: aisc workspaces --stop · 单个: aisc stop")

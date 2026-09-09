@@ -273,6 +273,8 @@ def _build_parser() -> _AiscArgumentParser:
                      help="Container name (overrides registry discovery)")
     shp.add_argument("--label", type=str, default=None,
                      help="Target container by label")
+    shp.add_argument("rest", nargs=argparse.REMAINDER, default=[],
+                     help="One-shot command in the container (use -- first: aisc shell -- ls -la)")
 
     # --- switch ---
     swp = sub.add_parser("switch", help="Switch AI provider in the container", allow_abbrev=False)
@@ -1416,7 +1418,7 @@ def _cmd_runs(
             print(f"  {i}. {r.get('path')}  [{r.get('image', '')} · {r.get('network', '')}]"
                   f"  {r.get('last_used_at', '')}{alias}")
         if items:
-            print("恢复: aisc run --resume <序号|路径>")
+            print("恢复: aisc run --resume <别名|序号|路径>（别名最稳，序号随列表变动）")
         return None, 0, []
     return {"runs": items}, 0, []
 
@@ -1433,7 +1435,12 @@ def _cmd_workspaces(
     if getattr(args, "stop", False):
         out = cmd_workspaces_stop()
         if effective_format == "text":
-            names = ", ".join(s["alias"] or s["workspace"] for s in out["stopped"]) or "无"
+            def _short(s):
+                if s.get("alias"):
+                    return s["alias"]
+                ws = s.get("workspace", "")
+                return Path(ws).name or ws
+            names = ", ".join(_short(s) for s in out["stopped"]) or "无"
             print(f"已批量停止 {len(out['stopped'])} 个运行中的工作区: {names}")
         return out, 0, []
 
@@ -1550,7 +1557,7 @@ def _cmd_shell(
     if effective_format == "json":
         emit_json_usage_error(
             command="shell", version=__version__,
-            message="shell only supports text output, --format json is not supported",
+            message="shell 仅支持 text 输出——不支持 --format json",
         )
         sys.exit(2)
 
@@ -1570,6 +1577,7 @@ def _cmd_shell(
         name_override=name_override,
         explicit_root=getattr(args, "aisc_root", None),
         label_override=label_override,
+        rest=getattr(args, "rest", None) or [],
     )
 
     exit_code = proc.exit_code if proc.exit_code >= 0 else 1
@@ -1593,7 +1601,7 @@ def _cmd_switch(
     if effective_format == "json":
         emit_json_usage_error(
             command="switch", version=__version__,
-            message="switch only supports text output, --format json is not supported",
+            message="switch 仅支持 text 输出——不支持 --format json",
         )
         sys.exit(2)
 
@@ -1768,7 +1776,7 @@ def _cmd_provider(
     if effective_format == "json":
         emit_json_usage_error(
             command="provider", version=__version__,
-            message="provider set-key only supports text output, --format json is not supported",
+            message="provider set-key 仅支持 text 输出——不支持 --format json",
         )
         sys.exit(2)
 
@@ -2052,7 +2060,7 @@ def _cmd_session(
         if effective_format == "json":
             emit_json_usage_error(
                 command="session", version=__version__,
-                message="session open only supports text output, --format json is not supported",
+                message="session open 仅支持 text 输出——不支持 --format json",
             )
             sys.exit(2)
         data, exit_code = cmd_session_open(

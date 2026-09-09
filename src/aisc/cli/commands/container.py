@@ -251,7 +251,7 @@ def cmd_stop(
 
     if not status.exists:
         raise CliError(
-            message=f"Container '{name}' not found — nothing to stop.",
+            message=f"容器 '{name}' 不存在——无可停止。",
             exit_code=1, error_code="AISC_ERR_CONTAINER_NOT_FOUND",
         )
 
@@ -402,9 +402,12 @@ def cmd_shell(
     explicit_root: Optional[str] = None,
     executor: Optional[DockerExecutor] = None,
     label_override: Optional[str] = None,
+    rest: Optional[List[str]] = None,
 ) -> ProcessResult:
     """Open an interactive shell via ``docker exec -it NAME bash``.
 
+    r2 #I: args after ``--`` pass through verbatim (``aisc shell -- ls -la``)
+    like the agent sugar — a non-interactive one-shot exec (no ``-it``).
     Uses streaming executor for interactive terminal.  Text-only.
     Returns ProcessResult so caller can inspect exit_code / errors.
     """
@@ -420,14 +423,25 @@ def cmd_shell(
 
     if not status.exists:
         raise CliError(
-            message=f"Container '{name}' not found — cannot open shell.",
+            message=f"容器 '{name}' 不存在——无法打开 shell。",
             exit_code=1, error_code="AISC_ERR_CONTAINER_NOT_FOUND",
         )
     if not status.running:
         raise CliError(
-            message=f"Container '{name}' is not running — cannot open shell.",
+            message=f"容器 '{name}' 未在运行——无法打开 shell。",
             exit_code=1, error_code="AISC_ERR_CONTAINER_NOT_FOUND",
         )
+
+    passthrough = [a for a in (rest or []) if a != "--"]
+    if passthrough:
+        # one-shot, non-interactive: no -it (docker exec -t without a TTY
+        # dies), stream like the interactive case
+        argv = ["exec", name, *passthrough]
+        proc = exec_.run_streaming(argv)
+        if proc.command_not_found:
+            raise CliError(message="Docker CLI 不可用",
+                           exit_code=3, error_code="AISC_ERR_DOCKER_UNAVAILABLE")
+        return proc
 
     # v2.1.7 S6 (Gate-S6/D10): interactive shells get the tutorial `help`
     # via the exec environment (BASH_FUNC_* re-import) — see
@@ -716,14 +730,12 @@ def cmd_ps(
     ``workspaces/``), matching the registry anchor; the machine-global
     ACTIVE workspace (last ``aisc run``) gets ``active=True``.
     """
-    from aisc.cli.commands.runs import get_active
     from aisc.cli.commands.workspaces import docker_states, registry_entries
 
     exec_ = executor or RealDockerExecutor()
 
-    entries = registry_entries(exec_, data_root=explicit_root)
+    entries, defaults = registry_entries(exec_, data_root=explicit_root)
     states, docker_ok = docker_states(exec_)
-    active_ws = get_active()
 
     rows: List[PsRow] = []
     for nm, meta in entries:
@@ -746,7 +758,10 @@ def cmd_ps(
             workspace=ws,
             status=status,
             running=running,
-            active=bool(active_ws) and ws == active_ws,
+            # r2 #B: star the registry DEFAULT pointer — what a bare
+            # `aisc claude` actually lands in — not "any container of the
+            # active workspace" (label slots live there too).
+            active=name in defaults,
         ))
 
     # active first, then running, then name — glanceable and stable
@@ -755,12 +770,16 @@ def cmd_ps(
 
 
 def print_ps_text(rows: List[PsRow]) -> None:
-    """Print the ``aisc ps`` table."""
+    """Print the ``aisc ps`` table (dead/gone rows get a cleanup hint)."""
     if not rows:
-        print("No containers registered. Run 'aisc run' first.")
+        print("尚无已注册容器——先 aisc run <路径> 激活工作区。")
         return
     print(f"{'NAME':<36} {'ACTIVE':<6} {'LABEL':<10} {'STATUS':<10} {'IMAGE':<24} WORKSPACE")
     for r in rows:
         label = r.label or "-"
         star = "*" if r.active else ""
         print(f"{r.name:<36} {star:<6} {label:<10} {r.status:<10} {r.image:<24} {r.workspace}")
+    # r2 #G: orphan hygiene — dead/gone rows exist, tell the user what to do
+    if any(not r.running for r in rows):
+        print("提示: 已停止(gone/Exited)的容器可 aisc stop --name <名> 清除，"
+              "或 aisc run --resume <别名|序号|路径> 重建。")

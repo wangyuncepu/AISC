@@ -187,11 +187,14 @@ class ReactivationReplaceTests(unittest.TestCase):
         ws = tempfile.mkdtemp()
         reg = Path(tempfile.mkdtemp()) / "runtime"
         reg.mkdir(parents=True)
+        # default-series names ("super-claude-station-*") — what a plain
+        # `aisc run` produces; rename-intent (r2 #C) keys off this series
         (reg / "containers.json").write_text(_json.dumps({
-            "default": "old-main",
+            "default": "super-claude-station-live",
             "containers": {
-                "old-main": {"image": "i", "workspace": ws,
-                             "network": "direct", "label": ""},
+                "super-claude-station-live": {
+                    "image": "i", "workspace": ws,
+                    "network": "direct", "label": ""},
                 "old-lab": {"image": "i", "workspace": ws,
                             "network": "direct", "label": "x"},
                 "old-wb": {"image": "i", "workspace": ws,
@@ -227,7 +230,7 @@ class ReactivationReplaceTests(unittest.TestCase):
         from aisc.cli.commands.run import plan_run, run_container
 
         ws, reg, ex = self._fixtures(
-            "old-main\tUp 3 hours\nold-lab\tUp 1 hour\n"
+            "super-claude-station-live\tUp 3 hours\nold-lab\tUp 1 hour\n"
             "old-wb\tUp 2 hours\nother-ws\tExited (0)\n")
         plan = plan_run(image="super-claude:latest", workspace=ws,
                         interactive=False, keep_alive=True)
@@ -235,37 +238,73 @@ class ReactivationReplaceTests(unittest.TestCase):
                    return_value=reg):
             result = run_container(plan, executor=ex)
 
-        self.assertEqual(result.reused, "old-main")
+        self.assertEqual(result.reused, "super-claude-station-live")
         self.assertFalse(result.executed)
         self.assertIn("reused", result.to_dict())
         argvs = [c[0][0] for c in ex.run_captured.call_args_list]
-        self.assertNotIn(["stop", "old-main"], argvs)
-        self.assertNotIn(["rm", "-f", "old-main"], argvs)
+        self.assertNotIn(["stop", "super-claude-station-live"], argvs)
+        self.assertNotIn(["rm", "-f", "super-claude-station-live"], argvs)
         self.assertTrue(all(a[0] != "run" for a in argvs))  # nothing started
+
+    def test_rename_intent_rebuilds_under_the_new_name(self):
+        """r2 #C: a live container of a DIFFERENT name series is a rename —
+        sweep and rebuild (alias and container name must stay one story)."""
+        import json as _json
+        from aisc.cli.commands.run import plan_run, run_container
+
+        ws, reg, ex = self._fixtures(
+            "super-claude-station-live\tUp 3 hours\nother-ws\tUp 1 hour\n")
+        plan = plan_run(image="super-claude:latest", workspace=ws,
+                        name="beta", interactive=False, keep_alive=True)
+        with patch("aisc.application.data_root.workspace_state_dir",
+                   return_value=reg):
+            result = run_container(plan, executor=ex)
+
+        self.assertIsNone(result.reused)
+        self.assertEqual(result.replaced, ["super-claude-station-live"])
+        argvs = [c[0][0] for c in ex.run_captured.call_args_list]
+        self.assertIn(["stop", "super-claude-station-live"], argvs)
+        self.assertTrue(any(a[0] == "run" for a in argvs))  # rebuilt
+
+    def test_label_activation_never_steals_default_pointer(self):
+        """r2 #A: --label is a bypass slot — it must not steal the
+        workspace's default pointer (the bare `aisc claude` entry)."""
+        import json as _json
+        from aisc.cli.commands.run import plan_run, run_container
+
+        ws, reg, ex = self._fixtures("other-ws\tUp 1 hour\n")
+        plan = plan_run(image="super-claude:latest", workspace=ws,
+                        interactive=False, keep_alive=True, label="exp1")
+        with patch("aisc.application.data_root.workspace_state_dir",
+                   return_value=reg):
+            run_container(plan, executor=ex)
+
+        data = _json.loads((reg / "containers.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["default"], "super-claude-station-live")  # unchanged
 
     def test_dead_same_workspace_container_is_swept_before_start(self):
         import json as _json
         from aisc.cli.commands.run import plan_run, run_container
 
         ws, reg, ex = self._fixtures(
-            "old-main\tExited (0) 5 minutes ago\nother-ws\tUp 1 hour\n")
+            "super-claude-station-live\tExited (0) 5 minutes ago\nother-ws\tUp 1 hour\n")
         plan = plan_run(image="super-claude:latest", workspace=ws,
                         interactive=False, keep_alive=True)
         with patch("aisc.application.data_root.workspace_state_dir",
                    return_value=reg):
             result = run_container(plan, executor=ex)
 
-        self.assertEqual(result.replaced, ["old-main"])
+        self.assertEqual(result.replaced, ["super-claude-station-live"])
         self.assertIsNone(result.reused)
         self.assertTrue(result.executed)
         argvs = [c[0][0] for c in ex.run_captured.call_args_list]
-        self.assertIn(["stop", "old-main"], argvs)
-        self.assertIn(["rm", "-f", "old-main"], argvs)
+        self.assertIn(["stop", "super-claude-station-live"], argvs)
+        self.assertIn(["rm", "-f", "super-claude-station-live"], argvs)
         for protected in ("old-lab", "old-wb", "other-ws"):
             self.assertNotIn(["stop", protected], argvs)
             self.assertNotIn(["rm", "-f", protected], argvs)
         data = _json.loads((reg / "containers.json").read_text(encoding="utf-8"))
-        self.assertNotIn("old-main", data["containers"])
+        self.assertNotIn("super-claude-station-live", data["containers"])
         for protected in ("old-lab", "old-wb", "other-ws"):
             self.assertIn(protected, data["containers"])
 

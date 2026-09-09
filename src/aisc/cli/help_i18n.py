@@ -142,6 +142,8 @@ HELP_ZH: Dict[str, str] = {
         "停删全部 CLI 容器（Workbench 运行时不碰）",
     "Restart the container": "重启容器",
     "Open a bash shell in the container": "在容器内打开 bash shell",
+    "One-shot command in the container (use -- first: aisc shell -- ls -la)":
+        "容器内单发命令（-- 开头: aisc shell -- ls -la）",
     "Switch AI provider in the container": "切换容器内 AI provider",
     "Provider id or alias for quick switch (e.g. deepseek)":
         "快速切换用 provider id 或别名（如 deepseek）",

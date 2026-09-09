@@ -703,15 +703,15 @@ def resolve_target(
     if not containers:
         raise CliError(
             message=(
-                "No container registered. Run 'aisc run' first, or pass "
-                "--name NAME / --label LABEL."
+                "当前没有已注册容器——先用 aisc run <路径> 激活，"
+                "或用 --name <名> / --label <标签> 指定目标。"
             ),
             exit_code=1, error_code="AISC_ERR_CONTAINER_NOT_FOUND",
         )
     raise CliError(
         message=(
-            f"Multiple containers registered ({len(containers)}). "
-            "Specify --name NAME or --label LABEL:\n"
+            f"注册了多个容器（{len(containers)} 个），请用 --name <名> "
+            f"或 --label <标签> 指定：\n"
             + _format_candidates(containers)
         ),
         exit_code=1, error_code="AISC_ERR_MULTIPLE_CONTAINERS",

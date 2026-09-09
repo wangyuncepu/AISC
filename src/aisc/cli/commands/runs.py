@@ -118,7 +118,8 @@ def require_resume(spec: str) -> Dict[str, Any]:
     rec = resolve_resume(spec)
     if rec is None:
         raise CliError(
-            message=f"no activation history matches {spec!r} — see `aisc runs`",
+            message=f"没有匹配 {spec!r} 的激活记录——用 aisc runs 查看历史"
+                    f"（别名是最稳的键，序号会随列表变动）",
             exit_code=2, error_code="AISC_ERR_USAGE",
         )
     return rec
