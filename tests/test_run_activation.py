@@ -174,6 +174,67 @@ class ActivationArgvTests(unittest.TestCase):
         self.assertNotIn("-it", argv)
 
 
+class ReactivationReplaceTests(unittest.TestCase):
+    """r1 #2: a default (label-less) re-activation REPLACES same-workspace
+    CLI containers — never --label slots, never owner=workbench (the GUI's
+    lease-guarded singletons), never other workspaces."""
+
+    def test_reactivation_replaces_the_same_workspace_default_slot(self):
+        import json as _json
+        from aisc.adapters.docker_ import ImageInspectResult, ImageInspectStatus
+        from aisc.cli.commands.run import plan_run, run_container
+
+        ws = tempfile.mkdtemp()
+        reg = Path(tempfile.mkdtemp()) / "runtime"
+        reg.mkdir(parents=True)
+        (reg / "containers.json").write_text(_json.dumps({
+            "default": "old-main",
+            "containers": {
+                "old-main": {"image": "i", "workspace": ws,
+                             "network": "direct", "label": ""},
+                "old-lab": {"image": "i", "workspace": ws,
+                            "network": "direct", "label": "x"},
+                "old-wb": {"image": "i", "workspace": ws,
+                           "network": "direct", "label": "",
+                           "owner": "workbench"},
+                "other-ws": {"image": "i", "workspace": str(Path(ws).parent),
+                             "network": "direct", "label": ""},
+            },
+        }), encoding="utf-8")
+
+        def ok(stdout=""):
+            return ProcessResult(exit_code=0, stdout=stdout, stderr="",
+                                 command_not_found=False, timed_out=False)
+
+        ex = MagicMock()
+
+        class _PF:
+            available = True
+        ex.preflight.return_value = _PF()
+        ex.inspect_image.return_value = ImageInspectResult(
+            status=ImageInspectStatus.EXISTS)
+        ex.run_captured.side_effect = lambda argv, timeout=None: ok("newid\n")
+
+        plan = plan_run(image="super-claude:latest", workspace=ws,
+                        interactive=False, keep_alive=True)
+        with patch("aisc.application.data_root.workspace_state_dir",
+                   return_value=reg):
+            result = run_container(plan, executor=ex)
+
+        self.assertEqual(result.replaced, ["old-main"])
+        self.assertIn("replaced", result.to_dict())
+        argvs = [c[0][0] for c in ex.run_captured.call_args_list]
+        self.assertIn(["stop", "old-main"], argvs)
+        self.assertIn(["rm", "-f", "old-main"], argvs)
+        for protected in ("old-lab", "old-wb", "other-ws"):
+            self.assertNotIn(["stop", protected], argvs)
+            self.assertNotIn(["rm", "-f", protected], argvs)
+        data = _json.loads((reg / "containers.json").read_text(encoding="utf-8"))
+        self.assertNotIn("old-main", data["containers"])
+        for protected in ("old-lab", "old-wb", "other-ws"):
+            self.assertIn(protected, data["containers"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

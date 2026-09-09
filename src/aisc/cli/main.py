@@ -1355,6 +1355,9 @@ def _cmd_run(
     if effective_format == "text" and emitter is None:
         print(f"💯 工作区已激活: {plan.workspace}")
         print(f"  容器 {plan.name}（detached） · 镜像 {plan.image} · 网络 {plan.network}")
+        if out.get("replaced"):
+            names = ", ".join(out["replaced"])
+            print(f"  ♻ 已替换同工作区旧容器: {names}")
         if plan.web_gateway_host_port and not plan.dry_run:
             print(f"  🌐 Web 服务网关: http://p<端口>.localhost:{plan.web_gateway_host_port}/ "
                   f"（容器内: aisc-web-expose <端口>）")
