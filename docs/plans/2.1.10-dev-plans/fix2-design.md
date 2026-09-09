@@ -28,14 +28,16 @@
    零逐个注册。约束：仅承载非交互 + JSON envelope 命令（分派前校验，
    交互命令回明确错误）。
 2. **Rust：`run_control_target` / `run_input_target` 的 Remote 分支**
-   改为优先 ServePool 通道（借 `cli` op 送 argv）；serve 不在或握手
-   失败 → 回退现有 per-op ssh。**老版本远端机（serve 无 cli op）天然
-   兼容**：unknown op 错误 → 回退路径。
+   改为走 ServePool 通道（借 `cli` op 送 argv）。**无 per-op ssh 回退**
+   （用户裁决 2026-09-09）：两端版本都自管，`serve_protocol` 不匹配 →
+   硬错误 + 「远端 aisc 过旧，请升级」指引（诚实失败优于静默慢速，
+   同 VS Code commit 配对哲学）；serve 死亡由 ServePool 按需重建兜底，
+   不留单通道独活的暗路径。
 3. **协议 v1.2 → v1.3**：新增 `cli` op + ready 帧加 `home` 字段
-   （F2-B 共用）。Rust 侧握手硬门同步 3；serve_protocol 不匹配 →
-   直接走 per-op ssh 回退。
+   （F2-B 共用）。Rust 侧握手硬门同步 3。
 4. **边界**：PTY 流（已是 serve）、build 事件流、subscription 下载
-   等 stdin/长流命令维持既有通道，本批不迁。
+   等 stdin/长流命令维持既有通道，本批不迁（per-op ssh 机制仅存活于
+   serve 引导拉起与 build 流两处）。
 5. ServePool 健康性：断线检测 + 按需重建（复用 fs_op 既有重建语义，
    实施时核对补齐）。
 

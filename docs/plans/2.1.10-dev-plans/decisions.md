@@ -76,11 +76,13 @@ list 轮询）；③所有 fs path 以远端为根、服务端 containment 拒�
 D-7 的「低频控制面走 per-op ssh」在真实远程使用中代价过高：每 op 一次
 全新 ssh 握手 ≈ 220ms（LAN 实测，公网按 RTT 放大），且 Windows OpenSSH
 不支持 ControlMaster（实测 `getsockname failed`），连接复用无解。
-修订：控制面 op 优先走 serve 长驻连接（ServePool 复用，通用 `cli` op
-进程内复用命令分派）；per-op ssh 降级为 serve 不可用时的回退通道。
-协议 v1.2 → v1.3（`cli` op + ready 帧 `home` 字段）；老远端机经
-unknown-op 回退天然兼容。PTY/build 流维持既有通道。详见
-fix2-design.md F2-A。
+修订：控制面 op 走 serve 长驻连接（ServePool 复用，通用 `cli` op
+进程内复用命令分派）——**Remote 的唯一控制通道，无 per-op ssh 回退**
+（用户裁决：两端版本自管，serve_protocol 不匹配直接硬错误 +
+「远端 aisc 过旧，请升级」指引；诚实失败优于静默慢速，同 VS Code
+commit 配对哲学）。serve 死亡由 ServePool 按需重建兜底。协议
+v1.2 → v1.3（`cli` op + ready 帧 `home` 字段）。per-op ssh 机制仅存活
+于 serve 引导拉起与 build 事件流两处。详见 fix2-design.md F2-A。
 
 ## D-11 CLI 更新方案封存（2026-09-09）
 
