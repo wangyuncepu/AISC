@@ -320,7 +320,7 @@ describe("WorkspaceExplorer toolbar (11c)", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const buttons = wrapper.findAll(".explorer-actions button");
-    expect(buttons.length).toBe(3);
+    expect(buttons.length).toBe(4); // FIX-3: + collapse (new-file/-folder/refresh/collapse)
     expect(buttons[0].attributes("aria-label")).toBe("新建文件");
 
     await buttons[0].trigger("click");
@@ -342,10 +342,14 @@ describe("WorkspaceExplorer toolbar (11c)", () => {
     // Fresh runtime store: workspace defaults to "" (no workspace chosen).
     const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
     const buttons = wrapper.findAll(".explorer-actions button");
-    expect(buttons.length).toBe(3);
-    for (const b of buttons) {
+    expect(buttons.length).toBe(4);
+    // FIX-3: collapse is workspace-independent (always enabled); the three
+    // workspace actions stay disabled.
+    for (const b of buttons.slice(0, 3)) {
       expect(b.attributes("disabled")).toBeDefined();
     }
+    expect(buttons[3].attributes("aria-label")).toBe("折叠资源管理器");
+    expect(buttons[3].attributes("disabled")).toBeUndefined();
     wrapper.unmount();
   });
 });

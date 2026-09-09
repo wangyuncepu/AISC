@@ -535,6 +535,9 @@ export const enUS: Record<string, string> = {
   "explorer.tab.services": "Services",
   "explorer.status.urlCopied": "Service URL copied",
   "explorer.refresh": "Refresh",
+  "explorer.collapse": "Collapse explorer",
+  "explorer.expand": "Expand explorer",
+  "explorer.resizeHandle": "Drag to resize the explorer, double-click to collapse",
   "explorer.stale": "File state may be stale; a bounded rescan was performed.",
   "explorer.empty.workspace": "Select a workspace first.",
 

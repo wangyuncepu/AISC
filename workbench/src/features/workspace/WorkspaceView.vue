@@ -24,6 +24,14 @@ import { useI18n } from "vue-i18n";
 import { leafCount } from "../../stores/paneTree";
 import { CC_SWITCH_UI_TAB_ID, useRuntimeStore } from "../../stores/runtime";
 import { useDoctorStore } from "../../stores/doctor";
+import {
+  EXPLORER_COLLAPSED_W,
+  appScale,
+  panelLayout,
+  setExplorerCollapsed,
+  setExplorerWidth,
+} from "../../lib/panelLayout";
+import type { LayoutTier } from "../../lib/layout";
 import PaneTree from "../terminal/PaneTree.vue";
 import TabBar from "./TabBar.vue";
 import RuntimeSidebar from "./RuntimeSidebar.vue";
@@ -38,6 +46,9 @@ import WorkspaceExplorer from "../workspace-explorer/WorkspaceExplorer.vue";
 const props = defineProps<{
   /** Terminal counter-zoom style (App owns the zoom machinery, G-11). */
   zoom: Record<string, string>;
+  /** Layout tier (FIX-3): compact hands the dock width to the responsive
+   * CSS rule (no inline width); standard/wide honor the user's dragged value. */
+  tier: LayoutTier;
 }>();
 
 const { t } = useI18n();
@@ -50,6 +61,59 @@ const doctorStore = useDoctorStore();
 const showStatus = ref(false);
 /** 10e (B-07): Escape-close returns focus here (opener restore). */
 const drawerToggleRef = ref<HTMLButtonElement | null>(null);
+
+// --- FIX-3: Explorer dock geometry (drag-to-resize + VS Code-style collapse) ---
+/** Inline width source of truth. collapsed ⇒ 40px rail (min-width must move
+ * along — the scoped `min-width:240px` floor would otherwise push the rail
+ * back open, audit (g)); compact ⇒ undefined so the responsive scoped rule
+ * owns the width (audit (d) — the old App.vue override was a dead rule). */
+const dockStyle = computed<Record<string, string> | undefined>(() => {
+  if (panelLayout.explorerCollapsed) {
+    return { width: `${EXPLORER_COLLAPSED_W}px`, minWidth: `${EXPLORER_COLLAPSED_W}px` };
+  }
+  if (props.tier === "compact") return undefined;
+  const w = `${panelLayout.explorerWidth}px`;
+  return { width: w, minWidth: w };
+});
+/** Width transition rides ONLY on collapse/expand — during a drag the dock
+ * must track the pointer instantly (a live 300ms ease would lag behind the
+ * cursor forever, audit (a)). */
+const dockAnimating = ref(true);
+function withInstantDock(fn: () => void): void {
+  dockAnimating.value = false;
+  fn();
+  requestAnimationFrame(() => { dockAnimating.value = true; });
+}
+function onDockHandleDown(e: PointerEvent): void {
+  if (e.button !== 0) return;
+  e.preventDefault(); // keep text selection out; also swallows default focus
+  (e.currentTarget as HTMLElement).focus(); // restore it for keyboard nudging
+  const startX = e.clientX;
+  const startW = panelLayout.explorerWidth;
+  const scale = appScale(); // snapshot: visual px → layout px
+  dockAnimating.value = false;
+  const move = (ev: PointerEvent) => {
+    // Incremental, zero-rect (engine-neutral under zoom, audit (b))
+    setExplorerWidth(startW + (ev.clientX - startX) / scale);
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    dockAnimating.value = true;
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+}
+function onDockHandleKey(e: KeyboardEvent): void {
+  const step = 8;
+  if (e.key === "ArrowLeft") {
+    e.preventDefault();
+    withInstantDock(() => setExplorerWidth(panelLayout.explorerWidth - step));
+  } else if (e.key === "ArrowRight") {
+    e.preventDefault();
+    withInstantDock(() => setExplorerWidth(panelLayout.explorerWidth + step));
+  }
+}
 
 // Stage 8e: the cc-switch Provider UI virtual pane — kept alive while hidden
 // so unsaved state survives switches. (The Settings pane is workspace-layer
@@ -274,11 +338,42 @@ function setPaneTreeRef(tabId: string) {
     </div>
 
     <!-- Terminal workspace -->
-    <div v-else-if="store.status === 'ready'" class="ready">
-      <!-- 2026-08-18 样式对调：Explorer 固定常驻左侧（dock，无开关） -->
-      <div class="explorer-dock">
-        <WorkspaceExplorer />
+    <div v-else-if="store.status === 'ready'" class="ready" :class="{ 'tier-compact': props.tier === 'compact' }">
+      <!-- FIX-3: resizable + collapsible left dock (2026-08-18 样式对调 kept:
+           Explorer resident on the left; now with drag handle + rail collapse) -->
+      <div
+        class="explorer-dock"
+        :class="{ collapsed: panelLayout.explorerCollapsed, anim: dockAnimating }"
+        :style="dockStyle"
+      >
+        <!-- v-show on purpose (audit (c)): remount would drop in-flight
+             search/rename state and the tree's scroll position. -->
+        <WorkspaceExplorer v-show="!panelLayout.explorerCollapsed" />
+        <button
+          v-show="panelLayout.explorerCollapsed"
+          class="explorer-rail"
+          :title="t('explorer.expand')"
+          :aria-label="t('explorer.expand')"
+          @click="setExplorerCollapsed(false)"
+        >
+          »
+        </button>
       </div>
+      <!-- Drag handle: hidden when collapsed (rail must expand first) and in
+           compact (the responsive rule owns the width — a dead handle would
+           mislead, audit (j)). -->
+      <div
+        v-if="!panelLayout.explorerCollapsed && props.tier !== 'compact'"
+        class="dock-handle"
+        role="separator"
+        aria-orientation="vertical"
+        :aria-label="t('explorer.resizeHandle')"
+        :title="t('explorer.resizeHandle')"
+        tabindex="0"
+        @pointerdown="onDockHandleDown"
+        @keydown="onDockHandleKey"
+        @dblclick="setExplorerCollapsed(true)"
+      ></div>
       <div class="main">
         <TabBar />
         <main ref="terminalAreaRef" class="terminal-area">
@@ -384,16 +479,72 @@ function setPaneTreeRef(tabId: string) {
 .term-wrap, .settings-pane { transition: opacity var(--duration-normal) var(--ease); }
 .term-wrap.pane-fade-in, .settings-pane.pane-fade-in { opacity: 0; }
 .settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }
-/* 2026-08-18 样式对调：Explorer 固定停靠左列（原 RuntimeSidebar 的 dock 样式） */
+/* 2026-08-18 样式对调：Explorer 固定停靠左列（原 RuntimeSidebar 的 dock 样式）
+ * FIX-3: width comes from the inline dockStyle (user value) or, in compact,
+ * the responsive rule below — the 320px here is only the no-JS fallback. */
 .explorer-dock {
   width: 320px;
   min-width: 240px;
   flex-shrink: 0;
   display: flex;
   background: var(--surface);
-  border-right: var(--border-w) solid var(--border);
+}
+/* Collapse/expand animation (audit (a)): the terminal's 150ms settle-once
+ * debounce rides out the 300ms transition and fits exactly once at the end.
+ * Global reduced-motion collapses this to nothing (styles.css). */
+.explorer-dock.anim {
+  transition: width var(--duration-slow) var(--ease),
+    min-width var(--duration-slow) var(--ease);
 }
 .explorer-dock > * { flex: 1; min-height: 0; min-width: 0; }
+/* FIX-3 compact tier — responsive dock width (migrated from App.vue where
+ * the scoped rule never matched, audit (d)). */
+.tier-compact .explorer-dock:not(.collapsed) { width: min(280px, 45%); min-width: 200px; }
+.tier-compact .status-drawer { width: min(300px, 100%); }
+/* FIX-3: collapsed rail — the dock's right edge IS the border; the handle
+ * is hidden while collapsed. */
+.explorer-dock.collapsed { border-right: var(--border-w) solid var(--border); }
+.explorer-dock:not(.collapsed) { border-right: none; }
+.explorer-rail {
+  width: 100%;
+  padding: var(--space-2) 0;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  font-size: var(--font-lg);
+  cursor: pointer;
+  transition: background-color var(--duration-normal) var(--ease),
+    color var(--duration-normal) var(--ease);
+}
+.explorer-rail:hover { background: var(--surface-hover); color: var(--text-2); }
+.explorer-rail:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: var(--focus-ring-offset);
+}
+/* FIX-3: drag handle (PaneTree divider visual recipe) */
+.dock-handle {
+  flex-shrink: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none; /* pointer drag owns the gesture */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.dock-handle::after {
+  content: "";
+  width: 2px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--border-2);
+  transition: background-color var(--duration-normal) var(--ease);
+}
+.dock-handle:hover::after, .dock-handle:focus-visible::after { background: var(--accent); }
+.dock-handle:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: -2px;
+}
 /* 右缘弱化开关：幽灵样式，hover 才浮出 */
 .status-toggle {
   align-self: flex-start;

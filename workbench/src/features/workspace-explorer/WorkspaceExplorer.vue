@@ -22,6 +22,7 @@ import { errorCodeOf, useWorkspaceExplorerStore } from "../../stores/workspaceEx
 import { useRuntimeStore } from "../../stores/runtime";
 import { WORKSPACE_PATH_MIME } from "../../lib/workspaceDnd";
 import { buildSearchMatcher } from "../../lib/search";
+import { setExplorerCollapsed } from "../../lib/panelLayout";
 import { validateBasename } from "./basename";
 import ChangeBadge from "./ChangeBadge.vue";
 import TypeIcon from "./TypeIcon.vue";
@@ -997,6 +998,20 @@ function onTreeKeydown(e: KeyboardEvent) {
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
             <path d="M13 8a5 5 0 1 1-1.6-3.7" />
             <path d="M13 2.5v3h-3" />
+          </svg>
+        </button>
+        <!-- FIX-3: collapse the dock to the rail (» on the rail re-expands;
+             double-click on the drag handle does the same). -->
+        <button
+          class="ui-icon-button sm"
+          type="button"
+          :aria-label="t('explorer.collapse')"
+          :title="t('explorer.collapse')"
+          @click="setExplorerCollapsed(true)"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <path d="M10.5 3.5 6 8l4.5 4.5" />
+            <path d="M13.5 3.5 9 8l4.5 4.5" />
           </svg>
         </button>
       </div>

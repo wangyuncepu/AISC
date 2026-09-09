@@ -459,6 +459,7 @@ onBeforeUnmount(() => {
         v-else-if="!ws.settingsTabActive && !ws.networkUsageTabActive"
         :key="ws.activeRuntime.id"
         :zoom="terminalZoom"
+        :tier="layoutTier"
       />
     </template>
 
@@ -532,7 +533,9 @@ onBeforeUnmount(() => {
 /* Stage 6 (UX-02): layout tiers driven by the effective app-box width. */
 .app[data-tier="compact"] .topbar { gap: var(--space-2); padding: 4px var(--space-2); }
 .app[data-tier="compact"] .topbar .status { display: none; } /* keep the brand readable */
-.app[data-tier="compact"] .sidebar { padding: var(--space-2); }
-.app[data-tier="compact"] .explorer-dock { width: min(280px, 45%); min-width: 200px; }
-.app[data-tier="compact"] .status-drawer { width: min(300px, 100%); }
+/* FIX-3 audit (d): the three rules below (sidebar/explorer-dock/status-drawer)
+ * were DEAD since birth — this style block is scoped, so they compiled to
+ * `[data-v-app]` selectors that can never match elements rendered by child
+ * components. The compact explorer/status rules now live (alive) in
+ * WorkspaceView.vue's own scoped styles via the :tier prop. */
 </style>
