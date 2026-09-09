@@ -101,6 +101,17 @@ class DataRootResolver:
         # use the process environment (test_artifact_contract.py precedent).
         self._env = os.environ if env is None else env
 
+    def resolve_shared_root(self) -> Path:
+        """The data root for MACHINE-GLOBAL (workspace-independent) state.
+
+        Same selection semantics as ``resolve`` minus the workspace-shaped
+        gates — a global file has no workspace to overlap-check against, and
+        anchoring a fake workspace (cwd/tempdir) false-positives whenever it
+        lands inside/around the real root (nas: $HOME, tests: AISC_DATA_ROOT
+        under tempdir). F2-C cli-runs.json is the first consumer.
+        """
+        return self._select_root(Path("/"))[0]
+
     def resolve(self, workspace: Path) -> ResolvedDataRoot:
         ws = Path(workspace)
         root, origin = self._select_root(ws)

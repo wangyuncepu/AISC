@@ -150,12 +150,17 @@ def _build_parser() -> _AiscArgumentParser:
                          "the pin — unverified, CN-mirror download)")
 
     # --- run ---
-    rp = sub.add_parser("run", help="Run Docker container", allow_abbrev=False)
+    # F2-C: run ACTIVATES a workspace (detached, then exit). Interactive
+    # surfaces live on their own verbs: shell / claude / codex.
+    rp = sub.add_parser("run", help="Activate a workspace (detached container)",
+                        allow_abbrev=False)
     _add_global_args(rp, is_subparser=True)
+    rp.add_argument("path", type=str, nargs="?", default=None,
+                    help="Workspace directory to activate (e.g. ./ or /home/user/proj)")
+    rp.add_argument("--resume", type=str, default=None, metavar="N|PATH",
+                    help="Re-activate from history (see `aisc runs`); explicit flags win")
     rp.add_argument("--image", "-i", type=str, default="super-claude:latest",
                     help="Docker image (default: super-claude:latest)")
-    rp.add_argument("--workspace", type=str, default=None,
-                    help="Host workspace path to bind-mount (default: current directory)")
     rp.add_argument("--name", type=str, default="super-claude-station",
                     help="Container name prefix (unique suffix appended)")
     rp.add_argument("--network", type=str, choices=["direct", "proxy"],
@@ -164,14 +169,26 @@ def _build_parser() -> _AiscArgumentParser:
     rp.add_argument("--profile", type=str, choices=["proxy"],
                     default=None,
                     help="Compatibility alias for --network proxy (prefer --network proxy)")
-    rp.add_argument("--non-interactive", action="store_true", default=False,
-                    help="Run without interactive terminal (no -it, stdin=DEVNULL)")
     rp.add_argument("--dry-run", action="store_true", default=False,
-                    help="Plan the run without executing")
+                    help="Plan the activation without executing")
     rp.add_argument("--label", type=str, default="",
                     help="Container label for multi-container addressing (optional)")
-    rp.add_argument("--keep-alive", action="store_true", default=False,
-                    help="Keep container after exit (omit --rm flag)")
+
+    # --- F2-C: agent sugar + activation history ---
+    for _agent in ("claude", "codex"):
+        _ap = sub.add_parser(_agent, help=f"Open {_agent} in the active workspace",
+                             allow_abbrev=False)
+        _add_global_args(_ap, is_subparser=True)
+        _ap.add_argument("--workspace", type=str, default=None,
+                         help="Target a registered workspace instead of the active one")
+        _ap.add_argument("--name", type=str, default=None,
+                         help="Container name (overrides registry discovery)")
+        _ap.add_argument("rest", nargs=argparse.REMAINDER, default=[],
+                         help=f"Args passed to {_agent} verbatim (use -- first: aisc {_agent} -- -c)")
+
+    rsp = sub.add_parser("runs", help="Activation history (aisc run records)",
+                         allow_abbrev=False)
+    _add_global_args(rsp, is_subparser=True)
 
     # --- config ---
     cp = sub.add_parser("config", help="Config management", allow_abbrev=False)
@@ -224,12 +241,15 @@ def _build_parser() -> _AiscArgumentParser:
                      help="Target container by label")
 
     # --- stop ---
-    spp = sub.add_parser("stop", help="Stop the container", allow_abbrev=False)
+    spp = sub.add_parser("stop", help="Stop & remove the active workspace container",
+                         allow_abbrev=False)
     _add_global_args(spp, is_subparser=True)
     spp.add_argument("--name", type=str, default=None,
                      help="Container name (overrides registry discovery)")
     spp.add_argument("--label", type=str, default=None,
                      help="Target container by label")
+    spp.add_argument("--all", action="store_true", default=False,
+                     help="Stop & remove EVERY CLI-owned container (Workbench runtimes untouched)")
 
     # --- restart ---
     rsp = sub.add_parser("restart", help="Restart the container", allow_abbrev=False)
@@ -1239,11 +1259,12 @@ def _cmd_run(
     effective_format: str,
     aisc_root_arg: Optional[str],
 ) -> Tuple[Optional[Dict[str, Any]], int, List[Dict[str, Any]]]:
-    """Execute ``aisc run``. Returns (data, exit_code, errors)."""
+    """Execute ``aisc run`` — F2-C activation semantics: detached start,
+    registry default pointer, history record, activation summary."""
     from aisc.cli.commands.run import plan_run, run_container
+    from aisc.cli.commands import runs as cli_runs
     from aisc.application.resources import locate_aisc_root, _RootSourceError
 
-    # Locate AISC root for proxy config resolution
     aisc_root = None
     try:
         aisc_root = locate_aisc_root(explicit_root=aisc_root_arg)
@@ -1251,13 +1272,30 @@ def _cmd_run(
         raise CliError(message=str(exc), exit_code=1,
                        error_code="AISC_ERR_GENERAL") from exc
 
-    # Resolve --profile proxy alias
+    # --resume: adopt the record's config; explicit flags win
+    resume = getattr(args, "resume", None)
+    rec = None
+    if resume:
+        rec = cli_runs.require_resume(resume)
+
+    path = getattr(args, "path", None)
+    if not path:
+        if rec:
+            path = rec["path"]
+        else:
+            raise CliError(
+                message="aisc run needs a workspace path (e.g. `aisc run ./`) — "
+                        "or --resume N|PATH from `aisc runs`",
+                exit_code=2, error_code="AISC_ERR_USAGE",
+            )
+    ws = Path(path).expanduser()
+
     profile = getattr(args, "profile", None)
     network = getattr(args, "network", argparse.SUPPRESS)
     network_explicit = network is not argparse.SUPPRESS
     if network is argparse.SUPPRESS:
-        network = "direct"  # default when neither --network nor --profile is given
-
+        network = (rec or {}).get("network", "direct") if rec else "direct"
+        network_explicit = False
     if profile == "proxy":
         if network_explicit and network == "direct":
             raise CliError(
@@ -1266,34 +1304,98 @@ def _cmd_run(
             )
         network = "proxy"
 
-    non_interactive = getattr(args, "non_interactive", False)
-    is_interactive = (effective_format == "text" and emitter is None and not non_interactive)
-    capture = (effective_format != "text" or emitter is not None)
+    image = getattr(args, "image", "super-claude:latest")
+    if rec and image == "super-claude:latest" and rec.get("image"):
+        image = rec["image"]
+    label = getattr(args, "label", "")
+    if rec and not label and rec.get("label"):
+        label = rec["label"]
 
     plan = plan_run(
-        image=getattr(args, "image", "super-claude:latest"),
-        workspace=getattr(args, "workspace", None) or str(Path.cwd()),
+        image=image,
+        workspace=str(ws),
         name=getattr(args, "name", "super-claude-station"),
         network=network,
         dry_run=getattr(args, "dry_run", False),
-        interactive=is_interactive,
-        non_interactive=non_interactive,
-        label=getattr(args, "label", ""),
-        keep_alive=getattr(args, "keep_alive", False),
+        interactive=False,   # F2-C: activation is always detached (-d)
+        non_interactive=False,
+        label=label,
+        keep_alive=True,     # F2-C: no --rm — the workspace STAYS activated
         aisc_root=aisc_root,
     )
 
-    result = run_container(plan, emitter=emitter, capture=capture,
+    result = run_container(plan, emitter=emitter, capture=True,
                            aisc_root=aisc_root)
 
-    # svc-5: text mode shows the one-line gateway contract before the
-    # container takes over the terminal (JSON/events carry web_gateway).
-    if (effective_format == "text" and emitter is None
-            and not plan.dry_run and plan.web_gateway_host_port):
-        print(f"🌐 Web 服务网关: http://p<端口>.localhost:{plan.web_gateway_host_port}/ "
-              f"（容器内注册服务: aisc-web-expose <端口>）")
+    if not plan.dry_run:
+        abs_ws = str(Path(plan.workspace).resolve())
+        cli_runs.record(abs_ws, plan.image, plan.network, plan.label)
+        cli_runs.set_active(abs_ws)
 
-    return result.to_dict(), 0, []
+    out = result.to_dict()
+    out["workspace"] = plan.workspace
+    out["commands"] = [
+        "aisc claude", "aisc codex", "aisc switch", "aisc shell",
+        "aisc status", "aisc stop", "aisc runs",
+    ]
+
+    if effective_format == "text" and emitter is None:
+        print(f"\\U0001f4af 工作区已激活: {plan.workspace}")
+        print(f"  容器 {plan.name}（detached） · 镜像 {plan.image} · 网络 {plan.network}")
+        if plan.web_gateway_host_port and not plan.dry_run:
+            print(f"  \\U0001f310 Web 服务网关: http://p<端口>.localhost:{plan.web_gateway_host_port}/ "
+                  f"（容器内: aisc-web-expose <端口>）")
+        print("  进入方式: aisc claude | aisc codex | aisc switch | aisc shell")
+        print("  停止: aisc stop · 历史: aisc runs")
+
+    return out, 0, []
+
+
+def _cmd_agent(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Optional[Dict[str, Any]], int, List[Dict[str, Any]]]:
+    """Execute ``aisc claude`` / ``aisc codex`` (F2-C agent sugar)."""
+    from aisc.cli.commands.agents import cmd_agent
+
+    rest = [a for a in (getattr(args, "rest", None) or [])]
+    if rest and rest[0] == "--":
+        rest = rest[1:]
+
+    capture = effective_format != "text"
+    outcome = cmd_agent(
+        str(args.command),
+        rest,
+        workspace=getattr(args, "workspace", None),
+        name_override=getattr(args, "name", None),
+        explicit_root=getattr(args, "aisc_root", None),
+        capture=capture,
+    )
+    if capture:
+        return dict(outcome), int(outcome.get("exit_code", 0) or 0), []
+    # Text mode: the TTY was live; report the exit like shell does.
+    return {"container": None, "agent": str(args.command), "args": rest,
+            "exit_code": outcome.exit_code}, 0, []
+
+
+def _cmd_runs(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Optional[Dict[str, Any]], int, List[Dict[str, Any]]]:
+    """Execute ``aisc runs`` — the CLI activation history."""
+    from aisc.cli.commands import runs as cli_runs
+
+    items = cli_runs.list_runs()
+    if effective_format == "text":
+        if not items:
+            print("暂无激活历史 — aisc run <路径> 开始")
+        for i, r in enumerate(items, 1):
+            print(f"  {i}. {r.get('path')}  [{r.get('image', '')} · {r.get('network', '')}]"
+                  f"  {r.get('last_used_at', '')}")
+        if items:
+            print("恢复: aisc run --resume <序号|路径>")
+        return None, 0, []
+    return {"runs": items}, 0, []
 
 
 def _cmd_config(
@@ -1361,9 +1463,15 @@ def _cmd_stop(
     args: argparse.Namespace,
     effective_format: str,
 ) -> Tuple[Dict[str, Any], int, List[Dict[str, Any]]]:
-    """Execute ``aisc stop``.  Supports --format json."""
-    from aisc.cli.commands.container import cmd_stop
+    """Execute ``aisc stop`` (F2-C: stop+remove; --all sweeps CLI-owned)."""
+    from aisc.cli.commands.container import cmd_stop, cmd_stop_all
 
+    if getattr(args, "all", False):
+        data = cmd_stop_all(explicit_root=getattr(args, "aisc_root", None))
+        if effective_format == "text":
+            names = ", ".join(s["name"] for s in data.get("stopped", [])) or "无"
+            print(f"已停止并移除: {names}（跳过 Workbench 管理的 {data.get('skipped', 0)} 个）")
+        return data, 0, []
     data = cmd_stop(
         name_override=getattr(args, "name", None),
         explicit_root=getattr(args, "aisc_root", None),
@@ -2407,6 +2515,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_build(args, emitter, effective_format)
         elif args.command == "run":
             data, exit_code, errors = _cmd_run(args, emitter, effective_format, aisc_root)
+        elif args.command in ("claude", "codex"):
+            data, exit_code, errors = _cmd_agent(args, effective_format)
+        elif args.command == "runs":
+            data, exit_code, errors = _cmd_runs(args, effective_format)
         elif args.command == "config":
             data, exit_code, errors = _cmd_config(args, effective_format)
         elif args.command == "profile":

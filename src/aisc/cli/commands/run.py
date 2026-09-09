@@ -337,21 +337,26 @@ def run_container(
     # EXISTS → proceed
 
     # --- register container in the multi-container index ---
-    if aisc_root is not None:
-        from aisc.adapters.container_registry import register
-        try:
-            register(aisc_root, plan.name, {
-                "image": plan.image,
-                "workspace": plan.workspace,
-                "network": plan.network,
-                "label": plan.label,
-            })
-        except (ValueError, OSError) as exc:
-            raise CliError(
-                message=f"Failed to write container registry: {exc}",
-                exit_code=1, error_code="AISC_ERR_STATE_WRITE_FAILED",
-                data=result.to_dict(),
-            ) from exc
+    # F2-C: the registry root is the WORKSPACE's state dir (workspaces/<h>/
+    # runtime) — the same anchor `aisc runtime start` (the Workbench path)
+    # uses. The old cwd/install-root anchor split-brained discovery: from
+    # $HOME the data-root/workspace overlap gate fired outright (nas).
+    from aisc.adapters.container_registry import register
+    from aisc.application.data_root import workspace_state_dir
+    try:
+        reg_root = workspace_state_dir(Path(plan.workspace))
+        register(reg_root, plan.name, {
+            "image": plan.image,
+            "workspace": plan.workspace,
+            "network": plan.network,
+            "label": plan.label,
+        })
+    except (ValueError, OSError) as exc:
+        raise CliError(
+            message=f"Failed to write container registry: {exc}",
+            exit_code=1, error_code="AISC_ERR_STATE_WRITE_FAILED",
+            data=result.to_dict(),
+        ) from exc
 
     # --- plan event for non-dry ---
     if emitter is not None:
@@ -368,131 +373,25 @@ def run_container(
             "docker_argv": argv,
         })
 
-    if capture:
-        # --- machine mode (json / events): captured output, forwarded to stderr ---
-        import sys as _sys
-        proc, plan = _run_captured_with_publish_retry(exec_, plan)
-        result.docker_argv = list(plan.docker_argv)
-        if plan.web_gateway_host_port:
-            result.web_gateway = {**result.web_gateway,
-                                  "host_port": plan.web_gateway_host_port}
-        result.container_exit_code = proc.exit_code
-        result.executed = True
+    # F2-C (fix2-design.md): run is ACTIVATE-ONLY — detached start (the
+    # plan always carries -d for keep-alive runs), capture the container id,
+    # return. No attach, no foreground streaming: the interactive surface is
+    # `aisc shell` / `aisc claude` / `aisc codex`.
+    proc, plan = _run_captured_with_publish_retry(exec_, plan)
+    result.docker_argv = list(plan.docker_argv)
+    if plan.web_gateway_host_port:
+        result.web_gateway = {**result.web_gateway,
+                              "host_port": plan.web_gateway_host_port}
+    result.container_id = (proc.stdout or "").strip() or None
+    result.container_exit_code = proc.exit_code
+    result.executed = True
 
-        # Forward docker stdout/stderr to stderr
-        if proc.stdout:
-            _sys.stderr.write(proc.stdout)
-        if proc.stderr:
-            _sys.stderr.write(proc.stderr)
-
-        if proc.exit_code != 0:
-            raise CliError(
-                message=f"Container exited with code {proc.exit_code}",
-                exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
-                data=result.to_dict(),
-            )
-    elif plan.interactive and not plan.non_interactive:
-        # Text mode: streaming with inherited streams
-        # For keep_alive mode, container runs in background (-d), then we attach
-        if plan.keep_alive:
-            # Step 1: Start container in detached mode
-            proc, plan = _run_captured_with_publish_retry(exec_, plan)
-            result.docker_argv = list(plan.docker_argv)
-            if plan.web_gateway_host_port:
-                result.web_gateway = {**result.web_gateway,
-                                      "host_port": plan.web_gateway_host_port}
-            if proc.exit_code != 0:
-                raise CliError(
-                    message=f"Failed to start container: {proc.stderr}",
-                    exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
-                    data=result.to_dict(),
-                )
-
-            # Step 2: Attach to the running container
-            attach_argv = ["attach", "--sig-proxy=true", plan.name]
-            proc = exec_.run_streaming(attach_argv)
-            result.container_exit_code = 0  # Container keeps running after detach
-            result.executed = True
-
-            if proc.command_not_found:
-                raise CliError(
-                    message="Docker CLI not found",
-                    exit_code=3, error_code="AISC_ERR_DOCKER_UNAVAILABLE",
-                    data=result.to_dict(),
-                )
-        else:
-            # Normal interactive mode (container removed on exit)
-            proc = exec_.run_streaming(argv)
-            result.container_exit_code = proc.exit_code if proc.exit_code >= 0 else proc.exit_code
-            result.executed = True
-
-            if proc.command_not_found:
-                raise CliError(
-                    message="Docker CLI not found",
-                    exit_code=3, error_code="AISC_ERR_DOCKER_UNAVAILABLE",
-                    data=result.to_dict(),
-                )
-            if proc.timed_out:
-                raise CliError(
-                    message="Container run timed out",
-                    exit_code=1, error_code="AISC_ERR_GENERAL",
-                    data=result.to_dict(),
-                )
-            if proc.exit_code != 0:
-                raise CliError(
-                    message=f"Container exited with code {proc.exit_code}",
-                    exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
-                    data=result.to_dict(),
-                )
-    elif plan.non_interactive and not capture:
-        # Non-interactive mode: streaming with DEVNULL stdin
-        proc = exec_.run_non_interactive(argv)
-        result.container_exit_code = proc.exit_code if proc.exit_code >= 0 else proc.exit_code
-        result.executed = True
-
-        if proc.command_not_found:
-            raise CliError(
-                message="Docker CLI not found",
-                exit_code=3, error_code="AISC_ERR_DOCKER_UNAVAILABLE",
-                data=result.to_dict(),
-            )
-        if proc.timed_out:
-            raise CliError(
-                message="Container run timed out",
-                exit_code=1, error_code="AISC_ERR_GENERAL",
-                data=result.to_dict(),
-            )
-        if proc.exit_code != 0:
-            raise CliError(
-                message=f"Container exited with code {proc.exit_code}",
-                exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
-                data=result.to_dict(),
-            )
-    else:
-        # JSON / events mode (no capture flag, not interactive, not non_interactive): captured
-        import sys as _sys
-        proc, plan = _run_captured_with_publish_retry(exec_, plan)
-        result.docker_argv = list(plan.docker_argv)
-        if plan.web_gateway_host_port:
-            result.web_gateway = {**result.web_gateway,
-                                  "host_port": plan.web_gateway_host_port}
-        result.container_exit_code = proc.exit_code
-        result.executed = True
-
-        # Forward docker stdout/stderr to stderr
-        if proc.stdout:
-            _sys.stderr.write(proc.stdout)
-        if proc.stderr:
-            _sys.stderr.write(proc.stderr)
-
-        if proc.exit_code != 0:
-            raise CliError(
-                message=f"Container exited with code {proc.exit_code}",
-                exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
-                data=result.to_dict(),
-            )
-
-    # --- success ---
+    if proc.exit_code != 0:
+        raise CliError(
+            message=f"Failed to start container: {proc.stderr}",
+            exit_code=10, error_code="AISC_ERR_CONTAINER_FAILED",
+            data=result.to_dict(),
+        )
     if emitter is not None:
         emitter.emit("run.container.complete", data={
             "exit_code": result.container_exit_code,

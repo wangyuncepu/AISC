@@ -415,8 +415,9 @@ class RunPlan:
         if not self.keep_alive:
             argv.append("--rm")
 
-        # For keep_alive mode, use -d (detached) instead of -it to prevent container exit on client disconnect
-        if self.keep_alive and self.interactive and not self.non_interactive:
+        # F2-C: keep-alive runs are DETACHED, period — `aisc run` activates a
+        # workspace and exits; the interactive surface is `aisc shell`/agents.
+        if self.keep_alive:
             argv.append("-d")
         elif self.interactive and not self.non_interactive:
             argv.append("-it")
@@ -424,6 +425,10 @@ class RunPlan:
 
         argv.extend([
             "-e", "TERM=xterm-256color",
+            # F2-C: detached activations ride the entrypoint's IDLE mode
+            # (exec sleep infinity) — the image default CMD exits without a
+            # TTY, so a bare `docker run -d` died within a second.
+            "-e", "AISC_RUNTIME_MODE=idle",
             "--name", self.name,
             # runtime-lifecycle A2 / docker-ownership A0: labels prove
             # ownership for the maintenance classifier (kind=one-shot).

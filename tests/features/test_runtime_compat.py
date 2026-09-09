@@ -367,10 +367,10 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
 
             result = cmd_stop(name_override="test-container", executor=fake_executor)
 
-            # Verify docker stop was called
-            fake_executor.run_captured.assert_called()
-            call_args = fake_executor.run_captured.call_args[0][0]
-            self.assertEqual(call_args, ["stop", "test-container"])
+            # Verify docker stop was called, then F2-C removal (`rm -f`)
+            calls = [c[0][0] for c in fake_executor.run_captured.call_args_list]
+            self.assertIn(["stop", "test-container"], calls)
+            self.assertIn(["rm", "-f", "test-container"], calls)
 
             # Verify result indicates stopped
             self.assertTrue(result["stopped"])
@@ -389,10 +389,13 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
 
             result = cmd_stop(name_override="test-container", executor=fake_executor)
 
-            # Should not call docker stop
-            fake_executor.run_captured.assert_not_called()
+            # F2-C: an already-stopped keep-alive container is still REMOVED
+            # (that is the cleanup an activation owes); no stop call happens.
+            calls = [c[0][0] for c in fake_executor.run_captured.call_args_list]
+            self.assertNotIn(["stop", "test-container"], calls)
+            self.assertIn(["rm", "-f", "test-container"], calls)
 
-            # Should return already_stopped=True
+            # Removal happened; the report still marks the stop as idempotent.
             self.assertFalse(result["stopped"])
             self.assertTrue(result["already_stopped"])
 
@@ -498,6 +501,15 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
 
                 self.assertEqual(result["name"], "container-b")
 
+            # F2-C note: test 2's stop now also UNREGISTERS an already-stopped
+            # container (cleanup contract), so re-arm the resolved state registry.
+            from aisc.adapters.container_registry import _resolve_root
+            register(_resolve_root(None, str(root)), "container-b", {
+                "image": "super-claude:latest",
+                "workspace": "/workspace-b",
+                "network": "direct",
+                "label": "test",
+            })
             # Test 3: No args uses default from registry
             fake_executor.reset_mock()
             fake_executor.run_captured.return_value = ProcessResult(
@@ -658,33 +670,8 @@ class LegacyCommandBehaviorTests(unittest.TestCase):
 class CLIParameterMappingTests(unittest.TestCase):
     """Tests ensuring CLI parameters correctly map to internal function calls."""
 
-    def test_cli_non_interactive_flag_maps_to_plan_parameter(self):
-        """Verify --non-interactive CLI flag correctly sets non_interactive=True."""
-        from aisc.cli.commands.run import plan_run
-        from unittest.mock import patch
-
-        # Mock plan_run to capture parameters
-        with patch("aisc.cli.commands.run.plan_run", wraps=plan_run) as mock_plan:
-            from aisc.cli.main import main
-
-            with tempfile.TemporaryDirectory() as workspace:
-                with patch("sys.stdout", new=StringIO()), \
-                     patch("sys.stderr", new=StringIO()), \
-                     patch("sys.argv", ["aisc", "run", "--non-interactive",
-                                        "--workspace", workspace, "--dry-run"]):
-                    try:
-                        main()
-                    except SystemExit:
-                        pass
-
-                # Verify plan_run was called with non_interactive=True
-                mock_plan.assert_called()
-                call_kwargs = mock_plan.call_args[1]
-                self.assertTrue(call_kwargs.get("non_interactive"))
-                self.assertFalse(call_kwargs.get("interactive"))
-
-    def test_cli_keep_alive_flag_maps_to_plan_parameter(self):
-        """Verify --keep-alive CLI flag correctly sets keep_alive=True."""
+    def test_cli_activation_flags_map_to_plan(self):
+        """F2-C: `aisc run <path>` maps to a detached keep-alive plan."""
         from aisc.cli.commands.run import plan_run
         from unittest.mock import patch
 
@@ -692,62 +679,75 @@ class CLIParameterMappingTests(unittest.TestCase):
             from aisc.cli.main import main
 
             with tempfile.TemporaryDirectory() as workspace:
-                with patch("sys.stdout", new=StringIO()), \
-                     patch("sys.stderr", new=StringIO()), \
-                     patch("sys.argv", ["aisc", "run", "--keep-alive",
-                                        "--workspace", workspace, "--dry-run"]):
+                with patch("sys.stdout", new=StringIO()),                      patch("sys.stderr", new=StringIO()),                      patch("sys.argv", ["aisc", "run", "--dry-run", workspace]):
                     try:
                         main()
                     except SystemExit:
                         pass
+                kwargs = mock_plan.call_args[1]
+                self.assertTrue(kwargs["keep_alive"], "F2-C runs are keep-alive (detached)")
+                self.assertFalse(kwargs["interactive"])
+                self.assertEqual(kwargs["workspace"], workspace)
+    def test_cli_resume_adopts_history_record(self):
+        """F2-C: --resume feeds path/image/network from the history record."""
+        from unittest.mock import patch
+        from aisc.cli.commands.run import RunResult
 
-                # Verify plan_run was called with keep_alive=True
-                mock_plan.assert_called()
-                call_kwargs = mock_plan.call_args[1]
-                self.assertTrue(call_kwargs.get("keep_alive"))
+        rec = {"path": "C:\ws\proj", "image": "img:v2",
+               "network": "proxy", "label": "x", "last_used_at": "t"}
+        from aisc.domain.models import RunPlan
+        real_plan = RunPlan(image="img:v2", workspace="C:\ws\proj", name="n",
+                            network="proxy", label="x", dry_run=True,
+                            interactive=False, keep_alive=True)
+        with patch("aisc.cli.commands.runs.list_runs", return_value=[rec]),              patch("aisc.cli.commands.run.plan_run", return_value=real_plan) as mock_plan,              patch("aisc.cli.commands.run.run_container") as mock_run:
+            from aisc.cli.main import main
+            mock_run.return_value = RunResult(image="img:v2",
+                                              executed=True, container_id="abc")
+            with patch("sys.stdout", new=StringIO()), patch("sys.stderr", new=StringIO()):
+                with patch("sys.argv", ["aisc", "run", "--resume", "1", "--format", "json"]):
+                    try:
+                        main()
+                    except SystemExit:
+                        pass
+            kwargs = mock_plan.call_args[1]
+            self.assertEqual(kwargs["workspace"], "C:\ws\proj")
+            self.assertEqual(kwargs["network"], "proxy")
+            self.assertEqual(kwargs["label"], "x")
+            self.assertEqual(kwargs["image"], "img:v2")
 
-    def test_non_interactive_uses_run_non_interactive_executor(self):
-        """Verify --non-interactive actually calls run_non_interactive(), not streaming."""
-        from aisc.cli.commands.run import run_container
+    def test_activation_uses_captured_detached_start(self):
+        """F2-C: run_container activates via run_captured (-d), never streams."""
+        from aisc.cli.commands.run import plan_run, run_container
         from aisc.domain.models import ProcessResult
         from unittest.mock import MagicMock, patch
 
-        # Create spy executor
-        spy_executor = MagicMock()
-        spy_executor.run_non_interactive.return_value = ProcessResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            command_not_found=False,
-            timed_out=False,
+        from aisc.domain.models import (
+            DockerPreflightResult,
+            ImageInspectResult,
+            ImageInspectStatus,
         )
 
+        spy_executor = MagicMock()
+        spy_executor.run_captured.return_value = ProcessResult(
+            exit_code=0, stdout="abc123\n", stderr="",
+            command_not_found=False, timed_out=False,
+        )
+        spy_executor.preflight.return_value = DockerPreflightResult(
+            docker_path="docker", available=True, reason="ok")
+        spy_executor.inspect_image.return_value = ImageInspectResult(
+            status=ImageInspectStatus.EXISTS, image="super-claude:latest",
+            image_id="sha256:x")
+
         with tempfile.TemporaryDirectory() as workspace:
-            # Execute run_container with non-interactive plan (no dry-run)
             with patch("aisc.cli.commands.run.RealDockerExecutor", return_value=spy_executor):
-                from aisc.cli.commands.run import plan_run
-
-                plan = plan_run(
-                    image="super-claude:test",
-                    workspace=workspace,
-                    non_interactive=True,
-                    interactive=False,
-                    dry_run=False,  # Actually execute
-                )
-
-                result = run_container(plan, executor=spy_executor)
-
-        # Verify run_non_interactive was called (not streaming/captured)
-        spy_executor.run_non_interactive.assert_called_once()
-        spy_executor.run_streaming.assert_not_called()
-        spy_executor.run_captured.assert_not_called()
-
-        # Verify correct argv was passed
-        call_args = spy_executor.run_non_interactive.call_args[0][0]
-        self.assertIn("AISC_NON_INTERACTIVE=1", call_args)
-        self.assertIn("CLAUDE_SCOPE=project", call_args)
-        self.assertNotIn("-it", call_args)
-
-
-if __name__ == "__main__":
-    unittest.main()
+                plan = plan_run(image="super-claude:latest", workspace=workspace,
+                                interactive=False, keep_alive=True)
+                result = run_container(plan, aisc_root=None, capture=True)
+            self.assertTrue(result.executed)
+            self.assertEqual(result.container_id, "abc123")
+            argv = plan.docker_argv
+            self.assertIn("-d", argv)
+            self.assertNotIn("--rm", argv)
+            self.assertNotIn("-it", argv)
+            spy_executor.run_non_interactive.assert_not_called()
+            spy_executor.run_streaming.assert_not_called()

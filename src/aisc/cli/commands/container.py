@@ -133,8 +133,21 @@ def cmd_status(
     permission failures raise CliError.
     """
     exec_ = executor or RealDockerExecutor()
+    root = explicit_root
+    if not name_override and not label_override and not explicit_root:
+        # F2-C default leg: the ACTIVE workspace's registry (never cwd).
+        from aisc.cli.commands import runs as cli_runs
+
+        active = cli_runs.get_active()
+        if active:
+            from aisc.application.data_root import workspace_state_dir
+
+            try:
+                root = str(workspace_state_dir(Path(active)))
+            except Exception:
+                root = None
     name = discover_container(name_override=name_override,
-                              explicit_root=explicit_root,
+                              explicit_root=root,
                               label_override=label_override,
                               executor=exec_)
 
@@ -203,21 +216,37 @@ def cmd_stop(
     explicit_root: Optional[str] = None,
     executor: Optional[DockerExecutor] = None,
     label_override: Optional[str] = None,
+    remove: bool = True,
 ) -> Dict[str, Any]:
-    """Stop the discovered container via ``docker stop``.
+    """Stop the discovered container via ``docker stop`` (F2-C: then REMOVE).
 
     Requires the container to exist. Idempotent: stopping an already-stopped
     container returns success. The container is unregistered from the index
-    after stop (it is no longer an active target).
+    after stop (it is no longer an active target) and — since F2-C runs are
+    detached keep-alives — removed by default, else every stop litters.
     """
     exec_ = executor or RealDockerExecutor()
+    root = explicit_root
+    if not name_override and not label_override and not explicit_root:
+        # F2-C default leg: the ACTIVE workspace's registry (never cwd —
+        # the cwd anchor trips the data-root overlap gate from $HOME).
+        from aisc.cli.commands import runs as cli_runs
+
+        active = cli_runs.get_active()
+        if active:
+            from aisc.application.data_root import workspace_state_dir
+
+            try:
+                root = str(workspace_state_dir(Path(active)))
+            except Exception:
+                root = None
     name = discover_container(name_override=name_override,
-                              explicit_root=explicit_root,
+                              explicit_root=root,
                               label_override=label_override,
                               executor=exec_)
 
-    # First check if container exists
-    status = cmd_status(name_override=name, explicit_root=explicit_root,
+    # First check if container exists (same derived registry root)
+    status = cmd_status(name_override=name, explicit_root=root,
                          executor=executor)
 
     if not status.exists:
@@ -226,29 +255,85 @@ def cmd_stop(
             exit_code=1, error_code="AISC_ERR_CONTAINER_NOT_FOUND",
         )
 
-    if not status.running:
-        return {"name": name, "stopped": False, "already_stopped": True}
+    if status.running:
+        proc = exec_.run_captured(["stop", name], timeout=30.0)
+        if proc.exit_code != 0:
+            raise _classify_process_error(proc, name, "stop")
+    if remove:
+        # An already-stopped keep-alive container still needs its cleanup.
+        rm = exec_.run_captured(["rm", "-f", name], timeout=30.0)
+        if rm.exit_code != 0:
+            raise _classify_process_error(rm, name, "remove")
 
-    argv = ["stop", name]
-    proc = exec_.run_captured(argv, timeout=30.0)
-
-    if proc.exit_code != 0:
-        raise _classify_process_error(proc, name, "stop")
-
-    # Unregister from the multi-container index (no longer an active target)
+    # Unregister from the multi-container index (no longer an active
+    # target). The registry root must go through _resolve_root — writing at
+    # the raw explicit_root would CREATE an empty registry.json there and
+    # shadow the real (.aisc / state-dir) one for every later lookup.
     try:
-        from aisc.adapters.container_registry import unregister
-        from aisc.application.resources import locate_aisc_root
-        try:
-            root = locate_aisc_root(explicit_root=explicit_root)
-        except Exception:
-            root = None
-        if root is not None:
-            unregister(root, name)
+        from aisc.adapters.container_registry import unregister, _resolve_root
+        reg = None
+        if root:
+            reg = _resolve_root(None, root)
+        if reg is None:
+            # name/label override legs keep the legacy root resolution
+            from aisc.application.resources import locate_aisc_root
+            try:
+                reg = locate_aisc_root(explicit_root=explicit_root)
+            except Exception:
+                reg = None
+        if reg is not None:
+            unregister(reg, name)
     except Exception:
         pass
 
-    return {"name": name, "stopped": True, "already_stopped": False}
+    return {"name": name, "stopped": status.running,
+            "already_stopped": not status.running, "removed": remove}
+
+
+def cmd_stop_all(
+    explicit_root: Optional[str] = None,
+    executor: Optional[DockerExecutor] = None,
+) -> Dict[str, Any]:
+    """F2-C ``aisc stop --all``: stop + remove every CLI-owned container.
+
+    Workbench-managed runtimes (owner=workbench) are deliberately untouched —
+    the GUI owns their lifecycle (leases, reconcile); the CLI's blast radius
+    stays on its own one-shot activations.
+    """
+    exec_ = executor or RealDockerExecutor()
+    from aisc.adapters.container_registry import list_containers, unregister
+    from aisc.application.data_root import DataRootResolver
+
+    # Every workspace registry under the data root (the family's registries
+    # are workspace-scoped; the CLI's blast radius excludes Workbench-owned
+    # runtimes wherever they live).
+    shared_workspaces = DataRootResolver().resolve_shared_root() / "workspaces"
+    stopped: List[Dict[str, Any]] = []
+    skipped = 0
+    registry_dirs = [
+        p / "runtime" for p in shared_workspaces.glob("*") if (p / "runtime" / "registry.json").is_file()
+    ] if shared_workspaces.is_dir() else []
+    for reg_dir in registry_dirs:
+        for entry in list_containers(reg_dir):
+            meta = entry.get("meta", {})
+            if meta.get("owner") == "workbench":
+                skipped += 1
+                continue
+            name = str(entry.get("name", ""))
+            if not name:
+                continue
+            stop = exec_.run_captured(["stop", name], timeout=30.0)
+            rm = exec_.run_captured(["rm", "-f", name], timeout=30.0)
+            try:
+                unregister(reg_dir, name)
+            except Exception:
+                pass
+            stopped.append({
+                "name": name,
+                "workspace": meta.get("workspace", ""),
+                "exit_code": rm.exit_code if rm.exit_code != 0 else stop.exit_code,
+            })
+    return {"stopped": stopped, "skipped": skipped}
 
 
 def print_stop_text(data: Dict[str, Any]) -> None:
