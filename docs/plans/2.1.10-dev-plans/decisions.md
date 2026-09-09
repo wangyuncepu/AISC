@@ -70,3 +70,19 @@ watch 事件用预留 event 帧（D-8 双通道归位）；②Python 侧引入 `
 list 轮询）；③所有 fs path 以远端为根、服务端 containment 拒绝越界
 （防穿越沿 F1 browse 钉根教训），本地软件打开=显式下载副本、拖入=上传，
 本地永无工作区副本。详见 r3-remote-fs.md。
+
+## D-10 控制面迁 serve 长驻（2026-09-09，修订 D-7）
+
+D-7 的「低频控制面走 per-op ssh」在真实远程使用中代价过高：每 op 一次
+全新 ssh 握手 ≈ 220ms（LAN 实测，公网按 RTT 放大），且 Windows OpenSSH
+不支持 ControlMaster（实测 `getsockname failed`），连接复用无解。
+修订：控制面 op 优先走 serve 长驻连接（ServePool 复用，通用 `cli` op
+进程内复用命令分派）；per-op ssh 降级为 serve 不可用时的回退通道。
+协议 v1.2 → v1.3（`cli` op + ready 帧 `home` 字段）；老远端机经
+unknown-op 回退天然兼容。PTY/build 流维持既有通道。详见
+fix2-design.md F2-A。
+
+## D-11 CLI 更新方案封存（2026-09-09）
+
+`aisc update`（CLI 自更新）本批不做——更新需要整体设计（CLI + Workbench
++ 侧车同步 + 发布通道），转下周期「更新方案」专题与用户专题讨论。
