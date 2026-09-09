@@ -101,6 +101,7 @@ def cmd_workspaces(
         rows.append({
             "workspace": ws,
             "alias": alias_by_path.get(ws, ""),
+            "label": str(meta.get("label", "")),
             "container": name,
             "image": str(meta.get("image", "")),
             "status": status,
@@ -148,9 +149,14 @@ def print_workspaces_text(rows: List[Dict[str, Any]]) -> None:
     if not rows:
         print("当前没有 CLI 激活的工作区 — aisc run <路径> 开始")
         return
-    width = max(len(r.get("alias", "") or "-") for r in rows) + 2
+    width = max(len(r.get("alias", "") or "-")
+                + (len(r.get("label", "")) + 4 if r.get("label") else 0)
+                for r in rows) + 2
     for r in rows:
-        alias = (r.get("alias", "") or "-") + (" *" if r.get("active") else "")
+        alias = r.get("alias", "") or "-"
+        if r.get("label"):
+            alias = f"{alias}[{r['label']}]"  # bypass slot — distinguish
+        alias += " *" if r.get("active") else ""
         status = r.get("status", "") or "(容器不存在)"
         print(f"  {alias:<{width}} {status:<22} {r['workspace']}")
     print("批量停止运行中的: aisc workspaces --stop · 单个: aisc stop")
