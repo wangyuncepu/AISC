@@ -2305,6 +2305,18 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     except (AttributeError, ValueError):
         pass  # non-TextIOWrapper (PyInstaller wrapper) - protocol sites are ASCII anyway
     parser = _build_parser()
+
+    # Shell completion (manual test ask 2026-09-09): argcomplete follows the
+    # argparse tree automatically — subcommands, flags, choices all covered,
+    # zero per-command maintenance. No-op outside a completion environment
+    # (no _ARGCOMPLETE env); optional import so argcomplete-less installs
+    # only lose completion, never the CLI.
+    try:
+        import argcomplete
+        argcomplete.autocomplete(parser)
+    except ImportError:
+        pass
+
     args_list = list(argv) if argv is not None else sys.argv[1:]
 
     # Pre-detect format/events/command for error messages
