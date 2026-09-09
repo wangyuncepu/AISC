@@ -476,6 +476,21 @@ impl ServeSession {
     }
 }
 
+impl Drop for ServeSession {
+    fn drop(&mut self) {
+        // Last owner gone (pool eviction, teardown): NEVER leak the ssh /
+        // serve child — the tokio orphan reaper would otherwise hold the
+        // runtime open at process end (field evidence 2026-09-09: a test
+        // binary whose pooled session outlived it never exited) and every
+        // evict-and-respawn would strand a zombie ssh. Graceful EOF-exit
+        // stays `shutdown()`'s job for callers that care; this is the
+        // best-effort backstop (sync, no await, skip if locked).
+        if let Ok(mut child) = self.child.try_lock() {
+            let _ = child.start_kill();
+        }
+    }
+}
+
 // -- 2.1.10 R3: the pooled serve connection for a remote target ----------------
 //
 // fs.* ops are high-frequency; per-op connections would re-handshake the ssh

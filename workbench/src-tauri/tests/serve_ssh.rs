@@ -24,7 +24,12 @@ fn ssh_env() -> Option<(String, u16)> {
 /// F2-A (D-10): the generic `cli` op over a REAL ssh link — the remote
 /// control plane. Needs only `AISC_TEST_SSH` (a remote with the v1.3 serve
 /// CLI on PATH); no runtime container.
-#[tokio::test]
+///
+/// multi_thread runtime is REQUIRED on Windows: the default current-thread
+/// flavor deadlocks in tokio::process child-stdio setup (field evidence
+/// 2026-09-09 — banner never consumed, remote serve parked in pipe_read).
+/// The app itself rides tauri's multi-thread runtime and is unaffected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_op_over_real_ssh_roundtrip() {
     let Some((host, port)) = ssh_env() else {
         eprintln!("skipping: AISC_TEST_SSH not set");
@@ -39,9 +44,11 @@ async fn cli_op_over_real_ssh_roundtrip() {
 
     // The pooled session's banner carries the v1.3 home anchor.
     let pool = workbench_lib::serve::global_pool();
+    eprintln!("[probe] spawning pooled session…");
     let session = workbench_lib::serve::pooled_session(pool, &t)
         .await
         .expect("pooled serve session");
+    eprintln!("[probe] session up, banner = {:?}", session.banner());
     assert_eq!(session.banner().serve_protocol, workbench_lib::serve::SERVE_PROTOCOL);
     let home = session.banner().home.clone().expect("v1.3 ready home");
     assert!(home.starts_with('/'), "remote home is a POSIX path: {home}");
@@ -53,11 +60,13 @@ async fn cli_op_over_real_ssh_roundtrip() {
         vec!["version".to_string(), "--format".into(), "json".into()],
         vec!["ps".to_string(), "--format".into(), "json".into()],
     ] {
+        eprintln!("[probe] cli_op {:?}…", cmd.first());
         let env = workbench_lib::serve::cli_op(
-            &t, &cmd, None, Duration::from_secs(60), &cancel, "it-cli-op",
+            &t, &cmd, None, Duration::from_secs(20), &cancel, "it-cli-op",
         )
         .await
         .expect("cli op roundtrip");
+        eprintln!("[probe] cli_op {:?} -> exit {}", cmd.first(), env.meta.exit_code);
         assert_eq!(env.meta.exit_code, 0, "op {:?} failed: {:?}", cmd.first(), env.errors);
     }
     // A second fetch must reuse the SAME session Arc (pool hit).
@@ -65,6 +74,11 @@ async fn cli_op_over_real_ssh_roundtrip() {
         .await
         .expect("pooled again");
     assert!(Arc::ptr_eq(&session, &again), "pool must reuse the live session");
+
+    // The global pool is process-static: evict so the session (and its ssh
+    // child, killed on Drop) does not outlive the test binary — the tokio
+    // orphan reaper would otherwise hold the runtime open forever.
+    workbench_lib::serve::evict_session(pool, &t).await;
 }
 
 #[tokio::test]
