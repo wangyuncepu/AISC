@@ -17,6 +17,7 @@ import { useSettingsStore } from "../../stores/settings";
 import type { ForgetPreview } from "../../types";
 import ForgetConfirmDialog from "./ForgetConfirmDialog.vue";
 import InvalidPathDialog from "./InvalidPathDialog.vue";
+import { buildSearchMatcher } from "../../lib/search";
 
 const { t } = useI18n();
 const store = useRuntimeStore();
@@ -91,6 +92,10 @@ async function clearInvalidEntry(): Promise<void> {
 // confirms the selection. ---
 const browse = ref<{ cwd: string; root: string; entries: { name: string; isDir: boolean }[] } | null>(null);
 const browseSelected = ref<string | null>(null);
+// Field #4/#5: hidden-dotdir toggle + fuzzy search over the current page
+// (the S5 matcher — substring > subsequence, /re/ explicit regex).
+const browseShowHidden = ref(false);
+const browseQuery = ref("");
 
 function onBrowse(): void {
   if (target.value?.kind === "remote") {
@@ -102,21 +107,27 @@ function onBrowse(): void {
   }
 }
 async function openBrowse(start?: string): Promise<void> {
-  const r = await wsStore.browseRemote(start);
+  const r = await wsStore.browseRemote(start, browseShowHidden.value);
   if (r) {
     browse.value = { cwd: r.cwd, root: r.root, entries: r.entries };
     browseSelected.value = null;
+    browseQuery.value = "";
   }
 }
 async function loadBrowse(path: string): Promise<void> {
   if (!browse.value) return;
-  const r = await wsStore.browseRemote(path);
+  const r = await wsStore.browseRemote(path, browseShowHidden.value);
   if (r) {
     browse.value.cwd = r.cwd;
     browse.value.root = r.root;
     browse.value.entries = r.entries;
     browseSelected.value = null;
+    browseQuery.value = "";
   }
+}
+function toggleBrowseHidden(): void {
+  browseShowHidden.value = !browseShowHidden.value;
+  if (browse.value) void loadBrowse(browse.value.cwd);
 }
 function browseSelect(name: string): void {
   browseSelected.value = browseSelected.value === name ? null : name;
@@ -134,6 +145,17 @@ function browseUp(): void {
   parts.pop();
   void loadBrowse(parts.length ? `${root.replace(/\/+$/, "")}/${parts.join("/")}` : root);
 }
+const browseVisible = computed(() => {
+  const matcher = buildSearchMatcher(browseQuery.value);
+  if (!browse.value) return [];
+  if (!matcher) return browse.value.entries;
+  return [...browse.value.entries]
+    .map((e) => ({ e, rank: matcher(e.name.toLowerCase()) }))
+    .filter((x) => x.rank > 0)
+    .sort((a, b) => b.rank - a.rank || a.e.name.localeCompare(b.e.name))
+    .map((x) => x.e);
+});
+
 const browseCrumbs = computed(() => {
   if (!browse.value) return [] as { label: string; path: string }[];
   const { cwd, root } = browse.value;
@@ -364,14 +386,26 @@ async function confirmForget(): Promise<void> {
               <button class="crumb" @click="loadBrowse(c.path)">{{ c.label }}</button>
             </template>
           </span>
+          <input
+            v-model="browseQuery"
+            class="browse-search"
+            type="search"
+            :placeholder="t('picker.browseDialog.searchPlaceholder')"
+          />
+          <button
+            class="ui-button quiet"
+            :title="browseShowHidden ? t('picker.browseDialog.hideHidden') : t('picker.browseDialog.showHidden')"
+            @click="toggleBrowseHidden"
+          >{{ browseShowHidden ? "●" : "◌" }}</button>
           <button class="ui-button quiet" :disabled="browse.cwd === browse.root" @click="browseUp">↑</button>
         </div>
         <div class="browse-list">
           <p v-if="wsStore.browseBusy" class="hint">{{ t("picker.browseDialog.loading") }}</p>
           <p v-else-if="wsStore.browseError" class="forget-error" role="alert">{{ wsStore.browseError }}</p>
           <p v-else-if="!browse.entries.length" class="hint">{{ t("picker.browseDialog.empty") }}</p>
+          <p v-else-if="!browseVisible.length" class="hint">{{ t("picker.browseDialog.noMatches") }}</p>
           <div
-            v-for="e in browse.entries" :key="e.name"
+            v-for="e in browseVisible" :key="e.name"
             class="browse-item"
             :class="{ selected: browseSelected === e.name }"
             role="button" tabindex="0"
@@ -499,6 +533,13 @@ async function confirmForget(): Promise<void> {
   padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border);
 }
 .crumbs { display: flex; flex-wrap: wrap; gap: 2px; flex: 1; min-width: 0; }
+.browse-search {
+  flex: none; width: 140px; padding: 3px var(--space-2);
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+}
+.browse-search:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: calc(-1 * var(--focus-ring-offset)); }
 .crumb {
   background: none; border: none; cursor: pointer; padding: 2px 4px;
   color: var(--accent); font-family: var(--font-mono); font-size: var(--font-sm);

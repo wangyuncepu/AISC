@@ -764,6 +764,7 @@ fn normalize_under_root(root: &str, requested: &str) -> Result<String, Workbench
 pub async fn remote_browse(
     app: AppHandle,
     path: Option<String>,
+    include_hidden: Option<bool>,
 ) -> Result<RemoteBrowseResult, WorkbenchError> {
     let t = match crate::target::resolve_target(&app).await? {
         crate::cli::CliTarget::Remote(t) => t,
@@ -772,7 +773,7 @@ pub async fn remote_browse(
                 .with_detail("remote browse requires a remote driving target"))
         }
     };
-    remote_browse_core(&t, path.as_deref()).await
+    remote_browse_core(&t, path.as_deref(), include_hidden.unwrap_or(false)).await
 }
 
 /// The transport-independent browse body (env-gated integration tests call
@@ -783,6 +784,7 @@ pub async fn remote_browse(
 pub async fn remote_browse_core(
     t: &crate::cli::SshTarget,
     path: Option<&str>,
+    include_hidden: bool,
 ) -> Result<RemoteBrowseResult, WorkbenchError> {
     let pool = crate::serve::global_pool();
     let session = crate::serve::pooled_session(pool, t).await?;
@@ -798,6 +800,9 @@ pub async fn remote_browse_core(
 
     // Page through fs.list until exhausted (cap guards a runaway listing).
     let mut entries: Vec<RemoteDirEntry> = Vec::new();
+    // Field #3 defense: cross-page re-lists must never duplicate a row (the
+    // picker renders by name key — a dup blanks a row via key collision).
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut offset = 0usize;
     loop {
         let rel = cwd.strip_prefix(&root).unwrap_or("").trim_start_matches('/');
@@ -812,7 +817,13 @@ pub async fn remote_browse_core(
         for e in page {
             let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let is_dir = e.get("kind").and_then(|v| v.as_str()) == Some("dir");
-            if name.is_empty() || name.starts_with('.') || !is_dir {
+            if name.is_empty() || !is_dir {
+                continue;
+            }
+            if name.starts_with('.') && !include_hidden {
+                continue;
+            }
+            if !seen.insert(name.clone()) {
                 continue;
             }
             entries.push(RemoteDirEntry { is_dir, name });

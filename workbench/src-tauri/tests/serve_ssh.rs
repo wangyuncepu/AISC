@@ -220,17 +220,25 @@ async fn remote_browse_core_root_then_descent_over_real_ssh() {
         extra_args: vec!["-o".into(), "StrictHostKeyChecking=accept-new".into()],
     };
 
-    let root_page = workbench_lib::workspace::remote_browse_core(&t, None)
+    let root_page = workbench_lib::workspace::remote_browse_core(&t, None, false)
         .await
         .expect("root browse");
     assert!(root_page.cwd.starts_with('/'));
     assert_eq!(root_page.cwd, root_page.root, "first page opens at the pin root");
+    // Field #3 defense: cross-page collection can never surface a dup row.
+    {
+        let mut names: Vec<&str> = root_page.entries.iter().map(|e| e.name.as_str()).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(before, names.len(), "duplicate names in the browse listing");
+    }
     // dirs only, no dotfiles
     assert!(root_page.entries.iter().all(|e| e.is_dir && !e.name.starts_with('.')));
 
     if let Some(first) = root_page.entries.first() {
         let child = format!("{}/{}", root_page.cwd.trim_end_matches('/'), first.name);
-        let sub = workbench_lib::workspace::remote_browse_core(&t, Some(&child))
+        let sub = workbench_lib::workspace::remote_browse_core(&t, Some(&child), false)
             .await
             .expect("descent browse");
         assert_eq!(sub.cwd, child, "descent resolves the requested child");
@@ -238,5 +246,11 @@ async fn remote_browse_core_root_then_descent_over_real_ssh() {
     } else {
         eprintln!("root listing empty — descent leg skipped");
     }
+    // Field #4: include_hidden surfaces dot-dirs (any real $HOME has them).
+    let hidden_page = workbench_lib::workspace::remote_browse_core(&t, None, true)
+        .await
+        .expect("hidden browse");
+    assert!(hidden_page.entries.iter().any(|e| e.name.starts_with('.')),
+            "includeHidden must surface dot-dirs");
     workbench_lib::serve::evict_session(workbench_lib::serve::global_pool(), &t).await;
 }

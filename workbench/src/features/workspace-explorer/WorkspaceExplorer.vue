@@ -21,6 +21,7 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { errorCodeOf, useWorkspaceExplorerStore } from "../../stores/workspaceExplorer";
 import { useRuntimeStore } from "../../stores/runtime";
 import { WORKSPACE_PATH_MIME } from "../../lib/workspaceDnd";
+import { buildSearchMatcher } from "../../lib/search";
 import { validateBasename } from "./basename";
 import ChangeBadge from "./ChangeBadge.vue";
 import TypeIcon from "./TypeIcon.vue";
@@ -104,38 +105,11 @@ const artifactFilter = computed(() => explorer.activeKind);
 /** One search box above both panels (VSCode-style). Empty = no filtering. */
 const panelSearch = ref("");
 const searchQuery = computed(() => panelSearch.value.trim().toLowerCase());
-/** S5c r2 (user request): fuzzy matching — a literal substring wins, then a
- *  subsequence match (query chars in order, gaps allowed: "ndl" → needle).
- *  Returns 0 = no match, 1 = subsequence, 2 = substring (higher ranks first). */
-function fuzzyRank(query: string, hay: string): 0 | 1 | 2 {
-  if (!query) return 2;
-  if (hay.includes(query)) return 2;
-  let i = 0;
-  for (const ch of hay) {
-    if (ch === query[i]) i += 1;
-    if (i === query.length) return 1;
-  }
-  return 0;
-}
-/** S5c r3: explicit regex with `/pattern/` delimiters (case-insensitive,
- *  matching the box's default). An INVALID pattern falls back to the literal
- *  string — a broken regex must never blank the panel. The raw (non-
- *  lowercased) query feeds the regex so character classes survive. */
-const searchMatcher = computed<((hay: string) => 0 | 1 | 2) | null>(() => {
-  const raw = panelSearch.value.trim();
-  if (!raw) return null;
-  const m = /^\/(.+)\/$/.exec(raw);
-  if (m) {
-    try {
-      const re = new RegExp(m[1], "i");
-      return (hay: string) => (re.test(hay) ? 2 : 0);
-    } catch {
-      return (hay: string) => (hay.includes(raw.toLowerCase()) ? 2 : 0);
-    }
-  }
-  const q = raw.toLowerCase();
-  return (hay: string) => fuzzyRank(q, hay);
-});
+/** S5c r2/r3: the matcher now lives in lib/search.ts (shared with the F2-B
+ *  browse dialog); semantics unchanged — substring > subsequence, `/re/`
+ * explicit regex, invalid patterns fall back to literal. */
+const searchMatcher = computed<((hay: string) => 0 | 1 | 2) | null>(() =>
+  buildSearchMatcher(panelSearch.value));
 const searchPlaceholder = computed(() =>
   explorer.activeKind === "artifacts"
     ? t("explorer.searchArtifacts")

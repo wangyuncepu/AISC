@@ -384,8 +384,14 @@ export interface RemoteBrowseResult {
   root: string;
   entries: RemoteDirEntry[];
 }
-export const remoteBrowse = (path?: string) =>
-  invoke<RemoteBrowseResult>("remote_browse", path === undefined ? {} : { path });
+export const remoteBrowse = (path?: string, includeHidden?: boolean) =>
+  invoke<RemoteBrowseResult>(
+    "remote_browse",
+    {
+      ...(path === undefined ? {} : { path }),
+      ...(includeHidden ? { includeHidden } : {}),
+    },
+  );
 
 /** S4: reveal the build log file (data-root paths only) in the OS file manager. */
 export const workspaceRevealDataFile = (path: string) =>

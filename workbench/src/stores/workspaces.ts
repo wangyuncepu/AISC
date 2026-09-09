@@ -482,11 +482,12 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
    *  remote $HOME. `path` optional/absolute POSIX; undefined = the root. */
   async function browseRemote(
     path?: string,
+    includeHidden?: boolean,
   ): Promise<import("../lib/ipc").RemoteBrowseResult | null> {
     browseError.value = null;
     browseBusy.value = true;
     try {
-      return await ipc.remoteBrowse(path);
+      return await ipc.remoteBrowse(path, includeHidden);
     } catch (e) {
       browseError.value = (e as { message?: string })?.message
         ?? String(e);

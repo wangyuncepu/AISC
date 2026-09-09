@@ -254,7 +254,7 @@ describe("F2-B: remote browse dialog (explorer model: click selects, dblclick de
     expect(btn.attributes("disabled")).toBeUndefined();
     await btn.trigger("click");
     await flushPromises();
-    expect(mockIpc.remoteBrowse).toHaveBeenCalledWith(undefined);
+    expect(mockIpc.remoteBrowse).toHaveBeenCalledWith(undefined, false);
     expect(w.find('[role="dialog"]').exists()).toBe(true);
     // Rust filters files/dotfiles — rows are dirs only, each with a chevron.
     const row = w.find(".browse-item");
@@ -275,9 +275,30 @@ describe("F2-B: remote browse dialog (explorer model: click selects, dblclick de
     });
     await row.trigger("dblclick");
     await flushPromises();
-    expect(mockIpc.remoteBrowse).toHaveBeenLastCalledWith("/home/tv/projects");
+    expect(mockIpc.remoteBrowse).toHaveBeenLastCalledWith("/home/tv/projects", false);
     expect(w.find(".browse-path").text()).toBe("/home/tv/projects");
     expect(w.find(".browse-item").classes()).not.toContain("selected");
+
+    // Field #4: the hidden toggle refetches the SAME cwd with includeHidden.
+    mockIpc.remoteBrowse.mockResolvedValue({
+      cwd: "/home/tv/projects", root: "/home/tv",
+      entries: [
+        { name: ".secret", isDir: true },
+        { name: "aisc-handtest", isDir: true },
+      ],
+    });
+    await w.findAll(".browse-head .ui-button")[0]!.trigger("click"); // ◌/● toggle
+    await flushPromises();
+    expect(mockIpc.remoteBrowse).toHaveBeenLastCalledWith("/home/tv/projects", true);
+
+    // Field #5: fuzzy search — a subsequence ("ahd" → aisc-handtest) filters
+    // the rows; the dotdir stays out of the ranking until it matches.
+    const search = w.find(".browse-search");
+    await search.setValue("ahd");
+    expect(w.findAll(".browse-item").length).toBe(1);
+    expect(w.find(".browse-item").text()).toContain("aisc-handtest");
+    await search.setValue("");
+    expect(w.findAll(".browse-item").length).toBe(2);
 
     // Choose with no selection commits the current directory.
     await w.findAll(".browse-actions button")[1]!.trigger("click");
