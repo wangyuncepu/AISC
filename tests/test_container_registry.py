@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from aisc.adapters.container_registry import (
     _registry_lock,
@@ -121,6 +122,37 @@ class RegisterDefaultAndImageIdTests(unittest.TestCase):
 
             from aisc.adapters.container_registry import get_default
             self.assertEqual(get_default(root), "aisc-a")
+
+
+class ResolveTargetByNameTests(unittest.TestCase):
+    """r2 #2: ``--name`` is its own address — resolving a workspace from cwd
+    must not gate it (from $HOME the data-root guard fires outright, making
+    ``stop --name X`` unusable outside workspaces)."""
+
+    def test_name_override_survives_unresolvable_cwd(self):
+        from aisc.adapters.container_registry import resolve_target
+        from aisc.domain.models import CliError
+
+        def _boom(_path):
+            raise CliError(message="data root inside the workspace",
+                           exit_code=1, error_code="AISC_ERR_STATE_WRITE_FAILED")
+
+        with mock.patch("aisc.application.data_root.workspace_state_dir", _boom):
+            got = resolve_target(root=None, name_override="box-1")
+        self.assertEqual(got, "box-1")  # accepted unregistered; caller
+        # verifies existence against docker (cmd_status)
+
+    def test_no_name_and_unresolvable_cwd_still_raises(self):
+        from aisc.adapters.container_registry import resolve_target
+        from aisc.domain.models import CliError
+
+        def _boom(_path):
+            raise CliError(message="data root inside the workspace",
+                           exit_code=1, error_code="AISC_ERR_STATE_WRITE_FAILED")
+
+        with mock.patch("aisc.application.data_root.workspace_state_dir", _boom):
+            with self.assertRaises(CliError):
+                resolve_target(root=None)
 
 
 if __name__ == "__main__":

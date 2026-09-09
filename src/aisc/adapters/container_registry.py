@@ -628,8 +628,19 @@ def resolve_target(
     Raises:
         CliError: when no target can be resolved.
     """
-    resolved_root = _resolve_root(root, explicit_root)
-    if resolved_root is None:
+    # r2 #2: --name needs no workspace at all — the name IS the address.
+    # Resolving a workspace from cwd misfires outside workspaces (from
+    # $HOME the data-root guard fires outright), blocking the very
+    # scenario --name exists for. Registry lookups degrade to "not
+    # registered" (the name is still accepted; cmd_status verifies it
+    # against docker).
+    resolved_root: Optional[Path] = None
+    try:
+        resolved_root = _resolve_root(root, explicit_root)
+    except CliError:
+        if not name_override:
+            raise
+    if resolved_root is None and not name_override:
         raise CliError(
             message=(
                 "No AISC root found and no container name/label given.\n"
@@ -639,13 +650,13 @@ def resolve_target(
         )
 
     # Lazy GC before addressing (best-effort, executor may be None in dry paths)
-    if executor is not None:
+    if executor is not None and resolved_root is not None:
         try:
             gc(resolved_root, executor)
         except Exception:
             pass
 
-    containers = list_containers(resolved_root)
+    containers = list_containers(resolved_root) if resolved_root is not None else {}
 
     # 1. explicit name
     if name_override:
