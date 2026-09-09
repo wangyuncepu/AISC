@@ -2750,8 +2750,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             )
             print_status_text(sr)
         elif args.command == "stop":
-            from aisc.cli.commands.container import print_stop_text
-            print_stop_text(data if isinstance(data, dict) else {})
+            # --all already printed its batch summary in _cmd_stop — feeding
+            # the batch dict to print_stop_text was a KeyError crash (r2 #1)
+            if not getattr(args, "all", False):
+                from aisc.cli.commands.container import print_stop_text
+                print_stop_text(data if isinstance(data, dict) else {})
         elif args.command == "restart":
             from aisc.cli.commands.container import print_restart_text
             print_restart_text(data if isinstance(data, dict) else {})

@@ -337,11 +337,16 @@ def cmd_stop_all(
 
 
 def print_stop_text(data: Dict[str, Any]) -> None:
-    """Print stop result in human-readable format."""
+    """Print stop result in human-readable format.
+
+    F2-C stop = stop + REMOVE (detached keep-alives would otherwise litter);
+    the wording says both — English phrasing that only said "stopped" hid
+    the removal (manual test r2 note).
+    """
     if data.get("already_stopped"):
-        print(f"Container '{data['name']}' was already stopped.")
+        print(f"容器 '{data['name']}' 此前已停止，现已移除。")
     else:
-        print(f"Container '{data['name']}' stopped.")
+        print(f"容器 '{data['name']}' 已停止并移除。")
 
 
 # ---------------------------------------------------------------------------
