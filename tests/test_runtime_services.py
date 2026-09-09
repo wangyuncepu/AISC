@@ -94,6 +94,7 @@ from aisc.application.runtime import (
     runtime_status,
     start_runtime,
 )
+from aisc.application import web_gateway
 from aisc.application.web_gateway import (
     GatewayPortError,
     allocate_gateway_host_port,
@@ -313,7 +314,10 @@ def _bind_free_range_port() -> int:
             return port, s
         except OSError:
             s.close()
-    raise AssertionError("no bindable port in the frozen range")
+    # Phantom HNS hold (2026-09-09): the whole range can be bind-blocked
+    # while publishes keep working — these bind-based cases cannot run
+    # in that environment; skip honestly instead of failing.
+    raise unittest.SkipTest("frozen range bind-blocked (HNS phantom hold)")
 
 
 class PortAllocatorTests(unittest.TestCase):
@@ -336,6 +340,59 @@ class PortAllocatorTests(unittest.TestCase):
         blocked = set(range(WEB_GATEWAY_HOST_PORT_MIN, WEB_GATEWAY_HOST_PORT_MIN + 50))
         port = allocate_gateway_host_port(exclude=blocked)
         self.assertNotIn(port, blocked)
+
+    def test_phantom_hns_hold_falls_back_to_reachability(self):
+        """2026-09-09 field shape: binds fail range-wide (invisible HNS
+        reservation) while docker publishes keep working — the allocator
+        must fall through to a connect-probe and return a non-answering
+        port instead of erroring."""
+        from unittest import mock
+
+        class PhantomBindSocket:
+            def __init__(self, *a, **k):
+                pass
+
+            def setsockopt(self, *a, **k):
+                pass
+
+            def bind(self, addr):
+                raise OSError(10048, "phantom HNS hold")
+
+            def close(self):
+                pass
+
+        answering = set(range(WEB_GATEWAY_HOST_PORT_MIN, WEB_GATEWAY_HOST_PORT_MIN + 5))
+        with mock.patch.object(web_gateway.socket, "socket", PhantomBindSocket), \
+                mock.patch.object(web_gateway, "_connect_reachable",
+                                  side_effect=lambda p, timeout=0.15: p in answering):
+            port = allocate_gateway_host_port()
+        self.assertIn(WEB_GATEWAY_HOST_PORT_MIN, range(WEB_GATEWAY_HOST_PORT_MIN,
+                                                      WEB_GATEWAY_HOST_PORT_MAX + 1))
+        self.assertTrue(WEB_GATEWAY_HOST_PORT_MIN <= port <= WEB_GATEWAY_HOST_PORT_MAX)
+        self.assertNotIn(port, answering, "must skip ports that actually answer")
+
+    def test_all_answering_ports_still_errors(self):
+        from unittest import mock
+
+        class PhantomBindSocket:
+            def __init__(self, *a, **k):
+                pass
+
+            def setsockopt(self, *a, **k):
+                pass
+
+            def bind(self, addr):
+                raise OSError(10048, "phantom HNS hold")
+
+            def close(self):
+                pass
+
+        with mock.patch.object(web_gateway.socket, "socket", PhantomBindSocket), \
+                mock.patch.object(web_gateway, "_connect_reachable",
+                                  side_effect=lambda p, timeout=0.15: True):
+            with self.assertRaises(GatewayPortError) as ctx:
+                allocate_gateway_host_port()
+        self.assertIn("bind-blocked AND answering", str(ctx.exception))
 
     def test_bind_conflict_detection(self):
         self.assertTrue(is_bind_conflict(
