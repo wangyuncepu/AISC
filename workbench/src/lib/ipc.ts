@@ -370,6 +370,29 @@ export const workspaceHistoryRemove = (path: string, expectedHistoryRevision: nu
 export const workspacePathExists = (path: string) =>
   invoke<boolean>("workspace_path_exists", { path });
 
+/** F2-B: one page of the remote workspace picker's browse dialog — fs.list
+ * over the pooled serve connection, pinned at the remote $HOME (the v1.3
+ * ready banner's `home`); server-side containment applies on top. */
+export interface RemoteDirEntry {
+  name: string;
+  isDir: boolean;
+}
+export interface RemoteBrowseResult {
+  /** Absolute POSIX path this page describes (normalized). */
+  cwd: string;
+  /** The pin root (remote $HOME) — the dialog's up-limit. */
+  root: string;
+  entries: RemoteDirEntry[];
+}
+export const remoteBrowse = (path?: string, includeHidden?: boolean) =>
+  invoke<RemoteBrowseResult>(
+    "remote_browse",
+    {
+      ...(path === undefined ? {} : { path }),
+      ...(includeHidden ? { includeHidden } : {}),
+    },
+  );
+
 /** S4: reveal the build log file (data-root paths only) in the OS file manager. */
 export const workspaceRevealDataFile = (path: string) =>
   invoke<void>("workspace_reveal_data_file", { path });

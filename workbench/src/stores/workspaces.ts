@@ -473,6 +473,29 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
       return true;
     }
   }
+
+  // --- F2-B: remote browse (picker dialog state; store-routed per F-A01) ---
+  const browseBusy = ref(false);
+  const browseError = ref<string | null>(null);
+
+  /** One directory page of the remote picker's browse dialog, pinned at the
+   *  remote $HOME. `path` optional/absolute POSIX; undefined = the root. */
+  async function browseRemote(
+    path?: string,
+    includeHidden?: boolean,
+  ): Promise<import("../lib/ipc").RemoteBrowseResult | null> {
+    browseError.value = null;
+    browseBusy.value = true;
+    try {
+      return await ipc.remoteBrowse(path, includeHidden);
+    } catch (e) {
+      browseError.value = (e as { message?: string })?.message
+        ?? String(e);
+      return null;
+    } finally {
+      browseBusy.value = false;
+    }
+  }
   return {
     // constants/state
     runtimes,
@@ -497,6 +520,9 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     forgetWorkspace,
     clearHistoryEntry,
     workspacePathExists,
+    browseBusy,
+    browseError,
+    browseRemote,
     // activation
     activate,
     openLauncher,

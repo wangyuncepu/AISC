@@ -21,6 +21,66 @@ fn ssh_env() -> Option<(String, u16)> {
     Some((rest.to_string(), port.parse().ok()?))
 }
 
+/// F2-A (D-10): the generic `cli` op over a REAL ssh link — the remote
+/// control plane. Needs only `AISC_TEST_SSH` (a remote with the v1.3 serve
+/// CLI on PATH); no runtime container.
+///
+/// multi_thread runtime is REQUIRED on Windows: the default current-thread
+/// flavor deadlocks in tokio::process child-stdio setup (field evidence
+/// 2026-09-09 — banner never consumed, remote serve parked in pipe_read).
+/// The app itself rides tauri's multi-thread runtime and is unaffected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_op_over_real_ssh_roundtrip() {
+    let Some((host, port)) = ssh_env() else {
+        eprintln!("skipping: AISC_TEST_SSH not set");
+        return;
+    };
+    let t = SshTarget {
+        host,
+        port: Some(port),
+        key_path: None,
+        extra_args: vec!["-o".into(), "StrictHostKeyChecking=accept-new".into()],
+    };
+
+    // The pooled session's banner carries the v1.3 home anchor.
+    let pool = workbench_lib::serve::global_pool();
+    eprintln!("[probe] spawning pooled session…");
+    let session = workbench_lib::serve::pooled_session(pool, &t)
+        .await
+        .expect("pooled serve session");
+    eprintln!("[probe] session up, banner = {:?}", session.banner());
+    assert_eq!(session.banner().serve_protocol, workbench_lib::serve::SERVE_PROTOCOL);
+    let home = session.banner().home.clone().expect("v1.3 ready home");
+    assert!(home.starts_with('/'), "remote home is a POSIX path: {home}");
+
+    // Two sequential control ops ride the SAME pooled connection (no
+    // per-op handshake) — the D-10 win this test pins.
+    let cancel = CancellationToken::new();
+    for cmd in [
+        vec!["version".to_string(), "--format".into(), "json".into()],
+        vec!["ps".to_string(), "--format".into(), "json".into()],
+    ] {
+        eprintln!("[probe] cli_op {:?}…", cmd.first());
+        let env = workbench_lib::serve::cli_op(
+            &t, &cmd, None, Duration::from_secs(20), &cancel, "it-cli-op",
+        )
+        .await
+        .expect("cli op roundtrip");
+        eprintln!("[probe] cli_op {:?} -> exit {}", cmd.first(), env.meta.exit_code);
+        assert_eq!(env.meta.exit_code, 0, "op {:?} failed: {:?}", cmd.first(), env.errors);
+    }
+    // A second fetch must reuse the SAME session Arc (pool hit).
+    let again = workbench_lib::serve::pooled_session(pool, &t)
+        .await
+        .expect("pooled again");
+    assert!(Arc::ptr_eq(&session, &again), "pool must reuse the live session");
+
+    // The global pool is process-static: evict so the session (and its ssh
+    // child, killed on Drop) does not outlive the test binary — the tokio
+    // orphan reaper would otherwise hold the runtime open forever.
+    workbench_lib::serve::evict_session(pool, &t).await;
+}
+
 #[tokio::test]
 async fn serve_pty_over_real_ssh_full_roundtrip() {
     let Some((host, port)) = ssh_env() else {
@@ -142,4 +202,55 @@ async fn serve_pty_over_real_ssh_full_roundtrip() {
     .await
     .unwrap_or(false);
     assert!(exited, "no exit event after kill");
+}
+
+/// F2-B: remote_browse_core over the real link — the ROOT page AND a
+/// second-call descent (the field-reported "cannot go deeper" leg, proven
+/// end-to-end: Rust core → pooled fs.list → filtering).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_browse_core_root_then_descent_over_real_ssh() {
+    let Some((host, port)) = ssh_env() else {
+        eprintln!("skipping: AISC_TEST_SSH not set");
+        return;
+    };
+    let t = SshTarget {
+        host,
+        port: Some(port),
+        key_path: None,
+        extra_args: vec!["-o".into(), "StrictHostKeyChecking=accept-new".into()],
+    };
+
+    let root_page = workbench_lib::workspace::remote_browse_core(&t, None, false)
+        .await
+        .expect("root browse");
+    assert!(root_page.cwd.starts_with('/'));
+    assert_eq!(root_page.cwd, root_page.root, "first page opens at the pin root");
+    // Field #3 defense: cross-page collection can never surface a dup row.
+    {
+        let mut names: Vec<&str> = root_page.entries.iter().map(|e| e.name.as_str()).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(before, names.len(), "duplicate names in the browse listing");
+    }
+    // dirs only, no dotfiles
+    assert!(root_page.entries.iter().all(|e| e.is_dir && !e.name.starts_with('.')));
+
+    if let Some(first) = root_page.entries.first() {
+        let child = format!("{}/{}", root_page.cwd.trim_end_matches('/'), first.name);
+        let sub = workbench_lib::workspace::remote_browse_core(&t, Some(&child), false)
+            .await
+            .expect("descent browse");
+        assert_eq!(sub.cwd, child, "descent resolves the requested child");
+        assert_eq!(sub.root, root_page.root);
+    } else {
+        eprintln!("root listing empty — descent leg skipped");
+    }
+    // Field #4: include_hidden surfaces dot-dirs (any real $HOME has them).
+    let hidden_page = workbench_lib::workspace::remote_browse_core(&t, None, true)
+        .await
+        .expect("hidden browse");
+    assert!(hidden_page.entries.iter().any(|e| e.name.starts_with('.')),
+            "includeHidden must surface dot-dirs");
+    workbench_lib::serve::evict_session(workbench_lib::serve::global_pool(), &t).await;
 }

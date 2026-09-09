@@ -513,49 +513,87 @@ impl RemoteWatcher {
 
         // Pump: fs.watch op + subscribe BEFORE the op (no lost early events),
         // then project every fs.change batch into the raw vocabulary.
-        let pump_app = app.clone();
+        // F2-B field #1: RESILIENT — the pooled session's death is normal
+        // operation since D-10 (cli_op evicts + respawns on transport
+        // errors), and the old pump exited forever on the first miss
+        // (files then only appeared on manual refresh). The pump now
+        // re-attaches (re-acquire session, re-issue fs.watch) with bounded
+        // backoff; a genuinely broken/unsupported remote still gives up and
+        // the frontend falls back to polling.
         let pump_ws = workspace.clone();
         let pump_stop = Arc::clone(&stop);
         let pump = tokio::spawn(async move {
-            let pool = pump_app.state::<crate::serve::ServePool>();
-            let session = match crate::serve::pooled_session(&pool, &target).await {
-                Ok(s) => s,
-                Err(_) => return,
-            };
-            let mut events = session.subscribe_event("fs.change");
+            let pool = crate::serve::global_pool();
             let root = pump_ws.trim_end_matches('/').to_string();
-            if crate::serve::fs_op(&pool, &target, "fs.watch",
-                                   &serde_json::json!({ "root": root })).await.is_err() {
-                return; // unsupported on the remote — frontend falls back to polling
-            }
-            while let Some(data) = events.recv().await {
+            let mut attempt: u32 = 0;
+            'attach: loop {
                 if *pump_stop.lock().unwrap() {
                     break;
                 }
-                let Some(paths) = data.get("paths").and_then(|v| v.as_array()) else {
-                    continue;
-                };
-                for p in paths {
-                    let abs = p.get("path").and_then(|v| v.as_str()).unwrap_or_default();
-                    let change = p.get("change").and_then(|v| v.as_str()).unwrap_or("modified");
-                    let kind = p.get("kind").and_then(|v| v.as_str()).unwrap_or("file");
-                    let Some(rel) = abs.strip_prefix(&format!("{root}/")) else {
-                        continue;
-                    };
-                    let rel = rel.to_string();
-                    let name = rel.rsplit('/').next().unwrap_or_default().to_string();
-                    // Same filter as the local notify callback — ignore-set
-                    // names never surface as changes.
-                    if is_watch_ignored(&rel, &extra_ignore) {
-                        continue;
-                    }
-                    if tx.send((rel, change.to_string(), kind.to_string())).is_err() {
-                        return; // debounce loop gone
+                if attempt > 0 {
+                    // 2s → 4s → 8s → 16s (capped), stop-aware ticks.
+                    let wait_ms = 1000u64 << attempt.min(4);
+                    let mut slept = 0u64;
+                    while slept < wait_ms {
+                        if *pump_stop.lock().unwrap() {
+                            break 'attach;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        slept += 500;
                     }
                 }
+                let session = match crate::serve::pooled_session(pool, &target).await {
+                    Ok(s) => s,
+                    Err(_) => {
+                        if attempt >= 5 { break; }
+                        attempt += 1;
+                        continue;
+                    }
+                };
+                let mut events = session.subscribe_event("fs.change");
+                if crate::serve::fs_op(pool, &target, "fs.watch",
+                                       &serde_json::json!({ "root": root })).await.is_err() {
+                    if attempt >= 5 { break; } // persistent/unsupported — polling fallback
+                    attempt += 1;
+                    // The pooled session is the likely suspect: evict so the
+                    // next round rides a fresh connection.
+                    crate::serve::evict_session(pool, &target).await;
+                    continue;
+                }
+                attempt = 0; // healthy attach — reset the backoff
+                while let Some(data) = events.recv().await {
+                    if *pump_stop.lock().unwrap() {
+                        break 'attach;
+                    }
+                    let Some(paths) = data.get("paths").and_then(|v| v.as_array()) else {
+                        continue;
+                    };
+                    for p in paths {
+                        let abs = p.get("path").and_then(|v| v.as_str()).unwrap_or_default();
+                        let change = p.get("change").and_then(|v| v.as_str()).unwrap_or("modified");
+                        let kind = p.get("kind").and_then(|v| v.as_str()).unwrap_or("file");
+                        let Some(rel) = abs.strip_prefix(&format!("{root}/")) else {
+                            continue;
+                        };
+                        let rel = rel.to_string();
+                        let name = rel.rsplit('/').next().unwrap_or_default().to_string();
+                        // Same filter as the local notify callback — ignore-set
+                        // names never surface as changes.
+                        if is_watch_ignored(&rel, &extra_ignore) {
+                            continue;
+                        }
+                        if tx.send((rel, change.to_string(), kind.to_string())).is_err() {
+                            break 'attach; // debounce loop gone
+                        }
+                    }
+                }
+                // Event channel closed: the session died mid-flight — evict
+                // the stale pool entry and re-attach on a fresh connection.
+                crate::serve::evict_session(pool, &target).await;
+                attempt += 1;
             }
-            // Session dropped us: unwatch best-effort.
-            let _ = crate::serve::fs_op(&pool, &target, "fs.unwatch",
+            // Pump ending: unwatch best-effort.
+            let _ = crate::serve::fs_op(pool, &target, "fs.unwatch",
                                         &serde_json::json!({ "root": root })).await;
         });
 

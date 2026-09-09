@@ -53,7 +53,7 @@ class ServeSubprocessTests(unittest.TestCase):
         proc = self._spawn()
         banner = self._readline(proc)
         self.assertEqual(banner["type"], "ready")
-        self.assertEqual(banner["serve_protocol"], 1)
+        self.assertEqual(banner["serve_protocol"], 3)
         self.assertTrue(banner["cli_version"])
 
         proc.stdin.write('{"id":"u1","op":"version","args":[]}\n')

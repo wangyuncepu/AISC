@@ -665,8 +665,10 @@ pub async fn run_control(
 }
 
 /// `run_control_target`: the transport-aware form (2.1.10 R1) — Local is the
-/// legacy behavior bit-for-bit; Remote wraps the same CLI argv in an ssh
-/// spawn. Shared phase/run_id/trace/log plumbing for both.
+/// legacy behavior bit-for-bit; Remote (D-10) rides the pooled serve
+/// connection via the generic `cli` op (per-op ssh survives only for serve
+/// bootstrap and the build stream). Shared phase/run_id/trace/log plumbing
+/// for both.
 pub async fn run_control_target(
     target: &CliTarget,
     argv: Vec<String>,
@@ -680,11 +682,16 @@ pub async fn run_control_target(
     // across both process boundaries.
     let run_id = uuid::Uuid::new_v4().to_string();
     let started_op = std::time::Instant::now();
-    let result = crate::trace::timed(
-        "cli",
-        &phase,
-        run_control_inner(target, argv, None, timeout, cancel, &run_id),
-    )
+    let result = crate::trace::timed("cli", &phase, async {
+        match target {
+            CliTarget::Remote(t) => {
+                crate::serve::cli_op(t, &argv, None, timeout, &cancel, &run_id).await
+            }
+            CliTarget::Local(_) => {
+                run_control_inner(target, argv, None, timeout, cancel, &run_id).await
+            }
+        }
+    })
     .await;
     log_cli_op(&phase, &run_id, started_op, &result);
     result
@@ -704,7 +711,9 @@ pub async fn run_control_input(
         .await
 }
 
-/// Transport-aware form of `run_control_input`.
+/// Transport-aware form of `run_control_input`. Remote (D-10) rides the
+/// pooled serve connection — the stdin payload travels as the `cli` op's
+/// `stdin` field.
 pub async fn run_control_input_target(
     target: &CliTarget,
     argv: Vec<String>,
@@ -715,11 +724,16 @@ pub async fn run_control_input_target(
     let phase = argv.first().map(|s| s.as_str()).unwrap_or("cli").to_owned();
     let run_id = uuid::Uuid::new_v4().to_string();
     let started_op = std::time::Instant::now();
-    let result = crate::trace::timed(
-        "cli",
-        &phase,
-        run_control_inner(target, argv, Some(input), timeout, cancel, &run_id),
-    )
+    let result = crate::trace::timed("cli", &phase, async {
+        match target {
+            CliTarget::Remote(t) => {
+                crate::serve::cli_op(t, &argv, Some(input), timeout, &cancel, &run_id).await
+            }
+            CliTarget::Local(_) => {
+                run_control_inner(target, argv, Some(input), timeout, cancel, &run_id).await
+            }
+        }
+    })
     .await;
     log_cli_op(&phase, &run_id, started_op, &result);
     result

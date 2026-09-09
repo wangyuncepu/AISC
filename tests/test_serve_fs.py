@@ -25,8 +25,13 @@ class FsResolveTests(unittest.TestCase):
 
     def test_relative_resolution(self) -> None:
         self.assertEqual(serve_fs._resolve(self.root, ""), self.root)
-        self.assertEqual(serve_fs._resolve(self.root, "a/b.txt"),
-                         os.path.join(self.root, "a", "b.txt"))
+        # fs.* paths are POSIX-joined (forward slashes ride through on every
+        # host); compare component-wise so the assertion is not a Windows
+        # separator ping-pong (pre-existing Linux-only green — fixed 2026-09-09).
+        self.assertEqual(
+            Path(serve_fs._resolve(self.root, "a/b.txt")).parts,
+            Path(os.path.join(self.root, "a", "b.txt")).parts,
+        )
 
     def test_dotdot_escape_rejected(self) -> None:
         with self.assertRaises(CliError) as ctx:

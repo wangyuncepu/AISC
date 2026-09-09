@@ -33,7 +33,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
+import io
 import json
+import os
 import signal
 import sys
 import threading
@@ -42,7 +45,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from aisc.cli.output import build_envelope
 from aisc.domain.models import CliError
 
-SERVE_PROTOCOL = 1
+#: Wire protocol version. Human labels v1.1 (PTY) / v1.2 (fs.*) were additive
+#: while the field stayed 1; v1.3 (D-10: generic `cli` op + ready `home`)
+#: BUMPS the field to 3 and drops cross-version compatibility by ruling —
+#: both ends ship from one repo, a mismatch is a hard client-side error
+#: ("upgrade the remote aisc"), never a silent per-op-ssh fallback.
+SERVE_PROTOCOL = 3
 
 #: Grace period for an in-flight op when the loop is asked to stop (s).
 SHUTDOWN_GRACE_SECONDS = 3.0
@@ -196,6 +204,89 @@ def _op_ps(args: argparse.Namespace, payload: Dict[str, Any],
     return _cmd_ps(args, effective_format="json")
 
 
+#: Commands that must never run inside serve's `cli` op (D-10): interactive /
+#: TUI / streaming / self-referential — they would block the serial op loop
+#: or capture the transport itself. PTY entry rides its own session.open op;
+#: build stays on its per-op ssh event stream.
+_SERVE_CLI_DENY = frozenset({
+    "serve",             # recursion
+    "run",               # interactive exec
+    "shell",             # docker exec -it
+    "switch", "cc-switch",  # TUIs
+    "build",             # long streaming op (own channel)
+    "wizard",            # interactive
+    "session",           # streams ride session.open / pty.* frames
+})
+
+
+def _op_cli(args: argparse.Namespace, payload: Dict[str, Any],
+            runtime: ServeRuntime) -> Tuple[Any, int, List[Dict[str, Any]]]:
+    """D-10 generic control-plane op: run one non-interactive CLI argv
+    in-process and return its envelope's (data, exit_code, errors).
+
+    Reuses the one-shot CLI's own dispatch (``main``) under captured
+    stdio — one op covers every envelope command, zero per-command
+    registration. Frame transport is unaffected by the capture: the loop
+    and PTY drains write through the ``ServeRuntime``'s cached stdout
+    handle, not the rebound ``sys.stdout``.
+    """
+    from aisc.cli.main import main as _cli_main, _detect_json_format
+
+    argv = [str(a) for a in (payload.get("argv") or [])]
+    if not argv:
+        raise CliError(message="cli op requires a non-empty argv",
+                       exit_code=2, error_code="AISC_ERR_USAGE")
+    if argv[0] in _SERVE_CLI_DENY:
+        raise CliError(
+            message=f"'{argv[0]}' cannot run over serve (interactive, "
+                    f"streaming or self-referential)",
+            exit_code=2, error_code="AISC_ERR_USAGE",
+            hint="PTY sessions ride session.open; build keeps its ssh stream")
+    if "--events" in argv or "-h" in argv or "--help" in argv:
+        raise CliError(message="cli op rejects --events/-h/--help argv",
+                       exit_code=2, error_code="AISC_ERR_USAGE")
+    # The op contract is the JSON envelope — force it for callers that
+    # omitted --format (same detector the one-shot CLI uses pre-parse).
+    if not _detect_json_format(argv):
+        argv = [*argv, "--format", "json"]
+
+    stdin_text = payload.get("stdin")
+    run_id = payload.get("run_id")
+    prev_run_id = os.environ.get("AISC_RUN_ID")
+    if isinstance(run_id, str) and run_id:
+        os.environ["AISC_RUN_ID"] = run_id
+
+    buf = io.StringIO()
+    code = 0
+    prev_stdin = sys.stdin
+    sys.stdin = io.StringIO(stdin_text if isinstance(stdin_text, str) else "")
+    try:
+        with contextlib.redirect_stdout(buf):
+            try:
+                _cli_main(argv)
+            except SystemExit as exc:  # argparse errors print + exit
+                code = exc.code if isinstance(exc.code, int) else (0 if not exc.code else 2)
+    finally:
+        sys.stdin = prev_stdin
+        if prev_run_id is None:
+            os.environ.pop("AISC_RUN_ID", None)
+        else:
+            os.environ["AISC_RUN_ID"] = prev_run_id
+
+    text = buf.getvalue().strip()
+    if text:
+        try:
+            env = json.loads(text)
+            meta = env.get("meta") or {}
+            errors = list(env.get("errors") or [])
+            return (env.get("data"), int(meta.get("exit_code", code)), errors)
+        except ValueError:
+            pass
+    raise CliError(
+        message=f"cli op got non-envelope output: {text[:200]!r}",
+        exit_code=code or 2, error_code="AISC_ERR_SERVE_CLI_OUTPUT")
+
+
 def _op_session_open(args: argparse.Namespace, payload: Dict[str, Any],
                      runtime: ServeRuntime) -> Tuple[Any, int, List[Dict[str, Any]]]:
     """R2 (D-8): open one exec TTY as a stream; result frame reports the
@@ -244,6 +335,7 @@ OPS: Dict[str, Callable[..., Tuple[Any, int, List[Dict[str, Any]]]]] = {
     "doctor": _op_doctor,
     "ps": _op_ps,
     "session.open": _op_session_open,
+    "cli": _op_cli,
 }
 
 # R3 (D-9): the remote-authoritative file plane rides the same serve session.
@@ -341,10 +433,12 @@ def _serve_loop(stdin: Any, stdout: Any) -> int:
 
     # Ready banner — the client's version-pairing handshake (VS Code's
     # commit-match equivalent): it can refuse the connection before any op.
+    # `home` (v1.3) anchors the remote-side directory browser (F2-B).
     runtime._emit({
         "type": "ready",
         "serve_protocol": SERVE_PROTOCOL,
         "cli_version": __version__,
+        "home": os.path.expanduser("~"),
     })
 
     while not stop["flag"]:

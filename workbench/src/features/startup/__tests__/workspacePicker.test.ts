@@ -20,6 +20,11 @@ const mockIpc = vi.hoisted(() => ({
   workspaceForgetPreview: vi.fn(),
   workspaceForget: vi.fn(),
   workspaceHistoryRemove: vi.fn().mockResolvedValue(2),
+  // F2-B: remote browse + target plumbing
+  remoteBrowse: vi.fn(),
+  targetGet: vi.fn().mockResolvedValue(null),
+  targetSet: vi.fn(),
+  targetClear: vi.fn().mockResolvedValue(null),
   // facade wiring (not exercised here, but imported at module load)
   negotiateCapabilities: vi.fn(),
   listRuntimes: vi.fn().mockResolvedValue({ runtimes: [] }),
@@ -218,5 +223,97 @@ describe("forget flow (⑦)", () => {
     expect(w.find('[role="dialog"]').exists()).toBe(true);
     // History was still refreshed so a retry uses the new revision.
     expect(mockIpc.loadHistory).toHaveBeenCalled();
+  });
+});
+
+describe("F2-B: remote browse dialog (explorer model: click selects, dblclick descends)", () => {
+  beforeEach(() => {
+    mockIpc.remoteBrowse.mockReset();
+    mockIpc.targetGet.mockReset().mockResolvedValue(null);
+  });
+
+  async function mountRemote() {
+    mockIpc.targetGet.mockResolvedValue({
+      machine: { name: "nas", host: "192.168.31.108", user: "tv", port: 22 },
+      kind: "remote" as const,
+    });
+    const w = mountPicker();
+    const { useSettingsStore } = await import("../../../stores/settings");
+    await useSettingsStore().refreshTarget();
+    await flushPromises();
+    return w;
+  }
+
+  it("click selects (footer previews the child), dblclick descends, choose commits the selection", async () => {
+    mockIpc.remoteBrowse.mockResolvedValue({
+      cwd: "/home/tv", root: "/home/tv",
+      entries: [{ name: "projects", isDir: true }],
+    });
+    const w = await mountRemote();
+    const btn = w.findAll("button").find((b) => b.text() === "选择")!;
+    expect(btn.attributes("disabled")).toBeUndefined();
+    await btn.trigger("click");
+    await flushPromises();
+    expect(mockIpc.remoteBrowse).toHaveBeenCalledWith(undefined, false);
+    expect(w.find('[role="dialog"]').exists()).toBe(true);
+    // Rust filters files/dotfiles — rows are dirs only, each with a chevron.
+    const row = w.find(".browse-item");
+    expect(row.text()).toContain("projects");
+    expect(row.find(".bi-arrow").exists()).toBe(true);
+    // Footer previews the CWD before any selection.
+    expect(w.find(".browse-path").text()).toBe("/home/tv");
+
+    // Single click = selection (footer previews the child path).
+    await row.trigger("click");
+    expect(w.find(".browse-item").classes()).toContain("selected");
+    expect(w.find(".browse-path").text()).toBe("/home/tv/projects");
+
+    // Double click = descend (second browse through the same IPC).
+    mockIpc.remoteBrowse.mockResolvedValue({
+      cwd: "/home/tv/projects", root: "/home/tv",
+      entries: [{ name: "aisc-handtest", isDir: true }],
+    });
+    await row.trigger("dblclick");
+    await flushPromises();
+    expect(mockIpc.remoteBrowse).toHaveBeenLastCalledWith("/home/tv/projects", false);
+    expect(w.find(".browse-path").text()).toBe("/home/tv/projects");
+    expect(w.find(".browse-item").classes()).not.toContain("selected");
+
+    // Field #4: the hidden toggle refetches the SAME cwd with includeHidden.
+    mockIpc.remoteBrowse.mockResolvedValue({
+      cwd: "/home/tv/projects", root: "/home/tv",
+      entries: [
+        { name: ".secret", isDir: true },
+        { name: "aisc-handtest", isDir: true },
+      ],
+    });
+    await w.findAll(".browse-head .ui-button")[0]!.trigger("click"); // ◌/● toggle
+    await flushPromises();
+    expect(mockIpc.remoteBrowse).toHaveBeenLastCalledWith("/home/tv/projects", true);
+
+    // Field #5: fuzzy search — a subsequence ("ahd" → aisc-handtest) filters
+    // the rows; the dotdir stays out of the ranking until it matches.
+    const search = w.find(".browse-search");
+    await search.setValue("ahd");
+    expect(w.findAll(".browse-item").length).toBe(1);
+    expect(w.find(".browse-item").text()).toContain("aisc-handtest");
+    await search.setValue("");
+    expect(w.findAll(".browse-item").length).toBe(2);
+
+    // Choose with no selection commits the current directory.
+    await w.findAll(".browse-actions button")[1]!.trigger("click");
+    const input = w.find("input.workspace");
+    expect((input.element as HTMLInputElement).value).toBe("/home/tv/projects");
+    expect(w.find('[role="dialog"]').exists()).toBe(false);
+  });
+
+  it("local target: browse keeps the native dialog path (no remote IPC)", async () => {
+    const w = mountPicker();
+    await flushPromises();
+    const btn = w.findAll("button").find((b) => b.text() === "选择")!;
+    await btn.trigger("click");
+    await flushPromises();
+    expect(mockIpc.remoteBrowse).not.toHaveBeenCalled();
+    expect(w.find('[role="dialog"]').exists()).toBe(false);
   });
 });

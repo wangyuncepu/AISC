@@ -66,16 +66,36 @@ def is_bind_conflict(stderr: str) -> bool:
 # Host port allocation (decisions.md §7)
 # ---------------------------------------------------------------------------
 
+def _connect_reachable(port: int, timeout: float = 0.15) -> bool:
+    """True when something ANSWERS on the port (so it is genuinely in use)."""
+    try:
+        with socket.create_connection((WEB_GATEWAY_HOST_BIND, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def allocate_gateway_host_port(exclude: Optional[Set[int]] = None,
                                start_hint: Optional[int] = None) -> int:
-    """Bind-probe one free loopback port in the frozen 47000..47999 range.
+    """Pick one loopback port in the frozen 47000..47999 range.
 
     *exclude* carries ports reserved by other runtimes' registry records —
     skipped without probing so two starts cannot pick the same candidate.
-    Probing binds ``127.0.0.1:<port>``, closes the socket, and returns the
-    port; the Docker publish that follows owns it for real. TOCTOU between
-    probe and publish is absorbed by the create-retry loop in
-    :func:`runtime.start_runtime`.
+
+    Two-stage probe (2026-09-09, HNS field evidence):
+
+    1. Bind-probe ``127.0.0.1:<port>`` — a port we can bind is definitely
+       publishable (the fast, normal path).
+    2. If the WHOLE range fails binds, fall through to a connect-probe:
+       Docker-Desktop/WSL2 hosts can carry an invisible HNS reservation
+       that blocks plain socket binds on the entire range while docker
+       publishes on the same ports keep working (measured: bind 10048,
+       publish HTTP 200). A port with nothing answering and no registry
+       entry is safe to publish; Docker's own allocator is the conflict
+       authority (a genuinely taken port fails `docker run -p` loudly,
+       absorbed by the create-retry loop in :func:`runtime.start_runtime`).
+
+    TOCTOU between probe and publish is absorbed by the same retry loop.
     """
     taken = set(exclude or ())
     hint = start_hint or WEB_GATEWAY_HOST_PORT_MIN
@@ -83,6 +103,8 @@ def allocate_gateway_host_port(exclude: Optional[Set[int]] = None,
                   if p not in taken]
     candidates += [p for p in range(WEB_GATEWAY_HOST_PORT_MIN, hint)
                    if p not in taken]
+
+    bind_failed = False
     for port in candidates:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -90,18 +112,28 @@ def allocate_gateway_host_port(exclude: Optional[Set[int]] = None,
             sock.bind((WEB_GATEWAY_HOST_BIND, port))
             return port
         except OSError:
+            bind_failed = True
             continue
         finally:
             sock.close()
+
+    if bind_failed:
+        # Phantom HNS hold (binds blocked range-wide, publishes alive) —
+        # trust reachability instead of bindability.
+        for port in candidates:
+            if not _connect_reachable(port):
+                return port
+
     raise GatewayPortError(
         "No free host port in "
-        f"{WEB_GATEWAY_HOST_PORT_MIN}..{WEB_GATEWAY_HOST_PORT_MAX} for the web gateway. "
-        "On WSL2 hosts this is almost always the invisible HNS port grab: "
-        "run `wsl --shutdown` (or `net stop winnat`) once, then re-add the "
-        "admin exclusion `netsh int ipv4 add excludedportrange protocol=tcp "
-        f"startport={WEB_GATEWAY_HOST_PORT_MIN} numberofports=1000` and restart "
-        "Docker — the reserved range keeps HNS from re-grabbing while normal "
-        "binds and docker publishes keep working."
+        f"{WEB_GATEWAY_HOST_PORT_MIN}..{WEB_GATEWAY_HOST_PORT_MAX} for the web gateway: "
+        "every candidate is bind-blocked AND answering connections. On "
+        "Docker-Desktop/WSL2 hosts an invisible HNS reservation can "
+        "bind-block the whole range while publishes still work (the "
+        "allocator already falls back to reachability probing in that "
+        "state); if services still fail to open, `wsl --shutdown` + "
+        "restart Docker Desktop clears the reservation, and a reboot "
+        "re-rolls it."
     )
 
 

@@ -100,6 +100,38 @@
   字形（claude 暖金/codex 冷蓝 + 底色块）。**FIX-3（面板拖动折叠）留
   下一轮**（resize 敏感区，需用户在场手测迭代）；**FIX-2（CLI 命令优化）
   待与用户深入讨论**。
+- **FIX-2 F2-A/B 远程体验补全（2026-09-09，分支 fix2-a-serve-cli，D-10 落地）**：
+  **F2-A 控制面迁 serve**：Python 通用 `cli` op——argv 进程内复用 one-shot
+  CLI 分派、stdout 捕获解析 envelope（帧通道走缓存 stdout 句柄不受重绑
+  影响）、denylist 拦交互/流式/自引用、--format json 强制、stdin 载荷 +
+  AISC_RUN_ID 穿线；协议 v1.2→v1.3（serve_protocol 字段 1→3 跳变=无兼容
+  承诺，ready 帧加 home）；Rust run_control_target/_input_target Remote
+  分支全走 serve::cli_op（传输级失败逐出缓存会话重拉一次），ServePool
+  迁进程级 global_pool()（trace ring 静态先例，lib.rs manage 摘除 9 调用
+  点跟迁）。**实测 nas：281ms/op（per-op ssh）→ 27ms/op（serve 帧）=10 倍**；
+  硬门真机实证（旧远端 → "serve protocol mismatch client 3 remote 1 —
+  upgrade"，action=UpgradeCli）。**F2-B 远端浏览器**：remote_browse 走
+  ServePool fs.list 钉根 $HOME（v1.3 home），normalize_under_root 段归一化
+  + containment；弹层两轮手测打磨——资源管理器心智（单击选中/双击进入/
+  选定提交）、只列目录+隐藏 dotfile（◌/● 切换可显示）、跨页去重（v-for
+  按 name key 碰撞防御）、S5 matcher 抽 lib/search.ts 共享做模糊搜索、
+  固定高度内滚。**顺手三修**：①HNS 幽灵占——Docker Desktop 运行态对
+  47000-47999 整段产生 netstat/excludedportrange 双不可见的预留，纯
+  bind 全 10048 而 docker publish 正常（HTTP 200 实证），#3 的
+  wsl --shutdown/管理员保留配方两版实测均救不回纯 bind——分配器加
+  connect-probe 降级（无监听者=可发布，docker 分配器为冲突权威），
+  52 个 runtime 测试红全塌；②Windows 测试双死锁：#[tokio::test] 默认
+  current-thread 在 Windows 死锁于 tokio::process 子进程 stdio（多线程
+  flavor 即通，产品走 tauri 多线程无恙；09-07 PTY 集成当时在 WSL/Linux
+  跑所以单线程无事——跨平台盲区再现）+ ServeSession 无 Drop 兜底杀
+  （全局池会话超出测试二进制寿命时 orphan reaper 挂住 runtime 永不退出；
+  evict-retry 也会漏孤儿 ssh——真产品泄漏）；③RemoteWatcher 泵三处
+  Err→return：D-10 后会话 evict/重建属正常运维，一次瞬断即永久退场
+  （文件只剩手动刷新）——attach 循环有界退避重连+重挂 fs.watch。
+  用户手测 PASS（远程操作体感显著改善；浏览器两轮反馈全清）。
+  挂账：bash 偶发冻结（PTY 独立连接已排除 F2-A 连带，待复现取证）。
+  门禁：pytest 1188 / vitest 443 / cargo 306 / 真 SSH 集成（cli op 往返
+  +remote_browse 四断言 0.81s）全绿。
 - **R4 手测三轮收官（2026-09-08/09，批次 field-fixes-r4-1/2/3/4 全合入）**：
   R4 面全验收 + 远程链**真机首验**（nas = Debian 13/zsh 真远程机，非 WSL
   自演）。修复账：一轮 #1/#4/#5（`27adac6` 会话列表容错/远程浏览禁用/
