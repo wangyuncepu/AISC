@@ -1,5 +1,17 @@
 # F2-C 手测清单——run 解耦验收（真容器 e2e + Workbench 回归）
 
+> **结果（2026-09-09）：三轮全 PASS，F2-C 验收通过。**
+> r1（nas 真机 A/B/D 组 + 设计问答）五项修复：#1 ps split-brain、
+> #2 重复 run 堆容器（裁决演进：替换 → 幂等复用）、#3 前台文案残留、
+> #4 tab 补全（argcomplete）、#5 help 随 locale；r2（Claude 全流程
+> 真机 + 分析报告）两 bug（stop --all 崩溃、--name 工作区外不可用）
+> + 用户裁决批 A-K（生命周期三项 + 文案/提示八项）+ 收尾两提；用户
+> 手感轮（REPL/TUI/shell 透传/新语义）PASS。账目详见 devlog
+> 「F2-C 手测两轮收官」条（`a516aef..39a7fc3` 十二提，pytest
+> 1198→1212）。清单主体全程在 nas（真容器）执行，GUI 互操作 F 组
+> 留待本机 Workbench 环境就绪时补验（F2-C 对 GUI 路径零改动 +
+> owner=workbench 边界经 workspaces --stop/stop --all 多轮实证）。
+
 > 2026-09-09。基线分支 `fix2-c-run-decouple` `a896d0a`
 > （代码 `9025044` + `38d1c8a`）。范围：fix2-design F2-C 全部九点
 > （run/claude/codex/stop/runs/--resume/别名/workspaces）+ 9025044

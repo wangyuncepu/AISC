@@ -132,6 +132,36 @@
   挂账：bash 偶发冻结（PTY 独立连接已排除 F2-A 连带，待复现取证）。
   门禁：pytest 1188 / vitest 443 / cargo 306 / 真 SSH 集成（cli op 往返
   +remote_browse 四断言 0.81s）全绿。
+- **F2-C 手测两轮收官（2026-09-09，分支 fix2-c-run-decouple，`a516aef..39a7fc3` 十二提）**：
+  **r1（nas 真机）**：#1 `aisc ps` split-brain——run 注册在 workspace
+  state dir 而 ps 仍读 locate_aisc_root(cwd) 锚定的另一份注册表，run 后
+  ps 恒空；改机器级扫描（workspaces 的 registry_entries/docker_states
+  公开化复用，缺席=gone、docker 不可达全 ? 不猜、active 标 * 置顶）。
+  #2 同工作区重复 run 堆容器——用户先裁决替换（`710022b`）再修订幂等
+  复用（`b9c4baa`）：live 提示复用不重建（含进入方式与重建指引）、
+  dead 清尸重建、docker 探活失败不下判断直走建流；GUI（lease 单例）
+  与 --label 槽位永不触碰。#3 detached run 残留 "Container finished."
+  前台文案。#4 tab 补全——argcomplete 接入（optional import，依赖缺席
+  只损失补全）。#5 help 中文化——用户裁决改**随系统 locale**：parser
+  英文 help 为唯一事实源，zh locale 输出层 patch argparse（`9dd703b`；
+  `1044fe1` 补组标题构建期求值——安装须在 _build_parser 前）。
+  **r2（全流程真机 + 用户裁决批 A-K）**：#1 stop --all 批量 dict 误入
+  单停文案 KeyError 栈崩（json 模式无恙的测试盲区）。#2 stop --name
+  工作区外一律撞数据根守卫——resolve_target 无条件把 cwd 解析成
+  workspace，--name 名字即地址，cwd 解析失败降级空注册表放行
+  （`8719f4a`）。**裁决批**（`365fdea`）：A label 注册 set_default=False
+  ——旁路不抢裸 `aisc claude` 主入口；B ps 星标=default 指针容器（非
+  同 workspace 全标）；C 异名系列=改名意图清尸重建（_name_series 剥
+  hash 段，别名与容器名保持一个故事）；D-K 文案/提示批（批量停止摘要
+  别名优先、workspaces 星标、runs 提示补别名键、ps 孤儿清理指引、
+  八处错误中文化、shell `--` 透传对齐 agent 糖、无目标报错温和化）。
+  **收尾两提**（`125ef53`/`39a7fc3`）：回归暴露 shell/status/restart/
+  switch/provider-set-key 无参仍走 cwd 锚定——「无参走 active」抽
+  _active_registry_root 六点统一接线；workspaces label 旁路行 [label]
+  标注防与主行混淆。**用户手感轮 PASS**（REPL/TUI/shell 透传/新语义
+  体感全过）。门禁：pytest 1198→**1212** / 72 skip（手测轮 +14 测）；
+  nas wheel 全程同步部署，CLI 日志（cli_exit 计时/退出码）定位「用户
+  自 stop 后再 stop 报错」一段乌龙全靠它还原。
 - **FIX-2 F2-C run 解耦（2026-09-09，分支 fix2-c-run-decouple，`9025044`）**：
   `aisc run <路径>` 即 detached 激活（`docker run -d` 不 `--rm`、registry
   default 指针、激活摘要），`aisc claude`/`aisc codex` 顶层糖（活跃工作区
