@@ -162,6 +162,29 @@
   体感全过）。门禁：pytest 1198→**1212** / 72 skip（手测轮 +14 测）；
   nas wheel 全程同步部署，CLI 日志（cli_exit 计时/退出码）定位「用户
   自 stop 后再 stop 报错」一段乌龙全靠它还原。
+- **FIX-3 面板拖动折叠实施（2026-09-09 夜，分支 fix3-panel-resize，`e6078c7..603e84a` 四提，待手测）**：
+  用户裁决：折叠=VS Code 式窄条（40px rail + » 展开）；tab 行拖动=
+  TabBar↔终端分界线。**三能力全复刻先例**：拖动=PaneTree pointer 模式
+  （window move/up + role=separator + 键盘微调 + 显式 focus +
+  touch-action:none）；折叠动画=token Transition；持久化=localStorage
+  模块态（theme.ts 先例；WorkspaceView 按 runtime id keyed 重挂故状态
+  必须模块级——`lib/panelLayout.ts`：explorerWidth 240..600/
+  explorerCollapsed/tabbarHeight 40..120(null=自然高)）。**审计四修正**
+  （Plan agent 实证）：①App.vue 三条 compact scoped 规则（explorer/
+  status/sidebar）**出生即死**（data-v 永不匹配子组件元素）——删除，
+  响应式诉求迁 WorkspaceView 自有 scoped（App 新传 :tier）；②TabBar
+  下限 40 非防 32（自然高 39，overflow-x:auto 下溢出即竖向滚动条）；
+  ③折叠必须同步内联 minWidth（240 地板会把 40px rail 顶回）；④拖动期
+  禁 width transition（把手永久滞后指针），.anim 只挂折叠/展开路径。
+  **zoom 免疫**：增量式 newW=clamp(startW+ΔclientX/appScale)，scale=
+  innerWidth/.app offsetWidth（placeMenu 同式；勿用 ui.font_scale——
+  被窗口尺寸钳制）；零 rect 读取双引擎免疫。终端侧零改动——150ms
+  settle-once/veil/sendResize 串行化护栏直接受益，fitDiag 浮层为手测
+  振荡信号。TabBar border-bottom 移除由分界线接管（防 7px 双线）。
+  门禁：vitest 452→**462**（lib +9、源码契约 +10——jsdom 无布局按
+  paneCloseHit 范式钉死 width/minWidth 同步/compact 让位/v-show 保活/
+  拖动瞬跳/aria/增量公式/i18n 双键）。手测清单落盘
+  fix3-manual-test.md（A-D 十条）；PASS 后推 develop。
 - **FIX-2 F2-C run 解耦（2026-09-09，分支 fix2-c-run-decouple，`9025044`）**：
   `aisc run <路径>` 即 detached 激活（`docker run -d` 不 `--rm`、registry
   default 指针、激活摘要），`aisc claude`/`aisc codex` 顶层糖（活跃工作区
