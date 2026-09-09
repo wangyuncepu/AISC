@@ -513,18 +513,17 @@ impl RemoteWatcher {
 
         // Pump: fs.watch op + subscribe BEFORE the op (no lost early events),
         // then project every fs.change batch into the raw vocabulary.
-        let pump_app = app.clone();
         let pump_ws = workspace.clone();
         let pump_stop = Arc::clone(&stop);
         let pump = tokio::spawn(async move {
-            let pool = pump_app.state::<crate::serve::ServePool>();
-            let session = match crate::serve::pooled_session(&pool, &target).await {
+            let pool = crate::serve::global_pool();
+            let session = match crate::serve::pooled_session(pool, &target).await {
                 Ok(s) => s,
                 Err(_) => return,
             };
             let mut events = session.subscribe_event("fs.change");
             let root = pump_ws.trim_end_matches('/').to_string();
-            if crate::serve::fs_op(&pool, &target, "fs.watch",
+            if crate::serve::fs_op(pool, &target, "fs.watch",
                                    &serde_json::json!({ "root": root })).await.is_err() {
                 return; // unsupported on the remote — frontend falls back to polling
             }
@@ -555,7 +554,7 @@ impl RemoteWatcher {
                 }
             }
             // Session dropped us: unwatch best-effort.
-            let _ = crate::serve::fs_op(&pool, &target, "fs.unwatch",
+            let _ = crate::serve::fs_op(pool, &target, "fs.unwatch",
                                         &serde_json::json!({ "root": root })).await;
         });
 

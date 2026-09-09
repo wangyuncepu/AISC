@@ -27,8 +27,10 @@ use crate::cli::{CliTarget, Envelope, SshTarget};
 use crate::error::WorkbenchError;
 
 /// Serve wire protocol this client speaks (must equal the Python side's
-/// `SERVE_PROTOCOL`).
-pub const SERVE_PROTOCOL: u64 = 1;
+/// `SERVE_PROTOCOL`). v1.3 (D-10): generic `cli` op + ready `home`; the bump
+/// 1→3 is a hard pairing — a mismatch is an "upgrade the remote aisc" error,
+/// never a silent per-op-ssh fallback (user ruling 2026-09-09).
+pub const SERVE_PROTOCOL: u64 = 3;
 
 /// The `ready` banner — the session's handshake.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -37,11 +39,14 @@ pub struct ReadyBanner {
     pub serve_protocol: u64,
     #[serde(default)]
     pub cli_version: String,
+    /// v1.3: the remote home directory — anchors the remote browser (F2-B).
+    #[serde(default)]
+    pub home: Option<String>,
 }
 
 impl Default for ReadyBanner {
     fn default() -> Self {
-        ReadyBanner { serve_protocol: 0, cli_version: String::new() }
+        ReadyBanner { serve_protocol: 0, cli_version: String::new(), home: None }
     }
 }
 
@@ -56,6 +61,8 @@ pub enum ServeFrame {
         serve_protocol: u64,
         #[serde(default)]
         cli_version: String,
+        #[serde(default)]
+        home: Option<String>,
     },
     #[serde(rename = "result")]
     Result {
@@ -343,13 +350,14 @@ impl ServeSession {
             .await?
             .ok_or_else(|| WorkbenchError::cli_protocol().with_detail("serve closed before ready"))?;
         match frame {
-            ServeFrame::Ready { serve_protocol, cli_version } => {
+            ServeFrame::Ready { serve_protocol, cli_version, home } => {
                 if serve_protocol != SERVE_PROTOCOL {
                     return Err(WorkbenchError::cli_protocol().with_detail(format!(
-                        "serve protocol mismatch: client {SERVE_PROTOCOL}, remote {serve_protocol}"
+                        "serve protocol mismatch: client {SERVE_PROTOCOL}, remote \
+                         {serve_protocol} — upgrade the aisc CLI on the target machine"
                     )));
                 }
-                Ok(ReadyBanner { serve_protocol, cli_version })
+                Ok(ReadyBanner { serve_protocol, cli_version, home })
             }
             _ => Err(WorkbenchError::cli_protocol().with_detail(
                 "serve first frame was not ready",
@@ -488,6 +496,20 @@ impl Default for ServePool {
     }
 }
 
+/// The process-global pool (D-10): control-plane routing in `cli.rs` has no
+/// AppHandle in scope, so the pool lives as a static — same idiom as the
+/// trace ring. The tauri-managed instance was removed; all callers reach the
+/// one pool through this accessor.
+static GLOBAL_POOL: std::sync::OnceLock<ServePool> = std::sync::OnceLock::new();
+
+pub fn global_pool() -> &'static ServePool {
+    GLOBAL_POOL.get_or_init(ServePool::new)
+}
+
+fn target_key(t: &SshTarget) -> String {
+    format!("{}:{}:{:?}", t.host, t.port.unwrap_or(22), t.key_path)
+}
+
 /// Fetch (or establish) the pooled serve session for one ssh target. A broken
 /// cached session (ssh died) is replaced transparently on the next call: the
 /// request that hits the dead connection errors, the entry is evicted.
@@ -495,7 +517,7 @@ pub async fn pooled_session(
     pool: &ServePool,
     t: &SshTarget,
 ) -> Result<Arc<ServeSession>, WorkbenchError> {
-    let key = format!("{}:{}:{:?}", t.host, t.port.unwrap_or(22), t.key_path);
+    let key = target_key(t);
     {
         let guard = pool.0.lock().await;
         if let Some(s) = guard.get(&key) {
@@ -505,6 +527,47 @@ pub async fn pooled_session(
     let session = Arc::new(ServeSession::spawn_ssh(t).await?);
     pool.0.lock().await.insert(key, Arc::clone(&session));
     Ok(session)
+}
+
+/// Drop one target's cached session (dead ssh) so the next use re-spawns.
+pub async fn evict_session(pool: &ServePool, t: &SshTarget) {
+    pool.0.lock().await.remove(&target_key(t));
+}
+
+/// D-10 (F2-A): run one control-plane CLI argv over the pooled serve
+/// connection via the generic `cli` op — the ONLY remote transport for
+/// envelope commands (per-op ssh survives solely for serve bootstrap and the
+/// build event stream). A transport-grade failure evicts the dead session
+/// and retries once on a fresh connection; timeouts/cancellations never
+/// evict (the op may simply be slow while the session lives).
+pub async fn cli_op(
+    t: &SshTarget,
+    argv: &[String],
+    input: Option<String>,
+    timeout: std::time::Duration,
+    cancel: &tokio_util::sync::CancellationToken,
+    run_id: &str,
+) -> Result<Envelope, WorkbenchError> {
+    let pool = global_pool();
+    let mut args = serde_json::json!({ "argv": argv, "run_id": run_id });
+    if let Some(s) = input {
+        args["stdin"] = serde_json::json!(s);
+    }
+    let first = match pooled_session(pool, t).await {
+        Ok(s) => s.request("cli", &args, timeout, cancel).await,
+        Err(e) => Err(e),
+    };
+    match first {
+        Ok(env) => Ok(env),
+        Err(e) if !matches!(e.code.as_str(), "WB_ERR_CLI_TIMEOUT" | "WB_ERR_CLI_CANCELLED") => {
+            // Transport-grade failure: the cached session is suspect —
+            // evict, re-spawn, retry once.
+            evict_session(pool, t).await;
+            let session = pooled_session(pool, t).await?;
+            session.request("cli", &args, timeout, cancel).await
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// fs.* request helper for the pooled connection: returns the envelope's

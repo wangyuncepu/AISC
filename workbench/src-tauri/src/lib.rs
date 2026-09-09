@@ -122,7 +122,6 @@ pub fn run(cli_arg: Option<String>) {
         // F2 (D-10): host-tools MCP — the backend's first local listener.
         .manage(std::sync::Arc::new(host_mcp::HostMcpState::new()))
         .manage(target::ActiveTarget::default())
-        .manage(serve::ServePool::new())
         .manage(tunnel::TunnelRegistry::default())
         .invoke_handler(tauri::generate_handler![
             cli_discover,

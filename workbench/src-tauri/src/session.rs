@@ -325,9 +325,9 @@ pub async fn canonical_workspace_for(
                 return Err(WorkbenchError::map_aisc("AISC_ERR_WORKSPACE_INVALID")
                     .with_detail(format!("remote workspace must be an absolute path: {raw}")));
             }
-            let pool = app.state::<crate::serve::ServePool>();
+            let pool = crate::serve::global_pool();
             crate::serve::fs_op(
-                &pool,
+                pool,
                 &t,
                 "fs.list",
                 &serde_json::json!({ "root": root, "path": "" }),

@@ -718,9 +718,9 @@ pub async fn workspace_path_exists(app: AppHandle, path: String) -> bool {
             if !path.starts_with('/') {
                 return false; // a local-machine path under a remote target
             }
-            let pool = app.state::<crate::serve::ServePool>();
+            let pool = crate::serve::global_pool();
             crate::serve::fs_op(
-                &pool,
+                pool,
                 &t,
                 "fs.list",
                 &serde_json::json!({ "root": path.trim_end_matches('/'), "path": "" }),
@@ -1287,7 +1287,7 @@ pub async fn workspace_list(
     // projection and therefore don't ride the remote path yet (remote
     // artifact registry is a follow-up).
     if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target(&app).await? {
-        return list_remote(&app, &t, &workspace, &relative_dir, cursor.unwrap_or(0)).await;
+        return list_remote(&t, &workspace, &relative_dir, cursor.unwrap_or(0)).await;
     }
 
     // User-configured explorer ignores (`ui.explorer_ignore`) complement the
@@ -1330,15 +1330,14 @@ pub async fn workspace_list(
 /// mapped into the same Explorer node shape (relative_path chaining matches
 /// the local lazy-tree protocol).
 async fn list_remote(
-    app: &AppHandle,
     t: &crate::cli::SshTarget,
     workspace: &str,
     relative_dir: &str,
     offset: usize,
 ) -> Result<WorkspaceListResult, WorkbenchError> {
-    let pool = app.state::<crate::serve::ServePool>();
+    let pool = crate::serve::global_pool();
     let data = crate::serve::fs_op(
-        &pool,
+        pool,
         t,
         "fs.list",
         &serde_json::json!({
@@ -1393,9 +1392,9 @@ pub async fn workspace_open(
     // sync — edits there do NOT flow back (the honest semantics VS Code's
     // Download gesture has too).
     if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target(&app).await? {
-        let pool = app.state::<crate::serve::ServePool>();
+        let pool = crate::serve::global_pool();
         let data = crate::serve::fs_op(
-            &pool,
+            pool,
             &t,
             "fs.read",
             &serde_json::json!({
@@ -1453,9 +1452,9 @@ pub async fn workspace_preview(
     // R3 (D-5/D-9): preview reads the REMOTE file over fs.read; nothing is
     // stored locally (the budget matches the local PREVIEW_BUDGET).
     if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target(&app).await? {
-        let pool = app.state::<crate::serve::ServePool>();
+        let pool = crate::serve::global_pool();
         let data = crate::serve::fs_op(
-            &pool,
+            pool,
             &t,
             "fs.read",
             &serde_json::json!({ "root": workspace, "path": relative_path }),
@@ -1531,8 +1530,8 @@ async fn remote_mutation(
         crate::cli::CliTarget::Remote(t) => t,
         crate::cli::CliTarget::Local(_) => unreachable!("remote_mutation on local target"),
     };
-    let pool = app.state::<crate::serve::ServePool>();
-    crate::serve::fs_op(&pool, &target, op, args).await?;
+    let pool = crate::serve::global_pool();
+    crate::serve::fs_op(pool, &target, op, args).await?;
     Ok(WorkspaceMutationResult {
         schema_version: 1,
         operation: operation.to_string(),
@@ -1599,9 +1598,9 @@ pub async fn workspace_copy_entry(
             crate::cli::CliTarget::Remote(t) => t,
             crate::cli::CliTarget::Local(_) => unreachable!(),
         };
-        let pool = app.state::<crate::serve::ServePool>();
+        let pool = crate::serve::global_pool();
         let data = crate::serve::fs_op(
-            &pool, &target, "fs.read",
+            pool, &target, "fs.read",
             &serde_json::json!({ "root": workspace, "path": source_relative_path,
                                  "maxBytes": 64 * 1024 * 1024 }),
         ).await?;

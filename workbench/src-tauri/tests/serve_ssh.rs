@@ -21,6 +21,52 @@ fn ssh_env() -> Option<(String, u16)> {
     Some((rest.to_string(), port.parse().ok()?))
 }
 
+/// F2-A (D-10): the generic `cli` op over a REAL ssh link — the remote
+/// control plane. Needs only `AISC_TEST_SSH` (a remote with the v1.3 serve
+/// CLI on PATH); no runtime container.
+#[tokio::test]
+async fn cli_op_over_real_ssh_roundtrip() {
+    let Some((host, port)) = ssh_env() else {
+        eprintln!("skipping: AISC_TEST_SSH not set");
+        return;
+    };
+    let t = SshTarget {
+        host,
+        port: Some(port),
+        key_path: None,
+        extra_args: vec!["-o".into(), "StrictHostKeyChecking=accept-new".into()],
+    };
+
+    // The pooled session's banner carries the v1.3 home anchor.
+    let pool = workbench_lib::serve::global_pool();
+    let session = workbench_lib::serve::pooled_session(pool, &t)
+        .await
+        .expect("pooled serve session");
+    assert_eq!(session.banner().serve_protocol, workbench_lib::serve::SERVE_PROTOCOL);
+    let home = session.banner().home.clone().expect("v1.3 ready home");
+    assert!(home.starts_with('/'), "remote home is a POSIX path: {home}");
+
+    // Two sequential control ops ride the SAME pooled connection (no
+    // per-op handshake) — the D-10 win this test pins.
+    let cancel = CancellationToken::new();
+    for cmd in [
+        vec!["version".to_string(), "--format".into(), "json".into()],
+        vec!["ps".to_string(), "--format".into(), "json".into()],
+    ] {
+        let env = workbench_lib::serve::cli_op(
+            &t, &cmd, None, Duration::from_secs(60), &cancel, "it-cli-op",
+        )
+        .await
+        .expect("cli op roundtrip");
+        assert_eq!(env.meta.exit_code, 0, "op {:?} failed: {:?}", cmd.first(), env.errors);
+    }
+    // A second fetch must reuse the SAME session Arc (pool hit).
+    let again = workbench_lib::serve::pooled_session(pool, &t)
+        .await
+        .expect("pooled again");
+    assert!(Arc::ptr_eq(&session, &again), "pool must reuse the live session");
+}
+
 #[tokio::test]
 async fn serve_pty_over_real_ssh_full_roundtrip() {
     let Some((host, port)) = ssh_env() else {
