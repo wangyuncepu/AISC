@@ -132,6 +132,23 @@
   挂账：bash 偶发冻结（PTY 独立连接已排除 F2-A 连带，待复现取证）。
   门禁：pytest 1188 / vitest 443 / cargo 306 / 真 SSH 集成（cli op 往返
   +remote_browse 四断言 0.81s）全绿。
+- **FIX-2 F2-C run 解耦（2026-09-09，分支 fix2-c-run-decouple，`9025044`）**：
+  `aisc run <路径>` 即 detached 激活（`docker run -d` 不 `--rm`、registry
+  default 指针、激活摘要），`aisc claude`/`aisc codex` 顶层糖（活跃工作区
+  容器内 exec、`--workspace` 覆盖、`--` 后参数透传），`aisc stop` 显式
+  stop+remove（`--all` 只清 CLI-owned，workbench 拥有者不碰），`aisc runs`
+  历史 + `aisc run --resume <序号|路径>` 快照恢复（数据根 config/
+  cli-runs.json，绝对路径 + 配置快照，独立于 Workbench history）。**附
+  2026-09-09 addendum**：①别名 alias——`--name` 即工作区别名（默认
+  `super-claude-station`=未命名），record 落 alias、resume 按别名（最强键
+  同名覆盖）、`aisc runs` 显示 `@别名`；②`aisc workspaces` 机器级视图——
+  扫数据根全工作区 registry join 别名 + docker 状态，`--stop` 批量清
+  运行中 CLI 工作区。**修 9025044 三缺陷**：`_resolve_by_workspace` 误按
+  list 迭代 `list_containers`（实际 name→meta dict）+ 用错 locate_aisc_root
+  （应 workspace_state_dir）→ `aisc claude --workspace` 必崩；`cmd_stop_all`
+  同 list/dict 错位（registry.json 旧文件名残留）；激活文案 emoji 双重
+  转义成字面 `\U...`。
+  门禁：pytest 1198（含 F2-C 新测 +10）/ 72 skip；真容器 e2e 待手测。
 - **R4 手测三轮收官（2026-09-08/09，批次 field-fixes-r4-1/2/3/4 全合入）**：
   R4 面全验收 + 远程链**真机首验**（nas = Debian 13/zsh 真远程机，非 WSL
   自演）。修复账：一轮 #1/#4/#5（`27adac6` 会话列表容错/远程浏览禁用/

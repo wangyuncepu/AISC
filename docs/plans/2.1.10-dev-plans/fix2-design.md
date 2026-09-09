@@ -87,8 +87,23 @@ vitest（远程模式浏览启用/本地模式原生对话框不变）+ CDP 真�
 7. **孤儿治理**：重启后 stale 容器检测复用 ownership 标签机制
    （`aisc ps` 列出 + 提示 stop --all）。
 
-测试：run/stop/claude/codex/runs 单测（default 指针流转、快照恢复、
-路径绝对化）；真容器 e2e 一轮；Workbench 回归零改动验证。
+**附（2026-09-09 追加，addendum）**：
+8. **别名 alias**：`--name` 即工作区别名（默认 `super-claude-station`
+   表示「未命名」），record 落 alias 字段，`aisc run --resume <别名|序号|
+   路径>` 按别名恢复（别名最强键，同名覆盖）；`aisc runs` 列表显示
+   `@别名`；resume 不带新 `--name` 时沿用原别名。
+9. **`aisc workspaces`**：机器级管理视图——扫数据根全工作区 registry，
+   join 激活历史别名 + docker 实际状态（`running` = status 前缀 `Up`），
+   `--stop` 批量 stop+rm+unregister 运行中的 CLI 工作区（`owner=workbench`
+   的 GUI 运行时永不触碰）。修 9025044 遗留缺陷：`_resolve_by_workspace`
+   误按 list 形状迭代 `list_containers`（实际返回 name→meta dict）+ 用错
+   `locate_aisc_root`（应 `workspace_state_dir`），`aisc claude --workspace`
+   必崩；`cmd_stop_all` 同 list/dict 错位；激活文案 emoji 双重转义成字面
+   `\U...`。
+
+测试：run/stop/claude/codex/runs/workspaces 单测（default 指针流转、
+快照恢复、路径绝对化、别名解析、workspaces 视图 join/stop 抖动）；
+真容器 e2e 一轮；Workbench 回归零改动验证。
 
 ## F2-D · CLI 自更新（封存）
 
