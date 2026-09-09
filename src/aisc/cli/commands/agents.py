@@ -21,21 +21,29 @@ AGENTS = ("claude", "codex")
 
 
 def _resolve_by_workspace(workspace: str, explicit_root: Optional[str]) -> str:
-    """Find the registered container bound to this workspace path."""
-    from aisc.adapters.container_registry import list_containers
-    from aisc.application.resources import locate_aisc_root
+    """Find the registered container bound to this workspace path.
 
+    The registry lives in the workspace's state dir (data-root
+    ``workspaces/<hash>/runtime``). ``list_containers`` returns a
+    ``name → meta`` map — the earlier list-shaped traversal here was wrong
+    and crashed every ``aisc claude --workspace <path>``.
+    """
+    from aisc.adapters.container_registry import list_containers
+    from aisc.application.data_root import workspace_state_dir
+
+    target = Path(workspace).resolve()
     try:
-        root = locate_aisc_root(explicit_root=explicit_root)
+        state_dir = workspace_state_dir(target)
     except Exception as exc:
-        raise CliError(message=f"no AISC root to resolve the workspace: {exc}",
-                       exit_code=1, error_code="AISC_ERR_GENERAL") from exc
-    # Path-level comparison: separator forms differ between the recording
-    # host and this one (POSIX vs Windows); components must not.
-    target = Path(workspace)
+        if not explicit_root:
+            raise CliError(
+                message=f"cannot resolve the workspace state dir: {exc}",
+                exit_code=1, error_code="AISC_ERR_GENERAL") from exc
+        state_dir = Path(explicit_root).resolve()
+
     matches = [
-        entry for entry in list_containers(root)
-        if Path(str(entry.get("meta", {}).get("workspace", ""))) == target
+        name for name, meta in list_containers(state_dir).items()
+        if Path(str(meta.get("workspace", ""))).resolve() == target
     ]
     if not matches:
         raise CliError(
@@ -43,7 +51,7 @@ def _resolve_by_workspace(workspace: str, explicit_root: Optional[str]) -> str:
                     f"start one first: aisc run {target}",
             exit_code=4, error_code="AISC_ERR_NOT_FOUND",
         )
-    return str(matches[0]["name"])
+    return str(matches[0])
 
 
 def cmd_agent(

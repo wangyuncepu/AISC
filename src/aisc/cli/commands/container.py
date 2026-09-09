@@ -267,7 +267,7 @@ def cmd_stop(
 
     # Unregister from the multi-container index (no longer an active
     # target). The registry root must go through _resolve_root — writing at
-    # the raw explicit_root would CREATE an empty registry.json there and
+    # the raw explicit_root would CREATE an empty containers.json there and
     # shadow the real (.aisc / state-dir) one for every later lookup.
     try:
         from aisc.adapters.container_registry import unregister, _resolve_root
@@ -311,15 +311,15 @@ def cmd_stop_all(
     stopped: List[Dict[str, Any]] = []
     skipped = 0
     registry_dirs = [
-        p / "runtime" for p in shared_workspaces.glob("*") if (p / "runtime" / "registry.json").is_file()
+        p / "runtime" for p in shared_workspaces.glob("*") if (p / "runtime" / "containers.json").is_file()
     ] if shared_workspaces.is_dir() else []
     for reg_dir in registry_dirs:
-        for entry in list_containers(reg_dir):
-            meta = entry.get("meta", {})
+        for cname, meta in list_containers(reg_dir).items():
+            meta = meta or {}
             if meta.get("owner") == "workbench":
                 skipped += 1
                 continue
-            name = str(entry.get("name", ""))
+            name = str(cname)
             if not name:
                 continue
             stop = exec_.run_captured(["stop", name], timeout=30.0)

@@ -96,12 +96,13 @@ class AgentSugarTests(unittest.TestCase):
 
     def test_workspace_resolution_overrides_discovery(self):
         ex = self._exec()
-        entries = [
-            {"name": "box-other", "meta": {"workspace": "/other"}},
-            {"name": "box-mine", "meta": {"workspace": "/home/tv/proj"}},
-        ]
+        tmp = Path(tempfile.mkdtemp())
+        entries = {
+            "box-other": {"workspace": "/other"},
+            "box-mine": {"workspace": "/home/tv/proj"},
+        }
         with patch("aisc.adapters.container_registry.list_containers", return_value=entries), \
-             patch("aisc.application.resources.locate_aisc_root", return_value=Path("root")), \
+             patch("aisc.application.data_root.workspace_state_dir", return_value=tmp), \
              patch("aisc.cli.commands.container.discover_container") as disc:
             cmd_agent("codex", [], workspace="/home/tv/proj", executor=ex)
         disc.assert_not_called()
@@ -111,8 +112,9 @@ class AgentSugarTests(unittest.TestCase):
     def test_workspace_without_container_is_not_found(self):
         from aisc.domain.models import CliError
 
-        with patch("aisc.adapters.container_registry.list_containers", return_value=[]), \
-             patch("aisc.application.resources.locate_aisc_root", return_value=Path("root")):
+        tmp = Path(tempfile.mkdtemp())
+        with patch("aisc.adapters.container_registry.list_containers", return_value={}), \
+             patch("aisc.application.data_root.workspace_state_dir", return_value=tmp):
             with self.assertRaises(CliError) as ctx:
                 cmd_agent("claude", [], workspace="/gone", executor=self._exec())
         self.assertEqual(ctx.exception.error_code, "AISC_ERR_NOT_FOUND")
@@ -136,15 +138,15 @@ class StopAllTests(unittest.TestCase):
         ex = MagicMock()
         ex.run_captured.return_value = ProcessResult(
             exit_code=0, stdout="", stderr="", command_not_found=False, timed_out=False)
-        entries = [
-            {"name": "cli-box", "meta": {"owner": "", "workspace": "/a"}},
-            {"name": "wb-box", "meta": {"owner": "workbench", "workspace": "/b"}},
-        ]
+        entries = {
+            "cli-box": {"owner": "", "workspace": "/a"},
+            "wb-box": {"owner": "workbench", "workspace": "/b"},
+        }
         import tempfile as _t
         shared_root = Path(_t.mkdtemp())
         reg_dir = shared_root / "workspaces" / "h1" / "runtime"
         reg_dir.mkdir(parents=True)
-        (reg_dir / "registry.json").write_text("{}", encoding="utf-8")
+        (reg_dir / "containers.json").write_text("{}", encoding="utf-8")
         with patch("aisc.adapters.container_registry.list_containers", return_value=entries), \
              patch("aisc.adapters.container_registry.unregister") as unreg, \
              patch("aisc.application.data_root.DataRootResolver.resolve_shared_root",
@@ -174,3 +176,126 @@ class ActivationArgvTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AliasResumeTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._old = os.environ.get("AISC_DATA_ROOT")
+        os.environ["AISC_DATA_ROOT"] = self._tmp.name
+        (Path(self._tmp.name) / "config").mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        if self._old is None:
+            os.environ.pop("AISC_DATA_ROOT", None)
+        else:
+            os.environ["AISC_DATA_ROOT"] = self._old
+        self._tmp.cleanup()
+
+    def test_alias_is_the_strongest_resume_key(self):
+        p = str(Path("/home/tv/proj"))
+        cli_runs.record(p, "img", "direct", "", alias="myproj")
+        cli_runs.record(str(Path("/home/tv/other")), "img", "direct", "", alias="x")
+        got = cli_runs.resolve_resume("myproj")
+        self.assertIsNotNone(got)
+        self.assertEqual(got["path"], p)
+
+    def test_record_roundtrips_alias(self):
+        cli_runs.record("/a", "img", "direct", "", alias="k")
+        self.assertEqual(cli_runs.list_runs()[0]["alias"], "k")
+        cli_runs.record("/a", "img", "direct", "", alias="")
+        self.assertEqual(cli_runs.list_runs()[0]["alias"], "")
+
+
+class WorkspacesViewTests(unittest.TestCase):
+    def _setup_registries(self, tmp):
+        import json as _json
+        reg = Path(tmp) / "workspaces" / "h1" / "runtime"
+        reg.mkdir(parents=True)
+        (reg / "containers.json").write_text(_json.dumps({
+            "default": "box-live",
+            "containers": {
+                "box-live": {"image": "i", "workspace": "/w/live",
+                             "network": "direct", "label": "", "owner": ""},
+                "box-dead": {"image": "i", "workspace": "/w/dead",
+                             "network": "direct", "label": "", "owner": ""},
+                "box-wb": {"image": "i", "workspace": "/w/wb",
+                           "network": "direct", "label": "", "owner": "workbench"},
+            },
+        }), encoding="utf-8")
+
+    def test_list_joins_docker_state_and_skips_workbench(self):
+        from aisc.cli.commands.workspaces import cmd_workspaces
+
+        tmp = tempfile.mkdtemp()
+        self._setup_registries(tmp)
+        ex = MagicMock()
+        ex.run_captured.return_value = ProcessResult(
+            exit_code=0,
+            stdout="box-live\tUp 3 hours\nbox-dead\tExited (0)\nbox-wb\tUp 1 hour\n",
+            stderr="", command_not_found=False, timed_out=False)
+        with patch("aisc.application.data_root.DataRootResolver.resolve_shared_root",
+                   return_value=Path(tmp)):
+            rows = cmd_workspaces(executor=ex)
+        # (the scan globs <shared>/workspaces/*/runtime)
+        names = [r["container"] for r in rows]
+        self.assertIn("box-live", names)
+        self.assertIn("box-dead", names)
+        self.assertNotIn("box-wb", names)
+        live = next(r for r in rows if r["container"] == "box-live")
+        self.assertTrue(live["running"])
+        dead = next(r for r in rows if r["container"] == "box-dead")
+        self.assertFalse(dead["running"])
+
+    def test_stop_sweeps_only_running_cli_owned(self):
+        from aisc.cli.commands.workspaces import cmd_workspaces_stop
+
+        tmp = tempfile.mkdtemp()
+        self._setup_registries(tmp)
+        ex = MagicMock()
+        ps = ProcessResult(exit_code=0,
+                           stdout="box-live\tUp 3 hours\nbox-dead\tExited (0)",
+                           stderr="", command_not_found=False, timed_out=False)
+        ok = ProcessResult(exit_code=0, stdout="", stderr="",
+                           command_not_found=False, timed_out=False)
+        ex.run_captured.side_effect = lambda argv, timeout=None: ps if argv[:1] == ["ps"] else ok
+        with patch("aisc.application.data_root.DataRootResolver.resolve_shared_root",
+                   return_value=Path(tmp)):
+            out = cmd_workspaces_stop(executor=ex)
+        self.assertEqual([s["container"] for s in out["stopped"]], ["box-live"])
+        argvs = [c[0][0] for c in ex.run_captured.call_args_list]
+        self.assertIn(["stop", "box-live"], argvs)
+        self.assertIn(["rm", "-f", "box-live"], argvs)
+        self.assertNotIn(["stop", "box-dead"], argvs)
+
+
+class AgentWorkspaceResolveTests(unittest.TestCase):
+    """`aisc claude --workspace <path>` resolution — the registry is a
+    ``name → meta`` map (not a list), which the first F2-C cut got wrong."""
+
+    def test_resolve_by_workspace_reads_dict_registry(self):
+        from aisc.cli.commands.agents import _resolve_by_workspace
+
+        tmp = Path(tempfile.mkdtemp())
+        containers = {
+            "box": {"workspace": "/w/live", "image": "i", "label": ""},
+            "other": {"workspace": "/w/dead", "image": "i", "label": ""},
+        }
+        with patch("aisc.adapters.container_registry.list_containers",
+                   return_value=containers), \
+             patch("aisc.application.data_root.workspace_state_dir",
+                   return_value=tmp):
+            name = _resolve_by_workspace("/w/live", None)
+        self.assertEqual(name, "box")
+
+    def test_resolve_by_workspace_miss_raises(self):
+        from aisc.cli.commands.agents import _resolve_by_workspace
+        from aisc.domain.models import CliError
+
+        tmp = Path(tempfile.mkdtemp())
+        with patch("aisc.adapters.container_registry.list_containers",
+                   return_value={"box": {"workspace": "/w/live"}}), \
+             patch("aisc.application.data_root.workspace_state_dir",
+                   return_value=tmp):
+            with self.assertRaises(CliError):
+                _resolve_by_workspace("/w/nope", None)

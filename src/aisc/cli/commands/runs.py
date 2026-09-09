@@ -49,8 +49,12 @@ def _save(path: Path, data: Dict[str, Any]) -> None:
     )
 
 
-def record(workspace: str, image: str, network: str, label: str) -> None:
-    """Upsert one activation (absolute path key); newest first, capped."""
+def record(workspace: str, image: str, network: str, label: str,
+           alias: str = "") -> None:
+    """Upsert one activation (absolute path key); newest first, capped.
+
+    *alias* is the user's `--name` for the workspace — the resume key when
+    set (an empty alias means "resume by index or path only")."""
     path = _history_path()
     data = _load(path)
     ws = str(Path(workspace))
@@ -60,6 +64,7 @@ def record(workspace: str, image: str, network: str, label: str) -> None:
         "image": image,
         "network": network,
         "label": label,
+        "alias": alias,
         "last_used_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
     data["runs"] = runs[:HISTORY_CAP]
@@ -89,9 +94,14 @@ def list_runs() -> List[Dict[str, Any]]:
 
 
 def resolve_resume(spec: str) -> Optional[Dict[str, Any]]:
-    """Resolve a resume target: 1-based index (newest = 1) or exact path."""
+    """Resolve a resume target: exact ALIAS → 1-based index (newest = 1) →
+    exact path. The alias is the strongest key (unique by construction — a
+    second registration with the same alias replaces the first)."""
     runs = list_runs()
     spec = spec.strip()
+    for r in runs:
+        if spec and r.get("alias") == spec:
+            return r
     if spec.isdigit():
         idx = int(spec)
         if 1 <= idx <= len(runs):

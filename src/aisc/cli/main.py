@@ -162,7 +162,8 @@ def _build_parser() -> _AiscArgumentParser:
     rp.add_argument("--image", "-i", type=str, default="super-claude:latest",
                     help="Docker image (default: super-claude:latest)")
     rp.add_argument("--name", type=str, default="super-claude-station",
-                    help="Container name prefix (unique suffix appended)")
+                    help="Workspace alias — also the container name prefix; "
+                         "resume later by it (aisc run --resume <别名>)")
     rp.add_argument("--network", type=str, choices=["direct", "proxy"],
                     default=argparse.SUPPRESS,
                     help="Network mode: direct or proxy (default: direct)")
@@ -189,6 +190,12 @@ def _build_parser() -> _AiscArgumentParser:
     rsp = sub.add_parser("runs", help="Activation history (aisc run records)",
                          allow_abbrev=False)
     _add_global_args(rsp, is_subparser=True)
+
+    wsp = sub.add_parser("workspaces", help="Manage running CLI workspaces",
+                         allow_abbrev=False)
+    _add_global_args(wsp, is_subparser=True)
+    wsp.add_argument("--stop", action="store_true", default=False,
+                     help="Stop & remove every RUNNING CLI-owned workspace")
 
     # --- config ---
     cp = sub.add_parser("config", help="Config management", allow_abbrev=False)
@@ -1311,10 +1318,13 @@ def _cmd_run(
     if rec and not label and rec.get("label"):
         label = rec["label"]
 
+    raw_name = getattr(args, "name", "super-claude-station") or "super-claude-station"
+    if rec and raw_name == "super-claude-station" and rec.get("alias"):
+        raw_name = rec["alias"]  # resume keeps the alias-named containers
     plan = plan_run(
         image=image,
         workspace=str(ws),
-        name=getattr(args, "name", "super-claude-station"),
+        name=raw_name,
         network=network,
         dry_run=getattr(args, "dry_run", False),
         interactive=False,   # F2-C: activation is always detached (-d)
@@ -1329,7 +1339,10 @@ def _cmd_run(
 
     if not plan.dry_run:
         abs_ws = str(Path(plan.workspace).resolve())
-        cli_runs.record(abs_ws, plan.image, plan.network, plan.label)
+        alias = "" if raw_name == "super-claude-station" else raw_name
+        if rec and not alias and rec.get("alias"):
+            alias = rec["alias"]  # --resume without a fresh --name keeps it
+        cli_runs.record(abs_ws, plan.image, plan.network, plan.label, alias)
         cli_runs.set_active(abs_ws)
 
     out = result.to_dict()
@@ -1340,10 +1353,10 @@ def _cmd_run(
     ]
 
     if effective_format == "text" and emitter is None:
-        print(f"\\U0001f4af 工作区已激活: {plan.workspace}")
+        print(f"💯 工作区已激活: {plan.workspace}")
         print(f"  容器 {plan.name}（detached） · 镜像 {plan.image} · 网络 {plan.network}")
         if plan.web_gateway_host_port and not plan.dry_run:
-            print(f"  \\U0001f310 Web 服务网关: http://p<端口>.localhost:{plan.web_gateway_host_port}/ "
+            print(f"  🌐 Web 服务网关: http://p<端口>.localhost:{plan.web_gateway_host_port}/ "
                   f"（容器内: aisc-web-expose <端口>）")
         print("  进入方式: aisc claude | aisc codex | aisc switch | aisc shell")
         print("  停止: aisc stop · 历史: aisc runs")
@@ -1390,12 +1403,35 @@ def _cmd_runs(
         if not items:
             print("暂无激活历史 — aisc run <路径> 开始")
         for i, r in enumerate(items, 1):
+            alias = f"  @{r['alias']}" if r.get("alias") else ""
             print(f"  {i}. {r.get('path')}  [{r.get('image', '')} · {r.get('network', '')}]"
-                  f"  {r.get('last_used_at', '')}")
+                  f"  {r.get('last_used_at', '')}{alias}")
         if items:
             print("恢复: aisc run --resume <序号|路径>")
         return None, 0, []
     return {"runs": items}, 0, []
+
+
+def _cmd_workspaces(
+    args: argparse.Namespace,
+    effective_format: str,
+) -> Tuple[Optional[Dict[str, Any]], int, List[Dict[str, Any]]]:
+    """Execute ``aisc workspaces`` — the machine-wide management view."""
+    from aisc.cli.commands.workspaces import (
+        cmd_workspaces, cmd_workspaces_stop, print_workspaces_text,
+    )
+
+    if getattr(args, "stop", False):
+        out = cmd_workspaces_stop()
+        if effective_format == "text":
+            names = ", ".join(s["alias"] or s["workspace"] for s in out["stopped"]) or "无"
+            print(f"已批量停止 {len(out['stopped'])} 个运行中的工作区: {names}")
+        return out, 0, []
+
+    rows = cmd_workspaces()
+    if effective_format == "text":
+        print_workspaces_text(rows)
+    return {"workspaces": rows}, 0, []
 
 
 def _cmd_config(
@@ -2519,6 +2555,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             data, exit_code, errors = _cmd_agent(args, effective_format)
         elif args.command == "runs":
             data, exit_code, errors = _cmd_runs(args, effective_format)
+        elif args.command == "workspaces":
+            data, exit_code, errors = _cmd_workspaces(args, effective_format)
         elif args.command == "config":
             data, exit_code, errors = _cmd_config(args, effective_format)
         elif args.command == "profile":

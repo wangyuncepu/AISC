@@ -1,0 +1,128 @@
+"""F2-C addendum (user request 2026-09-09): ``aisc workspaces`` — the
+machine-wide management view of CLI-activated workspaces.
+
+Scans every workspace registry under the data root, joins the activation
+history for aliases, and cross-references live Docker state. ``--stop``
+sweeps the RUNNING CLI-owned activations (Workbench-managed runtimes are
+never touched — the GUI owns their lifecycle).
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from aisc.adapters.container_registry import (
+    gc as registry_gc,
+    list_containers,
+    unregister,
+)
+from aisc.adapters.docker_ import DockerExecutor, RealDockerExecutor
+from aisc.application.data_root import DataRootResolver
+
+
+def _registry_entries(executor: Optional[DockerExecutor] = None) -> List[Any]:
+    """Every ``(name, meta)`` across all workspace registries (CLI and
+    Workbench-owned alike — the caller filters). Lazy-GCs each registry so
+    stale records from deleted containers do not surface."""
+    shared = DataRootResolver().resolve_shared_root() / "workspaces"
+    out: List[Any] = []
+    if not shared.is_dir():
+        return out
+    for reg_dir in sorted(shared.glob("*/runtime")):
+        if (reg_dir / "containers.json").is_file():
+            try:
+                registry_gc(reg_dir, executor)
+            except Exception:
+                pass
+            out.extend(list_containers(reg_dir).items())
+    return out
+
+
+def _docker_states(executor: DockerExecutor) -> Dict[str, str]:
+    """name → docker status string (one ``docker ps -a`` round trip)."""
+    proc = executor.run_captured([
+        "ps", "-a", "--format", "{{.Names}}\t{{.Status}}",
+    ])
+    states: Dict[str, str] = {}
+    if proc.exit_code != 0:
+        return states
+    for line in (proc.stdout or "").splitlines():
+        name, _, status = line.partition("\t")
+        if name:
+            states[name] = status
+    return states
+
+
+def cmd_workspaces(
+    executor: Optional[DockerExecutor] = None,
+) -> List[Dict[str, Any]]:
+    """List every CLI-activated workspace with live Docker state."""
+    exec_ = executor or RealDockerExecutor()
+    from aisc.cli.commands.runs import list_runs
+
+    alias_by_path = {r.get("path", ""): r.get("alias", "") for r in list_runs()}
+    states = _docker_states(exec_)
+
+    rows: List[Dict[str, Any]] = []
+    for cname, meta in _registry_entries(exec_):
+        meta = meta or {}
+        if meta.get("owner") == "workbench":
+            continue
+        name = str(cname)
+        if not name:
+            continue
+        ws = str(meta.get("workspace", ""))
+        status = states.get(name, "")
+        rows.append({
+            "workspace": ws,
+            "alias": alias_by_path.get(ws, ""),
+            "container": name,
+            "image": str(meta.get("image", "")),
+            "status": status,
+            "running": status.startswith("Up"),
+        })
+    rows.sort(key=lambda r: (not r["running"], r["workspace"]))
+    return rows
+
+
+def cmd_workspaces_stop(
+    executor: Optional[DockerExecutor] = None,
+) -> Dict[str, Any]:
+    """Stop + remove every RUNNING CLI-owned activation (the batch sweep)."""
+    exec_ = executor or RealDockerExecutor()
+    from aisc.application.data_root import DataRootResolver
+
+    rows = [r for r in cmd_workspaces(executor=exec_) if r["running"]]
+    stopped: List[Dict[str, Any]] = []
+    shared = DataRootResolver().resolve_shared_root() / "workspaces"
+    for row in rows:
+        name = row["container"]
+        stop = exec_.run_captured(["stop", name], timeout=30.0)
+        rm = exec_.run_captured(["rm", "-f", name], timeout=30.0)
+        # unregister from its workspace registry (best-effort locate)
+        try:
+            for reg_dir in shared.glob("*/runtime"):
+                if (reg_dir / "containers.json").is_file():
+                    unregister(reg_dir, name)
+        except Exception:
+            pass
+        stopped.append({
+            "workspace": row["workspace"],
+            "alias": row["alias"],
+            "container": name,
+            "exit_code": rm.exit_code if rm.exit_code != 0 else stop.exit_code,
+        })
+    return {"stopped": stopped, "running_found": len(rows)}
+
+
+def print_workspaces_text(rows: List[Dict[str, Any]]) -> None:
+    """Human table: alias, status, workspace."""
+    if not rows:
+        print("当前没有 CLI 激活的工作区 — aisc run <路径> 开始")
+        return
+    width = max(len(r.get("alias", "") or "-") for r in rows) + 1
+    for r in rows:
+        alias = r.get("alias", "") or "-"
+        status = r.get("status", "") or "(容器不存在)"
+        print(f"  {alias:<{width}} {status:<22} {r['workspace']}")
+    print("批量停止运行中的: aisc workspaces --stop · 单个: aisc stop")
