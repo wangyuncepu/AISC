@@ -2683,8 +2683,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             elif isinstance(data, dict) and data.get("executed"):
                 if args.command == "build":
                     print(f"Build succeeded: {data.get('image_tag', '')}")
-                else:
-                    print("Container finished.")
+                # run: the activation summary (_cmd_run) already spoke —
+                # "Container finished." was the old foreground-run wording;
+                # F2-C detached keep-alives never finish here
         elif args.command == "data-root":
             from aisc.cli.commands.data_root import print_data_root_text
             print_data_root_text(data)
