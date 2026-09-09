@@ -538,6 +538,7 @@ export const enUS: Record<string, string> = {
   "explorer.collapse": "Collapse explorer",
   "explorer.expand": "Expand explorer",
   "explorer.resizeHandle": "Drag to resize the explorer, double-click to collapse",
+  "explorer.tabbarResize": "Drag to resize the tab bar",
   "explorer.stale": "File state may be stale; a bounded rescan was performed.",
   "explorer.empty.workspace": "Select a workspace first.",
 

@@ -30,6 +30,7 @@ import {
   panelLayout,
   setExplorerCollapsed,
   setExplorerWidth,
+  setTabbarHeight,
 } from "../../lib/panelLayout";
 import type { LayoutTier } from "../../lib/layout";
 import PaneTree from "../terminal/PaneTree.vue";
@@ -112,6 +113,43 @@ function onDockHandleKey(e: KeyboardEvent): void {
   } else if (e.key === "ArrowRight") {
     e.preventDefault();
     withInstantDock(() => setExplorerWidth(panelLayout.explorerWidth + step));
+  }
+}
+
+// --- FIX-3: TabBar ↔ terminal-area horizontal divider (drag = resize the
+// tab row, i.e. the terminal's share of the column). ---
+const tabbarRef = ref<{ $el?: HTMLElement } | null>(null);
+const tabbarStyle = computed<Record<string, string> | undefined>(() =>
+  panelLayout.tabbarHeight != null
+    ? { height: `${panelLayout.tabbarHeight}px` }
+    : undefined);
+function onTabDividerDown(e: PointerEvent): void {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  (e.currentTarget as HTMLElement).focus();
+  const startY = e.clientY;
+  // offsetHeight is LAYOUT px (zoom-immune, unlike getBoundingClientRect) —
+  // null height (never dragged) starts from the measured natural bar height.
+  const startH = tabbarRef.value?.$el?.offsetHeight ?? 39;
+  const scale = appScale();
+  const move = (ev: PointerEvent) => {
+    setTabbarHeight(startH + (ev.clientY - startY) / scale);
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+}
+function onTabDividerKey(e: KeyboardEvent): void {
+  const step = 4;
+  if (e.key === "ArrowUp") {
+    e.preventDefault();
+    setTabbarHeight((panelLayout.tabbarHeight ?? tabbarRef.value?.$el?.offsetHeight ?? 39) - step);
+  } else if (e.key === "ArrowDown") {
+    e.preventDefault();
+    setTabbarHeight((panelLayout.tabbarHeight ?? tabbarRef.value?.$el?.offsetHeight ?? 39) + step);
   }
 }
 
@@ -375,7 +413,19 @@ function setPaneTreeRef(tabId: string) {
         @dblclick="setExplorerCollapsed(true)"
       ></div>
       <div class="main">
-        <TabBar />
+        <TabBar ref="tabbarRef" :style="tabbarStyle" />
+        <!-- FIX-3: drag to resize the tab row / terminal split (the divider
+             takes over the bar's old bottom border as the visual edge). -->
+        <div
+          class="tab-divider"
+          role="separator"
+          aria-orientation="horizontal"
+          :aria-label="t('explorer.tabbarResize')"
+          :title="t('explorer.tabbarResize')"
+          tabindex="0"
+          @pointerdown="onTabDividerDown"
+          @keydown="onTabDividerKey"
+        ></div>
         <main ref="terminalAreaRef" class="terminal-area">
           <div v-if="store.tabs.length === 0 && !ccSwitchPaneVisible" class="empty-tabs">
             <p>{{ t("tabs.empty") }}</p>
@@ -542,6 +592,30 @@ function setPaneTreeRef(tabId: string) {
 }
 .dock-handle:hover::after, .dock-handle:focus-visible::after { background: var(--accent); }
 .dock-handle:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus);
+  outline-offset: -2px;
+}
+/* FIX-3: TabBar↔terminal horizontal divider (mirrors the dock handle) */
+.tab-divider {
+  flex-shrink: 0;
+  height: 6px;
+  cursor: row-resize;
+  background: transparent;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tab-divider::after {
+  content: "";
+  width: 24px;
+  height: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--border-2);
+  transition: background-color var(--duration-normal) var(--ease);
+}
+.tab-divider:hover::after, .tab-divider:focus-visible::after { background: var(--accent); }
+.tab-divider:focus-visible {
   outline: var(--focus-ring-width) solid var(--focus);
   outline-offset: -2px;
 }

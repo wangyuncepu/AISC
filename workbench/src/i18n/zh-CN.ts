@@ -538,6 +538,7 @@ export const zhCN = {
   "explorer.collapse": "折叠资源管理器",
   "explorer.expand": "展开资源管理器",
   "explorer.resizeHandle": "拖动调整资源管理器宽度，双击折叠",
+  "explorer.tabbarResize": "拖动调整标签行高度",
   "explorer.stale": "文件状态可能已过期，已执行受限重扫。",
   "explorer.empty.workspace": "请先选择工作区。",
 
