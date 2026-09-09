@@ -226,7 +226,7 @@ describe("forget flow (⑦)", () => {
   });
 });
 
-describe("F2-B: remote browse dialog", () => {
+describe("F2-B: remote browse dialog (explorer model: click selects, dblclick descends)", () => {
   beforeEach(() => {
     mockIpc.remoteBrowse.mockReset();
     mockIpc.targetGet.mockReset().mockResolvedValue(null);
@@ -244,13 +244,10 @@ describe("F2-B: remote browse dialog", () => {
     return w;
   }
 
-  it("remote target: browse opens the fs.list popover; dirs descend; choose fills the input", async () => {
+  it("click selects (footer previews the child), dblclick descends, choose commits the selection", async () => {
     mockIpc.remoteBrowse.mockResolvedValue({
       cwd: "/home/tv", root: "/home/tv",
-      entries: [
-        { name: "aisc-handtest", isDir: true },
-        { name: "readme.md", isDir: false },
-      ],
+      entries: [{ name: "projects", isDir: true }],
     });
     const w = await mountRemote();
     const btn = w.findAll("button").find((b) => b.text() === "选择")!;
@@ -259,24 +256,33 @@ describe("F2-B: remote browse dialog", () => {
     await flushPromises();
     expect(mockIpc.remoteBrowse).toHaveBeenCalledWith(undefined);
     expect(w.find('[role="dialog"]').exists()).toBe(true);
-    expect(w.findAll(".browse-item").length).toBe(2);
+    // Rust filters files/dotfiles — rows are dirs only, each with a chevron.
+    const row = w.find(".browse-item");
+    expect(row.text()).toContain("projects");
+    expect(row.find(".bi-arrow").exists()).toBe(true);
+    // Footer previews the CWD before any selection.
+    expect(w.find(".browse-path").text()).toBe("/home/tv");
 
-    // Descend into the dir (second page through the same IPC).
+    // Single click = selection (footer previews the child path).
+    await row.trigger("click");
+    expect(w.find(".browse-item").classes()).toContain("selected");
+    expect(w.find(".browse-path").text()).toBe("/home/tv/projects");
+
+    // Double click = descend (second browse through the same IPC).
     mockIpc.remoteBrowse.mockResolvedValue({
-      cwd: "/home/tv/aisc-handtest", root: "/home/tv",
-      entries: [],
+      cwd: "/home/tv/projects", root: "/home/tv",
+      entries: [{ name: "aisc-handtest", isDir: true }],
     });
-    await w.findAll(".browse-item")[0]!.trigger("click");
+    await row.trigger("dblclick");
     await flushPromises();
-    expect(mockIpc.remoteBrowse).toHaveBeenLastCalledWith("/home/tv/aisc-handtest");
-    expect(w.find(".browse-path").text()).toBe("/home/tv/aisc-handtest");
-    // The up-limit is the pin root, not "/".
-    expect(w.find(".browse-head .ui-button").attributes("disabled")).toBeUndefined();
+    expect(mockIpc.remoteBrowse).toHaveBeenLastCalledWith("/home/tv/projects");
+    expect(w.find(".browse-path").text()).toBe("/home/tv/projects");
+    expect(w.find(".browse-item").classes()).not.toContain("selected");
 
-    // Choose fills the picker input with the absolute remote path.
+    // Choose with no selection commits the current directory.
     await w.findAll(".browse-actions button")[1]!.trigger("click");
     const input = w.find("input.workspace");
-    expect((input.element as HTMLInputElement).value).toBe("/home/tv/aisc-handtest");
+    expect((input.element as HTMLInputElement).value).toBe("/home/tv/projects");
     expect(w.find('[role="dialog"]').exists()).toBe(false);
   });
 

@@ -86,8 +86,11 @@ async function clearInvalidEntry(): Promise<void> {
 
 // --- F2-B: remote directory browser (fs.list over the pooled serve
 // channel, pinned at the remote $HOME; manual absolute input stays the
-// escape hatch for anything outside the pin). ---
+// escape hatch for anything outside the pin). Explorer mental model
+// (field feedback): click selects, DOUBLE-click descends, the button
+// confirms the selection. ---
 const browse = ref<{ cwd: string; root: string; entries: { name: string; isDir: boolean }[] } | null>(null);
+const browseSelected = ref<string | null>(null);
 
 function onBrowse(): void {
   if (target.value?.kind === "remote") {
@@ -100,7 +103,10 @@ function onBrowse(): void {
 }
 async function openBrowse(start?: string): Promise<void> {
   const r = await wsStore.browseRemote(start);
-  if (r) browse.value = { cwd: r.cwd, root: r.root, entries: r.entries };
+  if (r) {
+    browse.value = { cwd: r.cwd, root: r.root, entries: r.entries };
+    browseSelected.value = null;
+  }
 }
 async function loadBrowse(path: string): Promise<void> {
   if (!browse.value) return;
@@ -109,7 +115,11 @@ async function loadBrowse(path: string): Promise<void> {
     browse.value.cwd = r.cwd;
     browse.value.root = r.root;
     browse.value.entries = r.entries;
+    browseSelected.value = null;
   }
+}
+function browseSelect(name: string): void {
+  browseSelected.value = browseSelected.value === name ? null : name;
 }
 function browseInto(name: string): void {
   if (!browse.value) return;
@@ -138,8 +148,19 @@ const browseCrumbs = computed(() => {
   }
   return out;
 });
+/** The absolute path the confirm button would commit: the selected child
+ *  when one is highlighted, else the current directory. */
+const browseChoice = computed(() => {
+  if (!browse.value) return "";
+  const { cwd, root } = browse.value;
+  return browseSelected.value
+    ? `${cwd.replace(/\/+$/, "")}/${browseSelected.value}`
+    : cwd === root
+      ? root
+      : cwd;
+});
 function chooseBrowse(): void {
-  if (browse.value) store.workspace = browse.value.cwd;
+  if (browse.value) store.workspace = browseChoice.value;
   browse.value = null;
 }
 
@@ -333,8 +354,8 @@ async function confirmForget(): Promise<void> {
       @close="invalidPath = null"
       @clear="clearInvalidEntry"
     />
-    <!-- F2-B: remote directory browser — dirs descend, files are inert
-         context (F1 popover interaction, resurrected over fs.list). -->
+    <!-- F2-B: remote directory browser — click selects, double-click
+         descends (explorer mental model); dirs only, dotfiles hidden. -->
     <div v-if="browse" class="browse-overlay" @mousedown="browse = null">
       <div class="browse" role="dialog" aria-modal="true" :aria-label="t('picker.browse')" @mousedown.stop>
         <div class="browse-head">
@@ -349,19 +370,24 @@ async function confirmForget(): Promise<void> {
           <p v-if="wsStore.browseBusy" class="hint">{{ t("picker.browseDialog.loading") }}</p>
           <p v-else-if="wsStore.browseError" class="forget-error" role="alert">{{ wsStore.browseError }}</p>
           <p v-else-if="!browse.entries.length" class="hint">{{ t("picker.browseDialog.empty") }}</p>
-          <button
+          <div
             v-for="e in browse.entries" :key="e.name"
-            class="browse-item" :class="{ dir: e.isDir }"
-            @click="e.isDir && browseInto(e.name)"
+            class="browse-item"
+            :class="{ selected: browseSelected === e.name }"
+            role="button" tabindex="0"
+            @click="browseSelect(e.name)"
+            @dblclick="browseInto(e.name)"
+            @keyup.enter="browseInto(e.name)"
           >
-            <span class="bi-icon">{{ e.isDir ? "📁" : "📄" }}</span>{{ e.name }}
-          </button>
+            <span class="bi-arrow" aria-hidden="true">▸</span>
+            <span class="bi-name">{{ e.name }}</span>
+          </div>
         </div>
         <div class="browse-foot">
-          <span class="browse-path">{{ browse.cwd }}</span>
+          <span class="browse-path">{{ browseChoice }}</span>
           <div class="browse-actions">
             <button class="ui-button" @click="browse = null">{{ t("picker.browseDialog.cancel") }}</button>
-            <button class="ui-button primary" @click="chooseBrowse">{{ t("picker.browseDialog.choose") }}</button>
+            <button class="ui-button primary" :disabled="!browseChoice" @click="chooseBrowse">{{ t("picker.browseDialog.choose") }}</button>
           </div>
         </div>
       </div>
@@ -456,13 +482,14 @@ async function confirmForget(): Promise<void> {
 .ctx-item:focus-visible { outline: var(--focus-ring-width) solid var(--focus); outline-offset: calc(-1 * var(--focus-ring-offset)); }
 .forget-error { color: var(--error-fg); font-size: var(--font-sm); margin: 0; max-width: 560px; }
 
-/* --- F2-B: remote browse popover (F1 styles resurrected) --- */
+/* --- F2-B: remote browse popover (field-redesign: dirs-only rows with a
+       chevron, clear selection state, explorer interactions) --- */
 .browse-overlay {
   position: fixed; inset: 0; z-index: 90; background: var(--scrim, rgba(0, 0, 0, 0.4));
   display: flex; align-items: center; justify-content: center;
 }
 .browse {
-  width: 520px; max-width: 92vw; max-height: 70vh;
+  width: 640px; max-width: 92vw; max-height: 72vh;
   display: flex; flex-direction: column;
   background: var(--surface); border: var(--border-w) solid var(--border-strong);
   border-radius: var(--radius-md); box-shadow: var(--shadow-menu);
@@ -478,20 +505,28 @@ async function confirmForget(): Promise<void> {
   border-radius: var(--radius-sm);
 }
 .crumb:hover { background: var(--surface-hover); }
-.browse-list { flex: 1; overflow-y: auto; padding: var(--space-2); min-height: 160px; }
+.browse-list { flex: 1; overflow-y: auto; padding: var(--space-2); min-height: 200px; }
 .browse-item {
   display: flex; align-items: center; gap: var(--space-2); width: 100%;
-  text-align: left; padding: 5px var(--space-2); border: none; cursor: default;
-  background: none; color: var(--text-2); font-size: var(--font-sm);
-  border-radius: var(--radius-sm);
+  text-align: left; padding: 7px var(--space-2);
+  border: none; border-radius: var(--radius-sm);
+  background: none; color: var(--text); font-size: var(--font-md, var(--font-sm));
+  cursor: pointer; user-select: none;
 }
-.browse-item.dir { cursor: pointer; color: var(--text); }
-.browse-item.dir:hover, .browse-item.dir:focus-visible { background: var(--surface-hover); }
-.bi-icon { flex: none; }
+.browse-item:hover, .browse-item:focus-visible { background: var(--surface-hover); }
+.browse-item.selected {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+}
+.bi-arrow { flex: none; color: var(--accent); font-size: var(--font-sm); }
+.bi-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browse-foot {
   display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
   padding: var(--space-2) var(--space-3); border-top: 1px solid var(--border);
 }
-.browse-path { font-family: var(--font-mono); font-size: var(--font-sm); color: var(--text-2); }
-.browse-actions { display: flex; gap: var(--space-2); }
+.browse-path {
+  font-family: var(--font-mono); font-size: var(--font-sm); color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;
+}
+.browse-actions { display: flex; gap: var(--space-2); flex: none; }
 </style>

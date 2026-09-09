@@ -203,3 +203,40 @@ async fn serve_pty_over_real_ssh_full_roundtrip() {
     .unwrap_or(false);
     assert!(exited, "no exit event after kill");
 }
+
+/// F2-B: remote_browse_core over the real link — the ROOT page AND a
+/// second-call descent (the field-reported "cannot go deeper" leg, proven
+/// end-to-end: Rust core → pooled fs.list → filtering).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_browse_core_root_then_descent_over_real_ssh() {
+    let Some((host, port)) = ssh_env() else {
+        eprintln!("skipping: AISC_TEST_SSH not set");
+        return;
+    };
+    let t = SshTarget {
+        host,
+        port: Some(port),
+        key_path: None,
+        extra_args: vec!["-o".into(), "StrictHostKeyChecking=accept-new".into()],
+    };
+
+    let root_page = workbench_lib::workspace::remote_browse_core(&t, None)
+        .await
+        .expect("root browse");
+    assert!(root_page.cwd.starts_with('/'));
+    assert_eq!(root_page.cwd, root_page.root, "first page opens at the pin root");
+    // dirs only, no dotfiles
+    assert!(root_page.entries.iter().all(|e| e.is_dir && !e.name.starts_with('.')));
+
+    if let Some(first) = root_page.entries.first() {
+        let child = format!("{}/{}", root_page.cwd.trim_end_matches('/'), first.name);
+        let sub = workbench_lib::workspace::remote_browse_core(&t, Some(&child))
+            .await
+            .expect("descent browse");
+        assert_eq!(sub.cwd, child, "descent resolves the requested child");
+        assert_eq!(sub.root, root_page.root);
+    } else {
+        eprintln!("root listing empty — descent leg skipped");
+    }
+    workbench_lib::serve::evict_session(workbench_lib::serve::global_pool(), &t).await;
+}

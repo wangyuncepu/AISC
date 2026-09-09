@@ -772,8 +772,20 @@ pub async fn remote_browse(
                 .with_detail("remote browse requires a remote driving target"))
         }
     };
+    remote_browse_core(&t, path.as_deref()).await
+}
+
+/// The transport-independent browse body (env-gated integration tests call
+/// it directly with a real target). Directories only — the picker selects a
+/// WORKSPACE dir, files are noise (field feedback #2: rows were
+/// indistinguishable); dotfiles hidden (Unix picker convention — a $HOME
+/// listing is 70 rows of noise otherwise).
+pub async fn remote_browse_core(
+    t: &crate::cli::SshTarget,
+    path: Option<&str>,
+) -> Result<RemoteBrowseResult, WorkbenchError> {
     let pool = crate::serve::global_pool();
-    let session = crate::serve::pooled_session(pool, &t).await?;
+    let session = crate::serve::pooled_session(pool, t).await?;
     let root = session
         .banner()
         .home
@@ -782,17 +794,16 @@ pub async fn remote_browse(
             .with_detail("remote serve lacks the v1.3 home anchor — upgrade the remote aisc CLI"))?
         .trim_end_matches('/')
         .to_string();
-    let cwd = normalize_under_root(&root, path.as_deref().unwrap_or(""))?;
+    let cwd = normalize_under_root(&root, path.unwrap_or(""))?;
 
-    // Page through fs.list until exhausted (dirs first, name-sorted; the
-    // picker only descends into dirs but files stay visible, F1 semantics).
+    // Page through fs.list until exhausted (cap guards a runaway listing).
     let mut entries: Vec<RemoteDirEntry> = Vec::new();
     let mut offset = 0usize;
     loop {
         let rel = cwd.strip_prefix(&root).unwrap_or("").trim_start_matches('/');
         let data = crate::serve::fs_op(
             pool,
-            &t,
+            t,
             "fs.list",
             &serde_json::json!({ "root": root, "path": rel, "offset": offset }),
         )
@@ -800,20 +811,18 @@ pub async fn remote_browse(
         let page = data.get("entries").and_then(|v| v.as_array()).cloned().unwrap_or_default();
         for e in page {
             let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            if name.is_empty() {
+            let is_dir = e.get("kind").and_then(|v| v.as_str()) == Some("dir");
+            if name.is_empty() || name.starts_with('.') || !is_dir {
                 continue;
             }
-            entries.push(RemoteDirEntry {
-                is_dir: e.get("kind").and_then(|v| v.as_str()) == Some("dir"),
-                name,
-            });
+            entries.push(RemoteDirEntry { is_dir, name });
         }
         match data.get("nextOffset").and_then(|v| v.as_u64()) {
             Some(next) if (next as usize) < 2000 => offset = next as usize,
             _ => break,
         }
     }
-    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(RemoteBrowseResult { cwd, root, entries })
 }
 
