@@ -351,7 +351,7 @@ def install(force: bool = False) -> Optional[Callable[[], None]]:
 
     def _expand_zh(self, action):  # type: ignore[no-untyped-def]
         text = saved_expand(self, action)
-        return HELP_ZH.get(text, text)
+        return HELP_ZH.get(text) or _BUILTIN.get(text, text)
 
     _expand_zh._aisc_zh = True  # type: ignore[attr-defined]
 

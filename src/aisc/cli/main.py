@@ -2304,13 +2304,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         sys.stdout.reconfigure(errors="replace")
     except (AttributeError, ValueError):
         pass  # non-TextIOWrapper (PyInstaller wrapper) - protocol sites are ASCII anyway
-    parser = _build_parser()
-
     # Help localization (manual test ask 2026-09-09): follow the OS locale —
     # Chinese environments get Chinese help via output-layer translation
     # (see aisc.cli.help_i18n); every other locale keeps the English source.
+    # MUST run before _build_parser(): argparse group titles ('options' 等)
+    # resolve _() at construction time, not render time.
     from aisc.cli.help_i18n import maybe_install as _maybe_i18n
     _maybe_i18n()
+
+    parser = _build_parser()
 
     # Shell completion (manual test ask 2026-09-09): argcomplete follows the
     # argparse tree automatically — subcommands, flags, choices all covered,
