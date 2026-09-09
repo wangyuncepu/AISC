@@ -59,6 +59,7 @@ use tauri::Emitter;
 use cli::{cli_clear_pin, cli_discover, cli_pin, negotiate_capabilities, CliArg};
 use watcher::{workspace_rescan, workspace_watch_start, workspace_watch_stop, WatcherState};
 use workspace::{
+    remote_browse,
     workspace_copy_entry, workspace_copy_path, workspace_create_dir, workspace_create_file,
     workspace_forget, workspace_forget_preview, workspace_history_remove, workspace_list,
     workspace_open, workspace_path_exists, workspace_preview, workspace_rename, workspace_reveal,
@@ -205,6 +206,7 @@ pub fn run(cli_arg: Option<String>) {
             workspace_forget,
             workspace_history_remove,
             workspace_path_exists,
+            remote_browse,
             workspace_reveal_data_file,
             workspace_copy_path,
             workspace_create_file,

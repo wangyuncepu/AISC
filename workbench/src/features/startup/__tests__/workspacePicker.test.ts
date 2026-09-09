@@ -20,6 +20,11 @@ const mockIpc = vi.hoisted(() => ({
   workspaceForgetPreview: vi.fn(),
   workspaceForget: vi.fn(),
   workspaceHistoryRemove: vi.fn().mockResolvedValue(2),
+  // F2-B: remote browse + target plumbing
+  remoteBrowse: vi.fn(),
+  targetGet: vi.fn().mockResolvedValue(null),
+  targetSet: vi.fn(),
+  targetClear: vi.fn().mockResolvedValue(null),
   // facade wiring (not exercised here, but imported at module load)
   negotiateCapabilities: vi.fn(),
   listRuntimes: vi.fn().mockResolvedValue({ runtimes: [] }),
@@ -218,5 +223,70 @@ describe("forget flow (⑦)", () => {
     expect(w.find('[role="dialog"]').exists()).toBe(true);
     // History was still refreshed so a retry uses the new revision.
     expect(mockIpc.loadHistory).toHaveBeenCalled();
+  });
+});
+
+describe("F2-B: remote browse dialog", () => {
+  beforeEach(() => {
+    mockIpc.remoteBrowse.mockReset();
+    mockIpc.targetGet.mockReset().mockResolvedValue(null);
+  });
+
+  async function mountRemote() {
+    mockIpc.targetGet.mockResolvedValue({
+      machine: { name: "nas", host: "192.168.31.108", user: "tv", port: 22 },
+      kind: "remote" as const,
+    });
+    const w = mountPicker();
+    const { useSettingsStore } = await import("../../../stores/settings");
+    await useSettingsStore().refreshTarget();
+    await flushPromises();
+    return w;
+  }
+
+  it("remote target: browse opens the fs.list popover; dirs descend; choose fills the input", async () => {
+    mockIpc.remoteBrowse.mockResolvedValue({
+      cwd: "/home/tv", root: "/home/tv",
+      entries: [
+        { name: "aisc-handtest", isDir: true },
+        { name: "readme.md", isDir: false },
+      ],
+    });
+    const w = await mountRemote();
+    const btn = w.findAll("button").find((b) => b.text() === "选择")!;
+    expect(btn.attributes("disabled")).toBeUndefined();
+    await btn.trigger("click");
+    await flushPromises();
+    expect(mockIpc.remoteBrowse).toHaveBeenCalledWith(undefined);
+    expect(w.find('[role="dialog"]').exists()).toBe(true);
+    expect(w.findAll(".browse-item").length).toBe(2);
+
+    // Descend into the dir (second page through the same IPC).
+    mockIpc.remoteBrowse.mockResolvedValue({
+      cwd: "/home/tv/aisc-handtest", root: "/home/tv",
+      entries: [],
+    });
+    await w.findAll(".browse-item")[0]!.trigger("click");
+    await flushPromises();
+    expect(mockIpc.remoteBrowse).toHaveBeenLastCalledWith("/home/tv/aisc-handtest");
+    expect(w.find(".browse-path").text()).toBe("/home/tv/aisc-handtest");
+    // The up-limit is the pin root, not "/".
+    expect(w.find(".browse-head .ui-button").attributes("disabled")).toBeUndefined();
+
+    // Choose fills the picker input with the absolute remote path.
+    await w.findAll(".browse-actions button")[1]!.trigger("click");
+    const input = w.find("input.workspace");
+    expect((input.element as HTMLInputElement).value).toBe("/home/tv/aisc-handtest");
+    expect(w.find('[role="dialog"]').exists()).toBe(false);
+  });
+
+  it("local target: browse keeps the native dialog path (no remote IPC)", async () => {
+    const w = mountPicker();
+    await flushPromises();
+    const btn = w.findAll("button").find((b) => b.text() === "选择")!;
+    await btn.trigger("click");
+    await flushPromises();
+    expect(mockIpc.remoteBrowse).not.toHaveBeenCalled();
+    expect(w.find('[role="dialog"]').exists()).toBe(false);
   });
 });

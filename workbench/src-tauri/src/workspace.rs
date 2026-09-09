@@ -694,6 +694,129 @@ pub async fn workspace_history_remove(
     Ok(rev)
 }
 
+/// F2-B (fix2-design.md): one directory page of the remote workspace
+/// picker's browse dialog — served over the pooled serve connection's
+/// `fs.list` op, pinned at the remote `$HOME` (the v1.3 ready banner's
+/// `home`). Containment mirrors the R3 fs.* server side: `..` segments
+/// normalize away, anything resolving outside the pin root is rejected.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RemoteDirEntry {
+    pub name: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RemoteBrowseResult {
+    /// The absolute POSIX path this page describes (already normalized).
+    pub cwd: String,
+    /// The pin root (remote `$HOME`) — the dialog's up-limit.
+    pub root: String,
+    pub entries: Vec<RemoteDirEntry>,
+}
+
+/// Normalize a requested absolute POSIX path and keep it inside `root`:
+/// `.` and `..` fold away (F1 browse-pinning precedent — a plain prefix
+/// check would let `/root/a/../x` through), empty/`/` means the root.
+fn normalize_under_root(root: &str, requested: &str) -> Result<String, WorkbenchError> {
+    let root_abs = root.trim_end_matches('/');
+    if root_abs.is_empty() {
+        return Err(WorkbenchError::workspace_invalid().with_detail("browse root is empty"));
+    }
+    let req = requested.trim();
+    let joined = if req.is_empty() || req == "/" {
+        root_abs.to_string()
+    } else if req.starts_with('/') {
+        req.to_string()
+    } else {
+        return Err(WorkbenchError::workspace_invalid()
+            .with_detail("browse path must be absolute (e.g. /home/user/proj)"));
+    };
+    let mut segs: Vec<&str> = Vec::new();
+    for seg in joined.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                if segs.pop().is_none() {
+                    return Err(WorkbenchError::workspace_conflict()
+                        .with_detail("browse path escapes the remote home"));
+                }
+            }
+            s => segs.push(s),
+        }
+    }
+    let mut abs = String::new();
+    for s in &segs {
+        abs.push('/');
+        abs.push_str(s);
+    }
+    if abs.is_empty() {
+        abs.push('/');
+    }
+    if abs == root_abs || abs.starts_with(&format!("{}/", root_abs)) {
+        Ok(abs)
+    } else {
+        Err(WorkbenchError::workspace_conflict()
+            .with_detail("browse path escapes the remote home"))
+    }
+}
+
+#[tauri::command]
+pub async fn remote_browse(
+    app: AppHandle,
+    path: Option<String>,
+) -> Result<RemoteBrowseResult, WorkbenchError> {
+    let t = match crate::target::resolve_target(&app).await? {
+        crate::cli::CliTarget::Remote(t) => t,
+        crate::cli::CliTarget::Local(_) => {
+            return Err(WorkbenchError::workspace_invalid()
+                .with_detail("remote browse requires a remote driving target"))
+        }
+    };
+    let pool = crate::serve::global_pool();
+    let session = crate::serve::pooled_session(pool, &t).await?;
+    let root = session
+        .banner()
+        .home
+        .clone()
+        .ok_or_else(|| WorkbenchError::cli_protocol()
+            .with_detail("remote serve lacks the v1.3 home anchor — upgrade the remote aisc CLI"))?
+        .trim_end_matches('/')
+        .to_string();
+    let cwd = normalize_under_root(&root, path.as_deref().unwrap_or(""))?;
+
+    // Page through fs.list until exhausted (dirs first, name-sorted; the
+    // picker only descends into dirs but files stay visible, F1 semantics).
+    let mut entries: Vec<RemoteDirEntry> = Vec::new();
+    let mut offset = 0usize;
+    loop {
+        let rel = cwd.strip_prefix(&root).unwrap_or("").trim_start_matches('/');
+        let data = crate::serve::fs_op(
+            pool,
+            &t,
+            "fs.list",
+            &serde_json::json!({ "root": root, "path": rel, "offset": offset }),
+        )
+        .await?;
+        let page = data.get("entries").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        for e in page {
+            let name = e.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if name.is_empty() {
+                continue;
+            }
+            entries.push(RemoteDirEntry {
+                is_dir: e.get("kind").and_then(|v| v.as_str()) == Some("dir"),
+                name,
+            });
+        }
+        match data.get("nextOffset").and_then(|v| v.as_u64()) {
+            Some(next) if (next as usize) < 2000 => offset = next as usize,
+            _ => break,
+        }
+    }
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+    Ok(RemoteBrowseResult { cwd, root, entries })
+}
+
 /// Cheap existence probe for the picker's click-guard (⑧).
 /// R4 (field #1/#5): target-aware — a remote target probes the REMOTE
 /// machine's fs over the pooled serve connection; a WINDOWS-STYLE path
@@ -1930,6 +2053,31 @@ mod tests {
 
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
+
+    // -- F2-B: browse pinning (normalize_under_root) -------------------------
+
+    #[test]
+    fn browse_root_pins_and_normalizes() {
+        // empty / "/" → the root itself
+        assert_eq!(normalize_under_root("/home/tv", "").unwrap(), "/home/tv");
+        assert_eq!(normalize_under_root("/home/tv", "/").unwrap(), "/home/tv");
+        // inside stays; `.` and `..` fold away (F1 containment precedent)
+        assert_eq!(normalize_under_root("/home/tv", "/home/tv/proj").unwrap(), "/home/tv/proj");
+        assert_eq!(
+            normalize_under_root("/home/tv", "/home/tv/a/../b").unwrap(),
+            "/home/tv/b"
+        );
+        assert_eq!(normalize_under_root("/home/tv", "/home/tv/./x/").unwrap(), "/home/tv/x");
+        // escapes (sibling / parent / dotdot below root / relative input)
+        assert!(normalize_under_root("/home/tv", "/home/tv2/x").is_err());
+        assert!(normalize_under_root("/home/tv", "/home/tv/../secret").is_err());
+        assert!(normalize_under_root("/home/tv", "/etc").is_err());
+        assert!(normalize_under_root("/home/tv", "relative/path").is_err());
+        // root itself is the up-limit
+        assert_eq!(normalize_under_root("/home/tv", "/home/tv").unwrap(), "/home/tv");
+        // trailing slashes on the root argument fold away
+        assert_eq!(normalize_under_root("/home/tv/", "/home/tv/p").unwrap(), "/home/tv/p");
+    }
 
     #[test]
     fn accepts_simple_relative() {
