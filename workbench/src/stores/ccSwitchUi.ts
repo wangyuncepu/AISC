@@ -43,15 +43,16 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
 
   /** 2.1.11 P1: edit-time explicit view — fetch the FULL api_key of one
    * provider. The reveal snapshot is used for the key only and is NOT
-   * applied to the card list (the list must stay secret-free). */
+   * applied to the card list (the list must stay secret-free).
+   * Manual-test r3: failures PROPAGATE — swallowing them into `null` made
+   * the eye button a silent no-op whenever the chain broke (e.g. a runtime
+   * container whose baked adapter predates `--reveal-id`), the exact
+   * "保存无反应" dead-button pattern PP r4 fixed for save. The editor
+   * renders the error inline. */
   async function revealKey(ws: string, rt: string, providerId: string): Promise<string | null> {
-    try {
-      const result = await ipc.ccSwitchProviders(ws, rt, agent.value, providerId);
-      const row = result.providers.find((p) => p.id === providerId);
-      return row?.api_key ?? null;
-    } catch {
-      return null;
-    }
+    const result = await ipc.ccSwitchProviders(ws, rt, agent.value, providerId);
+    const row = result.providers.find((p) => p.id === providerId);
+    return row?.api_key ?? null;
   }
 
   async function list(ws: string, rt: string): Promise<boolean> {

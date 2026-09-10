@@ -279,6 +279,7 @@ export const enUS: Record<string, string> = {
   "ccswitch.apiKeyConfigured": "Configured — leave empty to keep; use the button to view",
   "ccswitch.apiKeyShow": "Show API key",
   "ccswitch.apiKeyHide": "Hide API key",
+  "ccswitch.apiKeyRevealFailed": "Reveal failed: {message}",
   "ccswitch.newKey": "New API key (optional)",
   "ccswitch.secretHint": "The key is written into the container through an encrypted channel only — never in argv, logs, or local storage.",
   "ccswitch.editKeyHint": "Leave empty to keep the current key.",

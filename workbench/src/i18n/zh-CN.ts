@@ -279,6 +279,7 @@ export const zhCN = {
   "ccswitch.apiKeyConfigured": "已配置——留空保存则不修改，点右侧按钮查看",
   "ccswitch.apiKeyShow": "查看 API Key",
   "ccswitch.apiKeyHide": "隐藏 API Key",
+  "ccswitch.apiKeyRevealFailed": "取回失败：{message}",
   "ccswitch.newKey": "新 API Key（可选）",
   "ccswitch.secretHint": "密钥仅经加密通道写入容器，不会出现在命令行、日志或本地存储。",
   "ccswitch.editKeyHint": "留空表示保留现有密钥。",
