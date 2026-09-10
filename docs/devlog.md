@@ -162,6 +162,13 @@
   体感全过）。门禁：pytest 1198→**1212** / 72 skip（手测轮 +14 测）；
   nas wheel 全程同步部署，CLI 日志（cli_exit 计时/退出码）定位「用户
   自 stop 后再 stop 报错」一段乌龙全靠它还原。
+- **v2.1.10.dev0 封版（2026-09-10）**：四件套冻结（VERSION / tauri
+  2.1.10-dev / envelope fixture / notes `docs/releases/v2.1.10.dev0.md`
+  ——主题「CLI 远程化 + 工作区体验补全」）+ plans 归档
+  `docs/archive/2.1.10-dev-plans/`。周期总账：R1-R4（serve 通道/远程
+  会话/远端 FS/机器管理+网关转发）+ FIX-1/2/3 全批 + UI 审查落盘
+  （2.1.11 输入）。tag `v2.1.10-dev` → Draft release（NSIS + sha256，
+  发布按钮在用户）。
 - **FIX-3 手测 PASS 收口（2026-09-10，用户验收「无明显 bug」）**：A-D
   十条全过。手测期间环境性拦截一起：起工作区报「No free host port in
   47000..47999」（2026-09-10 复发，现场实证空闲口 connect 被吞非 RST、

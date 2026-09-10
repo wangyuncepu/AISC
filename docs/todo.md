@@ -153,8 +153,10 @@
 
 # v2.1.10-target
 - new feature
-  - [ ] aisc-cli能力：类似vscode codeserver，一台机器上的cli可以和其它机器上的workbench沟通，workbench可以选择和哪台机器上的cli进行通信？先调研vscode ssh remote的实现方式
+  - [x] aisc-cli能力：类似vscode codeserver，一台机器上的cli可以和其它机器上的workbench沟通，workbench可以选择和哪台机器上的cli进行通信？先调研vscode ssh remote的实现方式
 - fix
-  - [ ] 历史页的claude、codex图标区别度提升
-  - [ ] aisc-cli命令优化
+  - [x] 历史页的claude、codex图标区别度提升
+  - [x] aisc-cli命令优化
   - [x] 资源管理器、bash tab行等非终端区域的拖动，且提供类似vscode的可隐藏折叠设计
+
+
