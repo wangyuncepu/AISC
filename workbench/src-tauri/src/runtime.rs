@@ -530,7 +530,12 @@ pub async fn runtime_services(
 // --- Stage 8e: cc-switch provider data plane (aisc.cc-switch-provider/v1) ---
 
 /// One provider row of the secret-free adapter snapshot (already masked
-/// in-container; the API key never crosses this boundary in full).
+/// in-container). Exception (2.1.11 P1-1): an explicit `list --reveal-id`
+/// response carries the FULL key of the NAMED row only — `api_key` is
+/// `None` for every other row and for all card-list snapshots.
+/// 手测 r4: the field was missing here, so serde silently STRIPPED the
+/// revealed key at this boundary and the eye button stayed a silent no-op
+/// (envelope ok → row without api_key → `null` → UI did nothing).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CcSwitchProvider {
     pub id: String,
@@ -540,6 +545,8 @@ pub struct CcSwitchProvider {
     pub model: String,
     pub has_api_key: bool,
     pub api_key_mask: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
     pub is_current: bool,
 }
 
