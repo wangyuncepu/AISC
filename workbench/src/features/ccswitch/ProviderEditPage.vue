@@ -323,13 +323,18 @@ function onSave(): void {
 /* 2.1.11 P1: key field — input stays FULL width (aligned with the fields
  * above); the reveal button floats inside the right edge (manual-test r2:
  * the flex row squeezed the input shorter than its siblings).
- * Manual-test r3: `.key-row` must carry flex: 1 itself — as a flex item of
- * `.field` with default `flex: 0 1 auto` it shrink-wraps, and the input's
- * `width: 100%` resolves against that shrink-to-fit width (circular → the
- * browser falls back to the input's ~170px intrinsic size), which is why
- * the r2 width fix had no visual effect. min-width: 0 lets it shrink below
- * content size instead of overflowing. */
-.key-row { position: relative; display: block; flex: 1; min-width: 0; }
+ * Manual-test r4: `.key-row` IS a `.field > span`, so the generic
+ * `.field > span { width: 90px; flex: none }` label rule (specificity
+ * 0,1,1) overrides any plain `.key-row` sizing (0,1,0) — r2/r3 fixes kept
+ * losing to it and the row stayed pinned at 90px. Match the specificity
+ * and opt out of every label property explicitly. */
+.field > span.key-row {
+  position: relative;
+  display: block;
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
 .key-row input { width: 100%; box-sizing: border-box; padding-right: 42px; }
 .key-reveal {
   position: absolute;
