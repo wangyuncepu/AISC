@@ -84,6 +84,8 @@ export const zhCN = {
   "picker.invalidTitle": "工作区已移动或删除",
   "picker.invalidBody": "以下路径在磁盘上已不存在。可以清除这条历史记录（只移除记录，不动任何数据）：",
   "picker.invalidClear": "清除记录",
+  "picker.invalidPurge": "同时清理该工作区的生命周期文件（agent 记忆、配置、状态——不涉及任何用户文件）",
+  "picker.exportLifecycle": "先导出（zip）",
 
   // --- launch summary (LaunchSummary.vue) ---
   "summary.title": "启动摘要",

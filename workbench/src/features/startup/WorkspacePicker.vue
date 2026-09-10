@@ -74,16 +74,40 @@ async function onRecentClick(path: string): Promise<void> {
   }
   store.selectRecentWorkspace(path);
 }
-async function clearInvalidEntry(): Promise<void> {
+async function clearInvalidEntry(purgeData: boolean): Promise<void> {
   const path = invalidPath.value;
   invalidPath.value = null;
   if (!path) return;
   try {
-    await wsStore.clearHistoryEntry(path);
+    if (purgeData) {
+      // 2.1.11 P1-3 (user ruling): sweep the lifecycle files too — the
+      // full forget transaction (quarantine → purge → drop the record).
+      // The workspace directory is already gone from disk, so the
+      // user-files red line holds trivially.
+      await wsStore.forgetWorkspace(path);
+    } else {
+      await wsStore.clearHistoryEntry(path);
+    }
   } catch {
     /* record-only clear is best-effort for the user; history reloads next open */
   }
 }
+
+/** 2.1.11 P1-3: rescue-export before clearing (agent memories/configs as
+ * zip; the dialog stays open so the user can still confirm the clear). */
+async function exportInvalidEntry(): Promise<void> {
+  const path = invalidPath.value;
+  if (!path) return;
+  exportBusy.value = true;
+  try {
+    await wsStore.exportLifecycle(path);
+  } catch {
+    /* best-effort rescue path — surface nothing scary on failure */
+  } finally {
+    exportBusy.value = false;
+  }
+}
+const exportBusy = ref(false);
 
 // --- F2-B: remote directory browser (fs.list over the pooled serve
 // channel, pinned at the remote $HOME; manual absolute input stays the
@@ -253,6 +277,21 @@ async function startForget(path: string): Promise<void> {
     forgetPreview.value = null;
   }
 }
+/** 2.1.11 P1-3: rescue-export from the forget dialog (memories/configs as
+ * zip; the dialog stays open — the destructive confirm is still manual). */
+async function exportForgetLifecycle(): Promise<void> {
+  const preview = forgetPreview.value;
+  if (!preview || exportBusy.value) return;
+  exportBusy.value = true;
+  try {
+    await wsStore.exportLifecycle(preview.workspacePath);
+  } catch {
+    /* best-effort rescue path */
+  } finally {
+    exportBusy.value = false;
+  }
+}
+
 async function confirmForget(): Promise<void> {
   const preview = forgetPreview.value;
   if (!preview || forgetBusy.value) return;
@@ -367,14 +406,18 @@ async function confirmForget(): Promise<void> {
       :preview="forgetPreview"
       :busy="forgetBusy"
       :error="forgetError"
+      v-model:export-busy="exportBusy"
       @close="forgetPreview = null; forgetError = null"
       @confirm="confirmForget"
+      @export="exportForgetLifecycle"
     />
     <InvalidPathDialog
       v-if="invalidPath"
       :path="invalidPath"
+      :busy="exportBusy"
       @close="invalidPath = null"
       @clear="clearInvalidEntry"
+      @export="exportInvalidEntry"
     />
     <!-- F2-B: remote directory browser — click selects, double-click
          descends (explorer mental model); dirs only, dotfiles hidden. -->

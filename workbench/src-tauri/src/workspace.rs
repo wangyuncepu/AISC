@@ -554,6 +554,74 @@ fn forget_stop_owned_containers(key: &str) -> Result<u32, String> {
     Ok(stopped)
 }
 
+/// 2.1.11 P1-3: export the workspace's lifecycle files as a zip (agent
+/// memories, provider configs, session state — the data-root
+/// `workspaces/<h>/` subtree minus the bulky machine-regenerable
+/// `toolchain/` cache). The user's workspace directory itself is never
+/// read, let alone touched. Files locked at copy time (e.g. a live SQLite
+/// -wal held by the container) are skipped best-effort — the export must
+/// never fail the rescue path. Returns the number of files written.
+#[tauri::command]
+pub async fn workspace_export_lifecycle(
+    path: String,
+    dest: String,
+) -> Result<u32, WorkbenchError> {
+    let ws_path = Path::new(&path);
+    let resolved = crate::data_root::resolve_data_root(ws_path)
+        .map_err(|e| WorkbenchError::workspace_io().with_detail(e.message()))?;
+    let ws_dir = resolved.workspace_dir();
+    if !ws_dir.is_dir() {
+        return Err(WorkbenchError::workspace_not_found()
+            .with_detail("no lifecycle data exists for this workspace"));
+    }
+    let file = fs::File::create(&dest).map_err(|e| {
+        WorkbenchError::workspace_io().with_detail(format!("create zip: {e}"))
+    })?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let root_name = crate::data_root::workspace_dir_name(
+        &crate::data_root::workspace_hash_v1(ws_path));
+
+    let mut count = 0u32;
+    let mut stack: Vec<(PathBuf, String)> = vec![(ws_dir.clone(), root_name)];
+    while let Some((dir, prefix)) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(it) => it,
+            Err(e) => {
+                return Err(WorkbenchError::workspace_io()
+                    .with_detail(format!("read dir {}: {e}", prefix)))
+            }
+        };
+        for entry in entries.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            let entry_name =
+                format!("{prefix}/{}", entry.file_name().to_string_lossy());
+            if ft.is_dir() {
+                // toolchain cache: node_modules-class bulk, regenerable —
+                // agent memories/configs are the point of the export.
+                if entry.file_name() == "toolchain" {
+                    continue;
+                }
+                let _ = zip.add_directory(&entry_name, options);
+                stack.push((entry.path(), entry_name));
+            } else {
+                let Ok(mut src) = fs::File::open(entry.path()) else { continue };
+                if zip.start_file(&entry_name, options).is_err() {
+                    continue;
+                }
+                if std::io::copy(&mut src, &mut zip).is_ok() {
+                    count += 1;
+                }
+            }
+        }
+    }
+    zip.finish().map_err(|e| {
+        WorkbenchError::workspace_io().with_detail(format!("finish zip: {e}"))
+    })?;
+    Ok(count)
+}
+
 /// Read-only preview for the confirm dialog: what WOULD be deleted, what is
 /// kept, and whether anything blocks the operation right now.
 #[tauri::command]

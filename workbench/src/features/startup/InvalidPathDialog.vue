@@ -9,14 +9,24 @@ import { onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useDialogA11y } from "../../composables/useDialogA11y";
 
-defineProps<{ path: string }>();
-const emit = defineEmits<{ (e: "close"): void; (e: "clear"): void }>();
+defineProps<{ path: string; busy?: boolean }>();
+const emit = defineEmits<{
+  (e: "close"): void;
+  (e: "clear", purgeData: boolean): void;
+  (e: "export"): void;
+}>();
 
 const { t } = useI18n();
 const panel = ref<HTMLElement | null>(null);
 const cancelBtn = ref<HTMLButtonElement | null>(null);
 useDialogA11y(panel, () => emit("close"));
 onMounted(() => cancelBtn.value?.focus());
+
+// 2.1.11 P1-3 (user ruling): the record clear ALSO sweeps the lifecycle
+// files by default — agent memories/configs/state under the data root.
+// The workspace directory itself is gone from disk (that is why this
+// dialog exists), so "never touch user files" holds trivially.
+const purgeData = ref(true);
 </script>
 
 <template>
@@ -35,12 +45,20 @@ onMounted(() => cancelBtn.value?.focus());
       <div class="body">
         <p>{{ t("picker.invalidBody") }}</p>
         <p class="path" :title="path">{{ path }}</p>
+        <label class="purge">
+          <input v-model="purgeData" type="checkbox" />
+          <span>{{ t("picker.invalidPurge") }}</span>
+        </label>
       </div>
       <footer class="foot">
         <button ref="cancelBtn" class="ui-button" @click="emit('close')">
           {{ t("picker.cancel") }}
         </button>
-        <button class="ui-button" @click="emit('clear')">
+        <button class="ui-button" @click="emit('export')">
+          {{ t("picker.exportLifecycle") }}
+        </button>
+        <button class="ui-button" :disabled="busy"
+                @click="emit('clear', purgeData)">
           {{ t("picker.invalidClear") }}
         </button>
       </footer>
@@ -66,6 +84,11 @@ onMounted(() => cancelBtn.value?.focus());
 .head h2 { margin: 0; font-size: var(--font-lg); font-weight: 600; }
 .body { padding: var(--space-2) var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
 .foot { padding: var(--space-3) var(--space-4); display: flex; justify-content: flex-end; gap: var(--space-2); }
+.purge {
+  display: flex; align-items: center; gap: var(--space-2);
+  font-size: var(--font-sm); color: var(--text-2); margin: 0;
+  cursor: pointer;
+}
 .path {
   margin: 0; font-family: var(--font-mono); font-size: var(--font-xs);
   color: var(--text-muted);

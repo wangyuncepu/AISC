@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, markRaw, ref, shallowRef } from "vue";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { confirm, save } from "@tauri-apps/plugin-dialog";
 import type {
   ForgetResult,
   ForgetPreview,
@@ -453,6 +453,20 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     }
   }
 
+  /** 2.1.11 P1-3: rescue-export the lifecycle files before a forget/clear.
+   * Returns the written-file count, or null when the user cancelled the
+   * save dialog. Routed through the store per the layer contract (F-A01). */
+  async function exportLifecycle(path: string): Promise<number | null> {
+    const base = path.split(/[\\/]/).filter(Boolean).pop() ?? "workspace";
+    const stamp = new Date().toISOString().slice(0, 10);
+    const dest = await save({
+      defaultPath: `aisc-lifecycle-${base}-${stamp}.zip`,
+      filters: [{ name: "zip", extensions: ["zip"] }],
+    });
+    if (!dest) return null;
+    return await ipc.workspaceExportLifecycle(path, dest);
+  }
+
   /** ⑧ "clear the moved/deleted record": drops the history entry only. */
   async function clearHistoryEntry(path: string): Promise<void> {
     try {
@@ -518,6 +532,7 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     recentWorkspaces,
     forgetPreview,
     forgetWorkspace,
+    exportLifecycle,
     clearHistoryEntry,
     workspacePathExists,
     browseBusy,

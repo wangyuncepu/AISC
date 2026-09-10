@@ -116,7 +116,7 @@ describe("recents cap + inline expand (⑦)", () => {
 });
 
 describe("moved/deleted click guard (⑧)", () => {
-  it("opens the invalid dialog for a missing path and clears ONLY the record", async () => {
+  it("clears the record AND purges lifecycle files when the purge box is checked (default)", async () => {
     const ws = useWorkspacesStore();
     ws.history = historyWith(1);
     ws.historyRevision = 1;
@@ -127,9 +127,29 @@ describe("moved/deleted click guard (⑧)", () => {
     await flushPromises();
     expect(w.find('[role="dialog"]').exists()).toBe(true);
     expect(w.text()).toContain("已移动或删除");
+    // 2.1.11 P1-3 (user ruling): purge is ON by default.
+    expect((w.find('.purge input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true);
 
     mockIpc.loadHistory.mockResolvedValue(historyWith(0));
-    await w.findAll(".foot button")[1].trigger("click"); // 清除记录
+    await w.findAll(".foot button")[2].trigger("click"); // 清除记录（foot: cancel/export/clear）
+    expect(mockIpc.workspaceForget).toHaveBeenCalledWith("C:\\ws\\project-1", 1);
+    expect(mockIpc.workspaceHistoryRemove).not.toHaveBeenCalled();
+    expect(w.find('[role="dialog"]').exists()).toBe(false);
+  });
+
+  it("clears ONLY the record when the purge box is unchecked", async () => {
+    const ws = useWorkspacesStore();
+    ws.history = historyWith(1);
+    ws.historyRevision = 1;
+    mockIpc.workspacePathExists.mockResolvedValue(false);
+    const w = mountPicker();
+
+    await w.find(".recent").trigger("click");
+    await flushPromises();
+    await w.find('.purge input[type="checkbox"]').setValue(false);
+
+    mockIpc.loadHistory.mockResolvedValue(historyWith(0));
+    await w.findAll(".foot button")[2].trigger("click"); // 清除记录
     expect(mockIpc.workspaceHistoryRemove).toHaveBeenCalledWith("C:\\ws\\project-1", 1);
     expect(mockIpc.workspaceForget).not.toHaveBeenCalled();
     expect(w.find('[role="dialog"]').exists()).toBe(false);
@@ -183,7 +203,7 @@ describe("forget flow (⑦)", () => {
     expect(dialog.text()).toContain("不会被删除");
     expect(dialog.text()).toContain("不会被触碰");
 
-    await w.findAll(".foot button")[1].trigger("click"); // 彻底忘记
+    await w.findAll(".foot button")[2].trigger("click"); // 彻底忘记（foot: cancel/export/confirm）
     await flushPromises();
     expect(mockIpc.workspaceForget).toHaveBeenCalledWith("C:\\ws\\project-1", 3);
     expect(mockIpc.loadHistory).toHaveBeenCalled();
@@ -201,7 +221,7 @@ describe("forget flow (⑦)", () => {
     await w.find(".kebab").trigger("click");
     await w.find(".ctx-item").trigger("click");
     await flushPromises();
-    const confirmBtn = w.findAll(".foot button")[1];
+    const confirmBtn = w.findAll(".foot button")[2];
     expect((confirmBtn.element as HTMLButtonElement).disabled).toBe(true);
     expect(w.text()).toContain("当前窗口");
     expect(mockIpc.workspaceForget).not.toHaveBeenCalled();
@@ -218,7 +238,7 @@ describe("forget flow (⑦)", () => {
     await w.find(".kebab").trigger("click");
     await w.find(".ctx-item").trigger("click");
     await flushPromises();
-    await w.findAll(".foot button")[1].trigger("click");
+    await w.findAll(".foot button")[2].trigger("click");
     await flushPromises();
     expect(w.find('[role="dialog"]').exists()).toBe(true);
     // History was still refreshed so a retry uses the new revision.
