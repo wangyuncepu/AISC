@@ -192,6 +192,8 @@ export const useRuntimeStore = defineStore("runtime", () => {
 
     // instance computed (read-only forward)
     reconcile: fwdRef("reconcile"),
+    /** Manual-test r4 #1: the single launch gate (button / Enter / store). */
+    startEnabled: fwdRef("startEnabled"),
 
     // instance methods (call-time re-lookup -> ACTIVE workspace)
     buildPatch: fwdFn("buildPatch"),

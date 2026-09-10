@@ -1,4 +1,4 @@
-﻿import { ref } from "vue";
+﻿import { computed, ref } from "vue";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -1667,8 +1667,28 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     }
   }
 
+  /** Manual-test r4 #1: single source of truth for "launch is allowed".
+   * Previously the LaunchSummary button gated on its own local computed
+   * while the G-08 Enter shortcut called startFromSummary directly — a moved
+   * workspace folder launched anyway and docker's `-v` bind silently
+   * recreated the missing host path as an empty dir. The button, the
+   * shortcut, and the store action now all consume THIS computed. */
+  const startEnabled = computed(() => {
+    if (!preflight.value) return false;
+    const action = preflight.value.recommended_action ?? "start";
+    if (!["start", "reuse", "restart"].includes(action)) return false;
+    const imageFail = preflight.value.checks.find((c) => c.id === "image");
+    const imageMissing =
+      imageFail?.status === "fail" && action !== "reuse";
+    const hardBlocking = preflight.value.checks.some(
+      (c) => c.status === "fail" && (c.id === "workspace" || c.id === "docker")
+    );
+    return !hardBlocking && !imageMissing;
+  });
+
   async function startFromSummary() {
     if (!preflight.value) return;
+    if (!startEnabled.value) return;
     // O9 r2 (D-11, user ruling 2026-09-02): NO layout restore at all —
     // closing the workspace closes it; reopening always starts FRESH from
     // the G-08 single Bash tab. (r1 restored the layout in full after the
@@ -1887,6 +1907,7 @@ export function createWorkspaceRuntime(deps: WorkspaceRuntimeDeps) {
     dockerStarting,
     dockerStartedAt,
     startFromSummary,
+    startEnabled,
     cancelStart,
     keepCancelledRuntime,
     stopCancelledRuntime,

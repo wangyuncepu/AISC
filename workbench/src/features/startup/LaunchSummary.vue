@@ -49,16 +49,11 @@ const imageNotFound = computed(() => {
   const c = store.preflight?.checks.find((c) => c.id === "image");
   return c?.status === "fail" && c?.error_code === "AISC_ERR_IMAGE_NOT_FOUND";
 });
-/** Missing image on a non-reuse path - disables Start (reuse keeps the existing
- * container, so a missing tag does not block it). */
-const imageMissing = computed(() => checkStatus("image") === "fail" && action.value !== "reuse");
-const startEnabled = computed(
-  () =>
-    !!store.preflight &&
-    ["start", "reuse", "restart"].includes(action.value) &&
-    !hardBlocking.value &&
-    !imageMissing.value
-);
+// Manual-test r4 #1: the launch gate moved INTO the store (startEnabled) so
+// the G-08 Enter shortcut, the store action and this button share the exact
+// same predicate — the button's local copy used to disagree with the
+// shortcut path, letting a moved workspace folder launch via Enter.
+const startEnabled = computed(() => store.startEnabled);
 
 function changeSettings() {
   store.showAdvanced = !store.showAdvanced;
