@@ -87,6 +87,29 @@ async function fetchNow(): Promise<void> {
         message: r.available ? "" : (r.message || t("ccswitch.fetchUnavailable")) }
     : null;
 }
+// 2.1.11 P1: edit-time key view — an already-configured provider keeps the
+// field EMPTY by default (placeholder states it) with an explicit reveal
+// (eye) button that fetches the full key on demand; masked otherwise.
+const keyConfigured = computed(() => props.provider?.has_api_key ?? false);
+const keyVisible = ref(false);
+const revealBusy = ref(false);
+const keyPlaceholder = computed(() =>
+  adding.value ? "" : (keyConfigured.value ? t("ccswitch.apiKeyConfigured") : ""));
+async function revealApiKey(): Promise<void> {
+  if (!props.provider || !runtime.runtimeId || !runtime.workspace || revealBusy.value) return;
+  revealBusy.value = true;
+  try {
+    const key = await uiStore.revealKey(
+      runtime.workspace, runtime.runtimeId, props.provider.id);
+    if (key) {
+      form.apiKey = key;
+      keyVisible.value = true;
+    }
+  } finally {
+    revealBusy.value = false;
+  }
+}
+
 const candidates = computed<string[]>(() => {
   if (!props.provider) return [];
   return [
@@ -226,7 +249,21 @@ function onSave(): void {
         <input v-model="modelField" @input="touch" /></label>
       </template>
       <label class="field"><span>{{ t("ccswitch.apiKey") }}</span>
-        <input v-model="form.apiKey" type="password" autocomplete="off" @input="touch" /></label>
+        <span class="key-row">
+          <input v-model="form.apiKey" :type="keyVisible ? 'text' : 'password'"
+                 autocomplete="off" :placeholder="keyPlaceholder" @input="touch" />
+          <button v-if="!adding && keyConfigured" type="button" class="ui-icon-button sm key-reveal"
+                  :disabled="revealBusy"
+                  :aria-label="keyVisible ? t('ccswitch.apiKeyHide') : t('ccswitch.apiKeyShow')"
+                  :title="keyVisible ? t('ccswitch.apiKeyHide') : t('ccswitch.apiKeyShow')"
+                  @click="keyVisible ? (keyVisible = false) : revealApiKey()">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" />
+              <circle cx="8" cy="8" r="2" />
+            </svg>
+          </button>
+        </span>
+      </label>
       <p class="hint">{{ t("ccswitch.secretHint") }}</p>
 
       <template v-if="tier === 'advanced'">
@@ -273,6 +310,10 @@ function onSave(): void {
 
 <style scoped>
 .edit-page { display: flex; flex-direction: column; height: 100%; overflow: auto; }
+/* 2.1.11 P1: key field with the reveal (eye) button inline */
+.key-row { display: flex; gap: 6px; align-items: center; }
+.key-row input { flex: 1; min-width: 0; }
+.key-reveal { flex-shrink: 0; }
 .head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
 .head h2 { font-size: var(--font-md); margin: 0; }
 .spacer { flex: 1; }

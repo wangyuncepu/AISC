@@ -653,9 +653,16 @@ pub async fn cc_switch_providers(
     workspace: String,
     runtime_id: String,
     agent: String,
+    reveal_id: Option<String>,
 ) -> Result<CcSwitchProvidersResult, WorkbenchError> {
     cc_switch_validate(&runtime_id, &agent)?;
-    let argv = cc_switch_argv("list", &runtime_id, &agent, &workspace, None);
+    let mut argv = cc_switch_argv("list", &runtime_id, &agent, &workspace, None);
+    if let Some(rid) = reveal_id {
+        // 2.1.11 P1: edit-time explicit view — the named provider's row
+        // carries the FULL api_key (every other row stays masked).
+        argv.push("--reveal-id".into());
+        argv.push(rid);
+    }
     cc_switch_call(&app, argv, None).await
 }
 

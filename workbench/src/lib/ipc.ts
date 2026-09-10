@@ -264,8 +264,11 @@ export const shutdownWorkbenchV2 = (request: ShutdownRequest) =>
 // The request document (with any API key) rides the CLI child's stdin via the
 // Rust side — never argv, never persisted.
 
-export const ccSwitchProviders = (workspace: string, runtimeId: string, agent: string) =>
-  invoke<CcSwitchProvidersResult>("cc_switch_providers", { workspace, runtimeId, agent });
+export const ccSwitchProviders = (
+  workspace: string, runtimeId: string, agent: string, revealId?: string,
+) =>
+  invoke<CcSwitchProvidersResult>("cc_switch_providers",
+    { workspace, runtimeId, agent, revealId: revealId ?? null });
 
 export const ccSwitchAdd = (
   workspace: string, runtimeId: string, agent: string, request: CcSwitchRequest,

@@ -41,6 +41,19 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
     providers.value = [...result.providers].sort((a, b) => _order(a.id) - _order(b.id));
   }
 
+  /** 2.1.11 P1: edit-time explicit view — fetch the FULL api_key of one
+   * provider. The reveal snapshot is used for the key only and is NOT
+   * applied to the card list (the list must stay secret-free). */
+  async function revealKey(ws: string, rt: string, providerId: string): Promise<string | null> {
+    try {
+      const result = await ipc.ccSwitchProviders(ws, rt, agent.value, providerId);
+      const row = result.providers.find((p) => p.id === providerId);
+      return row?.api_key ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async function list(ws: string, rt: string): Promise<boolean> {
     loading.value = true;
     error.value = null;
@@ -143,6 +156,6 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
 
   return {
     agent, providers, loading, busy, busyOp, error, fetchedModels,
-    list, switchAgent, add, edit, activate, remove, fetchModels,
+    list, switchAgent, add, edit, activate, remove, fetchModels, revealKey,
   };
 });

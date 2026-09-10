@@ -371,8 +371,13 @@ def resolve_api_format(agent: str, row: dict[str, Any]) -> str:
     return DEFAULT_API_FORMAT.get(agent, "anthropic")
 
 
-def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
-    """The secret-free v1 view of one provider row."""
+def provider_view(agent: str, row: dict[str, Any],
+                  reveal: bool = False) -> dict[str, Any]:
+    """The secret-free v1 view of one provider row.
+
+    *reveal* (2.1.11 P1: edit-time explicit view) additionally emits the
+    full ``api_key`` for THIS row only — the host asked for it by id via
+    ``--reveal-id``; every other row in the snapshot stays masked."""
     settings = row["settings"]
     secret = ""
     if agent == "claude":
@@ -423,6 +428,7 @@ def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
         "model": model,
         "has_api_key": bool(secret),
         "api_key_mask": mask_secret(secret) if secret else "",
+        **({"api_key": secret} if (reveal and secret) else {}),
         "is_current": row["is_current"],
         "role_env": role_env,
         "known_models": known_models,
@@ -1003,8 +1009,10 @@ def _settings_are_real(agent: str, row: dict[str, Any]) -> bool:
 # Operations
 # ---------------------------------------------------------------------------
 
-def op_list(agent: str) -> list[dict[str, Any]]:
-    return [provider_view(agent, row) for row in read_snapshot(agent)]
+def op_list(agent: str, reveal_id: str | None = None) -> list[dict[str, Any]]:
+    return [provider_view(agent, row, reveal=(reveal_id is not None
+                                              and row["id"] == reveal_id))
+            for row in read_snapshot(agent)]
 
 
 def op_add(agent: str, request: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2102,6 +2110,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--since", type=float, default=0.0,
                         help="usage: epoch-seconds cutoff computed host-side "
                              "(local timezone semantics)")
+    parser.add_argument("--reveal-id", default=None,
+                        help="list: additionally emit the FULL api_key of "
+                             "this provider id (edit-time explicit view)")
     parser.add_argument("--live", action="store_true", default=False,
                         help="catalog-sync: ALSO merge a live /models fetch "
                              "(background refresh — up to ~12s of network; "
@@ -2216,7 +2227,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.op == "list":
-            providers = op_list(args.agent)
+            providers = op_list(args.agent, reveal_id=args.reveal_id)
         elif args.op == "add":
             request.setdefault("id", args.id)
             providers = op_add(args.agent, request)

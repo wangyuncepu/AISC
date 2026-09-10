@@ -51,6 +51,7 @@ def cmd_cc_switch_list(args: Any) -> Dict[str, Any]:
         agent=args.agent,
         workspace=args.workspace,
         executor=None,
+        reveal_id=getattr(args, "reveal_id", None),
     )
 
 
