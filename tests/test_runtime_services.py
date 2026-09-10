@@ -371,7 +371,13 @@ class PortAllocatorTests(unittest.TestCase):
         self.assertTrue(WEB_GATEWAY_HOST_PORT_MIN <= port <= WEB_GATEWAY_HOST_PORT_MAX)
         self.assertNotIn(port, answering, "must skip ports that actually answer")
 
-    def test_all_answering_ports_still_errors(self):
+    def test_all_answering_ports_hands_out_for_docker_to_adjudicate(self):
+        """2026-09-10 field shape (recurring): every port bind-blocked AND
+        connect-answering at once (loopback-interception variant of the
+        phantom hold). Both probes lie in that state — hard-failing blocked
+        the whole activation; now the first non-excluded candidate is handed
+        out and Docker's allocator adjudicates a real clash (publish-retry
+        loops rotate the port)."""
         from unittest import mock
 
         class PhantomBindSocket:
@@ -390,9 +396,16 @@ class PortAllocatorTests(unittest.TestCase):
         with mock.patch.object(web_gateway.socket, "socket", PhantomBindSocket), \
                 mock.patch.object(web_gateway, "_connect_reachable",
                                   side_effect=lambda p, timeout=0.15: True):
-            with self.assertRaises(GatewayPortError) as ctx:
-                allocate_gateway_host_port()
-        self.assertIn("bind-blocked AND answering", str(ctx.exception))
+            port = allocate_gateway_host_port(exclude={WEB_GATEWAY_HOST_PORT_MIN})
+        self.assertTrue(WEB_GATEWAY_HOST_PORT_MIN <= port <= WEB_GATEWAY_HOST_PORT_MAX)
+        self.assertNotEqual(port, WEB_GATEWAY_HOST_PORT_MIN, "excluded port must be skipped")
+
+    def test_fully_excluded_range_still_errors(self):
+        """Only a range fully reserved by OTHER REGISTERED RUNTIMES
+        (exclude covers everything) is a true dead end."""
+        blocked = set(range(WEB_GATEWAY_HOST_PORT_MIN, WEB_GATEWAY_HOST_PORT_MAX + 1))
+        with self.assertRaises(GatewayPortError):
+            allocate_gateway_host_port(exclude=blocked)
 
     def test_bind_conflict_detection(self):
         self.assertTrue(is_bind_conflict(

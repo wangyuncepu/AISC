@@ -124,16 +124,27 @@ def allocate_gateway_host_port(exclude: Optional[Set[int]] = None,
             if not _connect_reachable(port):
                 return port
 
+    # 2026-09-10 field evidence (recurring): a transient host state can
+    # leave EVERY candidate bind-blocked AND connect-answering at once (a
+    # loopback-interception variant of the phantom hold — measured:
+    # connects to untouched ports get SWALLOWED, not RST'd, and in the
+    # worse state they get ACKed). Both probes lie in that state and a
+    # hard GatewayPortError blocks the whole activation for nothing.
+    # Docker's own allocator is the conflict authority: hand out the first
+    # non-excluded candidate; a genuine clash fails `docker run -p`
+    # loudly and the publish-retry loops (run_container /
+    # start_runtime) rotate the port with a fresh start_hint.
+    if candidates:
+        return candidates[0]
+
     raise GatewayPortError(
         "No free host port in "
         f"{WEB_GATEWAY_HOST_PORT_MIN}..{WEB_GATEWAY_HOST_PORT_MAX} for the web gateway: "
-        "every candidate is bind-blocked AND answering connections. On "
-        "Docker-Desktop/WSL2 hosts an invisible HNS reservation can "
-        "bind-block the whole range while publishes still work (the "
-        "allocator already falls back to reachability probing in that "
-        "state); if services still fail to open, `wsl --shutdown` + "
-        "restart Docker Desktop clears the reservation, and a reboot "
-        "re-rolls it."
+        "every port in the range is reserved by other registered runtimes. "
+        "(Bind-blocked and connect-answering states no longer fail here — "
+        "the first non-excluded candidate is handed out and Docker's own "
+        "allocator adjudicates real conflicts; `wsl --shutdown` + restart "
+        "Docker Desktop clears phantom HNS holds.)"
     )
 
 
