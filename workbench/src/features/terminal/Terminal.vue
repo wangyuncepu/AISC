@@ -35,6 +35,7 @@ import { sameTermSize, shouldSendSize, type TermSize } from "./resizeSync";
 import { WORKSPACE_PATH_MIME } from "../../lib/workspaceDnd";
 import { containerPathFor, quoteForTerminal } from "./dropPath";
 import { resolveRenderer, terminalTheme, webglGpuSummary } from "./renderer";
+import { linearizeSpoolPage } from "./spoolReplay";
 import { effectiveTheme } from "../../theme";
 import { findLeaf } from "../../stores/paneTree";
 import { prefersReducedMotion } from "../../lib/accessibility";
@@ -1043,7 +1044,11 @@ async function loadEarlier(): Promise<void> {
       return;
     }
     term.clear();
-    const u8 = b64ToUint8(page.bytes);
+    // P1-2 (2.1.11): linearize the replayed page — the raw stream's screen
+    // choreography (scroll-down/ED/CUP/alt-screen) leaves big blank bands
+    // when replayed over a long scrollback (measured 199 lines). The live
+    // window replay below stays raw (that is what the user is watching).
+    const u8 = linearizeSpoolPage(b64ToUint8(page.bytes));
     // 64 KiB slices: one huge write can stall the xterm parse loop.
     for (let i = 0; i < u8.length; i += 65536) {
       term.write(u8.subarray(i, Math.min(i + 65536, u8.length)));
