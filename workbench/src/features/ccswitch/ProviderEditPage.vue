@@ -310,10 +310,17 @@ function onSave(): void {
 
 <style scoped>
 .edit-page { display: flex; flex-direction: column; height: 100%; overflow: auto; }
-/* 2.1.11 P1: key field with the reveal (eye) button inline */
-.key-row { display: flex; gap: 6px; align-items: center; }
-.key-row input { flex: 1; min-width: 0; }
-.key-reveal { flex-shrink: 0; }
+/* 2.1.11 P1: key field — input stays FULL width (aligned with the fields
+ * above); the reveal button floats inside the right edge (manual-test r2:
+ * the flex row squeezed the input shorter than its siblings). */
+.key-row { position: relative; display: block; }
+.key-row input { width: 100%; box-sizing: border-box; padding-right: 42px; }
+.key-reveal {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+}
 .head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
 .head h2 { font-size: var(--font-md); margin: 0; }
 .spacer { flex: 1; }
