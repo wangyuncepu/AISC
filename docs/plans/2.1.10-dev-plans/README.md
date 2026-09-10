@@ -27,7 +27,7 @@ Slurm/PBS 场景调研并入 R0、实施明确划出 2.1.10（D-2 裁决）。
 | R2 | runtime 生命周期 + 终端 PTY 远程流（含 resize 带内化） | **完成（手测自动化三层 PASS：真 SSH 集成 + 真容器 e2e + UI 面 CDP 全链）**，已合并 | [r2-remote-sessions.md](r2-remote-sessions.md) |
 | R3 | 文件面远程化：远端 FS API（D-5 远端权威/本地仅显示） | **完成（三层自动化 PASS：单测 12/真 SSH 0.79s/UI CDP 全链含 watcher）**，已合并 | [r3-remote-fs.md](r3-remote-fs.md) |
 | R4 | svc 网关端口转发 + 机器管理页 | **完成（手测三轮 PASS，真机 nas/Debian/zsh 验收；field-fixes-r4-1..4 五批修复，含 #7 ssh 参数 shell 转义）**，已合并 | [r4-manual-test-round3.md](r4-manual-test-round3.md) |
-| FIX 批 | 历史页图标 ✅ / FIX-2 远程体验补全：**F2-A 控制面迁 serve（D-10，10 倍实测）+ F2-B 远端浏览器 + F2-C run 解耦已合入（手测两轮 r1/r2 + 用户手感轮 PASS；r1 五项 + r2 两 bug + 裁决批 A-K，pytest 1198→1212）**；CLI 更新封存（D-11）/ 面板拖动折叠（下一轮，需手测迭代） | FIX-1/FIX-2 完成；FIX-3 待做 | [fix2-design.md](fix2-design.md) |
+| FIX 批 | 历史页图标 ✅ / FIX-2 远程体验补全：**F2-A 控制面迁 serve（D-10，10 倍实测）+ F2-B 远端浏览器 + F2-C run 解耦已合入（手测两轮 r1/r2 + 用户手感轮 PASS；r1 五项 + r2 两 bug + 裁决批 A-K，pytest 1198→1212）**；**FIX-3 面板拖动折叠已合入（2026-09-10 手测 PASS「无明显 bug」，含网关全应答态根治 `e4b8c92`）**；CLI 更新封存（D-11） | FIX-1/FIX-2/FIX-3 全部完成 | [fix2-design.md](fix2-design.md) |
 
 D-4 裁决：**R1-R4 全部在本周期内交付**（含文件面与机器管理），不收窄。
 

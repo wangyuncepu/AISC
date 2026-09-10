@@ -1,5 +1,11 @@
 # FIX-3 手测清单——面板拖动折叠（拖宽/折叠窄条/TabBar 分界线）
 
+> **结果（2026-09-10）：全项 PASS，无明显 bug（用户验收）。**
+> 手测期间一个环境性拦截：起工作区报「No free host port in 47000..47999」
+> （loopback 拦截层令双探针同时说谎——bind 全挡+connect 全应答变象），
+> `e4b8c92` 根治：全应答态盲选交 Docker 权威裁决，真冲突由 publish-retry
+> 换口吸收；sidecar 重建同步后用户复测通过。
+
 > 2026-09-09 夜实施完成（分支 `fix3-panel-resize`，`e6078c7..603e84a` 四提，
 > vitest 462 / vue-tsc 绿，**未推送**——手测 PASS 后再推）。
 > 启动 dev Workbench 后按序过 10 条；发现问题记 #N。

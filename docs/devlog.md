@@ -162,6 +162,15 @@
   体感全过）。门禁：pytest 1198→**1212** / 72 skip（手测轮 +14 测）；
   nas wheel 全程同步部署，CLI 日志（cli_exit 计时/退出码）定位「用户
   自 stop 后再 stop 报错」一段乌龙全靠它还原。
+- **FIX-3 手测 PASS 收口（2026-09-10，用户验收「无明显 bug」）**：A-D
+  十条全过。手测期间环境性拦截一起：起工作区报「No free host port in
+  47000..47999」（2026-09-10 复发，现场实证空闲口 connect 被吞非 RST、
+  错误时为 bind 全挡+connect 全应答的 loopback 拦截变象——双探针同时
+  说谎）。`e4b8c92` 根治：全应答态不再硬失败，盲选首个 exclude 外候选
+  交 Docker 权威裁决（真冲突 docker run -p 大声失败、publish-retry 双侧
+  start_hint+1 换口吸收）；GatewayPortError 收窄为 exclude 占满全段唯一
+  死局。pytest 1213；sidecar 四处重建同步。至此 2.1.10 三大件
+  （R1-R4/FIX-2/FIX-3）全收官，剩 VERSION 四件套冻结 + release。
 - **FIX-3 面板拖动折叠实施（2026-09-09 夜，分支 fix3-panel-resize，`e6078c7..603e84a` 四提，待手测）**：
   用户裁决：折叠=VS Code 式窄条（40px rail + » 展开）；tab 行拖动=
   TabBar↔终端分界线。**三能力全复刻先例**：拖动=PaneTree pointer 模式
