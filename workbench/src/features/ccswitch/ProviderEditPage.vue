@@ -93,11 +93,15 @@ async function fetchNow(): Promise<void> {
 const keyConfigured = computed(() => props.provider?.has_api_key ?? false);
 const keyVisible = ref(false);
 const revealBusy = ref(false);
+/** Manual-test r3: reveal failures render HERE — the store propagates them,
+ * because a swallowed error made the eye button a silent no-op. */
+const revealError = ref("");
 const keyPlaceholder = computed(() =>
   adding.value ? "" : (keyConfigured.value ? t("ccswitch.apiKeyConfigured") : ""));
 async function revealApiKey(): Promise<void> {
   if (!props.provider || !runtime.runtimeId || !runtime.workspace || revealBusy.value) return;
   revealBusy.value = true;
+  revealError.value = "";
   try {
     const key = await uiStore.revealKey(
       runtime.workspace, runtime.runtimeId, props.provider.id);
@@ -105,6 +109,9 @@ async function revealApiKey(): Promise<void> {
       form.apiKey = key;
       keyVisible.value = true;
     }
+  } catch (e) {
+    revealError.value =
+      (e as { message?: string })?.message ?? String(e);
   } finally {
     revealBusy.value = false;
   }
@@ -264,6 +271,9 @@ function onSave(): void {
           </button>
         </span>
       </label>
+      <p v-if="revealError" class="hint warn" role="alert">
+        {{ t("ccswitch.apiKeyRevealFailed", { message: revealError }) }}
+      </p>
       <p class="hint">{{ t("ccswitch.secretHint") }}</p>
 
       <template v-if="tier === 'advanced'">
@@ -312,8 +322,14 @@ function onSave(): void {
 .edit-page { display: flex; flex-direction: column; height: 100%; overflow: auto; }
 /* 2.1.11 P1: key field — input stays FULL width (aligned with the fields
  * above); the reveal button floats inside the right edge (manual-test r2:
- * the flex row squeezed the input shorter than its siblings). */
-.key-row { position: relative; display: block; }
+ * the flex row squeezed the input shorter than its siblings).
+ * Manual-test r3: `.key-row` must carry flex: 1 itself — as a flex item of
+ * `.field` with default `flex: 0 1 auto` it shrink-wraps, and the input's
+ * `width: 100%` resolves against that shrink-to-fit width (circular → the
+ * browser falls back to the input's ~170px intrinsic size), which is why
+ * the r2 width fix had no visual effect. min-width: 0 lets it shrink below
+ * content size instead of overflowing. */
+.key-row { position: relative; display: block; flex: 1; min-width: 0; }
 .key-row input { width: 100%; box-sizing: border-box; padding-right: 42px; }
 .key-reveal {
   position: absolute;
@@ -348,6 +364,9 @@ input, select {
   min-height: var(--control-h-sm); padding: 0 var(--space-2); font-size: var(--font-sm);
 }
 .hint { font-size: var(--font-xs); color: var(--text-faint); margin: 0; }
+/* r3: failure hints (reveal error + fetch unavailable) must stand out —
+ * `.warn` was referenced before but had no rule (rendered plain gray). */
+.hint.warn { color: var(--error-fg); }
 button { cursor: pointer; }
 button.primary { background: var(--accent); border: none; color: var(--accent-fg);
   min-height: var(--control-h-sm); padding: 0 var(--space-4); border-radius: var(--radius-sm);
