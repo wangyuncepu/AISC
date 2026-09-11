@@ -344,6 +344,12 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
    * runtime targets — every materialized workspace with a live runtime id.
    * Retention is the registry default (remove_on_close); the backend maps
    * per-target behavior. */
+  /** W3 手测 r6: Rust-side window hide (the webview-side IPC no-ops while
+   * a close request is pending — G-07). Store-routed per F-A01. */
+  function hideWindowForExit(): void {
+    void ipc.hideWindow().catch(() => undefined);
+  }
+
   async function closeWindowScoped(): Promise<void> {
     await flushSave();
     const sessionIds = runtimes.value
@@ -552,6 +558,7 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     clearHistoryEntry,
     workspacePathExists,
     closeWindowScoped,
+    hideWindowForExit,
     browseBusy,
     browseError,
     browseRemote,

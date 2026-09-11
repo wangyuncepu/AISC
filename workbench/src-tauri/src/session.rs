@@ -970,6 +970,18 @@ pub struct RuntimeCleanup {
 /// never wired (runtime stop lands in G-07 Step 2 — superseded by the
 /// structured v2 below); the frontend migrates onto v2 in
 /// runtime-lifecycle-ux Stage 3, after which this wrapper can go.
+/// W3 手测 r6: the WEBVIEW-side hide() IPC does not take effect while a
+/// close request is pending (G-07, 2026-08-09) — a child window's
+/// hide-first exit visually lingered through the whole scoped teardown
+/// (~2-3s of docker stop) because the JS `win.hide()` silently no-opped.
+/// Rust-side hide IS the direct win32 call; this exposes it.
+#[tauri::command]
+pub async fn hide_window(window: tauri::WebviewWindow) -> Result<(), WorkbenchError> {
+    window
+        .hide()
+        .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("hide: {e}")))
+}
+
 #[tauri::command]
 pub async fn shutdown_workbench(
     app: AppHandle,

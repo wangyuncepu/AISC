@@ -185,6 +185,7 @@ pub fn run(cli_arg: Option<String>) {
             save_settings,
             reset_gui_settings,
             resolve_locale,
+            session::hide_window,
             target::target_get,
             target::target_set,
             target::target_clear,

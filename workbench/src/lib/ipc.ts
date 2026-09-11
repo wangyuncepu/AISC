@@ -131,6 +131,10 @@ export const ackSessionExit = (sessionId: string) =>
   invoke<AckResult>("ack_session_exit", { sessionId });
 
 /** Unified exit coordinator: bounded session close + force-reap + flush. */
+/** W3: Rust-side hide — the direct win32 call (the webview-side hide IPC
+ * no-ops while a close request is pending; G-07). */
+export const hideWindow = () => invoke<void>("hide_window");
+
 export const shutdownWorkbench = (stopRuntime: boolean = false) =>
   invoke<ShutdownReport>("shutdown_workbench", { stopRuntime });
 
