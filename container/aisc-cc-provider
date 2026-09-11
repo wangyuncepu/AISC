@@ -962,6 +962,73 @@ def _recover_route(agent: str, secrets: list[str]) -> None:
         )
 
 
+# --- P3 热切换（2026-09-12）：model-shim 路由挂钩 -------------------------
+# aisc-model-shim（entrypoint 常驻，15711/15712）重写请求体 model 字段——
+# 切换 provider 后，运行中会话的下一个请求即走当前 provider 的模型。
+# 挂钩 = 切换收尾时把 live 文件里的本地路由 stub 端口指向 shim；shim 不在
+# 则指回 cc-switch 代理直连（连通性永远优先于映射，fail-open）。
+
+SHIM_WIRING = {"claude": (15711, 15721), "codex": (15712, 15722)}
+
+
+def _patch_claude_base_url_port(port: int) -> bool:
+    root = os.environ.get("CLAUDE_CONFIG_DIR")
+    if not root:
+        return False
+    path = Path(root) / "settings.json"
+    if not path.is_file():
+        return False
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    env = settings.get("env") if isinstance(settings.get("env"), dict) else None
+    if env is None:
+        return False
+    url = str(env.get("ANTHROPIC_BASE_URL") or "")
+    m = re.match(r"^(http://127\.0\.0\.1):(\d+)(.*)$", url)
+    if not m:
+        return False  # direct provider URL — not a local route stub
+    new_url = f"{m.group(1)}:{port}{m.group(3)}"
+    if new_url == url:
+        return False
+    env["ANTHROPIC_BASE_URL"] = new_url
+    tmp = path.with_suffix(".json.aisc-tmp")
+    tmp.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    return True
+
+
+def _patch_codex_base_url_port(port: int) -> bool:
+    root = os.environ.get("CODEX_CONFIG_DIR") or os.environ.get("CODEX_HOME")
+    if not root:
+        return False
+    path = Path(root) / "config.toml"
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8")
+    _shim, direct = SHIM_WIRING["codex"]
+    new_text = re.sub(
+        r"(http://127\.0\.0\.1):(?:%d|%d)" % (_shim, direct),
+        lambda m: f"{m.group(1)}:{port}", text)
+    if new_text == text:
+        return False
+    tmp = path.with_suffix(".toml.aisc-tmp")
+    tmp.write_text(new_text, encoding="utf-8")
+    tmp.replace(path)
+    return True
+
+
+def _point_stub_at_shim(agent: str) -> None:
+    """Post-switch wiring (best-effort, never raises)."""
+    shim_port, proxy_port = SHIM_WIRING[agent]
+    target = shim_port if _tcp_listening(shim_port, attempts=1) else proxy_port
+    try:
+        if agent == "claude":
+            _patch_claude_base_url_port(target)
+        else:
+            _patch_codex_base_url_port(target)
+    except Exception:
+        pass
+
+
 def _ensure_route_serving(
     agent: str, secrets: list[str], *, probe_attempts: int = 4
 ) -> None:
@@ -1811,6 +1878,7 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
         if _settings_are_real(agent, row):
             _ensure_route_serving(agent, snapshot_secrets(agent, snapshot),
                                   probe_attempts=1)
+            _point_stub_at_shim(agent)
             if agent == "codex":
                 _apply_codex_model_catalog(row, live=False)
                 _spawn_catalog_refresh(agent)
@@ -1850,6 +1918,8 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
             _ensure_route_serving(agent, secrets)
         else:
             _recover_route(agent, secrets)
+        # P3 热切换: route (re)armed — point the live stub at the model shim.
+        _point_stub_at_shim(agent)
     elif not disable_ok:
         # Official/direct target: one plain retry — the live files were
         # already rewritten to direct by the switch, so a lingering worker

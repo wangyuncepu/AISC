@@ -914,11 +914,14 @@ class SwitchTests(AdapterTestCase):
     def test_idempotent_switch_probes_the_route_once(self):
         # Fast path: a single TCP attempt (not the 4× retry ring) — a
         # healthy route answers in ~ms; a miss still heals via full recovery.
+        # P3 shim hook: only ROUTE-port probes count (the model-shim wiring
+        # probe rides the same mock but targets the shim port).
         attempts_seen = []
         orig = A._tcp_listening
         A._tcp_listening = (
             lambda port, attempts=4, delay=0.4:
-            attempts_seen.append(attempts) or True)
+            (attempts_seen.append(attempts) if port != A.SHIM_WIRING["codex"][0]
+             else None) or True)
         self.addCleanup(setattr, A, "_tcp_listening", orig)
         self._install_show_cli(
             lambda args: f"- Codex: enabled, configured 12345\n"

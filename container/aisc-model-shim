@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""AISC model-mapping shim (container-side, P3 热切换实施 2026-09-12).
+
+``agent ──▶ 127.0.0.1:<listen> 本shim ──▶ 127.0.0.1:<upstream> cc-switch 代理 ──▶ provider``
+
+Why: neither CLI hot-reloads its env/model config (claude: only
+hooks/permissions/keybindings/theme reload — env needs a session restart,
+upstream issue #42251; codex: config.toml is read once at startup). But ALL
+traffic already flows through the local cc-switch proxy, so the request
+body's ``model`` field can be rewritten HERE — the session's NEXT request
+runs on the CURRENT provider's model even though the CLI keeps displaying
+its startup name (display-level staleness only, functional swap is real).
+
+Mapping semantics (role-based, not name-based): provider rows carry
+role_env — claude: ANTHROPIC_MODEL / _DEFAULT_OPUS_MODEL / _SONNET_MODEL /
+_HAIKU_MODEL slots; codex: the row's primary ``model``. An incoming model
+name resolves to a ROLE via ANY provider row of the agent (the running
+session's provider is typically not the current one after a switch), then
+emits the CURRENT provider's name for that role. Unresolvable names pass
+through untouched (custom models stay literal). A name that already belongs
+to the current provider passes through.
+
+The mapping is read from the cc-switch SQLite db per request (1s TTL —
+switches are rare, reads are µs, staleness is bounded and self-healing; no
+invalidation plumbing). Requests with Content-Encoding or non-JSON bodies
+forward untouched. Responses stream through chunk-by-chunk (SSE-safe).
+
+Env (all required except where noted):
+- ``AISC_SHIM_AGENT``     claude | codex (labels logs/mapping only)
+- ``AISC_SHIM_LISTEN``    this shim's port (agent env points here)
+- ``AISC_SHIM_UPSTREAM``  the cc-switch proxy route port
+- ``CC_SWITCH_CONFIG_DIR``  db root (same env the adapter requires)
+
+Fail-open philosophy: on ANY internal error the request is forwarded
+UNMODIFIED — the shim may degrade to a dumb pipe, it must never break the
+agent's connectivity.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any, Optional
+
+DB_NAME = "cc-switch.db"
+
+# ---------------------------------------------------------------------------
+# Mapping tables (pure + unit-testable)
+# ---------------------------------------------------------------------------
+
+CLAUDE_ROLE_KEYS = [
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_MODEL",  # primary — last: a row may set both; primary wins
+]
+CODEX_ROLE = "__primary__"
+
+
+def build_tables(rows: list[dict[str, Any]], agent: str) -> dict[str, Any]:
+    """From provider rows (read_snapshot-shaped) build the resolution model:
+
+    returns {"current": name->role for the CURRENT provider's names,
+             "foreign": name->role for every OTHER provider's names,
+             "role_targets": role->name for the CURRENT provider}
+    """
+    current_row = next((r for r in rows if r.get("is_current")), None)
+    if current_row is None:
+        return {"current": {}, "foreign": {}, "role_targets": {}}
+
+    def roles_of(row: dict[str, Any]) -> dict[str, str]:
+        env = (row.get("role_env") or {}) if isinstance(row.get("role_env"), dict) else {}
+        out: dict[str, str] = {}
+        if agent == "claude":
+            for key in CLAUDE_ROLE_KEYS:
+                name = env.get(key)
+                if name:
+                    out[str(name)] = key
+        else:
+            model = row.get("model")
+            if model:
+                out[str(model)] = CODEX_ROLE
+        return out
+
+    current_names = roles_of(current_row)
+    foreign: dict[str, str] = {}
+    for r in rows:
+        if r is current_row:
+            continue
+        for name, role in roles_of(r).items():
+            # First foreign row wins — names are near-unique across providers
+            # and a collision is unresolvable anyway (same name = same model
+            # family; the role choice between two identical names is moot).
+            foreign.setdefault(name, role)
+
+    role_targets: dict[str, str] = {}
+    env = current_row.get("role_env") or {}
+    if agent == "claude":
+        for key in CLAUDE_ROLE_KEYS:
+            name = env.get(key)
+            if name:
+                role_targets[key] = str(name)
+    else:
+        model = current_row.get("model")
+        if model:
+            role_targets[CODEX_ROLE] = str(model)
+
+    return {"current": current_names, "foreign": foreign, "role_targets": role_targets}
+
+
+def resolve_model(incoming: str, tables: dict[str, Any]) -> Optional[str]:
+    """The rewrite decision. None = pass through untouched."""
+    if not incoming:
+        return None
+    if incoming in tables["current"]:
+        return None  # already the current provider's name
+    role = tables["foreign"].get(incoming)
+    if role is None:
+        return None  # unmapped (custom model) — stay literal
+    target = tables["role_targets"].get(role)
+    if not target or target == incoming:
+        return None
+    return target
+
+
+# ---------------------------------------------------------------------------
+# db access (read-only, TTL-cached)
+# ---------------------------------------------------------------------------
+
+_CACHE: dict[str, Any] = {"rows": [], "at": 0.0, "lock": threading.Lock()}
+_TTL = 1.0
+
+
+def _db_path() -> Path:
+    root = os.environ.get("CC_SWITCH_CONFIG_DIR", "")
+    if not root:
+        raise RuntimeError("CC_SWITCH_CONFIG_DIR is not set")
+    return Path(root) / DB_NAME
+
+
+def _rows_from_db(agent: str) -> list[dict[str, Any]]:
+    """The provider rows as build_tables wants them (env-decoded)."""
+    conn = sqlite3.connect(f"file:{_db_path().as_posix()}?mode=ro", uri=True, timeout=10)
+    try:
+        raw = conn.execute(
+            "SELECT id, name, settings_config, is_current FROM providers "
+            "WHERE app_type = ? ORDER BY sort_index, id",
+            (agent,),
+        ).fetchall()
+    finally:
+        conn.close()
+    rows: list[dict[str, Any]] = []
+    for pid, name, cfg_text, is_current in raw:
+        try:
+            settings = json.loads(cfg_text) if cfg_text else {}
+        except json.JSONDecodeError:
+            settings = {}
+        env = settings.get("env") if isinstance(settings.get("env"), dict) else {}
+        role_env: dict[str, str] = {}
+        for key in CLAUDE_ROLE_KEYS:
+            if env.get(key):
+                role_env[key] = str(env[key])
+        model = ""
+        if settings.get("model"):
+            model = str(settings["model"])
+        else:
+            config_text = settings.get("config")
+            if isinstance(config_text, str) and config_text:
+                # TOML-lite: the top-level `model = "..."` line
+                for line in config_text.splitlines():
+                    s = line.strip()
+                    # exact top-level `model =` — NOT `model_provider =`
+                    if (s.startswith("model ") or s.startswith("model=")) and "=" in s:
+                        v = s.split("=", 1)[1].strip().strip('"').strip("'")
+                        if v:
+                            model = v
+                        break
+        rows.append({
+            "id": pid, "name": name,
+            "is_current": bool(is_current),
+            "role_env": role_env,
+            "model": model,
+        })
+    return rows
+
+
+def tables_for(agent: str) -> dict[str, Any]:
+    with _CACHE["lock"]:
+        now = time.monotonic()
+        if now - _CACHE["at"] < _TTL and _CACHE.get("agent") == agent:
+            return _CACHE["tables"]
+    rows = _rows_from_db(agent)
+    tables = build_tables(rows, agent)
+    with _CACHE["lock"]:
+        _CACHE.update({"tables": tables, "at": now, "agent": agent})
+    return tables
+
+
+# ---------------------------------------------------------------------------
+# HTTP forwarding
+# ---------------------------------------------------------------------------
+
+HOP_BY_HOP = {
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade", "host",
+    "content-length",  # recomputed after any rewrite
+}
+
+
+class ShimHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    agent = "claude"
+    upstream = "http://127.0.0.1:15721"
+
+    def log_message(self, fmt: str, *args: Any) -> None:  # noqa: D401
+        sys.stderr.write(f"[model-shim:{self.agent}] {self.address_string()} {fmt % args}\n")
+
+    # -- core -------------------------------------------------------------
+
+    def _relay(self) -> None:
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        out_body = body
+        try:
+            if body and not self.headers.get("Content-Encoding"):
+                payload = json.loads(body)
+                if isinstance(payload, dict) and isinstance(payload.get("model"), str):
+                    target = resolve_model(payload["model"], tables_for(self.agent))
+                    if target:
+                        payload["model"] = target
+                        out_body = json.dumps(payload, ensure_ascii=False).encode()
+        except Exception:  # noqa: BLE001 — fail-open: forward untouched
+            out_body = body
+
+        req = urllib.request.Request(
+            self.upstream + self.path, data=out_body or None, method=self.command)
+        for key, value in self.headers.items():
+            if key.lower() not in HOP_BY_HOP:
+                req.add_header(key, value)
+        if out_body:
+            req.add_header("Content-Length", str(len(out_body)))
+
+        try:
+            resp = urllib.request.urlopen(req, timeout=660)
+        except urllib.error.HTTPError as exc:
+            resp = exc
+        except Exception as exc:  # noqa: BLE001 — upstream unreachable
+            self.send_response(502)
+            msg = f"model-shim upstream unreachable: {exc}".encode()
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(msg)))
+            self.end_headers()
+            self.wfile.write(msg)
+            return
+
+        self.send_response(resp.status)
+        for key, value in resp.headers.items():
+            if key.lower() not in HOP_BY_HOP and key.lower() != "content-length":
+                self.send_header(key, value)
+        # Stream: chunk-for-chunk with flush so SSE arrives live.
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        try:
+            while True:
+                chunk = resp.read(8192)
+                if not chunk:
+                    break
+                self.wfile.write(f"{len(chunk):X}\r\n".encode() + chunk + b"\r\n")
+                self.wfile.flush()
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except Exception:  # noqa: BLE001 — client went away mid-stream
+            pass
+
+    do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _relay
+
+
+def main() -> int:
+    agent = os.environ.get("AISC_SHIM_AGENT") or "claude"
+    listen = int(os.environ.get("AISC_SHIM_LISTEN")
+                 or {"claude": "15711", "codex": "15712"}.get(agent, "15711"))
+    upstream_port = os.environ.get("AISC_SHIM_UPSTREAM") \
+        or {"claude": "15721", "codex": "15722"}.get(agent, "15721")
+    handler = type("Bound", (ShimHandler,), {
+        "agent": agent,
+        "upstream": f"http://127.0.0.1:{upstream_port}",
+    })
+    server = ThreadingHTTPServer(("127.0.0.1", listen), handler)
+    sys.stderr.write(
+        f"[model-shim:{agent}] listening 127.0.0.1:{listen} → {upstream_port}\n")
+    server.serve_forever()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
