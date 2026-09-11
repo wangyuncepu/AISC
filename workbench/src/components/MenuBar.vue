@@ -106,7 +106,10 @@ async function openByPath(path: string, machine?: string | null): Promise<void> 
   // clear + lifecycle export, P1-3) — a bare toast left the dead record
   // dangling with no path to clean it.
   if (!pathRemote && !(await ws.workspacePathExists(path))) {
-    if (ws.openLauncher()) ws.surfaceInvalidPath(path);
+    // 手测 r11: FLOAT the remediation dialog — never openLauncher() here;
+    // hijacking a window that hosts a live workspace orphaned it (the
+    // strip is gone in W3 — no way back to it).
+    ws.surfaceInvalidPath(path);
     return;
   }
   void openWorkspaceWindow({ workspace: path, machine: targetMachine });

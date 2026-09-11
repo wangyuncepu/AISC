@@ -524,6 +524,22 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     pendingInvalidPath.value = null;
     return p;
   }
+  /** 手测 r11: the dead-recent dialog's actions, shared by the picker and
+   * the app-level overlay (mirrors the picker's original local handlers). */
+  async function clearInvalidRecent(path: string, purgeData: boolean): Promise<void> {
+    try {
+      if (purgeData) {
+        await forgetWorkspace(path);
+      } else {
+        await clearHistoryEntry(path);
+      }
+    } catch {
+      /* record-only clear is best-effort; history reloads next open */
+    }
+  }
+  async function exportInvalidRecent(path: string): Promise<number | null> {
+    return exportLifecycle(path);
+  }
 
   // --- F2-B: remote browse (picker dialog state; store-routed per F-A01) ---
   const browseBusy = ref(false);
@@ -577,6 +593,8 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     pendingInvalidPath,
     surfaceInvalidPath,
     consumeInvalidPath,
+    clearInvalidRecent,
+    exportInvalidRecent,
     browseBusy,
     browseError,
     browseRemote,

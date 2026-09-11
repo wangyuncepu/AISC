@@ -41,6 +41,7 @@ import SettingsTab from "./features/settings/SettingsTab.vue";
 import NetworkUsageTab from "./features/usage/NetworkUsageTab.vue";
 import DoctorDialog from "./features/doctor/DoctorDialog.vue";
 import OnboardingWizard from "./features/onboarding/OnboardingWizard.vue";
+import InvalidPathDialog from "./features/startup/InvalidPathDialog.vue";
 import WorkspaceView from "./features/workspace/WorkspaceView.vue";
 import { useWorkspaceExplorerStore } from "./stores/workspaceExplorer";
 import { useOnboardingStore } from "./stores/onboarding";
@@ -96,6 +97,34 @@ function toggleSettings(): void {
     ws.closeSettingsTab();
   } else {
     ws.openSettingsTab();
+  }
+}
+
+// W3 手测 r10/r11: the dead-recent remediation dialog — app-level FLOATING
+// mount (never hijacks the launcher/active workspace; the boot-param path
+// in a fresh window lands the same overlay above its picker).
+const overlayInvalidPath = ref<string | null>(null);
+const overlayExportBusy = ref(false);
+watch(
+  () => ws.pendingInvalidPath,
+  (p) => {
+    if (p) overlayInvalidPath.value = ws.consumeInvalidPath();
+  },
+  { immediate: true },
+);
+async function onOverlayClear(purgeData: boolean): Promise<void> {
+  const path = overlayInvalidPath.value;
+  overlayInvalidPath.value = null;
+  if (path) await ws.clearInvalidRecent(path, purgeData);
+}
+async function onOverlayExport(): Promise<void> {
+  const path = overlayInvalidPath.value;
+  if (!path) return;
+  overlayExportBusy.value = true;
+  try {
+    await ws.exportInvalidRecent(path);
+  } finally {
+    overlayExportBusy.value = false;
   }
 }
 
@@ -564,6 +593,16 @@ onBeforeUnmount(() => {
     <Transition name="fade">
       <DoctorDialog v-if="doctorStore.open" />
     </Transition>
+
+    <!-- W3 手测 r11: dead-recent remediation floats over ANY state. -->
+    <InvalidPathDialog
+      v-if="overlayInvalidPath"
+      :path="overlayInvalidPath"
+      :busy="overlayExportBusy"
+      @close="overlayInvalidPath = null"
+      @clear="onOverlayClear"
+      @export="onOverlayExport"
+    />
 
     <!-- P2-1 (A2 反馈语法): the ONE global toast host — body-teleported,
          above every layer. Features push through useToastStore. -->
