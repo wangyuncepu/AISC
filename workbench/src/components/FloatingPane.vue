@@ -5,12 +5,18 @@
  * centered panel + Esc/backdrop/× close), not as workspace-strip tabs.
  * Same shape as DoctorDialog; the body rides the default slot.
  */
-import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
+import { useSettingsStore } from "../stores/settings";
 
 defineProps<{ title: string; wide?: boolean }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 const { t } = useI18n();
+// W1 manual test r1#2: same zoom treatment as ToastHost/palette — the
+// teleport escapes App's zoom scope, so the pane re-applies ui.font_scale
+// itself (position offsets stay unscaled, content scales).
+const settings = useSettingsStore();
+const uiScale = computed(() => settings.doc?.ui.font_scale ?? 1);
 const paneRef = ref<HTMLElement | null>(null);
 
 function onKeydown(e: KeyboardEvent): void {
@@ -35,6 +41,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown, { capture
         ref="paneRef"
         class="float-pane"
         :class="{ wide }"
+        :style="{ zoom: uiScale }"
         role="dialog"
         aria-modal="true"
         :aria-label="title"
