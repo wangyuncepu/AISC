@@ -279,7 +279,13 @@ onMounted(() => void usage.fetchOverview());
             </tr>
           </tbody>
         </table>
-        <p v-else class="dim">{{ t("usage.empty") }}</p>
+        <!-- P2-1 (A2): empty states carry an action (VS Code parity). -->
+        <div v-else class="dim usage-empty">
+          <p>{{ t("usage.empty") }}</p>
+          <button class="ui-button sm" :disabled="usage.loading" @click="usage.fetchOverview()">
+            {{ t("common.refresh") }}
+          </button>
+        </div>
 
         <!-- PP r5③: per-model usage — the actual upstream model ids the
              proxy forwarded (ground truth for mapping verification). -->
@@ -307,7 +313,13 @@ onMounted(() => void usage.fetchOverview());
             </tr>
           </tbody>
         </table>
-        <p v-else class="dim">{{ t("usage.empty") }}</p>
+        <!-- P2-1 (A2): empty states carry an action (VS Code parity). -->
+        <div v-else class="dim usage-empty">
+          <p>{{ t("usage.empty") }}</p>
+          <button class="ui-button sm" :disabled="usage.loading" @click="usage.fetchOverview()">
+            {{ t("common.refresh") }}
+          </button>
+        </div>
 
         <ul v-if="usage.scope === 'all'" class="ws-states">
           <li v-for="w in visibleWorkspaces" :key="w.workspace_hash">

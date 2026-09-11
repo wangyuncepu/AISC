@@ -367,6 +367,11 @@ export const enUS: Record<string, string> = {
   "tabbar.menu.splitV": "Split top/bottom",
   "pane.close": "Close pane",
   "tabs.empty": "No open tabs.",
+
+  "common.dismiss": "Dismiss",
+  "common.refresh": "Refresh",
+  "ccswitch.emptyAdd": "Add a provider",
+  "explorer.empty.workspaceCta": "Choose a workspace",
   "tabs.newTab": "New tab",
   "guide.title.notConfigured": "{agent} provider not configured",
   "guide.title.loginRequired": "{agent} login required",

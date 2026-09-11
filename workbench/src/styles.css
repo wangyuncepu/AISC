@@ -61,6 +61,7 @@
   --z-drawer: 30;
   --z-onboarding: 40;
   --z-dialog: 50;
+  --z-toast: 60; /* P2-1: global toasts float above every layer, dialogs included */
 
   --duration-fast: 100ms;
   --duration-normal: 200ms;
