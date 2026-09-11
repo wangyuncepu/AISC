@@ -13,6 +13,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useSettingsStore } from "../../stores/settings";
+import { buildSearchMatcher } from "../../lib/search";
 import type { TerminalSettings, UiSettings, WindowSettings } from "../../types";
 
 const { t } = useI18n();
@@ -99,6 +100,36 @@ const GROUP_KEY: Record<SettingsGroup, string> = {
   performance: "settings.group.performance",
   disk: "settings.group.disk",
 };
+
+// --- P2-5 (手测裁决: VS Code 式左导航右内容 + 搜索) ---
+/** The active nav section (no query = the pane shows exactly this one). */
+const activeGroup = ref<SettingsGroup>("ui");
+/** Search query — matches a group when its heading or any of its FIELDS'
+ * labels match (shared matcher: substring > subsequence > /regex/). The
+ * hand-rolled custom sections (hostTools/machines/performance/disk) match
+ * on their heading only — their rows aren't FIELDS-driven. */
+const query = ref("");
+const queryText = computed(() => query.value.trim().toLowerCase());
+function groupMatches(group: SettingsGroup): boolean {
+  const q = queryText.value;
+  if (!q) return true;
+  const matcher = buildSearchMatcher(q);
+  if (matcher === null) return true;
+  const hay = [
+    t(GROUP_KEY[group] ?? group),
+    ...FIELDS.filter((f) => f.key.startsWith(`${group}.`)).map((f) => t(f.labelKey)),
+  ].join(" ").toLowerCase();
+  return matcher(hay) > 0;
+}
+const searching = computed(() => queryText.value.length > 0);
+const visibleGroups = computed<SettingsGroup[]>(() => {
+  if (!searching.value) return [activeGroup.value];
+  return GROUPS.filter(groupMatches);
+});
+function pickGroup(group: SettingsGroup): void {
+  activeGroup.value = group;
+  query.value = ""; // picking a nav entry always leaves search mode
+}
 
 // Explicit non-null section models (rendered only under `v-if="store.doc"`);
 // the `?? {}` casts never render - defaults come from the backend.
@@ -289,8 +320,32 @@ async function reopenOnboarding() {
       <button class="link" :disabled="saving" @click="store.save()">{{ t("settings.retry") }}</button>
     </p>
 
-    <div v-if="store.doc" class="body">
-      <template v-for="group in GROUPS" :key="group">
+    <!-- P2-5: VS Code-style — left nav (sections; dimmed when a search
+         misses them) + right pane (the active section, or every matching
+         section while searching). -->
+    <div v-if="store.doc" class="settings-cols">
+      <nav class="settings-nav" :aria-label="t('settings.navLabel')">
+        <input
+          v-model="query"
+          class="nav-search"
+          type="text"
+          :placeholder="t('settings.searchPlaceholder')"
+          aria-label="t('settings.searchPlaceholder')"
+        />
+        <button
+          v-for="g in GROUPS"
+          :key="g"
+          type="button"
+          class="nav-item"
+          :class="{
+            active: !searching && activeGroup === g,
+            dim: searching && !groupMatches(g),
+          }"
+          @click="pickGroup(g)"
+        >{{ t(GROUP_KEY[g] ?? g) }}</button>
+      </nav>
+      <div class="settings-pane">
+      <template v-for="group in visibleGroups" :key="group">
         <h3 class="group">{{ t(GROUP_KEY[group] ?? group) }}</h3>
 
         <!-- ui section -->
@@ -470,6 +525,7 @@ async function reopenOnboarding() {
           <p v-for="(line, i) in store.cacheLog" :key="i" class="note">{{ line }}</p>
         </template>
       </template>
+      </div>
     </div>
     <div v-else class="body">
       <p class="loading">{{ t("settings.loading") }}</p>
@@ -500,6 +556,37 @@ async function reopenOnboarding() {
 .banner.warn { background: var(--warn-bg); color: var(--warn-fg); }
 .banner.err { background: var(--error-bg); color: var(--error-fg); }
 .link { background: none; border: none; color: var(--info); padding: 0; margin-left: 8px; cursor: pointer; text-decoration: underline; }
+/* P2-5: left nav + right pane. The nav rides sticky inside the floating
+ * pane's scroll container so it stays reachable in long sections. */
+.settings-cols { display: flex; gap: 12px; flex: 1; min-height: 0; align-items: stretch; }
+.settings-nav {
+  flex: none;
+  width: 168px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 0;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  max-height: 100%;
+  overflow-y: auto;
+}
+.nav-search {
+  margin: 0 6px 6px;
+  background: var(--surface-3); color: var(--text);
+  border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
+  min-height: var(--control-h-sm); padding: 0 var(--space-2); font-size: var(--font-sm);
+}
+.nav-item {
+  text-align: left; background: none; border: none; cursor: pointer;
+  color: var(--text-2); font-size: var(--font-sm);
+  padding: 6px 10px; border-radius: var(--radius-sm);
+}
+.nav-item:hover { background: var(--surface-hover); color: var(--text); }
+.nav-item.active { background: var(--accent-soft); color: var(--accent); }
+.nav-item.dim { opacity: 0.45; }
+.settings-pane { flex: 1; min-width: 0; padding: 6px 14px 12px 0; }
 .body { padding: 6px 14px 12px; flex: 1; }
 .group { margin: 12px 0 4px; font-size: var(--font-sm); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
 .field { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }

@@ -443,6 +443,8 @@ export const enUS: Record<string, string> = {
 
   // --- settings dialog (SettingsDialog.vue) ---
   "settings.title": "Settings",
+  "settings.navLabel": "Settings sections",
+  "settings.searchPlaceholder": "Search settings…",
   "settings.dirty": "Unsaved changes",
   "settings.saved": "Saved",
   "settings.corrupted": "The settings file was corrupt and has been isolated (settings.json.corrupt); defaults are shown. Saving or resetting writes a new file.",

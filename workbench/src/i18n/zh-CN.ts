@@ -443,6 +443,8 @@ export const zhCN = {
 
   // --- settings dialog (SettingsDialog.vue) ---
   "settings.title": "设置",
+  "settings.navLabel": "设置区导航",
+  "settings.searchPlaceholder": "搜索设置…",
   "settings.dirty": "未保存更改",
   "settings.saved": "已保存",
   "settings.corrupted": "设置文件已损坏并已隔离备份（settings.json.corrupt），当前显示默认值。保存或重置后将写入新文件。",
