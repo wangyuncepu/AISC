@@ -688,7 +688,17 @@ pub async fn run_control_target(
                 crate::serve::cli_op(t, &argv, None, timeout, &cancel, &run_id).await
             }
             CliTarget::Local(_) => {
-                run_control_inner(target, argv, None, timeout, cancel, &run_id).await
+                // 2.1.11 step2: local rides the POOLED resident serve too —
+                // one code path on both sides of the machine toggle. The
+                // exe-mtime guard in pooled_local_session evicts+respawns on
+                // sidecar rebuilds. `--events` argv (streaming commands, e.g.
+                // the build stream's own runner) must NOT ride the cli op
+                // (the serve gate rejects them) — those keep the per-op spawn.
+                if argv.iter().any(|a| a == "--events") {
+                    run_control_inner(target, argv, None, timeout, cancel, &run_id).await
+                } else {
+                    crate::serve::cli_op_target(target, &argv, None, timeout, &cancel, &run_id).await
+                }
             }
         }
     })
@@ -711,9 +721,10 @@ pub async fn run_control_input(
         .await
 }
 
-/// Transport-aware form of `run_control_input`. Remote (D-10) rides the
-/// pooled serve connection — the stdin payload travels as the `cli` op's
-/// `stdin` field.
+/// Transport-aware form of `run_control_input`. Both sides (D-10 remote;
+/// 2.1.11 step2 local) ride the pooled serve connection — the stdin payload
+/// travels as the `cli` op's `stdin` field (argv, disk and logs never see a
+/// secret, including on the local pipe).
 pub async fn run_control_input_target(
     target: &CliTarget,
     argv: Vec<String>,
@@ -730,7 +741,11 @@ pub async fn run_control_input_target(
                 crate::serve::cli_op(t, &argv, Some(input), timeout, &cancel, &run_id).await
             }
             CliTarget::Local(_) => {
-                run_control_inner(target, argv, Some(input), timeout, cancel, &run_id).await
+                if argv.iter().any(|a| a == "--events") {
+                    run_control_inner(target, argv, Some(input), timeout, cancel, &run_id).await
+                } else {
+                    crate::serve::cli_op_target(target, &argv, Some(input), timeout, &cancel, &run_id).await
+                }
             }
         }
     })
@@ -739,29 +754,10 @@ pub async fn run_control_input_target(
     result
 }
 
-/// 2.1.11 r6 (step 1 of the local/remote transport unification): provider
-/// ops ride the POOLED serve transport on BOTH sides — Remote over ssh (as
-/// since D-10), Local over a resident `serve --stdio` instead of a per-op
-/// process spawn (PyInstaller extraction + interpreter boot + Defender scan
-/// on every call, ~0.5-1s of pure start-up tax). Same request shape, same
-/// deny gate, same trace/log parity as the per-op path.
-pub async fn run_serve_op_target(
-    target: &CliTarget,
-    argv: Vec<String>,
-    input: Option<String>,
-    timeout: Duration,
-    cancel: CancellationToken,
-) -> Result<Envelope, WorkbenchError> {
-    let phase = argv.first().map(|s| s.as_str()).unwrap_or("cli").to_owned();
-    let run_id = uuid::Uuid::new_v4().to_string();
-    let started_op = std::time::Instant::now();
-    let result = crate::trace::timed("cli", &phase, async {
-        crate::serve::cli_op_target(target, &argv, input, timeout, &cancel, &run_id).await
-    })
-    .await;
-    log_cli_op(&phase, &run_id, started_op, &result);
-    result
-}
+/// 2.1.11 r6→step2: the step-1 special-case provider entry (`run_serve_op_target`)
+/// was FOLDED AWAY — `run_control_target` / `run_control_input_target` now route
+/// BOTH arms over the pooled serve transport, so every caller gets the resident
+/// serve with zero call-site changes.
 
 /// lifecycle-logging P1: the app-side line for one CLI call — best-effort,
 /// allowlisted fields only (phase/duration/outcome/error_code; never argv
