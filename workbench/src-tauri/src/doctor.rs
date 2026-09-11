@@ -114,8 +114,11 @@ pub fn doctor_report_from_envelope(env: Envelope) -> Result<DoctorReport, Workbe
 }
 
 #[tauri::command]
-pub async fn run_doctor(app: AppHandle) -> Result<DoctorReport, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+pub async fn run_doctor(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<DoctorReport, WorkbenchError> {
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let env = run_control_target(&target, doctor_argv(), DOCTOR_TIMEOUT, CancellationToken::new()).await?;
     doctor_report_from_envelope(env)
 }
@@ -286,10 +289,11 @@ pub async fn logs_tail(lines: Option<usize>) -> Result<LogsTail, WorkbenchError>
 #[tauri::command]
 pub async fn diagnostic_bundle(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     write_path: Option<String>,
 ) -> Result<DiagnosticBundle, WorkbenchError> {
     let env = crate::env::compute_readiness(app.clone()).await;
-    let doctor = run_doctor(app.clone()).await.ok();
+    let doctor = run_doctor(app.clone(), window.clone()).await.ok();
     let settings = crate::settings::load_settings(app.clone())
         .await
         .ok()

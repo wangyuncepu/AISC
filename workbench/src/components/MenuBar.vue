@@ -16,7 +16,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useToastStore } from "../stores/toast";
 import { useRuntimeStore } from "../stores/runtime";
 import { useWorkspacesStore } from "../stores/workspaces";
@@ -89,26 +89,19 @@ onBeforeUnmount(() => {
 /** The recent-open flow lifted out of the picker's onRecentClick (W2):
  * target switch on path-kind mismatch, existence probe, then the ACTIVE
  * launcher instance takes the path into its state machine. */
-/** 手测 r2#2: the drive target is PROCESS-GLOBAL (one machine per app
- * run — remote/local CLI capabilities cannot mix). The menu therefore
- * NEVER flips it silently: same-kind recents spawn a window directly;
- * cross-kind opens REQUIRE the explicit confirm below. No openLauncher()
- * here either — the CURRENT window must not be yanked to the picker. */
+/** 手测 r3#3 + per-window targets (W3 follow-up): every window owns its
+ * drive machine — a remote workspace window NEVER disturbs local windows
+ * (the old global-target bug closed the local runtime: its poll rerouted
+ * to the remote registry and reconcile recycled the "missing" container).
+ * Click = new window, no confirm, no current-window churn. */
 async function openByPath(path: string, machine?: string | null): Promise<void> {
   closeMenu();
   // Same rule as the picker (R4): a POSIX path names a REMOTE workspace.
   const pathRemote = path.startsWith("/");
-  const nowRemote = settings.target?.kind === "remote";
   const targetMachine = pathRemote
     ? (machine ?? settings.target?.machine?.name
       ?? settings.doc?.remoteMachines?.[0]?.name ?? null)
     : null;
-  if (pathRemote !== nowRemote) {
-    const ok = await confirm(t(pathRemote ? "menubar.switchToRemoteConfirm" : "menubar.switchToLocalConfirm", {
-      machine: targetMachine ?? "",
-    }));
-    if (!ok) return;
-  }
   if (!(await ws.workspacePathExists(path))) {
     toast.error(t("menubar.pathMissing", { path }));
     return;
@@ -126,15 +119,10 @@ async function openFromFolder(): Promise<void> {
   }
 }
 
-async function openFromMachine(): Promise<void> {
+const machines = computed(() => settings.doc?.remoteMachines ?? []);
+function openFromMachine(machine: string): void {
   closeMenu();
-  const machine = settings.target?.machine?.name
-    ?? settings.doc?.remoteMachines?.[0]?.name ?? null;
-  if (!machine) {
-    toast.error(t("menubar.noMachines"));
-    return;
-  }
-  // A remote launcher window: the drive target switches on boot, the
+  // A remote launcher window: its OWN drive target switches on boot; the
   // picker's remote browse carries the rest.
   void openWorkspaceWindow({ machine });
 }
@@ -237,8 +225,8 @@ async function openDocs(): Promise<void> {
           >
             {{ t("menubar.openRecent") }}<span class="sub-arrow">▸</span>
             <ul class="menubar-sub" role="menu">
-              <li v-if="recentsLocal.length" class="sub-head" role="presentation">
-                {{ t("menubar.groupLocal") }}
+              <li v-if="recentsLocal.length" class="sub-head local" role="presentation">
+                <span class="kind-badge">{{ t("menubar.groupLocal") }}</span>
               </li>
               <li
                 v-for="r in recentsLocal"
@@ -251,8 +239,8 @@ async function openDocs(): Promise<void> {
                 <span class="recent-name">{{ r.label }}</span>
                 <span class="recent-path">{{ r.path }}</span>
               </li>
-              <li v-if="recentsRemote.length" class="sub-head" role="presentation">
-                {{ t("menubar.groupRemote") }}
+              <li v-if="recentsRemote.length" class="sub-head remote" role="presentation">
+                <span class="kind-badge">{{ t("menubar.groupRemote") }}</span>
               </li>
               <li
                 v-for="r in recentsRemote"
@@ -271,8 +259,30 @@ async function openDocs(): Promise<void> {
             </ul>
           </li>
           <li class="sep" role="separator" />
-          <li role="menuitem" tabindex="0" @click="openFromMachine">
-            {{ t("menubar.openRemote") }}
+          <!-- 手测 r3#1: multi-machine flyout — one entry per configured
+               machine (a machine-only window = remote launcher). -->
+          <li
+            class="has-sub"
+            role="menuitem"
+            tabindex="0"
+            aria-haspopup="menu"
+          >
+            {{ t("menubar.openRemote") }}<span class="sub-arrow">▸</span>
+            <ul class="menubar-sub" role="menu">
+              <li
+                v-for="m in machines"
+                :key="m.name"
+                role="menuitem"
+                tabindex="0"
+                @click="openFromMachine(m.name)"
+              >
+                <span class="recent-name">{{ m.name }}</span>
+                <span class="recent-path">{{ m.user ? `${m.user}@` : "" }}{{ m.host }}</span>
+              </li>
+              <li v-if="!machines.length" class="dim" role="presentation">
+                {{ t("menubar.noMachines") }}
+              </li>
+            </ul>
           </li>
         </template>
         <template v-else-if="openMenu === 'edit'">
@@ -383,6 +393,23 @@ async function openDocs(): Promise<void> {
   color: var(--text-faint);
   letter-spacing: 0.5px;
   cursor: default;
+}
+/* 手测 r3#2: kind badges — LOCAL reads neutral, REMOTE carries the accent
+ * so the machine boundary is unmissable at a glance. */
+.menubar-sub .sub-head .kind-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+}
+.menubar-sub .sub-head.local .kind-badge {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.menubar-sub .sub-head.remote .kind-badge {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .menubar-sub li.recent { padding: 5px 14px; }
 /* 手测 r1#1: VS Code-style recents — name bold, full path dimmed below. */

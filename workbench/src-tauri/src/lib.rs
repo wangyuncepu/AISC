@@ -117,6 +117,7 @@ pub fn run(cli_arg: Option<String>) {
         .plugin(tauri_plugin_notification::init())
         .manage(cli_arg_state)
         .manage(SessionRegistry::default())
+        .manage(target::WindowTargets::default())
         .manage(StartOps::default())
         .manage(BuildOps::default())
         .manage(OpMutexes::default())

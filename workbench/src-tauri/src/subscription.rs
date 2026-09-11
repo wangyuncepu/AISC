@@ -178,10 +178,11 @@ pub(crate) async fn download(url: &str) -> Result<DownloadedSubscription, String
 /// (the secret-free snapshot).
 pub(crate) async fn store_downloaded(
     app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
     url: &str,
     dl: DownloadedSubscription,
 ) -> Result<Value, WorkbenchError> {
-    let target = crate::target::resolve_target(app).await?;
+    let target = crate::target::resolve_target_for(app, &window).await?;
     let payload = serde_json::json!({
         "url": url,
         "content_b64": base64::engine::general_purpose::STANDARD.encode(&dl.body),

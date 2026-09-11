@@ -259,9 +259,10 @@ impl LeaseSupervisor {
 #[tauri::command]
 pub async fn lease_claim(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
 ) -> Result<LeaseClaimResult, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let supervisor = app.state::<LeaseSupervisor>();
     let instance_id = supervisor.instance_id();
     let argv = lease_argv("claim", &workspace, Some(&instance_id), None);
@@ -378,6 +379,7 @@ fn handle_lease_conflict(app: &AppHandle, workspace: &str, lease_id: &str) {
 #[tauri::command]
 pub async fn lease_release(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
 ) -> Result<bool, WorkbenchError> {
     let supervisor = app.state::<LeaseSupervisor>();
@@ -387,7 +389,7 @@ pub async fn lease_release(
     };
     let Some(beat) = beat else { return Ok(false) };
     beat.cancel.cancel();
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let argv = lease_argv(
         "release", &workspace,
         Some(&supervisor.instance_id()), Some(&beat.lease_id),

@@ -177,9 +177,10 @@ pub struct ConversationRenameResult {
 #[tauri::command]
 pub async fn conversation_list(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
 ) -> Result<ConversationListResult, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let argv = conversation_list_argv(&workspace);
     let env: Envelope = run_control_target(&target, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
         .await?;
@@ -194,11 +195,12 @@ pub async fn conversation_list(
 #[tauri::command]
 pub async fn conversation_preflight(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     conversation_id: String,
     agent: String,
 ) -> Result<ConversationPreflightResult, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let argv = conversation_preflight_argv(&workspace, &conversation_id, &agent);
     let env: Envelope = run_control_target(&target, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
         .await?;
@@ -218,11 +220,12 @@ pub async fn conversation_preflight(
 #[tauri::command]
 pub async fn conversation_delete(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     conversation_id: String,
     agent: String,
 ) -> Result<ConversationDeleteResult, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let argv = conversation_delete_argv(&workspace, &conversation_id, &agent);
     let env: Envelope = run_control_target(&target, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
         .await?;
@@ -242,12 +245,13 @@ pub async fn conversation_delete(
 #[tauri::command]
 pub async fn conversation_rename(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     conversation_id: String,
     agent: String,
     title: String,
 ) -> Result<ConversationRenameResult, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let argv = conversation_rename_argv(&workspace, &conversation_id, &agent, &title);
     let env: Envelope = run_control_target(&target, argv, CONVERSATION_TIMEOUT, CancellationToken::new())
         .await?;
