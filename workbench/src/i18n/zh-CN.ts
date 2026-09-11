@@ -367,6 +367,11 @@ export const zhCN = {
   "tabbar.menu.splitV": "上下分屏",
   "pane.close": "关闭分屏",
   "tabs.empty": "没有打开的标签。",
+
+  "common.dismiss": "关闭提示",
+  "common.refresh": "刷新",
+  "ccswitch.emptyAdd": "添加 provider",
+  "explorer.empty.workspaceCta": "选择工作区",
   "tabs.newTab": "新建标签",
   "guide.title.notConfigured": "{agent} Provider 未配置",
   "guide.title.loginRequired": "{agent} 需要登录",

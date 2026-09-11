@@ -1047,7 +1047,13 @@ function onTreeKeydown(e: KeyboardEvent) {
       @keydown="onTreeKeydown"
       @contextmenu.prevent="openMenuAt({ kind: 'root' }, $event.clientX, $event.clientY)"
     >
-      <p v-if="!runtime.workspace" class="explorer-empty">{{ t("explorer.empty.workspace") }}</p>
+      <div v-if="!runtime.workspace" class="explorer-empty">
+        <p>{{ t("explorer.empty.workspace") }}</p>
+        <!-- P2-1 (A2): empty states carry an action (VS Code parity). -->
+        <button class="ui-button sm" @click="runtime.backToPicker()">
+          {{ t("explorer.empty.workspaceCta") }}
+        </button>
+      </div>
       <!-- S5c: active query = flat match list over every LOADED directory
            (collapsed-but-loaded folders included). Click selects; dirs
            expand; files open on double-click like normal rows. Checked
@@ -1073,12 +1079,15 @@ function onTreeKeydown(e: KeyboardEvent) {
           <span class="search-dir">{{ dirOf(m.relative_path) }}</span>
         </div>
       </template>
-      <p
+      <div
         v-else-if="explorer.visibleNodes.length === 0 && !explorer.isLoading('') && !explorer.errors[''] && pending === null"
         class="explorer-empty"
       >
-        {{ t("explorer.empty.files") }}
-      </p>
+        <p>{{ t("explorer.empty.files") }}</p>
+        <button class="ui-button sm" @click="onToolbarRefresh">
+          {{ t("common.refresh") }}
+        </button>
+      </div>
       <template v-else>
         <!-- Root-level create input: above the first row (or alone when the
              tree is empty — the v-for below never runs). -->
@@ -1206,9 +1215,12 @@ function onTreeKeydown(e: KeyboardEvent) {
       <p v-else-if="explorer.conversationsError" class="explorer-empty">
         {{ t("explorer.conversations.loadFailed") }}
       </p>
-      <p v-else-if="!conversationsFiltered.length" class="explorer-empty">
-        {{ t("explorer.empty.conversations") }}
-      </p>
+      <div v-else-if="!conversationsFiltered.length" class="explorer-empty">
+        <p>{{ t("explorer.empty.conversations") }}</p>
+        <button class="ui-button sm" @click="explorer.loadConversations(true)">
+          {{ t("common.refresh") }}
+        </button>
+      </div>
       <template v-else>
         <div
           v-for="c in conversationsFiltered"
@@ -1266,12 +1278,15 @@ function onTreeKeydown(e: KeyboardEvent) {
          filter chips, attribution badges). The panel is a FLAT change list
          + the shared search box (substring/subsequence fuzzy + /regex/). -->
     <div v-else-if="artifactFilter === 'artifacts'" key="artifacts" class="explorer-body artifacts-panel">
-      <p
+      <div
         v-if="!changesFiltered.length"
         class="explorer-empty"
       >
-        {{ searchQuery ? t("explorer.searchNoMatch") : t("explorer.empty.artifacts") }}
-      </p>
+        <p>{{ searchQuery ? t("explorer.searchNoMatch") : t("explorer.empty.artifacts") }}</p>
+        <button v-if="!searchQuery" class="ui-button sm" @click="onToolbarRefresh">
+          {{ t("common.refresh") }}
+        </button>
+      </div>
       <div
         v-for="u in changesFiltered"
         :key="u.relative_path"
@@ -1596,6 +1611,11 @@ function onTreeKeydown(e: KeyboardEvent) {
 .explorer-empty {
   padding: var(--space-2);
   color: var(--text-muted);
+  /* P2-1: empty states stack text + CTA action. */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
 }
 .explorer-more {
   padding: var(--space-1) var(--space-2);

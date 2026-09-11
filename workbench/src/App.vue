@@ -22,6 +22,7 @@ import {
 import { applyLocale } from "./i18n";
 import { applyTheme, createSystemListener } from "./theme";
 import { blockNativeContextMenu } from "./lib/contextMenu";
+import ToastHost from "./components/ToastHost.vue";
 import { layoutTierFor, type LayoutTier } from "./lib/layout";
 import { computeWindowTitle } from "./lib/title";
 import { useRuntimeStore } from "./stores/runtime";
@@ -476,6 +477,10 @@ onBeforeUnmount(() => {
     <Transition name="fade">
       <DoctorDialog v-if="doctorStore.open" />
     </Transition>
+
+    <!-- P2-1 (A2 反馈语法): the ONE global toast host — body-teleported,
+         above every layer. Features push through useToastStore. -->
+    <ToastHost />
   </div>
 </template>
 
