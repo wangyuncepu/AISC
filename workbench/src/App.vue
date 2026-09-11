@@ -8,7 +8,7 @@
  * workspace internals and the session-layer shortcuts all live in
  * WorkspaceView now; workspace concurrency lives in stores/workspaces.ts.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -28,6 +28,7 @@ import { toggleExplorerCollapsed } from "./lib/panelLayout";
 import { setExplorerCollapsed } from "./lib/panelLayout";
 import type { CommandCtx } from "./lib/commands";
 import CommandPalette from "./components/CommandPalette.vue";
+import FloatingPane from "./components/FloatingPane.vue";
 import { computeWindowTitle } from "./lib/title";
 import { useRuntimeStore } from "./stores/runtime";
 import { useWorkspacesStore } from "./stores/workspaces";
@@ -85,31 +86,20 @@ watch(
   { immediate: true }
 );
 
-// IDEA-3 (3d): Settings is a WORKSPACE-layer tab (the strip's sentinel) —
-// the topbar gear and the pre-ready modal dialog are both retired. Entries:
-// the strip's Settings chip, the picker's embedded button, and Ctrl+, from
-// ANY post-onboarding state. When active, the settings pane fills the
-// content area (the last workspace stays a keyed-remount away).
-const settingsPaneRef = ref<HTMLElement | null>(null);
+// IDEA-3 (3d) → W1 (shell-redesign): Settings & the data dashboard are
+// FLOATING panes now (FloatingPane owns focus/Esc/×). Entries: the
+// rail-bottom icons, the palette, and Ctrl+, from any post-onboarding
+// state.
 function toggleSettings(): void {
   if (ws.settingsTabActive) {
-    settingsStore.cancel(); // revert unsaved edits, same contract as the chip ×
+    settingsStore.cancel(); // revert unsaved edits, same contract as before
     ws.closeSettingsTab();
   } else {
     ws.openSettingsTab();
-    void nextTick(() => settingsPaneRef.value?.focus({ preventScroll: true }));
   }
 }
 
-// IDEA-2 (2d): the「网络与用量」pane — same slot as Settings. It opens from
-// the strip chip / ▾ menu (no shortcut in v1), so focus follows activation.
-const networkUsagePaneRef = ref<HTMLElement | null>(null);
-watch(
-  () => ws.networkUsageTabActive,
-  (active) => {
-    if (active) void nextTick(() => networkUsagePaneRef.value?.focus({ preventScroll: true }));
-  },
-);
+// IDEA-2 (2d): the「网络与用量」pane — same floating treatment (W1).
 
 // P2-4 (D-4): the command palette — Ctrl+Shift+P (the r5 print-block used
 // to swallow this combo dead; it now opens the palette instead).
@@ -465,18 +455,24 @@ onBeforeUnmount(() => {
            path. Only the WorkspaceView yields to the settings pane. -->
       <WorkspaceBar v-if="workspaceLayerVisible" />
 
-      <!-- IDEA-3 (3d): the workspace-level Settings page — rendered AFTER the
-           strip (round-3 fix: it used to sit above it, pushing the strip to
-           the window bottom) and taking the content area only. -->
-      <div v-if="ws.settingsTabActive" ref="settingsPaneRef" class="settings-pane" tabindex="-1">
+      <!-- W1 (shell-redesign): Settings & the data dashboard are FLOATING
+           panes now (rail-bottom icons / Ctrl+, / palette) — the workspace
+           keeps rendering underneath. -->
+      <FloatingPane
+        v-if="ws.settingsTabActive"
+        :title="t('workspbar.settings')"
+        @close="ws.closeSettingsTab()"
+      >
         <SettingsTab />
-      </div>
-
-      <!-- IDEA-2 (2d): the workspace-level「网络与用量」panel — same content
-           area takeover semantics as the settings pane. -->
-      <div v-if="ws.networkUsageTabActive" ref="networkUsagePaneRef" class="settings-pane" tabindex="-1">
+      </FloatingPane>
+      <FloatingPane
+        v-if="ws.networkUsageTabActive"
+        :title="t('workspbar.networkUsage')"
+        wide
+        @close="ws.closeNetworkUsageTab()"
+      >
         <NetworkUsageTab />
-      </div>
+      </FloatingPane>
 
       <!-- Capability gate (app-level; strip stays for reachability) -->
       <div v-if="store.status === 'blocked'" class="gate blocked">
@@ -494,10 +490,10 @@ onBeforeUnmount(() => {
         <p class="msg">{{ t("app.negotiating") }}</p>
       </div>
 
-      <!-- The ACTIVE workspace's view (keyed remount on switch); yields to
-           the Settings / 网络与用量 panes while either is active. -->
+      <!-- The ACTIVE workspace's view (keyed remount on switch). W1: the
+           floating panes overlay it instead of replacing it. -->
       <WorkspaceView
-        v-else-if="!ws.settingsTabActive && !ws.networkUsageTabActive"
+        v-else
         :key="ws.activeRuntime.id"
         :zoom="terminalZoom"
         :tier="layoutTier"

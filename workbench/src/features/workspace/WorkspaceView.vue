@@ -25,6 +25,7 @@ import { leafCount } from "../../stores/paneTree";
 import { CC_SWITCH_UI_TAB_ID, useRuntimeStore } from "../../stores/runtime";
 import { useDoctorStore } from "../../stores/doctor";
 import { useWorkspaceExplorerStore } from "../../stores/workspaceExplorer";
+import { useWorkspacesStore } from "../../stores/workspaces";
 import {
   EXPLORER_COLLAPSED_W,
   appScale,
@@ -58,6 +59,7 @@ const { t } = useI18n();
 const store = useRuntimeStore();
 const doctorStore = useDoctorStore();
 const explorerStore = useWorkspaceExplorerStore();
+const wsStore = useWorkspacesStore();
 
 // --- P2-3 (D-4): the collapsed rail is a real activity bar now ------------
 /** One icon per side view; services only when the runtime advertises it
@@ -459,6 +461,33 @@ function setPaneTreeRef(tabId: string) {
               </svg>
             </button>
           </template>
+
+          <!-- W1 (shell-redesign): VS Code activity-bar BOTTOM actions —
+               settings gear + data dashboard; floating panes, never tabs. -->
+          <span class="rail-spacer" />
+          <button
+            type="button"
+            class="rail-icon"
+            :title="t('workspbar.networkUsage')"
+            :aria-label="t('workspbar.networkUsage')"
+            @click="wsStore.openNetworkUsageTab()"
+          >
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M2 13V9M6 13V5M10 13V7M14 13V3" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="rail-icon"
+            :title="t('workspbar.settings')"
+            :aria-label="t('workspbar.settings')"
+            @click="wsStore.openSettingsTab()"
+          >
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <circle cx="8" cy="8" r="2.2" />
+              <path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2" />
+            </svg>
+          </button>
         </nav>
         <!-- v-show on purpose (audit (c)): remount would drop in-flight
              search/rename state and the tree's scroll position. -->
@@ -643,6 +672,7 @@ function setPaneTreeRef(tabId: string) {
   border-right: var(--border-w) solid var(--border);
   box-sizing: border-box;
 }
+.rail-spacer { flex: 1; }
 .rail-icon {
   position: relative;
   display: flex;

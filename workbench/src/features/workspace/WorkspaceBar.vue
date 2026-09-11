@@ -10,121 +10,23 @@
  * every workspace, not just the active one). Full APG roving-focus polish is
  * 3e; this ships the correct roles/labels.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspacesStore, MAX_WORKSPACES } from "../../stores/workspaces";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useSettingsStore } from "../../stores/settings";
-import { SETTINGS_TAB_ID, NETWORK_USAGE_TAB_ID } from "../../stores/runtime";
 
 const { t } = useI18n();
 const ws = useWorkspacesStore();
 const settingsStore = useSettingsStore();
 
 // --- + split button (3f round 2, user request): main + opens the launcher
-// (default new workspace), ▾ opens a menu with the workspace-layer entries
-// (Settings). Same teleport + zoom-compensation pattern as TabBar's ▾: the
-// strip is an overflow-x scroll container, and the chrome is CSS-zoomed. ---
-const menuOpen = ref(false);
-const menuRef = ref<HTMLUListElement | null>(null);
-const addBtnRef = ref<HTMLButtonElement | null>(null);
-const caretBtnRef = ref<HTMLButtonElement | null>(null);
-const menuPos = ref({ x: 0, y: 0 });
+// W1 (shell-redesign): the ▾ menu is RETIRED (settings/dashboard are
+// rail-bottom floating panes now) — only the + launcher button remains.
 
-function placeMenu(): boolean {
-  const btn = caretBtnRef.value ?? addBtnRef.value;
-  if (!btn) return false;
-  const rect = btn.getBoundingClientRect();
-  // 10d: a detached / not-yet-laid-out ref reports an all-zero rect, and the
-  // clamped minimum then parked the menu at the window's top-left corner
-  // (user evidence 2.png). Refuse to open instead.
-  if (rect.width === 0 && rect.height === 0) return false;
-  // The teleported menu lives OUTSIDE the zoomed .app, so its fixed px are
-  // viewport (VISUAL) px. r4: .app is sized width:100vw/scale, so the live
-  // scale is innerWidth / app.offsetWidth regardless of engine. A visual-space
-  // rect (modern engines: ratio == scale) is already correct; a layout-space
-  // rect (legacy: ratio == 1) must be MULTIPLIED by the scale. Never divided —
-  // dividing made the offset grow with the caret's distance from the left
-  // edge (user evidence: more tabs → bigger drift at font_scale 1.5).
-  const app = document.querySelector<HTMLElement>(".app");
-  const scale = app && app.offsetWidth > 0 ? window.innerWidth / app.offsetWidth : 1;
-  const ratio = btn.offsetWidth > 0 ? rect.width / btn.offsetWidth : 1;
-  const z = Math.abs(scale - 1) < 0.02 ? 1 : (Math.abs(ratio - scale) < 0.05 ? 1 : scale);
-  const menuWidth = 180;
-  menuPos.value = {
-    x: Math.max(4, Math.min(rect.left * z, window.innerWidth - menuWidth)),
-    y: rect.bottom * z + 2,
-  };
-  return true;
-}
 
-function toggleMenu() {
-  menuOpen.value = !menuOpen.value;
-  if (menuOpen.value) {
-    // Place after the menu mounts AND after the next paint: opening the
-    // menu right after closing a tab catches the +/▾ mid-FLIP, and transforms
-    // DO land in getBoundingClientRect — the menu then anchored at the
-    // transient position (occasional repro, user evidence 1.png). Double
-    // rAF measures the settled layout.
-    void nextTick(() => {
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          if (!placeMenu()) {
-            menuOpen.value = false;
-            return;
-          }
-          menuRef.value?.querySelector<HTMLElement>("[role=menuitem]")?.focus();
-        }),
-      );
-    });
-  }
-}
 
-function closeMenu() {
-  menuOpen.value = false;
-}
 
-function onMenuKeydown(e: KeyboardEvent) {
-  if (e.key === "Escape" || e.key === "Tab") {
-    e.preventDefault();
-    closeMenu();
-    caretBtnRef.value?.focus();
-    return;
-  }
-  const items = Array.from(menuRef.value?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? []);
-  if (items.length === 0) return;
-  const idx = items.findIndex((el) => el === document.activeElement);
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    items[(idx + 1 + items.length) % items.length]!.focus();
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    items[(idx - 1 + items.length) % items.length]!.focus();
-  } else if (e.key === "Enter" || e.key === " ") {
-    e.preventDefault();
-    (items[idx >= 0 ? idx : 0] as HTMLElement).click();
-  }
-}
-
-function onDocMousedown(e: MouseEvent) {
-  const target = e.target as HTMLElement;
-  if (menuOpen.value && !target.closest(".wsp-menu") && !target.closest(".add-group")) {
-    closeMenu();
-  }
-}
-
-onMounted(() => document.addEventListener("mousedown", onDocMousedown));
-onBeforeUnmount(() => document.removeEventListener("mousedown", onDocMousedown));
-
-function menuOpenSettings() {
-  closeMenu();
-  ws.openSettingsTab();
-}
-
-function menuOpenNetworkUsage() {
-  closeMenu();
-  ws.openNetworkUsageTab();
-}
 
 interface Chip {
   id: string;
@@ -210,32 +112,9 @@ const chips = computed<Chip[]>(() => {
       launcher: true,
     });
   }
-  // Settings is a page opened via ▾ / Ctrl+, — its chip (and ×) exist only
-  // while it is open.
-  if (ws.settingsTabOpen) {
-    list.push({
-      id: SETTINGS_TAB_ID,
-      label: t("workspbar.settings"),
-      title: t("workspbar.settings"),
-      status: "settings",
-      state: "",
-      launcher: false,
-      settings: true,
-    });
-  }
-  // IDEA-2 (2d): the「网络与用量」panel rides after Settings — same
-  // only-while-open chip model.
-  if (ws.networkUsageTabOpen) {
-    list.push({
-      id: NETWORK_USAGE_TAB_ID,
-      label: t("workspbar.networkUsage"),
-      title: t("workspbar.networkUsage"),
-      status: "settings",
-      state: "",
-      launcher: false,
-      networkUsage: true,
-    });
-  }
+  // W1 (shell-redesign): Settings / 数据看板 chips are RETIRED — both ride
+  // the rail-bottom icons as FLOATING panes now (the store flags stay; they
+  // drive the overlay, not a chip).
   return list;
 });
 
@@ -280,18 +159,6 @@ function onChip(c: Chip): void {
     return;
   }
   ws.activate(c.id);
-}
-
-/** The Settings chip × reverts unsaved form edits via the settings store
- * (same contract the session-layer chip had), then closes the sentinel. */
-function closeSettingsChip(): void {
-  settingsStore.cancel();
-  ws.closeSettingsTab();
-}
-
-/** The「网络与用量」chip × — no dirty-form contract, just close. */
-function closeNetworkUsageChip(): void {
-  ws.closeNetworkUsageTab();
 }
 
 // --- APG tabs pattern (3e): roving tabindex. Arrows/Home/End move FOCUS
@@ -349,25 +216,7 @@ function onBarKeydown(e: KeyboardEvent) {
       />
       <span class="name">{{ c.label }}</span>
       <button
-        v-if="c.settings && ws.settingsTabOpen"
-        class="close"
-        :title="t('tabbar.closeSettings')"
-        :aria-label="t('tabbar.closeSettings')"
-        @click.stop="closeSettingsChip()"
-      >
-        ×
-      </button>
-      <button
-        v-else-if="c.networkUsage && ws.networkUsageTabOpen"
-        class="close"
-        :title="t('tabbar.closeNetworkUsage')"
-        :aria-label="t('tabbar.closeNetworkUsage')"
-        @click.stop="closeNetworkUsageChip()"
-      >
-        ×
-      </button>
-      <button
-        v-else-if="!c.launcher && !c.settings"
+        v-if="!c.launcher"
         class="close"
         :title="t('workspbar.close')"
         :aria-label="`${t('workspbar.close')}: ${c.title}`"
@@ -377,8 +226,9 @@ function onBarKeydown(e: KeyboardEvent) {
       </button>
     </div>
 
-    <!-- + split button: + = launcher (default new workspace), ▾ = Settings. -->
-    <div class="add-group wsp-menu">
+    <!-- W1: the + button (launcher / configured default page) — the ▾ half
+         of the old split button retired with the menu. -->
+    <div class="add-group">
       <button
         ref="addBtnRef"
         class="add"
@@ -387,39 +237,6 @@ function onBarKeydown(e: KeyboardEvent) {
         :disabled="plusDisabled"
         @click="openDefaultPage()"
       >+</button>
-      <button
-        ref="caretBtnRef"
-        class="add-caret"
-        :aria-label="t('workspbar.choose')"
-        :title="t('workspbar.choose')"
-        aria-haspopup="menu"
-        :aria-expanded="menuOpen"
-        @click="toggleMenu"
-        @keydown="onMenuKeydown"
-      >▾</button>
-      <Teleport to="body">
-        <Transition name="pop">
-        <ul
-          v-if="menuOpen"
-          ref="menuRef"
-          class="menu wsp-menu tab-new-menu"
-          role="menu"
-          :style="{ left: `${menuPos.x}px`, top: `${menuPos.y}px` }"
-          @keydown="onMenuKeydown"
-        >
-          <li
-            role="menuitem"
-            tabindex="0"
-            @click="menuOpenSettings"
-          >{{ t("workspbar.settings") }}</li>
-          <li
-            role="menuitem"
-            tabindex="0"
-            @click="menuOpenNetworkUsage"
-          >{{ t("workspbar.networkUsage") }}</li>
-        </ul>
-        </Transition>
-      </Teleport>
     </div>
 
     <!-- P2-2 (D-2): global status, relocated from the retired topbar row —
