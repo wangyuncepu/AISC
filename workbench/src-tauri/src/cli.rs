@@ -739,6 +739,30 @@ pub async fn run_control_input_target(
     result
 }
 
+/// 2.1.11 r6 (step 1 of the local/remote transport unification): provider
+/// ops ride the POOLED serve transport on BOTH sides — Remote over ssh (as
+/// since D-10), Local over a resident `serve --stdio` instead of a per-op
+/// process spawn (PyInstaller extraction + interpreter boot + Defender scan
+/// on every call, ~0.5-1s of pure start-up tax). Same request shape, same
+/// deny gate, same trace/log parity as the per-op path.
+pub async fn run_serve_op_target(
+    target: &CliTarget,
+    argv: Vec<String>,
+    input: Option<String>,
+    timeout: Duration,
+    cancel: CancellationToken,
+) -> Result<Envelope, WorkbenchError> {
+    let phase = argv.first().map(|s| s.as_str()).unwrap_or("cli").to_owned();
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let started_op = std::time::Instant::now();
+    let result = crate::trace::timed("cli", &phase, async {
+        crate::serve::cli_op_target(target, &argv, input, timeout, &cancel, &run_id).await
+    })
+    .await;
+    log_cli_op(&phase, &run_id, started_op, &result);
+    result
+}
+
 /// lifecycle-logging P1: the app-side line for one CLI call — best-effort,
 /// allowlisted fields only (phase/duration/outcome/error_code; never argv
 /// or stdin content).

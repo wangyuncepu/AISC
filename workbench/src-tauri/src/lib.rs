@@ -316,8 +316,16 @@ pub fn run(cli_arg: Option<String>) {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                // 2.1.11 r6: statics never Drop — without an explicit drain
+                // the pooled resident serve children (local `aisc serve`,
+                // especially) outlive the process as orphans.
+                tauri::async_runtime::block_on(crate::serve::drain_pool());
+            }
+        });
 }
 
 #[cfg(test)]

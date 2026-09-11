@@ -199,6 +199,17 @@ fn spawn(target: &CliTarget, cli_args: &[String]) -> Command {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    // KI-6 (same fix as run_control_inner): a local serve process docker-execs
+    // into runtime containers for provider ops — without Docker's bin dir
+    // prepended, those children fail to resolve `docker` when the GUI
+    // process's PATH snapshot lacks it (per-user installs).
+    #[cfg(windows)]
+    if matches!(target, CliTarget::Local(_)) {
+        if let Some(dir) = crate::env::docker_bin_dir() {
+            let path = std::env::var("PATH").unwrap_or_default();
+            cmd.env("PATH", format!("{};{}", dir.display(), path));
+        }
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -549,6 +560,101 @@ pub async fn evict_session(pool: &ServePool, t: &SshTarget) {
     pool.0.lock().await.remove(&target_key(t));
 }
 
+/// Gracefully shut down EVERY pooled session and drain the map (2.1.11 r6).
+/// Statics never Drop, so without an explicit drain at app exit the resident
+/// serve children (local `aisc serve` especially — no ssh parent to die with
+/// the transport) outlive the process as orphans. Field-proven by the test
+/// binary: pooled sessions left two `aisc.exe` processes behind at exit.
+pub async fn drain_pool() {
+    let pool = global_pool();
+    let sessions: Vec<Arc<ServeSession>> = {
+        let mut guard = pool.0.lock().await;
+        guard.drain().map(|(_, s)| s).collect()
+    };
+    for s in sessions {
+        s.shutdown().await;
+    }
+}
+
+fn local_target_key(aisc: &Path) -> String {
+    format!("local:{}", aisc.display())
+}
+
+/// Drop the pooled LOCAL serve session (dead/hung) so the next use re-spawns
+/// from the freshly resolved pin.
+async fn evict_local(pool: &ServePool, aisc: &Path) {
+    pool.0.lock().await.remove(&local_target_key(aisc));
+}
+
+/// Fetch (or establish) the pooled LOCAL serve session (2.1.11 r6: mirror of
+/// `pooled_session` for this machine — one resident `aisc serve --stdio`
+/// instead of a per-op spawn, which pays PyInstaller extraction + interpreter
+/// boot + Defender scan on EVERY provider op). Keyed by the resolved CLI
+/// path, so a pin change naturally establishes a fresh session on the next
+/// call; the stale entry ages out of the map (Drop kills the child).
+async fn pooled_local_session(
+    pool: &ServePool,
+    aisc: &Path,
+) -> Result<Arc<ServeSession>, WorkbenchError> {
+    let key = local_target_key(aisc);
+    {
+        let guard = pool.0.lock().await;
+        if let Some(s) = guard.get(&key) {
+            return Ok(Arc::clone(s));
+        }
+    }
+    let session = Arc::new(ServeSession::spawn_local(aisc).await?);
+    pool.0.lock().await.insert(key, Arc::clone(&session));
+    Ok(session)
+}
+
+/// Unified `cli` op dispatch over the pooled serve transport (2.1.11 r6):
+/// Remote rides ssh exactly as before; LOCAL now rides a pooled resident
+/// `serve --stdio` instead of a per-op process spawn. Same request shape,
+/// same deny gate, same evict-and-retry-once semantics on both sides.
+pub async fn cli_op_target(
+    target: &CliTarget,
+    argv: &[String],
+    input: Option<String>,
+    timeout: std::time::Duration,
+    cancel: &tokio_util::sync::CancellationToken,
+    run_id: &str,
+) -> Result<Envelope, WorkbenchError> {
+    let pool = global_pool();
+    let mut args = serde_json::json!({ "argv": argv, "run_id": run_id });
+    if let Some(s) = input {
+        args["stdin"] = serde_json::json!(s);
+    }
+    let (key, first) = match target {
+        CliTarget::Remote(t) => {
+            let s = pooled_session(pool, t).await;
+            (target_key(t), s)
+        }
+        CliTarget::Local(p) => {
+            let s = pooled_local_session(pool, p).await;
+            (local_target_key(p), s)
+        }
+    };
+    let first = match first {
+        Ok(s) => s.request("cli", &args, timeout, cancel).await,
+        Err(e) => Err(e),
+    };
+    match first {
+        Ok(env) => Ok(env),
+        Err(e) if !matches!(e.code.as_str(), "WB_ERR_CLI_TIMEOUT" | "WB_ERR_CLI_CANCELLED") => {
+            // Transport-grade failure: the cached session is suspect —
+            // evict, re-spawn, retry once.
+            pool.0.lock().await.remove(&key);
+            let session = match target {
+                CliTarget::Remote(t) => pooled_session(pool, t).await?,
+                CliTarget::Local(p) => pooled_local_session(pool, p).await?,
+            };
+            session.request("cli", &args, timeout, cancel).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// D-10 (F2-A): run one control-plane CLI argv over the pooled serve
 /// connection via the generic `cli` op — the ONLY remote transport for
 /// envelope commands (per-op ssh survives solely for serve bootstrap and the
@@ -563,26 +669,10 @@ pub async fn cli_op(
     cancel: &tokio_util::sync::CancellationToken,
     run_id: &str,
 ) -> Result<Envelope, WorkbenchError> {
-    let pool = global_pool();
-    let mut args = serde_json::json!({ "argv": argv, "run_id": run_id });
-    if let Some(s) = input {
-        args["stdin"] = serde_json::json!(s);
-    }
-    let first = match pooled_session(pool, t).await {
-        Ok(s) => s.request("cli", &args, timeout, cancel).await,
-        Err(e) => Err(e),
-    };
-    match first {
-        Ok(env) => Ok(env),
-        Err(e) if !matches!(e.code.as_str(), "WB_ERR_CLI_TIMEOUT" | "WB_ERR_CLI_CANCELLED") => {
-            // Transport-grade failure: the cached session is suspect —
-            // evict, re-spawn, retry once.
-            evict_session(pool, t).await;
-            let session = pooled_session(pool, t).await?;
-            session.request("cli", &args, timeout, cancel).await
-        }
-        Err(e) => Err(e),
-    }
+    cli_op_target(
+        &CliTarget::Remote(t.clone()), argv, input, timeout, cancel, run_id,
+    )
+    .await
 }
 
 /// fs.* request helper for the pooled connection: returns the envelope's
@@ -790,5 +880,51 @@ mod tests {
             assert_eq!(env.meta.command, op, "{op}");
         }
         session.shutdown().await;
+    }
+
+    /// 2.1.11 r6: the POOLED local cli op (the provider tab's new transport).
+    /// Two sequential ops must share ONE resident serve process (the second
+    /// call hits the pool, not a fresh spawn) and both return envelopes.
+    #[tokio::test]
+    async fn local_pooled_cli_op_roundtrip() {
+        let Ok(exe) = std::env::var("AISC_TEST_CLI") else {
+            return; // skip: no real CLI pinned (CI tauri jobs have placeholders)
+        };
+        let exe = PathBuf::from(exe);
+        if !exe.is_file() {
+            return;
+        }
+        let target = CliTarget::Local(exe);
+        let cancel = CancellationToken::new();
+        for i in 0..2 {
+            let t0 = std::time::Instant::now();
+            let env = cli_op_target(
+                &target,
+                &["version".to_string()],
+                None,
+                Duration::from_secs(120),
+                &cancel,
+                &format!("pool-test-{i}"),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("op {i}: {e:?}"));
+            eprintln!("op {i} took {:?}", t0.elapsed());
+            // The cli op's OUTER envelope carries command="cli"; the wrapped
+            // command's payload rides `data` (inner envelope .data).
+            assert_eq!(env.meta.command, "cli");
+            assert!(env.errors.is_empty(), "op {i}: {:?}", env.errors);
+            assert!(
+                env.data.as_ref().is_some_and(|d| d.get("cli_version").is_some()),
+                "op {i}: version payload missing in data: {:?}",
+                env.data
+            );
+        }
+        // The pool holds exactly one local session after both ops.
+        let pool = global_pool();
+        let keys = pool.0.lock().await.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(keys.iter().filter(|k| k.starts_with("local:")).count(), 1);
+        // Drain: the test process would otherwise orphan the resident child
+        // (statics never Drop; proven by the first run of this very test).
+        drain_pool().await;
     }
 }
