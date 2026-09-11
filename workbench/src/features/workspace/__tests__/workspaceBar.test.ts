@@ -9,30 +9,8 @@ import { nextTick } from "vue";
 import { mount } from "@vue/test-utils";
 import { i18n } from "../../../i18n";
 import { useWorkspacesStore, MAX_WORKSPACES } from "../../../stores/workspaces";
-import { useSettingsStore } from "../../../stores/settings";
-import type { SettingsDocument } from "../../../types";
 import WorkspaceBar from "../WorkspaceBar.vue";
 
-/** Minimal settings doc fixture (full section shapes for vue-tsc). */
-const settingsDoc: SettingsDocument = {
-  schemaVersion: 1,
-  revision: 0,
-  aiscCliPath: null,
-  ui: { language: "auto", font_scale: 1.0, theme: "system", explorer_ignore: [], default_tab_agent: "bash", default_new_page: "workspace" },
-  terminal: {
-    font_family: "Cascadia Mono, Consolas, monospace",
-    font_size: 14,
-    line_height: 1.2,
-    letter_spacing: 0,
-    scrollback: 5000,
-    renderer: "auto",
-    smooth_scroll_duration: 100,
-  },
-  window: { remember_geometry: true, close_behavior: "quit", geometry: null },
-  issues: [],
-  corrupted: false,
-  readOnly: false,
-};
 
 const mockIpc = vi.hoisted(() => ({
   logUiEvent: vi.fn().mockResolvedValue(undefined),
@@ -169,86 +147,17 @@ describe("WorkspaceBar (3c)", () => {
     expect(ws.activeId).toBe(active); // cap: no launcher activation
   });
 
-  it("+ split button: + opens the launcher, ▾ menu 设置 opens the settings tab", async () => {
+  // W1 (shell-redesign): the ▾ menu + settings/network-usage strip chips
+  // are RETIRED (rail-bottom floating panes own those entries now); their
+  // tests left with them. The + launcher half survives below.
+  it("+ button opens the launcher (W1: the ▾ half is retired)", async () => {
     const ws = useWorkspacesStore();
     await launchWorkspace(ws, "C:/alpha");
     const bar = mount(WorkspaceBar, { global: { plugins: [i18n] }, attachTo: document.body });
-    // 10d: menu placement measures the anchor rect — jsdom has no layout, so
-    // stub a real one (the zero-rect guard would otherwise refuse to open).
-    (bar.element.querySelector(".add-group .add-caret") as HTMLElement).getBoundingClientRect = () =>
-      ({ left: 400, right: 420, top: 40, bottom: 60, width: 20, height: 20, x: 400, y: 40 }) as DOMRect;
-    // + activates the launcher (default new workspace).
     await bar.find(".add-group .add").trigger("click");
     expect(ws.activeId).toBe(ws.launcher.id);
-    // ▾ menu: teleported, carries 设置, opens the workspace-layer sentinel.
-    await bar.find(".add-group .add-caret").trigger("click");
-    const item = document.querySelector(".wsp-menu.menu [role=menuitem]") as HTMLElement;
-    expect(item).toBeTruthy();
-    expect(item.textContent).toContain("设置");
-    item.click();
-    await nextTick();
-    expect(ws.settingsTabActive).toBe(true);
+    expect(bar.find(".add-group .add-caret").exists()).toBe(false);
     bar.unmount();
   });
 
-  it("Settings chip (3d): exists only while open, × reverts unsaved edits then closes", async () => {
-    const ws = useWorkspacesStore();
-    await launchWorkspace(ws, "C:/alpha");
-    const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
-    // Closed: no settings chip at all (round-3 model).
-    expect(bar.findAll(".chip").some((c) => c.text().includes("设置"))).toBe(false);
-    ws.openSettingsTab();
-    expect(ws.settingsTabActive).toBe(true);
-    await nextTick(); // store mutation → DOM update is async
-    const settingsChip = bar.findAll(".chip")[bar.findAll(".chip").length - 1]!;
-    expect(settingsChip.text()).toContain("设置");
-    expect(settingsChip.classes()).toContain("active");
-    expect(settingsChip.find(".close").exists()).toBe(true);
-
-    // Dirty the settings form, then ×: cancel() reverts to lastSaved, sentinel closes.
-    const settings = useSettingsStore();
-    settings.doc = {
-      ...settingsDoc,
-      ui: { ...settingsDoc.ui, language: "en-US" },
-    };
-    settings.lastSaved = JSON.parse(JSON.stringify(settingsDoc)) as SettingsDocument;
-    await settingsChip.find(".close").trigger("click");
-    expect(settings.doc?.ui.language).toBe("auto"); // reverted
-    expect(ws.settingsTabOpen).toBe(false);
-    expect(ws.activeId).toBe(ws.runtimes[0].id); // falls back to the last workspace
-  });
-
-  it("▾ menu 网络与用量 opens the network-usage sentinel (IDEA-2 2d)", async () => {
-    const ws = useWorkspacesStore();
-    await launchWorkspace(ws, "C:/alpha");
-    const bar = mount(WorkspaceBar, { global: { plugins: [i18n] }, attachTo: document.body });
-    // 10d: menu placement measures the anchor rect — jsdom has no layout, so
-    // stub a real one (the zero-rect guard would otherwise refuse to open).
-    (bar.element.querySelector(".add-group .add-caret") as HTMLElement).getBoundingClientRect = () =>
-      ({ left: 400, right: 420, top: 40, bottom: 60, width: 20, height: 20, x: 400, y: 40 }) as DOMRect;
-    await bar.find(".add-group .add-caret").trigger("click");
-    const items = [...document.querySelectorAll(".wsp-menu.menu [role=menuitem]")];
-    const usage = items.find((el) => el.textContent?.includes("网络与用量"));
-    expect(usage, "menu must list 网络与用量").toBeTruthy();
-    (usage as HTMLElement).click();
-    await nextTick();
-    expect(ws.networkUsageTabActive).toBe(true);
-    expect(ws.settingsTabActive).toBe(false); // the two sentinels are independent
-    bar.unmount();
-  });
-
-  it("Network-usage chip: exists only while open, × closes and falls back", async () => {
-    const ws = useWorkspacesStore();
-    await launchWorkspace(ws, "C:/alpha");
-    const bar = mount(WorkspaceBar, { global: { plugins: [i18n] } });
-    expect(bar.findAll(".chip").some((c) => c.text().includes("网络与用量"))).toBe(false);
-    ws.openNetworkUsageTab();
-    await nextTick();
-    const chip = bar.findAll(".chip").find((c) => c.text().includes("网络与用量"))!;
-    expect(chip.classes()).toContain("active");
-    expect(chip.find(".close").exists()).toBe(true);
-    await chip.find(".close").trigger("click");
-    expect(ws.networkUsageTabOpen).toBe(false);
-    expect(ws.activeId).toBe(ws.runtimes[0].id); // falls back to the last workspace
-  });
 });

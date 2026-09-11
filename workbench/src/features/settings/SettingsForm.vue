@@ -49,7 +49,7 @@ const FIELDS: FieldDef[] = [
     { value: "claude", labelKey: "tabbar.menu.claude" },
     { value: "codex", labelKey: "tabbar.menu.codex" },
     { value: "bash", labelKey: "tabbar.menu.bash" },
-    { value: "cc-switch", labelKey: "tabbar.menu.cc-switch" },
+    { value: "cc-switch", labelKey: "tabbar.ccSwitchUi" },
   ], effect: "immediate", helpKey: "settings.ui.defaultTab.help" },
   { key: "ui.default_new_page", labelKey: "settings.ui.defaultNewPage", control: "select", options: [
     { value: "workspace", labelKey: "workspbar.newWorkspace" },
