@@ -332,8 +332,17 @@ async function runExitFlow(): Promise<void> {
   // window closed both). Scoped teardown: this window's sessions, then
   // stop→remove its runtimes (lease release rides remove), then destroy.
   if (win.label !== "main") {
-    await ws.closeWindowScoped();
-    void win.destroy().catch(() => undefined);
+    // 手测 r5: visually instant close (G-07's hide-first recipe — the same
+    // feel closeWorkspace has): hide NOW, scoped teardown runs on in this
+    // hidden window, destroy lands when it settles. stop→remove are docker
+    // CLI calls; awaiting them before destroy was the lag.
+    void win.hide().catch(() => undefined);
+    void ws
+      .closeWindowScoped()
+      .catch(() => undefined)
+      .finally(() => {
+        void win.destroy().catch(() => undefined);
+      });
     return;
   }
   void win.hide().catch(() => undefined);
