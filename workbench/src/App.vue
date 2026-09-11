@@ -386,7 +386,12 @@ async function consumeBootParams(): Promise<void> {
   }
   if (!ws.openLauncher()) return; // cap guard (harmless in a fresh window)
   if (!wsPath) return; // remote launcher window — the picker carries on
-  if (!(await ws.workspacePathExists(wsPath))) return; // launcher surfaces the miss
+  if (!(await ws.workspacePathExists(wsPath))) {
+    // Same remediation as the picker's own dead-recent click (手测 r10) —
+    // silently parking on the launcher left the dead record unexplained.
+    ws.surfaceInvalidPath(wsPath);
+    return;
+  }
   store.selectRecentWorkspace(wsPath);
 }
 

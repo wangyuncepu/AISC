@@ -9,7 +9,7 @@
  * flow (preview dialog → single-IPC transaction); clicking a recent whose
  * path no longer exists offers the record-only clear.
  */
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useWorkspacesStore } from "../../stores/workspaces";
@@ -53,6 +53,17 @@ const hiddenCount = computed(
 // a POSIX path is a REMOTE workspace. Clicking it under the wrong target
 // auto-switches the drive target first (tunnels re-root), then probes.
 const invalidPath = ref<string | null>(null);
+// W3 手测 r10: the menu / a spawned window's boot can surface a dead
+// recent too — consume the store flag into the same dialog flow.
+watch(
+  () => wsStore.pendingInvalidPath,
+  (p) => {
+    if (p && !invalidPath.value) {
+      invalidPath.value = wsStore.consumeInvalidPath();
+    }
+  },
+  { immediate: true },
+);
 function isRemotePath(path: string): boolean {
   return path.startsWith("/");
 }

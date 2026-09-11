@@ -510,6 +510,21 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     }
   }
 
+  // --- W3 手测 r10: invalid-recent remediation is reachable from ANY entry ---
+  /** Set by the menu's openByPath / a spawned window's boot probe when a
+   * recent's path is gone; the picker CONSUMES it on mount/watch and opens
+   * the same InvalidPathDialog its own click path uses (forget/clear +
+   * lifecycle export — P1-3). Store-routed per F-A01. */
+  const pendingInvalidPath = ref<string | null>(null);
+  function surfaceInvalidPath(path: string): void {
+    pendingInvalidPath.value = path;
+  }
+  function consumeInvalidPath(): string | null {
+    const p = pendingInvalidPath.value;
+    pendingInvalidPath.value = null;
+    return p;
+  }
+
   // --- F2-B: remote browse (picker dialog state; store-routed per F-A01) ---
   const browseBusy = ref(false);
   const browseError = ref<string | null>(null);
@@ -559,6 +574,9 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     workspacePathExists,
     closeWindowScoped,
     hideWindowForExit,
+    pendingInvalidPath,
+    surfaceInvalidPath,
+    consumeInvalidPath,
     browseBusy,
     browseError,
     browseRemote,

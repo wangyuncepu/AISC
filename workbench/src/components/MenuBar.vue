@@ -17,7 +17,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useToastStore } from "../stores/toast";
 import { useRuntimeStore } from "../stores/runtime";
 import { useWorkspacesStore } from "../stores/workspaces";
 import { useSettingsStore } from "../stores/settings";
@@ -30,7 +29,6 @@ const facade = useRuntimeStore();
 const doctor = useDoctorStore();
 const ws = useWorkspacesStore();
 const settings = useSettingsStore();
-const toast = useToastStore();
 const { zoomStyle } = useTeleportedZoom();
 
 // P2-2 → W3: the global status label rides the menu bar's right end now
@@ -102,11 +100,13 @@ async function openByPath(path: string, machine?: string | null): Promise<void> 
     ? (machine ?? settings.target?.machine?.name
       ?? settings.doc?.remoteMachines?.[0]?.name ?? null)
     : null;
-  // 手测 r4#1: existence is checked against the path's OWN machine — for
-  // remote paths that is the SPAWNED window's boot probe (this window's
-  // local registry would always answer "missing"); local paths probe here.
+  // 手测 r4#1 → r10: existence is checked against the path's OWN machine —
+  // remote paths probe in the SPAWNED window's boot; local paths probe
+  // here. A miss now opens the SAME remediation the picker offers (forget/
+  // clear + lifecycle export, P1-3) — a bare toast left the dead record
+  // dangling with no path to clean it.
   if (!pathRemote && !(await ws.workspacePathExists(path))) {
-    toast.error(t("menubar.pathMissing", { path }));
+    if (ws.openLauncher()) ws.surfaceInvalidPath(path);
     return;
   }
   void openWorkspaceWindow({ workspace: path, machine: targetMachine });
