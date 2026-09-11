@@ -218,29 +218,10 @@ const RUNTIME_LABEL_KEY: Record<string, string> = {
   removing: "app.removing",
 };
 
-// Stage 6 (UX-04): topbar status label (store.status, never a raw enum).
-const STATUS_KEY: Record<string, string> = {
-  idle: "app.status.idle",
-  negotiating: "app.negotiating",
-  preflight: "app.preflight",
-  picker: "app.status.picker",
-  summary: "app.status.summary",
-  starting: "app.starting",
-  cancelled: "app.status.cancelled",
-  building: "app.status.building",
-  conflict: "app.status.conflict",
-  ready: "app.status.ready",
-  stopping: "app.stopping",
-  blocked: "app.status.blocked",
-  error: "app.error.title",
-};
-
-// KI-1 UX: while the Docker boot loop runs, the topbar leads with the wake-up.
-const statusLabel = computed(() =>
-  store.dockerStarting
-    ? t("app.dockerStartingStatus")
-    : t(STATUS_KEY[store.status] ?? "app.unknown")
-);
+// P2-2 (D-2): the topbar status label moved into WorkspaceBar (.bar-status);
+// nothing here renders it anymore. The window title watcher below already
+// carries the workspace identity (computeWindowTitle) — the static brand
+// row's last duty is gone with the row.
 
 // KI-1 UX: announce the wake-up start and its SUCCESS.
 watch(
@@ -411,11 +392,10 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app" :style="uiZoom" :data-tier="layoutTier">
-    <header class="topbar">
-      <span class="brand">AISC Workbench</span>
-      <span class="status" :data-status="store.status">{{ statusLabel }}</span>
-      <span class="spacer" />
-    </header>
+    <!-- P2-2 (D-2, user ruling A): the topbar ROW is GONE — the static
+         「AISC Workbench」 carried zero information and duplicated the strip.
+         The status label moved into WorkspaceBar's right end; the window
+         title is now dynamic (workspace name, watcher below). -->
 
     <!-- Stage 5 (ONB-01): first-run wizard overlay. -->
     <div v-if="showOnboarding" class="onboarding-gate">
@@ -502,22 +482,9 @@ onBeforeUnmount(() => {
   flex-direction: column;
   height: 100vh;
 }
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface);
-  color: var(--text-2);
-  font-size: var(--font-base);
-  border-bottom: var(--border-w) solid var(--border);
-}
-.brand { font-weight: 600; }
-.spacer { flex: 1; }
-/* 10c round 2: quiet colored text — the badge pill was too heavy up here. */
-.status { font-size: var(--font-sm); color: var(--text-muted); }
-.status[data-status="ready"] { color: var(--success); }
-.status[data-status="error"], .status[data-status="blocked"] { color: var(--error); }
+/* P2-2 (D-2): the .topbar block/brand/spacer/status styles are retired with
+ * the row itself — the status label now lives in WorkspaceBar (.bar-status),
+ * the window title carries the identity instead of a static brand. */
 .settings-pane { flex: 1; min-height: 0; min-width: 0; display: flex; outline: none; }
 .gate.blocked, .center {
   flex: 1;
@@ -543,12 +510,21 @@ onBeforeUnmount(() => {
  * variant stays local. */
 .diagnose { background: var(--info-bg); border-color: var(--info-border); color: var(--text); }
 
-/* Stage 6 (UX-02): layout tiers driven by the effective app-box width. */
-.app[data-tier="compact"] .topbar { gap: var(--space-2); padding: 4px var(--space-2); }
-.app[data-tier="compact"] .topbar .status { display: none; } /* keep the brand readable */
+/* Stage 6 (UX-02): layout tiers driven by the effective app-box width.
+ * P2-2: the compact topbar rules left with the row; the bar-status label's
+ * compact rule lives unscoped at the bottom of this file (WorkspaceBar's
+ * own style block is scoped and cannot match its own element from here,
+ * nor can this scoped block reach into the child — FIX-3 audit (d) lesson).
+ */
 /* FIX-3 audit (d): the three rules below (sidebar/explorer-dock/status-drawer)
  * were DEAD since birth — this style block is scoped, so they compiled to
  * `[data-v-app]` selectors that can never match elements rendered by child
  * components. The compact explorer/status rules now live (alive) in
  * WorkspaceView.vue's own scoped styles via the :tier prop. */
+</style>
+
+<style>
+/* P2-2: unscoped ON PURPOSE — reaches WorkspaceBar's .bar-status on compact
+ * tiers (keep the chips readable; same rationale the old topbar rule had). */
+.app[data-tier="compact"] .workspbar .bar-status { display: none; }
 </style>

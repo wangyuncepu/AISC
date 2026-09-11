@@ -13,6 +13,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useWorkspacesStore, MAX_WORKSPACES } from "../../stores/workspaces";
+import { useRuntimeStore } from "../../stores/runtime";
 import { useSettingsStore } from "../../stores/settings";
 import { SETTINGS_TAB_ID, NETWORK_USAGE_TAB_ID } from "../../stores/runtime";
 
@@ -163,6 +164,18 @@ const STATUS_KEY: Record<string, string> = {
   stopping: "app.stopping",
   error: "app.error.title",
 };
+
+// P2-2 (D-2): the GLOBAL status label relocated here from the retired topbar
+// row — the ACTIVE instance's state via the facade (NOT the chips' own
+// per-workspace snapshot), KI-1 docker wake-up included. Renders at the
+// strip's right end (.bar-status).
+const facade = useRuntimeStore();
+const activeStatusRaw = computed(() => facade.status);
+const activeStatusLabel = computed(() =>
+  facade.dockerStarting
+    ? t("app.dockerStartingStatus")
+    : t(STATUS_KEY[facade.status] ?? "app.unknown")
+);
 
 /** The dot shows the LIVE runtime state when the workspace is ready (external
  * docker stop becomes visible via the downshifted background poll), else the
@@ -408,10 +421,37 @@ function onBarKeydown(e: KeyboardEvent) {
         </Transition>
       </Teleport>
     </div>
+
+    <!-- P2-2 (D-2): global status, relocated from the retired topbar row —
+         pinned to the strip's right end (sticky, so chip overflow scrolls
+         under it instead of pushing it out of view). -->
+    <span
+      class="bar-status"
+      :data-status="activeStatusRaw"
+      :title="activeStatusLabel"
+    >{{ activeStatusLabel }}</span>
   </nav>
 </template>
 
 <style scoped>
+/* P2-2 (D-2): the global status label — same quiet-text language the old
+ * topbar used (10c round 2), now at the strip's right end. Sticky against
+ * chip overflow; hidden on compact tiers (unscoped rule in App.vue). */
+.bar-status {
+  margin-left: auto;
+  position: sticky;
+  right: 0;
+  padding: 2px 8px;
+  background: var(--surface);
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex: none;
+}
+.bar-status[data-status="ready"] { color: var(--success); }
+.bar-status[data-status="error"],
+.bar-status[data-status="blocked"] { color: var(--error); }
+
 .workspbar {
   display: flex;
   align-items: center;
