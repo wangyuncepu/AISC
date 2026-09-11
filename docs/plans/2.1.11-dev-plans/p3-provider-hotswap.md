@@ -94,3 +94,19 @@ agent ── env 指向 ──▶ 127.0.0.1:15720 映射 shim ──▶ 15721 cc
 
 **实施量级**：容器内 Python asyncio 薄层（~200 行）+ adapter 路由 stub
 改端口 + 映射失效钩子 + 映射表解析测试。下轮与「无重启切换」同批。
+## 追加验证——CLI 原生热重载（用户问「改 settings.json 实时变化」）
+
+**两个 CLI 的 env/模型配置均无原生热重载**（2026-09-12 查证）：
+
+- **claude**：settings.json 的 hooks/permissions/keybindings/theme 热重载，
+  但 `env`（ANTHROPIC_BASE_URL/MODEL/TOKEN 所在）**改后需重启会话**——
+  官方 issue #42251（请求 env 热重载）与 #15858（配置热重载 RFC）仍
+  open。用户印象中的「改 settings.json 即生效」是前者那批键。
+- **codex**：config.toml 由 Rust 二进制启动时读入，无任何重载机制。
+
+**结论不变且更明确**：会话内的「实时变化」**只能**在传输层实现——
+本地代理换上游（已热）+ shim 重写 model 字段（下轮实施）。CLI 界面
+显示的模型名到会话结束都停留在启动值（两 CLI 同），属显示层错位；
+实际服务方与实际模型随切换即时变化。
+
+**Slurm/PBS 方案文档**：仍阻塞在用户提供实际工作流。
