@@ -587,6 +587,13 @@ async function reopenOnboarding() {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 .nav-item.dim { opacity: 0.45; }
+/* 手测 r2: styles.css's [role="dialog"] :focus paints the ring on plain
+ * :focus (dialog keyboard-nav workaround) — clicked nav items kept a +2px
+ * offset ring that OVERFLOWED the pane edge. Negative offset keeps the
+ * ring (the workaround's intent) strictly inside the box. */
+.settings-form :is(button, input, select):focus {
+  outline-offset: -2px;
+}
 .settings-pane { flex: 1; min-width: 0; padding: 6px 14px 12px 0; }
 .body { padding: 6px 14px 12px; flex: 1; }
 .group { margin: 12px 0 4px; font-size: var(--font-sm); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.5px; }
