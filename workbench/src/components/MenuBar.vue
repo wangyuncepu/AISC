@@ -16,7 +16,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { useToastStore } from "../stores/toast";
 import { useRuntimeStore } from "../stores/runtime";
 import { useWorkspacesStore } from "../stores/workspaces";
@@ -89,32 +89,31 @@ onBeforeUnmount(() => {
 /** The recent-open flow lifted out of the picker's onRecentClick (W2):
  * target switch on path-kind mismatch, existence probe, then the ACTIVE
  * launcher instance takes the path into its state machine. */
-async function openByPath(path: string): Promise<void> {
+/** 手测 r2#2: the drive target is PROCESS-GLOBAL (one machine per app
+ * run — remote/local CLI capabilities cannot mix). The menu therefore
+ * NEVER flips it silently: same-kind recents spawn a window directly;
+ * cross-kind opens REQUIRE the explicit confirm below. No openLauncher()
+ * here either — the CURRENT window must not be yanked to the picker. */
+async function openByPath(path: string, machine?: string | null): Promise<void> {
   closeMenu();
-  if (!ws.openLauncher()) {
-    toast.error(t("workspbar.capHint"));
-    return;
-  }
   // Same rule as the picker (R4): a POSIX path names a REMOTE workspace.
   const pathRemote = path.startsWith("/");
   const nowRemote = settings.target?.kind === "remote";
+  const targetMachine = pathRemote
+    ? (machine ?? settings.target?.machine?.name
+      ?? settings.doc?.remoteMachines?.[0]?.name ?? null)
+    : null;
   if (pathRemote !== nowRemote) {
-    const name = settings.target?.machine?.name
-      ?? settings.doc?.remoteMachines?.[0]?.name ?? null;
-    await settings.switchTarget(pathRemote ? name : null);
+    const ok = await confirm(t(pathRemote ? "menubar.switchToRemoteConfirm" : "menubar.switchToLocalConfirm", {
+      machine: targetMachine ?? "",
+    }));
+    if (!ok) return;
   }
   if (!(await ws.workspacePathExists(path))) {
     toast.error(t("menubar.pathMissing", { path }));
     return;
   }
-  // W3: recents open in their OWN window (remote paths carry the machine).
-  void openWorkspaceWindow({
-    workspace: path,
-    machine: path.startsWith("/")
-      ? (settings.target?.machine?.name
-        ?? settings.doc?.remoteMachines?.[0]?.name ?? null)
-      : null,
-  });
+  void openWorkspaceWindow({ workspace: path, machine: targetMachine });
 }
 
 async function openFromFolder(): Promise<void> {
@@ -140,11 +139,17 @@ async function openFromMachine(): Promise<void> {
   void openWorkspaceWindow({ machine });
 }
 
-const recents = computed(() =>
-  ws.recentWorkspaces.slice(0, 8).map((r) => ({
-    path: r.path,
-    label: r.path.replace(/[\/]+$/, "").split(/[\/]/).pop() || r.path,
-  })));
+/** 手测 r2#1/#2: VS Code-style flyout, classified 本地/远程（按机器）——
+ * the kinds must never silently mix (process-global drive target). */
+function baseOf(p: string): string {
+  return p.replace(/[\/]+$/, "").split(/[\/]/).pop() || p;
+}
+const recentsLocal = computed(() =>
+  ws.recentWorkspaces.filter((r) => !r.path.startsWith("/")).slice(0, 8)
+    .map((r) => ({ path: r.path, label: baseOf(r.path) })));
+const recentsRemote = computed(() =>
+  ws.recentWorkspaces.filter((r) => r.path.startsWith("/")).slice(0, 8)
+    .map((r) => ({ path: r.path, label: baseOf(r.path) })));
 
 function menuPos(which: string): { left: string; top: string } {
   const btn = menuBtn.value[which];
@@ -221,20 +226,49 @@ async function openDocs(): Promise<void> {
           <li role="menuitem" tabindex="0" @click="openFromFolder">
             {{ t("menubar.openFolder") }}
           </li>
-          <li class="sep" role="separator" />
+          <!-- 手测 r2#1: VS Code-style flyout — hover reveals the classified
+               recents (本地 first, 远程 grouped under the machine rule). -->
           <li
-            v-for="r in recents"
-            :key="r.path"
-            class="recent"
+            v-if="recentsLocal.length || recentsRemote.length"
+            class="has-sub"
             role="menuitem"
             tabindex="0"
-            @click="openByPath(r.path)"
+            aria-haspopup="menu"
           >
-            <span class="recent-name">{{ r.label }}</span>
-            <span class="recent-path">{{ r.path }}</span>
-          </li>
-          <li v-if="!recents.length" class="dim" role="presentation">
-            {{ t("menubar.noRecents") }}
+            {{ t("menubar.openRecent") }}<span class="sub-arrow">▸</span>
+            <ul class="menubar-sub" role="menu">
+              <li v-if="recentsLocal.length" class="sub-head" role="presentation">
+                {{ t("menubar.groupLocal") }}
+              </li>
+              <li
+                v-for="r in recentsLocal"
+                :key="r.path"
+                class="recent"
+                role="menuitem"
+                tabindex="0"
+                @click="openByPath(r.path)"
+              >
+                <span class="recent-name">{{ r.label }}</span>
+                <span class="recent-path">{{ r.path }}</span>
+              </li>
+              <li v-if="recentsRemote.length" class="sub-head" role="presentation">
+                {{ t("menubar.groupRemote") }}
+              </li>
+              <li
+                v-for="r in recentsRemote"
+                :key="r.path"
+                class="recent"
+                role="menuitem"
+                tabindex="0"
+                @click="openByPath(r.path)"
+              >
+                <span class="recent-name">{{ r.label }}</span>
+                <span class="recent-path">{{ r.path }}</span>
+              </li>
+              <li v-if="!recentsLocal.length && !recentsRemote.length" class="dim" role="presentation">
+                {{ t("menubar.noRecents") }}
+              </li>
+            </ul>
           </li>
           <li class="sep" role="separator" />
           <li role="menuitem" tabindex="0" @click="openFromMachine">
@@ -324,6 +358,33 @@ async function openDocs(): Promise<void> {
 .menubar-drop li:hover { background: var(--accent-soft); color: var(--text); }
 .menubar-drop li.sep { height: 1px; padding: 0; margin: 4px 8px; background: var(--border); }
 .menubar-drop li.dim { color: var(--text-faint); cursor: default; }
+/* 手测 r2#1: the flyout submenu — hover (or focus-within) reveals it. */
+.menubar-drop li.has-sub { position: relative; }
+.menubar-drop li.has-sub .sub-arrow { color: var(--text-faint); }
+.menubar-drop li.has-sub .menubar-sub {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: -5px;
+  min-width: 320px;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
+}
+.menubar-drop li.has-sub:hover .menubar-sub,
+.menubar-drop li.has-sub:focus-within .menubar-sub { display: block; }
+.menubar-sub .sub-head {
+  padding: 4px 14px 2px;
+  font-size: var(--font-xs);
+  color: var(--text-faint);
+  letter-spacing: 0.5px;
+  cursor: default;
+}
+.menubar-sub li.recent { padding: 5px 14px; }
 /* 手测 r1#1: VS Code-style recents — name bold, full path dimmed below. */
 .menubar-drop li.recent {
   flex-direction: column;
