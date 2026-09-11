@@ -55,6 +55,10 @@ pub struct CacheDfRow {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CacheUsage {
+    /// TS reads camelCase (invoke RETURNS serialize as-is — no auto-casing
+    /// on this direction, unlike arguments); the bare snake field read as
+    /// undefined → the card permanently showed 不可用. 手测 P2-5 r1#1.
+    #[serde(rename = "dockerAvailable")]
     pub docker_available: bool,
     pub rows: Vec<CacheDfRow>,
 }

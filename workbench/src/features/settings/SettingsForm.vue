@@ -52,10 +52,6 @@ const FIELDS: FieldDef[] = [
     { value: "bash", labelKey: "tabbar.menu.bash" },
     { value: "cc-switch", labelKey: "tabbar.ccSwitchUi" },
   ], effect: "immediate", helpKey: "settings.ui.defaultTab.help" },
-  { key: "ui.default_new_page", labelKey: "settings.ui.defaultNewPage", control: "select", options: [
-    { value: "workspace", labelKey: "workspbar.newWorkspace" },
-    { value: "settings", labelKey: "workspbar.settings" },
-  ], effect: "immediate", helpKey: "settings.ui.defaultNewPage.help" },
   { key: "ui.explorer_ignore", labelKey: "settings.ui.explorerIgnore", control: "text",
     effect: "immediate", helpKey: "settings.ui.explorerIgnore.help" },
   { key: "terminal.font_family", labelKey: "settings.term.fontFamily", control: "text",
@@ -361,7 +357,7 @@ async function reopenOnboarding() {
             <select v-else-if="f.key === 'ui.theme'" :id="f.key" v-model="ui.theme" :disabled="store.readOnly">
               <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
             </select>
-            <select v-else-if="f.key === 'ui.default_tab_agent' || f.key === 'ui.default_new_page'" :id="f.key" v-model="ui[f.key.split('.')[1] as 'default_tab_agent' | 'default_new_page']" :disabled="store.readOnly">
+            <select v-else-if="f.key === 'ui.default_tab_agent'" :id="f.key" v-model="ui.default_tab_agent" :disabled="store.readOnly">
               <option v-for="o in f.options" :key="o.value" :value="o.value">{{ t(o.labelKey) }}</option>
             </select>
             <input v-else-if="f.key === 'ui.explorer_ignore'" :id="f.key" v-model="explorerIgnoreText"
@@ -584,7 +580,12 @@ async function reopenOnboarding() {
   padding: 6px 10px; border-radius: var(--radius-sm);
 }
 .nav-item:hover { background: var(--surface-hover); color: var(--text); }
-.nav-item.active { background: var(--accent-soft); color: var(--accent); }
+.nav-item.active {
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .nav-item.dim { opacity: 0.45; }
 .settings-pane { flex: 1; min-width: 0; padding: 6px 14px 12px 0; }
 .body { padding: 6px 14px 12px; flex: 1; }
