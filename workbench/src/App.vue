@@ -542,13 +542,15 @@ onBeforeUnmount(() => {
 
       <!-- The ACTIVE workspace's view (keyed remount on switch). W1: the
            floating panes overlay it instead of replacing it. -->
-      <Transition name="fade" mode="out-in">
-      <WorkspaceView
-        v-else
-        :key="ws.activeRuntime.id"
-        :zoom="terminalZoom"
-        :tier="layoutTier"
-      />
+      <!-- The condition rides the TRANSITION itself — a wrapper between the
+           v-else-if chain and its v-else breaks chain adjacency (Vue
+           compile error; 手测 r9). -->
+      <Transition v-else name="fade" mode="out-in">
+        <WorkspaceView
+          :key="ws.activeRuntime.id"
+          :zoom="terminalZoom"
+          :tier="layoutTier"
+        />
       </Transition>
     </template>
 
