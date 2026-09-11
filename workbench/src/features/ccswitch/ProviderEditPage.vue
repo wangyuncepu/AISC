@@ -260,9 +260,10 @@ function onSave(): void {
           <input v-model="form.apiKey" :type="keyVisible ? 'text' : 'password'"
                  autocomplete="off" :placeholder="keyPlaceholder" @input="touch" />
           <button v-if="!adding && keyConfigured" type="button" class="ui-icon-button sm key-reveal"
+                  :class="{ busy: revealBusy }"
                   :disabled="revealBusy"
-                  :aria-label="keyVisible ? t('ccswitch.apiKeyHide') : t('ccswitch.apiKeyShow')"
-                  :title="keyVisible ? t('ccswitch.apiKeyHide') : t('ccswitch.apiKeyShow')"
+                  :aria-label="revealBusy ? t('ccswitch.revealing') : (keyVisible ? t('ccswitch.apiKeyHide') : t('ccswitch.apiKeyShow'))"
+                  :title="revealBusy ? t('ccswitch.revealing') : (keyVisible ? t('ccswitch.apiKeyHide') : t('ccswitch.apiKeyShow'))"
                   @click="keyVisible ? (keyVisible = false) : revealApiKey()">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
               <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" />
@@ -342,6 +343,10 @@ function onSave(): void {
   top: 50%;
   transform: translateY(-50%);
 }
+/* Manual-test r5 #2: the reveal is a full CLI→docker-exec→adapter round
+ * trip (~1-3s); without a busy affordance the button reads as ignored. */
+.key-reveal.busy { opacity: 0.45; animation: key-reveal-pulse 1s ease-in-out infinite; }
+@keyframes key-reveal-pulse { 50% { opacity: 0.15; } }
 .head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
 .head h2 { font-size: var(--font-md); margin: 0; }
 .spacer { flex: 1; }

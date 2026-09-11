@@ -115,6 +115,14 @@ watch(
 function onAppKeydown(e: KeyboardEvent) {
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
+  // Manual-test r5 #1: WebView2 leaks the browser print surfaces — Ctrl+P
+  // opens 打印, Ctrl+Shift+P opens 打印设置. Neither belongs in a terminal
+  // workbench; Ctrl+Shift+P is reserved for the P2 command palette.
+  if (e.key === "p" || e.key === "P") {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   if (e.key === "," && !showOnboarding.value) {
     e.preventDefault();
     toggleSettings();
