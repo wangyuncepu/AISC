@@ -242,6 +242,14 @@ function dirOf(p: string): string {
 
 const servicesSupported = computed(() => runtime.capability?.runtime_services ?? false);
 
+/** P2-3 手测 r2: the header titles itself with the ACTIVE view's name. */
+const TITLE_KEY: Record<string, string> = {
+  explorer: "explorer.tab.files",
+  conversations: "explorer.tab.conversations",
+  artifacts: "explorer.tab.artifacts",
+  services: "explorer.tab.services",
+};
+
 const WEB_REASON_KEY: Record<string, string> = {
   legacy_runtime: "sidebar.webReason.legacy_runtime",
   runtime_not_running: "sidebar.webReason.runtime_not_running",
@@ -900,8 +908,12 @@ function onTreeKeydown(e: KeyboardEvent) {
 <template>
   <div class="explorer" data-testid="workspace-explorer">
     <div class="explorer-header">
+      <!-- P2-3 手测 r2: VS Code view-header shape — the ACTIVE view's title
+           on the left (the tab strip is gone; this is the one place the
+           current panel names itself), the action icons right-aligned. -->
+      <h2 class="explorer-title">{{ t(TITLE_KEY[explorer.activeKind]) }}</h2>
       <!-- Stage 11 (11c): VS Code-density action row. Icon-only so Compact
-           widths never squeeze the tabs (03 §2). -->
+           widths never squeeze (03 §2). -->
       <div class="explorer-actions">
         <button
           class="ui-icon-button sm"
@@ -1022,15 +1034,12 @@ function onTreeKeydown(e: KeyboardEvent) {
           <span class="search-dir">{{ dirOf(m.relative_path) }}</span>
         </div>
       </template>
-      <div
+      <p
         v-else-if="explorer.visibleNodes.length === 0 && !explorer.isLoading('') && !explorer.errors[''] && pending === null"
         class="explorer-empty"
       >
-        <p>{{ t("explorer.empty.files") }}</p>
-        <button class="ui-button sm" @click="onToolbarRefresh">
-          {{ t("common.refresh") }}
-        </button>
-      </div>
+        {{ t("explorer.empty.files") }}
+      </p>
       <template v-else>
         <!-- Root-level create input: above the first row (or alone when the
              tree is empty — the v-for below never runs). -->
@@ -1158,12 +1167,9 @@ function onTreeKeydown(e: KeyboardEvent) {
       <p v-else-if="explorer.conversationsError" class="explorer-empty">
         {{ t("explorer.conversations.loadFailed") }}
       </p>
-      <div v-else-if="!conversationsFiltered.length" class="explorer-empty">
-        <p>{{ t("explorer.empty.conversations") }}</p>
-        <button class="ui-button sm" @click="explorer.loadConversations(true)">
-          {{ t("common.refresh") }}
-        </button>
-      </div>
+      <p v-else-if="!conversationsFiltered.length" class="explorer-empty">
+        {{ t("explorer.empty.conversations") }}
+      </p>
       <template v-else>
         <div
           v-for="c in conversationsFiltered"
@@ -1221,15 +1227,9 @@ function onTreeKeydown(e: KeyboardEvent) {
          filter chips, attribution badges). The panel is a FLAT change list
          + the shared search box (substring/subsequence fuzzy + /regex/). -->
     <div v-else-if="artifactFilter === 'artifacts'" key="artifacts" class="explorer-body artifacts-panel">
-      <div
-        v-if="!changesFiltered.length"
-        class="explorer-empty"
-      >
-        <p>{{ searchQuery ? t("explorer.searchNoMatch") : t("explorer.empty.artifacts") }}</p>
-        <button v-if="!searchQuery" class="ui-button sm" @click="onToolbarRefresh">
-          {{ t("common.refresh") }}
-        </button>
-      </div>
+      <p v-if="!changesFiltered.length" class="explorer-empty">
+        {{ searchQuery ? t("explorer.searchNoMatch") : t("explorer.empty.artifacts") }}
+      </p>
       <div
         v-for="u in changesFiltered"
         :key="u.relative_path"
@@ -1387,6 +1387,19 @@ function onTreeKeydown(e: KeyboardEvent) {
 .explorer-actions {
   display: flex;
   gap: 2px;
+}
+/* P2-3 手测 r2: the view title — VS Code's small quiet caps (a no-op for
+ * CJK) sitting left while the actions ride space-between to the right. */
+.explorer-title {
+  margin: 0;
+  font-size: var(--font-xs);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .explorer-body {
   flex: 1;
