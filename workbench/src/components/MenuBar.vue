@@ -102,7 +102,10 @@ async function openByPath(path: string, machine?: string | null): Promise<void> 
     ? (machine ?? settings.target?.machine?.name
       ?? settings.doc?.remoteMachines?.[0]?.name ?? null)
     : null;
-  if (!(await ws.workspacePathExists(path))) {
+  // 手测 r4#1: existence is checked against the path's OWN machine — for
+  // remote paths that is the SPAWNED window's boot probe (this window's
+  // local registry would always answer "missing"); local paths probe here.
+  if (!pathRemote && !(await ws.workspacePathExists(path))) {
     toast.error(t("menubar.pathMissing", { path }));
     return;
   }

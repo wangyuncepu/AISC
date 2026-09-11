@@ -326,14 +326,13 @@ async function runExitFlow(): Promise<void> {
   const allow = await store.confirmExit();
   if (!allow) return;
   const win = getCurrentWindow();
-  // W3: a spawned workspace window closes alone — no tray/app teardown
-  // while other windows (or the main launcher window) live.
+  // W3 手测 r4#3: a spawned window closes ALONE. The process-global
+  // coordinator is FORBIDDEN here — run_shutdown hides the MAIN window and
+  // sweeps EVERY window's session registry (field evidence: closing one
+  // window closed both). Scoped teardown: this window's sessions, then
+  // stop→remove its runtimes (lease release rides remove), then destroy.
   if (win.label !== "main") {
-    await store.flushSave();
-    void shutdownWorkbenchV2({
-      workspaces: store.shutdownTargets(),
-      reason: "window_close",
-    }).catch(() => undefined);
+    await ws.closeWindowScoped();
     void win.destroy().catch(() => undefined);
     return;
   }

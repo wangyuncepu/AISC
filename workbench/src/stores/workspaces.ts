@@ -344,6 +344,22 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
    * runtime targets — every materialized workspace with a live runtime id.
    * Retention is the registry default (remove_on_close); the backend maps
    * per-target behavior. */
+  async function closeWindowScoped(): Promise<void> {
+    await flushSave();
+    const sessionIds = runtimes.value
+      .flatMap((r) => r.tabs.value)
+      .map((t) => t.sessionId)
+      .filter((id): id is string => Boolean(id));
+    await Promise.race([
+      Promise.all(sessionIds.map((id) => ipc.closeSession(id).catch(() => null))),
+      new Promise((resolve) => setTimeout(resolve, 400)),
+    ]);
+    for (const t of shutdownTargets()) {
+      await ipc.stopRuntime(t.workspace, t.runtimeId).catch(() => null);
+      await ipc.removeRuntime(t.workspace, t.runtimeId).catch(() => null);
+    }
+  }
+
   function shutdownTargets(): Array<{ workspace: string; runtimeId: string }> {
     return runtimes.value
       .filter((r) => r.workspace.value.trim() && r.runtimeId.value)
@@ -535,6 +551,7 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     exportLifecycle,
     clearHistoryEntry,
     workspacePathExists,
+    closeWindowScoped,
     browseBusy,
     browseError,
     browseRemote,
