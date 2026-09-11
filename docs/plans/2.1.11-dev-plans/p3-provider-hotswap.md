@@ -55,3 +55,42 @@
 
 **Slurm/PBS 方案文档**：仍阻塞在用户提供实际工作流（提交节点形态/
 认证/常用作业操作）——2.1.11 封版前若未提供则顺延 2.1.12。
+## 追加调研——模型映射随切换实时变化（用户问 2026-09-12）
+
+**能解。** 全部流量已经流经本地代理（man-in-the-middle），请求体改写
+点天然存在；上游 cc-switch 代理**没有**请求时重写能力（容器实测
+`proxy config` 仅 listen addr/port；其「模型映射」= 切换时写 env），
+所以需要我们自加一层薄改写。
+
+**方案（shim 层，保住全部现有能力）**：
+
+```
+agent ── env 指向 ──▶ 127.0.0.1:15720 映射 shim ──▶ 15721 cc-switch 代理 ──▶ provider
+```
+
+- shim 只做一件事：按**当前 provider 的映射表**重写请求体 `model` 字段
+  （流式不影响——转发前改 body）；上游 token/路由/用量捕获全留在
+  cc-switch 代理，一行不动。
+- **按角色映射而非按名映射**（关键设计）：provider 行已携带
+  role_env（ANTHROPIC_DEFAULT_OPUS/SONNET/HAIKU/MODEL 槽位）+ 
+  model_catalog。会话发来的旧模型名 → 先在「历史 provider 的角色表」
+  里解析出槽位 → 再取当前 provider 该槽位的模型名发出。例：
+  deepseek-v4-flash（旧 opus 槽）→ zhipu 的 glm-4.6（新 opus 槽）。
+  解析不出角色的自定义名 → 原样透传（保守）。
+- 映射表缓存 + 失效：读 cc-switch db 现值；切换后由 adapter 通知失效
+  （op_switch 尾部加一次 shim 的 invalidate，或 shim watch db mtime）。
+- 代价：多一跳本地回环（<1ms）；agent env 的路由 stub 从 15721 改指
+  15720（改 adapter 的 enable 写入值）。
+
+**如实告知的边界**：
+
+1. 会话侧的**自我认知**不变：claude CLI 界面仍显示它启动时的模型名
+   （它是 env 读进内存的），但实际请求已按新 provider 走——显示名与
+   实际模型可能不一致，属显示层错位，功能无损。
+2. 上下文长度/计价假设随模型真实切换而变——重写后请求以新模型的
+   上下文窗口与计价运行，会话不感知。
+3. 官方直连行（proxy off）时 shim 不在路径上——该场景本就不热切，
+   一致。
+
+**实施量级**：容器内 Python asyncio 薄层（~200 行）+ adapter 路由 stub
+改端口 + 映射失效钩子 + 映射表解析测试。下轮与「无重启切换」同批。
