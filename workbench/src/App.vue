@@ -29,6 +29,7 @@ import { setExplorerCollapsed } from "./lib/panelLayout";
 import type { CommandCtx } from "./lib/commands";
 import CommandPalette from "./components/CommandPalette.vue";
 import FloatingPane from "./components/FloatingPane.vue";
+import MenuBar from "./components/MenuBar.vue";
 import { computeWindowTitle } from "./lib/title";
 import { useRuntimeStore } from "./stores/runtime";
 import { useWorkspacesStore } from "./stores/workspaces";
@@ -104,6 +105,13 @@ function toggleSettings(): void {
 // P2-4 (D-4): the command palette — Ctrl+Shift+P (the r5 print-block used
 // to swallow this combo dead; it now opens the palette instead).
 const paletteOpen = ref(false);
+// W2: the menu bar (and future surfaces) reach the palette through this
+// window event — one owner, no prop drilling.
+function onOpenPalette(): void {
+  if (!paletteOpen.value) paletteOpen.value = true;
+}
+onMounted(() => window.addEventListener("aisc:open-palette", onOpenPalette));
+onBeforeUnmount(() => window.removeEventListener("aisc:open-palette", onOpenPalette));
 const explorerForPalette = useWorkspaceExplorerStore();
 function paletteCtx(): CommandCtx {
   return {
@@ -453,6 +461,9 @@ onBeforeUnmount(() => {
            post-onboarding state — including while the Settings tab fills the
            content area — so the chip × (and the + ▾ menu) are always an exit
            path. Only the WorkspaceView yields to the settings pane. -->
+      <!-- W2 (shell-redesign, ruling a): the in-window menu bar. The strip
+           below still carries multi-workspace chips until W3 retires it. -->
+      <MenuBar v-if="workspaceLayerVisible" />
       <WorkspaceBar v-if="workspaceLayerVisible" />
 
       <!-- W1 (shell-redesign): Settings & the data dashboard are FLOATING
