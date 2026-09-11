@@ -53,6 +53,31 @@
   复现远程同款报错；且运行中 Workbench 驻留 serve 锁
   target\debug\aisc.exe，构建 Copy-Item 半途失败留半同步态。前置检测：
   发现运行中 aisc.exe 即拒绝构建。
+- **Shell 重设计 W1（浮窗化，分支并入 p2-ui-palette 收口 `e8372f7`）**：
+  rail 底部 ⚙ 设置 + 📊 数据看板（VS Code activity bar 底部位）；
+  FloatingPane 浮窗宿主（scrim+固定占地+内部滚动+Esc/背板/×，随
+  ui.font_scale 缩放）；设置/网络用量从工作区条哨兵 tab 降为浮窗，
+  工作区在其下持续渲染；工作区条哨兵 chips/×/▾ 菜单全套退役。
+- **Shell 重设计 W2+W3（菜单栏 + 一窗一工作区，分支 shell-w2-menubar，
+  `e6cab9f..4b2ebd4` 十二提交，手测 r1-r11 PASS）**：
+  **W2**：内嵌菜单条 操作/编辑/帮助（裁决 a/b——「操作」四条目：新建
+  窗口/从文件夹打开/最近/远程机器；下拉 teleport + useTeleportedZoom
+  共享 composable，teleport 逃逸 zoom 三连坑根治）；全局状态标签随
+  工作区条退役移入菜单栏右端。**W3（裁决 c）**：lib/workspaceWindow
+  WebviewWindow 工厂（?workspace=/?machine= 带参启动、继承开窗者尺
+  寸、capabilities 扩 ws-*）；boot 参数直达工作区（consumeBootParams，
+  工作区层等 settle 才揭+fade，无 picker 闪帧）；退出分叉——子窗
+  closeWindowScoped 作用域收尾（关本窗会话→stop→remove→自毁；hide
+  走 Rust 直呼，G-07「close pending 期间 JS hide IPC 失效」坑复现后
+  暴露 hide_window 命令），主窗原流；**WorkspaceBar 整文件退役**、
+  Ctrl+PgDn/Alt+1..9 跨工作区快捷键随裁决退役。**按窗隔离驱动
+  target（r3 架构刀）**：WindowTargets(label→机器)+resolve_target_for，
+  target_get/set/clear 按调用窗注入；远程/本地窗口并开互不干扰——
+  根治「点远程关本地」（全局 target 下本地轮询被改道远程注册表，
+  reconcile 回收『消失』容器）。**最近列表**：VS Code 二级悬浮
+  （本地/远程分类徽章、双行条目）；失效路径治理三入口同体验
+  （InvalidPathDialog 浮层化——openLauncher 劫持曾让无条可回的
+  已开工作区孤儿化，r11 根治）。门禁：cargo 净 / vitest 480。
 - **环境性事故两起（C:→D: 搬迁余震）**：editable install 仍指 C 盘
   旧仓库（6 测 ModuleNotFoundError）→ 重装指向 D 盘；`target/debug`
   构建脚本产物全带 C: 绝对路径（tauri permissions 读取失败，cargo
