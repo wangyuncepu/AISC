@@ -20,6 +20,8 @@ export interface CommandEntry {
   shortcut?: string;
   /** Availability — e.g. tabs need a ready workspace. */
   when?: (ctx: CommandCtx) => boolean;
+  /** Sub-selection id — the palette swaps to a fixed follow-up list. */
+  sub?: "split:h" | "split:v";
   run: (ctx: CommandCtx) => void;
 }
 
@@ -27,7 +29,7 @@ export interface CommandCtx {
   /** runtime facade — the ACTIVE workspace's store surface. */
   active: {
     createTab: (agent: "bash" | "claude" | "codex") => void;
-    splitPane: (dir: "h" | "v") => void;
+    splitPane: (dir: "h" | "v", agent: "bash" | "claude" | "codex") => void;
     status: string;
     workspace: string;
   };
@@ -62,11 +64,16 @@ export function buildCommands(): CommandEntry[] {
     },
     {
       id: "pane.split.h", labelKey: "tabbar.menu.splitH", groupKey: "palette.group.tab",
-      when: ready, run: (c) => c.active.splitPane("h"),
+      // 手测 r2#3: SAME flow as the pane context menu — the axis opens a
+      // session-type sub-step (rendered by the palette), the split runs with
+      // the CHOSEN agent (never a silent default).
+      when: ready, sub: "split:h",
+      run: (c) => c.active.splitPane("h", "bash"),
     },
     {
       id: "pane.split.v", labelKey: "tabbar.menu.splitV", groupKey: "palette.group.tab",
-      when: ready, run: (c) => c.active.splitPane("v"),
+      when: ready, sub: "split:v",
+      run: (c) => c.active.splitPane("v", "bash"),
     },
 
     // --- Views (group: view) ---

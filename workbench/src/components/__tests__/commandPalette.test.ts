@@ -83,6 +83,25 @@ describe("P2-4 command palette", () => {
     w.unmount();
   });
 
+  it("split commands open the session-type sub-step (手测 r2#3)", async () => {
+    const ctx = makeCtx();
+    const w = mount(CommandPalette, {
+      props: { makeCtx: () => ctx },
+      global: { plugins: [i18n], stubs: { teleport: true } },
+    });
+    await w.find("input").setValue("左右分屏");
+    await w.find("input").trigger("keydown", { key: "Enter" });
+    // Sub-step: the palette now lists the three session types.
+    expect(w.text()).toContain("分屏为");
+    expect(w.findAll(".palette-item").length).toBe(3);
+    await w.find("input").setValue("claude");
+    expect(w.findAll(".palette-item").length).toBe(1);
+    await w.find("input").trigger("keydown", { key: "Enter" });
+    expect(ctx.active.splitPane).toHaveBeenCalledWith("h", "claude");
+    expect(w.emitted("close")).toHaveLength(1);
+    w.unmount();
+  });
+
   it("no match renders the empty state", async () => {
     const w = mount(CommandPalette, {
       props: { makeCtx: () => makeCtx() },

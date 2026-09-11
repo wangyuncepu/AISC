@@ -116,16 +116,15 @@ watch(
 const paletteOpen = ref(false);
 const explorerForPalette = useWorkspaceExplorerStore();
 function paletteCtx(): CommandCtx {
-  const activeTab = store.tabs.find((tb) => tb.tabId === store.activeTabId);
   return {
     active: {
       createTab: (agent) => store.createTab(agent),
-      splitPane: (dir) => {
-        if (!store.activeTabId || !activeTab) return;
+      splitPane: (dir, agent) => {
+        if (!store.activeTabId) return;
         store.splitTabPane(
           store.activeTabId,
           dir === "h" ? "horizontal" : "vertical",
-          activeTab.agent,
+          agent,
         );
       },
       status: store.status,

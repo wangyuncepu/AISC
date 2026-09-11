@@ -550,6 +550,7 @@ export const zhCN = {
   "explorer.railLabel": "侧视图栏",
   "palette.title": "命令面板",
   "palette.placeholder": "输入命令…",
+  "palette.splitAs": "分屏为…",
   "palette.noMatch": "没有匹配的命令",
   "palette.group.tab": "标签页与会话",
   "palette.group.view": "视图",

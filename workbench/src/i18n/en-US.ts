@@ -550,6 +550,7 @@ export const enUS: Record<string, string> = {
   "explorer.railLabel": "Side views",
   "palette.title": "Command palette",
   "palette.placeholder": "Type a command…",
+  "palette.splitAs": "Split as…",
   "palette.noMatch": "No matching commands",
   "palette.group.tab": "Tabs & sessions",
   "palette.group.view": "Views",

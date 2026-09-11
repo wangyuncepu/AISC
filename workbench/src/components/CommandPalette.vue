@@ -31,12 +31,26 @@ const inputEl = ref<HTMLInputElement | null>(null);
 const listEl = ref<HTMLElement | null>(null);
 
 const ctx = computed(() => props.makeCtx());
+/** 手测 r2#3: split commands open a session-type sub-step (the SAME flow
+ * as the pane context menu) — chosen here, the split runs with the picked
+ * agent. Esc in a sub-step returns to the command list (one level). */
+const subMode = ref<"split:h" | "split:v" | null>(null);
+const SPLIT_AGENTS = ["bash", "claude", "codex"] as const;
 const available = computed(() => all.filter((c) => !c.when || c.when(ctx.value)));
 
 const filtered = computed(() => {
+  if (subMode.value) return []; // sub-step renders its own rows
   const matcher = buildSearchMatcher(query.value);
   if (matcher === null) return available.value;
   return available.value.filter((c) => matcher(t(c.labelKey).toLowerCase()) > 0);
+});
+
+const subRows = computed(() => {
+  if (!subMode.value) return [];
+  const matcher = buildSearchMatcher(query.value);
+  return SPLIT_AGENTS.filter(
+    (a) => matcher === null || matcher(t(`tabbar.menu.${a}`).toLowerCase()) > 0,
+  );
 });
 
 /** Group headers render between group changes of the filtered list. */
@@ -55,7 +69,7 @@ function reset(): void {
 }
 
 function move(delta: number): void {
-  const n = filtered.value.length;
+  const n = subMode.value ? subRows.value.length : filtered.value.length;
   if (!n) return;
   cursor.value = (cursor.value + delta + n) % n;
   void nextTick(() =>
@@ -67,20 +81,42 @@ function move(delta: number): void {
 function runAt(i: number): void {
   const cmd = filtered.value[i];
   if (!cmd) return;
+  if (cmd.sub) {
+    subMode.value = cmd.sub;
+    reset();
+    return;
+  }
   reset();
   emit("close");
   cmd.run(props.makeCtx());
 }
 
+function runSub(agent: (typeof SPLIT_AGENTS)[number]): void {
+  const [_, dir] = (subMode.value ?? "split:h").split(":");
+  subMode.value = null;
+  reset();
+  emit("close");
+  props.makeCtx().active.splitPane(dir === "v" ? "v" : "h", agent);
+}
+
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
   else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
-  else if (e.key === "Enter") { e.preventDefault(); runAt(cursor.value); }
-  else if (e.key === "Escape") { e.preventDefault(); emit("close"); }
+  else if (e.key === "Enter") {
+    e.preventDefault();
+    if (subMode.value) runSub(subRows.value[cursor.value] ?? subRows.value[0]!);
+    else runAt(cursor.value);
+  }
+  else if (e.key === "Escape") {
+    e.preventDefault();
+    if (subMode.value) { subMode.value = null; reset(); }
+    else emit("close");
+  }
 }
 
 // Typing re-filters → clamp the cursor back into range.
 watch(filtered, (f) => { if (cursor.value >= f.length) cursor.value = Math.max(0, f.length - 1); });
+watch(subRows, (r) => { cursor.value = Math.min(cursor.value, Math.max(0, r.length - 1)); });
 
 onMounted(() => inputEl.value?.focus());
 </script>
@@ -105,7 +141,29 @@ onMounted(() => inputEl.value?.focus());
           @keydown="onKeydown"
         />
         <ul
-          v-if="filtered.length"
+          v-if="subMode && subRows.length"
+          id="palette-list"
+          ref="listEl"
+          class="palette-list"
+          role="listbox"
+        >
+          <li class="palette-group" role="presentation">{{ t("palette.splitAs") }}</li>
+          <li
+            v-for="(a, i) in subRows"
+            :key="a"
+            class="palette-item"
+            role="option"
+            :aria-selected="i === cursor"
+            :data-idx="i"
+            :class="{ cursor: i === cursor }"
+            @mousemove="cursor = i"
+            @click="runSub(a)"
+          >
+            <span class="palette-label">{{ t(`tabbar.menu.${a}`) }}</span>
+          </li>
+        </ul>
+        <ul
+          v-if="!subMode && filtered.length"
           id="palette-list"
           ref="listEl"
           class="palette-list"
