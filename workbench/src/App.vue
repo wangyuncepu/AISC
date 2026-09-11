@@ -24,6 +24,7 @@ import { applyTheme, createSystemListener } from "./theme";
 import { blockNativeContextMenu } from "./lib/contextMenu";
 import ToastHost from "./components/ToastHost.vue";
 import { layoutTierFor, type LayoutTier } from "./lib/layout";
+import { toggleExplorerCollapsed } from "./lib/panelLayout";
 import { computeWindowTitle } from "./lib/title";
 import { useRuntimeStore } from "./stores/runtime";
 import { useWorkspacesStore } from "./stores/workspaces";
@@ -127,6 +128,14 @@ function onAppKeydown(e: KeyboardEvent) {
   if (e.key === "," && !showOnboarding.value) {
     e.preventDefault();
     toggleSettings();
+    return;
+  }
+  // P2-3 (D-4): VS Code's Ctrl+B — toggle the side panel; the activity rail
+  // stays (panelLayout is the module singleton, so this reaches the layout
+  // regardless of which layer holds focus).
+  if ((e.key === "b" || e.key === "B") && !showOnboarding.value) {
+    e.preventDefault();
+    toggleExplorerCollapsed();
     return;
   }
   if (showOnboarding.value || !workspaceLayerVisible.value) return;

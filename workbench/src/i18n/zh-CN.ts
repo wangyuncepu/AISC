@@ -548,6 +548,7 @@ export const zhCN = {
   "explorer.status.urlCopied": "已复制服务链接",
   "explorer.refresh": "刷新",
   "explorer.collapse": "折叠资源管理器",
+  "explorer.railLabel": "侧视图栏",
   "explorer.expand": "展开资源管理器",
   "explorer.resizeHandle": "拖动调整资源管理器宽度，双击折叠",
   "explorer.tabbarResize": "拖动调整标签行高度",
