@@ -14,11 +14,16 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { buildSearchMatcher } from "../lib/search";
 import { buildCommands, type CommandCtx } from "../lib/commands";
+import { useSettingsStore } from "../stores/settings";
 
 const props = defineProps<{ makeCtx: () => CommandCtx }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
 const { t } = useI18n();
+// 手测 r1#1: the palette rides the same ui.font_scale zoom as the chrome
+// (the teleport escapes App's zoom scope — re-applied here, ToastHost-style).
+const settings = useSettingsStore();
+const uiScale = computed(() => settings.doc?.ui.font_scale ?? 1);
 const all = buildCommands();
 const query = ref("");
 const cursor = ref(0);
@@ -85,6 +90,7 @@ onMounted(() => inputEl.value?.focus());
     <div class="palette-backdrop" @mousedown.self="emit('close')">
       <div
         class="palette"
+        :style="{ zoom: uiScale }"
         role="dialog"
         aria-modal="true"
         :aria-label="t('palette.title')"

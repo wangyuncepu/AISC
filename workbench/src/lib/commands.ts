@@ -27,7 +27,6 @@ export interface CommandCtx {
   /** runtime facade — the ACTIVE workspace's store surface. */
   active: {
     createTab: (agent: "bash" | "claude" | "codex") => void;
-    openCcSwitch: () => void;
     splitPane: (dir: "h" | "v") => void;
     status: string;
     workspace: string;
@@ -60,10 +59,6 @@ export function buildCommands(): CommandEntry[] {
     {
       id: "tab.new.codex", labelKey: "tabbar.menu.codex", groupKey: "palette.group.tab",
       when: ready, run: (c) => c.active.createTab("codex"),
-    },
-    {
-      id: "tab.new.ccswitch", labelKey: "tabbar.menu.cc-switch", groupKey: "palette.group.tab",
-      when: ready, run: (c) => c.active.openCcSwitch(),
     },
     {
       id: "pane.split.h", labelKey: "tabbar.menu.splitH", groupKey: "palette.group.tab",
@@ -108,8 +103,10 @@ export function buildCommands(): CommandEntry[] {
       run: (c) => c.app.openNetworkUsage(),
     },
     {
+      // 手测 r1#2: OPEN A NEW launcher page — never reset the active
+      // workspace (same + button semantics as the strip).
       id: "app.picker", labelKey: "palette.cmd.openPicker", groupKey: "palette.group.app",
-      when: (c) => Boolean(c.active.workspace), run: (c) => c.app.openPicker(),
+      run: (c) => c.app.openPicker(),
     },
     {
       id: "app.doctor", labelKey: "palette.cmd.runDoctor", groupKey: "palette.group.app",

@@ -252,7 +252,6 @@ export const zhCN = {
   "tabbar.menu.claude": "Claude",
   "tabbar.menu.codex": "Codex",
   "tabbar.menu.bash": "Bash",
-  "tabbar.menu.cc-switch": "cc-switch",
   "tabbar.ccSwitchUi": "Provider 管理",
   "tabbar.closeVirtual": "关闭标签",
   "tabbar.closeSettings": "关闭设置标签（未保存更改将回退）",

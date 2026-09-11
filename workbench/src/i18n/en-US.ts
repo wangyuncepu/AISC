@@ -252,7 +252,6 @@ export const enUS: Record<string, string> = {
   "tabbar.menu.claude": "Claude",
   "tabbar.menu.codex": "Codex",
   "tabbar.menu.bash": "Bash",
-  "tabbar.menu.cc-switch": "cc-switch",
   "tabbar.ccSwitchUi": "Providers",
   "tabbar.closeVirtual": "Close tab",
   "tabbar.closeSettings": "Close settings tab (unsaved edits revert)",

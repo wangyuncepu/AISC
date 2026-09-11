@@ -12,7 +12,6 @@ function makeCtx(): CommandCtx {
   return {
     active: {
       createTab: vi.fn(),
-      openCcSwitch: vi.fn(),
       splitPane: vi.fn(),
       status: "ready",
       workspace: "C:\\ws",

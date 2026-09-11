@@ -120,7 +120,6 @@ function paletteCtx(): CommandCtx {
   return {
     active: {
       createTab: (agent) => store.createTab(agent),
-      openCcSwitch: () => store.openCcSwitch(),
       splitPane: (dir) => {
         if (!store.activeTabId || !activeTab) return;
         store.splitTabPane(
@@ -135,7 +134,7 @@ function paletteCtx(): CommandCtx {
     app: {
       openSettings: () => ws.openSettingsTab(),
       openNetworkUsage: () => ws.openNetworkUsageTab(),
-      openPicker: () => store.backToPicker(),
+      openPicker: () => ws.openLauncher(),
       runDoctor: () => doctorStore.openDialog(),
       toggleSidebar: () => toggleExplorerCollapsed(),
       showView: (kind) => {
