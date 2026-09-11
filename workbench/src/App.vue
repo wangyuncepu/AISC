@@ -313,9 +313,14 @@ watch(
 /** Boot states live on the launcher until negotiate settles; after that the
  * workspace layer (strip + views) owns the surface. Blocked renders the
  * app gate UNDER the strip (settings must stay reachable — the chip lands
- * 3d; today the topbar gear covers it). */
+ * 3d; today the topbar gear covers it).
+ * W3 手测 r7: a param-booted window ALSO waits for consumeBootParams —
+ * otherwise the picker flashes for a frame before selectRecentWorkspace
+ * lands the instance on preflight/summary. */
 const booting = computed(() => ["idle", "negotiating"].includes(store.status));
-const workspaceLayerVisible = computed(() => !booting.value);
+const bootParamsSettled = ref(true);
+const workspaceLayerVisible = computed(
+  () => !booting.value && bootParamsSettled.value);
 
 // G-16 (Step 15): tray availability gate.
 const trayAvailable = ref(false);
@@ -370,6 +375,7 @@ async function consumeBootParams(): Promise<void> {
   const wsPath = params.get("workspace");
   const machine = params.get("machine");
   if (!wsPath && !machine) return;
+  bootParamsSettled.value = false;
   await settingsStore.refreshTarget();
   if (machine) {
     await settingsStore.switchTarget(machine);
@@ -394,7 +400,11 @@ onMounted(() => {
   void (async () => {
     await onboardingStore.load();
     await store.negotiate();
-    await consumeBootParams();
+    try {
+      await consumeBootParams();
+    } finally {
+      bootParamsSettled.value = true;
+    }
   })();
   // G-09 (02 §3.1): resolve + apply the locale in parallel.
   void (async () => {
