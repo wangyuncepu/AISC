@@ -6,7 +6,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { mount } from "@vue/test-utils";
-import { useToastStore } from "../../../stores/toast";
 import { nextTick } from "vue";
 import { i18n } from "../../../i18n";
 import { useRuntimeStore } from "../../../stores/runtime";
@@ -186,12 +185,9 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     await w.findAll(".card")[1]!.find("button.start").trigger("click");
     await vi.waitFor(() => expect(ipc.ccSwitchSwitch).toHaveBeenCalledTimes(1));
     expect(vi.mocked(ipc.ccSwitchSwitch).mock.calls[0]![3]).toBe("zhipu");
-    // P2-1: feedback rides the GLOBAL toast store now (the local
-    // .switch-toast node is retired with its Teleport).
-    const toast = useToastStore();
     await vi.waitFor(() =>
-      expect(toast.toasts.map((x) => x.message).join("|")).toContain("已切换到"));
-    expect(toast.toasts[0]!.kind).toBe("success");
+      expect(document.querySelector(".switch-toast")?.textContent ?? "")
+        .toContain("已切换到"));
     w.unmount();
   });
 
@@ -225,9 +221,8 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     await vi.waitFor(() => expect(ipc.ccSwitchSwitch).toHaveBeenCalledTimes(1));
     // Pseudo target flows to the adapter, not a row id.
     expect(vi.mocked(ipc.ccSwitchSwitch).mock.calls[0]![3]).toBe("official");
-    const toast = useToastStore();
     await vi.waitFor(() =>
-      expect(toast.toasts.map((x) => x.message).join("|"))
+      expect(document.querySelector(".switch-toast")?.textContent ?? "")
         .toContain("官方直连"));
     w.unmount();
   });

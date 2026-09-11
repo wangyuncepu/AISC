@@ -16,14 +16,12 @@ import { useI18n } from "vue-i18n";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useCcSwitchUiStore } from "../../stores/ccSwitchUi";
-import { useToastStore } from "../../stores/toast";
 import type { CcSwitchProvider, CcSwitchRequest } from "../../types";
 
 const props = withDefaults(defineProps<{ visible?: boolean }>(), { visible: true });
 
 const { t } = useI18n();
 const store = useRuntimeStore();
-const toast = useToastStore();
 // Layer contract (F-A01): all ipc fact commands live in the store.
 const ui = useCcSwitchUiStore();
 // storeToRefs keeps the reactive link (plain destructuring would break it).
@@ -102,10 +100,10 @@ function openAdd(): void {
 // provider current; the official-direct card's 启用 IS the cancel-proxy
 // path (pseudo target). The current provider has no deactivate button —
 // to stop it, enable another entry (user ruling).
+const switchedTo = ref("");
+let switchFlashTimer: number | null = null;
 /** IDEA-5 (5d): the newly-current row pulses once (visual feedback trio);
- * cleared after the keyframe so re-renders don't replay it. (The third leg
- * of the trio — the local switch toast — was promoted to the GLOBAL toast
- * primitive in P2-1 and now lives in ToastHost.) */
+ * cleared after the keyframe so re-renders don't replay it. */
 const flashId = ref("");
 let rowFlashTimer: number | null = null;
 
@@ -128,11 +126,10 @@ async function activate(p: CcSwitchProvider): Promise<void> {
   }
   const ok = await ui.activate(store.workspace, store.runtimeId, target);
   if (ok) {
-    // P2-1 (A2): switch feedback rides the GLOBAL toast primitive now —
-    // same message/motion, one host for the whole app.
-    toast.success(t("ccswitch.switchedTo", {
-      name: target === "official" ? t("ccswitch.officialDirect") : (p.name || p.id),
-    }));
+    switchedTo.value =
+      target === "official" ? t("ccswitch.officialDirect") : (p.name || p.id);
+    if (switchFlashTimer !== null) window.clearTimeout(switchFlashTimer);
+    switchFlashTimer = window.setTimeout(() => (switchedTo.value = ""), 3000);
     flashId.value = p.id;
     if (rowFlashTimer !== null) window.clearTimeout(rowFlashTimer);
     rowFlashTimer = window.setTimeout(() => (flashId.value = ""), 1300);
@@ -164,6 +161,7 @@ onMounted(() => {
   if (hasRuntime.value) void refresh();
 });
 onBeforeUnmount(() => {
+  if (switchFlashTimer !== null) window.clearTimeout(switchFlashTimer);
   if (rowFlashTimer !== null) window.clearTimeout(rowFlashTimer);
 });
 </script>
@@ -240,6 +238,17 @@ onBeforeUnmount(() => {
       </Transition>
     </Teleport>
 
+    <!-- IDEA-5 (5d): switch feedback — a floating top toast (teleported to
+         body so the pane's zoom/scroll never clips it), alongside the row
+         pulse + chip transition below. role=status keeps the SR path. -->
+    <Teleport to="body">
+      <Transition name="toast">
+        <p v-if="switchedTo" class="switch-toast" role="status">
+          ✓ {{ t("ccswitch.switchedTo", { name: switchedTo }) }}
+        </p>
+      </Transition>
+    </Teleport>
+
     <!-- PP r3: the agent toggle crossfades (out-in). PP r4: NO stale dim —
          the dimmed-list flash read as a broken middle state (user ruling);
          the swap is a soft 200ms fade. PP r5: the loading branch covers the
@@ -264,13 +273,9 @@ onBeforeUnmount(() => {
       <p v-else-if="loading" class="empty" :key="`loading-${agent}`">
         {{ t("ccswitch.loading") }}
       </p>
-      <div v-else-if="hasRuntime" class="empty" :key="`empty-${agent}`">
-        <p>{{ t("ccswitch.empty") }}</p>
-        <!-- P2-1 (A2): VS Code 空态永远带 action——直达添加页。 -->
-        <button class="ui-button" :disabled="mutating" @click="openAddPage">
-          {{ t("ccswitch.emptyAdd") }}
-        </button>
-      </div>
+      <p v-else-if="hasRuntime" class="empty" :key="`empty-${agent}`">
+        {{ t("ccswitch.empty") }}
+      </p>
     </Transition>
     <!-- S8g-2 (user ruling 2026-08-29): the hidden-placeholder count note is
          GONE; the footer is now a constant usage hint. -->
@@ -335,8 +340,6 @@ onBeforeUnmount(() => {
  * card-ification; row-flash still animates the newly-current CARD. */
 .banner.ok { background: var(--success-bg); color: var(--success); }
 .empty { color: var(--text-muted); font-size: var(--font-md); }
-/* P2-1: empty state = text + CTA. */
-.empty p { margin: 0 0 var(--space-2); }
 button {
   background: var(--surface-3); color: var(--text-2); border: 1px solid var(--border-strong);
   border-radius: var(--radius-md); padding: 4px 12px; cursor: pointer;
@@ -353,8 +356,17 @@ button.danger { background: var(--error-bg); color: var(--error-fg); }
 button.ghost { background: transparent; }
 
 /* --- IDEA-5 (5d): switch feedback --- */
-/* (The ✓ switch-toast was promoted to the GLOBAL toast primitive in P2-1 —
- * ToastHost.vue owns its styling/motion now.) */
+/* Floating toast: teleported to body (outside the zoomed/scrolling pane). */
+/* PP r3: rounded rect — the 50% radius read as an ugly ellipse.
+ * PP r5 follow-up: SAME spot as the switch-progress card (bottom-center) —
+ * on completion the progress card hands off to the ✓ toast in place. */
+.switch-toast {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  z-index: 1000; margin: 0; padding: var(--space-2) var(--space-5);
+  background: var(--success-bg); color: var(--success);
+  border: var(--border-w) solid var(--success); border-radius: var(--radius-md);
+  font-size: var(--font-md); box-shadow: var(--shadow-menu);
+}
 /* PP r5 (user ruling): the switch-progress card — floating bottom-center,
  * out of the document flow so it never pushes the cards down. */
 .switch-progress {
@@ -376,11 +388,16 @@ button.ghost { background: transparent; }
 }
 .swap-enter-from { opacity: 0; transform: translateY(4px); }
 .swap-leave-to { opacity: 0; transform: translateY(-4px); }
+.toast-enter-active { transition: opacity var(--duration-normal) var(--ease), transform var(--duration-normal) var(--ease); }
+.toast-leave-active { transition: opacity var(--duration-normal) var(--ease); }
+.toast-enter-from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+.toast-leave-to { opacity: 0; }
 
 /* S3.6: users who ask the OS for less motion get instant state changes. */
 @media (prefers-reduced-motion: reduce) {
   .cards .flash { animation: none; }
   .swap-enter-active, .swap-leave-active { transition: none; }
+  .toast-enter-active, .toast-leave-active { transition: none; }
   .prog-enter-active, .prog-leave-active { transition: none; }
 }
 </style>
