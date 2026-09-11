@@ -429,6 +429,7 @@ fn url_matches_canonical(url: &str, container_port: u16, host_port: u16) -> bool
 #[tauri::command]
 pub async fn open_runtime_service_url(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     runtime_id: String,
     port: u16,
@@ -439,7 +440,7 @@ pub async fn open_runtime_service_url(
     if !(1024..=65535).contains(&port) {
         return Err(WorkbenchError::map_aisc("AISC_ERR_USAGE"));
     }
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let argv = runtime_services_argv(&runtime_id, &workspace);
     let env = run_control_target(&target, argv, SERVICES_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -509,13 +510,14 @@ fn open_url_in_browser(url: &str) -> Result<(), WorkbenchError> {
 #[tauri::command]
 pub async fn runtime_services(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     runtime_id: String,
 ) -> Result<crate::web_services::RuntimeServicesResult, WorkbenchError> {
     if uuid_ok(&runtime_id).is_none() {
         return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_RUNTIME_ID"));
     }
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let argv = runtime_services_argv(&runtime_id, &workspace);
     let env = run_control_target(&target, argv, SERVICES_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -579,10 +581,11 @@ fn cc_switch_argv(op: &str, runtime_id: &str, agent: &str, workspace: &str,
 
 async fn cc_switch_call(
     app: &AppHandle,
+    window: &tauri::WebviewWindow,
     argv: Vec<String>,
     input: Option<String>,
 ) -> Result<CcSwitchProvidersResult, WorkbenchError> {
-    let data = cc_switch_call_value(app, argv, input).await?;
+    let data = cc_switch_call_value(app, &window, argv, input).await?;
     serde_json::from_value::<CcSwitchProvidersResult>(data)
         .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("cc-switch parse: {e}")))
 }
@@ -591,10 +594,11 @@ async fn cc_switch_call(
 /// providers snapshot (e.g. fetch-models) ride this directly.
 async fn cc_switch_call_value(
     app: &AppHandle,
+    window: &tauri::WebviewWindow,
     argv: Vec<String>,
     input: Option<String>,
 ) -> Result<Value, WorkbenchError> {
-    let target = crate::target::resolve_target(app).await?;
+    let target = crate::target::resolve_target_for(app, &window).await?;
     // 2.1.11 step2: provider ops ride the unified pooled serve via the
     // GENERIC input path (both Local and Remote arms) — the r7 step-1
     // special-case entry (run_serve_op_target) was folded away when the
@@ -663,6 +667,7 @@ fn cc_switch_validate(runtime_id: &str, agent: &str) -> Result<(), WorkbenchErro
 #[tauri::command]
 pub async fn cc_switch_providers(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     runtime_id: String,
     agent: String,
@@ -676,7 +681,7 @@ pub async fn cc_switch_providers(
         argv.push("--reveal-id".into());
         argv.push(rid);
     }
-    cc_switch_call(&app, argv, None).await
+    cc_switch_call(&app, &window, argv, None).await
 }
 
 /// Add a provider. The request document (which may carry the API key) rides
@@ -684,6 +689,7 @@ pub async fn cc_switch_providers(
 #[tauri::command]
 pub async fn cc_switch_add(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     runtime_id: String,
     agent: String,
@@ -691,13 +697,14 @@ pub async fn cc_switch_add(
 ) -> Result<CcSwitchProvidersResult, WorkbenchError> {
     cc_switch_validate(&runtime_id, &agent)?;
     let argv = cc_switch_argv("add", &runtime_id, &agent, &workspace, None);
-    cc_switch_call(&app, argv, Some(request.to_string())).await
+    cc_switch_call(&app, &window, argv, Some(request.to_string())).await
 }
 
 /// Edit a provider (patch document on STDIN; optional api_key inside it).
 #[tauri::command]
 pub async fn cc_switch_edit(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     runtime_id: String,
     agent: String,
@@ -706,7 +713,7 @@ pub async fn cc_switch_edit(
 ) -> Result<CcSwitchProvidersResult, WorkbenchError> {
     cc_switch_validate(&runtime_id, &agent)?;
     let argv = cc_switch_argv("edit", &runtime_id, &agent, &workspace, Some(&provider_id));
-    cc_switch_call(&app, argv, Some(request.to_string())).await
+    cc_switch_call(&app, &window, argv, Some(request.to_string())).await
 }
 
 /// Activate a provider (IDEA-4): the adapter runs the official
@@ -714,6 +721,7 @@ pub async fn cc_switch_edit(
 #[tauri::command]
 pub async fn cc_switch_switch(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     runtime_id: String,
     agent: String,
@@ -721,13 +729,14 @@ pub async fn cc_switch_switch(
 ) -> Result<CcSwitchProvidersResult, WorkbenchError> {
     cc_switch_validate(&runtime_id, &agent)?;
     let argv = cc_switch_argv("switch", &runtime_id, &agent, &workspace, Some(&provider_id));
-    cc_switch_call(&app, argv, None).await
+    cc_switch_call(&app, &window, argv, None).await
 }
 
 /// Delete a provider (the CLI gates on --confirm internally).
 #[tauri::command]
 pub async fn cc_switch_delete(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     runtime_id: String,
     agent: String,
@@ -736,7 +745,7 @@ pub async fn cc_switch_delete(
     cc_switch_validate(&runtime_id, &agent)?;
     let mut argv = cc_switch_argv("delete", &runtime_id, &agent, &workspace, Some(&provider_id));
     argv.push("--confirm".into()); // the CLI gates delete on this flag
-    cc_switch_call(&app, argv, None).await
+    cc_switch_call(&app, &window, argv, None).await
 }
 
 /// Fetch the remote model list for a provider (IDEA-5 5c, mapping dropdown
@@ -747,6 +756,7 @@ pub async fn cc_switch_delete(
 #[tauri::command]
 pub async fn cc_switch_fetch_models(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     runtime_id: String,
     agent: String,
@@ -758,7 +768,7 @@ pub async fn cc_switch_fetch_models(
     let input = api_key
         .filter(|k| !k.trim().is_empty())
         .map(|k| serde_json::json!({ "api_key": k }).to_string());
-    cc_switch_call_value(&app, argv, input).await
+    cc_switch_call_value(&app, &window, argv, input).await
 }
 
 // --- IDEA-2 (2d): network subscription + usage overview IPC -----------------
@@ -805,11 +815,12 @@ fn usage_overview_argv(range: &str, workspace: Option<&str>) -> Vec<String> {
 /// carry the CLI's own guidance text), return the envelope's `data`.
 async fn aisc_data_call(
     app: &AppHandle,
+    window: &tauri::WebviewWindow,
     argv: Vec<String>,
     input: Option<String>,
     timeout: Duration,
 ) -> Result<Value, WorkbenchError> {
-    let target = crate::target::resolve_target(app).await?;
+    let target = crate::target::resolve_target_for(app, &window).await?;
     let env = match input {
         Some(text) => {
             crate::cli::run_control_input_target(&target, argv, text, timeout, CancellationToken::new()).await?
@@ -841,13 +852,14 @@ async fn aisc_data_call(
 #[tauri::command]
 pub async fn network_subscription_import(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     url: String,
 ) -> Result<Value, WorkbenchError> {
     if let Ok(dl) = crate::subscription::download(&url).await {
-        return crate::subscription::store_downloaded(&app, &url, dl).await;
+        return crate::subscription::store_downloaded(&app, &window, &url, dl).await;
     }
     let argv = network_subscription_argv("import", false);
-    aisc_data_call(&app, argv, Some(url), SUBSCRIPTION_TIMEOUT).await
+    aisc_data_call(&app, &window, argv, Some(url), SUBSCRIPTION_TIMEOUT).await
 }
 
 /// Import manually supplied subscription content (D4 fallback for
@@ -855,10 +867,11 @@ pub async fn network_subscription_import(
 #[tauri::command]
 pub async fn network_subscription_import_file(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     content: String,
 ) -> Result<Value, WorkbenchError> {
     let argv = network_subscription_argv("import-file", false);
-    aisc_data_call(&app, argv, Some(content), SUBSCRIPTION_TIMEOUT).await
+    aisc_data_call(&app, &window, argv, Some(content), SUBSCRIPTION_TIMEOUT).await
 }
 
 /// Re-fetch the stored subscription URL. 挂账①: same Rust-downloader-first
@@ -866,7 +879,7 @@ pub async fn network_subscription_import_file(
 /// (never displayed; masked in every envelope) and downloaded with reqwest,
 /// falling back to the CLI's own fetch on download failure.
 #[tauri::command]
-pub async fn network_subscription_refresh(app: AppHandle) -> Result<Value, WorkbenchError> {
+pub async fn network_subscription_refresh(app: tauri::AppHandle, window: tauri::WebviewWindow, ) -> Result<Value, WorkbenchError> {
     let stored_url = crate::session::config_dir(&app)
         .ok()
         .and_then(|dir| std::fs::read_to_string(dir.join("network-subscription.json")).ok())
@@ -878,31 +891,32 @@ pub async fn network_subscription_refresh(app: AppHandle) -> Result<Value, Workb
         });
     if let Some(url) = stored_url {
         if let Ok(dl) = crate::subscription::download(&url).await {
-            return crate::subscription::store_downloaded(&app, &url, dl).await;
+            return crate::subscription::store_downloaded(&app, &window, &url, dl).await;
         }
     }
     let argv = network_subscription_argv("refresh", false);
-    aisc_data_call(&app, argv, None, SUBSCRIPTION_TIMEOUT).await
+    aisc_data_call(&app, &window, argv, None, SUBSCRIPTION_TIMEOUT).await
 }
 
 /// Remove the stored subscription (the CLI gates on --confirm internally).
 #[tauri::command]
-pub async fn network_subscription_clear(app: AppHandle) -> Result<Value, WorkbenchError> {
+pub async fn network_subscription_clear(app: tauri::AppHandle, window: tauri::WebviewWindow, ) -> Result<Value, WorkbenchError> {
     let argv = network_subscription_argv("clear", true);
-    aisc_data_call(&app, argv, None, PROVIDER_TIMEOUT).await
+    aisc_data_call(&app, &window, argv, None, PROVIDER_TIMEOUT).await
 }
 
 /// Secret-free subscription status, no fetch (wizard + summary hint source).
 #[tauri::command]
-pub async fn network_subscription_show(app: AppHandle) -> Result<Value, WorkbenchError> {
+pub async fn network_subscription_show(app: tauri::AppHandle, window: tauri::WebviewWindow, ) -> Result<Value, WorkbenchError> {
     let argv = network_subscription_argv("show", false);
-    aisc_data_call(&app, argv, None, PROVIDER_TIMEOUT).await
+    aisc_data_call(&app, &window, argv, None, PROVIDER_TIMEOUT).await
 }
 
 /// Subscription status + per-provider token usage across all workspaces.
 #[tauri::command]
 pub async fn usage_overview(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     range: String,
     workspace: Option<String>,
 ) -> Result<Value, WorkbenchError> {
@@ -910,19 +924,20 @@ pub async fn usage_overview(
         return Err(WorkbenchError::map_aisc("AISC_ERR_USAGE"));
     }
     let argv = usage_overview_argv(&range, workspace.as_deref());
-    aisc_data_call(&app, argv, None, USAGE_OVERVIEW_TIMEOUT).await
+    aisc_data_call(&app, &window, argv, None, USAGE_OVERVIEW_TIMEOUT).await
 }
 
 #[tauri::command]
 pub async fn runtime_preflight(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     runtime_id: String,
     workspace: String,
     image: Option<String>,
     network: Option<String>,
     scope: Option<String>,
 ) -> Result<PreflightReport, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let mut argv = vec![
         "runtime".into(),
         "preflight".into(),
@@ -957,10 +972,11 @@ pub async fn runtime_preflight(
 #[tauri::command]
 pub async fn runtime_inspect(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     runtime_id: String,
     workspace: String,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let argv = runtime_inspect_argv(&runtime_id, &workspace);
     let env = run_control_target(&target, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -977,10 +993,11 @@ pub async fn runtime_inspect(
 #[tauri::command]
 pub async fn runtime_status(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     runtime_id: String,
     workspace: String,
 ) -> Result<Value, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let argv = runtime_status_argv(&runtime_id, &workspace);
     let env = run_control_target(&target, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -1019,13 +1036,14 @@ pub async fn runtime_poll_light(
 #[tauri::command]
 pub async fn start_runtime(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     runtime_id: String,
     image: Option<String>,
     network: Option<String>,
     scope: Option<String>,
 ) -> Result<RuntimeStartResult, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let start_ops = app.state::<StartOps>().inner().clone();
     let cancel = CancellationToken::new();
     let start_key = runtime_id.clone();
@@ -1109,10 +1127,11 @@ pub async fn cancel_runtime_start(app: AppHandle, runtime_id: String) -> Result<
 #[tauri::command]
 pub async fn runtime_restart(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     runtime_id: String,
     workspace: String,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_restart_argv(&runtime_id, &workspace);
     let env = run_control_target(&target, argv, RESTART_TIMEOUT, CancellationToken::new()).await?;
@@ -1127,10 +1146,11 @@ pub async fn runtime_restart(
 #[tauri::command]
 pub async fn stop_runtime(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     runtime_id: String,
     workspace: String,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_stop_argv(&runtime_id, &workspace);
     let env = run_control_target(&target, argv, STOP_TIMEOUT, CancellationToken::new()).await?;
@@ -1145,10 +1165,11 @@ pub async fn stop_runtime(
 #[tauri::command]
 pub async fn list_runtimes(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     owner: Option<String>,
 ) -> Result<RuntimeListResult, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let argv = runtime_list_argv(&workspace, owner.as_deref());
     let env = run_control_target(&target, argv, LIST_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -1162,11 +1183,12 @@ pub async fn list_runtimes(
 #[tauri::command]
 pub async fn remove_runtime(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     runtime_id: String,
     workspace: String,
     force: bool,
 ) -> Result<RuntimeSnapshot, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let _op_guard = acquire_op_lock(app.state::<OpMutexes>().inner(), &runtime_id).await;
     let argv = runtime_remove_argv(&runtime_id, &workspace, force);
     let env = run_control_target(&target, argv, REMOVE_TIMEOUT, CancellationToken::new()).await?;
@@ -1184,10 +1206,11 @@ pub async fn remove_runtime(
 #[tauri::command]
 pub async fn runtime_reconcile(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     instance_id: Option<String>,
 ) -> Result<ReconcilePayload, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let iid = match instance_id {
         Some(i) => i,
         None => app
@@ -1216,6 +1239,7 @@ pub async fn runtime_reconcile(
 #[tauri::command]
 pub async fn get_provider_status(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     runtime_id: String,
     agent: String,
@@ -1223,7 +1247,7 @@ pub async fn get_provider_status(
     if agent != "claude" && agent != "codex" {
         return Err(WorkbenchError::map_aisc("AISC_ERR_INVALID_AGENT"));
     }
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let argv = provider_current_argv(&runtime_id, &agent, &workspace);
     let env = run_control_target(&target, argv, PROVIDER_TIMEOUT, CancellationToken::new()).await?;
     if let Some(e) = envelope_error(&env) {
@@ -1239,10 +1263,11 @@ pub async fn get_provider_status(
 #[tauri::command]
 pub async fn build_image(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     tag: String,
     on_event: Channel<BuildEvent>,
 ) -> Result<(), WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let build_ops = app.state::<BuildOps>().inner().clone();
     let cancel = CancellationToken::new();
     let build_key = tag.clone();

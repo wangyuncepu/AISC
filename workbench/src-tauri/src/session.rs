@@ -314,9 +314,10 @@ fn canonical_workspace(raw: &str) -> Result<String, WorkbenchError> {
 /// (trailing slash trim). Local targets keep the exact legacy behavior.
 pub async fn canonical_workspace_for(
     app: &AppHandle,
+    window: &tauri::WebviewWindow,
     raw: &str,
 ) -> Result<String, WorkbenchError> {
-    let target = crate::target::resolve_target(app).await?;
+    let target = crate::target::resolve_target_for(app, &window).await?;
     match target {
         crate::cli::CliTarget::Local(_) => canonical_workspace(raw),
         crate::cli::CliTarget::Remote(t) => {
@@ -395,6 +396,7 @@ fn sweep_terminal_entries(map: &mut HashMap<String, SessionEntry>) {
 #[tauri::command]
 pub async fn open_session(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     runtime_id: String,
     session_id: String,
     agent: String,
@@ -415,7 +417,7 @@ pub async fn open_session(
     // Canonicalize before any spawn: the frontend raw string never becomes
     // Session identity (05 §4.1). Missing/unreadable workspace -> stable
     // workspace error, no child is started.
-    let ws = canonical_workspace_for(&app, &workspace).await?;
+    let ws = canonical_workspace_for(&app, &window, &workspace).await?;
 
     let reg = registry(&app);
     if !reg.accepting() {
@@ -448,7 +450,7 @@ pub async fn open_session(
         gen
     };
 
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
 
     // O2 (D-11): full output spool at <data-root>/sessions/<sid>.spool.
     // A missing/invalid data root means NO spool — memory-only degradation,
@@ -968,13 +970,26 @@ pub struct RuntimeCleanup {
 /// never wired (runtime stop lands in G-07 Step 2 — superseded by the
 /// structured v2 below); the frontend migrates onto v2 in
 /// runtime-lifecycle-ux Stage 3, after which this wrapper can go.
+/// W3 手测 r6: the WEBVIEW-side hide() IPC does not take effect while a
+/// close request is pending (G-07, 2026-08-09) — a child window's
+/// hide-first exit visually lingered through the whole scoped teardown
+/// (~2-3s of docker stop) because the JS `win.hide()` silently no-opped.
+/// Rust-side hide IS the direct win32 call; this exposes it.
+#[tauri::command]
+pub async fn hide_window(window: tauri::WebviewWindow) -> Result<(), WorkbenchError> {
+    window
+        .hide()
+        .map_err(|e| WorkbenchError::cli_protocol().with_detail(format!("hide: {e}")))
+}
+
 #[tauri::command]
 pub async fn shutdown_workbench(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     stop_runtime: bool,
 ) -> Result<ShutdownReport, WorkbenchError> {
     let _ = stop_runtime;
-    run_shutdown(app, None).await
+    run_shutdown(app, window, None).await
 }
 
 /// Structured shutdown (runtime-lifecycle-ux 02 §4): sessions first, then
@@ -984,9 +999,10 @@ pub async fn shutdown_workbench(
 #[tauri::command]
 pub async fn shutdown_workbench_v2(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     request: ShutdownRequest,
 ) -> Result<ShutdownReport, WorkbenchError> {
-    run_shutdown(app, Some(request)).await
+    run_shutdown(app, window, Some(request)).await
 }
 
 /// Budget for one runtime's stop+remove during shutdown (02 §4: cleanup
@@ -995,6 +1011,7 @@ const RUNTIME_CLEANUP_TIMEOUT: Duration = Duration::from_secs(45);
 
 async fn run_shutdown(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     request: Option<ShutdownRequest>,
 ) -> Result<ShutdownReport, WorkbenchError> {
     let reg = registry(&app);
@@ -1102,8 +1119,8 @@ async fn run_shutdown(
     // a per-target budget; a failure or timeout lands in the report and
     // next-startup reconcile sweeps the remainder.
     if let Some(req) = &request {
-        report.runtime_cleanup = runtime_cleanup_phase(&app, req).await;
-        release_all_leases(&app).await;
+        report.runtime_cleanup = runtime_cleanup_phase(&app, &window, req).await;
+        release_all_leases(&app, &window).await;
     }
 
     // Flush settings (pin) so no dirty state is left behind (03 §4.3).
@@ -1143,15 +1160,20 @@ async fn run_shutdown(
 /// stop → (unless keep_stopped) remove. Same-runtime serialization rides
 /// the existing per-runtime op mutex inside stop/remove; cross-process
 /// safety rides the CLI's workspace/maintenance locks.
-async fn runtime_cleanup_phase(app: &AppHandle, request: &ShutdownRequest) -> Vec<RuntimeCleanup> {
+async fn runtime_cleanup_phase(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    request: &ShutdownRequest,
+) -> Vec<RuntimeCleanup> {
     let mut handles = Vec::new();
     for target in &request.workspaces {
         let app = app.clone();
+        let window = window.clone();
         let target = target.clone();
         handles.push(tokio::spawn(async move {
             match tokio::time::timeout(
                 RUNTIME_CLEANUP_TIMEOUT,
-                cleanup_one_runtime(&app, &target),
+                cleanup_one_runtime(&app, window.clone(), &target),
             )
             .await
             {
@@ -1175,7 +1197,11 @@ async fn runtime_cleanup_phase(app: &AppHandle, request: &ShutdownRequest) -> Ve
     out
 }
 
-async fn cleanup_one_runtime(app: &AppHandle, target: &ShutdownTarget) -> RuntimeCleanup {
+async fn cleanup_one_runtime(
+    app: &AppHandle,
+    window: tauri::WebviewWindow,
+    target: &ShutdownTarget,
+) -> RuntimeCleanup {
     use crate::runtime::{remove_runtime, stop_runtime};
 
     if target.retention == "keep_running" {
@@ -1192,6 +1218,7 @@ async fn cleanup_one_runtime(app: &AppHandle, target: &ShutdownTarget) -> Runtim
     // we keep for classification).
     let stop = stop_runtime(
         app.clone(),
+        window.clone(),
         target.runtime_id.clone(),
         target.workspace.clone(),
     )
@@ -1217,6 +1244,7 @@ async fn cleanup_one_runtime(app: &AppHandle, target: &ShutdownTarget) -> Runtim
 
     let remove = remove_runtime(
         app.clone(),
+        window,
         target.runtime_id.clone(),
         target.workspace.clone(),
         true, // stopped above (or already gone) — force covers a racing start
@@ -1254,12 +1282,12 @@ fn normalize_state(state: &str) -> String {
 /// Release every lease this process holds (best-effort — an un-released
 /// lease expires by TTL in 45s, which is the designed safety net, so a
 /// failure here never blocks exit).
-async fn release_all_leases(app: &AppHandle) {
+async fn release_all_leases(app: &AppHandle, window: &tauri::WebviewWindow) {
     let workspaces = app
         .state::<crate::lease::LeaseSupervisor>()
         .active_workspaces();
     for ws in workspaces {
-        if let Err(e) = crate::lease::lease_release(app.clone(), ws.clone()).await {
+        if let Err(e) = crate::lease::lease_release(app.clone(), window.clone(), ws.clone()).await {
             eprintln!("[shutdown] lease release failed for {}: {}", ws, e.code);
         }
     }

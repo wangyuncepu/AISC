@@ -29,6 +29,7 @@ import { setExplorerCollapsed } from "./lib/panelLayout";
 import type { CommandCtx } from "./lib/commands";
 import CommandPalette from "./components/CommandPalette.vue";
 import FloatingPane from "./components/FloatingPane.vue";
+import MenuBar from "./components/MenuBar.vue";
 import { computeWindowTitle } from "./lib/title";
 import { useRuntimeStore } from "./stores/runtime";
 import { useWorkspacesStore } from "./stores/workspaces";
@@ -40,7 +41,7 @@ import SettingsTab from "./features/settings/SettingsTab.vue";
 import NetworkUsageTab from "./features/usage/NetworkUsageTab.vue";
 import DoctorDialog from "./features/doctor/DoctorDialog.vue";
 import OnboardingWizard from "./features/onboarding/OnboardingWizard.vue";
-import WorkspaceBar from "./features/workspace/WorkspaceBar.vue";
+import InvalidPathDialog from "./features/startup/InvalidPathDialog.vue";
 import WorkspaceView from "./features/workspace/WorkspaceView.vue";
 import { useWorkspaceExplorerStore } from "./stores/workspaceExplorer";
 import { useOnboardingStore } from "./stores/onboarding";
@@ -99,11 +100,46 @@ function toggleSettings(): void {
   }
 }
 
+// W3 手测 r10/r11: the dead-recent remediation dialog — app-level FLOATING
+// mount (never hijacks the launcher/active workspace; the boot-param path
+// in a fresh window lands the same overlay above its picker).
+const overlayInvalidPath = ref<string | null>(null);
+const overlayExportBusy = ref(false);
+watch(
+  () => ws.pendingInvalidPath,
+  (p) => {
+    if (p) overlayInvalidPath.value = ws.consumeInvalidPath();
+  },
+  { immediate: true },
+);
+async function onOverlayClear(purgeData: boolean): Promise<void> {
+  const path = overlayInvalidPath.value;
+  overlayInvalidPath.value = null;
+  if (path) await ws.clearInvalidRecent(path, purgeData);
+}
+async function onOverlayExport(): Promise<void> {
+  const path = overlayInvalidPath.value;
+  if (!path) return;
+  overlayExportBusy.value = true;
+  try {
+    await ws.exportInvalidRecent(path);
+  } finally {
+    overlayExportBusy.value = false;
+  }
+}
+
 // IDEA-2 (2d): the「网络与用量」pane — same floating treatment (W1).
 
 // P2-4 (D-4): the command palette — Ctrl+Shift+P (the r5 print-block used
 // to swallow this combo dead; it now opens the palette instead).
 const paletteOpen = ref(false);
+// W2: the menu bar (and future surfaces) reach the palette through this
+// window event — one owner, no prop drilling.
+function onOpenPalette(): void {
+  if (!paletteOpen.value) paletteOpen.value = true;
+}
+onMounted(() => window.addEventListener("aisc:open-palette", onOpenPalette));
+onBeforeUnmount(() => window.removeEventListener("aisc:open-palette", onOpenPalette));
 const explorerForPalette = useWorkspaceExplorerStore();
 function paletteCtx(): CommandCtx {
   return {
@@ -171,20 +207,8 @@ function onAppKeydown(e: KeyboardEvent) {
     toggleExplorerCollapsed();
     return;
   }
-  if (showOnboarding.value || !workspaceLayerVisible.value) return;
-  if (e.key === "PageUp" && !e.altKey && !e.shiftKey) {
-    e.preventDefault();
-    ws.cycle(-1);
-  } else if (e.key === "PageDown" && !e.altKey && !e.shiftKey) {
-    e.preventDefault();
-    ws.cycle(1);
-  } else if (e.altKey && e.key >= "1" && e.key <= "9") {
-    const target = ws.runtimes[Number(e.key) - 1];
-    if (target) {
-      e.preventDefault();
-      ws.activate(target.id);
-    }
-  }
+  // W3 (ruling c): cross-workspace cycling left with the strip — the OS
+  // taskbar owns window switching now.
 }
 onMounted(() => window.addEventListener("keydown", onAppKeydown, { capture: true }));
 
@@ -318,9 +342,14 @@ watch(
 /** Boot states live on the launcher until negotiate settles; after that the
  * workspace layer (strip + views) owns the surface. Blocked renders the
  * app gate UNDER the strip (settings must stay reachable — the chip lands
- * 3d; today the topbar gear covers it). */
+ * 3d; today the topbar gear covers it).
+ * W3 手测 r7: a param-booted window ALSO waits for consumeBootParams —
+ * otherwise the picker flashes for a frame before selectRecentWorkspace
+ * lands the instance on preflight/summary. */
 const booting = computed(() => ["idle", "negotiating"].includes(store.status));
-const workspaceLayerVisible = computed(() => !booting.value);
+const bootParamsSettled = ref(true);
+const workspaceLayerVisible = computed(
+  () => !booting.value && bootParamsSettled.value);
 
 // G-16 (Step 15): tray availability gate.
 const trayAvailable = ref(false);
@@ -331,6 +360,24 @@ async function runExitFlow(): Promise<void> {
   const allow = await store.confirmExit();
   if (!allow) return;
   const win = getCurrentWindow();
+  // W3 手测 r4#3: a spawned window closes ALONE. The process-global
+  // coordinator is FORBIDDEN here — run_shutdown hides the MAIN window and
+  // sweeps EVERY window's session registry (field evidence: closing one
+  // window closed both). Scoped teardown: this window's sessions, then
+  // stop→remove its runtimes (lease release rides remove), then destroy.
+  if (win.label !== "main") {
+    // 手测 r6: the JS-side win.hide() IPC NO-OPS while a close request is
+    // pending (G-07) — the window lingered visually through the whole
+    // teardown. Rust-side hide (direct win32) is the reliable instant one.
+    ws.hideWindowForExit();
+    void ws
+      .closeWindowScoped()
+      .catch(() => undefined)
+      .finally(() => {
+        void win.destroy().catch(() => undefined);
+      });
+    return;
+  }
   void win.hide().catch(() => undefined);
   void trayRemove().catch(() => undefined);
   void captureWindowGeometry().catch(() => undefined);
@@ -349,6 +396,34 @@ async function runExitFlow(): Promise<void> {
   });
 }
 
+/** W3 (ruling c): a window spawned with ?workspace= (POSIX ⇒ remote,
+ * ?machine names the drive) boots STRAIGHT into its workspace — one
+ * window, one workspace; the OS taskbar owns cross-workspace switching. */
+async function consumeBootParams(): Promise<void> {
+  const params = new URLSearchParams(location.search);
+  const wsPath = params.get("workspace");
+  const machine = params.get("machine");
+  if (!wsPath && !machine) return;
+  bootParamsSettled.value = false;
+  await settingsStore.refreshTarget();
+  if (machine) {
+    await settingsStore.switchTarget(machine);
+  } else if (wsPath?.startsWith("/")) {
+    const name = settingsStore.target?.machine?.name
+      ?? settingsStore.doc?.remoteMachines?.[0]?.name ?? null;
+    if (settingsStore.target?.kind !== "remote") await settingsStore.switchTarget(name);
+  }
+  if (!ws.openLauncher()) return; // cap guard (harmless in a fresh window)
+  if (!wsPath) return; // remote launcher window — the picker carries on
+  if (!(await ws.workspacePathExists(wsPath))) {
+    // Same remediation as the picker's own dead-recent click (手测 r10) —
+    // silently parking on the launcher left the dead record unexplained.
+    ws.surfaceInvalidPath(wsPath);
+    return;
+  }
+  store.selectRecentWorkspace(wsPath);
+}
+
 onMounted(() => {
   // PP r8 (user request): kill the WebView2 default context menu app-wide —
   // the only context menus in the Workbench are our own Vue ones.
@@ -358,7 +433,12 @@ onMounted(() => {
   // instead of stranding the user on a wizard (A-21735).
   void (async () => {
     await onboardingStore.load();
-    store.negotiate();
+    await store.negotiate();
+    try {
+      await consumeBootParams();
+    } finally {
+      bootParamsSettled.value = true;
+    }
   })();
   // G-09 (02 §3.1): resolve + apply the locale in parallel.
   void (async () => {
@@ -453,7 +533,9 @@ onBeforeUnmount(() => {
            post-onboarding state — including while the Settings tab fills the
            content area — so the chip × (and the + ▾ menu) are always an exit
            path. Only the WorkspaceView yields to the settings pane. -->
-      <WorkspaceBar v-if="workspaceLayerVisible" />
+      <!-- W2 (shell-redesign, ruling a): the in-window menu bar. The strip
+           below still carries multi-workspace chips until W3 retires it. -->
+      <MenuBar v-if="workspaceLayerVisible" />
 
       <!-- W1 (shell-redesign): Settings & the data dashboard are FLOATING
            panes now (rail-bottom icons / Ctrl+, / palette) — the workspace
@@ -488,18 +570,22 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- Boot (idle/negotiating) -->
-      <div v-else-if="booting" class="center">
+      <div v-else-if="booting || !bootParamsSettled" class="center">
         <p class="msg">{{ t("app.negotiating") }}</p>
       </div>
 
       <!-- The ACTIVE workspace's view (keyed remount on switch). W1: the
            floating panes overlay it instead of replacing it. -->
-      <WorkspaceView
-        v-else
-        :key="ws.activeRuntime.id"
-        :zoom="terminalZoom"
-        :tier="layoutTier"
-      />
+      <!-- The condition rides the TRANSITION itself — a wrapper between the
+           v-else-if chain and its v-else breaks chain adjacency (Vue
+           compile error; 手测 r9). -->
+      <Transition v-else name="fade" mode="out-in">
+        <WorkspaceView
+          :key="ws.activeRuntime.id"
+          :zoom="terminalZoom"
+          :tier="layoutTier"
+        />
+      </Transition>
     </template>
 
     <!-- G-13: diagnosis dialog, shared by blocked/error/ready entry points.
@@ -507,6 +593,16 @@ onBeforeUnmount(() => {
     <Transition name="fade">
       <DoctorDialog v-if="doctorStore.open" />
     </Transition>
+
+    <!-- W3 手测 r11: dead-recent remediation floats over ANY state. -->
+    <InvalidPathDialog
+      v-if="overlayInvalidPath"
+      :path="overlayInvalidPath"
+      :busy="overlayExportBusy"
+      @close="overlayInvalidPath = null"
+      @clear="onOverlayClear"
+      @export="onOverlayExport"
+    />
 
     <!-- P2-1 (A2 反馈语法): the ONE global toast host — body-teleported,
          above every layer. Features push through useToastStore. -->
@@ -577,7 +673,6 @@ onBeforeUnmount(() => {
 </style>
 
 <style>
-/* P2-2: unscoped ON PURPOSE — reaches WorkspaceBar's .bar-status on compact
- * tiers (keep the chips readable; same rationale the old topbar rule had). */
-.app[data-tier="compact"] .workspbar .bar-status { display: none; }
+/* P2-2 → W3: the strip's compact rule left with the strip (the status
+ * label now rides the menu bar, hidden on compact in MenuBar's own styles). */
 </style>

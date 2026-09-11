@@ -109,8 +109,11 @@ fn envelope_data(
 
 /// Read-only `docker system df` summary for the settings card.
 #[tauri::command]
-pub async fn cache_usage(app: AppHandle) -> Result<CacheUsage, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+pub async fn cache_usage(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<CacheUsage, WorkbenchError> {
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let env = run_control_target(
         &target,
         cache_usage_argv(),
@@ -133,9 +136,10 @@ pub async fn cache_usage(app: AppHandle) -> Result<CacheUsage, WorkbenchError> {
 #[tauri::command]
 pub async fn cache_cleanup(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     min_age_hours: u32,
 ) -> Result<CacheCleanupResult, WorkbenchError> {
-    let target = crate::target::resolve_target(&app).await?;
+    let target = crate::target::resolve_target_for(&app, &window).await?;
     let env = run_control_target(
         &target,
         cache_cleanup_argv(min_age_hours),

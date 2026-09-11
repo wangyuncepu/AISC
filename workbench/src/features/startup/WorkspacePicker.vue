@@ -74,40 +74,30 @@ async function onRecentClick(path: string): Promise<void> {
   }
   store.selectRecentWorkspace(path);
 }
-async function clearInvalidEntry(purgeData: boolean): Promise<void> {
+/* W3 手测 r11: dead-recent actions live in the workspaces store now
+ * (shared with the app-level overlay); exportBusy stays local for the
+ * ForgetConfirmDialog export hand-off. */
+const exportBusy = ref(false);
+
+/** W3 手测 r11: close-then-act wrappers over the shared store actions (the
+ * bare inline arrows left the dialog open — the original local handlers
+ * cleared invalidPath FIRST; the tests caught the regression). */
+function onInvalidClear(purgeData: boolean): void {
   const path = invalidPath.value;
   invalidPath.value = null;
-  if (!path) return;
-  try {
-    if (purgeData) {
-      // 2.1.11 P1-3 (user ruling): sweep the lifecycle files too — the
-      // full forget transaction (quarantine → purge → drop the record).
-      // The workspace directory is already gone from disk, so the
-      // user-files red line holds trivially.
-      await wsStore.forgetWorkspace(path);
-    } else {
-      await wsStore.clearHistoryEntry(path);
-    }
-  } catch {
-    /* record-only clear is best-effort for the user; history reloads next open */
-  }
+  if (path) void wsStore.clearInvalidRecent(path, purgeData);
 }
-
-/** 2.1.11 P1-3: rescue-export before clearing (agent memories/configs as
- * zip; the dialog stays open so the user can still confirm the clear). */
-async function exportInvalidEntry(): Promise<void> {
+async function onInvalidExport(): Promise<void> {
   const path = invalidPath.value;
   if (!path) return;
   exportBusy.value = true;
   try {
-    await wsStore.exportLifecycle(path);
-  } catch {
-    /* best-effort rescue path — surface nothing scary on failure */
+    await wsStore.exportInvalidRecent(path);
   } finally {
     exportBusy.value = false;
   }
 }
-const exportBusy = ref(false);
+
 
 // --- F2-B: remote directory browser (fs.list over the pooled serve
 // channel, pinned at the remote $HOME; manual absolute input stays the
@@ -416,8 +406,8 @@ async function confirmForget(): Promise<void> {
       :path="invalidPath"
       :busy="exportBusy"
       @close="invalidPath = null"
-      @clear="clearInvalidEntry"
-      @export="exportInvalidEntry"
+      @clear="onInvalidClear"
+      @export="onInvalidExport"
     />
     <!-- F2-B: remote directory browser — click selects, double-click
          descends (explorer mental model); dirs only, dotfiles hidden. -->

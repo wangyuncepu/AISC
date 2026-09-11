@@ -344,6 +344,28 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
    * runtime targets — every materialized workspace with a live runtime id.
    * Retention is the registry default (remove_on_close); the backend maps
    * per-target behavior. */
+  /** W3 手测 r6: Rust-side window hide (the webview-side IPC no-ops while
+   * a close request is pending — G-07). Store-routed per F-A01. */
+  function hideWindowForExit(): void {
+    void ipc.hideWindow().catch(() => undefined);
+  }
+
+  async function closeWindowScoped(): Promise<void> {
+    await flushSave();
+    const sessionIds = runtimes.value
+      .flatMap((r) => r.tabs.value)
+      .map((t) => t.sessionId)
+      .filter((id): id is string => Boolean(id));
+    await Promise.race([
+      Promise.all(sessionIds.map((id) => ipc.closeSession(id).catch(() => null))),
+      new Promise((resolve) => setTimeout(resolve, 400)),
+    ]);
+    for (const t of shutdownTargets()) {
+      await ipc.stopRuntime(t.workspace, t.runtimeId).catch(() => null);
+      await ipc.removeRuntime(t.workspace, t.runtimeId).catch(() => null);
+    }
+  }
+
   function shutdownTargets(): Array<{ workspace: string; runtimeId: string }> {
     return runtimes.value
       .filter((r) => r.workspace.value.trim() && r.runtimeId.value)
@@ -488,6 +510,37 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     }
   }
 
+  // --- W3 手测 r10: invalid-recent remediation is reachable from ANY entry ---
+  /** Set by the menu's openByPath / a spawned window's boot probe when a
+   * recent's path is gone; the picker CONSUMES it on mount/watch and opens
+   * the same InvalidPathDialog its own click path uses (forget/clear +
+   * lifecycle export — P1-3). Store-routed per F-A01. */
+  const pendingInvalidPath = ref<string | null>(null);
+  function surfaceInvalidPath(path: string): void {
+    pendingInvalidPath.value = path;
+  }
+  function consumeInvalidPath(): string | null {
+    const p = pendingInvalidPath.value;
+    pendingInvalidPath.value = null;
+    return p;
+  }
+  /** 手测 r11: the dead-recent dialog's actions, shared by the picker and
+   * the app-level overlay (mirrors the picker's original local handlers). */
+  async function clearInvalidRecent(path: string, purgeData: boolean): Promise<void> {
+    try {
+      if (purgeData) {
+        await forgetWorkspace(path);
+      } else {
+        await clearHistoryEntry(path);
+      }
+    } catch {
+      /* record-only clear is best-effort; history reloads next open */
+    }
+  }
+  async function exportInvalidRecent(path: string): Promise<number | null> {
+    return exportLifecycle(path);
+  }
+
   // --- F2-B: remote browse (picker dialog state; store-routed per F-A01) ---
   const browseBusy = ref(false);
   const browseError = ref<string | null>(null);
@@ -535,6 +588,13 @@ export const useWorkspacesStore = defineStore("workspaces", () => {
     exportLifecycle,
     clearHistoryEntry,
     workspacePathExists,
+    closeWindowScoped,
+    hideWindowForExit,
+    pendingInvalidPath,
+    surfaceInvalidPath,
+    consumeInvalidPath,
+    clearInvalidRecent,
+    exportInvalidRecent,
     browseBusy,
     browseError,
     browseRemote,

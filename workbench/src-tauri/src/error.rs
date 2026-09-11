@@ -226,8 +226,14 @@ impl WorkbenchError {
             "AISC_ERR_CAPABILITY_UNSUPPORTED" => {
                 ("AISC CLI 版本不支持 Workbench", false, Action::UpgradeCli)
             }
-            "AISC_ERR_RUNTIME_NOT_FOUND" => ("Runtime 不存在", false, Action::Refresh),
-            "AISC_ERR_RUNTIME_NOT_RUNNING" => ("Runtime 未运行", false, Action::Refresh),
+            // 2.1.11 P1 手测 r4 #2: cold-start window reads as "not ready,
+            // retry" — the registry lookup legitimately misses until
+            // container_ready; the old 「Runtime 不存在」 read as fatal.
+            "AISC_ERR_RUNTIME_NOT_FOUND" | "AISC_ERR_RUNTIME_NOT_RUNNING" => (
+                "Runtime 尚未就绪（可能仍在启动），请稍候后刷新",
+                true,
+                Action::Retry,
+            ),
             "AISC_ERR_RUNTIME_CONFLICT" => {
                 ("工作区已有不兼容 Runtime", false, Action::None)
             }
@@ -281,21 +287,6 @@ impl WorkbenchError {
             "AISC_ERR_CC_SWITCH_RATE_LIMITED" => {
                 ("GitHub API 限流，请稍后重试", true, Action::Retry)
             }
-            // 2.1.11 P1 手测 r4 #2: opening the Provider tab while the
-            // runtime is still cold-starting surfaced the generic
-            // 「AISC CLI 返回错误」 banner (container registry lookup fails
-            // with RUNTIME_NOT_FOUND until container_ready) — say what is
-            // actually happening instead.
-            "AISC_ERR_RUNTIME_NOT_FOUND" => (
-                "Runtime 尚未就绪（可能仍在启动），请稍候后刷新",
-                true,
-                Action::Retry,
-            ),
-            "AISC_ERR_RUNTIME_NOT_RUNNING" => (
-                "Runtime 尚未就绪（可能仍在启动），请稍候后刷新",
-                true,
-                Action::Retry,
-            ),
             _ => ("AISC CLI 返回错误", true, Action::Retry),
         };
         Self::new(code, message, retryable, action)

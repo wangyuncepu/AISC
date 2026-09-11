@@ -831,10 +831,11 @@ fn normalize_under_root(root: &str, requested: &str) -> Result<String, Workbench
 #[tauri::command]
 pub async fn remote_browse(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     path: Option<String>,
     include_hidden: Option<bool>,
 ) -> Result<RemoteBrowseResult, WorkbenchError> {
-    let t = match crate::target::resolve_target(&app).await? {
+    let t = match crate::target::resolve_target_for(&app, &window).await? {
         crate::cli::CliTarget::Remote(t) => t,
         crate::cli::CliTarget::Local(_) => {
             return Err(WorkbenchError::workspace_invalid()
@@ -912,8 +913,12 @@ pub async fn remote_browse_core(
 /// reported as "not found" so the picker offers the record-only clear
 /// instead of the old protocol-error maze.
 #[tauri::command]
-pub async fn workspace_path_exists(app: AppHandle, path: String) -> bool {
-    let remote = match crate::target::resolve_target(&app).await {
+pub async fn workspace_path_exists(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    path: String,
+) -> bool {
+    let remote = match crate::target::resolve_target_for(&app, &window).await {
         Ok(crate::cli::CliTarget::Remote(t)) => Some(t),
         _ => None,
     };
@@ -1487,6 +1492,7 @@ fn explorer_extra_ignore(app: &AppHandle) -> Vec<String> {
 #[tauri::command]
 pub async fn workspace_list(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     relative_dir: String,
     cursor: Option<usize>,
@@ -1497,7 +1503,7 @@ pub async fn workspace_list(
     // fs is never consulted (or copied). Artifact badges stay a local-index
     // projection and therefore don't ride the remote path yet (remote
     // artifact registry is a follow-up).
-    if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target(&app).await? {
+    if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target_for(&app, &window).await? {
         return list_remote(&t, &workspace, &relative_dir, cursor.unwrap_or(0)).await;
     }
 
@@ -1595,6 +1601,7 @@ async fn list_remote(
 #[tauri::command]
 pub async fn workspace_open(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     relative_path: String,
 ) -> Result<(), WorkbenchError> {
@@ -1602,7 +1609,7 @@ pub async fn workspace_open(
     // temporary copy, then the system opener. The copy is a view, never a
     // sync — edits there do NOT flow back (the honest semantics VS Code's
     // Download gesture has too).
-    if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target(&app).await? {
+    if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target_for(&app, &window).await? {
         let pool = crate::serve::global_pool();
         let data = crate::serve::fs_op(
             pool,
@@ -1657,12 +1664,13 @@ pub async fn workspace_open(
 #[tauri::command]
 pub async fn workspace_preview(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     relative_path: String,
 ) -> Result<WorkspacePreviewResult, WorkbenchError> {
     // R3 (D-5/D-9): preview reads the REMOTE file over fs.read; nothing is
     // stored locally (the budget matches the local PREVIEW_BUDGET).
-    if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target(&app).await? {
+    if let crate::cli::CliTarget::Remote(t) = crate::target::resolve_target_for(&app, &window).await? {
         let pool = crate::serve::global_pool();
         let data = crate::serve::fs_op(
             pool,
@@ -1730,6 +1738,7 @@ async fn is_remote(app: &AppHandle) -> bool {
 /// outcome (the serve ops return terse payloads).
 async fn remote_mutation(
     app: &AppHandle,
+    window: &tauri::WebviewWindow,
     workspace: &str,
     op: &str,
     args: &serde_json::Value,
@@ -1737,7 +1746,7 @@ async fn remote_mutation(
     entry_relative: String,
     entry_kind: &str,
 ) -> Result<WorkspaceMutationResult, WorkbenchError> {
-    let target = match crate::target::resolve_target(app).await? {
+    let target = match crate::target::resolve_target_for(app, &window).await? {
         crate::cli::CliTarget::Remote(t) => t,
         crate::cli::CliTarget::Local(_) => unreachable!("remote_mutation on local target"),
     };
@@ -1754,6 +1763,7 @@ async fn remote_mutation(
 #[tauri::command]
 pub async fn workspace_create_file(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     relative_dir: String,
     name: String,
@@ -1761,7 +1771,7 @@ pub async fn workspace_create_file(
     let relative = if relative_dir.is_empty() { name.clone() } else { format!("{relative_dir}/{name}") };
     if is_remote(&app).await {
         return remote_mutation(
-            &app, &workspace, "fs.write",
+            &app, &window, &workspace, "fs.write",
             &serde_json::json!({ "root": workspace, "path": relative, "base64": "" }),
             "create_file", relative, "file",
         )
@@ -1773,6 +1783,7 @@ pub async fn workspace_create_file(
 #[tauri::command]
 pub async fn workspace_create_dir(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     relative_dir: String,
     name: String,
@@ -1780,7 +1791,7 @@ pub async fn workspace_create_dir(
     let relative = if relative_dir.is_empty() { name.clone() } else { format!("{relative_dir}/{name}") };
     if is_remote(&app).await {
         return remote_mutation(
-            &app, &workspace, "fs.mkdir",
+            &app, &window, &workspace, "fs.mkdir",
             &serde_json::json!({ "root": workspace, "path": relative }),
             "create_dir", relative, "dir",
         )
@@ -1792,6 +1803,7 @@ pub async fn workspace_create_dir(
 #[tauri::command]
 pub async fn workspace_copy_entry(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     source_relative_path: String,
     destination_relative_dir: String,
@@ -1805,7 +1817,7 @@ pub async fn workspace_copy_entry(
     if is_remote(&app).await {
         // Remote copy = fs.read + fs.write over the pooled session (files
         // only for now; a bounded remote dir copy rides a later fs.copy op).
-        let target = match crate::target::resolve_target(&app).await? {
+        let target = match crate::target::resolve_target_for(&app, &window).await? {
             crate::cli::CliTarget::Remote(t) => t,
             crate::cli::CliTarget::Local(_) => unreachable!(),
         };
@@ -1821,7 +1833,7 @@ pub async fn workspace_copy_entry(
         }
         let b64 = data.get("base64").and_then(|v| v.as_str()).unwrap_or_default().to_string();
         return remote_mutation(
-            &app, &workspace, "fs.write",
+            &app, &window, &workspace, "fs.write",
             &serde_json::json!({ "root": workspace, "path": new_relative, "base64": b64 }),
             "copy", new_relative, "file",
         ).await;
@@ -1836,6 +1848,7 @@ pub async fn workspace_copy_entry(
 #[tauri::command]
 pub async fn workspace_rename(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     workspace: String,
     relative_path: String,
     new_name: String,
@@ -1847,7 +1860,7 @@ pub async fn workspace_rename(
     let new_relative = if parent.is_empty() { new_name.clone() } else { format!("{parent}/{new_name}") };
     if is_remote(&app).await {
         return remote_mutation(
-            &app, &workspace, "fs.rename",
+            &app, &window, &workspace, "fs.rename",
             &serde_json::json!({ "root": workspace, "from": relative_path, "to": new_relative }),
             "rename", new_relative, "file",
         )

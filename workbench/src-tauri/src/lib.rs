@@ -117,6 +117,7 @@ pub fn run(cli_arg: Option<String>) {
         .plugin(tauri_plugin_notification::init())
         .manage(cli_arg_state)
         .manage(SessionRegistry::default())
+        .manage(target::WindowTargets::default())
         .manage(StartOps::default())
         .manage(BuildOps::default())
         .manage(OpMutexes::default())
@@ -184,6 +185,7 @@ pub fn run(cli_arg: Option<String>) {
             save_settings,
             reset_gui_settings,
             resolve_locale,
+            session::hide_window,
             target::target_get,
             target::target_set,
             target::target_clear,
