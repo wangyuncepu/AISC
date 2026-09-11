@@ -52,6 +52,24 @@ class CliOpInProcessTests(unittest.TestCase):
             self.assertEqual(frame["envelope"]["meta"]["exit_code"], 2)
             self.assertEqual(frame["envelope"]["errors"][0]["code"], "AISC_ERR_USAGE")
 
+    def test_cc_switch_tui_denied_envelope_ops_allowed(self) -> None:
+        """2.1.11 P1 手测 r6: the bare `cc-switch` is the TUI (denied), but
+        the six envelope subcommands must PASS the gate — denying the whole
+        command made provider management impossible on remote workspaces."""
+        for bad in (["cc-switch"], ["cc-switch", "bogus-op"]):
+            frame = self._run({"argv": bad})
+            self.assertEqual(frame["envelope"]["meta"]["exit_code"], 2)
+            self.assertIn("cannot run over serve",
+                          frame["envelope"]["errors"][0]["message"])
+        # Past the gate: argparse rejects the missing required args instead —
+        # a usage error whose message is NOT the serve denial.
+        for op in ("list", "switch", "fetch-models"):
+            frame = self._run({"argv": ["cc-switch", op]})
+            env = frame["envelope"]
+            self.assertEqual(env["meta"]["exit_code"], 2)
+            self.assertNotIn("cannot run over serve",
+                             env["errors"][0]["message"])
+
     def test_events_and_help_flags_rejected(self) -> None:
         for bad in (["doctor", "--events"], ["ps", "-h"], ["ps", "--help"]):
             frame = self._run({"argv": bad})

@@ -212,10 +212,20 @@ _SERVE_CLI_DENY = frozenset({
     "serve",             # recursion
     "run",               # interactive exec
     "shell",             # docker exec -it
-    "switch", "cc-switch",  # TUIs
+    "switch",            # TUI
     "build",             # long streaming op (own channel)
     "wizard",            # interactive
     "session",           # streams ride session.open / pty.* frames
+})
+
+#: 2.1.11 P1 手测 r6: the bare `cc-switch` IS a TUI, but the workbench
+#: Provider tab drives the six ENVELOPE subcommands over serve for remote
+#: workspaces — denying the whole command made provider management
+#: remote-impossible ('cc-switch' cannot run over serve). Allowlist mirrors
+#: application/cc_switch_provider._OPS; anything else (bare TUI, future
+#: subcommands) stays denied — default-deny keeps the serial op loop safe.
+_SERVE_CC_SWITCH_OPS = frozenset({
+    "list", "add", "edit", "switch", "delete", "fetch-models",
 })
 
 
@@ -236,7 +246,10 @@ def _op_cli(args: argparse.Namespace, payload: Dict[str, Any],
     if not argv:
         raise CliError(message="cli op requires a non-empty argv",
                        exit_code=2, error_code="AISC_ERR_USAGE")
-    if argv[0] in _SERVE_CLI_DENY:
+    if argv[0] in _SERVE_CLI_DENY or (
+        argv[0] == "cc-switch"
+        and (len(argv) < 2 or argv[1] not in _SERVE_CC_SWITCH_OPS)
+    ):
         raise CliError(
             message=f"'{argv[0]}' cannot run over serve (interactive, "
                     f"streaming or self-referential)",
