@@ -536,18 +536,20 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- Boot (idle/negotiating) -->
-      <div v-else-if="booting" class="center">
+      <div v-else-if="booting || !bootParamsSettled" class="center">
         <p class="msg">{{ t("app.negotiating") }}</p>
       </div>
 
       <!-- The ACTIVE workspace's view (keyed remount on switch). W1: the
            floating panes overlay it instead of replacing it. -->
+      <Transition name="fade" mode="out-in">
       <WorkspaceView
         v-else
         :key="ws.activeRuntime.id"
         :zoom="terminalZoom"
         :tier="layoutTier"
       />
+      </Transition>
     </template>
 
     <!-- G-13: diagnosis dialog, shared by blocked/error/ready entry points.
