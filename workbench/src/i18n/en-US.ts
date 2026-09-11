@@ -260,8 +260,6 @@ export const enUS: Record<string, string> = {
   "workspbar.launcher": "New workspace +",
   "workspbar.close": "Close workspace",
   "workspbar.capHint": "Up to 3 concurrent workspaces",
-  "settings.ui.defaultNewPage": "+ default page",
-  "settings.ui.defaultNewPage.help": "The page the workspace-bar + opens directly; the ▾ next to it picks others.",
   "workspbar.newWorkspace": "New workspace",
   "workspbar.choose": "Choose a page to open",
   "workspbar.settings": "Settings",
@@ -443,6 +441,8 @@ export const enUS: Record<string, string> = {
 
   // --- settings dialog (SettingsDialog.vue) ---
   "settings.title": "Settings",
+  "settings.navLabel": "Settings sections",
+  "settings.searchPlaceholder": "Search settings…",
   "settings.dirty": "Unsaved changes",
   "settings.saved": "Saved",
   "settings.corrupted": "The settings file was corrupt and has been isolated (settings.json.corrupt); defaults are shown. Saving or resetting writes a new file.",

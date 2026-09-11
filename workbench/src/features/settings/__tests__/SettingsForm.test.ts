@@ -59,13 +59,15 @@ beforeEach(() => {
 });
 
 describe("SettingsForm section headings (manual-test #1)", () => {
-  it("renders every group heading through i18n — no GROUP_KEY hole throws", async () => {
+  it("P2-5: nav carries every section; the pane shows the ACTIVE one", async () => {
     const store = useSettingsStore();
     await store.load();
     const wrapper = mount(SettingsForm, { global: { plugins: [i18n] } });
 
-    const headings = wrapper.findAll("h3.group").map((h) => h.text());
-    expect(headings).toEqual([
+    // The nav lists all seven sections; the pane renders only the active
+    // one (VS Code-style left nav + right content — 手测裁决 2026-09-12).
+    const nav = wrapper.findAll(".nav-item").map((b) => b.text());
+    expect(nav).toEqual([
       i18n.global.t("settings.group.ui"),
       i18n.global.t("settings.group.terminal"),
       i18n.global.t("settings.group.window"),
@@ -74,6 +76,31 @@ describe("SettingsForm section headings (manual-test #1)", () => {
       i18n.global.t("settings.group.performance"),
       i18n.global.t("settings.group.disk"),
     ]);
+    expect(wrapper.findAll("h3.group").map((h) => h.text())).toEqual([
+      i18n.global.t("settings.group.ui"),
+    ]);
+    // Picking a section swaps the pane and leaves search mode.
+    await wrapper.findAll(".nav-item")[4]!.trigger("click");
+    expect(wrapper.findAll("h3.group").map((h) => h.text())).toEqual([
+      i18n.global.t("settings.group.machines"),
+    ]);
+  });
+
+  it("P2-5: search dims non-matching nav entries and shows matching groups", async () => {
+    const store = useSettingsStore();
+    await store.load();
+    const wrapper = mount(SettingsForm, { global: { plugins: [i18n] } });
+
+    await wrapper.find(".nav-search").setValue("字体");
+    // Terminal matches (字体/字号); ui does not (no such label).
+    const dimmed = wrapper.findAll(".nav-item.dim").map((b) => b.text());
+    expect(dimmed).not.toContain(i18n.global.t("settings.group.terminal"));
+    expect(wrapper.findAll("h3.group").map((h) => h.text())).toContain(
+      i18n.global.t("settings.group.terminal"),
+    );
+    expect(wrapper.findAll("h3.group").map((h) => h.text())).not.toContain(
+      i18n.global.t("settings.group.ui"),
+    );
   });
 
   it("renders the low-spec memory/cpus inputs when lowSpec is on", async () => {
@@ -84,6 +111,8 @@ describe("SettingsForm section headings (manual-test #1)", () => {
     await store.load();
     const wrapper = mount(SettingsForm, { global: { plugins: [i18n] } });
 
+    // P2-5: navigate to the performance section first (single-section pane).
+    await wrapper.findAll(".nav-item")[5]!.trigger("click");
     const body = wrapper.text();
     expect(body).toContain(i18n.global.t("settings.perf.memory"));
     expect(body).toContain(i18n.global.t("settings.perf.cpus"));

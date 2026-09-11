@@ -260,8 +260,6 @@ export const zhCN = {
   "workspbar.launcher": "新建工作区 +",
   "workspbar.close": "关闭工作区",
   "workspbar.capHint": "最多同时打开 3 个工作区",
-  "settings.ui.defaultNewPage": "+ 默认打开",
-  "settings.ui.defaultNewPage.help": "点击工作区条 + 直接打开的页面；+ 旁的下拉可选择其他页面。",
   "workspbar.newWorkspace": "新建工作区",
   "workspbar.choose": "选择要打开的页面",
   "workspbar.settings": "设置",
@@ -443,6 +441,8 @@ export const zhCN = {
 
   // --- settings dialog (SettingsDialog.vue) ---
   "settings.title": "设置",
+  "settings.navLabel": "设置区导航",
+  "settings.searchPlaceholder": "搜索设置…",
   "settings.dirty": "未保存更改",
   "settings.saved": "已保存",
   "settings.corrupted": "设置文件已损坏并已隔离备份（settings.json.corrupt），当前显示默认值。保存或重置后将写入新文件。",
