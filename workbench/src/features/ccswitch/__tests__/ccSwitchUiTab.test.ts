@@ -177,6 +177,27 @@ describe("CcSwitchUiTab (Stage 8e)", () => {
     w.unmount();
   });
 
+  it("a pending switch shows the sticky progress toast, then replaces it in place (手测 r2)", async () => {
+    setup();
+    let release!: (v: CcSwitchProvidersResult) => void;
+    vi.mocked(ipc.ccSwitchSwitch).mockImplementation(
+      () => new Promise((res) => (release = res)));
+    const w = mount(CcSwitchUiTab, { global: { plugins: [i18n] } });
+    await vi.waitFor(() => expect(w.findAll(".card").length).toBe(2));
+    await w.findAll(".card")[1]!.find("button.start").trigger("click");
+    // DURING the pending op: exactly one sticky progress toast, live.
+    const toast = useToastStore();
+    await vi.waitFor(() =>
+      expect(toast.toasts.filter((x) => x.kind === "progress").length).toBe(1));
+    expect(toast.toasts[0]!.message).toContain("切换中");
+    // Completing the op replaces it with the success toast in the queue.
+    release(RESULT(["deepseek", "zhipu"]));
+    await vi.waitFor(() =>
+      expect(toast.toasts.map((x) => x.message).join("|")).toContain("已切换到"));
+    expect(toast.toasts.some((x) => x.kind === "progress")).toBe(false);
+    w.unmount();
+  });
+
   it("the 启用 button on a non-current row activates it (PP r2)", async () => {
     setup();
     vi.mocked(ipc.ccSwitchSwitch).mockResolvedValue(RESULT(["deepseek", "zhipu"]));
