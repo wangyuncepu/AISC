@@ -16,12 +16,14 @@ import { useI18n } from "vue-i18n";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { useRuntimeStore } from "../../stores/runtime";
 import { useCcSwitchUiStore } from "../../stores/ccSwitchUi";
+import { useToastStore } from "../../stores/toast";
 import type { CcSwitchProvider, CcSwitchRequest } from "../../types";
 
 const props = withDefaults(defineProps<{ visible?: boolean }>(), { visible: true });
 
 const { t } = useI18n();
 const store = useRuntimeStore();
+const toast = useToastStore();
 // Layer contract (F-A01): all ipc fact commands live in the store.
 const ui = useCcSwitchUiStore();
 // storeToRefs keeps the reactive link (plain destructuring would break it).
@@ -54,19 +56,35 @@ async function saveFromEditPage(
 const mutating = computed(() => busyOp.value !== "" && busyOp.value !== "fetch");
 // O4: an honest switch progress read-out — the op is one docker exec with no
 // step events, so show a live elapsed counter instead of a fake stepper.
-const switchElapsed = ref(0);
+// 手测 r2: the progress card rides the GLOBAL toast (kind=progress, sticky,
+// updated in place) so it lives in the SAME spot as the ✓ completion toast
+// — one feedback surface, same position, same font-scale sizing.
 let switchTimer: number | null = null;
+let progressToastId: number | null = null;
 watch(busyOp, (op) => {
   if (op === "switch" && switchTimer === null) {
-    switchElapsed.value = 0;
-    switchTimer = window.setInterval(() => (switchElapsed.value += 1), 1000);
+    let elapsed = 0;
+    progressToastId = toast.push(t("ccswitch.switching", { sec: elapsed }), {
+      kind: "progress",
+    });
+    switchTimer = window.setInterval(() => {
+      elapsed += 1;
+      if (progressToastId !== null) {
+        toast.update(progressToastId, t("ccswitch.switching", { sec: elapsed }));
+      }
+    }, 1000);
   } else if (op !== "switch" && switchTimer !== null) {
     window.clearInterval(switchTimer);
     switchTimer = null;
+    if (progressToastId !== null) {
+      toast.dismiss(progressToastId);
+      progressToastId = null;
+    }
   }
 }, { immediate: true });
 onBeforeUnmount(() => {
   if (switchTimer !== null) window.clearInterval(switchTimer);
+  if (progressToastId !== null) toast.dismiss(progressToastId);
 });
 
 async function refresh(): Promise<void> {
@@ -100,10 +118,9 @@ function openAdd(): void {
 // provider current; the official-direct card's 启用 IS the cancel-proxy
 // path (pseudo target). The current provider has no deactivate button —
 // to stop it, enable another entry (user ruling).
-const switchedTo = ref("");
-let switchFlashTimer: number | null = null;
 /** IDEA-5 (5d): the newly-current row pulses once (visual feedback trio);
- * cleared after the keyframe so re-renders don't replay it. */
+ * cleared after the keyframe so re-renders don't replay it. (The other two
+ * legs — progress card and ✓ toast — ride the GLOBAL toast since 手测 r2.) */
 const flashId = ref("");
 let rowFlashTimer: number | null = null;
 
@@ -126,10 +143,9 @@ async function activate(p: CcSwitchProvider): Promise<void> {
   }
   const ok = await ui.activate(store.workspace, store.runtimeId, target);
   if (ok) {
-    switchedTo.value =
-      target === "official" ? t("ccswitch.officialDirect") : (p.name || p.id);
-    if (switchFlashTimer !== null) window.clearTimeout(switchFlashTimer);
-    switchFlashTimer = window.setTimeout(() => (switchedTo.value = ""), 3000);
+    toast.success(t("ccswitch.switchedTo", {
+      name: target === "official" ? t("ccswitch.officialDirect") : (p.name || p.id),
+    }));
     flashId.value = p.id;
     if (rowFlashTimer !== null) window.clearTimeout(rowFlashTimer);
     rowFlashTimer = window.setTimeout(() => (flashId.value = ""), 1300);
@@ -161,7 +177,6 @@ onMounted(() => {
   if (hasRuntime.value) void refresh();
 });
 onBeforeUnmount(() => {
-  if (switchFlashTimer !== null) window.clearTimeout(switchFlashTimer);
   if (rowFlashTimer !== null) window.clearTimeout(rowFlashTimer);
 });
 </script>
@@ -226,28 +241,9 @@ onBeforeUnmount(() => {
       <p v-if="ui.errorDetail" class="banner-detail">{{ ui.errorDetail }}</p>
     </div>
 
-    <!-- PP r5 (user ruling): the switch progress rides a floating
-         bottom-center card, teleported to body — the old in-flow banner sat
-         above the cards and pushed them down. O4 semantics unchanged: an
-         honest elapsed counter (one docker exec, no step events). -->
-    <Teleport to="body">
-      <Transition name="prog">
-        <p v-if="busyOp === 'switch'" class="switch-progress" role="status">
-          {{ t("ccswitch.switching", { sec: switchElapsed }) }}
-        </p>
-      </Transition>
-    </Teleport>
-
-    <!-- IDEA-5 (5d): switch feedback — a floating top toast (teleported to
-         body so the pane's zoom/scroll never clips it), alongside the row
-         pulse + chip transition below. role=status keeps the SR path. -->
-    <Teleport to="body">
-      <Transition name="toast">
-        <p v-if="switchedTo" class="switch-toast" role="status">
-          ✓ {{ t("ccswitch.switchedTo", { name: switchedTo }) }}
-        </p>
-      </Transition>
-    </Teleport>
+    <!-- 手测 r2: switch feedback (progress card + ✓ completion) rides the
+         GLOBAL toast — bottom-center, font-scale-aware, both in the SAME
+         spot (see the busyOp watch + activate in the script). -->
 
     <!-- PP r3: the agent toggle crossfades (out-in). PP r4: NO stale dim —
          the dimmed-list flash read as a broken middle state (user ruling);
@@ -355,31 +351,7 @@ button.danger { background: var(--error-bg); color: var(--error-fg); }
 .roles-title { font-size: var(--font-sm); color: var(--text-2); font-weight: 600; }
 button.ghost { background: transparent; }
 
-/* --- IDEA-5 (5d): switch feedback --- */
-/* Floating toast: teleported to body (outside the zoomed/scrolling pane). */
-/* PP r3: rounded rect — the 50% radius read as an ugly ellipse.
- * PP r5 follow-up: SAME spot as the switch-progress card (bottom-center) —
- * on completion the progress card hands off to the ✓ toast in place. */
-.switch-toast {
-  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
-  z-index: 1000; margin: 0; padding: var(--space-2) var(--space-5);
-  background: var(--success-bg); color: var(--success);
-  border: var(--border-w) solid var(--success); border-radius: var(--radius-md);
-  font-size: var(--font-md); box-shadow: var(--shadow-menu);
-}
-/* PP r5 (user ruling): the switch-progress card — floating bottom-center,
- * out of the document flow so it never pushes the cards down. */
-.switch-progress {
-  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
-  z-index: 1000; margin: 0; padding: var(--space-2) var(--space-5);
-  background: var(--surface-2); color: var(--text-2);
-  border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-md);
-  font-size: var(--font-md); box-shadow: var(--shadow-menu);
-}
-.prog-enter-active { transition: opacity var(--duration-normal) var(--ease), transform var(--duration-normal) var(--ease); }
-.prog-leave-active { transition: opacity var(--duration-normal) var(--ease); }
-.prog-enter-from { opacity: 0; transform: translateX(-50%) translateY(8px); }
-.prog-leave-to { opacity: 0; }
+/* 手测 r2: switch feedback styles live in the GLOBAL ToastHost now. */
 /* PP r3/r4: agent-toggle crossfade — soft 200ms fade, no stale dim (the
  * dimmed flash read as a broken middle state). */
 .swap-enter-active, .swap-leave-active {
@@ -397,7 +369,5 @@ button.ghost { background: transparent; }
 @media (prefers-reduced-motion: reduce) {
   .cards .flash { animation: none; }
   .swap-enter-active, .swap-leave-active { transition: none; }
-  .toast-enter-active, .toast-leave-active { transition: none; }
-  .prog-enter-active, .prog-leave-active { transition: none; }
 }
 </style>

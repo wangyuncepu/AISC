@@ -54,4 +54,24 @@ describe("global toast store (P2-1)", () => {
     toast.error("e");
     expect(toast.toasts.map((x) => x.kind)).toEqual(["success", "error"]);
   });
+
+  it("progress kind is sticky and updateable in place", () => {
+    const toast = useToastStore();
+    const id = toast.push("切换中… 0s", { kind: "progress" });
+    // No auto-dismiss at any duration — the completion path dismisses it.
+    vi.advanceTimersByTime(60_000);
+    expect(toast.toasts).toHaveLength(1);
+    toast.update(id, "切换中… 3s");
+    expect(toast.toasts[0]!.message).toBe("切换中… 3s");
+    expect(toast.toasts[0]!.kind).toBe("progress");
+    toast.dismiss(id);
+    expect(toast.toasts).toHaveLength(0);
+  });
+
+  it("update of a foreign id is a no-op", () => {
+    const toast = useToastStore();
+    const id = toast.info("a");
+    toast.update(id + 999, "x");
+    expect(toast.toasts[0]!.message).toBe("a");
+  });
 });

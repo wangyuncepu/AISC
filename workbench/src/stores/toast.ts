@@ -1,14 +1,18 @@
 /**
  * P2-1 (A2 反馈语法统一): the GLOBAL toast primitive — one queue, one host
  * (ToastHost.vue, mounted once in App), any feature pushes feedback through
- * `useToastStore().push(...)`. The cc-switch switch-success toast was the
- * lone local instance (Teleport + role=status — the shape was right, the
- * scope was not); it migrates onto this store. VS Code parity: transient
- * outcomes surface as toasts, not inline state each feature re-invents.
+ * `useToastStore().push(...)`. VS Code parity: transient outcomes surface
+ * as toasts, not inline state each feature re-invents.
  *
- * Design notes:
+ * Design notes (手测 r2 裁决纳入):
+ * - ALL toasts render bottom-center (the position the cc-switch switch
+ *   feedback made familiar) and scale with ui.font_scale — same place,
+ *   same size language as the rest of the UI.
  * - Errors outlive successes (6s vs 3s) — a failure the user must be able
  *   to read cannot race away at success speed.
+ * - "progress" kind is STICKY by default (no timer) and updateable in
+ *   place (`update(id, message)`) — long ops (e.g. provider 切换中… xS)
+ *   show a live card that the completion toast replaces in the SAME spot.
  * - Optional single action (VS Code style: "重新加载" / "打开…") — clicking
  *   it runs the callback and dismisses the toast.
  * - IDs are monotonic; `dismiss(id)` is the only removal path besides the
@@ -18,7 +22,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 
-export type ToastKind = "info" | "success" | "error";
+export type ToastKind = "info" | "success" | "error" | "progress";
 
 export interface ToastAction {
   label: string;
@@ -32,10 +36,12 @@ export interface ToastItem {
   action?: ToastAction;
 }
 
+/** Default lifetime per kind. 0 = sticky (no auto-dismiss timer). */
 export const TOAST_DURATION_MS: Record<ToastKind, number> = {
   info: 3000,
   success: 3000,
   error: 6000,
+  progress: 0,
 };
 
 export const useToastStore = defineStore("uiToast", () => {
@@ -60,8 +66,17 @@ export const useToastStore = defineStore("uiToast", () => {
     const id = ++seq;
     toasts.value = [...toasts.value, { id, kind, message, action: opts.action }];
     const ms = opts.durationMs ?? TOAST_DURATION_MS[kind];
-    timers.set(id, window.setTimeout(() => dismiss(id), ms));
+    if (ms > 0) {
+      timers.set(id, window.setTimeout(() => dismiss(id), ms));
+    }
     return id;
+  }
+
+  /** In-place message update for sticky/live toasts (progress cards). */
+  function update(id: number, message: string): void {
+    toasts.value = toasts.value.map((item) =>
+      item.id === id ? { ...item, message } : item,
+    );
   }
 
   /** Convenience wrappers — call sites read better and the kind can never
@@ -70,5 +85,5 @@ export const useToastStore = defineStore("uiToast", () => {
   const success = (m: string, o?: Parameters<typeof push>[1]) => push(m, { ...o, kind: "success" });
   const error = (m: string, o?: Parameters<typeof push>[1]) => push(m, { ...o, kind: "error" });
 
-  return { toasts, push, info, success, error, dismiss };
+  return { toasts, push, info, success, error, update, dismiss };
 });
