@@ -548,6 +548,7 @@ export const enUS: Record<string, string> = {
   "explorer.status.urlCopied": "Service URL copied",
   "explorer.refresh": "Refresh",
   "explorer.collapse": "Collapse explorer",
+  "explorer.railLabel": "Side views",
   "explorer.expand": "Expand explorer",
   "explorer.resizeHandle": "Drag to resize the explorer, double-click to collapse",
   "explorer.tabbarResize": "Drag to resize the tab bar",

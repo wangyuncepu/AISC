@@ -193,14 +193,12 @@ describe("WorkspaceExplorer keyboard (3f, A-WX05-1)", () => {
 
 describe("WorkspaceExplorer changes panel (WX-04, T6 flat)", () => {
   async function mountChanges() {
-    await setup();
+    const { explorer } = await setup();
+    // P2-3 手测 r1#2: the text tabs are gone (the activity rail owns
+    // switching) — land on the panel via the store, exactly what the rail
+    // click does.
+    explorer.activeKind = "artifacts";
     const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
-    // v2.1.8 T4: the History tab sits between Files and Changes — click by
-    // text, not index.
-    await wrapper
-      .findAll("[role=tab]")
-      .find((t) => t.text() === "变更")!
-      .trigger("click");
     await new Promise((resolve) => setTimeout(resolve, 10));
     return wrapper;
   }

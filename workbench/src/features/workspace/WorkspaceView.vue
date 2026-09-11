@@ -24,10 +24,12 @@ import { useI18n } from "vue-i18n";
 import { leafCount } from "../../stores/paneTree";
 import { CC_SWITCH_UI_TAB_ID, useRuntimeStore } from "../../stores/runtime";
 import { useDoctorStore } from "../../stores/doctor";
+import { useWorkspaceExplorerStore } from "../../stores/workspaceExplorer";
 import {
   EXPLORER_COLLAPSED_W,
   appScale,
   panelLayout,
+  railIconAction,
   setExplorerCollapsed,
   setExplorerWidth,
   setTabbarHeight,
@@ -55,6 +57,39 @@ const props = defineProps<{
 const { t } = useI18n();
 const store = useRuntimeStore();
 const doctorStore = useDoctorStore();
+const explorerStore = useWorkspaceExplorerStore();
+
+// --- P2-3 (D-4): the collapsed rail is a real activity bar now ------------
+/** One icon per side view; services only when the runtime advertises it
+ * (same gate WorkspaceExplorer's tab uses). Click = VS Code semantics via
+ * railIconAction (expand+land / toggle-collapse / plain switch). */
+const servicesSupported = computed(() => store.capability?.runtime_services ?? false);
+const RAIL_ITEMS = [
+  { kind: "explorer", labelKey: "explorer.tab.files", icon: "folder" },
+  { kind: "conversations", labelKey: "explorer.tab.conversations", icon: "clock" },
+  { kind: "artifacts", labelKey: "explorer.tab.artifacts", icon: "box" },
+  { kind: "services", labelKey: "explorer.tab.services", icon: "globe" },
+] as const;
+function onRailIcon(kind: string): void {
+  const action = railIconAction(
+    panelLayout.explorerCollapsed, explorerStore.activeKind, kind,
+  );
+  if (action.do === "collapse") {
+    setExplorerCollapsed(true);
+    return;
+  }
+  explorerStore.activeKind = action.kind as typeof explorerStore.activeKind;
+  // Activation side effects (moved from the retired text tabs' switchKind):
+  // conversations ALWAYS rescan on activation (v2.1.8 T4 — new sessions land
+  // when the user opens the view, never a stale cached list); services take
+  // a fresh list (the 5s runtime poll keeps it fresh after).
+  if (action.kind === "conversations") {
+    void explorerStore.loadConversations(true);
+  } else if (action.kind === "services") {
+    void store.refreshWebServices();
+  }
+  if (action.do === "expand") setExplorerCollapsed(false);
+}
 
 /** 2026-08-18 用户决策（样式对调）：资源管理器/产物框固定常驻左侧（原
  * RuntimeSidebar 的固定列样式，无开关），状态信息栏变右侧悬浮抽屉
@@ -64,16 +99,18 @@ const showStatus = ref(false);
 const drawerToggleRef = ref<HTMLButtonElement | null>(null);
 
 // --- FIX-3: Explorer dock geometry (drag-to-resize + VS Code-style collapse) ---
-/** Inline width source of truth. collapsed ⇒ 40px rail (min-width must move
- * along — the scoped `min-width:240px` floor would otherwise push the rail
- * back open, audit (g)); compact ⇒ undefined so the responsive scoped rule
- * owns the width (audit (d) — the old App.vue override was a dead rule). */
+/** Inline width source of truth. P2-3: the 40px activity rail is PERMANENT —
+ * the dock is [rail 40px] + [panel explorerWidth]; collapsed = rail only.
+ * min-width moves along (the scoped `min-width:240px` floor would otherwise
+ * push the rail back open, audit (g)); compact ⇒ undefined so the responsive
+ * scoped rule owns the width (audit (d) — the old App.vue override was a
+ * dead rule). */
 const dockStyle = computed<Record<string, string> | undefined>(() => {
   if (panelLayout.explorerCollapsed) {
     return { width: `${EXPLORER_COLLAPSED_W}px`, minWidth: `${EXPLORER_COLLAPSED_W}px` };
   }
   if (props.tier === "compact") return undefined;
-  const w = `${panelLayout.explorerWidth}px`;
+  const w = `${EXPLORER_COLLAPSED_W + panelLayout.explorerWidth}px`;
   return { width: w, minWidth: w };
 });
 /** Width transition rides ONLY on collapse/expand — during a drag the dock
@@ -390,18 +427,51 @@ function setPaneTreeRef(tabId: string) {
         :class="{ collapsed: panelLayout.explorerCollapsed, anim: dockAnimating }"
         :style="dockStyle"
       >
+        <!-- P2-3 (D-4): the FIX-3 single-« rail is now a PERMANENT ACTIVITY
+             BAR — LEFTMOST, VS Code-style (手测 r1: born on the wrong side).
+             One icon per side view; click = expand+land / toggle-collapse /
+             switch (VS Code semantics); the active view's icon carries the
+             accent + left bar. Ctrl+B toggles the panel globally (App.vue). -->
+        <nav
+          class="explorer-rail"
+          :aria-label="t('explorer.railLabel')"
+        >
+          <template v-for="item in RAIL_ITEMS" :key="item.kind">
+            <button
+              v-if="item.kind !== 'services' || servicesSupported"
+              type="button"
+              class="rail-icon"
+              :class="{
+                active: !panelLayout.explorerCollapsed
+                  && explorerStore.activeKind === item.kind,
+              }"
+              :title="t(item.labelKey)"
+              :aria-label="t(item.labelKey)"
+              @click="onRailIcon(item.kind)"
+            >
+              <svg v-if="item.icon === 'folder'" width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                <path d="M1.5 4.5A1.5 1.5 0 0 1 3 3h3l1.5 2H13a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5z" />
+              </svg>
+              <svg v-else-if="item.icon === 'clock'" width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" />
+                <path d="M8 4.5V8l2.5 1.5" />
+              </svg>
+              <svg v-else-if="item.icon === 'box'" width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                <path d="M2 5l6-3 6 3v6l-6 3-6-3z" />
+                <path d="M2 5l6 3 6-3M8 8v6" />
+              </svg>
+              <svg v-else width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" />
+                <path d="M2.5 6h11M2.5 10h11M8 2c-2 1.7-3 3.7-3 6s1 4.3 3 6c2-1.7 3-3.7 3-6s-1-4.3-3-6z" />
+              </svg>
+            </button>
+          </template>
+        </nav>
         <!-- v-show on purpose (audit (c)): remount would drop in-flight
              search/rename state and the tree's scroll position. -->
-        <WorkspaceExplorer v-show="!panelLayout.explorerCollapsed" />
-        <button
-          v-show="panelLayout.explorerCollapsed"
-          class="explorer-rail"
-          :title="t('explorer.expand')"
-          :aria-label="t('explorer.expand')"
-          @click="setExplorerCollapsed(false)"
-        >
-          »
-        </button>
+        <div v-show="!panelLayout.explorerCollapsed" class="explorer-panel">
+          <WorkspaceExplorer />
+        </div>
       </div>
       <!-- Drag handle: hidden when collapsed (rail must expand first) and in
            compact (the responsive rule owns the width — a dead handle would
@@ -545,6 +615,8 @@ function setPaneTreeRef(tabId: string) {
   display: flex;
   background: var(--surface);
 }
+/* P2-3: the dock is [40px activity rail][panel]. */
+.explorer-panel { flex: 1; min-width: 0; }
 /* Collapse/expand animation (audit (a)): the terminal's 150ms settle-once
  * debounce rides out the 300ms transition and fits exactly once at the end.
  * Global reduced-motion collapses this to nothing (styles.css). */
@@ -561,16 +633,54 @@ function setPaneTreeRef(tabId: string) {
  * is hidden while collapsed. */
 .explorer-dock.collapsed { border-right: var(--border-w) solid var(--border); }
 .explorer-dock:not(.collapsed) { border-right: none; }
+/* P2-3 (D-4): the collapsed rail as an activity bar — vertical icon stack
+ * (VS Code language: quiet glyphs, hover lift, active = accent + left bar). */
 .explorer-rail {
-  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  /* 40px = EXPLORER_COLLAPSED_W (panelLayout.ts). FIXED, flex-none — the
+   * old single-button rail used width:100% (= the 40px dock); as a direct
+   * dock child that would grab container width and squeeze the panel
+   * (手测 r1: misaligned hover rect, panel/rail split). */
+  width: 40px;
+  flex: none;
   padding: var(--space-2) 0;
+  border-right: var(--border-w) solid var(--border);
+  box-sizing: border-box;
+}
+.rail-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   background: none;
   border: none;
+  border-radius: var(--radius-sm);
   color: var(--text-faint);
-  font-size: var(--font-lg);
   cursor: pointer;
   transition: background-color var(--duration-normal) var(--ease),
     color var(--duration-normal) var(--ease);
+}
+.rail-icon:hover { background: var(--surface-hover); color: var(--text); }
+.rail-icon:focus-visible { outline: var(--focus) solid var(--focus-ring-width); outline-offset: -2px; }
+/* Active view: accent glyph + VS Code's left activity indicator bar. Only
+ * meaningful while the dock is OPEN (the rail is hidden then, but the class
+ * stays correct for the moment of expansion). */
+.rail-icon.active { color: var(--accent); }
+.rail-icon.active::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
 }
 .explorer-rail:hover { background: var(--surface-hover); color: var(--text-2); }
 .explorer-rail:focus-visible {

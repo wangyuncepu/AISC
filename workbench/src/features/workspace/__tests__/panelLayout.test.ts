@@ -26,7 +26,9 @@ describe("FIX-3 source contracts — WorkspaceView.vue", () => {
   it("dock width and min-width move together (the 240px floor must not push the rail open)", () => {
     const v = s();
     expect(v).toContain("minWidth: `${EXPLORER_COLLAPSED_W}px`");
-    expect(v).toMatch(/const w = `\$\{panelLayout\.explorerWidth\}px`;\s*\n\s*return \{ width: w, minWidth: w \};/);
+    // P2-3: the dock measures [40px permanent rail] + panel width.
+    expect(v).toMatch(/EXPLORER_COLLAPSED_W \+ panelLayout\.explorerWidth/);
+    expect(v).toMatch(/return \{ width: w, minWidth: w \};/);
   });
 
   it("compact tier hands the width to the responsive rule (no inline width)", () => {
@@ -42,7 +44,10 @@ describe("FIX-3 source contracts — WorkspaceView.vue", () => {
   });
 
   it("Explorer content is KEPT ALIVE through collapse (v-show, never v-if)", () => {
-    expect(s()).toContain('<WorkspaceExplorer v-show="!panelLayout.explorerCollapsed" />');
+    // P2-3: the v-show moved to the .explorer-panel wrapper (the rail is
+    // permanent now); the remount-guard property is unchanged.
+    expect(s()).toContain('v-show="!panelLayout.explorerCollapsed" class="explorer-panel"');
+    expect(s()).toContain("<WorkspaceExplorer />");
   });
 
   it("width transition rides ONLY on collapse/expand — drags and keyboard nudges stay instant", () => {
@@ -96,5 +101,39 @@ describe("FIX-3 i18n — both locales carry the new keys", () => {
       expect(zhCN[k], `zh-CN missing ${k}`).toBeTruthy();
       expect(enUS[k], `en-US missing ${k}`).toBeTruthy();
     }
+  });
+});
+
+describe("P2-3 — the permanent activity rail (VS Code semantics)", () => {
+  it("railIconAction: expand+land / toggle-collapse / plain switch", async () => {
+    const { railIconAction } = await import("../../../lib/panelLayout");
+    // Collapsed → every icon expands and lands on its view.
+    expect(railIconAction(true, "explorer", "artifacts")).toEqual({
+      do: "expand", kind: "artifacts",
+    });
+    // Open + clicked view active → collapse.
+    expect(railIconAction(false, "artifacts", "artifacts")).toEqual({
+      do: "collapse",
+    });
+    // Open + other view active → plain switch (dock stays open).
+    expect(railIconAction(false, "explorer", "conversations")).toEqual({
+      do: "switch", kind: "conversations",
+    });
+  });
+
+  it("source contracts: rail is permanent, panel is v-show, Ctrl+B wired", () => {
+    const v = readFileSync(join(resolve(__dirname, "../../.."), "features/workspace/WorkspaceView.vue"), "utf8");
+    // The rail renders unconditionally (no v-show collapse gate on it)…
+    expect(v).toContain('class="explorer-rail"');
+    expect(v).not.toContain('v-show="panelLayout.explorerCollapsed"');
+    // …the PANEL is the v-show half now.
+    expect(v).toContain('v-show="!panelLayout.explorerCollapsed" class="explorer-panel"');
+    // Dock width accounts for the permanent 40px rail.
+    expect(v).toContain("EXPLORER_COLLAPSED_W + panelLayout.explorerWidth");
+    const app = readFileSync(join(resolve(__dirname, "../../.."), "App.vue"), "utf8");
+    expect(app).toContain("toggleExplorerCollapsed()");
+    // Both locales label the rail.
+    expect(zhCN["explorer.railLabel"]).toBeTruthy();
+    expect(enUS["explorer.railLabel"]).toBeTruthy();
   });
 });

@@ -164,7 +164,8 @@
 - fix
   - [ ] provider功能与使用体验
   - [ ] 远程机器 CLI 版本配对与更新：远程驻留 serve 无 mtime 驱逐（本地有），CLI 更新靠手工 rsync（2026-09-11 两次踩坑：闸门修复/命令透传修复都忘了同步 NAS）。banner 已带 cli_version——Rust 侧可对比本机版本，不一致给「远程 CLI 需更新」提示或自动同步（2026-09-11 step2 手测裁决入库）
-  - [ ] doctor 的 aisc-root 检查在生产容器恒警吿（无 repo 根）——repo 根检查宜限定 dev 检出场景，远程/容器工作区不该出现「not found」级联（2026-09-11 远程诊断截图裁决入库）
+  - [ ] doctor 的 aisc-root 检查在生产容器恒警告（无 repo 根）——repo 根检查宜限定 dev 检出场景，远程/容器工作区不该出现「not found」级联（2026-09-11 远程诊断截图裁决入库）
+  - [ ] picker 界面窄窗持续挤压时整 UI 随 effectiveScale 同步缩小（App.vue `Math.min(scale, 1.5, w/800, h/600)` 把 <800px 拉进 zoom）——无害但不美观；下阶段让 picker 场景脱离 width-clamp 或改响应式布局（2026-09-11 P2-2 手测反馈，用户裁决下阶段处理）
     - [ ] 当前API key不显示，要求用户已经填入api-key时，再编辑时可选择查看，默认隐藏
     - [ ] 
   - [ ] UI优化

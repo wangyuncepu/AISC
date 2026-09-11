@@ -105,6 +105,27 @@ export function toggleExplorerCollapsed(): void {
   setExplorerCollapsed(!panelLayout.explorerCollapsed);
 }
 
+/** P2-3 (D-4): what ONE activity-rail icon click does — VS Code semantics.
+ * - dock collapsed → expand AND land on the clicked view;
+ * - dock open, clicked view already active → collapse (the toggle);
+ * - dock open, other view active → plain switch.
+ * Kinds stay strings (not the store's ExplorerKind) so this module keeps its
+ * zero-store-imports purity; the view passes/uses its own kind values. */
+export type RailAction =
+  | { do: "expand"; kind: string }
+  | { do: "switch"; kind: string }
+  | { do: "collapse" };
+
+export function railIconAction(
+  collapsed: boolean,
+  activeKind: string,
+  target: string,
+): RailAction {
+  if (collapsed) return { do: "expand", kind: target };
+  if (activeKind === target) return { do: "collapse" };
+  return { do: "switch", kind: target };
+}
+
 export function setTabbarHeight(px: number | null): void {
   panelLayout.tabbarHeight = clampTabbarHeight(px);
   persist();
