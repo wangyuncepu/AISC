@@ -617,6 +617,21 @@ export const useWorkspaceExplorerStore = defineStore("workspaceExplorer", {
 
     /** Load the workspace's agent history conversations (most recent first;
      *  the CLI owns ordering). Called when the 变更 tab activates. */
+    /** P2-4: the ONE activation path for side views — rail icons AND the
+     * command palette land here (activation side effects: conversations
+     * ALWAYS rescan on activation (v2.1.8 T4), services take a fresh list).
+     * The facade import is DYNAMIC: a static one would cycle
+     * runtime.ts → workspaceRuntime → … back into this module. */
+    activateView(kind: ExplorerKind) {
+      this.activeKind = kind;
+      if (kind === "conversations") {
+        void this.loadConversations(true);
+      } else if (kind === "services") {
+        void import("./runtime").then(({ useRuntimeStore }) =>
+          useRuntimeStore().refreshWebServices());
+      }
+    },
+
     async loadConversations(force = false) {
       if (!this.workspace) return;
       if (this.conversationsLoading) return;

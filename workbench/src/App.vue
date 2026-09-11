@@ -25,6 +25,9 @@ import { blockNativeContextMenu } from "./lib/contextMenu";
 import ToastHost from "./components/ToastHost.vue";
 import { layoutTierFor, type LayoutTier } from "./lib/layout";
 import { toggleExplorerCollapsed } from "./lib/panelLayout";
+import { setExplorerCollapsed } from "./lib/panelLayout";
+import type { CommandCtx } from "./lib/commands";
+import CommandPalette from "./components/CommandPalette.vue";
 import { computeWindowTitle } from "./lib/title";
 import { useRuntimeStore } from "./stores/runtime";
 import { useWorkspacesStore } from "./stores/workspaces";
@@ -108,6 +111,42 @@ watch(
   },
 );
 
+// P2-4 (D-4): the command palette — Ctrl+Shift+P (the r5 print-block used
+// to swallow this combo dead; it now opens the palette instead).
+const paletteOpen = ref(false);
+const explorerForPalette = useWorkspaceExplorerStore();
+function paletteCtx(): CommandCtx {
+  const activeTab = store.tabs.find((tb) => tb.tabId === store.activeTabId);
+  return {
+    active: {
+      createTab: (agent) => store.createTab(agent),
+      openCcSwitch: () => store.openCcSwitch(),
+      splitPane: (dir) => {
+        if (!store.activeTabId || !activeTab) return;
+        store.splitTabPane(
+          store.activeTabId,
+          dir === "h" ? "horizontal" : "vertical",
+          activeTab.agent,
+        );
+      },
+      status: store.status,
+      workspace: store.workspace,
+    },
+    app: {
+      openSettings: () => ws.openSettingsTab(),
+      openNetworkUsage: () => ws.openNetworkUsageTab(),
+      openPicker: () => store.backToPicker(),
+      runDoctor: () => doctorStore.openDialog(),
+      toggleSidebar: () => toggleExplorerCollapsed(),
+      showView: (kind) => {
+        setExplorerCollapsed(false);
+        explorerForPalette.activateView(kind);
+      },
+      servicesSupported: () => store.capability?.runtime_services ?? false,
+    },
+  };
+}
+
 // The ONE app-level keydown (workspace layer): Ctrl/Cmd+, toggles Settings
 // everywhere after onboarding; Ctrl/Cmd+PgUp/PgDn cycles workspaces;
 // Ctrl/Cmd+Alt+1..9 activates the nth workspace (VSCode-style groups are a
@@ -119,7 +158,13 @@ function onAppKeydown(e: KeyboardEvent) {
   if (!mod) return;
   // Manual-test r5 #1: WebView2 leaks the browser print surfaces — Ctrl+P
   // opens 打印, Ctrl+Shift+P opens 打印设置. Neither belongs in a terminal
-  // workbench; Ctrl+Shift+P is reserved for the P2 command palette.
+  // workbench; P2-4: Ctrl+Shift+P now OPENS THE COMMAND PALETTE, plain
+  // Ctrl+P stays swallowed.
+  if ((e.key === "p" || e.key === "P") && e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    paletteOpen.value = !paletteOpen.value;
+    return;
+  }
   if (e.key === "p" || e.key === "P") {
     e.preventDefault();
     e.stopPropagation();
@@ -470,6 +515,9 @@ onBeforeUnmount(() => {
     <!-- P2-1 (A2 反馈语法): the ONE global toast host — body-teleported,
          above every layer. Features push through useToastStore. -->
     <ToastHost />
+
+    <!-- P2-4 (A1): the command palette (Ctrl+Shift+P). -->
+    <CommandPalette v-if="paletteOpen" :make-ctx="paletteCtx" @close="paletteOpen = false" />
   </div>
 </template>
 

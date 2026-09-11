@@ -78,16 +78,9 @@ function onRailIcon(kind: string): void {
     setExplorerCollapsed(true);
     return;
   }
-  explorerStore.activeKind = action.kind as typeof explorerStore.activeKind;
-  // Activation side effects (moved from the retired text tabs' switchKind):
-  // conversations ALWAYS rescan on activation (v2.1.8 T4 — new sessions land
-  // when the user opens the view, never a stale cached list); services take
-  // a fresh list (the 5s runtime poll keeps it fresh after).
-  if (action.kind === "conversations") {
-    void explorerStore.loadConversations(true);
-  } else if (action.kind === "services") {
-    void store.refreshWebServices();
-  }
+  // P2-4: activation side effects centralized in the store's activateView
+  // (conversations rescan / services refresh) — shared with the palette.
+  explorerStore.activateView(action.kind as typeof explorerStore.activeKind);
   if (action.do === "expand") setExplorerCollapsed(false);
 }
 
