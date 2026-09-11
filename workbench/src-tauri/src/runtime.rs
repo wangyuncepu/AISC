@@ -595,15 +595,18 @@ async fn cc_switch_call_value(
     input: Option<String>,
 ) -> Result<Value, WorkbenchError> {
     let target = crate::target::resolve_target(app).await?;
-    // 2.1.11 r6: provider ops are the FIRST tenants of the unified pooled
-    // serve transport — Local rides a resident `serve --stdio` instead of a
-    // per-op process spawn (the remote path was already resident, and remote
-    // provider ops were measurably faster than local because of it). Other
-    // commands keep the per-op path until step 2 of the unification.
-    let env = crate::cli::run_serve_op_target(
-        &target, argv, input, PROVIDER_TIMEOUT, CancellationToken::new(),
-    )
-    .await?;
+    // 2.1.11 step2: provider ops ride the unified pooled serve via the
+    // GENERIC input path (both Local and Remote arms) — the r7 step-1
+    // special-case entry (run_serve_op_target) was folded away when the
+    // Local arm flipped.
+    let env = match input {
+        Some(text) => crate::cli::run_control_input_target(
+            &target, argv, text, PROVIDER_TIMEOUT, CancellationToken::new(),
+        ).await?,
+        None => crate::cli::run_control_target(
+            &target, argv, PROVIDER_TIMEOUT, CancellationToken::new(),
+        ).await?,
+    };
     if let Some(env_err) = env.errors.first() {
         // Stage 8e: the adapter's stable AISC_ERR_CC_SWITCH_PROVIDER_* codes
         // are unknown to map_aisc's curated table — surface the adapter's own

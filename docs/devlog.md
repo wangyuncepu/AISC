@@ -6,7 +6,7 @@
 
 > 规划入口：`docs/plans/2.1.11-dev-plans/`（README 阶段表 + decisions.md）。
 > VERSION 冻结前保持 2.1.10.dev0。P1 收官记录见
-> `p1-manual-test.md`（r1-r8 全 PASS）。
+> `p1-manual-test.md`（r1-r8 全 PASS）；S2 传输统一见 D-5。
 
 - **P1-1 provider API key 显隐（六层链 + 四轮修复）**：编辑已配置
   provider 的 key 字段占位态「已配置——留空保存不变」+ 眼睛按钮按需
@@ -58,6 +58,28 @@
   构建脚本产物全带 C: 绝对路径（tauri permissions 读取失败，cargo
   指纹不含路径不重跑）→ 清 target 重编，手工保住 aisc.exe/aisc-bundle
   两工件归位。
+
+- **S2 传输统一（D-5 step 2，分支 unify-serve-step2，`b434083`+`b903036`）**：
+  `run_control_target`/`run_control_input_target` Local 臂整体翻到池化驻留
+  serve——一处覆盖 28 调用点零调用面改动，本地/远程同池同闸门同驱逐
+  语义；r7 特例入口折叠删除。**版本配对驱逐**：池条目记 spawn 时 exe
+  mtime，变化即驱逐重建（dev 重建/build-cli 自动换新）。`--events` argv
+  兜底回落逐次 spawn（唯一生产用户 build 本走独立 runner）。手测两轮
+  揪出三个跨层真凶：①serve `_frame` ensure_ascii=False 在 zh-CN Windows
+  按 GBK 写 CJK 帧（doctor「Not Linux —」触发），Rust 严格 UTF-8 reader
+  首字节撕裂会话——单发命令无害纯因 envelope 层 ensure_ascii=True，
+  serve 是漏网；修 `_frame` 全 ASCII 逃义（新旧互通）+ cmd_serve stdio
+  reconfigure utf-8 + spawn PYTHONUTF8 次级防线（app 级 #61 只靠继承，
+  cargo test 无启动钩子正是取证入口）。②cli op 外层 envelope
+  meta.command 写成 op 名，doctor.rs/cache.rs 校验内层名——「unexpected
+  command: cli」本地远程同病（远程 D-10 时代即存在无人触发）；修
+  `_run_op` 对 cli op 透传 argv[0]（传输不改写命令身份），pytest 钉
+  version/doctor/ps 三例。③测试 panic 路径漏排水 → 进程被未排水 serve
+  管道拖住假挂 678s；门控测试体进 tokio::spawn + drain_pool 必达。
+  远程交付：NAS 包两次 rsync（闸门修复午后/透传+UTF-8 晚间——踩坑
+  促成 todo「远程 CLI 版本配对/自动同步」）。手测 PASS：本地全命令/
+  doctor/远程 provider+诊断/build 流/PTY。门禁：pytest 1220 / cargo
+  lib 308 / 门控 3 测 8.5s 零孤儿 / vitest 471。
 
 
 # v2.1.10-dev (2026-09-07 ~) — F1 剥离封存 · CLI 远程化（分支 develop）

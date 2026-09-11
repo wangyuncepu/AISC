@@ -163,6 +163,8 @@
 # v2.1.11-target
 - fix
   - [ ] provider功能与使用体验
+  - [ ] 远程机器 CLI 版本配对与更新：远程驻留 serve 无 mtime 驱逐（本地有），CLI 更新靠手工 rsync（2026-09-11 两次踩坑：闸门修复/命令透传修复都忘了同步 NAS）。banner 已带 cli_version——Rust 侧可对比本机版本，不一致给「远程 CLI 需更新」提示或自动同步（2026-09-11 step2 手测裁决入库）
+  - [ ] doctor 的 aisc-root 检查在生产容器恒警吿（无 repo 根）——repo 根检查宜限定 dev 检出场景，远程/容器工作区不该出现「not found」级联（2026-09-11 远程诊断截图裁决入库）
     - [ ] 当前API key不显示，要求用户已经填入api-key时，再编辑时可选择查看，默认隐藏
     - [ ] 
   - [ ] UI优化

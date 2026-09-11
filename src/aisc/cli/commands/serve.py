@@ -61,7 +61,17 @@ DEFAULT_ROWS = 24
 
 
 def _frame(line: str) -> str:
-    return json.dumps(line, ensure_ascii=False, separators=(",", ":"))
+    # 2.1.11 step2 (field forensics): the wire is JSON-lines read by a Rust
+    # client with a STRICT UTF-8 reader. `ensure_ascii=False` wrote real CJK
+    # through the locale encoder — GBK on zh-CN Windows — and the resident
+    # reader died on the first invalid byte ("stream did not contain valid
+    # UTF-8"), tearing the session down (doctor's "Not Linux —" message was
+    # the trigger). ASCII-escape everything: pure-ASCII frames are immune to
+    # any locale, and \uXXXX escapes parse identically on every client (old
+    # and new interop in both directions). CJK-heavy frames grow ~3x —
+    # irrelevant at control-plane sizes. (One-shot envelope writers kept
+    # ensure_ascii=True all along; serve was the outlier.)
+    return json.dumps(line, ensure_ascii=True, separators=(",", ":"))
 
 
 # -- PTY registry (R2, D-8) -----------------------------------------------------
@@ -372,16 +382,30 @@ def _run_op(op: str, payload: Dict[str, Any], runtime: ServeRuntime) -> Dict[str
             "ok": False,
             "error": f"unknown op {op!r} (known: {', '.join(sorted(OPS))})",
         }
+
+    def _command_name() -> str:
+        """2.1.11 step2 (field fix): the ``cli`` op is a TRANSPARENT
+        passthrough — the envelope's command identity is the INNER command
+        (argv[0]), never the op name. Consumers validate ``meta.command``
+        (doctor/cache expect "doctor", "ps", ...); the transport must not
+        rewrite command identity. Symptom before: the doctor dialog died
+        with "unexpected command: cli"."""
+        if op == "cli":
+            argv = [str(a) for a in (payload.get("argv") or [])]
+            if argv:
+                return argv[0]
+        return op
+
     try:
         # Uniform handler signature (ns, payload, runtime) — R2's stream ops
         # need the payload dict and the PTY registry; plain ops ignore them.
         data, exit_code, errors = handler(ns, payload, runtime)
-        envelope = build_envelope(command=op, exit_code=exit_code, version=_cli_version(),
-                                  data=data, errors=errors)
+        envelope = build_envelope(command=_command_name(), exit_code=exit_code,
+                                  version=_cli_version(), data=data, errors=errors)
         return {"id": None, "type": "result", "ok": True, "envelope": envelope}
     except CliError as exc:
         envelope = build_envelope(
-            command=op,
+            command=_command_name(),
             exit_code=exc.exit_code,
             version=_cli_version(),
             errors=[{
@@ -426,6 +450,17 @@ def cmd_serve(args: argparse.Namespace) -> int:
             error_code="AISC_ERR_USAGE",
             hint="Remote callers spawn: ssh <host> aisc serve --stdio",
         )
+    # 2.1.11 step2: the wire contract is UTF-8 JSON-lines in BOTH
+    # directions. stdout is ASCII-safe via _frame's escaping, but the CLIENT
+    # writes unescaped UTF-8 (serde_json does not ASCII-escape) — a CJK
+    # workspace path in argv would hit a GBK stdin decoder on zh-CN Windows.
+    # Reconfigure the real handles where the wrapper allows it (PyInstaller
+    # wrappers may not expose reconfigure; the try/except is deliberate).
+    for handle in (sys.stdin, sys.stdout):
+        try:
+            handle.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+        except (AttributeError, ValueError, OSError):
+            pass
     return _serve_loop(sys.stdin, sys.stdout)
 
 

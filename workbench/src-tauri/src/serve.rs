@@ -199,6 +199,13 @@ fn spawn(target: &CliTarget, cli_args: &[String]) -> Command {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    // 2.1.11 step2: secondary UTF-8 hardening for the serve child (the
+    // PRIMARY fix is server-side — serve.py `_frame` ASCII-escapes every
+    // frame and reconfigures its stdio to UTF-8, making the wire
+    // locale-immune). Belt for any non-protocol text the child prints.
+    // The app-level `ensure_sidecar_utf8()` (#61) only covers production by
+    // inheritance — the cargo test binary proved that gap.
+    cmd.env("PYTHONUTF8", "1");
     // KI-6 (same fix as run_control_inner): a local serve process docker-execs
     // into runtime containers for provider ops — without Docker's bin dir
     // prepended, those children fail to resolve `docker` when the GUI
@@ -508,7 +515,18 @@ impl Drop for ServeSession {
 // session constantly. One ServeSession per SshTarget, shared by every fs call
 // (PTY sessions keep their own connections — they have their own lifetime).
 
-pub struct ServePool(pub tokio::sync::Mutex<HashMap<String, Arc<ServeSession>>>);
+pub struct ServePool(pub tokio::sync::Mutex<HashMap<String, PooledSession>>);
+
+/// One pooled entry (2.1.11 step2): the session plus, for LOCAL entries, the
+/// CLI exe's mtime at spawn time — the version-pair guard. A resident serve
+/// pins the code it was spawned from until evicted; without this check a
+//  rebuilt sidecar (dev rebuild or `build-cli.ps1`) would keep serving the
+/// OLD code (r8 field incident: new routing, stale serve gate). Remote
+/// entries carry None (their CLI updates via its own channel).
+pub struct PooledSession {
+    pub session: Arc<ServeSession>,
+    pub spawned_exe_mtime: Option<std::time::SystemTime>,
+}
 
 impl ServePool {
     pub fn new() -> Self {
@@ -546,12 +564,15 @@ pub async fn pooled_session(
     let key = target_key(t);
     {
         let guard = pool.0.lock().await;
-        if let Some(s) = guard.get(&key) {
-            return Ok(Arc::clone(s));
+        if let Some(entry) = guard.get(&key) {
+            return Ok(Arc::clone(&entry.session));
         }
     }
     let session = Arc::new(ServeSession::spawn_ssh(t).await?);
-    pool.0.lock().await.insert(key, Arc::clone(&session));
+    pool.0.lock().await.insert(
+        key,
+        PooledSession { session: Arc::clone(&session), spawned_exe_mtime: None },
+    );
     Ok(session)
 }
 
@@ -569,7 +590,7 @@ pub async fn drain_pool() {
     let pool = global_pool();
     let sessions: Vec<Arc<ServeSession>> = {
         let mut guard = pool.0.lock().await;
-        guard.drain().map(|(_, s)| s).collect()
+        guard.drain().map(|(_, e)| e.session).collect()
     };
     for s in sessions {
         s.shutdown().await;
@@ -592,19 +613,36 @@ async fn evict_local(pool: &ServePool, aisc: &Path) {
 /// boot + Defender scan on EVERY provider op). Keyed by the resolved CLI
 /// path, so a pin change naturally establishes a fresh session on the next
 /// call; the stale entry ages out of the map (Drop kills the child).
+/// step2 version-pair guard: the cached session is reused only while the
+/// exe's mtime is unchanged — a rebuilt sidecar (dev rebuild or
+/// `build-cli.ps1`) evicts + respawns from the fresh binary automatically.
 async fn pooled_local_session(
     pool: &ServePool,
     aisc: &Path,
 ) -> Result<Arc<ServeSession>, WorkbenchError> {
     let key = local_target_key(aisc);
+    let now_mtime = std::fs::metadata(aisc).and_then(|m| m.modified()).ok();
     {
-        let guard = pool.0.lock().await;
-        if let Some(s) = guard.get(&key) {
-            return Ok(Arc::clone(s));
+        let mut guard = pool.0.lock().await;
+        if let Some(entry) = guard.get(&key) {
+            if entry.spawned_exe_mtime.is_none()
+                || entry.spawned_exe_mtime == now_mtime
+            {
+                return Ok(Arc::clone(&entry.session));
+            }
+            // Exe changed under us — drop the stale resident (Drop kills the
+            // child) and respawn from the fresh binary below.
+            guard.remove(&key);
         }
     }
     let session = Arc::new(ServeSession::spawn_local(aisc).await?);
-    pool.0.lock().await.insert(key, Arc::clone(&session));
+    pool.0.lock().await.insert(
+        key,
+        PooledSession {
+            session: Arc::clone(&session),
+            spawned_exe_mtime: now_mtime,
+        },
+    );
     Ok(session)
 }
 
@@ -894,37 +932,128 @@ mod tests {
         if !exe.is_file() {
             return;
         }
-        let target = CliTarget::Local(exe);
-        let cancel = CancellationToken::new();
-        for i in 0..2 {
-            let t0 = std::time::Instant::now();
-            let env = cli_op_target(
-                &target,
-                &["version".to_string()],
-                None,
-                Duration::from_secs(120),
-                &cancel,
-                &format!("pool-test-{i}"),
-            )
-            .await
-            .unwrap_or_else(|e| panic!("op {i}: {e:?}"));
-            eprintln!("op {i} took {:?}", t0.elapsed());
-            // The cli op's OUTER envelope carries command="cli"; the wrapped
-            // command's payload rides `data` (inner envelope .data).
-            assert_eq!(env.meta.command, "cli");
-            assert!(env.errors.is_empty(), "op {i}: {:?}", env.errors);
-            assert!(
-                env.data.as_ref().is_some_and(|d| d.get("cli_version").is_some()),
-                "op {i}: version payload missing in data: {:?}",
-                env.data
-            );
-        }
-        // The pool holds exactly one local session after both ops.
-        let pool = global_pool();
-        let keys = pool.0.lock().await.keys().cloned().collect::<Vec<_>>();
-        assert_eq!(keys.iter().filter(|k| k.starts_with("local:")).count(), 1);
+        // Panic-safe: drain ALWAYS runs (see control_plane test's note).
+        let body = tokio::spawn(async move {
+            let target = CliTarget::Local(exe);
+            let cancel = CancellationToken::new();
+            for i in 0..2 {
+                let t0 = std::time::Instant::now();
+                let env = cli_op_target(
+                    &target,
+                    &["version".to_string()],
+                    None,
+                    Duration::from_secs(120),
+                    &cancel,
+                    &format!("pool-test-{i}"),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("op {i}: {e:?}"));
+                eprintln!("op {i} took {:?}", t0.elapsed());
+                // step2 passthrough contract: the cli op's envelope carries
+                // the INNER command's identity (field fix for the doctor
+                // dialog's "unexpected command: cli"), payload in `data`.
+                assert_eq!(env.meta.command, "version");
+                assert!(env.errors.is_empty(), "op {i}: {:?}", env.errors);
+                assert!(
+                    env.data.as_ref().is_some_and(|d| d.get("cli_version").is_some()),
+                    "op {i}: version payload missing in data: {:?}",
+                    env.data
+                );
+            }
+            // The pool holds exactly one local session after both ops.
+            let pool = global_pool();
+            let keys = pool.0.lock().await.keys().cloned().collect::<Vec<_>>();
+            assert_eq!(keys.iter().filter(|k| k.starts_with("local:")).count(), 1);
+        });
+        let outcome = body.await;
         // Drain: the test process would otherwise orphan the resident child
         // (statics never Drop; proven by the first run of this very test).
         drain_pool().await;
+        if let Err(e) = outcome {
+            std::panic::resume_unwind(e.into_panic());
+        }
+    }
+
+    /// 2.1.11 step2: the GENERIC control-plane path (run_control_target)
+    /// must ride the pooled serve for Local targets too — several distinct
+    /// commands, ONE resident session. Plus the --events fallback: those
+    /// argv must reach the per-op spawn (argparse's own error), NOT the
+    /// serve gate's "--events" rejection.
+    ///
+    /// The body runs inside `tokio::spawn` and drain_pool ALWAYS runs after
+    /// — a panicking assertion used to skip the drain, and the test harness
+    /// then hung on the undrained serve's pipes (r7 orphan lesson, panic
+    /// path edition: 678s "hang" that was really a 2s panic + a leaked
+    /// resident blocking process exit).
+    #[tokio::test]
+    async fn local_control_plane_rides_pool_with_events_fallback() {
+        let Ok(exe) = std::env::var("AISC_TEST_CLI") else {
+            return;
+        };
+        let exe = PathBuf::from(exe);
+        if !exe.is_file() {
+            return;
+        }
+        let cancel = CancellationToken::new();
+        let body = tokio::spawn(async move {
+            let target = CliTarget::Local(exe);
+            for op in (["version", "doctor", "ps"]).map(|c| vec![c.to_string()]) {
+                let env = crate::cli::run_control_target(
+                    &target, op.clone(), Duration::from_secs(120), cancel.clone(),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{}: {e:?}", op[0]));
+                assert!(env.errors.is_empty(), "{}: {:?}", op[0], env.errors);
+            }
+            {
+                let pool = global_pool();
+                let keys = pool.0.lock().await.keys().cloned().collect::<Vec<_>>();
+                assert_eq!(
+                    keys.iter().filter(|k| k.starts_with("local:")).count(),
+                    1,
+                    "three commands must share one resident session: {keys:?}"
+                );
+            }
+            // --events argv keeps the per-op spawn path. Routing check ONLY:
+            // `version --events` legitimately fails at the CLI's own layer
+            // (argparse rejects, error on stderr, envelope never printed),
+            // so the spawn path returns a protocol Err — what matters is
+            // that the failure came from the SPAWN (stderr in the detail),
+            // never from the serve gate's rejection.
+            let res = crate::cli::run_control_target(
+                &target,
+                vec!["version".to_string(), "--events".to_string()],
+                Duration::from_secs(120),
+                cancel,
+            )
+            .await;
+            let msgs = match &res {
+                Ok(env) => env
+                    .errors
+                    .iter()
+                    .map(|e| e.message.as_str())
+                    .collect::<String>(),
+                Err(e) => format!(
+                    "{} {}",
+                    e.message,
+                    e.technical_detail.as_deref().unwrap_or("")
+                ),
+            };
+            assert!(
+                !msgs.contains("rejects --events") && !msgs.contains("cannot run over serve"),
+                "argv fell through to the serve gate: {msgs}"
+            );
+            // Positive signature: `version --events` ALWAYS argparse-fails
+            // with the error on stderr — the spawn path surfaces that.
+            assert!(
+                matches!(&res, Err(e) if e.technical_detail.as_deref().unwrap_or("").contains("stderr:")),
+                "expected the spawn path's stderr-bearing protocol error, got: {msgs}"
+            );
+        });
+        let outcome = body.await;
+        drain_pool().await;
+        if let Err(e) = outcome {
+            std::panic::resume_unwind(e.into_panic());
+        }
     }
 }

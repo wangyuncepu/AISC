@@ -45,7 +45,7 @@ Slurm/PBS：等用户提供实际工作流（提交节点形态/认证/常用作
 - **step 1（已交付，P1 内 `e1c9df5`）**：仅 provider 操作切池化
   serve。ServePool 扩 `local:<path>` 键、`cli_op_target` 双侧统一分发、
   drain_pool 挂 RunEvent::Exit。实测冷 534ms / 热 10ms。
-- **step 2（下轮独立分支）**：
+- **step 2（已交付，2026-09-11，分支 unify-serve-step2，手测 PASS 已并 develop）**：
   1. 全部本地命令迁移（runtime preflight/start/stop/list、doctor、ps、
      usage、logs、config、conversation、artifact…）；
   2. **版本配对驱逐**——驻留 serve 把旧代码用到驱逐为止，banner

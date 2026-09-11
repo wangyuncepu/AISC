@@ -38,6 +38,16 @@ class CliOpInProcessTests(unittest.TestCase):
         self.assertEqual(env["errors"], [])
         self.assertIn("cli_version", env["data"])
 
+    def test_cli_op_envelope_carries_inner_command_identity(self) -> None:
+        """2.1.11 step2 (field fix): the cli op is a transparent passthrough —
+        the envelope's meta.command is the INNER argv[0], never "cli".
+        Consumers (doctor.rs / cache.rs) validate meta.command; a transport
+        that rewrote command identity broke the doctor dialog with
+        "unexpected command: cli"."""
+        for argv in (["version"], ["doctor"], ["ps"]):
+            env = self._run({"argv": argv})["envelope"]
+            self.assertEqual(env["meta"]["command"], argv[0], f"{argv}")
+
     def test_json_format_is_forced_when_omitted(self) -> None:
         # No --format in argv — the op must still speak envelope.
         frame = self._run({"argv": ["version"]})
