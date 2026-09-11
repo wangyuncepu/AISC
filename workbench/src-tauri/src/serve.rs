@@ -949,9 +949,10 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("op {i}: {e:?}"));
                 eprintln!("op {i} took {:?}", t0.elapsed());
-                // The cli op's OUTER envelope carries command="cli"; the wrapped
-                // command's payload rides `data` (inner envelope .data).
-                assert_eq!(env.meta.command, "cli");
+                // step2 passthrough contract: the cli op's envelope carries
+                // the INNER command's identity (field fix for the doctor
+                // dialog's "unexpected command: cli"), payload in `data`.
+                assert_eq!(env.meta.command, "version");
                 assert!(env.errors.is_empty(), "op {i}: {:?}", env.errors);
                 assert!(
                     env.data.as_ref().is_some_and(|d| d.get("cli_version").is_some()),

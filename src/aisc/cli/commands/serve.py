@@ -382,16 +382,30 @@ def _run_op(op: str, payload: Dict[str, Any], runtime: ServeRuntime) -> Dict[str
             "ok": False,
             "error": f"unknown op {op!r} (known: {', '.join(sorted(OPS))})",
         }
+
+    def _command_name() -> str:
+        """2.1.11 step2 (field fix): the ``cli`` op is a TRANSPARENT
+        passthrough — the envelope's command identity is the INNER command
+        (argv[0]), never the op name. Consumers validate ``meta.command``
+        (doctor/cache expect "doctor", "ps", ...); the transport must not
+        rewrite command identity. Symptom before: the doctor dialog died
+        with "unexpected command: cli"."""
+        if op == "cli":
+            argv = [str(a) for a in (payload.get("argv") or [])]
+            if argv:
+                return argv[0]
+        return op
+
     try:
         # Uniform handler signature (ns, payload, runtime) — R2's stream ops
         # need the payload dict and the PTY registry; plain ops ignore them.
         data, exit_code, errors = handler(ns, payload, runtime)
-        envelope = build_envelope(command=op, exit_code=exit_code, version=_cli_version(),
-                                  data=data, errors=errors)
+        envelope = build_envelope(command=_command_name(), exit_code=exit_code,
+                                  version=_cli_version(), data=data, errors=errors)
         return {"id": None, "type": "result", "ok": True, "envelope": envelope}
     except CliError as exc:
         envelope = build_envelope(
-            command=op,
+            command=_command_name(),
             exit_code=exc.exit_code,
             version=_cli_version(),
             errors=[{
