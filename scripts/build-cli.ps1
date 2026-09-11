@@ -3,9 +3,26 @@
 # Produces dist\<name>-<target-triple>.exe (Tauri externalBin convention;
 # the .exe extension is handled by Tauri's bundler on Windows).
 # Requires: python with PyInstaller (pip install -e ".[dev]" or uv).
+#
+# 2.1.11 r8 (field lesson): Python-side CLI changes (e.g. serve.py gate) do
+# NOT reach the running app until this script rebuilds the sidecar AND the
+# Workbench restarts its resident serve pool. ALSO: while Workbench runs, its
+# pooled `aisc serve` children hold target\debug\aisc.exe locked — the copy
+# below fails mid-script (half-synced state). The preflight below refuses to
+# build until they are gone.
 
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $MyInvocation.MyCommand.Path | Join-Path -ChildPath "..")
+
+# --- preflight: refuse while a running aisc would lock the destinations ---
+$Running = @(Get-Process aisc -ErrorAction SilentlyContinue)
+if ($Running.Count -gt 0) {
+    Write-Host "== PREFLIGHT FAILED: aisc.exe is running (pid(s): $((($Running | ForEach-Object Id) -join ', '))) ==" -ForegroundColor Red
+    Write-Host "   A running Workbench pools resident `aisc serve` children that lock"
+    Write-Host "   workbench\src-tauri\target\debug\aisc.exe; the copy step would fail"
+    Write-Host "   mid-script. Close Workbench (or stop those processes) and re-run."
+    exit 1
+}
 
 $TargetTriple = $env:TARGET_TRIPLE
 if (-not $TargetTriple) {
