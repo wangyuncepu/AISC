@@ -310,6 +310,12 @@ function onKeydown(e: KeyboardEvent) {
     const id = renderedTabIds()[Number(e.key) - 1];
     if (id) activateRenderedTab(id);
   } else if (e.key === "Enter" && store.status === "summary") {
+    // Manual-test r4 #1: Enter must respect the same hard-blocking gate as
+    // the (disabled) launch button — a moved workspace folder used to launch
+    // straight through this shortcut and docker silently recreated the old
+    // path as an empty dir. startFromSummary now self-guards; the early
+    // return here keeps preventDefault from eating the keystroke pointlessly.
+    if (!store.startEnabled) return;
     e.preventDefault();
     store.startFromSummary();
   }

@@ -87,6 +87,36 @@ async function fetchNow(): Promise<void> {
         message: r.available ? "" : (r.message || t("ccswitch.fetchUnavailable")) }
     : null;
 }
+// 2.1.11 P1: edit-time key view — an already-configured provider keeps the
+// field EMPTY by default (placeholder states it) with an explicit reveal
+// (eye) button that fetches the full key on demand; masked otherwise.
+const keyConfigured = computed(() => props.provider?.has_api_key ?? false);
+const keyVisible = ref(false);
+const revealBusy = ref(false);
+/** Manual-test r3: reveal failures render HERE — the store propagates them,
+ * because a swallowed error made the eye button a silent no-op. */
+const revealError = ref("");
+const keyPlaceholder = computed(() =>
+  adding.value ? "" : (keyConfigured.value ? t("ccswitch.apiKeyConfigured") : ""));
+async function revealApiKey(): Promise<void> {
+  if (!props.provider || !runtime.runtimeId || !runtime.workspace || revealBusy.value) return;
+  revealBusy.value = true;
+  revealError.value = "";
+  try {
+    const key = await uiStore.revealKey(
+      runtime.workspace, runtime.runtimeId, props.provider.id);
+    if (key) {
+      form.apiKey = key;
+      keyVisible.value = true;
+    }
+  } catch (e) {
+    revealError.value =
+      (e as { message?: string })?.message ?? String(e);
+  } finally {
+    revealBusy.value = false;
+  }
+}
+
 const candidates = computed<string[]>(() => {
   if (!props.provider) return [];
   return [
@@ -226,7 +256,25 @@ function onSave(): void {
         <input v-model="modelField" @input="touch" /></label>
       </template>
       <label class="field"><span>{{ t("ccswitch.apiKey") }}</span>
-        <input v-model="form.apiKey" type="password" autocomplete="off" @input="touch" /></label>
+        <span class="key-row">
+          <input v-model="form.apiKey" :type="keyVisible ? 'text' : 'password'"
+                 autocomplete="off" :placeholder="keyPlaceholder" @input="touch" />
+          <button v-if="!adding && keyConfigured" type="button" class="ui-icon-button sm key-reveal"
+                  :class="{ busy: revealBusy }"
+                  :disabled="revealBusy"
+                  :aria-label="revealBusy ? t('ccswitch.revealing') : (keyVisible ? t('ccswitch.apiKeyHide') : t('ccswitch.apiKeyShow'))"
+                  :title="revealBusy ? t('ccswitch.revealing') : (keyVisible ? t('ccswitch.apiKeyHide') : t('ccswitch.apiKeyShow'))"
+                  @click="keyVisible ? (keyVisible = false) : revealApiKey()">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" />
+              <circle cx="8" cy="8" r="2" />
+            </svg>
+          </button>
+        </span>
+      </label>
+      <p v-if="revealError" class="hint warn" role="alert">
+        {{ t("ccswitch.apiKeyRevealFailed", { message: revealError }) }}
+      </p>
       <p class="hint">{{ t("ccswitch.secretHint") }}</p>
 
       <template v-if="tier === 'advanced'">
@@ -273,6 +321,32 @@ function onSave(): void {
 
 <style scoped>
 .edit-page { display: flex; flex-direction: column; height: 100%; overflow: auto; }
+/* 2.1.11 P1: key field — input stays FULL width (aligned with the fields
+ * above); the reveal button floats inside the right edge (manual-test r2:
+ * the flex row squeezed the input shorter than its siblings).
+ * Manual-test r4: `.key-row` IS a `.field > span`, so the generic
+ * `.field > span { width: 90px; flex: none }` label rule (specificity
+ * 0,1,1) overrides any plain `.key-row` sizing (0,1,0) — r2/r3 fixes kept
+ * losing to it and the row stayed pinned at 90px. Match the specificity
+ * and opt out of every label property explicitly. */
+.field > span.key-row {
+  position: relative;
+  display: block;
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+.key-row input { width: 100%; box-sizing: border-box; padding-right: 42px; }
+.key-reveal {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+/* Manual-test r5 #2: the reveal is a full CLI→docker-exec→adapter round
+ * trip (~1-3s); without a busy affordance the button reads as ignored. */
+.key-reveal.busy { opacity: 0.45; animation: key-reveal-pulse 1s ease-in-out infinite; }
+@keyframes key-reveal-pulse { 50% { opacity: 0.15; } }
 .head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
 .head h2 { font-size: var(--font-md); margin: 0; }
 .spacer { flex: 1; }
@@ -300,6 +374,9 @@ input, select {
   min-height: var(--control-h-sm); padding: 0 var(--space-2); font-size: var(--font-sm);
 }
 .hint { font-size: var(--font-xs); color: var(--text-faint); margin: 0; }
+/* r3: failure hints (reveal error + fetch unavailable) must stand out —
+ * `.warn` was referenced before but had no rule (rendered plain gray). */
+.hint.warn { color: var(--error-fg); }
 button { cursor: pointer; }
 button.primary { background: var(--accent); border: none; color: var(--accent-fg);
   min-height: var(--control-h-sm); padding: 0 var(--space-4); border-radius: var(--radius-sm);

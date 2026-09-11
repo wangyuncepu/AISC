@@ -480,6 +480,10 @@ export interface CcSwitchProvider {
   model: string;
   has_api_key: boolean;
   api_key_mask: string;
+  /** 2.1.11 P1: present ONLY on the row explicitly targeted by
+   * `--reveal-id` (edit-time explicit view); every other row — and every
+   * other snapshot — stays secret-free. */
+  api_key?: string;
   is_current: boolean;
   /** IDEA-5 (5c): secret-free whitelist view of the role-model env (five
    * slots + effort + base URL); credential keys are structurally absent.

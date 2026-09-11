@@ -221,7 +221,10 @@ onBeforeUnmount(() => {
     </header>
 
     <p v-if="!hasRuntime" class="banner warn">{{ t("ccswitch.noRuntime") }}</p>
-    <p v-if="error" class="banner err" role="alert">{{ error }}</p>
+    <div v-if="error" class="banner err" role="alert">
+      <p>{{ error }}</p>
+      <p v-if="ui.errorDetail" class="banner-detail">{{ ui.errorDetail }}</p>
+    </div>
 
     <!-- PP r5 (user ruling): the switch progress rides a floating
          bottom-center card, teleported to body — the old in-flow banner sat
@@ -312,6 +315,15 @@ onBeforeUnmount(() => {
 .banner { padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); font-size: var(--font-sm); }
 .banner.warn { background: var(--warn-bg); color: var(--warn-fg); }
 .banner.err { background: var(--error-bg); color: var(--error-fg); }
+/* Manual-test r5 #3: the mapped message alone hid the diagnosis — render
+ * the WorkbenchError.technical_detail under it when they differ. */
+.banner .banner-detail {
+  margin: 4px 0 0;
+  font-size: var(--font-xs);
+  opacity: 0.85;
+  word-break: break-all;
+  user-select: text;
+}
 /* S1 (⑤/A-21715): ONE grid template shared by header and rows. The last
  * track is FIXED, not auto — an auto track sizes to its own content
  * (buttons in rows vs "操作" text in the header), which desynced the 1fr

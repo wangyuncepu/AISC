@@ -84,6 +84,8 @@ export const enUS: Record<string, string> = {
   "picker.invalidTitle": "Workspace moved or deleted",
   "picker.invalidBody": "The path below no longer exists on disk. You can clear this history entry (removes only the record, never any data):",
   "picker.invalidClear": "Clear record",
+  "picker.invalidPurge": "Also purge this workspace's lifecycle files (agent memories, configs, state — user files are never touched)",
+  "picker.exportLifecycle": "Export first (zip)",
 
   // --- launch summary (LaunchSummary.vue) ---
   "summary.title": "Launch summary",
@@ -274,6 +276,11 @@ export const enUS: Record<string, string> = {
   "ccswitch.baseUrl": "Base URL",
   "ccswitch.model": "Model",
   "ccswitch.apiKey": "API key",
+  "ccswitch.apiKeyConfigured": "Configured — leave empty to keep; use the button to view",
+  "ccswitch.apiKeyShow": "Show API key",
+  "ccswitch.apiKeyHide": "Hide API key",
+  "ccswitch.revealing": "Revealing…",
+  "ccswitch.apiKeyRevealFailed": "Reveal failed: {message}",
   "ccswitch.newKey": "New API key (optional)",
   "ccswitch.secretHint": "The key is written into the container through an encrypted channel only — never in argv, logs, or local storage.",
   "ccswitch.editKeyHint": "Leave empty to keep the current key.",

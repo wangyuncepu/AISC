@@ -264,8 +264,11 @@ export const shutdownWorkbenchV2 = (request: ShutdownRequest) =>
 // The request document (with any API key) rides the CLI child's stdin via the
 // Rust side — never argv, never persisted.
 
-export const ccSwitchProviders = (workspace: string, runtimeId: string, agent: string) =>
-  invoke<CcSwitchProvidersResult>("cc_switch_providers", { workspace, runtimeId, agent });
+export const ccSwitchProviders = (
+  workspace: string, runtimeId: string, agent: string, revealId?: string,
+) =>
+  invoke<CcSwitchProvidersResult>("cc_switch_providers",
+    { workspace, runtimeId, agent, revealId: revealId ?? null });
 
 export const ccSwitchAdd = (
   workspace: string, runtimeId: string, agent: string, request: CcSwitchRequest,
@@ -363,6 +366,12 @@ export const workspaceForgetPreview = (path: string) =>
 
 export const workspaceForget = (path: string, expectedHistoryRevision: number) =>
   invoke<ForgetResult>("workspace_forget", { path, expectedHistoryRevision });
+
+/** 2.1.11 P1-3: zip the workspace's lifecycle files (agent memories/
+ * configs/state, minus the toolchain cache) to a user-chosen path.
+ * Returns the number of files written. */
+export const workspaceExportLifecycle = (path: string, dest: string) =>
+  invoke<number>("workspace_export_lifecycle", { path, dest });
 
 export const workspaceHistoryRemove = (path: string, expectedHistoryRevision: number) =>
   invoke<number>("workspace_history_remove", { path, expectedHistoryRevision });

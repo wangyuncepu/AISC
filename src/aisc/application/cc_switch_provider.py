@@ -53,6 +53,7 @@ def _exec_adapter(
     agent: str,
     provider_id: Optional[str],
     request: Optional[Dict[str, Any]],
+    reveal_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run the in-container adapter and return the validated envelope."""
     from aisc.adapters.docker_ import RealDockerExecutor
@@ -73,6 +74,10 @@ def _exec_adapter(
     )
     if provider_id:
         argv.extend(["--id", provider_id])
+    if reveal_id:
+        # 2.1.11 P1: edit-time explicit view — the named provider's row
+        # carries the FULL api_key (every other row stays masked).
+        argv.extend(["--reveal-id", reveal_id])
 
     stdin_text = ""
     if request is not None:
@@ -141,14 +146,16 @@ _SCOPE_WRAPPER = "\n".join([
 ])
 
 
-def list_providers(runtime_id: str, agent: str, workspace: Optional[str], executor: Any) -> Dict[str, Any]:
+def list_providers(runtime_id: str, agent: str, workspace: Optional[str], executor: Any,
+                   reveal_id: Optional[str] = None) -> Dict[str, Any]:
     from aisc.application.data_root import workspace_state_dir
     from pathlib import Path
 
     ws_path = Path(workspace).resolve() if workspace else Path.cwd()
     _validate(runtime_id, agent, "list")
     envelope = _exec_adapter(
-        runtime_id, workspace_state_dir(ws_path), executor, "list", agent, None, None
+        runtime_id, workspace_state_dir(ws_path), executor, "list", agent, None, None,
+        reveal_id=reveal_id,
     )
     return {"agent": agent, "providers": envelope.get("providers") or [],
             "operation_id": envelope.get("operation_id")}

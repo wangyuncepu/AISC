@@ -123,27 +123,43 @@ def _db_path() -> Path:
 
 
 def read_snapshot(agent: str) -> list[dict[str, Any]]:
-    """Raw provider rows (id → full settings_config) for one agent."""
+    """Raw provider rows (id → full settings_config) for one agent.
+
+    The in-container cc-switch daemon holds this db open in WAL mode and
+    checkpoints it periodically; a ``mode=ro`` connection cannot run WAL
+    recovery and blocks during a checkpoint window, which surfaced as
+    transient ``SNAPSHOT_FAILED`` reveals (2.1.11 P1 手测 r3: two eye-button
+    clicks 23s apart both failed, everything around them succeeded). Two
+    hardening measures: connect ``mode=rw`` + ``PRAGMA query_only`` (still
+    statement-level write-protected, but able to participate in recovery)
+    and retry the whole open+query a few times with short backoff."""
     path = _db_path()
     if not path.is_file():
         return []
-    uri = f"file:{path.as_posix()}?mode=ro"
-    try:
-        conn = sqlite3.connect(uri, uri=True, timeout=10)
-    except sqlite3.Error as exc:
-        raise AdapterError(ERR_SNAPSHOT, f"cannot open cc-switch.db: {exc}") from exc
-    try:
-        conn.execute("PRAGMA busy_timeout=10000")
-        rows = conn.execute(
-            "SELECT id, name, settings_config, is_current, sort_index, meta, "
-            "notes, website_url, icon, icon_color "
-            "FROM providers WHERE app_type = ? ORDER BY sort_index, id",
-            (agent,),
-        ).fetchall()
-    except sqlite3.Error as exc:
-        raise AdapterError(ERR_SNAPSHOT, f"snapshot query failed: {exc}") from exc
-    finally:
-        conn.close()
+    uri = f"file:{path.as_posix()}?mode=rw"
+    last_exc: sqlite3.Error | None = None
+    for attempt in range(3):
+        try:
+            conn = sqlite3.connect(uri, uri=True, timeout=10)
+            try:
+                conn.execute("PRAGMA query_only=ON")
+                conn.execute("PRAGMA busy_timeout=10000")
+                rows = conn.execute(
+                    "SELECT id, name, settings_config, is_current, sort_index, meta, "
+                    "notes, website_url, icon, icon_color "
+                    "FROM providers WHERE app_type = ? ORDER BY sort_index, id",
+                    (agent,),
+                ).fetchall()
+            finally:
+                conn.close()
+            break
+        except sqlite3.Error as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+    if last_exc is not None:
+        raise AdapterError(
+            ERR_SNAPSHOT, f"snapshot query failed: {last_exc}") from last_exc
 
     snapshot: list[dict[str, Any]] = []
     for pid, name, raw, is_current, sort_index, raw_meta, notes, website, icon, icon_color in rows:
@@ -371,8 +387,13 @@ def resolve_api_format(agent: str, row: dict[str, Any]) -> str:
     return DEFAULT_API_FORMAT.get(agent, "anthropic")
 
 
-def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
-    """The secret-free v1 view of one provider row."""
+def provider_view(agent: str, row: dict[str, Any],
+                  reveal: bool = False) -> dict[str, Any]:
+    """The secret-free v1 view of one provider row.
+
+    *reveal* (2.1.11 P1: edit-time explicit view) additionally emits the
+    full ``api_key`` for THIS row only — the host asked for it by id via
+    ``--reveal-id``; every other row in the snapshot stays masked."""
     settings = row["settings"]
     secret = ""
     if agent == "claude":
@@ -423,6 +444,7 @@ def provider_view(agent: str, row: dict[str, Any]) -> dict[str, Any]:
         "model": model,
         "has_api_key": bool(secret),
         "api_key_mask": mask_secret(secret) if secret else "",
+        **({"api_key": secret} if (reveal and secret) else {}),
         "is_current": row["is_current"],
         "role_env": role_env,
         "known_models": known_models,
@@ -1003,8 +1025,10 @@ def _settings_are_real(agent: str, row: dict[str, Any]) -> bool:
 # Operations
 # ---------------------------------------------------------------------------
 
-def op_list(agent: str) -> list[dict[str, Any]]:
-    return [provider_view(agent, row) for row in read_snapshot(agent)]
+def op_list(agent: str, reveal_id: str | None = None) -> list[dict[str, Any]]:
+    return [provider_view(agent, row, reveal=(reveal_id is not None
+                                              and row["id"] == reveal_id))
+            for row in read_snapshot(agent)]
 
 
 def op_add(agent: str, request: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2102,6 +2126,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--since", type=float, default=0.0,
                         help="usage: epoch-seconds cutoff computed host-side "
                              "(local timezone semantics)")
+    parser.add_argument("--reveal-id", default=None,
+                        help="list: additionally emit the FULL api_key of "
+                             "this provider id (edit-time explicit view)")
     parser.add_argument("--live", action="store_true", default=False,
                         help="catalog-sync: ALSO merge a live /models fetch "
                              "(background refresh — up to ~12s of network; "
@@ -2216,7 +2243,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.op == "list":
-            providers = op_list(args.agent)
+            providers = op_list(args.agent, reveal_id=args.reveal_id)
         elif args.op == "add":
             request.setdefault("id", args.id)
             providers = op_add(args.agent, request)

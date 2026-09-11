@@ -530,7 +530,12 @@ pub async fn runtime_services(
 // --- Stage 8e: cc-switch provider data plane (aisc.cc-switch-provider/v1) ---
 
 /// One provider row of the secret-free adapter snapshot (already masked
-/// in-container; the API key never crosses this boundary in full).
+/// in-container). Exception (2.1.11 P1-1): an explicit `list --reveal-id`
+/// response carries the FULL key of the NAMED row only — `api_key` is
+/// `None` for every other row and for all card-list snapshots.
+/// 手测 r4: the field was missing here, so serde silently STRIPPED the
+/// revealed key at this boundary and the eye button stayed a silent no-op
+/// (envelope ok → row without api_key → `null` → UI did nothing).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CcSwitchProvider {
     pub id: String,
@@ -540,6 +545,8 @@ pub struct CcSwitchProvider {
     pub model: String,
     pub has_api_key: bool,
     pub api_key_mask: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
     pub is_current: bool,
 }
 
@@ -588,23 +595,26 @@ async fn cc_switch_call_value(
     input: Option<String>,
 ) -> Result<Value, WorkbenchError> {
     let target = crate::target::resolve_target(app).await?;
-    let env = match input {
-        Some(text) => {
-            crate::cli::run_control_input_target(&target, argv, text, PROVIDER_TIMEOUT, CancellationToken::new()).await?
-        }
-        None => run_control_target(&target, argv, PROVIDER_TIMEOUT, CancellationToken::new()).await?,
-    };
-    if let Some(err) = env.errors.first() {
+    // 2.1.11 r6: provider ops are the FIRST tenants of the unified pooled
+    // serve transport — Local rides a resident `serve --stdio` instead of a
+    // per-op process spawn (the remote path was already resident, and remote
+    // provider ops were measurably faster than local because of it). Other
+    // commands keep the per-op path until step 2 of the unification.
+    let env = crate::cli::run_serve_op_target(
+        &target, argv, input, PROVIDER_TIMEOUT, CancellationToken::new(),
+    )
+    .await?;
+    if let Some(env_err) = env.errors.first() {
         // Stage 8e: the adapter's stable AISC_ERR_CC_SWITCH_PROVIDER_* codes
         // are unknown to map_aisc's curated table — surface the adapter's own
         // message (e.g. "provider id already exists: deepseek") instead of
         // the generic fallback.
-        let mut wb = WorkbenchError::map_aisc(&err.code);
-        if err.code.starts_with("AISC_ERR_CC_SWITCH_PROVIDER_") {
-            wb.message = err.message.clone();
+        let mut wb = WorkbenchError::map_aisc(&env_err.code);
+        if env_err.code.starts_with("AISC_ERR_CC_SWITCH_PROVIDER_") {
+            wb.message = env_err.message.clone();
             wb.retryable = false;
         }
-        return Err(wb.with_detail(err.message.clone()));
+        return Err(wb.with_detail(env_err.message.clone()));
     }
     Ok(env.data.unwrap_or(Value::Null))
 }
@@ -653,9 +663,16 @@ pub async fn cc_switch_providers(
     workspace: String,
     runtime_id: String,
     agent: String,
+    reveal_id: Option<String>,
 ) -> Result<CcSwitchProvidersResult, WorkbenchError> {
     cc_switch_validate(&runtime_id, &agent)?;
-    let argv = cc_switch_argv("list", &runtime_id, &agent, &workspace, None);
+    let mut argv = cc_switch_argv("list", &runtime_id, &agent, &workspace, None);
+    if let Some(rid) = reveal_id {
+        // 2.1.11 P1: edit-time explicit view — the named provider's row
+        // carries the FULL api_key (every other row stays masked).
+        argv.push("--reveal-id".into());
+        argv.push(rid);
+    }
     cc_switch_call(&app, argv, None).await
 }
 

@@ -35,3 +35,27 @@ Slurm/PBS：等用户提供实际工作流（提交节点形态/认证/常用作
 图标化（FIX-3 窄条升级 activity bar + Ctrl+B）→ 命令面板（菜单项为
 数据源 + aria-keyshortcuts）→ 设置页搜索。每项独立分支独立手测；
 底部状态栏/tab 活动指示/面板最大化视余力（P2 后评估）。
+
+## D-5 · 本地/远程 CLI 传输统一——两步走（2026-09-11 P1 手测 r7 裁决）
+
+用户实测远程 provider 比本地快且全生效，根因：远程走驻留 serve
+（D-10 池化），本地逐次 spawn aisc.exe 交 ~0.5-1s 启动税
+（PyInstaller 解压+解释器+Defender）。裁决分两步，各自独立分支独立手测：
+
+- **step 1（已交付，P1 内 `e1c9df5`）**：仅 provider 操作切池化
+  serve。ServePool 扩 `local:<path>` 键、`cli_op_target` 双侧统一分发、
+  drain_pool 挂 RunEvent::Exit。实测冷 534ms / 热 10ms。
+- **step 2（下轮独立分支）**：
+  1. 全部本地命令迁移（runtime preflight/start/stop/list、doctor、ps、
+     usage、logs、config、conversation、artifact…）；
+  2. **版本配对驱逐**——驻留 serve 把旧代码用到驱逐为止，banner
+     `cli_version` 对比 pin 版本/mtime 不一致即驱逐重建（r8「旧闸门
+     新路由」事故的根治）；
+  3. `run_control_inner` 逐次 spawn 路径删除（serve bootstrap 自身保留）；
+  4. **例外逐个裁决**：`--events` 流式命令（build/启动进度）serve 闸门
+     拒收——继续专用通道或借 serve 事件流，设计时定；PTY 本地 pipe
+     模式不动；
+  5. dev 模式 CLI 频繁重建的陈旧性（版本配对驱逐应顺带覆盖）。
+
+已知代价（用户已知悉）：串行 op 循环（fetch-models ~12s 网络期间其它
+op 排队——远程现状已如此）；共享进程故障域（传输级失败已有驱逐重试）。

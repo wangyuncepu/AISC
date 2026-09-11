@@ -17,6 +17,11 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
   const loading = ref(false);
   const busy = ref("");
   const error = ref<string | null>(null);
+  /** Manual-test r5 #3: the mapped message alone hid the diagnosis (the
+   * generic 「AISC CLI 返回错误」 bucket carries the real reason in
+   * technical_detail) and the failure left NO timeline trace. The banner
+   * now renders this detail line; list() failures log to the timeline. */
+  const errorDetail = ref<string | null>(null);
   /** IDEA-5 (5d): last fetch-models result per provider id (the dropdown's
    * tier-1 source; unavailable results carry the upstream hint). */
   const fetchedModels = reactive<Record<string, FetchModelsResult>>({});
@@ -41,14 +46,38 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
     providers.value = [...result.providers].sort((a, b) => _order(a.id) - _order(b.id));
   }
 
+  /** 2.1.11 P1: edit-time explicit view — fetch the FULL api_key of one
+   * provider. The reveal snapshot is used for the key only and is NOT
+   * applied to the card list (the list must stay secret-free).
+   * Manual-test r3: failures PROPAGATE — swallowing them into `null` made
+   * the eye button a silent no-op whenever the chain broke (e.g. a runtime
+   * container whose baked adapter predates `--reveal-id`), the exact
+   * "保存无反应" dead-button pattern PP r4 fixed for save. The editor
+   * renders the error inline. */
+  async function revealKey(ws: string, rt: string, providerId: string): Promise<string | null> {
+    const result = await ipc.ccSwitchProviders(ws, rt, agent.value, providerId);
+    const row = result.providers.find((p) => p.id === providerId);
+    return row?.api_key ?? null;
+  }
+
+  function _setError(e: unknown): void {
+    const err = e as { message?: string; technical_detail?: string | null };
+    error.value = err?.message ?? String(e);
+    const detail = err?.technical_detail;
+    errorDetail.value = detail && detail !== error.value ? detail : null;
+  }
+
   async function list(ws: string, rt: string): Promise<boolean> {
     loading.value = true;
     error.value = null;
+    errorDetail.value = null;
     try {
       _apply(await ipc.ccSwitchProviders(ws, rt, agent.value));
       return true;
     } catch (e) {
-      error.value = (e as { message?: string })?.message ?? String(e);
+      _setError(e);
+      void ipc.logUiEvent?.("cc_switch_list", "error",
+        (e as { code?: string })?.code ?? undefined);
       return false;
     } finally {
       loading.value = false;
@@ -72,12 +101,13 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
   ): Promise<boolean> {
     busy.value = op;
     error.value = null;
+    errorDetail.value = null;
     try {
       _apply(await fn());
       void ipc.logUiEvent?.(`cc_switch_${op.split(":")[0]}`, "ok");
       return true;
     } catch (e) {
-      error.value = (e as { message?: string })?.message ?? String(e);
+      _setError(e);
       void ipc.logUiEvent?.(`cc_switch_${op.split(":")[0]}`, "error",
         (e as { code?: string })?.code ?? undefined);
       return false;
@@ -142,7 +172,7 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
   const busyOp = computed(() => (busy.value ? busy.value.split(":")[0]! : ""));
 
   return {
-    agent, providers, loading, busy, busyOp, error, fetchedModels,
-    list, switchAgent, add, edit, activate, remove, fetchModels,
+    agent, providers, loading, busy, busyOp, error, errorDetail, fetchedModels,
+    list, switchAgent, add, edit, activate, remove, fetchModels, revealKey,
   };
 });

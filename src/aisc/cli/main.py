@@ -343,6 +343,9 @@ def _build_parser() -> _AiscArgumentParser:
     csl = cssub.add_parser("list", help="List providers (secret-free snapshot)",
                            allow_abbrev=False)
     _cc_switch_common(csl)
+    csl.add_argument("--reveal-id", type=str, default=None, metavar="ID",
+                     help="Additionally emit the FULL api_key of this provider "
+                          "(edit-time explicit view, 2.1.11 P1)")
 
     csa = cssub.add_parser("add", help="Add a provider (request JSON on stdin)",
                            allow_abbrev=False)

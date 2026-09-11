@@ -19,7 +19,13 @@ const props = defineProps<{
   busy: boolean;
   error: string | null;
 }>();
-const emit = defineEmits<{ (e: "close"): void; (e: "confirm"): void }>();
+const emit = defineEmits<{
+  (e: "close"): void;
+  (e: "confirm"): void;
+  /** 2.1.11 P1-3: rescue-export the lifecycle files as zip BEFORE the
+   * destructive confirm (agent memories/configs — the forget purges them). */
+  (e: "export"): void;
+}>();
 
 const { t } = useI18n();
 const panel = ref<HTMLElement | null>(null);
@@ -28,6 +34,8 @@ useDialogA11y(panel, () => emit("close"));
 onMounted(() => cancelBtn.value?.focus());
 
 const blocked = computed(() => props.preview.blockedReason !== null);
+/** 2.1.11 P1-3: export-in-progress guard (parent owns the action). */
+const exportBusy = defineModel<boolean>("exportBusy", { default: false });
 
 function catLabel(c: string): string {
   if (c.startsWith("other:")) {
@@ -87,6 +95,9 @@ function warnText(w: string): string {
       <footer class="foot">
         <button ref="cancelBtn" class="ui-button" @click="emit('close')">
           {{ t("picker.cancel") }}
+        </button>
+        <button class="ui-button" :disabled="busy || exportBusy" @click="emit('export')">
+          {{ t("picker.exportLifecycle") }}
         </button>
         <button class="ui-button danger" :disabled="blocked || busy" @click="emit('confirm')">
           {{ busy ? t("picker.forgetBusy") : t("picker.forgetConfirmBtn") }}

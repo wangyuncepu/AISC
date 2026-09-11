@@ -84,6 +84,8 @@ export const zhCN = {
   "picker.invalidTitle": "工作区已移动或删除",
   "picker.invalidBody": "以下路径在磁盘上已不存在。可以清除这条历史记录（只移除记录，不动任何数据）：",
   "picker.invalidClear": "清除记录",
+  "picker.invalidPurge": "同时清理该工作区的生命周期文件（agent 记忆、配置、状态——不涉及任何用户文件）",
+  "picker.exportLifecycle": "先导出（zip）",
 
   // --- launch summary (LaunchSummary.vue) ---
   "summary.title": "启动摘要",
@@ -274,6 +276,11 @@ export const zhCN = {
   "ccswitch.baseUrl": "Base URL",
   "ccswitch.model": "模型",
   "ccswitch.apiKey": "API Key",
+  "ccswitch.apiKeyConfigured": "已配置——留空保存则不修改，点右侧按钮查看",
+  "ccswitch.apiKeyShow": "查看 API Key",
+  "ccswitch.apiKeyHide": "隐藏 API Key",
+  "ccswitch.revealing": "取回中…",
+  "ccswitch.apiKeyRevealFailed": "取回失败：{message}",
   "ccswitch.newKey": "新 API Key（可选）",
   "ccswitch.secretHint": "密钥仅经加密通道写入容器，不会出现在命令行、日志或本地存储。",
   "ccswitch.editKeyHint": "留空表示保留现有密钥。",

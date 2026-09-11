@@ -1080,3 +1080,62 @@ class CcSwitchSkillSyncTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "declined\n")
         approve.assert_called_once()
         synchronize.assert_not_called()
+
+
+class CcSwitchRevealTests(unittest.TestCase):
+    """2.1.11 P1: edit-time explicit key view — `list --reveal-id <id>`
+    emits the FULL api_key for that row only; every other row (and every
+    other snapshot) stays secret-free."""
+
+    @classmethod
+    def setUpClass(cls):
+        from importlib.machinery import SourceFileLoader
+        path = str(ROOT / "container" / "aisc-cc-provider")
+        spec = importlib.util.spec_from_file_location(
+            "aisc_cc_provider_adapter", path,
+            loader=SourceFileLoader("aisc_cc_provider_adapter", path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        cls.adapter = mod
+
+    @staticmethod
+    def _row(pid="acme", token="sk-test-1234567890"):
+        return {
+            "id": pid, "name": pid.title(), "is_current": False,
+            "settings": {"env": {"ANTHROPIC_AUTH_TOKEN": token,
+                                  "ANTHROPIC_BASE_URL": "https://api.example"}},
+        }
+
+    def test_reveal_emits_full_key_only_for_the_named_row(self):
+        view = self.adapter.provider_view("claude", self._row(), reveal=True)
+        self.assertEqual(view["api_key"], "sk-test-1234567890")
+        self.assertTrue(view["has_api_key"])
+        self.assertIn("****", view["api_key_mask"])  # mask still present
+
+    def test_default_view_stays_secret_free(self):
+        view = self.adapter.provider_view("claude", self._row())
+        self.assertNotIn("api_key", view)
+        self.assertIn("****", view["api_key_mask"])
+
+    def test_reveal_without_secret_emits_nothing(self):
+        row = self._row()
+        row["settings"]["env"].pop("ANTHROPIC_AUTH_TOKEN")
+        view = self.adapter.provider_view("claude", row, reveal=True)
+        self.assertNotIn("api_key", view)
+        self.assertFalse(view["has_api_key"])
+
+    def test_chain_carries_reveal_id(self):
+        """Source contract: host CLI parser → application argv → container
+        adapter argparse/dispatch all carry the reveal id."""
+        adapter_src = (ROOT / "container" / "aisc-cc-provider").read_text(encoding="utf-8")
+        self.assertIn('"--reveal-id"', adapter_src)
+        self.assertIn("op_list(args.agent, reveal_id=args.reveal_id)", adapter_src)
+
+        app_src = (ROOT / "src/aisc/application/cc_switch_provider.py").read_text(encoding="utf-8")
+        self.assertIn('argv.extend(["--reveal-id", reveal_id])', app_src)
+
+        cli_src = (ROOT / "src/aisc/cli/commands/cc_switch.py").read_text(encoding="utf-8")
+        self.assertIn('reveal_id=getattr(args, "reveal_id", None)', cli_src)
+
+        main_src = (ROOT / "src/aisc/cli/main.py").read_text(encoding="utf-8")
+        self.assertIn('"--reveal-id"', main_src)

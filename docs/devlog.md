@@ -2,6 +2,64 @@
 
 > 记录规则：版本按发布时间从新到旧排列。版本内只记录已经进入对应标签或当前发布提交的内容；计划、未提交实验和后续修复不提前归入旧版本。
 
+# v2.1.11-dev (2026-09-10 ~) — Provider 体验 · UI 对标 · 历史生命周期（分支 p1-quick-batch）
+
+> 规划入口：`docs/plans/2.1.11-dev-plans/`（README 阶段表 + decisions.md）。
+> VERSION 冻结前保持 2.1.10.dev0。P1 收官记录见
+> `p1-manual-test.md`（r1-r8 全 PASS）。
+
+- **P1-1 provider API key 显隐（六层链 + 四轮修复）**：编辑已配置
+  provider 的 key 字段占位态「已配置——留空保存不变」+ 眼睛按钮按需
+  取回明文（ProviderEditPage → ccSwitchUi.revealKey → Rust
+  `reveal_id` → CLI `list --reveal-id` → 容器 adapter 命中行附全文，
+  其余行与所有快照恒掩码；SQLite WAL 宿主直读不可靠故走容器 adapter）。
+  手测八轮揪出三层真凶：①输入框宽度 r2-r4 三连修，终局
+  `.field > span.key-row`（0,2,1）压过标签规则的 `width:90px;
+  flex:none`（0,1,1）；②眼睛无声无息 = Rust `CcSwitchProvider` 缺
+  `api_key` 字段 serde 静默剥明文（`8c7c860`——教训：端到端验证必须
+  穿透到消费端，此前只验到 CLI 层）；③17:00 两次瞬时失败 = 容器内
+  cc-switch daemon WAL checkpoint 锁 `mode=ro` 连接——`read_snapshot`
+  改 `mode=rw+query_only`（可参与恢复、语句级写保护不变）+ 三次退避
+  （`42a5dc5`）。失败可见化三件套（r5 `af16a15`）：store 不吞错 +
+  banner 渲染 technical_detail 第二行 + 取回中脉冲。
+- **P1-2 spool 回放顶部空白根治**（`5916605`）：linearize 过滤器
+  剥离屏幕编排序列——加载更早输出后顶部不再出现大片空白。
+- **P1-3 忘记/清除记录生命周期治理**（`6034a53`）：勾选清理（默认勾，
+  绝不碰工作区用户文件）+ 先导出 zip（Tauri save dialog）。
+- **r4 增补·搬迁工作区 recent 守门**（`edd534c`）：Enter 快捷键绕过
+  禁用按钮直启 → docker `-v` 静默重建旧路径为空目录。`startEnabled`
+  判定提升进 workspaceRuntime store，按钮/Enter/store action 三处同源。
+- **r6 增补·serve 闸门放行 envelope 子命令**（`682b7a4`）：远程
+  provider 全不可用真凶——`_SERVE_CLI_DENY` 按顶层命令一刀切拒绝
+  `cc-switch`（设计意图拦裸 TUI，误伤 workbench 驱动的六个 envelope
+  子命令）。allowlist 化（default-deny 不变）+ 测试以「报错文案是否
+  含 cannot run over serve」钉住闸门内外。远端交付：CLI 包 rsync 到
+  NAS + 镜像重建（NAS docker daemon 死代理 `127.0.0.1:7897` 拦拉取，
+  本机 `docker save|load` 推 node:20-slim + legacy builder 绕过）。
+- **r7 增补·本地 provider 切驻留 serve（传输统一 step 1，`e1c9df5`）**：
+  用户实测远程 provider 比本地快且全生效——远程 D-10 驻留 serve op
+  进程内分发，本地逐次 spawn 冷启 aisc.exe（PyInstaller 解压+解释器+
+  Defender ~0.5-1s 启动税）。两步走裁决（decisions.md D-5）：step 1
+  仅 provider 操作切池化 serve（ServePool 扩 `local:<path>` 键 +
+  `cli_op_target` 双侧统一分发 + `run_serve_op_target` trace/log 对齐
+  包装）；实测冷 534ms / 热 10ms（原 ~1.4s）。配套：spawn 补 KI-6
+  docker PATH（本地 serve 的 docker exec 子进程依赖）；
+  `drain_pool` 挂 RunEvent::Exit（statics 不 Drop——测试实证不排水
+  会孤儿化 aisc.exe 子进程）；门控测试两连 op 共享一会话 + 显式排水。
+  **step 2（全部命令迁移 + banner 版本配对驱逐 + --events 通道裁决）
+  独立分支下轮**。
+- **r8·build-cli 前置检测**（`1a91850`）：现场教训——CLI 源码改动
+  （serve.py 闸门）只同步远程包未重建本地 sidecar，r7 新路由跑旧闸门
+  复现远程同款报错；且运行中 Workbench 驻留 serve 锁
+  target\debug\aisc.exe，构建 Copy-Item 半途失败留半同步态。前置检测：
+  发现运行中 aisc.exe 即拒绝构建。
+- **环境性事故两起（C:→D: 搬迁余震）**：editable install 仍指 C 盘
+  旧仓库（6 测 ModuleNotFoundError）→ 重装指向 D 盘；`target/debug`
+  构建脚本产物全带 C: 绝对路径（tauri permissions 读取失败，cargo
+  指纹不含路径不重跑）→ 清 target 重编，手工保住 aisc.exe/aisc-bundle
+  两工件归位。
+
+
 # v2.1.10-dev (2026-09-07 ~) — F1 剥离封存 · CLI 远程化（分支 develop）
 
 > 规划入口：`docs/plans/2.1.10-dev-plans/`（README 阶段表 + decisions.md D-1..D-6 +
