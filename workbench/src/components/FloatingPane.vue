@@ -9,14 +9,21 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSettingsStore } from "../stores/settings";
 
-defineProps<{ title: string; wide?: boolean }>();
+const props = withDefaults(defineProps<{
+  title: string;
+  wide?: boolean;
+  /** W1 手测 r2: FIXED footprint (the body scrolls inside) — same model as
+   * the remote-folder browse layer, not grow-with-content. */
+  height?: string;
+}>(), { height: "min(640px, 82vh)" });
 const emit = defineEmits<{ (e: "close"): void }>();
 const { t } = useI18n();
-// W1 manual test r1#2: same zoom treatment as ToastHost/palette — the
+// W1 手测 r1#2: same zoom treatment as ToastHost/palette — the
 // teleport escapes App's zoom scope, so the pane re-applies ui.font_scale
 // itself (position offsets stay unscaled, content scales).
 const settings = useSettingsStore();
 const uiScale = computed(() => settings.doc?.ui.font_scale ?? 1);
+const paneHeight = computed(() => ({ height: props.height }));
 const paneRef = ref<HTMLElement | null>(null);
 
 function onKeydown(e: KeyboardEvent): void {
@@ -41,7 +48,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown, { capture
         ref="paneRef"
         class="float-pane"
         :class="{ wide }"
-        :style="{ zoom: uiScale }"
+        :style="{ zoom: uiScale, ...paneHeight }"
         role="dialog"
         aria-modal="true"
         :aria-label="title"
@@ -77,6 +84,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown, { capture
   padding: 4vh 4vw;
 }
 .float-pane {
+  /* W1 手测 r2: fixed footprint; .float-body scrolls. */
   display: flex;
   flex-direction: column;
   width: min(720px, 92vw);

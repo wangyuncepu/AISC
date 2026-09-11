@@ -461,6 +461,8 @@ onBeforeUnmount(() => {
       <FloatingPane
         v-if="ws.settingsTabActive"
         :title="t('workspbar.settings')"
+        wide
+        height="min(680px, 84vh)"
         @close="ws.closeSettingsTab()"
       >
         <SettingsTab />
