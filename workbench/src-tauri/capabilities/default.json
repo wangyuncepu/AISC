@@ -2,7 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main",
+    "ws-*"
+  ],
   "permissions": [
     "core:default",
     "dialog:default",
@@ -10,6 +13,7 @@
     "core:window:allow-is-focused",
     "core:window:allow-is-minimized",
     "core:window:allow-set-title",
+    "core:webview:allow-create-webview-window",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
     "notification:allow-is-permission-granted",

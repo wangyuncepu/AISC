@@ -23,6 +23,7 @@ import { useWorkspacesStore } from "../stores/workspaces";
 import { useSettingsStore } from "../stores/settings";
 import { useTeleportedZoom } from "../lib/useTeleportedZoom";
 import { useDoctorStore } from "../stores/doctor";
+import { openWorkspaceWindow } from "../lib/workspaceWindow";
 
 const { t } = useI18n();
 const facade = useRuntimeStore();
@@ -31,6 +32,27 @@ const ws = useWorkspacesStore();
 const settings = useSettingsStore();
 const toast = useToastStore();
 const { zoomStyle } = useTeleportedZoom();
+
+// P2-2 → W3: the global status label rides the menu bar's right end now
+// (the workspace strip is retired). Same quiet-text language.
+const STATUS_KEY: Record<string, string> = {
+  picker: "app.status.picker",
+  preflight: "app.preflight",
+  summary: "app.status.summary",
+  starting: "app.starting",
+  cancelled: "app.status.cancelled",
+  building: "app.status.building",
+  conflict: "app.status.conflict",
+  ready: "app.status.ready",
+  stopping: "app.stopping",
+  error: "app.error.title",
+};
+const statusRaw = computed(() => facade.status);
+const statusLabel = computed(() =>
+  facade.dockerStarting
+    ? t("app.dockerStartingStatus")
+    : t(STATUS_KEY[facade.status] ?? "app.unknown")
+);
 
 const openMenu = ref<"ops" | "edit" | "help" | null>(null);
 const menuBtn = ref<Record<string, HTMLButtonElement | null>>({});
@@ -85,7 +107,14 @@ async function openByPath(path: string): Promise<void> {
     toast.error(t("menubar.pathMissing", { path }));
     return;
   }
-  facade.selectRecentWorkspace(path);
+  // W3: recents open in their OWN window (remote paths carry the machine).
+  void openWorkspaceWindow({
+    workspace: path,
+    machine: path.startsWith("/")
+      ? (settings.target?.machine?.name
+        ?? settings.doc?.remoteMachines?.[0]?.name ?? null)
+      : null,
+  });
 }
 
 async function openFromFolder(): Promise<void> {
@@ -93,7 +122,9 @@ async function openFromFolder(): Promise<void> {
   const picked = await open({
     directory: true, multiple: false, title: t("menubar.openFolder"),
   });
-  if (typeof picked === "string") void openByPath(picked);
+  if (typeof picked === "string") {
+    void openWorkspaceWindow({ workspace: picked });
+  }
 }
 
 async function openFromMachine(): Promise<void> {
@@ -104,8 +135,9 @@ async function openFromMachine(): Promise<void> {
     toast.error(t("menubar.noMachines"));
     return;
   }
-  await settings.switchTarget(machine);
-  if (!ws.openLauncher()) toast.error(t("workspbar.capHint"));
+  // A remote launcher window: the drive target switches on boot, the
+  // picker's remote browse carries the rest.
+  void openWorkspaceWindow({ machine });
 }
 
 const recents = computed(() =>
@@ -123,7 +155,7 @@ function menuPos(which: string): { left: string; top: string } {
 
 function newWindow(): void {
   closeMenu();
-  if (!ws.openLauncher()) toast.error(t("workspbar.capHint"));
+  void openWorkspaceWindow();
 }
 function openSettings(): void {
   closeMenu();
@@ -170,6 +202,11 @@ async function openDocs(): Promise<void> {
       @click="toggle('help')"
     >{{ t("menubar.help") }}</button>
 
+    <span class="mb-spacer" />
+    <span class="mb-status" :data-status="statusRaw" :title="statusLabel">
+      {{ statusLabel }}
+    </span>
+
     <Teleport to="body">
       <ul
         v-if="openMenu"
@@ -188,12 +225,13 @@ async function openDocs(): Promise<void> {
           <li
             v-for="r in recents"
             :key="r.path"
+            class="recent"
             role="menuitem"
             tabindex="0"
-            :title="r.path"
             @click="openByPath(r.path)"
           >
-            {{ t("menubar.recentPrefix") }}{{ r.label || r.path }}
+            <span class="recent-name">{{ r.label }}</span>
+            <span class="recent-path">{{ r.path }}</span>
           </li>
           <li v-if="!recents.length" class="dim" role="presentation">
             {{ t("menubar.noRecents") }}
@@ -246,6 +284,16 @@ async function openDocs(): Promise<void> {
 }
 .menubar-btn:hover { background: var(--surface-hover); color: var(--text); }
 .menubar-btn.open { background: var(--accent-soft); color: var(--accent); }
+.mb-spacer { flex: 1; }
+.mb-status {
+  font-size: var(--font-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.mb-status[data-status="ready"] { color: var(--success); }
+.mb-status[data-status="error"],
+.mb-status[data-status="blocked"] { color: var(--error); }
+@media (max-width: 700px) { .mb-status { display: none; } } /* compact: keep the bar readable */
 </style>
 
 <style>
@@ -276,6 +324,21 @@ async function openDocs(): Promise<void> {
 .menubar-drop li:hover { background: var(--accent-soft); color: var(--text); }
 .menubar-drop li.sep { height: 1px; padding: 0; margin: 4px 8px; background: var(--border); }
 .menubar-drop li.dim { color: var(--text-faint); cursor: default; }
+/* 手测 r1#1: VS Code-style recents — name bold, full path dimmed below. */
+.menubar-drop li.recent {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 14px;
+}
+.menubar-drop li.recent .recent-name { font-weight: 600; color: var(--text); }
+.menubar-drop li.recent .recent-path {
+  font-size: var(--font-xs);
+  color: var(--text-faint);
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .menubar-drop kbd {
   font-family: inherit;
   font-size: var(--font-xs);

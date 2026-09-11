@@ -80,15 +80,15 @@ describe("FIX-3 source contracts — WorkspaceView.vue", () => {
 });
 
 describe("FIX-3 source contracts — App.vue dead rules removed", () => {
-  it("the never-matching compact overrides are gone (bar-status rule is the one live compact rule)", () => {
+  it("the never-matching compact overrides are gone (strip left with W3)", () => {
     const v = src("App.vue");
     expect(v).not.toContain('[data-tier="compact"] .explorer-dock');
     expect(v).not.toContain('[data-tier="compact"] .status-drawer');
     expect(v).not.toContain('[data-tier="compact"] .sidebar');
-    // P2-2 (D-2): the topbar row was removed — its compact rules left with
-    // it; the ONE live compact rule now guards WorkspaceBar's bar-status.
+    // P2-2 removed the topbar, W3 removed the workspace strip — both
+    // compact rules left with their rows (status rides the menu bar now).
     expect(v).not.toContain('[data-tier="compact"] .topbar');
-    expect(v).toContain('[data-tier="compact"] .workspbar .bar-status');
+    expect(v).not.toContain('.workspbar'); // W3: the strip is gone entirely
     expect(v).toContain(':tier="layoutTier"');
   });
 });

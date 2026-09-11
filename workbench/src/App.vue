@@ -41,7 +41,6 @@ import SettingsTab from "./features/settings/SettingsTab.vue";
 import NetworkUsageTab from "./features/usage/NetworkUsageTab.vue";
 import DoctorDialog from "./features/doctor/DoctorDialog.vue";
 import OnboardingWizard from "./features/onboarding/OnboardingWizard.vue";
-import WorkspaceBar from "./features/workspace/WorkspaceBar.vue";
 import WorkspaceView from "./features/workspace/WorkspaceView.vue";
 import { useWorkspaceExplorerStore } from "./stores/workspaceExplorer";
 import { useOnboardingStore } from "./stores/onboarding";
@@ -179,20 +178,8 @@ function onAppKeydown(e: KeyboardEvent) {
     toggleExplorerCollapsed();
     return;
   }
-  if (showOnboarding.value || !workspaceLayerVisible.value) return;
-  if (e.key === "PageUp" && !e.altKey && !e.shiftKey) {
-    e.preventDefault();
-    ws.cycle(-1);
-  } else if (e.key === "PageDown" && !e.altKey && !e.shiftKey) {
-    e.preventDefault();
-    ws.cycle(1);
-  } else if (e.altKey && e.key >= "1" && e.key <= "9") {
-    const target = ws.runtimes[Number(e.key) - 1];
-    if (target) {
-      e.preventDefault();
-      ws.activate(target.id);
-    }
-  }
+  // W3 (ruling c): cross-workspace cycling left with the strip — the OS
+  // taskbar owns window switching now.
 }
 onMounted(() => window.addEventListener("keydown", onAppKeydown, { capture: true }));
 
@@ -339,6 +326,17 @@ async function runExitFlow(): Promise<void> {
   const allow = await store.confirmExit();
   if (!allow) return;
   const win = getCurrentWindow();
+  // W3: a spawned workspace window closes alone — no tray/app teardown
+  // while other windows (or the main launcher window) live.
+  if (win.label !== "main") {
+    await store.flushSave();
+    void shutdownWorkbenchV2({
+      workspaces: store.shutdownTargets(),
+      reason: "window_close",
+    }).catch(() => undefined);
+    void win.destroy().catch(() => undefined);
+    return;
+  }
   void win.hide().catch(() => undefined);
   void trayRemove().catch(() => undefined);
   void captureWindowGeometry().catch(() => undefined);
@@ -357,6 +355,28 @@ async function runExitFlow(): Promise<void> {
   });
 }
 
+/** W3 (ruling c): a window spawned with ?workspace= (POSIX ⇒ remote,
+ * ?machine names the drive) boots STRAIGHT into its workspace — one
+ * window, one workspace; the OS taskbar owns cross-workspace switching. */
+async function consumeBootParams(): Promise<void> {
+  const params = new URLSearchParams(location.search);
+  const wsPath = params.get("workspace");
+  const machine = params.get("machine");
+  if (!wsPath && !machine) return;
+  await settingsStore.refreshTarget();
+  if (machine) {
+    await settingsStore.switchTarget(machine);
+  } else if (wsPath?.startsWith("/")) {
+    const name = settingsStore.target?.machine?.name
+      ?? settingsStore.doc?.remoteMachines?.[0]?.name ?? null;
+    if (settingsStore.target?.kind !== "remote") await settingsStore.switchTarget(name);
+  }
+  if (!ws.openLauncher()) return; // cap guard (harmless in a fresh window)
+  if (!wsPath) return; // remote launcher window — the picker carries on
+  if (!(await ws.workspacePathExists(wsPath))) return; // launcher surfaces the miss
+  store.selectRecentWorkspace(wsPath);
+}
+
 onMounted(() => {
   // PP r8 (user request): kill the WebView2 default context menu app-wide —
   // the only context menus in the Workbench are our own Vue ones.
@@ -366,7 +386,8 @@ onMounted(() => {
   // instead of stranding the user on a wizard (A-21735).
   void (async () => {
     await onboardingStore.load();
-    store.negotiate();
+    await store.negotiate();
+    await consumeBootParams();
   })();
   // G-09 (02 §3.1): resolve + apply the locale in parallel.
   void (async () => {
@@ -464,7 +485,6 @@ onBeforeUnmount(() => {
       <!-- W2 (shell-redesign, ruling a): the in-window menu bar. The strip
            below still carries multi-workspace chips until W3 retires it. -->
       <MenuBar v-if="workspaceLayerVisible" />
-      <WorkspaceBar v-if="workspaceLayerVisible" />
 
       <!-- W1 (shell-redesign): Settings & the data dashboard are FLOATING
            panes now (rail-bottom icons / Ctrl+, / palette) — the workspace
@@ -588,7 +608,6 @@ onBeforeUnmount(() => {
 </style>
 
 <style>
-/* P2-2: unscoped ON PURPOSE — reaches WorkspaceBar's .bar-status on compact
- * tiers (keep the chips readable; same rationale the old topbar rule had). */
-.app[data-tier="compact"] .workspbar .bar-status { display: none; }
+/* P2-2 → W3: the strip's compact rule left with the strip (the status
+ * label now rides the menu bar, hidden on compact in MenuBar's own styles). */
 </style>
