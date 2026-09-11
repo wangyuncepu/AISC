@@ -238,20 +238,6 @@ function dirOf(p: string): string {
   return i === -1 ? "" : p.slice(0, i);
 }
 
-async function switchKind(kind: "explorer" | "conversations" | "artifacts" | "services") {
-  explorer.activeKind = kind;
-  if (kind === "conversations") {
-    // v2.1.8 T4 手测反馈: ALWAYS rescan on activation — new sessions land
-    // when the user opens the tab, never a stale cached list. The scan is
-    // local JSONL head reads; cheap relative to its value.
-    await explorer.loadConversations(true);
-  }
-  if (kind === "services") {
-    // Fresh list on activation; the 5s runtime poll keeps it fresh after.
-    void runtime.refreshWebServices();
-  }
-}
-
 // --- svc-4+: Web services tab (parallel to files/artifacts) ---
 
 const servicesSupported = computed(() => runtime.capability?.runtime_services ?? false);
@@ -914,49 +900,6 @@ function onTreeKeydown(e: KeyboardEvent) {
 <template>
   <div class="explorer" data-testid="workspace-explorer">
     <div class="explorer-header">
-      <div class="explorer-tabs" role="tablist" aria-orientation="horizontal">
-        <button
-          role="tab"
-          :aria-selected="explorer.activeKind === 'explorer'"
-          class="explorer-tab"
-          :class="{ active: explorer.activeKind === 'explorer' }"
-          @click="switchKind('explorer')"
-        >
-          {{ t("explorer.tab.files") }}
-        </button>
-        <!-- v2.1.8 T4 手测反馈 #3: agent history gets its own tab (文件 → 历史 →
-             变更) — inside the 变更 panel it read as one of the artifact groups
-             and confused the panel's semantics. -->
-        <button
-          role="tab"
-          :aria-selected="explorer.activeKind === 'conversations'"
-          class="explorer-tab"
-          :class="{ active: explorer.activeKind === 'conversations' }"
-          @click="switchKind('conversations')"
-        >
-          {{ t("explorer.tab.conversations") }}
-        </button>
-        <button
-          role="tab"
-          :aria-selected="explorer.activeKind === 'artifacts'"
-          class="explorer-tab"
-          :class="{ active: explorer.activeKind === 'artifacts' }"
-          @click="switchKind('artifacts')"
-        >
-          {{ t("explorer.tab.artifacts") }}
-        </button>
-        <!-- svc-4+: runtime web services, parallel to files/artifacts -->
-        <button
-          v-if="servicesSupported"
-          role="tab"
-          :aria-selected="explorer.activeKind === 'services'"
-          class="explorer-tab"
-          :class="{ active: explorer.activeKind === 'services' }"
-          @click="switchKind('services')"
-        >
-          {{ t("explorer.tab.services") }}
-        </button>
-      </div>
       <!-- Stage 11 (11c): VS Code-density action row. Icon-only so Compact
            widths never squeeze the tabs (03 §2). -->
       <div class="explorer-actions">
@@ -1439,38 +1382,8 @@ function onTreeKeydown(e: KeyboardEvent) {
   padding: var(--space-1) var(--space-2);
   border-bottom: var(--border-w) solid var(--border);
 }
-.explorer-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-3);
-}
-.explorer-tab {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  padding: 0 var(--space-2);
-  min-height: 22px;
-  border-radius: calc(var(--radius-sm) - 2px);
-  cursor: pointer;
-  font-size: var(--font-sm);
-  transition: background-color var(--duration-normal) var(--ease),
-    color var(--duration-normal) var(--ease);
-}
-.explorer-tab:hover {
-  background: var(--surface-hover);
-  color: var(--text-2);
-}
-.explorer-tab.active {
-  background: var(--accent-soft);
-  color: var(--text);
-  font-weight: 600;
-}
-.explorer-tab:focus-visible {
-  outline: var(--focus-ring-width) solid var(--focus);
-  outline-offset: var(--focus-ring-offset);
-}
+/* P2-3 手测 r1#2 (user ruling): the text tabs are GONE — the activity
+ * rail owns panel switching; this header is the action row only. */
 .explorer-actions {
   display: flex;
   gap: 2px;

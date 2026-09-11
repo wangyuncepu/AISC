@@ -79,6 +79,15 @@ function onRailIcon(kind: string): void {
     return;
   }
   explorerStore.activeKind = action.kind as typeof explorerStore.activeKind;
+  // Activation side effects (moved from the retired text tabs' switchKind):
+  // conversations ALWAYS rescan on activation (v2.1.8 T4 — new sessions land
+  // when the user opens the view, never a stale cached list); services take
+  // a fresh list (the 5s runtime poll keeps it fresh after).
+  if (action.kind === "conversations") {
+    void explorerStore.loadConversations(true);
+  } else if (action.kind === "services") {
+    void store.refreshWebServices();
+  }
   if (action.do === "expand") setExplorerCollapsed(false);
 }
 
@@ -418,16 +427,11 @@ function setPaneTreeRef(tabId: string) {
         :class="{ collapsed: panelLayout.explorerCollapsed, anim: dockAnimating }"
         :style="dockStyle"
       >
-        <!-- v-show on purpose (audit (c)): remount would drop in-flight
-             search/rename state and the tree's scroll position. -->
-        <div v-show="!panelLayout.explorerCollapsed" class="explorer-panel">
-          <WorkspaceExplorer />
-        </div>
         <!-- P2-3 (D-4): the FIX-3 single-« rail is now a PERMANENT ACTIVITY
-             BAR — one icon per side view; click = expand+land /
-             toggle-collapse / switch (VS Code semantics); the active view's
-             icon carries the accent + left bar. Ctrl+B toggles the panel
-             globally (App.vue). -->
+             BAR — LEFTMOST, VS Code-style (手测 r1: born on the wrong side).
+             One icon per side view; click = expand+land / toggle-collapse /
+             switch (VS Code semantics); the active view's icon carries the
+             accent + left bar. Ctrl+B toggles the panel globally (App.vue). -->
         <nav
           class="explorer-rail"
           :aria-label="t('explorer.railLabel')"
@@ -463,6 +467,11 @@ function setPaneTreeRef(tabId: string) {
             </button>
           </template>
         </nav>
+        <!-- v-show on purpose (audit (c)): remount would drop in-flight
+             search/rename state and the tree's scroll position. -->
+        <div v-show="!panelLayout.explorerCollapsed" class="explorer-panel">
+          <WorkspaceExplorer />
+        </div>
       </div>
       <!-- Drag handle: hidden when collapsed (rail must expand first) and in
            compact (the responsive rule owns the width — a dead handle would
@@ -631,7 +640,12 @@ function setPaneTreeRef(tabId: string) {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  width: 100%;
+  /* 40px = EXPLORER_COLLAPSED_W (panelLayout.ts). FIXED, flex-none — the
+   * old single-button rail used width:100% (= the 40px dock); as a direct
+   * dock child that would grab container width and squeeze the panel
+   * (手测 r1: misaligned hover rect, panel/rail split). */
+  width: 40px;
+  flex: none;
   padding: var(--space-2) 0;
   border-right: var(--border-w) solid var(--border);
   box-sizing: border-box;

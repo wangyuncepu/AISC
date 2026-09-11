@@ -75,8 +75,8 @@ describe("svc-4+ explorer services tab", () => {
     setup(true);
     const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
     try {
-      const tab = wrapper.find('[role="tab"][aria-selected="true"]');
-      expect(tab.text()).toBe("服务");
+      // P2-3 手测 r1#2: the text tabs are gone — the rail owns switching;
+      // assert the PANEL content directly (store already set activeKind).
       expect(wrapper.find(".services-gateway").text()).toContain("47831");
       const rows = wrapper.findAll(".service-row");
       expect(rows).toHaveLength(2);
@@ -113,14 +113,13 @@ describe("svc-4+ explorer services tab", () => {
     }
   });
 
-  it("hides the tab without the runtimeServices capability", () => {
+  it("renders no services rows without the runtimeServices capability", () => {
+    // P2-3 手测 r1#2: the tab strip is gone; the gate now means the services
+    // VIEW stays empty (unsupported copy) when the capability is absent.
     setup(false);
     const wrapper = mount(WorkspaceExplorer, { global: { plugins: [i18n] } });
     try {
-      const tabs = wrapper.findAll('[role="tab"]').map((b) => b.text());
-      expect(tabs).not.toContain("服务");
-      expect(tabs).toContain("文件");
-      expect(tabs).toContain("变更");
+      expect(wrapper.findAll(".service-row")).toHaveLength(0);
     } finally {
       wrapper.unmount();
     }
