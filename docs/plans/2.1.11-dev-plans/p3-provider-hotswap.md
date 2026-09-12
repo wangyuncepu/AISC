@@ -110,3 +110,39 @@ agent ── env 指向 ──▶ 127.0.0.1:15720 映射 shim ──▶ 15721 cc
 实际服务方与实际模型随切换即时变化。
 
 **Slurm/PBS 方案文档**：仍阻塞在用户提供实际工作流。
+
+## 手测 r3/r4 轮（2026-09-12 下午）——三个现场问题全部闭环
+
+**r3（r2 修复后）结果**：拓扑四端口各就各位（15721/15722=python3 shim、
+15701/15702=cc-switch-real worker），claude 侧热切正常。r4 修复三个残留：
+
+1. **拉取模型 401**（`https://api.deepseek.com/anthropic/models`）——根因
+   不在 URL 候选链（剥离 `/anthropic` 根后的 `/v1/models`、`/models` 实测
+   200，key 有效），而在 `_codex_provider_fields` 的 key 提取优先级：
+   官方 switch/enable 会把**当前 provider 的 live key 同步进每一行的
+   `auth.OPENAI_API_KEY`**（deepseek 行里躺着 zhipu 的 key）——拿别家 key
+   探测自然全线 401。修复：行自有 TOML `api_key` 优先（`PROXY_MANAGED`
+   标记跳过），auth 只兜底。这同时治了两个潜伏问题：眼睛按钮会 reveal
+   出错误 provider 的 key；编辑不重填 key 会把别家 key 烧进该行。
+2. **「问他是什么模型回复错乱」+ codex 侧不热**——live 配置目录
+   （/root/.codex、/root/.claude）在持久卷上**跨容器世代存活**：上一代
+   旧镜像容器把 codex config.toml 的 base_url 留在 15702 直连，本代该
+   agent 从未 switch → 没人治它 → 本代新会话也读到 15702 → 整代绕过
+   shim → 旧模型名直击新 provider。修复：entrypoint 在 shim 起来后调
+   新增的 `aisc-cc-provider shim-heal`（等待绑定 ≤3s，幂等，shim 不在
+   则指回直连端口，fail-open 语义不变）。
+3. **cc-switch 里多出的 default 卡片**——官方 CLI 在 live 配置与任何行
+   不匹配时会把切换前 live 配置**自动导入为 `default` 行**（我们容器里
+   的 live 配置是 mcp-only 引导存根 → 空卡片，created_at=NULL，实测取证）。
+   修复：`op_list` 前置 `_sweep_import_artifacts`——只清「非当前 + 无任何
+   provider 信号（无 model_provider/base_url/ANTHROPIC_BASE_URL）」的
+   default 行，真叫 default 的用户行与当前行永不清；只读预检后才开写
+   事务（op_list 是高频路径，不与 daemon 抢写锁）。
+
+**顺带发现（无需修）**：claude 侧官方代理自带「别名模式」——live env 写
+`claude-opus-4-8[1M]` 等稳定别名 + `*_NAME` 伴生字段，worker 按当前行翻译；
+shim 对别名（不在任何行 role_env 里）按「未映射」透传，两者叠加不冲突。
+codex 无别名机制，shim 是它唯一的热切路径。
+
+**测试**：key 优先级 2 例 + PROXY_MANAGED 跳过 + default 清扫 2 例
+（工件清/真行留）入 test_cc_switch_provider_adapter.py；全量 pytest 绿。

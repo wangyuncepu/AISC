@@ -757,9 +757,11 @@ if command -v aisc-web-gateway >/dev/null 2>&1 && command -v python3 >/dev/null 
 fi
 
 # ==========================================
-# AISC 模型映射 shim（P3 热切换，2026-09-12）：agent 流量 → shim(15711/15712)
-# → cc-switch 代理(15721/15722)。shim 按「当前 provider 的角色映射表」重写
-# 请求体 model 字段——切换 provider 后，运行中会话的下一个请求即走新模型。
+# AISC 模型映射 shim（P3 热切换，2026-09-12）：agent 流量 → shim(15721/15722)
+# → cc-switch 代理(15701/15702)。shim 占据历史端口 1572x——运行中会话的内存
+# env 指向那里；worker 由 entrypoint/adapter 挪到 1570x（daemon 启动前）。
+# shim 按「当前 provider 的角色映射表」重写请求体 model 字段——切换 provider
+# 后，运行中会话的下一个请求即走新模型。
 # 失败只告警不阻断：shim 死亡时 adapter 的挂钩会把 live 文件指回直连代理
 # （fail-open），agent 连通性永远优先于映射。
 # ==========================================
@@ -771,6 +773,10 @@ if command -v aisc-model-shim >/dev/null 2>&1 && command -v python3 >/dev/null 2
     if ! pgrep -f "aisc-model-shim" >/dev/null 2>&1; then
         echo "⚠️  AISC 模型映射 shim 启动失败；日志: /tmp/aisc-model-shim-*.log（provider 切换将退化为非热切）" >&2
     fi
+    # 手测 r4#3：跨代自愈——live 配置目录是持久卷，上一代容器（旧镜像/该 agent
+    # 从未切换过）可能把 base_url 留在 1570x 直连端口，本代会话就绕过 shim。
+    # 等 shim 绑定后把两个 live 存根都指到 shim（幂等，shim 不在则指回直连）。
+    aisc-cc-provider shim-heal >/dev/null 2>&1 || true
 fi
 
 # ==========================================

@@ -316,28 +316,36 @@ def op_usage(since_epoch_s: float) -> dict[str, Any]:
 
 
 def _codex_provider_fields(settings: dict[str, Any], pid: str) -> dict[str, str]:
-    """base_url/model from the provider TOML; api_key from auth.OPENAI_API_KEY
-    (the live key channel — ~/.codex/auth.json is written from it on switch)
-    with the legacy TOML ``api_key`` line as fallback for older rows."""
+    """base_url/model from the provider TOML; api_key: the row's OWN TOML
+    ``api_key`` line first. Live probe 2026-09-12 (手测 r4#4) disproved the
+    old auth-first order: the official switch/enable syncs the CURRENT
+    provider's live key into EVERY row's ``auth.OPENAI_API_KEY`` — the
+    deepseek row carried zhipu's key, so fetch-models probed deepseek with a
+    foreign key and every URL 401'd (the reveal eye would have shown the
+    wrong key too, and an edit without re-typing would have baked it in).
+    auth stays the fallback for upstream-TUI rows whose TOML predates the
+    per-provider key line; a copied live ``PROXY_MANAGED`` marker never wins."""
     fields = {"base_url": "", "model": "", "api_key": ""}
-    auth = settings.get("auth")
-    if isinstance(auth, dict) and auth.get("OPENAI_API_KEY"):
-        fields["api_key"] = str(auth["OPENAI_API_KEY"])
     config_text = settings.get("config")
-    if not isinstance(config_text, str) or not config_text:
-        return fields
-    try:
-        toml = tomllib.loads(config_text)
-    except Exception:
-        return fields
+    toml: dict[str, Any] = {}
+    if isinstance(config_text, str) and config_text:
+        try:
+            toml = tomllib.loads(config_text)
+        except Exception:
+            toml = {}
     fields["model"] = str(toml.get("model") or "")
     providers = toml.get("model_providers")
     if isinstance(providers, dict):
         entry = providers.get(pid) or next(iter(providers.values()), None)
         if isinstance(entry, dict):
             fields["base_url"] = str(entry.get("base_url") or "")
-            if not fields["api_key"]:
-                fields["api_key"] = str(entry.get("api_key") or "")
+            key = str(entry.get("api_key") or "")
+            if key and key != "PROXY_MANAGED":
+                fields["api_key"] = key
+    if not fields["api_key"]:
+        auth = settings.get("auth")
+        if isinstance(auth, dict) and auth.get("OPENAI_API_KEY"):
+            fields["api_key"] = str(auth["OPENAI_API_KEY"])
     return fields
 
 
@@ -1048,6 +1056,20 @@ def _point_stub_at_shim(agent: str) -> None:
         pass
 
 
+def _wait_shim_up(deadline_s: float = 3.0) -> bool:
+    """Boot-time helper: the entrypoint starts the shims detached just before
+    its shim-heal call — give them a moment to bind so the heal doesn't race
+    into choosing the direct port."""
+    end = time.monotonic() + deadline_s
+    while True:
+        if (_tcp_listening(SHIM_WIRING["claude"][0], attempts=1)
+                or _tcp_listening(SHIM_WIRING["codex"][0], attempts=1)):
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.25)
+
+
 def _ensure_route_serving(
     agent: str, secrets: list[str], *, probe_attempts: int = 4
 ) -> None:
@@ -1111,7 +1133,80 @@ def _settings_are_real(agent: str, row: dict[str, Any]) -> bool:
 # Operations
 # ---------------------------------------------------------------------------
 
+def _sweep_import_artifacts(agent: str) -> None:
+    """手测 r4#1 (2026-09-12, live-probed): the official CLI auto-imports the
+    pre-switch live config as a ``default`` row when it matches no known
+    provider — in our containers that live config is the mcp-only bootstrap
+    stub, so the row renders as a phantom empty card (created_at NULL, no
+    model_provider/base_url/env signal). Delete it on every list so the UI
+    never shows it; a REAL user row named "default" (any provider signal)
+    and any current row are kept. Best-effort — never fails the op.
+
+    op_list is the hot path (every UI refresh), so the write txn only opens
+    after a cheap read-only probe confirms a candidate row exists."""
+    try:
+        path = _db_path()
+        if not path.is_file():
+            return
+        probe = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True,
+                                timeout=5)
+        try:
+            rows = probe.execute(
+                "SELECT settings_config, is_current FROM providers "
+                "WHERE id = 'default' AND app_type = ?", (agent,)).fetchall()
+        finally:
+            probe.close()
+        # All-or-nothing: sweep only when EVERY non-current 'default' row is
+        # signal-free (in practice the id is unique per agent, so this is the
+        # single artifact row; a mixed set keeps the phantom rather than risk
+        # eating a real row named default).
+        found = False
+        sweepable = True
+        for raw, is_current in rows:
+            found = True
+            if is_current:
+                sweepable = False
+                continue
+            signal = _artifact_signal(raw)
+            if ("model_provider" in signal or "base_url" in signal
+                    or "ANTHROPIC_BASE_URL" in signal):
+                sweepable = False
+        if not found or not sweepable:
+            return
+        conn = sqlite3.connect(path, timeout=15)
+        try:
+            conn.execute("PRAGMA busy_timeout=15000")
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "DELETE FROM providers "
+                "WHERE id = 'default' AND app_type = ? AND is_current = 0",
+                (agent,))
+            conn.commit()
+        except sqlite3.Error:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+def _artifact_signal(raw: str | None) -> str:
+    """Flatten a settings_config into a string to search for provider
+    signals; unparseable content counts as signal (never sweep it)."""
+    try:
+        settings = json.loads(raw) if raw else {}
+    except (json.JSONDecodeError, TypeError):
+        return "model_provider"  # unknown shape — keep the row
+    if not isinstance(settings, dict):
+        return "model_provider"
+    return json.dumps(settings, ensure_ascii=False)
+
+
 def op_list(agent: str, reveal_id: str | None = None) -> list[dict[str, Any]]:
+    _sweep_import_artifacts(agent)
     return [provider_view(agent, row, reveal=(reveal_id is not None
                                               and row["id"] == reveal_id))
             for row in read_snapshot(agent)]
@@ -2231,7 +2326,8 @@ def _envelope(op: str, ok: bool, *, providers: Optional[list] = None,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aisc-cc-provider")
     parser.add_argument("op", choices=["list", "add", "edit", "switch", "delete",
-                                       "usage", "fetch-models", "catalog-sync"])
+                                       "usage", "fetch-models", "catalog-sync",
+                                       "shim-heal"])
     parser.add_argument("--agent", default=None, choices=list(AGENTS),
                         help="agent (required for every op except usage)")
     parser.add_argument("--id", default=None, help="provider id (add/edit/delete)")
@@ -2246,6 +2342,22 @@ def main(argv: list[str] | None = None) -> int:
                              "(background refresh — up to ~12s of network; "
                              "the switch path spawns this detached)")
     args = parser.parse_args(argv)
+
+    if args.op == "shim-heal":
+        # 手测 r4#3 (2026-09-12): the live claude/codex stub files ride the
+        # PERSISTED config dirs — a container generation that predates the
+        # model shim (or a generation where this agent was never switched)
+        # leaves them pointing at the direct worker port, so every session
+        # started in THIS generation bypasses the shim and provider switches
+        # send stale model names into the new provider. The entrypoint runs
+        # this once right after starting the shims; idempotent, best-effort
+        # (when no shim ever binds the stubs settle on the direct ports —
+        # the pre-shim topology, connectivity intact).
+        _wait_shim_up()
+        for _agent in ("claude", "codex"):
+            _point_stub_at_shim(_agent)
+        print(json.dumps(_envelope("shim-heal", True)))
+        return 0
 
     if args.op == "catalog-sync":
         # S9d: container-start catalog sync — the daemon/preset refresh

@@ -213,20 +213,60 @@ class SnapshotAndRedactionTests(AdapterTestCase):
         self.assertTrue(p["has_api_key"])
         self.assertEqual(p["api_key_mask"], "****9888")
 
-    def test_codex_snapshot_prefers_auth_channel_over_toml(self):
-        # auth.OPENAI_API_KEY is the live channel; the TOML api_key line is
-        # the legacy fallback — when both exist, auth wins the mask.
+    def test_codex_snapshot_prefers_row_own_toml_key(self):
+        # 手测 r4#4 (2026-09-12, live-probed): auth.OPENAI_API_KEY is synced
+        # to the CURRENT provider's live key on every official switch — a
+        # non-current row carries a FOREIGN key there. The row's own TOML
+        # api_key line is the per-row credential and must win.
         toml_config = (
             'model_provider = "deepseek"\n[model_providers.deepseek]\n'
             'base_url = "https://api.deepseek.com"\n'
-            'api_key = "sk-toml-stale-1111"\n'
+            'api_key = "sk-toml-own-1111"\n'
         )
         seed_provider(self.dir, "deepseek", {}, agent="codex",
                       settings={"config": toml_config,
                                 "auth": {"OPENAI_API_KEY": "sk-auth-live-7788"}})
         p = A.op_list("codex")[0]
         self.assertTrue(p["has_api_key"])
-        self.assertEqual(p["api_key_mask"], "****7788")
+        self.assertEqual(p["api_key_mask"], "****1111")
+
+    def test_codex_fields_skip_proxy_managed_marker(self):
+        # A live-stub TOML carries api_key = "PROXY_MANAGED" (the worker's
+        # bearer marker) — never a credential; auth is the fallback there.
+        toml_config = (
+            'model_provider = "deepseek"\n[model_providers.deepseek]\n'
+            'base_url = "http://127.0.0.1:15702/v1"\n'
+            'api_key = "PROXY_MANAGED"\n'
+        )
+        fields = A._codex_provider_fields(
+            {"config": toml_config, "auth": {"OPENAI_API_KEY": "sk-auth-9911"}},
+            "deepseek")
+        self.assertEqual(fields["api_key"], "sk-auth-9911")
+
+    def test_list_sweeps_imported_default_artifact(self):
+        # 手测 r4#1 (2026-09-12, live-probed): the official CLI auto-imports
+        # the pre-switch mcp-only stub config as a `default` row — a phantom
+        # empty card. op_list must delete it (non-current, no provider signal).
+        seed_provider(self.dir, "zhipu", {}, agent="codex", is_current=True,
+                      settings={"config": 'model_provider = "zhipu"\n'
+                                          '[model_providers.zhipu]\n'
+                                          'base_url = "https://open.bigmodel.cn/api/anthropic"\n'})
+        seed_provider(self.dir, "default", {}, agent="codex",
+                      settings={"config": '[mcp_servers.aisc-host]\n'
+                                          'url = "http://host.docker.internal:5959/mcp?token=x"\n'})
+        ids = [p["id"] for p in A.op_list("codex")]
+        self.assertNotIn("default", ids)
+        self.assertIn("zhipu", ids)
+
+    def test_list_keeps_real_default_row(self):
+        # A row legitimately named `default` that carries provider config is
+        # real user data — never swept (nor is any current row).
+        seed_provider(self.dir, "default", {}, agent="codex",
+                      settings={"config": 'model_provider = "deepseek"\n'
+                                          '[model_providers.deepseek]\n'
+                                          'base_url = "https://api.deepseek.com"\n'})
+        ids = [p["id"] for p in A.op_list("codex")]
+        self.assertIn("default", ids)
 
 
 class AddTests(AdapterTestCase):
