@@ -369,6 +369,13 @@ CC_SWITCH_DAEMON_LOG="/tmp/cc-switch-daemon.log"
 CC_SWITCH_CODEX_INIT_LOG="/tmp/cc-switch-codex-init.log"
 CC_SWITCH_SKILLS_LOG="/tmp/cc-switch-skills-init.log"
 if command -v cc-switch >/dev/null 2>&1; then
+    # P3 热切换拓扑（手测 r2）：daemon worker 默认绑 15721/15722——那两个
+    # 端口属于 model-shim（存量会话的内存 env 指向那里）。daemon 启动
+    # 【前】把 worker 端口持久化挪到 15701/15702（幂等；失败静默=按旧直连
+    # 拓扑工作，shim 起不来但不冲突）。必须先于 daemon start：worker 端口
+    # 在 daemon 启动时生效。
+    cc-switch proxy -a claude config --listen-port 15701 >/dev/null 2>&1 || true
+    cc-switch proxy -a codex config --listen-port 15702 >/dev/null 2>&1 || true
     CC_SWITCH_DAEMON_READY=0
     if cc-switch daemon start --detach >"$CC_SWITCH_DAEMON_LOG" 2>&1; then
         # PERF P9 (D-13): was 40 × (cc-switch CLI spawn + 0.25s sleep) =
