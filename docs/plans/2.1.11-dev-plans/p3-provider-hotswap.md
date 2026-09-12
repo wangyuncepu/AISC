@@ -146,3 +146,31 @@ codex 无别名机制，shim 是它唯一的热切路径。
 
 **测试**：key 优先级 2 例 + PROXY_MANAGED 跳过 + default 清扫 2 例
 （工件清/真行留）入 test_cc_switch_provider_adapter.py；全量 pytest 绿。
+
+## 手测 r5 轮（2026-09-12 晚）——Rust 边界剥字段三连案（98ba28e）
+
+**表象三连**：① codex「stream disconnected」（用户只改了模型映射）；
+② 编辑页映射不回显（/model 与 cc-switch 里都在）；③ 热切成功但用户
+不知道自己在用什么模型。
+
+**同一根因（①②）**：adapter 的 provider_view 一直发 role_env/
+known_models/api_format/model_catalog/notes 等字段，**Rust 边界结构体
+CcSwitchProvider 只收 8 个基础字段，其余全被 serde 静默剥掉**——
+- ② 编辑页拿到 undefined → 映射/目录空白；
+- ① 表单 api_format 拿不到真实值 → 按 codex 默认 openai_responses
+  回存 → zhipu（anthropic 线规）的 worker 路由把 /responses 直译到
+  anthropic 基座 → 上游 404 以 HTTP 200 + JSON 错误体返回 → codex
+  以为流开始、立即断流。**修复**：结构体补齐 8 个透传字段 + 目录条目
+  结构；活容器 meta.apiFormat 已改回 anthropic 并重挂路由（实测走
+  shim 流式 completed=True、回答文本完整）。
+
+**③（可见性）**：切换 toast 带实际模型（claude 主槽位/codex 行
+model）；当前卡片新增「实际模型」行。CLI 界面显示启动名是两 CLI 的
+显示层限制，工作台侧给出真值。
+
+**顺带**：vitest 全过仍 exit=1 的假绿（jsdom 无 scrollIntoView，
+CommandPalette 历史 unhandled rejection，stash 验证与本轮无关）——
+test-setup.ts 全局 stub 治理。
+
+**边界**：本轮 workbench 改动需重启 dev 应用生效；运行中的应用锁
+target exe，全量 cargo check 待关应用后补跑。
