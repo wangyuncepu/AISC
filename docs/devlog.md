@@ -106,6 +106,45 @@
   doctor/远程 provider+诊断/build 流/PTY。门禁：pytest 1220 / cargo
   lib 308 / 门控 3 测 8.5s 零孤儿 / vitest 471。
 
+- **P2-1..P2-3 反馈语法与 Shell 骨架（`5f90c23..9eead71` 三批并入）**：
+  全局 Toast 原语（底部居中 / progress 形态 / 随 UI 字号缩放）+ 空态
+  全带 CTA；topbar 整行退役（status 右移工作区条、窗口标题承继身份）；
+  rail 图标化常驻 activity bar + Ctrl+B。
+- **P2-4 命令面板 + P2-5 设置页重构（`ec657ea..76b168f`）**：Ctrl+Shift+P
+  注册表驱动命令面板（二级拆分子步骤、teleport 逃逸 zoom 与浮窗同源
+  共治）；设置页 VS Code 式左导航右内容 + 搜索（手测揪出
+  docker_available 蛇形序列化——调用返回序列化不吃参数 rename——/
+  死设置项退役 / 焦点环负偏移防越界三案）。
+- **P3 Provider 模型热切换（分支 p3-model-shim，`dbf8b55..07261c0` 十八
+  提交，手测 r1-r10 PASS，merge `07c131b`）**：调研定论——两 CLI env
+  均无原生热重载（claude 仅 hooks/权限/键位/主题热载），会话内实时变化
+  **只能走传输层**；provider 间路由本已热（本地代理换上游）。实施：
+  容器内 `aisc-model-shim`（占 1572x 历史端口——运行中会话内存 env 指向
+  那里；按当前 provider 角色表重写请求体 model 字段，fail-open）+ worker
+  挪 1570x（entrypoint 拓扑先于 daemon）+ 跨代 `shim-heal`。手测十轮连破
+  五案：①fetch-models 401（行 auth 段被官方 live 同步成当前 provider key
+  ——行自有 TOML key 优先 + PROXY_MANAGED 跳过；同治 reveal 错 key 与编辑
+  烧错 key）；②default 幽灵卡片（官方 CLI 自动导入 mcp-only 引导存根，
+  created_at=NULL 取证——op_list 前置只读预检清扫）；③codex 整代绕过
+  shim（持久卷跨代 1570x 残留——entrypoint 启动自愈）；④「stream
+  disconnected」（Rust 边界 CcSwitchProvider 剥掉 api_format 等八字段——
+  编辑按 codex 默认值回存把 anthropic 行改成 responses 线规→上游 404 以
+  HTTP 200+JSON 错误体返回——结构体补齐透传 + CcSwitchCatalogEntry）；
+  ⑤三方互切 401（worker 仅在 enable 时刻从 live auth.json 捕获 token 而
+  无头官方 switch 从不写它——disable/enable 之间同步行 key + 行 auth 段
+  归一 + fast-path/edit 路径同治）。可见性：切换 toast 与当前卡片带
+  「实际模型」；官方直连品牌 SVG；映射表四盒对齐（border-box 无全局
+  重置三连坑收官 r7-r10）。手测文化沉淀：容器排障五诀入库记忆。
+- **v2.1.11.dev0 封版（2026-09-12）**：四件套冻结（VERSION /
+  tauri 2.1.11-dev / envelope fixture 三处 / notes
+  `docs/releases/v2.1.11.dev0.md`——主题「传输统一收口 · Shell 对标
+  VS Code · Provider 模型热切换」）+ plans 归档
+  `docs/archive/2.1.11-dev-plans/`。周期总账：P1 八轮（key 显隐六层链/
+  spool 空白/生命周期治理/recent 守门/serve 闸门/传输统一两步）+ Shell
+  W1-W3 + P2-1..5 + P3 r1-r10。门禁：pytest **1235** / vitest **481**
+  （假绿治理：jsdom scrollIntoView stub）/ cargo lib 309。遗留：Slurm/PBS
+  调研阻塞用户工作流输入（顺延下周期）。
+
 
 # v2.1.10-dev (2026-09-07 ~) — F1 剥离封存 · CLI 远程化（分支 develop）
 
