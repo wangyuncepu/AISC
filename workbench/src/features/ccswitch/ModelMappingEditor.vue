@@ -125,6 +125,7 @@ function toggleOneM(key: string): void {
         @input="row.context_window = Number(($event.target as HTMLInputElement).value) || 128000"
       />
       <button class="icon danger" :title="t('ccswitch.mapping.remove')"
+              :aria-label="t('ccswitch.mapping.remove')"
               @click="removeCatalogRow(i)">×</button>
     </div>
     <datalist id="pp-cat-candidates">
@@ -146,10 +147,22 @@ input {
   min-height: var(--control-h-sm); padding: 0 var(--space-2); font-size: var(--font-sm);
 }
 input[type="number"] { max-width: 110px; }
-.cat-head, .cat-row { display: grid; grid-template-columns: 1fr 0.8fr 100px 24px; gap: 6px; align-items: center; }
+.cat-head, .cat-row { display: grid; grid-template-columns: 1fr 0.8fr 100px 28px; gap: 6px; align-items: center; }
 .cat-head { font-size: var(--font-xs); color: var(--text-faint); }
 button.icon { min-width: 24px; min-height: 24px; padding: 0; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: var(--font-md); }
-button.icon.danger:hover { color: var(--error); }
+/* 手测 r7 (2026-09-12): the row-delete × used to be a bare borderless glyph
+ * in muted gray at the row's far right — it read as a stray character, and
+ * the user concluded rows "can only be added, never deleted". Give it the
+ * actions-button treatment (bordered surface chip, danger on hover) so the
+ * affordance is visible at rest, not just on hover. */
+button.icon.danger {
+  min-width: 26px; min-height: 26px;
+  background: var(--surface-3);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+button.icon.danger:hover { color: var(--error-fg); border-color: var(--error-border); background: var(--error-bg); }
 /* PP r3 (user ruling): a proper toggle chip instead of the raw "[1m]" text
  * squished against the input — solid accent when on, quiet ghost when off. */
 button.icon.one-m {
