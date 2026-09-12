@@ -34,6 +34,16 @@ const glyphColor = computed(() => props.provider.icon_color || "");
 /** PP r3: the current provider has no 停用 button — switching happens by
  * enabling another entry (or the official one). */
 const startable = computed(() => !props.provider.is_current);
+/** 手测 r5#3 (2026-09-12): hot-swap makes the effective model invisible in
+ * the CLI (it displays its startup name forever) — the CURRENT card states
+ * what requests actually run on: the primary slot (claude role env) or the
+ * row's model (codex). */
+const actualModel = computed(() => {
+  if (!props.provider.is_current || official.value) return "";
+  const env = props.provider.role_env ?? {};
+  return env.ANTHROPIC_MODEL || env.ANTHROPIC_DEFAULT_OPUS_MODEL
+    || props.provider.model || "";
+});
 </script>
 
 <template>
@@ -47,6 +57,7 @@ const startable = computed(() => !props.provider.is_current);
       </span>
       <span v-if="official" class="url">{{ t("ccswitch.officialDesc") }}</span>
       <span v-else class="url" :title="provider.base_url">{{ provider.base_url }}</span>
+      <span v-if="actualModel" class="actual">{{ t("ccswitch.actualModel") }}：{{ actualModel }}</span>
     </span>
     <span v-if="provider.is_current" class="badge">{{ t("ccswitch.currentChip") }}</span>
     <span class="actions" @click.stop @keydown.stop>
@@ -89,6 +100,8 @@ const startable = computed(() => !props.provider.is_current);
 .note { color: var(--text-faint); margin-left: 4px; }
 .url { font-size: var(--font-xs); color: var(--text-muted); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
+.actual { font-size: var(--font-xs); color: var(--accent); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 /* PP r3: rounded-rect tag, not a pill (the 50% radius read as an ellipse). */
 .badge {
   flex: none; font-size: var(--font-xs); font-weight: 600;

@@ -293,6 +293,8 @@ export const zhCN = {
   "ccswitch.empty": "暂无 provider",
   "ccswitch.noRuntime": "运行时未启动，无法管理 provider。",
   "ccswitch.switchedTo": "已切换到 {name}",
+  "ccswitch.switchedToModel": "已切换到 {name}（实际模型：{model}）",
+  "ccswitch.actualModel": "实际模型",
   "ccswitch.switching": "切换中… {sec}s",
   "ccswitch.currentChip": "使用中",
   "ccswitch.colStatus": "状态",
