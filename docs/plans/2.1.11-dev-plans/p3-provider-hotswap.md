@@ -174,3 +174,28 @@ test-setup.ts 全局 stub 治理。
 
 **边界**：本轮 workbench 改动需重启 dev 应用生效；运行中的应用锁
 target exe，全量 cargo check 待关应用后补跑。
+
+## 手测 r6 轮（2026-09-12 夜）——codex 三方互切 401 与品牌图标
+
+**r6#1（401，api-key 不匹配）**：codex zhipu→deepseek 后请求带 zhipu key 打
+deepseek。实测证据链：live auth.json 在官方 `provider switch` 后**原样不动**
+（df1dfe 仍在）——无头官方 switch 从不写 auth.json；而 worker 只在 **enable
+时刻**从该文件捕获上游 token（此后不再读库）。因此三方→三方切换必然沿用
+上一个 provider 的 key → 401。r4 发现的「行 auth 段被 live 同步成当前
+provider key」是同一链条的前置污染源。
+
+**修复（adapter，三处）**：
+1. `_normalize_codex_row_auth`：switch 前把行自有 TOML key 钉进其 auth 段
+   （幂等，auth-only 行不动）；
+2. `_sync_codex_live_auth`：**disable 与 enable 之间**把行自有 key 写入 live
+   auth.json（worker 捕获即正确）；tokens 登录保留、占位符替换、无 key 行不动；
+3. fast path（重按当前行）与 edit-当前行路径同样 restage+重挂——历史脏状态
+   点一下即愈。
+活容器已手工修复并实测 deepseek 走 shim 正常应答。
+
+**r6#2（官方直连图标）**：DB 官方行 icon 字段存的是品牌标识
+（'anthropic' #D4915D / 'openai' #00A67E）；r5 边界修复后该字段到达前端，
+旧渲染把它当文本输出。ProviderCard 现按品牌 id 渲染内联 SVG
+（Claude 八辐星芒 / OpenAI 六瓣结），其余行维持字符回退。
+
+测试 +3（staging/normalize/fast-path 愈合）入 adapter 套件。

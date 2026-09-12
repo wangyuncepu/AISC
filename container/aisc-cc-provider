@@ -1423,6 +1423,11 @@ def op_edit(agent: str, provider_id: str, request: dict[str, Any]) -> list[dict[
     _db_merge_row_extra(agent, provider_id, extra)
     if switch_back_to:
         _cli_switch(agent, switch_back_to, secrets)
+        # r6#1: the key may have just changed — restage live auth.json and
+        # re-arm so the worker captures the fresh token (same 401 class).
+        if agent == "codex" and _sync_codex_live_auth(
+                {"id": provider_id, "settings": new_settings}):
+            _run_cli_quiet(["proxy", "-a", agent, "enable"], secrets)
     return op_list(agent)
 
 
@@ -1510,6 +1515,89 @@ def _manage_codex_auth_placeholder(*, remove: bool) -> None:
             os.chmod(path, 0o600)
         except OSError:
             pass  # best-effort: the wizard stays, but the switch itself holds
+
+
+def _normalize_codex_row_auth(agent: str, row: dict[str, Any]) -> None:
+    """手测 r6#1 (2026-09-12, live-probed): non-current codex rows accumulate
+    the CURRENT provider's key in their ``auth.OPENAI_API_KEY`` (official CLI
+    live-sync), and every switch/enable path reads that section — switching to
+    such a row serves the WRONG provider's key (zhipu→deepseek 401'd on
+    zhipu's key). Pin the row's OWN key (its TOML ``api_key``, the r4
+    extraction) into its auth section right before the switch applies it.
+    Idempotent + best-effort; auth-only rows (no TOML key) are already their
+    own source and never touched."""
+    settings = row.get("settings") or {}
+    auth = settings.get("auth")
+    auth = auth if isinstance(auth, dict) else {}
+    own = _codex_provider_fields(settings, str(row.get("id") or ""))["api_key"]
+    if not own or own == "PROXY_MANAGED" or own == str(auth.get("OPENAI_API_KEY") or ""):
+        return
+    try:
+        conn = sqlite3.connect(_db_path(), timeout=15)
+        try:
+            conn.execute("PRAGMA busy_timeout=15000")
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE providers SET settings_config = ? "
+                "WHERE id = ? AND app_type = ?",
+                (json.dumps({**settings, "auth": {**auth, "OPENAI_API_KEY": own}},
+                            ensure_ascii=False, separators=(",", ":")),
+                 str(row.get("id") or ""), agent),
+            )
+            conn.commit()
+        except sqlite3.Error:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+        finally:
+            conn.close()
+        # The caller's row dict stays truthful for the live-auth sync below.
+        settings["auth"] = {**auth, "OPENAI_API_KEY": own}
+    except Exception:
+        pass
+
+
+def _sync_codex_live_auth(row: dict[str, Any]) -> bool:
+    """Stage the row's own key into live ``~/.codex/auth.json`` between the
+    proxy disable and the enable — the worker captures the upstream token
+    from THIS file at enable time and never reads the db again (live-probed
+    2026-08-21), while the headless official switch NEVER writes it
+    (live-probed 2026-09-12, 手测 r6#1): without this, every codex
+    third-party→third-party switch keeps serving the PREVIOUS provider's key
+    → 401. Returns True when the file changed (the caller re-arms the route
+    so the fresh token is captured). A ChatGPT ``{"tokens": ...}`` login
+    keeps its tokens; the marker placeholder is replaced; keyless rows leave
+    the file alone."""
+    key = _codex_provider_fields(row.get("settings") or {},
+                                 str(row.get("id") or ""))["api_key"]
+    if not key or key == "PROXY_MANAGED":
+        return False
+    try:
+        path = _codex_auth_path()
+    except AdapterError:
+        return False  # no codex config dir in this environment — nothing to stage
+    data: dict[str, Any] = {}
+    try:
+        existing = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+        if existing:
+            parsed = json.loads(existing)
+            if isinstance(parsed, dict):
+                data = parsed
+    except (OSError, json.JSONDecodeError, ValueError):
+        data = {}
+    if str(data.get("OPENAI_API_KEY") or "") == key:
+        return False
+    data["OPENAI_API_KEY"] = key
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.aisc-tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        tmp.replace(path)
+        return True
+    except OSError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1990,6 +2078,15 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
         # O4 (D-11): fast path — a SINGLE TCP probe (no retry ring); a miss
         # falls into the full recovery, which keeps the healing semantics.
         if _settings_are_real(agent, row):
+            if agent == "codex":
+                # r6#1: a stale captured token (pre-fix switch) heals on the
+                # re-click — pin the row's key, and if the live file actually
+                # changed, re-arm so the worker captures the fresh token.
+                _normalize_codex_row_auth(agent, row)
+                if _sync_codex_live_auth(row):
+                    _run_cli_quiet(
+                        ["proxy", "-a", agent, "enable"],
+                        snapshot_secrets(agent, snapshot))
             _ensure_route_serving(agent, snapshot_secrets(agent, snapshot),
                                   probe_attempts=1)
             _point_stub_at_shim(agent)
@@ -2016,6 +2113,10 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
     # 拓扑工作（热切退化，连通无损）。
     _ensure_shim_topology(agent, secrets)
     if _settings_are_real(agent, row):
+        # r6#1: pin the row's own key into its auth section BEFORE the switch
+        # applies it (non-current rows carry the current provider's key there).
+        if agent == "codex":
+            _normalize_codex_row_auth(agent, row)
         _cli_switch(agent, provider_id, secrets)
     else:
         _cli_switch_empty_config(agent, provider_id)
@@ -2027,6 +2128,11 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
     # the unconditional recovery there).
     disable_ok = _run_cli_quiet(["proxy", "-a", agent, "disable"], secrets)
     if not to_official:
+        # r6#1: stage the row's key into live auth.json BETWEEN disable and
+        # enable — the worker captures the upstream token from that file at
+        # enable time and the headless official switch never writes it.
+        if agent == "codex":
+            _sync_codex_live_auth(row)
         _cli(["proxy", "-a", agent, "enable"], secrets=secrets,
              what=f"{agent} proxy route enable")
         # Manual round 3: enable can silently no-op (stale supervisor state

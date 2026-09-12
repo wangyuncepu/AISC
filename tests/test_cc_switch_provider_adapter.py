@@ -852,6 +852,81 @@ class SwitchTests(AdapterTestCase):
         self.assertIn("switch", argvs[1])  # O4 r2: switch first (P3 config at [0])
         self.assertIn("proxy -a codex disable", argvs[2])
 
+    def _set_codex_current(self, pid: str) -> None:
+        db = sqlite3.connect(self.dir / "cc-switch.db")
+        db.execute("UPDATE providers SET is_current=0 WHERE app_type='codex'")
+        db.execute("UPDATE providers SET is_current=1 WHERE id=? AND app_type='codex'", (pid,))
+        db.commit()
+        db.close()
+
+    def test_codex_switch_stages_row_key_into_live_auth(self):
+        # 手测 r6#1 (2026-09-12, live-probed): the headless official switch
+        # NEVER writes live auth.json — the worker captures whatever sits
+        # there at enable time, so switching to a keyed row must stage THAT
+        # row's key between disable and enable (or the previous provider's
+        # key serves the new provider → 401).
+        deep = ('model_provider = "deepseek"\n[model_providers.deepseek]\n'
+                'base_url = "https://api.deepseek.com"\napi_key = "sk-own-1a"\n')
+        kimi = ('model_provider = "kimi"\n[model_providers.kimi]\n'
+                'base_url = "https://x"\napi_key = "sk-own-2b"\n')
+        seed_provider(self.dir, "codex-official", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": ""})
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"auth": {}, "config": deep})
+        seed_provider(self.dir, "kimi", {}, agent="codex",
+                      settings={"auth": {}, "config": kimi})
+        auth = self.dir / "auth.json"
+        auth.write_text(json.dumps({"OPENAI_API_KEY": "sk-old-live"}), encoding="utf-8")
+        A.op_switch("codex", "deepseek")
+        self.assertEqual(json.loads(auth.read_text())["OPENAI_API_KEY"], "sk-own-1a")
+        # A ChatGPT tokens login keeps its tokens alongside the staged key.
+        auth.write_text('{"tokens": {"id_token": "t1"}}', encoding="utf-8")
+        self._set_codex_current("deepseek")
+        A.op_switch("codex", "kimi")
+        staged = json.loads(auth.read_text())
+        self.assertEqual(staged["OPENAI_API_KEY"], "sk-own-2b")
+        self.assertEqual(staged["tokens"]["id_token"], "t1")
+
+    def test_codex_switch_normalizes_polluted_row_auth(self):
+        # r6#1: non-current rows accumulate the CURRENT provider's live key in
+        # their auth section; the switch must pin the row's own TOML key first
+        # or whatever reads that section (worker capture, enable) 401s.
+        deep = ('model_provider = "deepseek"\n[model_providers.deepseek]\n'
+                'base_url = "https://api.deepseek.com"\napi_key = "sk-own-1a"\n')
+        seed_provider(self.dir, "codex-official", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": ""})
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"auth": {"OPENAI_API_KEY": "sk-foreign-9"},
+                                "config": deep})
+        A.op_switch("codex", "deepseek")
+        db = sqlite3.connect(self.dir / "cc-switch.db")
+        raw = db.execute("SELECT settings_config FROM providers "
+                         "WHERE id='deepseek' AND app_type='codex'").fetchone()[0]
+        db.close()
+        self.assertEqual(json.loads(raw)["auth"]["OPENAI_API_KEY"], "sk-own-1a")
+
+    def test_codex_fast_path_heals_stale_captured_token(self):
+        # r6#1: a switch done before this fix leaves the worker holding the
+        # previous provider's token — re-clicking the current row restages
+        # live auth.json and re-arms the route so the fresh token is captured.
+        deep = ('model_provider = "deepseek"\n[model_providers.deepseek]\n'
+                'base_url = "https://api.deepseek.com"\napi_key = "sk-own-1a"\n')
+        seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": deep})
+        auth = self.dir / "auth.json"
+        auth.write_text(json.dumps({"OPENAI_API_KEY": "sk-old-live"}), encoding="utf-8")
+        self.cli.calls.clear()
+        A.op_switch("codex", "deepseek")  # fast path (already current)
+        self.assertEqual(json.loads(auth.read_text())["OPENAI_API_KEY"], "sk-own-1a")
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertTrue(any("proxy -a codex enable" in a for a in argvs),
+                        f"route must re-arm after restage: {argvs}")
+        # Second re-click with the key already staged: no redundant enable.
+        self.cli.calls.clear()
+        A.op_switch("codex", "deepseek")
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertFalse(any("enable" in a for a in argvs))
+
     def test_switch_to_current_is_idempotent_plus_tail_heal(self):
         # Idempotent success for the current row — but the cheap post-heal
         # (route verify) runs; unparseable show output skips verification

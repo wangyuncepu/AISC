@@ -25,11 +25,18 @@ const emit = defineEmits<{
 /** Official-direct entry: cc-switch keeps these always visible (placeholder
  * rows carry no base_url); activating one restores the official config. */
 const official = computed(() => !props.provider.base_url);
-/** Icon resolution: the db icon glyph (with its color) or the first
- * character of the display name as a neutral round badge. */
+/** Icon resolution: the db icon is a BRAND ID for the official rows
+ * ('anthropic' / 'openai' — rendered as inline SVG marks, 手测 r6#2: the
+ * raw id leaking through the r5 boundary fix rendered as literal text) or a
+ * free-form glyph; anything else falls to the first character of the name. */
+const brand = computed(() =>
+  props.provider.icon === "anthropic" || props.provider.icon === "openai"
+    ? props.provider.icon : "");
 const displayName = computed(() =>
   official.value ? t("ccswitch.officialDirect") : (props.provider.name || props.provider.id));
-const glyph = computed(() => props.provider.icon || displayName.value.trim().charAt(0).toUpperCase());
+const glyph = computed(() => props.provider.icon && !brand.value
+  ? props.provider.icon
+  : displayName.value.trim().charAt(0).toUpperCase());
 const glyphColor = computed(() => props.provider.icon_color || "");
 /** PP r3: the current provider has no 停用 button — switching happens by
  * enabling another entry (or the official one). */
@@ -48,8 +55,24 @@ const actualModel = computed(() => {
 
 <template>
   <div class="card" :class="{ current: provider.is_current }">
-    <span class="glyph" :style="glyphColor ? { color: glyphColor } : {}"
-          aria-hidden="true">{{ glyph }}</span>
+    <span class="glyph" :style="glyphColor ? { color: glyphColor } : {}" aria-hidden="true">
+      <!-- Claude's 8-spoke starburst mark (claude-official rows). -->
+      <svg v-if="brand === 'anthropic'" width="18" height="18" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+        <path d="M15.2 12H22M14.26 14.26l4.81 4.81M12 15.2V22M9.74 14.26l-4.81 4.81M8.8 12H2M9.74 9.74L4.93 4.93M12 8.8V2M14.26 9.74l4.81-4.81" />
+      </svg>
+      <!-- OpenAI's six-petal knot (codex-official rows). -->
+      <svg v-else-if="brand === 'openai'" width="18" height="18" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="1.6">
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" />
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" transform="rotate(30 12 12)" />
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" transform="rotate(60 12 12)" />
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" transform="rotate(90 12 12)" />
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" transform="rotate(120 12 12)" />
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" transform="rotate(150 12 12)" />
+      </svg>
+      <template v-else>{{ glyph }}</template>
+    </span>
     <span class="meta">
       <span class="name">
         {{ displayName }}
