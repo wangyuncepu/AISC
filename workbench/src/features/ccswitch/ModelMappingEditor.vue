@@ -124,7 +124,7 @@ function toggleOneM(key: string): void {
         :value="row.context_window || 128000"
         @input="row.context_window = Number(($event.target as HTMLInputElement).value) || 128000"
       />
-      <button class="icon danger" :title="t('ccswitch.mapping.remove')"
+      <button class="icon del" :title="t('ccswitch.mapping.remove')"
               :aria-label="t('ccswitch.mapping.remove')"
               @click="removeCatalogRow(i)">×</button>
     </div>
@@ -136,7 +136,7 @@ function toggleOneM(key: string): void {
 </template>
 
 <style scoped>
-.mapping { display: flex; flex-direction: column; gap: 6px; }
+.mapping { display: flex; flex-direction: column; gap: 8px; }
 .hint { font-size: var(--font-xs); color: var(--text-faint); margin: 0; }
 .row { display: flex; align-items: center; gap: 8px; }
 .role { width: 110px; font-size: var(--font-sm); color: var(--text-2); }
@@ -146,27 +146,33 @@ input {
   border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
   min-height: var(--control-h-sm); padding: 0 var(--space-2); font-size: var(--font-sm);
 }
-/* 手测 r8: the generic `input { min-width: 120px }` (written for the flex
- * role rows) OVERFLOWED the 100px window track — the number field ran under
- * the delete button and the × read as sitting INSIDE the input. Keep the
- * field strictly inside its track so the button stands clearly apart. */
+/* 手测 r8/r9 (2026-09-12): the codex table went through three bad shapes —
+ * a bare borderless × (invisible), then a floating chip that the number
+ * field's overflowing min-width swallowed (looked INSIDE the input), then a
+ * chip that changed visual weight between rest and hover. Final shape: the
+ * row reads as FOUR ALIGNED BOXES — three fields plus a slim full-height
+ * action cell with the SAME surface/border as the fields; only its colors
+ * flip to danger on hover, so the footprint never changes. The number field
+ * stays strictly in its track (the generic input min-width was written for
+ * the flex role rows and overflows grid tracks). */
 input[type="number"] { min-width: 0; width: 100%; max-width: none; }
-.cat-head, .cat-row { display: grid; grid-template-columns: 1fr 0.8fr 100px 28px; gap: 8px; align-items: center; }
-.cat-head { font-size: var(--font-xs); color: var(--text-faint); }
+.cat-head { display: grid; grid-template-columns: 1fr 0.7fr 92px 30px; gap: 8px;
+  align-items: center; font-size: var(--font-xs); color: var(--text-faint); }
+.cat-row { display: grid; grid-template-columns: 1fr 0.7fr 92px 30px; gap: 8px;
+  align-items: stretch; }
 button.icon { min-width: 24px; min-height: 24px; padding: 0; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: var(--font-md); }
-/* 手测 r7 (2026-09-12): the row-delete × used to be a bare borderless glyph
- * in muted gray at the row's far right — it read as a stray character, and
- * the user concluded rows "can only be added, never deleted". Give it the
- * actions-button treatment (bordered surface chip, danger on hover) so the
- * affordance is visible at rest, not just on hover. */
-button.icon.danger {
-  min-width: 26px; min-height: 26px;
+button.icon.del {
+  width: 30px; min-height: var(--control-h-sm); padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
   background: var(--surface-3);
-  border: var(--border-w) solid var(--border);
+  border: var(--border-w) solid var(--border-strong);
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  color: var(--text-muted); font-weight: 600;
+  transition: color var(--duration-normal) var(--ease),
+    border-color var(--duration-normal) var(--ease),
+    background-color var(--duration-normal) var(--ease);
 }
-button.icon.danger:hover { color: var(--error-fg); border-color: var(--error-border); background: var(--error-bg); }
+button.icon.del:hover { color: var(--error-fg); border-color: var(--error-border); background: var(--error-bg); }
 /* PP r3 (user ruling): a proper toggle chip instead of the raw "[1m]" text
  * squished against the input — solid accent when on, quiet ghost when off. */
 button.icon.one-m {
