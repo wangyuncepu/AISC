@@ -760,14 +760,31 @@ pub async fn cc_switch_fetch_models(
     workspace: String,
     runtime_id: String,
     agent: String,
-    provider_id: String,
+    provider_id: Option<String>,
     api_key: Option<String>,
+    base_url: Option<String>,
 ) -> Result<Value, WorkbenchError> {
     cc_switch_validate(&runtime_id, &agent)?;
-    let argv = cc_switch_argv("fetch-models", &runtime_id, &agent, &workspace, Some(&provider_id));
-    let input = api_key
-        .filter(|k| !k.trim().is_empty())
-        .map(|k| serde_json::json!({ "api_key": k }).to_string());
+    // 手测 r2#3: an EMPTY provider_id = add-mode inline probe — the form's
+    // base_url(+key) rides stdin, no saved row needed.
+    let argv = cc_switch_argv(
+        "fetch-models", &runtime_id, &agent, &workspace,
+        provider_id.as_deref().filter(|p| !p.trim().is_empty()),
+    );
+    let mut doc = serde_json::Map::new();
+    if let Some(k) = api_key.filter(|k| !k.trim().is_empty()) {
+        doc.insert("api_key".into(), serde_json::json!(k));
+    }
+    if provider_id.as_deref().unwrap_or("").trim().is_empty() {
+        if let Some(b) = base_url.filter(|b| !b.trim().is_empty()) {
+            doc.insert("base_url".into(), serde_json::json!(b));
+        }
+    }
+    let input = if doc.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(doc).to_string())
+    };
     cc_switch_call_value(&app, &window, argv, input).await
 }
 
