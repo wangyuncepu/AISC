@@ -294,11 +294,16 @@ export const ccSwitchDelete = (workspace: string, runtimeId: string, agent: stri
 /** IDEA-5 (5c): remote model list for the mapping dropdown. Degrades to
  * `available=false` (with the upstream message) instead of an error. */
 export const ccSwitchFetchModels = (
-  workspace: string, runtimeId: string, agent: string, providerId: string,
-  apiKey?: string,
+  workspace: string, runtimeId: string, agent: string,
+  providerId: string | null, apiKey?: string, baseUrl?: string,
 ) =>
   invoke<FetchModelsResult>("cc_switch_fetch_models", {
-    workspace, runtimeId, agent, providerId, apiKey: apiKey || null,
+    workspace, runtimeId, agent,
+    providerId: providerId || null,
+    apiKey: apiKey || null,
+    // 手测 r2#3: add-mode inline probe — the FORM's endpoint rides stdin
+    // when no provider row exists yet.
+    baseUrl: baseUrl || null,
   });
 
 // --- 2.1.10 R4b: which machine the Workbench drives ---

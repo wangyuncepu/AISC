@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """AISC model-mapping shim (container-side, P3 热切换实施 2026-09-12).
 
-``agent ──▶ 127.0.0.1:<listen> 本shim ──▶ 127.0.0.1:<upstream> cc-switch 代理 ──▶ provider``
+``agent ──▶ 127.0.0.1:15721/15722 本shim ──▶ 127.0.0.1:15701/15702 cc-switch 代理 ──▶ provider``
+
+手测 r1 拓扑反转：shim 必须占据 1572x——运行中会话的 env 在其启动时已把
+127.0.0.1:1572x 读进内存，改 live 文件只影响新进程；shim 若在别的端口，
+存量会话永远绕过它（旧模型名直击新 provider → 回复错乱）。cc-switch
+worker 由 adapter 经 `proxy config --listen-port` 挪到 1570x。
 
 Why: neither CLI hot-reloads its env/model config (claude: only
 hooks/permissions/keybindings/theme reload — env needs a session restart,
@@ -27,8 +32,8 @@ forward untouched. Responses stream through chunk-by-chunk (SSE-safe).
 
 Env (all required except where noted):
 - ``AISC_SHIM_AGENT``     claude | codex (labels logs/mapping only)
-- ``AISC_SHIM_LISTEN``    this shim's port (agent env points here)
-- ``AISC_SHIM_UPSTREAM``  the cc-switch proxy route port
+- ``AISC_SHIM_LISTEN``    this shim's port (defaults: 15721/15722)
+- ``AISC_SHIM_UPSTREAM``  the cc-switch proxy route port (15701/15702)
 - ``CC_SWITCH_CONFIG_DIR``  db root (same env the adapter requires)
 
 Fail-open philosophy: on ANY internal error the request is forwarded
@@ -285,9 +290,9 @@ class ShimHandler(BaseHTTPRequestHandler):
 def main() -> int:
     agent = os.environ.get("AISC_SHIM_AGENT") or "claude"
     listen = int(os.environ.get("AISC_SHIM_LISTEN")
-                 or {"claude": "15711", "codex": "15712"}.get(agent, "15711"))
+                 or {"claude": "15721", "codex": "15722"}.get(agent, "15721"))
     upstream_port = os.environ.get("AISC_SHIM_UPSTREAM") \
-        or {"claude": "15721", "codex": "15722"}.get(agent, "15721")
+        or {"claude": "15701", "codex": "15702"}.get(agent, "15701")
     handler = type("Bound", (ShimHandler,), {
         "agent": agent,
         "upstream": f"http://127.0.0.1:{upstream_port}",

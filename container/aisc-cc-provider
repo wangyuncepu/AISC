@@ -968,7 +968,11 @@ def _recover_route(agent: str, secrets: list[str]) -> None:
 # 挂钩 = 切换收尾时把 live 文件里的本地路由 stub 端口指向 shim；shim 不在
 # 则指回 cc-switch 代理直连（连通性永远优先于映射，fail-open）。
 
-SHIM_WIRING = {"claude": (15711, 15721), "codex": (15712, 15722)}
+# 手测 r1 拓扑反转：shim 必须占据历史路由端口 1572x——运行中会话的 env
+# 在其启动时已读入 127.0.0.1:1572x，改 live 文件只影响新进程；shim 若在
+# 别的端口，存量会话永远绕过它（旧模型名直击新 provider → 回复错乱）。
+# cc-switch worker 经 `proxy config --listen-port` 挪到 1570x。
+SHIM_WIRING = {"claude": (15721, 15701), "codex": (15722, 15702)}
 
 
 def _patch_claude_base_url_port(port: int) -> bool:
@@ -1004,9 +1008,10 @@ def _patch_codex_base_url_port(port: int) -> bool:
     if not path.is_file():
         return False
     text = path.read_text(encoding="utf-8")
-    _shim, direct = SHIM_WIRING["codex"]
+    # any historical local-route port (1572x original / 1571x first-shim
+    # build / 1570x current direct) → the target port
     new_text = re.sub(
-        r"(http://127\.0\.0\.1):(?:%d|%d)" % (_shim, direct),
+        r"(http://127\.0\.0\.1):(?:157[012][12])",
         lambda m: f"{m.group(1)}:{port}", text)
     if new_text == text:
         return False
@@ -1014,6 +1019,20 @@ def _patch_codex_base_url_port(port: int) -> bool:
     tmp.write_text(new_text, encoding="utf-8")
     tmp.replace(path)
     return True
+
+
+def _ensure_shim_topology(agent: str, secrets: list[str]) -> None:
+    """手测 r1 拓扑反转：cc-switch worker 挪到 1570x，shim 占据 1572x
+    （运行中会话的内存 env 指向那里）。`proxy config` 幂等持久；失败静默
+    ——上游不支持时整条链仍按旧直连拓扑工作（shim 收不到流量，热切退化
+    为非热切，连通性无损）。"""
+    try:
+        _direct = SHIM_WIRING[agent][1]
+        _run_cli_quiet(
+            ["proxy", "-a", agent, "config", "--listen-port", str(_direct)],
+            secrets)
+    except Exception:
+        pass
 
 
 def _point_stub_at_shim(agent: str) -> None:
@@ -1897,6 +1916,10 @@ def op_switch(agent: str, provider_id: str) -> list[dict[str, Any]]:
     # window where a stale worker kept serving; the end-state guard
     # (show + TCP verify + unconditional recovery) owns correctness either
     # way. A failed disable still forces the recovery below.
+    # 手测 r1 拓扑反转：把 cc-switch worker 挪到 1570x（幂等持久），
+    # shim 占据 1572x 接管存量会话流量。失败静默——不支持时按旧直连
+    # 拓扑工作（热切退化，连通无损）。
+    _ensure_shim_topology(agent, secrets)
     if _settings_are_real(agent, row):
         _cli_switch(agent, provider_id, secrets)
     else:
@@ -2093,8 +2116,27 @@ def _openai_compatible_models(
     return None
 
 
+def _fetch_models_inline(agent: str, base_url: str,
+                          api_key: str) -> dict[str, Any]:
+    """Add-mode probe (手测 r2#3): fetch against the FORM's endpoint+key —
+    no saved row needed. Same JSON-chain the row path uses."""
+    models = _openai_compatible_models(base_url, api_key) if base_url else None
+    if models:
+        return {"available": True, "models": models, "message": ""}
+    return {
+        "available": False, "models": [],
+        "message": "no /models at the given endpoint",
+    }
+
+
 def op_fetch_models(agent: str, provider_id: str,
                     request: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    # 手测 r2#3（add 态拉模型）: provider_id 为空且请求带 base_url 时走
+    # 内联探测（表单已填的端点+key，无需先保存行）。
+    req = request or {}
+    inline_base = str(req.get("base_url") or "").strip()
+    if not provider_id and inline_base:
+        return _fetch_models_inline(agent, inline_base, str(req.get("api_key") or ""))
     snapshot = read_snapshot(agent)
     row = next((r for r in snapshot if r["id"] == provider_id), None)
     if row is None:

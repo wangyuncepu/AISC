@@ -77,11 +77,20 @@ const uiStore = useCcSwitchUiStore();
  * PP r3 (user report): the form's unsaved key rides along — fetch must
  * work BEFORE the first save, not only against the stored key. */
 async function fetchNow(): Promise<void> {
-  if (!props.provider || !runtime.runtimeId || !runtime.workspace) return;
+  if (!runtime.runtimeId || !runtime.workspace) return;
   fetched.value = null;
-  await uiStore.fetchModels(runtime.workspace, runtime.runtimeId, props.provider.id,
-    form.apiKey || undefined);
-  const r = uiStore.fetchedModels[props.provider.id];
+  if (props.provider) {
+    await uiStore.fetchModels(runtime.workspace, runtime.runtimeId, props.provider.id,
+      form.apiKey || undefined);
+  } else {
+    // 手测 r2#3: add-mode INLINE probe — the form's endpoint+key ride the
+    // stdin channel; no saved row needed.
+    if (!form.baseUrl.trim()) return;
+    await uiStore.fetchModels(runtime.workspace, runtime.runtimeId, null,
+      form.apiKey || undefined, form.baseUrl.trim());
+  }
+  const key = props.provider?.id ?? "__add__";
+  const r = uiStore.fetchedModels[key];
   fetched.value = r
     ? { ok: Boolean(r.available), n: r.models.length,
         message: r.available ? "" : (r.message || t("ccswitch.fetchUnavailable")) }
@@ -118,7 +127,10 @@ async function revealApiKey(): Promise<void> {
 }
 
 const candidates = computed<string[]>(() => {
-  if (!props.provider) return [];
+  if (!props.provider) {
+    // add-mode: the inline probe's list (fresh fetch beats nothing-known).
+    return [...(uiStore.fetchedModels["__add__"]?.models ?? [])];
+  }
   return [
     ...(uiStore.fetchedModels[props.provider.id]?.models ?? []),
     ...(props.provider.known_models ?? []),
@@ -291,8 +303,8 @@ function onSave(): void {
         </p>
 
         <h3>{{ t("ccswitch.mapping.title") }}</h3>
-        <div v-if="provider" class="field">
-          <button :disabled="busyOp === 'fetch'" @click="fetchNow">
+        <div v-if="provider || adding" class="field">
+          <button :disabled="busyOp === 'fetch' || (!provider && !form.baseUrl.trim())" @click="fetchNow">
             {{ busyOp === "fetch" ? t("ccswitch.fetching") : t("ccswitch.fetchModels") }}
           </button>
           <p v-if="fetched" class="hint" :class="{ warn: !fetched.ok }">

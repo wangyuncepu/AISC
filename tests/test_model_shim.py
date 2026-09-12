@@ -213,21 +213,21 @@ class AdapterWiringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             settings = Path(td) / "settings.json"
             settings.write_text(json.dumps(
-                {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:15721/api"}},
+                {"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:15701/api"}},
                 ensure_ascii=False), encoding="utf-8")
             old_c = os.environ.get("CLAUDE_CONFIG_DIR")
             os.environ["CLAUDE_CONFIG_DIR"] = td
             try:
-                # shim alive → stub points at 15711
+                # shim alive → stub points at the SHIM port 15721 (it owns the historical port)
                 with mock.patch.object(A, "_tcp_listening", return_value=True):
                     A._point_stub_at_shim("claude")
                 url = json.loads(settings.read_text())["env"]["ANTHROPIC_BASE_URL"]
-                self.assertIn(":15711", url)
+                self.assertIn(":15721", url)
                 # shim dead → restored to the direct proxy port
                 with mock.patch.object(A, "_tcp_listening", return_value=False):
                     A._point_stub_at_shim("claude")
                 url = json.loads(settings.read_text())["env"]["ANTHROPIC_BASE_URL"]
-                self.assertIn(":15721", url)
+                self.assertIn(":15701", url)  # restored to the direct port
                 # direct provider URLs are untouched
                 settings.write_text(json.dumps(
                     {"env": {"ANTHROPIC_BASE_URL": "https://api.deepseek.com/x"}}),
@@ -249,14 +249,14 @@ class AdapterWiringTests(unittest.TestCase):
             cfg.write_text(
                 'model_provider = "k"\n'
                 '[model_providers.k]\n'
-                'base_url = "http://127.0.0.1:15722/v1"\n',
+                'base_url = "http://127.0.0.1:15702/v1"\n',
                 encoding="utf-8")
             old = os.environ.get("CODEX_CONFIG_DIR")
             os.environ["CODEX_CONFIG_DIR"] = td
             try:
                 with mock.patch.object(A, "_tcp_listening", return_value=True):
                     A._point_stub_at_shim("codex")
-                self.assertIn("127.0.0.1:15712", cfg.read_text())
+                self.assertIn("127.0.0.1:15722", cfg.read_text())
             finally:
                 if old is None:
                     os.environ.pop("CODEX_CONFIG_DIR", None)

@@ -382,7 +382,9 @@ def _build_parser() -> _AiscArgumentParser:
                            help="Fetch the remote model list for a provider",
                            allow_abbrev=False)
     _cc_switch_common(csf)
-    csf.add_argument("provider_id", type=str, help="Provider ID to query")
+    csf.add_argument("provider_id", type=str, nargs="?", default="",
+                    help="Provider ID to query (empty = add-mode inline probe; "
+                         "the stdin document then carries base_url)")
 
     # --- network (IDEA-2: mihomo subscription data plane) ---
     nwp = sub.add_parser(
