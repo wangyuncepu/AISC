@@ -144,17 +144,20 @@ export const useCcSwitchUiStore = defineStore("ccSwitchUi", () => {
    * the form's unsaved key, forwarded so fetch works before the first
    * save; it rides the stdin channel only and is never stored here. */
   async function fetchModels(
-    ws: string, rt: string, providerId: string, apiKey?: string,
+    ws: string, rt: string, providerId: string | null, apiKey?: string,
+    baseUrl?: string,
   ): Promise<boolean> {
-    busy.value = `fetch:${providerId}`;
+    // 手测 r2#3: providerId null = add-mode inline probe (form endpoint).
+    const key = providerId ?? "__add__";
+    busy.value = `fetch:${key}`;
     error.value = null;
     try {
-      fetchedModels[providerId] =
-        await ipc.ccSwitchFetchModels(ws, rt, agent.value, providerId, apiKey);
+      fetchedModels[key] =
+        await ipc.ccSwitchFetchModels(ws, rt, agent.value, providerId, apiKey, baseUrl);
       void ipc.logUiEvent?.("cc_switch_fetch", "ok");
       return true;
     } catch (e) {
-      fetchedModels[providerId] = {
+      fetchedModels[key] = {
         available: false, models: [],
         message: (e as { message?: string })?.message ?? String(e),
       };

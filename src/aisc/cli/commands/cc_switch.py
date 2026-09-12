@@ -132,6 +132,11 @@ def cmd_cc_switch_fetch_models(args: Any) -> Dict[str, Any]:
     # (never argv, never logged).
     request = _read_stdin_request(required=False)
     api_key = str(request.get("api_key") or "")
+    # 手测 r2#3: add-mode inline probe — the form's base_url rides the same
+    # stdin channel when no provider row exists yet.
+    base_url = str(request.get("base_url") or "")
+    if base_url:
+        request["base_url"] = base_url
     return fetch_models(
         runtime_id=args.runtime_id,
         agent=args.agent,

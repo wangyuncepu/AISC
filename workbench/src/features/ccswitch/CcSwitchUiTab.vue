@@ -143,9 +143,17 @@ async function activate(p: CcSwitchProvider): Promise<void> {
   }
   const ok = await ui.activate(store.workspace, store.runtimeId, target);
   if (ok) {
-    toast.success(t("ccswitch.switchedTo", {
-      name: target === "official" ? t("ccswitch.officialDirect") : (p.name || p.id),
-    }));
+    const name = target === "official" ? t("ccswitch.officialDirect") : (p.name || p.id);
+    // 手测 r5#3: hot-swap is invisible in the CLI (it displays its startup
+    // model forever) — say what requests actually run on now.
+    const cur = ui.providers.find((x) => x.is_current);
+    const env = cur?.role_env ?? {};
+    const model = cur
+      ? (env.ANTHROPIC_MODEL || env.ANTHROPIC_DEFAULT_OPUS_MODEL || cur.model || "")
+      : "";
+    toast.success(model
+      ? t("ccswitch.switchedToModel", { name, model })
+      : t("ccswitch.switchedTo", { name }));
     flashId.value = p.id;
     if (rowFlashTimer !== null) window.clearTimeout(rowFlashTimer);
     rowFlashTimer = window.setTimeout(() => (flashId.value = ""), 1300);

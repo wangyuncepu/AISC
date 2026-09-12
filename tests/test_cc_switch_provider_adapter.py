@@ -213,20 +213,60 @@ class SnapshotAndRedactionTests(AdapterTestCase):
         self.assertTrue(p["has_api_key"])
         self.assertEqual(p["api_key_mask"], "****9888")
 
-    def test_codex_snapshot_prefers_auth_channel_over_toml(self):
-        # auth.OPENAI_API_KEY is the live channel; the TOML api_key line is
-        # the legacy fallback — when both exist, auth wins the mask.
+    def test_codex_snapshot_prefers_row_own_toml_key(self):
+        # 手测 r4#4 (2026-09-12, live-probed): auth.OPENAI_API_KEY is synced
+        # to the CURRENT provider's live key on every official switch — a
+        # non-current row carries a FOREIGN key there. The row's own TOML
+        # api_key line is the per-row credential and must win.
         toml_config = (
             'model_provider = "deepseek"\n[model_providers.deepseek]\n'
             'base_url = "https://api.deepseek.com"\n'
-            'api_key = "sk-toml-stale-1111"\n'
+            'api_key = "sk-toml-own-1111"\n'
         )
         seed_provider(self.dir, "deepseek", {}, agent="codex",
                       settings={"config": toml_config,
                                 "auth": {"OPENAI_API_KEY": "sk-auth-live-7788"}})
         p = A.op_list("codex")[0]
         self.assertTrue(p["has_api_key"])
-        self.assertEqual(p["api_key_mask"], "****7788")
+        self.assertEqual(p["api_key_mask"], "****1111")
+
+    def test_codex_fields_skip_proxy_managed_marker(self):
+        # A live-stub TOML carries api_key = "PROXY_MANAGED" (the worker's
+        # bearer marker) — never a credential; auth is the fallback there.
+        toml_config = (
+            'model_provider = "deepseek"\n[model_providers.deepseek]\n'
+            'base_url = "http://127.0.0.1:15702/v1"\n'
+            'api_key = "PROXY_MANAGED"\n'
+        )
+        fields = A._codex_provider_fields(
+            {"config": toml_config, "auth": {"OPENAI_API_KEY": "sk-auth-9911"}},
+            "deepseek")
+        self.assertEqual(fields["api_key"], "sk-auth-9911")
+
+    def test_list_sweeps_imported_default_artifact(self):
+        # 手测 r4#1 (2026-09-12, live-probed): the official CLI auto-imports
+        # the pre-switch mcp-only stub config as a `default` row — a phantom
+        # empty card. op_list must delete it (non-current, no provider signal).
+        seed_provider(self.dir, "zhipu", {}, agent="codex", is_current=True,
+                      settings={"config": 'model_provider = "zhipu"\n'
+                                          '[model_providers.zhipu]\n'
+                                          'base_url = "https://open.bigmodel.cn/api/anthropic"\n'})
+        seed_provider(self.dir, "default", {}, agent="codex",
+                      settings={"config": '[mcp_servers.aisc-host]\n'
+                                          'url = "http://host.docker.internal:5959/mcp?token=x"\n'})
+        ids = [p["id"] for p in A.op_list("codex")]
+        self.assertNotIn("default", ids)
+        self.assertIn("zhipu", ids)
+
+    def test_list_keeps_real_default_row(self):
+        # A row legitimately named `default` that carries provider config is
+        # real user data — never swept (nor is any current row).
+        seed_provider(self.dir, "default", {}, agent="codex",
+                      settings={"config": 'model_provider = "deepseek"\n'
+                                          '[model_providers.deepseek]\n'
+                                          'base_url = "https://api.deepseek.com"\n'})
+        ids = [p["id"] for p in A.op_list("codex")]
+        self.assertIn("default", ids)
 
 
 class AddTests(AdapterTestCase):
@@ -653,7 +693,7 @@ class RouteGuardTests(AdapterTestCase):
         self._seed_codex_switch()
         A.op_switch("codex", "deepseek")  # must NOT raise
         argvs = [" ".join(c.args) for c in self.cli.calls]
-        self.assertIn("switch", argvs[0])  # O4 r2: the switch runs FIRST now
+        self.assertIn("switch", argvs[1])  # O4 r2: switch first (the P3 topology config rides at [0])
         self.assertTrue(any("daemon" in a and "stop" in a for a in argvs))
         self.assertTrue(any("daemon" in a and "start" in a for a in argvs))
         self.assertEqual(sum("enable" in a for a in argvs), 2)  # forced
@@ -683,12 +723,15 @@ class SwitchTests(AdapterTestCase):
         # daemon teardown — live-probed 2026-09-02). The enable is followed
         # by a route liveness verify (`proxy show` for the port —
         # unparseable output skips the check).
-        self.assertEqual(len(argvs), 4)
-        self.assertIn("switch", argvs[0])
-        self.assertTrue(argvs[0].endswith("zhipu"))
-        self.assertIn("proxy -a claude disable", argvs[1])
-        self.assertIn("proxy -a claude enable", argvs[2])
-        self.assertIn("proxy -a claude show", argvs[3])
+        # P3 shim (手测 r1): a topology config rides FIRST (worker → 1570x).
+        self.assertEqual(len(argvs), 5)
+        self.assertIn("proxy -a claude config", argvs[0])
+        self.assertIn("15701", argvs[0])
+        self.assertIn("switch", argvs[1])
+        self.assertTrue(argvs[1].endswith("zhipu"))
+        self.assertIn("proxy -a claude disable", argvs[2])
+        self.assertIn("proxy -a claude enable", argvs[3])
+        self.assertIn("proxy -a claude show", argvs[4])
         # snapshot returned unchanged (the CLI owns is_current truth)
         self.assertEqual([p["id"] for p in providers][0], "deepseek")
 
@@ -701,9 +744,10 @@ class SwitchTests(AdapterTestCase):
         seed_provider(self.dir, "zhipu", {"ANTHROPIC_BASE_URL": "https://z"})
         A.op_switch("claude", "zhipu")
         argvs = [" ".join(c.args) for c in self.cli.calls]
-        self.assertIn("switch", argvs[0])  # O4 r2: switch first
-        self.assertEqual(argvs[1], "proxy -a claude disable")
-        self.assertEqual(argvs[2], "proxy -a claude enable")
+        self.assertIn("proxy -a claude config", argvs[0])  # P3 shim topology
+        self.assertIn("switch", argvs[1])  # O4 r2: switch first
+        self.assertEqual(argvs[2], "proxy -a claude disable")
+        self.assertEqual(argvs[3], "proxy -a claude enable")
 
     def test_claude_switch_to_official_leaves_route_disabled(self):
         # Cancel-proxy: official-direct rows leave the agent's route OFF —
@@ -714,8 +758,8 @@ class SwitchTests(AdapterTestCase):
         self.cli.stdout_for = None
         A.op_switch("claude", "official")
         argvs = [" ".join(c.args) for c in self.cli.calls]
-        self.assertIn("provider switch claude-official", argvs[0])  # O4 r2: first
-        self.assertIn("proxy -a claude disable", argvs[1])
+        self.assertIn("provider switch claude-official", argvs[1])  # O4 r2: first after the P3 config
+        self.assertIn("proxy -a claude disable", argvs[2])
         self.assertFalse(any("enable" in a for a in argvs))
 
     def test_codex_switch_reenables_proxy_route_after_switch(self):
@@ -735,9 +779,10 @@ class SwitchTests(AdapterTestCase):
         A.op_switch("codex", "deepseek")
         argvs = [" ".join(c.args) for c in self.cli.calls]
         # O4 r2: switch first, disable second (see the claude twin above).
-        self.assertIn("switch", argvs[0])
-        self.assertIn("proxy -a codex disable", argvs[1])
-        self.assertIn("proxy -a codex enable", argvs[2])
+        self.assertIn("proxy -a codex config", argvs[0])  # P3 shim topology
+        self.assertIn("switch", argvs[1])
+        self.assertIn("proxy -a codex disable", argvs[2])
+        self.assertIn("proxy -a codex enable", argvs[3])
 
     def test_codex_switch_manages_auth_placeholder(self):
         import os as _os
@@ -804,8 +849,83 @@ class SwitchTests(AdapterTestCase):
                       settings={"auth": {}, "config": ""})
         A.op_switch("codex", "official")
         argvs = [" ".join(c.args) for c in self.cli.calls]
-        self.assertIn("switch", argvs[0])  # O4 r2: switch first
-        self.assertIn("proxy -a codex disable", argvs[1])
+        self.assertIn("switch", argvs[1])  # O4 r2: switch first (P3 config at [0])
+        self.assertIn("proxy -a codex disable", argvs[2])
+
+    def _set_codex_current(self, pid: str) -> None:
+        db = sqlite3.connect(self.dir / "cc-switch.db")
+        db.execute("UPDATE providers SET is_current=0 WHERE app_type='codex'")
+        db.execute("UPDATE providers SET is_current=1 WHERE id=? AND app_type='codex'", (pid,))
+        db.commit()
+        db.close()
+
+    def test_codex_switch_stages_row_key_into_live_auth(self):
+        # 手测 r6#1 (2026-09-12, live-probed): the headless official switch
+        # NEVER writes live auth.json — the worker captures whatever sits
+        # there at enable time, so switching to a keyed row must stage THAT
+        # row's key between disable and enable (or the previous provider's
+        # key serves the new provider → 401).
+        deep = ('model_provider = "deepseek"\n[model_providers.deepseek]\n'
+                'base_url = "https://api.deepseek.com"\napi_key = "sk-own-1a"\n')
+        kimi = ('model_provider = "kimi"\n[model_providers.kimi]\n'
+                'base_url = "https://x"\napi_key = "sk-own-2b"\n')
+        seed_provider(self.dir, "codex-official", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": ""})
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"auth": {}, "config": deep})
+        seed_provider(self.dir, "kimi", {}, agent="codex",
+                      settings={"auth": {}, "config": kimi})
+        auth = self.dir / "auth.json"
+        auth.write_text(json.dumps({"OPENAI_API_KEY": "sk-old-live"}), encoding="utf-8")
+        A.op_switch("codex", "deepseek")
+        self.assertEqual(json.loads(auth.read_text())["OPENAI_API_KEY"], "sk-own-1a")
+        # A ChatGPT tokens login keeps its tokens alongside the staged key.
+        auth.write_text('{"tokens": {"id_token": "t1"}}', encoding="utf-8")
+        self._set_codex_current("deepseek")
+        A.op_switch("codex", "kimi")
+        staged = json.loads(auth.read_text())
+        self.assertEqual(staged["OPENAI_API_KEY"], "sk-own-2b")
+        self.assertEqual(staged["tokens"]["id_token"], "t1")
+
+    def test_codex_switch_normalizes_polluted_row_auth(self):
+        # r6#1: non-current rows accumulate the CURRENT provider's live key in
+        # their auth section; the switch must pin the row's own TOML key first
+        # or whatever reads that section (worker capture, enable) 401s.
+        deep = ('model_provider = "deepseek"\n[model_providers.deepseek]\n'
+                'base_url = "https://api.deepseek.com"\napi_key = "sk-own-1a"\n')
+        seed_provider(self.dir, "codex-official", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": ""})
+        seed_provider(self.dir, "deepseek", {}, agent="codex",
+                      settings={"auth": {"OPENAI_API_KEY": "sk-foreign-9"},
+                                "config": deep})
+        A.op_switch("codex", "deepseek")
+        db = sqlite3.connect(self.dir / "cc-switch.db")
+        raw = db.execute("SELECT settings_config FROM providers "
+                         "WHERE id='deepseek' AND app_type='codex'").fetchone()[0]
+        db.close()
+        self.assertEqual(json.loads(raw)["auth"]["OPENAI_API_KEY"], "sk-own-1a")
+
+    def test_codex_fast_path_heals_stale_captured_token(self):
+        # r6#1: a switch done before this fix leaves the worker holding the
+        # previous provider's token — re-clicking the current row restages
+        # live auth.json and re-arms the route so the fresh token is captured.
+        deep = ('model_provider = "deepseek"\n[model_providers.deepseek]\n'
+                'base_url = "https://api.deepseek.com"\napi_key = "sk-own-1a"\n')
+        seed_provider(self.dir, "deepseek", {}, agent="codex", is_current=True,
+                      settings={"auth": {}, "config": deep})
+        auth = self.dir / "auth.json"
+        auth.write_text(json.dumps({"OPENAI_API_KEY": "sk-old-live"}), encoding="utf-8")
+        self.cli.calls.clear()
+        A.op_switch("codex", "deepseek")  # fast path (already current)
+        self.assertEqual(json.loads(auth.read_text())["OPENAI_API_KEY"], "sk-own-1a")
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertTrue(any("proxy -a codex enable" in a for a in argvs),
+                        f"route must re-arm after restage: {argvs}")
+        # Second re-click with the key already staged: no redundant enable.
+        self.cli.calls.clear()
+        A.op_switch("codex", "deepseek")
+        argvs = [" ".join(c.args) for c in self.cli.calls]
+        self.assertFalse(any("enable" in a for a in argvs))
 
     def test_switch_to_current_is_idempotent_plus_tail_heal(self):
         # Idempotent success for the current row — but the cheap post-heal
@@ -914,11 +1034,14 @@ class SwitchTests(AdapterTestCase):
     def test_idempotent_switch_probes_the_route_once(self):
         # Fast path: a single TCP attempt (not the 4× retry ring) — a
         # healthy route answers in ~ms; a miss still heals via full recovery.
+        # P3 shim hook: only ROUTE-port probes count (the model-shim wiring
+        # probe rides the same mock but targets the shim port).
         attempts_seen = []
         orig = A._tcp_listening
         A._tcp_listening = (
             lambda port, attempts=4, delay=0.4:
-            attempts_seen.append(attempts) or True)
+            (attempts_seen.append(attempts) if port != A.SHIM_WIRING["codex"][0]
+             else None) or True)
         self.addCleanup(setattr, A, "_tcp_listening", orig)
         self._install_show_cli(
             lambda args: f"- Codex: enabled, configured 12345\n"

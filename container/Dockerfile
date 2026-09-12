@@ -324,7 +324,9 @@ RUN chmod +x /usr/local/bin/aisc-provider-inspect
 # list=只读 SQLite 快照；add/edit/delete=官方非交互 CLI（secret 只走 stdin），
 # edit=switch-away→delete→re-add 舞步。stdout 全部经 redaction 后才出信封。
 COPY container/aisc-cc-provider /usr/local/bin/aisc-cc-provider
-RUN chmod +x /usr/local/bin/aisc-cc-provider
+# P3 热切换：模型映射 shim（15711/15712 → 15721/15722，见 entrypoint）
+COPY container/aisc-model-shim /usr/local/bin/aisc-model-shim
+RUN chmod +x /usr/local/bin/aisc-cc-provider /usr/local/bin/aisc-model-shim
 
 # AISC web 服务访问（svc-1，docs/plans/container-service-access.md）：
 #   aisc-web-gateway  容器内 0.0.0.0:45871，按 Host: p<port>.localhost 把字节流
@@ -351,6 +353,7 @@ RUN sed -i 's/\r$//' \
         /usr/local/bin/aisc-session-wrapper \
         /usr/local/bin/aisc-provider-inspect \
         /usr/local/bin/aisc-cc-provider \
+        /usr/local/bin/aisc-model-shim \
         /usr/local/bin/aisc-web-gateway \
         /usr/local/bin/aisc-web-expose \
         /usr/local/bin/aisc-web-unexpose \

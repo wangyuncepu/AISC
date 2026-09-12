@@ -221,7 +221,7 @@ def delete_provider(runtime_id: str, agent: str, provider_id: str,
             "operation_id": envelope.get("operation_id")}
 
 
-def fetch_models(runtime_id: str, agent: str, provider_id: str,
+def fetch_models(runtime_id: str, agent: str, provider_id: Optional[str],
                  workspace: Optional[str], executor: Any,
                  request: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Remote model list for the mapping dropdown (IDEA-5 5c).
@@ -237,7 +237,7 @@ def fetch_models(runtime_id: str, agent: str, provider_id: str,
     _validate(runtime_id, agent, "fetch-models")
     envelope = _exec_adapter(
         runtime_id, workspace_state_dir(ws_path), executor, "fetch-models",
-        agent, provider_id, request,
+        agent, provider_id or None, request,
     )
     result = envelope.get("fetch_models")
     return result if isinstance(result, dict) else {

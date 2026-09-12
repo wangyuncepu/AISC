@@ -25,21 +25,54 @@ const emit = defineEmits<{
 /** Official-direct entry: cc-switch keeps these always visible (placeholder
  * rows carry no base_url); activating one restores the official config. */
 const official = computed(() => !props.provider.base_url);
-/** Icon resolution: the db icon glyph (with its color) or the first
- * character of the display name as a neutral round badge. */
+/** Icon resolution: the db icon is a BRAND ID for the official rows
+ * ('anthropic' / 'openai' — rendered as inline SVG marks, 手测 r6#2: the
+ * raw id leaking through the r5 boundary fix rendered as literal text) or a
+ * free-form glyph; anything else falls to the first character of the name. */
+const brand = computed(() =>
+  props.provider.icon === "anthropic" || props.provider.icon === "openai"
+    ? props.provider.icon : "");
 const displayName = computed(() =>
   official.value ? t("ccswitch.officialDirect") : (props.provider.name || props.provider.id));
-const glyph = computed(() => props.provider.icon || displayName.value.trim().charAt(0).toUpperCase());
+const glyph = computed(() => props.provider.icon && !brand.value
+  ? props.provider.icon
+  : displayName.value.trim().charAt(0).toUpperCase());
 const glyphColor = computed(() => props.provider.icon_color || "");
 /** PP r3: the current provider has no 停用 button — switching happens by
  * enabling another entry (or the official one). */
 const startable = computed(() => !props.provider.is_current);
+/** 手测 r5#3 (2026-09-12): hot-swap makes the effective model invisible in
+ * the CLI (it displays its startup name forever) — the CURRENT card states
+ * what requests actually run on: the primary slot (claude role env) or the
+ * row's model (codex). */
+const actualModel = computed(() => {
+  if (!props.provider.is_current || official.value) return "";
+  const env = props.provider.role_env ?? {};
+  return env.ANTHROPIC_MODEL || env.ANTHROPIC_DEFAULT_OPUS_MODEL
+    || props.provider.model || "";
+});
 </script>
 
 <template>
   <div class="card" :class="{ current: provider.is_current }">
-    <span class="glyph" :style="glyphColor ? { color: glyphColor } : {}"
-          aria-hidden="true">{{ glyph }}</span>
+    <span class="glyph" :style="glyphColor ? { color: glyphColor } : {}" aria-hidden="true">
+      <!-- Claude's 8-spoke starburst mark (claude-official rows). -->
+      <svg v-if="brand === 'anthropic'" width="18" height="18" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+        <path d="M15.2 12H22M14.26 14.26l4.81 4.81M12 15.2V22M9.74 14.26l-4.81 4.81M8.8 12H2M9.74 9.74L4.93 4.93M12 8.8V2M14.26 9.74l4.81-4.81" />
+      </svg>
+      <!-- OpenAI's six-petal knot (codex-official rows). -->
+      <svg v-else-if="brand === 'openai'" width="18" height="18" viewBox="0 0 24 24"
+           fill="none" stroke="currentColor" stroke-width="1.6">
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" />
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" transform="rotate(30 12 12)" />
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" transform="rotate(60 12 12)" />
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" transform="rotate(90 12 12)" />
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" transform="rotate(120 12 12)" />
+        <ellipse cx="12" cy="12" rx="3.6" ry="10" transform="rotate(150 12 12)" />
+      </svg>
+      <template v-else>{{ glyph }}</template>
+    </span>
     <span class="meta">
       <span class="name">
         {{ displayName }}
@@ -47,6 +80,7 @@ const startable = computed(() => !props.provider.is_current);
       </span>
       <span v-if="official" class="url">{{ t("ccswitch.officialDesc") }}</span>
       <span v-else class="url" :title="provider.base_url">{{ provider.base_url }}</span>
+      <span v-if="actualModel" class="actual">{{ t("ccswitch.actualModel") }}：{{ actualModel }}</span>
     </span>
     <span v-if="provider.is_current" class="badge">{{ t("ccswitch.currentChip") }}</span>
     <span class="actions" @click.stop @keydown.stop>
@@ -89,6 +123,8 @@ const startable = computed(() => !props.provider.is_current);
 .note { color: var(--text-faint); margin-left: 4px; }
 .url { font-size: var(--font-xs); color: var(--text-muted); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
+.actual { font-size: var(--font-xs); color: var(--accent); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 /* PP r3: rounded-rect tag, not a pill (the 50% radius read as an ellipse). */
 .badge {
   flex: none; font-size: var(--font-xs); font-weight: 600;

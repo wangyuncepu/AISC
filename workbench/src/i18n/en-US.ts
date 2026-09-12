@@ -293,6 +293,8 @@ export const enUS: Record<string, string> = {
   "ccswitch.empty": "No providers yet",
   "ccswitch.noRuntime": "The runtime is not running; providers cannot be managed.",
   "ccswitch.switchedTo": "Switched to {name}",
+  "ccswitch.switchedToModel": "Switched to {name} (model: {model})",
+  "ccswitch.actualModel": "Active model",
   "ccswitch.switching": "Switching… {sec}s",
   "ccswitch.currentChip": "Active",
   "ccswitch.colStatus": "Status",

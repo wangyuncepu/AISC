@@ -550,6 +550,39 @@ pub struct CcSwitchProvider {
     #[serde(default)]
     pub api_key: Option<String>,
     pub is_current: bool,
+    /// 手测 r5#1/#2 (2026-09-12): the adapter has always emitted the mapping/
+    /// display columns, but this boundary struct STRIPPED every one of them —
+    /// the edit page loaded an empty mapping (saved catalogs apparently
+    /// vanished) and, worse, `api_format` fell back to the codex default
+    /// `openai_responses` on save, flipping the worker's wire protocol for an
+    /// anthropic-endpoint provider into literal /responses → upstream 404 →
+    /// codex "stream disconnected". All fields pass through verbatim now.
+    #[serde(default)]
+    pub role_env: HashMap<String, String>,
+    #[serde(default)]
+    pub known_models: Vec<String>,
+    #[serde(default)]
+    pub api_format: String,
+    #[serde(default)]
+    pub notes: String,
+    #[serde(default)]
+    pub website_url: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub icon_color: String,
+    #[serde(default)]
+    pub model_catalog: Vec<CcSwitchCatalogEntry>,
+}
+
+/// One codex mapping row (PP D-12; the /model list source).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CcSwitchCatalogEntry {
+    pub model: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub context_window: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -760,14 +793,31 @@ pub async fn cc_switch_fetch_models(
     workspace: String,
     runtime_id: String,
     agent: String,
-    provider_id: String,
+    provider_id: Option<String>,
     api_key: Option<String>,
+    base_url: Option<String>,
 ) -> Result<Value, WorkbenchError> {
     cc_switch_validate(&runtime_id, &agent)?;
-    let argv = cc_switch_argv("fetch-models", &runtime_id, &agent, &workspace, Some(&provider_id));
-    let input = api_key
-        .filter(|k| !k.trim().is_empty())
-        .map(|k| serde_json::json!({ "api_key": k }).to_string());
+    // 手测 r2#3: an EMPTY provider_id = add-mode inline probe — the form's
+    // base_url(+key) rides stdin, no saved row needed.
+    let argv = cc_switch_argv(
+        "fetch-models", &runtime_id, &agent, &workspace,
+        provider_id.as_deref().filter(|p| !p.trim().is_empty()),
+    );
+    let mut doc = serde_json::Map::new();
+    if let Some(k) = api_key.filter(|k| !k.trim().is_empty()) {
+        doc.insert("api_key".into(), serde_json::json!(k));
+    }
+    if provider_id.as_deref().unwrap_or("").trim().is_empty() {
+        if let Some(b) = base_url.filter(|b| !b.trim().is_empty()) {
+            doc.insert("base_url".into(), serde_json::json!(b));
+        }
+    }
+    let input = if doc.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(doc).to_string())
+    };
     cc_switch_call_value(&app, &window, argv, input).await
 }
 
@@ -2159,6 +2209,41 @@ mod tests {
         assert_eq!(s.agent, "codex");
         assert_eq!(s.auth_status, "not_configured");
         assert_eq!(s.provider_name, "");
+    }
+
+    #[test]
+    fn cc_switch_provider_passthrough_fields_parse() {
+        // 手测 r5 (2026-09-12): the mapping/display columns must SURVIVE this
+        // boundary — stripping them emptied the edit form and let api_format
+        // default to openai_responses on save (broke the zhipu wire route).
+        let json = r#"{
+            "id": "zhipu", "name": "Zhipu GLM", "app_type": "codex",
+            "base_url": "https://open.bigmodel.cn/api/anthropic",
+            "model": "glm-5.3", "has_api_key": true, "api_key_mask": "****CGWD",
+            "is_current": true,
+            "role_env": {"ANTHROPIC_MODEL": "glm-4.6"},
+            "known_models": ["glm-4.6", "glm-5.3"],
+            "api_format": "anthropic",
+            "notes": "", "website_url": "", "icon": "", "icon_color": "",
+            "model_catalog": [
+                {"model": "glm-5.3", "display_name": "GLM 5.3", "context_window": 1000000}
+            ]
+        }"#;
+        let p: CcSwitchProvider = serde_json::from_str(json).unwrap();
+        assert_eq!(p.api_format, "anthropic");
+        assert_eq!(p.role_env.get("ANTHROPIC_MODEL").map(String::as_str),
+                   Some("glm-4.6"));
+        assert_eq!(p.known_models.len(), 2);
+        assert_eq!(p.model_catalog.len(), 1);
+        assert_eq!(p.model_catalog[0].context_window, 1_000_000);
+        assert_eq!(p.model_catalog[0].display_name, "GLM 5.3");
+        // Pre-field envelopes still parse (serde defaults, never a hard error).
+        let legacy = r#"{"id":"x","name":"x","app_type":"claude","base_url":"",
+            "model":"","has_api_key":false,"api_key_mask":"","is_current":false}"#;
+        let l: CcSwitchProvider = serde_json::from_str(legacy).unwrap();
+        assert!(l.role_env.is_empty());
+        assert_eq!(l.api_format, "");
+        assert!(l.model_catalog.is_empty());
     }
 
     #[tokio::test]

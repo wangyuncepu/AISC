@@ -11,6 +11,7 @@ export default defineConfig(async () => ({
   test: {
     environment: "jsdom",
     include: ["src/**/*.test.ts"],
+    setupFiles: ["src/test-setup.ts"],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

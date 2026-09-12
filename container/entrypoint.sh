@@ -369,6 +369,13 @@ CC_SWITCH_DAEMON_LOG="/tmp/cc-switch-daemon.log"
 CC_SWITCH_CODEX_INIT_LOG="/tmp/cc-switch-codex-init.log"
 CC_SWITCH_SKILLS_LOG="/tmp/cc-switch-skills-init.log"
 if command -v cc-switch >/dev/null 2>&1; then
+    # P3 热切换拓扑（手测 r2）：daemon worker 默认绑 15721/15722——那两个
+    # 端口属于 model-shim（存量会话的内存 env 指向那里）。daemon 启动
+    # 【前】把 worker 端口持久化挪到 15701/15702（幂等；失败静默=按旧直连
+    # 拓扑工作，shim 起不来但不冲突）。必须先于 daemon start：worker 端口
+    # 在 daemon 启动时生效。
+    cc-switch proxy -a claude config --listen-port 15701 >/dev/null 2>&1 || true
+    cc-switch proxy -a codex config --listen-port 15702 >/dev/null 2>&1 || true
     CC_SWITCH_DAEMON_READY=0
     if cc-switch daemon start --detach >"$CC_SWITCH_DAEMON_LOG" 2>&1; then
         # PERF P9 (D-13): was 40 × (cc-switch CLI spawn + 0.25s sleep) =
@@ -747,6 +754,29 @@ if command -v aisc-web-gateway >/dev/null 2>&1 && command -v python3 >/dev/null 
     else
         echo "⚠️  AISC Web 网关启动失败；日志: /tmp/aisc-web-gateway.log" >&2
     fi
+fi
+
+# ==========================================
+# AISC 模型映射 shim（P3 热切换，2026-09-12）：agent 流量 → shim(15721/15722)
+# → cc-switch 代理(15701/15702)。shim 占据历史端口 1572x——运行中会话的内存
+# env 指向那里；worker 由 entrypoint/adapter 挪到 1570x（daemon 启动前）。
+# shim 按「当前 provider 的角色映射表」重写请求体 model 字段——切换 provider
+# 后，运行中会话的下一个请求即走新模型。
+# 失败只告警不阻断：shim 死亡时 adapter 的挂钩会把 live 文件指回直连代理
+# （fail-open），agent 连通性永远优先于映射。
+# ==========================================
+if command -v aisc-model-shim >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    for _agent in claude codex; do
+        AISC_SHIM_AGENT="$_agent" bash -c "exec aisc-model-shim >/tmp/aisc-model-shim-${_agent}.log 2>&1" &
+    done
+    sleep 0.3
+    if ! pgrep -f "aisc-model-shim" >/dev/null 2>&1; then
+        echo "⚠️  AISC 模型映射 shim 启动失败；日志: /tmp/aisc-model-shim-*.log（provider 切换将退化为非热切）" >&2
+    fi
+    # 手测 r4#3：跨代自愈——live 配置目录是持久卷，上一代容器（旧镜像/该 agent
+    # 从未切换过）可能把 base_url 留在 1570x 直连端口，本代会话就绕过 shim。
+    # 等 shim 绑定后把两个 live 存根都指到 shim（幂等，shim 不在则指回直连）。
+    aisc-cc-provider shim-heal >/dev/null 2>&1 || true
 fi
 
 # ==========================================
