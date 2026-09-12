@@ -146,8 +146,12 @@ input {
   border: var(--border-w) solid var(--border-strong); border-radius: var(--radius-sm);
   min-height: var(--control-h-sm); padding: 0 var(--space-2); font-size: var(--font-sm);
 }
-input[type="number"] { max-width: 110px; }
-.cat-head, .cat-row { display: grid; grid-template-columns: 1fr 0.8fr 100px 28px; gap: 6px; align-items: center; }
+/* 手测 r8: the generic `input { min-width: 120px }` (written for the flex
+ * role rows) OVERFLOWED the 100px window track — the number field ran under
+ * the delete button and the × read as sitting INSIDE the input. Keep the
+ * field strictly inside its track so the button stands clearly apart. */
+input[type="number"] { min-width: 0; width: 100%; max-width: none; }
+.cat-head, .cat-row { display: grid; grid-template-columns: 1fr 0.8fr 100px 28px; gap: 8px; align-items: center; }
 .cat-head { font-size: var(--font-xs); color: var(--text-faint); }
 button.icon { min-width: 24px; min-height: 24px; padding: 0; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: var(--font-md); }
 /* 手测 r7 (2026-09-12): the row-delete × used to be a bare borderless glyph
