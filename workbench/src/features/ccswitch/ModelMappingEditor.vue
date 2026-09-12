@@ -155,13 +155,20 @@ input {
  * flip to danger on hover, so the footprint never changes. The number field
  * stays strictly in its track (the generic input min-width was written for
  * the flex role rows and overflows grid tracks). */
-input[type="number"] { min-width: 0; width: 100%; max-width: none; }
+/* 手测 r10: the workbench has NO global border-box reset (the key-row input
+ * sets it explicitly for the same reason) — content-box inputs with
+ * width:100% render track + padding + border wide and ride under the delete
+ * cell; the 30px button + borders was 32px of the same disease. Border-box
+ * everything in the grid and let tracks own the geometry. */
+.cat-row input { box-sizing: border-box; min-width: 0; }
+input[type="number"] { width: 100%; }
 .cat-head { display: grid; grid-template-columns: 1fr 0.7fr 92px 30px; gap: 8px;
   align-items: center; font-size: var(--font-xs); color: var(--text-faint); }
 .cat-row { display: grid; grid-template-columns: 1fr 0.7fr 92px 30px; gap: 8px;
   align-items: stretch; }
 button.icon { min-width: 24px; min-height: 24px; padding: 0; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: var(--font-md); }
 button.icon.del {
+  box-sizing: border-box;
   width: 30px; min-height: var(--control-h-sm); padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--surface-3);
